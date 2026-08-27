@@ -675,7 +675,15 @@ mod spawn_executor_tests {
             &socket_absent,
             DaemonToWrapper::SpawnRejected {
                 command_id: "cwd-executor-absent".to_string(),
-                reason: SpawnRefusal::CwdGone,
+                // DEUX machines ATTESTÉES et DIFFÉRENTES, imposées au banc :
+                // c'est la seule configuration où le rendu peut prouver qu'il
+                // distingue « où l'on a cherché » de « qui a demandé ». Des
+                // valeurs recalculées par le code de production ne prouveraient
+                // que la recopie.
+                reason: SpawnRefusal::CwdGone {
+                    searched_on: "machine-executante".to_string(),
+                    requested_from: "machine-demandeuse".to_string(),
+                },
             },
         );
         let refusal = send_control_to_daemon_at(&socket_absent, ordre_absent)
@@ -687,10 +695,14 @@ mod spawn_executor_tests {
             }
             other => panic!("SpawnRejected attendu, reçu {other:?}"),
         };
+        // Le texte HISTORIQUE appartenait aux deux issues : il ne prouvait plus
+        // rien depuis que le refus nomme les machines. On exige donc le rendu
+        // EXACT du nouveau contrat — les deux noms, chacun à sa place.
         assert_eq!(
             format!("SPAWN REFUSÉ: {}", display_spawn_refusal(&reason)),
-            "SPAWN REFUSÉ: répertoire de travail disparu",
-            "le texte doit venir de CwdGone, pas du pré-contrôle client"
+            "SPAWN REFUSÉ: répertoire de travail introuvable sur machine-executante, \
+             demandé depuis machine-demandeuse",
+            "le texte doit venir de CwdGone et nommer les DEUX machines, pas du pré-contrôle client"
         );
         assert!(matches!(
             daemon_absent.join().expect("daemon absent termine"),
@@ -797,6 +809,18 @@ fn validate_command_id(command_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Une machine vide vient d'un daemon antérieur au champ : on le DIT, on ne
+/// suppose pas la machine locale.
+fn machine_ou_non_attestee(host: &str) -> &str {
+    // Rendu UNIQUE : un champ vide et un champ portant la valeur de repli
+    // disent le meme fait et doivent se lire pareil.
+    if host.trim().is_empty() {
+        crate::build_info::MACHINE_NON_ATTESTEE
+    } else {
+        crate::build_info::describe_host(Some(host))
+    }
+}
+
 fn display_spawn_refusal(reason: &SpawnRefusal) -> String {
     match reason {
         SpawnRefusal::UnknownType {
@@ -837,7 +861,18 @@ fn display_spawn_refusal(reason: &SpawnRefusal) -> String {
         }
         SpawnRefusal::NameActive => "nom déjà actif".to_string(),
         SpawnRefusal::EnvUnfit { detail } => format!("environnement inapte: {detail}"),
-        SpawnRefusal::CwdGone => "répertoire de travail disparu".to_string(),
+        // Le refus dit OÙ il a cherché et QUI a demandé : sans cela, un
+        // opérateur fédéré cherche le répertoire du mauvais côté du tunnel.
+        SpawnRefusal::CwdGone {
+            searched_on,
+            requested_from,
+        } => {
+            let searched_on = machine_ou_non_attestee(searched_on);
+            let requested_from = machine_ou_non_attestee(requested_from);
+            format!(
+                "répertoire de travail introuvable sur {searched_on}, demandé depuis {requested_from}"
+            )
+        }
         SpawnRefusal::NegotiationFailed { detail } => format!("négociation échouée: {detail}"),
         SpawnRefusal::SpawnTimeout => "délai de lancement dépassé".to_string(),
         SpawnRefusal::QuotaExceeded { limit } => format!("quota de flotte atteint ({limit})"),
@@ -1718,17 +1753,18 @@ fn send_control_to_daemon(command: WrapperToDaemon) -> Result<DaemonToWrapper, S
     send_control_to_daemon_at(&socket_path(), command)
 }
 
-fn send_control_to_daemon_at(
-    socket: &std::path::Path,
-    command: WrapperToDaemon,
-) -> Result<DaemonToWrapper, String> {
-    let stream = UnixStream::connect(socket).map_err(|e| e.to_string())?;
-    let mut writer = BufWriter::new(stream);
-
-    let reg = WrapperToDaemon::Register {
+/// Enregistrement d'une connexion CLI — source UNIQUE des trois usages.
+///
+/// Le champ `host` était `None` sur les trois : le daemon lisait ensuite
+/// `requested_from` dans `conn_hosts` et n'y trouvait rien, si bien qu'un refus
+/// de lancement ne pouvait pas nommer la machine demandeuse. Trois copies du
+/// même bloc, c'est trois occasions d'oublier la même chose ; il n'y en a plus
+/// qu'une.
+fn cli_register(usage: &str) -> WrapperToDaemon {
+    WrapperToDaemon::Register {
         agent_type: "cli".to_string(),
-        name: Some(format!("cli-send-{}", std::process::id())),
-        host: None,
+        name: Some(format!("cli-{usage}-{}", std::process::id())),
+        host: Some(crate::build_info::local_host()),
         transport: None,
         channel: bridget_transport::ChannelReport::Unknown,
         mode: Some(PresenceMode::Cli),
@@ -1738,7 +1774,17 @@ fn send_control_to_daemon_at(
         domain: None,
         turn_in_progress: false,
         journal_available: None,
-    };
+    }
+}
+
+fn send_control_to_daemon_at(
+    socket: &std::path::Path,
+    command: WrapperToDaemon,
+) -> Result<DaemonToWrapper, String> {
+    let stream = UnixStream::connect(socket).map_err(|e| e.to_string())?;
+    let mut writer = BufWriter::new(stream);
+
+    let reg = cli_register("send");
     let reg_json = encode(&reg).map_err(|e| e.to_string())?;
     writeln!(writer, "{}", reg_json).map_err(|e| e.to_string())?;
     writer.flush().map_err(|e| e.to_string())?;
@@ -1988,20 +2034,7 @@ fn send_rename_to_daemon(current_name: &str, name: &str) -> Result<DaemonToWrapp
     let read_stream = stream.try_clone().map_err(|e| e.to_string())?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(read_stream);
-    let register = WrapperToDaemon::Register {
-        agent_type: "cli".to_string(),
-        name: Some(format!("cli-rename-{}", std::process::id())),
-        host: None,
-        transport: None,
-        channel: bridget_transport::ChannelReport::Unknown,
-        mode: Some(PresenceMode::Cli),
-        location: None,
-        os: None,
-        instance_id: None,
-        domain: None,
-        turn_in_progress: false,
-        journal_available: None,
-    };
+    let register = cli_register("rename");
     writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     writer.flush().map_err(|e| e.to_string())?;
@@ -2042,20 +2075,7 @@ fn send_runtime_to_daemon(
         .map_err(|e| e.to_string())?;
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(read_stream);
-    let register = WrapperToDaemon::Register {
-        agent_type: "cli".to_string(),
-        name: Some(format!("cli-runtime-{}", std::process::id())),
-        host: None,
-        transport: None,
-        channel: bridget_transport::ChannelReport::Unknown,
-        mode: Some(PresenceMode::Cli),
-        location: None,
-        os: None,
-        instance_id: None,
-        domain: None,
-        turn_in_progress: false,
-        journal_available: None,
-    };
+    let register = cli_register("runtime");
     writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     writer.flush().map_err(|e| e.to_string())?;
@@ -3076,7 +3096,7 @@ fn cmd_who(args: &[String]) {
 
     print!("{}", render_who(&agents, parsed.domain.as_deref()));
     println!("Daemon build-id: {build_id}");
-    emit_stale_daemon_warning(status.build_id.as_deref());
+    emit_stale_daemon_warning(status.build_id.as_deref(), status.daemon_host.as_deref());
     emit_disk_warning();
 }
 
@@ -3493,24 +3513,44 @@ fn cmd_status() {
             "hors ligne"
         }
     );
+    let machine = crate::build_info::describe_host(status.daemon_host.as_deref());
+    println!("Machine du daemon: {machine}");
     println!("Socket: {}", config.socket_path.display());
-    println!("Base de données: {}", config.db_path.display());
+    // La base affichée est celle que le DAEMON atteste, jamais le chemin que ce
+    // client calculerait pour lui-même : les deux divergent dès que le daemon
+    // est au bout d'un tunnel.
+    println!(
+        "Base de données du daemon: {}",
+        status
+            .daemon_db_path
+            .as_deref()
+            .unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE)
+    );
     println!("Agents connectés: {}", status.agents.len());
-    println!("Messages en base: {}", status.message_count);
+    match status.message_count {
+        Some(count) => println!("Messages en base: {count}"),
+        None => println!(
+            "Messages en base: non mesurable d'ici — la base locale ({}) n'est pas celle du daemon",
+            config.db_path.display()
+        ),
+    }
     println!(
         "Build-id daemon: {}",
         status.build_id.as_deref().unwrap_or("inconnu")
     );
-    emit_stale_daemon_warning(status.build_id.as_deref());
+    emit_stale_daemon_warning(status.build_id.as_deref(), status.daemon_host.as_deref());
     emit_disk_warning();
 }
 
-fn stale_daemon_warning_for_status(build_id: Option<&str>) -> Option<String> {
-    crate::build_info::stale_daemon_warning(build_id.unwrap_or("unknown"))
+fn stale_daemon_warning_for_status(
+    build_id: Option<&str>,
+    daemon_host: Option<&str>,
+) -> Option<String> {
+    crate::build_info::stale_daemon_warning_at(build_id.unwrap_or("unknown"), daemon_host)
 }
 
-fn emit_stale_daemon_warning(build_id: Option<&str>) {
-    if let Some(warning) = stale_daemon_warning_for_status(build_id) {
+fn emit_stale_daemon_warning(build_id: Option<&str>, daemon_host: Option<&str>) {
+    if let Some(warning) = stale_daemon_warning_for_status(build_id, daemon_host) {
         eprintln!("{warning}");
     }
 }
@@ -5223,19 +5263,57 @@ mod idempotency_projection_tests {
 
     #[test]
     fn who_et_status_signalent_exactement_un_daemon_perime() {
-        // Observe les identifiants et la remédiation structurelle — pas un
-        // libellé humain (le gate fondateur a déjà payé ce piège cette nuit).
-        assert!(stale_daemon_warning_for_status(Some(crate::build_info::BUILD_ID)).is_none());
-        let warning = stale_daemon_warning_for_status(Some("daemon-ancien")).unwrap();
+        // Observe les identifiants et l'ATTRIBUTION — pas un libellé humain
+        // (le gate fondateur a déjà payé ce piège cette nuit).
+        let ici = crate::build_info::local_host();
+        assert!(
+            stale_daemon_warning_for_status(Some(crate::build_info::BUILD_ID), Some(&ici))
+                .is_none()
+        );
+        let warning =
+            stale_daemon_warning_for_status(Some("daemon-ancien"), Some("monordinateur")).unwrap();
         assert!(warning.contains("daemon-ancien"));
         assert!(warning.contains(crate::build_info::BUILD_ID));
-        let remediation = format!("gui/{}/com.bridget.daemon", unsafe { libc::getuid() });
-        assert!(warning.contains(&remediation));
+        // La VALEUR portée est la machine du daemon, pas la mienne : un oracle
+        // qui vérifierait seulement la présence d'un hôte passerait aussi avec
+        // le mauvais.
         assert!(
-            stale_daemon_warning_for_status(None)
-                .unwrap()
-                .contains(&remediation)
+            warning.contains("daemon périmé sur monordinateur"),
+            "{warning}"
         );
+        // Machine non attestée : le message le dit, il ne suppose pas la mienne.
+        let sans_hote = stale_daemon_warning_for_status(Some("daemon-ancien"), None).unwrap();
+        assert!(
+            sans_hote.contains(crate::build_info::MACHINE_NON_ATTESTEE),
+            "{sans_hote}"
+        );
+        assert!(
+            !sans_hote.contains(&format!("daemon périmé sur {ici}")),
+            "{sans_hote}"
+        );
+    }
+
+    /// Daemon injoignable : aucune attestation, donc aucun chiffre.
+    ///
+    /// CE QUE CE TEST NE PROUVE PAS, et je le dis parce que je l'ai cru :
+    /// il ne franchit PAS la garde de comptage. `get_status` sort dès que la
+    /// socket est absente, bien avant elle. Le mutant qui retire la garde
+    /// laisse ce test VERT. La garde elle-même est éprouvée par
+    /// `daemon::attribution_tests::compter_n_est_permis_que_sur_la_base_attestee_par_le_daemon`.
+    #[test]
+    fn status_ne_compte_pas_les_messages_d_une_base_qui_n_est_pas_celle_du_daemon() {
+        let config = DaemonConfig {
+            socket_path: std::path::PathBuf::from("/tmp/bridget-absent-oracle.sock"),
+            ..DaemonConfig::default()
+        };
+        // Daemon injoignable → aucune attestation, donc aucun compte.
+        let status = daemon::get_status(&config);
+        assert!(
+            status.message_count.is_none(),
+            "sans attestation du daemon, aucun compte ne doit être rendu"
+        );
+        assert!(status.daemon_db_path.is_none());
+        assert!(status.daemon_host.is_none());
     }
 }
 
@@ -5304,5 +5382,37 @@ mod depot_tests {
         assert!(!send_deposited(&IdempotencyIssue::EnvelopeMismatch));
         assert!(!send_deposited(&IdempotencyIssue::IdempotencyExpired));
         assert!(!send_deposited(&IdempotencyIssue::InvalidIssuedAt));
+    }
+
+    /// M2 — le `Register` du CLI doit porter SA machine.
+    ///
+    /// Il envoyait `host: None` sur ses trois usages ; le daemon lisait ensuite
+    /// `requested_from` dans `conn_hosts` et n'y trouvait rien. La couture
+    /// bout-en-bout est éprouvée par `spawn_refusal_hosts_test` ; celui-ci garde
+    /// la VALEUR émise, à la source.
+    ///
+    /// Mutant qui tue ce test : remettre `host: None` dans `cli_register` → la
+    /// première assertion meurt en affichant `None`.
+    #[test]
+    fn le_register_du_cli_porte_la_machine_locale() {
+        let attendu = crate::build_info::local_host();
+        for usage in ["send", "rename", "runtime"] {
+            match cli_register(usage) {
+                WrapperToDaemon::Register { host, name, .. } => {
+                    assert_eq!(
+                        host.as_deref(),
+                        Some(attendu.as_str()),
+                        "usage {usage} : le CLI doit attester sa machine"
+                    );
+                    // Contrôle de sens : les trois usages restent distincts, la
+                    // mise en facteur n'a pas confondu les noms.
+                    assert!(
+                        name.is_some_and(|name| name.starts_with(&format!("cli-{usage}-"))),
+                        "usage {usage} : le nom doit rester distinct"
+                    );
+                }
+                autre => panic!("Register attendu, obtenu {autre:?}"),
+            }
+        }
     }
 }

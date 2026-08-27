@@ -74,6 +74,8 @@ pub struct RepriseSnapshot {
     pub now: SystemTime,
     pub repo: PathBuf,
     pub socket_path: PathBuf,
+    /// Base **de cette machine**. Elle ne décrit le daemon que si celui-ci est
+    /// local — la carte doit donc toujours l'afficher avec sa machine.
     pub db_path: PathBuf,
     pub binary_cli: Option<PathBuf>,
     pub status: Result<DaemonStatus, String>,
@@ -121,7 +123,20 @@ pub fn collect_snapshot(
     let db_path = absolutize(&config.db_path);
     let binary_cli = std::env::current_exe().ok().map(|path| absolutize(&path));
 
-    let status = Ok(daemon::get_status(config));
+    let status = daemon::get_status(config);
+    // La flotte décrite doit être celle du daemon interrogé. Tant que sa base
+    // n'est pas la nôtre, la trace de reprise locale décrit une AUTRE flotte :
+    // on ne la lit pas, et la carte dit pourquoi.
+    let recovery_losses = match recovery_trace_scope(
+        status.daemon_host.as_deref(),
+        status.daemon_db_path.as_deref(),
+        &crate::build_info::local_host(),
+        &db_path,
+    ) {
+        Ok(()) => collect_recovery_losses(&db_path),
+        Err(motif) => Err(motif),
+    };
+    let status = Ok(status);
 
     let (open_requests, recent_messages) = collect_ledger(config);
 
@@ -134,7 +149,6 @@ pub fn collect_snapshot(
             .and_then(|loaded| loaded.pin.maicie_config.as_deref()),
     );
     let maicie = collect_maicie(maicie_config.as_deref());
-    let recovery_losses = collect_recovery_losses(&db_path);
 
     RepriseSnapshot {
         now,
@@ -150,6 +164,54 @@ pub fn collect_snapshot(
         pin,
         recovery_losses,
     }
+}
+
+/// Marqueur du refus pour INDÉTERMINATION — présent dans ce seul motif.
+///
+/// Les deux refus partagent la mention « machine non attestée », parce que le
+/// motif générique affiche lui aussi l'hôte du daemon. Une assertion sur cette
+/// mention ne DISCRIMINE donc rien : il faut une phrase qui n'appartienne qu'à
+/// une seule issue, et l'oracle doit exiger l'une ET refuser l'autre.
+const MOTIF_INDETERMINATION: &str = "Une machine indéterminée n'est pas une machine";
+
+/// Marqueur du refus pour BASES DIFFÉRENTES — présent dans ce seul motif.
+const MOTIF_BASES_DIFFERENTES: &str = "n'est pas celle du daemon";
+
+/// La trace de reprise locale ne décrit la flotte du daemon que si la base du
+/// daemon est bien celle d'ici — MACHINE **et** chemin.
+///
+/// Séparée de la lecture pour être éprouvable dans ses DEUX issues : un test qui
+/// ne prouverait que le refus laisserait vivre un mutant rendant la condition
+/// toujours fausse, et la trace ne serait plus jamais lue sans que rien ne
+/// rougisse.
+fn recovery_trace_scope(
+    daemon_host: Option<&str>,
+    daemon_db_path: Option<&str>,
+    local_host: &str,
+    local_db_path: &Path,
+) -> Result<(), String> {
+    if daemon::daemon_store_is_local(daemon_host, daemon_db_path, local_host, local_db_path) {
+        return Ok(());
+    }
+    // Deux refus DIFFERENTS, et le lecteur doit savoir lequel il tient : une
+    // machine qu'on n'a pas su nommer ne se corrige pas comme deux machines
+    // distinctes. Confondre les deux, c'est envoyer chercher au mauvais endroit.
+    let atteste = |host: Option<&str>| host.is_some_and(bridget_core::host_is_attested);
+    if !atteste(daemon_host) || !bridget_core::host_is_attested(local_host) {
+        return Err(format!(
+            "trace de reprise non lisible d'ici : machine non attestée — locale « {} », daemon « {} ». \
+             {MOTIF_INDETERMINATION}, et deux indéterminées ne sont pas la même.",
+            crate::build_info::describe_host(Some(local_host)),
+            crate::build_info::describe_host(daemon_host)
+        ));
+    }
+    Err(format!(
+        "trace de reprise non lisible d'ici : la base locale ({} sur {}) {MOTIF_BASES_DIFFERENTES} ({} sur {})",
+        local_db_path.display(),
+        crate::build_info::describe_host(Some(local_host)),
+        daemon_db_path.unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE),
+        crate::build_info::describe_host(daemon_host)
+    ))
 }
 
 fn collect_recovery_losses(
@@ -209,7 +271,7 @@ fn send_ledger_both(
     let reg = WrapperToDaemon::Register {
         agent_type: "cli".to_string(),
         name: Some(format!("cli-reprise-{}", std::process::id())),
-        host: None,
+        host: Some(crate::build_info::local_host()),
         transport: None,
         channel: bridget_transport::ChannelReport::Unknown,
         mode: Some(PresenceMode::Cli),
@@ -471,13 +533,30 @@ fn render_vivant(out: &mut String, snapshot: &RepriseSnapshot) {
                 if status.running { "true" } else { "false" }
             ));
             // Chemins RÉELLEMENT ceux de status (DaemonConfig résolu), jamais
-            // une reconstruction parallèle depuis un HOME inventé.
+            // une reconstruction parallèle depuis un HOME inventé. Chacun porte
+            // désormais SA machine : `socket` et `db_locale` valent ici, `db`
+            // vaut là où le daemon tourne, et les deux diffèrent en fédération.
+            out.push_str(&format!(
+                "  machine_daemon: {}\n",
+                yaml_string(crate::build_info::describe_host(
+                    status.daemon_host.as_deref()
+                ))
+            ));
             out.push_str(&format!(
                 "  socket: {}\n",
                 yaml_string(&snapshot.socket_path.display().to_string())
             ));
             out.push_str(&format!(
                 "  db: {}\n",
+                yaml_string(
+                    status
+                        .daemon_db_path
+                        .as_deref()
+                        .unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE)
+                )
+            ));
+            out.push_str(&format!(
+                "  db_locale: {}\n",
                 yaml_string(&snapshot.db_path.display().to_string())
             ));
             out.push_str(&format!(
@@ -510,11 +589,15 @@ fn render_vivant(out: &mut String, snapshot: &RepriseSnapshot) {
         Err(error) => {
             out.push_str("  daemon_en_ligne: false\n");
             out.push_str(&format!(
+                "  machine_daemon: {}\n",
+                yaml_string(crate::build_info::MACHINE_NON_ATTESTEE)
+            ));
+            out.push_str(&format!(
                 "  socket: {}\n",
                 yaml_string(&snapshot.socket_path.display().to_string())
             ));
             out.push_str(&format!(
-                "  db: {}\n",
+                "  db_locale: {}\n",
                 yaml_string(&snapshot.db_path.display().to_string())
             ));
             out.push_str("  build_id_daemon: indisponible\n");
@@ -871,7 +954,7 @@ fn render_acces(out: &mut String, snapshot: &RepriseSnapshot) {
         yaml_string(&snapshot.socket_path.display().to_string())
     ));
     out.push_str(&format!(
-        "  bridget_db: {}\n",
+        "  bridget_db_locale: {}\n",
         yaml_string(&snapshot.db_path.display().to_string())
     ));
 }
@@ -1067,8 +1150,12 @@ mod tests {
                     rate_limits: Default::default(),
                     model_mismatch: None,
                 }],
-                message_count: 3,
+                message_count: Some(3),
                 build_id: Some("abc123".to_string()),
+                // Le daemon de la fixture tourne AILLEURS : c'est le cas fédéré,
+                // le seul où l'attribution est vérifiable.
+                daemon_host: Some("monordinateur".to_string()),
+                daemon_db_path: Some("/Users/moi/.cache/bridget/bridget.db".to_string()),
             }),
             open_requests: Ok(vec![]),
             recent_messages: Ok(vec![]),
@@ -1092,7 +1179,7 @@ mod tests {
             card.contains("socket: /resolved/cache/bridget.sock"),
             "la carte doit recopier le chemin résolu de status: {card}"
         );
-        assert!(card.contains("db: /resolved/cache/bridget.db"));
+        assert!(card.contains("db_locale: /resolved/cache/bridget.db"));
         assert!(
             !card.contains("$HOME") && !card.contains("~/.cache"),
             "aucun chemin reconstruit depuis HOME: {card}"
@@ -1105,14 +1192,82 @@ mod tests {
         );
     }
 
+    /// POINT 2 — la carte décrivait la flotte à partir d'un fichier qui n'est
+    /// pas le sien. Chaque chemin doit désormais porter SA machine.
+    ///
+    /// La fixture place le daemon sur une AUTRE machine que le client : c'est la
+    /// seule configuration où l'attribution est vérifiable.
+    ///
+    /// Mutant qui tue ce test : réafficher `snapshot.db_path` sous la clé `db`
+    /// → l'assertion sur le chemin du daemon meurt, et celle qui interdit de
+    /// présenter la base locale comme celle du daemon meurt aussi.
+    #[test]
+    fn la_carte_attribue_chaque_base_a_sa_machine() {
+        let card = render_card(&base_snapshot(
+            SystemTime::UNIX_EPOCH + Duration::from_secs(10),
+        ));
+        assert!(
+            card.contains("machine_daemon: monordinateur"),
+            "la carte doit nommer la machine du daemon: {card}"
+        );
+        assert!(
+            card.contains("db: /Users/moi/.cache/bridget/bridget.db"),
+            "la clé db doit porter la base ATTESTÉE par le daemon: {card}"
+        );
+        assert!(
+            card.contains("db_locale: /resolved/cache/bridget.db"),
+            "la base d'ici doit être nommée comme locale: {card}"
+        );
+        assert!(
+            !card.contains("db: /resolved/cache/bridget.db"),
+            "la base locale ne doit jamais être présentée comme celle du daemon: {card}"
+        );
+    }
+
+    /// POINT 2 — la trace de reprise locale décrit une AUTRE flotte quand la
+    /// base du daemon n'est pas la nôtre : on ne la lit pas, et on dit pourquoi.
+    ///
+    /// Mutant qui tue ce test : lire la trace sans la garde → `recovery_losses`
+    /// redevient `Ok(..)` et l'assertion meurt.
+    #[test]
+    fn la_trace_de_reprise_n_est_pas_lue_quand_la_base_est_ailleurs() {
+        let config = DaemonConfig {
+            socket_path: PathBuf::from("/tmp/bridget-absent-reprise-oracle.sock"),
+            ..DaemonConfig::default()
+        };
+        let snapshot = collect_snapshot(
+            &config,
+            Path::new("/repo"),
+            None,
+            None,
+            SystemTime::UNIX_EPOCH + Duration::from_secs(10),
+        );
+        let error = snapshot
+            .recovery_losses
+            .expect_err("sans base attestée, la trace locale ne doit pas être lue");
+        // Daemon injoignable : rien n'est attesté. Le motif rendu doit être
+        // celui de l'INDÉTERMINATION, pas celui de deux machines différentes —
+        // les deux n'appellent pas le même geste de la part d'un opérateur.
+        assert!(
+            error.contains(MOTIF_INDETERMINATION),
+            "le refus doit dire pourquoi: {error}"
+        );
+        assert!(
+            !error.contains(MOTIF_BASES_DIFFERENTES),
+            "le motif générique ne doit pas être rendu pour une indétermination: {error}"
+        );
+    }
+
     #[test]
     fn source_indisponible_se_declare_sans_inventer_ni_echouer_en_bloc() {
         let mut snapshot = base_snapshot(SystemTime::UNIX_EPOCH + Duration::from_secs(10));
         snapshot.status = Ok(DaemonStatus {
             running: false,
             agents: vec![],
-            message_count: 0,
+            message_count: None,
             build_id: None,
+            daemon_host: None,
+            daemon_db_path: None,
         });
         snapshot.open_requests = Err("daemon hors ligne (socket absente)".to_string());
         snapshot.recent_messages = Err("daemon hors ligne (socket absente)".to_string());
@@ -1217,6 +1372,90 @@ mod tests {
         assert!(
             card.contains("geste: \"livrer carte reprise\"")
                 || card.contains("geste: livrer carte reprise")
+        );
+    }
+
+    /// M4 — le contrôle POSITIF qui manquait.
+    ///
+    /// Un mutant rendant la condition toujours fausse laissait toute la famille
+    /// `reprise::tests` verte : le test existant ne prouvait que le REFUS
+    /// distant, jamais qu'une trace locale attestée reste lisible. Les deux
+    /// issues sont désormais éprouvées sur la même fonction.
+    ///
+    /// Mutant qui tue ce test : rendre la condition toujours fausse → le premier
+    /// cas meurt en affichant le motif de refus qu'il n'aurait pas dû recevoir.
+    #[test]
+    fn la_trace_est_lue_ici_et_refusee_ailleurs() {
+        let chemin = PathBuf::from("/home/moi/.cache/bridget/bridget.db");
+
+        // POSITIF : même machine, même chemin → la trace nous concerne.
+        assert_eq!(
+            recovery_trace_scope(
+                Some("cartae"),
+                Some("/home/moi/.cache/bridget/bridget.db"),
+                "cartae",
+                &chemin
+            ),
+            Ok(()),
+            "une base attestée locale doit rester lisible"
+        );
+
+        // NÉGATIF, et c'est le cas piégeux : MÊME CHEMIN, autre machine.
+        let refus = recovery_trace_scope(
+            Some("monordinateur"),
+            Some("/home/moi/.cache/bridget/bridget.db"),
+            "cartae",
+            &chemin,
+        )
+        .expect_err("un daemon distant ne rend pas la trace locale lisible");
+        assert!(
+            refus.contains("sur cartae") && refus.contains("sur monordinateur"),
+            "le motif doit nommer LES DEUX machines : {refus}"
+        );
+        // Contrôle de séparation dans l'autre sens : deux machines ATTESTÉES et
+        // différentes doivent recevoir le motif générique, jamais celui de
+        // l'indétermination.
+        assert!(
+            refus.contains(MOTIF_BASES_DIFFERENTES) && !refus.contains(MOTIF_INDETERMINATION),
+            "deux machines nommées ne relèvent pas de l'indétermination : {refus}"
+        );
+
+        // Daemon antérieur : non attesté, donc refus explicite.
+        let inconnu = recovery_trace_scope(None, None, "cartae", &chemin)
+            .expect_err("sans attestation, la trace n'est pas réputée locale");
+        assert!(
+            inconnu.contains(crate::build_info::MACHINE_NON_ATTESTEE),
+            "{inconnu}"
+        );
+
+        // DEUX HÔTES INDÉTERMINÉS, MÊME CHEMIN — le cas de rc7. Refusé, et le
+        // motif doit dire POURQUOI : machine non attestée, pas « deux machines
+        // différentes ». Les deux refus n'appellent pas le même geste.
+        let repli = recovery_trace_scope(
+            Some(bridget_core::HOTE_NON_ATTESTE),
+            Some("/home/moi/.cache/bridget/bridget.db"),
+            bridget_core::HOTE_NON_ATTESTE,
+            &chemin,
+        )
+        .expect_err("deux machines indéterminées ne sont pas la même machine");
+        // LES DEUX CONDITIONS. La mention « machine non attestée » figure AUSSI
+        // dans le motif générique, qui affiche l'hôte du daemon : l'exiger seule
+        // ne sépare pas les issues. Il faut le motif spécifique PRÉSENT et le
+        // motif générique ABSENT — sinon un code qui ne changerait rien du tout
+        // passerait le test.
+        assert!(
+            repli.contains(MOTIF_INDETERMINATION),
+            "le motif doit nommer l'indétermination : {repli}"
+        );
+        assert!(
+            !repli.contains(MOTIF_BASES_DIFFERENTES),
+            "le motif générique des bases différentes ne doit PAS être rendu ici : {repli}"
+        );
+        // Rendu unique des DEUX côtés : la machine locale non attestée se lit
+        // comme telle, jamais sous sa valeur de repli brute.
+        assert!(
+            !repli.contains(&format!("sur {}", bridget_core::HOTE_NON_ATTESTE)),
+            "la machine locale non attestée doit se lire comme telle : {repli}"
         );
     }
 }

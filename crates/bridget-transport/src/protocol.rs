@@ -574,7 +574,19 @@ pub enum SpawnRefusal {
     EnvUnfit {
         detail: String,
     },
-    CwdGone,
+    /// Le répertoire de travail est absent **du système de fichiers où le
+    /// daemon a cherché**. Les deux hôtes sont portés par le refus : un
+    /// opérateur fédéré cherchait du mauvais côté du tunnel faute de savoir
+    /// quelle machine avait rendu le verdict.
+    ///
+    /// `#[serde(default)]` : un daemon antérieur sérialise `{}`, le champ
+    /// devient vide et le rendu dit « machine non attestée ».
+    CwdGone {
+        #[serde(default)]
+        searched_on: String,
+        #[serde(default)]
+        requested_from: String,
+    },
     NegotiationFailed {
         detail: String,
     },
@@ -981,6 +993,13 @@ pub enum WrapperToDaemon {
     Heartbeat,
     /// Demander la liste des agents connectés.
     ListAgents,
+    /// Demande au daemon ce qu'il atteste de LUI-MÊME : sa machine et sa base.
+    ///
+    /// Un client fédéré ne peut pas les déduire — il affichait jusqu'ici SES
+    /// chemins à côté de chiffres venus d'ici. Message dédié plutôt qu'un champ
+    /// de plus sur `ClientWelcome` : aucune construction existante à modifier,
+    /// donc aucun fichier tiers touché.
+    DaemonIdentityRequest,
     /// Rapporter le modèle et le niveau d'effort courants d'un agent.
     ///
     /// `agent` désigne l'agent observé, et non la connexion émettrice : le hook
@@ -1475,6 +1494,8 @@ pub enum DaemonToWrapper {
     Disconnect,
     /// Réponse à ListAgents.
     AgentList { agents: Vec<AgentInfo> },
+    /// Machine et base attestées par le daemon lui-même.
+    DaemonIdentityReport { host: String, db_path: String },
     /// Réponse à UsageWindow. `aggregate: None` signifie « aucun échantillon
     /// attesté dans la fenêtre » — le greffe doit rendre « inconnu », pas zéro.
     UsageWindowResult {
@@ -2802,6 +2823,65 @@ mod tests {
             } if operation_kind == "send" && idempotency_key == "message-1" && delivery_id == "delivery-1"
         ));
         assert!(!welcome.allowed_for_attach());
+    }
+
+    /// La machine et la base du daemon voyagent par un message DÉDIÉ, dont les
+    /// deux valeurs doivent survivre au tour du fil — et rester distinctes de
+    /// tout chemin local.
+    ///
+    /// Mutant qui tue ce test : renvoyer `db_path` à la place de `host` → la
+    /// première assertion meurt.
+    #[test]
+    fn le_daemon_atteste_sa_machine_et_sa_base() {
+        let report = DaemonToWrapper::DaemonIdentityReport {
+            host: "monordinateur".to_string(),
+            db_path: "/Users/moi/.cache/bridget/bridget.db".to_string(),
+        };
+        match decode::<DaemonToWrapper>(&encode(&report).unwrap()).unwrap() {
+            DaemonToWrapper::DaemonIdentityReport { host, db_path } => {
+                assert_eq!(host, "monordinateur");
+                assert_eq!(db_path, "/Users/moi/.cache/bridget/bridget.db");
+            }
+            other => panic!("variante inattendue: {other:?}"),
+        }
+    }
+
+    /// Les deux hôtes du refus survivent au tour du fil ET restent distincts :
+    /// un oracle qui vérifierait seulement leur présence passerait aussi si le
+    /// producteur écrivait deux fois la même machine.
+    ///
+    /// Mutant qui tue ce test : sérialiser `requested_from` à partir de
+    /// `searched_on` → l'assertion d'inégalité meurt.
+    #[test]
+    fn cwd_gone_transporte_les_deux_machines_et_les_distingue() {
+        let refusal = SpawnRefusal::CwdGone {
+            searched_on: "monordinateur".to_string(),
+            requested_from: "cartae".to_string(),
+        };
+        let json = serde_json::to_string(&refusal).expect("sérialisable");
+        let decoded: SpawnRefusal = serde_json::from_str(&json).expect("décodable");
+        match decoded {
+            SpawnRefusal::CwdGone {
+                searched_on,
+                requested_from,
+            } => {
+                assert_eq!(searched_on, "monordinateur");
+                assert_eq!(requested_from, "cartae");
+                assert_ne!(searched_on, requested_from);
+            }
+            other => panic!("variante inattendue: {other:?}"),
+        }
+
+        // Refus produit par un daemon antérieur : champs vides, jamais devinés.
+        let ancien: SpawnRefusal =
+            serde_json::from_str(r#"{"kind":"cwd_gone"}"#).expect("refus historique décodable");
+        assert!(matches!(
+            ancien,
+            SpawnRefusal::CwdGone {
+                searched_on,
+                requested_from,
+            } if searched_on.is_empty() && requested_from.is_empty()
+        ));
     }
 
     #[test]

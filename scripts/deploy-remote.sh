@@ -19,6 +19,18 @@ esac
 
 echo "=== Déploiement bridget vers $REMOTE:$PORT ==="
 
+# Le rsync exclut .git : sans cette variable, build.rs ne trouve aucun dépôt et
+# retombe sur "unknown", ce qui fait afficher « daemon périmé » à CHAQUE commande
+# sur toute machine déployée — en accusant le daemon alors que c'est le client
+# qui n'est pas identifiable. `build.rs` lit BRIDGET_BUILD_ID en priorité.
+BUILD_ID="$(git -C "$PROJECT_DIR" rev-parse --short=12 HEAD 2>/dev/null || true)"
+if [[ -n "$BUILD_ID" ]] \
+    && [[ -n "$(git -C "$PROJECT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+    BUILD_ID="${BUILD_ID}-dirty"
+fi
+: "${BUILD_ID:=unknown}"
+echo "→ Identité de compilation : $BUILD_ID"
+
 echo "→ Synchronisation du code source..."
 rsync -az --delete --exclude 'target' --exclude '.git' --exclude '*.db' --exclude '*.sock' \
     "$PROJECT_DIR/" -e "ssh -p $PORT" "$REMOTE:$REMOTE_DIR/"
@@ -34,11 +46,13 @@ echo "  Rust: $(rustc --version)"
 REMOTE_SCRIPT
 
 echo "→ Compilation..."
-ssh -p $PORT "$REMOTE" 'bash -s' << 'REMOTE_SCRIPT'
+ssh -p $PORT "$REMOTE" 'bash -s' -- "$BUILD_ID" << 'REMOTE_SCRIPT'
 source "$HOME/.cargo/env" 2>/dev/null || true
 cd ~/bridget
+export BRIDGET_BUILD_ID="$1"
 cargo build --release 2>&1 | tail -5
 echo "  Binaire: $(ls -la target/release/bridget 2>/dev/null | awk '{print $5}') bytes"
+echo "  Build-id: $BRIDGET_BUILD_ID"
 REMOTE_SCRIPT
 
 echo "→ Installation..."

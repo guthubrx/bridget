@@ -73,6 +73,9 @@ impl DaemonGuard {
                 .arg("daemon")
                 .env_clear()
                 .env("HOME", home)
+                // Machine du banc, imposée : l'oracle peut alors nommer la
+                // VALEUR attendue au lieu de la recalculer.
+                .env("HOSTNAME", BANC_HOST)
                 .env("PATH", env::var("PATH").unwrap_or_default())
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -131,11 +134,15 @@ fn stop_daemon_child_best_effort(child: Option<&mut Child>) -> bool {
     child.wait().is_ok()
 }
 
+/// Nom de machine imposé au daemon ET au client de ce banc.
+const BANC_HOST: &str = "banc-attribution";
+
 fn status(binary: &Path, home: &Path) -> std::process::Output {
     Command::new(binary)
         .arg("status")
         .env_clear()
         .env("HOME", home)
+        .env("HOSTNAME", BANC_HOST)
         .env("PATH", env::var("PATH").unwrap_or_default())
         .output()
         .expect("interroger le daemon via le CLI réel")
@@ -157,13 +164,36 @@ fn daemon_et_cli_reels_transmettent_et_comparent_le_build_id() {
     let daemon = DaemonGuard::start(&daemon_binary, &home);
     let same_build = status(&daemon_binary, &home);
     assert!(same_build.status.success());
-    assert!(
-        String::from_utf8_lossy(&same_build.stdout).contains("Build-id daemon: daemon-build-test")
-    );
+    let rendu = String::from_utf8_lossy(&same_build.stdout).to_string();
+    assert!(rendu.contains("Build-id daemon: daemon-build-test"));
     assert!(
         same_build.stderr.is_empty(),
         "égalité silencieuse: {:?}",
         same_build.stderr
+    );
+
+    // La sonde d'identité doit rendre les DEUX valeurs que le daemon atteste,
+    // et ce sont les VALEURS qu'on éprouve — pas la présence des champs.
+    // La machine est imposée au banc, la base est celle du HOME isolé : les deux
+    // sont donc connues d'avance et nommées ici, sans être recalculées par le
+    // code de production.
+    assert!(
+        rendu.contains(&format!("Machine du daemon: {BANC_HOST}")),
+        "la machine attestée doit être celle du banc: {rendu}"
+    );
+    let base_attendue = home.join(".cache/bridget/bridget.db");
+    assert!(
+        rendu.contains(&format!(
+            "Base de données du daemon: {}",
+            base_attendue.display()
+        )),
+        "la base attestée doit être celle du daemon: {rendu}"
+    );
+    // Contrôle de sens : sans attestation, ces deux lignes diraient « machine
+    // non attestée ». Leur absence prouve que la sonde a bien abouti.
+    assert!(
+        !rendu.contains("machine non attestée"),
+        "la sonde d'identité n'a pas abouti: {rendu}"
     );
 
     // Une reconstruction ultérieure porte une identité différente, comme après
@@ -178,9 +208,20 @@ fn daemon_et_cli_reels_transmettent_et_comparent_le_build_id() {
         String::from_utf8_lossy(&different_build.stdout)
             .contains("Build-id daemon: daemon-build-test")
     );
+    // Le daemon de ce banc tourne SUR CETTE MACHINE : le verdict doit donc la
+    // nommer, et la remédiation doit être la commande de CETTE plateforme.
+    // Deux littéraux, un par plateforme — l'oracle nomme la valeur au lieu de
+    // la recalculer avec le code de production.
+    let ici = BANC_HOST;
+    let remediation = if cfg!(target_os = "macos") {
+        format!("launchctl kickstart -k gui/{}/com.bridget.daemon", unsafe {
+            libc::getuid()
+        })
+    } else {
+        "systemctl --user restart bridget-daemon".to_string()
+    };
     let expected = format!(
-        "daemon périmé (daemon-build-test vs client-build-avance) : launchctl kickstart -k gui/{}/com.bridget.daemon\n",
-        unsafe { libc::getuid() }
+        "daemon périmé sur {ici} (daemon-build-test) — client client-build-avance sur {ici} : {remediation}\n"
     );
     assert_eq!(String::from_utf8_lossy(&different_build.stderr), expected);
 

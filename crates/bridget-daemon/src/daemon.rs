@@ -508,6 +508,12 @@ fn desired_state_path(config: &DaemonConfig) -> PathBuf {
 
 /// État partagé du daemon.
 struct DaemonState {
+    /// Machine et base **de ce daemon**, retenues une fois au démarrage.
+    ///
+    /// Elles voyagent ensuite dans `ClientWelcome` : un client fédéré ne peut
+    /// pas les déduire, et jusqu'ici il affichait les siennes à leur place.
+    host: String,
+    db_path: PathBuf,
     router: Router,
     circuit_breaker: CircuitBreaker,
     deduplicator: Deduplicator,
@@ -1946,6 +1952,8 @@ impl DaemonState {
         let registry = AgentRegistry::load()?;
         let (view_closed_tx, view_closed_rx) = mpsc::channel();
         Ok(DaemonState {
+            host: crate::build_info::local_host(),
+            db_path: config.db_path.clone(),
             router: Router::new(),
             circuit_breaker: CircuitBreaker::new(
                 config.circuit_breaker_window,
@@ -2511,6 +2519,9 @@ fn reserve_managed_recoveries(
             &order,
             now,
             &resolved_definition,
+            // Reprise : le daemon relance ses propres agents chez lui, donc
+            // demandeur et exécutant sont la même machine.
+            &crate::lifecycle::SpawnHosts::local(),
         )? {
             SpawnDecision::Ready(recovery) => prepared.push(recovery),
             SpawnDecision::Rejected(reason) => {
@@ -3741,7 +3752,10 @@ fn handle_register_with_channel(
                 .insert(conn_id.to_string(), final_name.clone());
             state.conn_hosts.insert(
                 conn_id.to_string(),
-                host.clone().unwrap_or_else(|| "inconnu".to_string()),
+                // Sentinelle PARTAGEE : ce champ est relu par les gardes de
+                // localite, qui doivent pouvoir la reconnaitre.
+                host.clone()
+                    .unwrap_or_else(|| bridget_core::HOTE_NON_ATTESTE.to_string()),
             );
             state.conn_operating_systems.insert(
                 conn_id.to_string(),
@@ -3893,7 +3907,7 @@ fn handle_register_with_channel(
                 };
                 let host = previous
                     .as_ref()
-                    .filter(|presence| presence.host != "inconnu")
+                    .filter(|presence| bridget_core::host_is_attested(&presence.host))
                     .map(|presence| presence.host.clone())
                     .or(host)
                     .unwrap_or_else(|| "inconnu".to_string());
@@ -5330,14 +5344,64 @@ fn handle_wrapper_message(
                 {
                     Some(ServiceRefusal::CapabilityRequired)
                 }
+                // MATRICE EXHAUSTIVE — même raison que pour le rôle Client, et
+                // conséquence PIRE ici. Un message non classé y était refusé en
+                // silence : une sonde d'identité posée sur ce rôle rendrait
+                // « non attesté », une garde en conclurait « ne pas écrire », et
+                // le refus serait PERMANENT. Une garde qui refuse toujours
+                // ressemble à une garde qui marche — elle passe la revue verte
+                // et ne protège rien.
                 WrapperToDaemon::ServiceHello { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
                 | WrapperToDaemon::GuichetClaim { .. }
                 | WrapperToDaemon::GuichetLookup { .. }
                 | WrapperToDaemon::GuichetReply { .. }
-                | WrapperToDaemon::Heartbeat => None,
-                _ => Some(ServiceRefusal::MessageOutsideServiceRole),
+                | WrapperToDaemon::Heartbeat
+                // Sonde d'identité : lecture seule, aucune écriture durable. Le
+                // greffe en a besoin pour savoir SUR QUELLE MACHINE il écrirait.
+                | WrapperToDaemon::DaemonIdentityRequest => None,
+                WrapperToDaemon::RoleHandshake { .. }
+                | WrapperToDaemon::ClientHello { .. }
+                // Refusé AVANT ce lot aussi : il tombait dans le tiret bas.
+                // La forme change, le sort de ce message ne change pas.
+                | WrapperToDaemon::ServiceRequest { .. }
+                | WrapperToDaemon::SendIdempotent { .. }
+                | WrapperToDaemon::Lookup { .. }
+                | WrapperToDaemon::DeliverAcked { .. }
+                | WrapperToDaemon::DeliveryIndeterminate { .. }
+                | WrapperToDaemon::SpawnOrder { .. }
+                | WrapperToDaemon::StopOrder { .. }
+                | WrapperToDaemon::Subscribe { .. }
+                | WrapperToDaemon::Unsubscribe { .. }
+                | WrapperToDaemon::Subscribed { .. }
+                | WrapperToDaemon::JournalFragment { .. }
+                | WrapperToDaemon::LiveJournalFragment { .. }
+                | WrapperToDaemon::SnapshotCaughtUp { .. }
+                | WrapperToDaemon::Gap { .. }
+                | WrapperToDaemon::JournalReadError { .. }
+                | WrapperToDaemon::End { .. }
+                | WrapperToDaemon::AttachRejected { .. }
+                | WrapperToDaemon::Register { .. }
+                | WrapperToDaemon::JournalReady
+                | WrapperToDaemon::Unregister
+                | WrapperToDaemon::Rename { .. }
+                | WrapperToDaemon::Send { .. }
+                | WrapperToDaemon::DeliveryRejected { .. }
+                | WrapperToDaemon::TurnState { .. }
+                | WrapperToDaemon::CancelRequest { .. }
+                | WrapperToDaemon::ListRequests { .. }
+                | WrapperToDaemon::LedgerProjection { .. }
+                | WrapperToDaemon::ListAgents
+                | WrapperToDaemon::Runtime { .. }
+                | WrapperToDaemon::ServedModel { .. }
+                | WrapperToDaemon::RateLimit { .. }
+                | WrapperToDaemon::Usage { .. }
+                | WrapperToDaemon::UsageWindow { .. }
+                | WrapperToDaemon::Domain { .. }
+                | WrapperToDaemon::Availability { .. } => {
+                    Some(ServiceRefusal::MessageOutsideServiceRole)
+                }
             },
             Some(ConnectionRole::Wrapper) | None if is_service_message => {
                 Some(ServiceRefusal::ServiceRoleRequired)
@@ -5387,10 +5451,65 @@ fn handle_wrapper_message(
                 {
                     Some(ClientRefusal::CapabilityNotNegotiated)
                 }
+                // MATRICE EXHAUSTIVE — aucun `_`, et c'est délibéré.
+                //
+                // Le tiret bas précédent classait trois variantes et renvoyait
+                // les quarante-deux autres au refus, EN SILENCE. Ajouter une
+                // variante au protocole compilait sans rien dire, et le message
+                // neuf était rejeté en production sans qu'aucun test unitaire ne
+                // puisse le voir : c'est ainsi que `DaemonIdentityRequest` a été
+                // livré inatteignable. Désormais, ajouter une variante NE COMPILE
+                // PAS tant qu'elle n'est pas classée ici — le compilateur pose la
+                // question à la place du relecteur.
                 WrapperToDaemon::ClientHello { .. }
                 | WrapperToDaemon::SendIdempotent { .. }
-                | WrapperToDaemon::Lookup { .. } => None,
-                _ => Some(ClientRefusal::MessageOutsideClientRole),
+                | WrapperToDaemon::Lookup { .. }
+                // Sonde d'identité : lecture seule, aucune écriture durable, et
+                // c'est le rôle Client qui l'emprunte (`daemon_identity`).
+                | WrapperToDaemon::DaemonIdentityRequest => None,
+                WrapperToDaemon::RoleHandshake { .. }
+                | WrapperToDaemon::ServiceHello { .. }
+                | WrapperToDaemon::CoordinationSubscribe { .. }
+                | WrapperToDaemon::ServiceRequest { .. }
+                | WrapperToDaemon::GuichetClaimNext { .. }
+                | WrapperToDaemon::GuichetClaim { .. }
+                | WrapperToDaemon::GuichetLookup { .. }
+                | WrapperToDaemon::GuichetReply { .. }
+                | WrapperToDaemon::DeliverAcked { .. }
+                | WrapperToDaemon::DeliveryIndeterminate { .. }
+                | WrapperToDaemon::SpawnOrder { .. }
+                | WrapperToDaemon::StopOrder { .. }
+                | WrapperToDaemon::Subscribe { .. }
+                | WrapperToDaemon::Unsubscribe { .. }
+                | WrapperToDaemon::Subscribed { .. }
+                | WrapperToDaemon::JournalFragment { .. }
+                | WrapperToDaemon::LiveJournalFragment { .. }
+                | WrapperToDaemon::SnapshotCaughtUp { .. }
+                | WrapperToDaemon::Gap { .. }
+                | WrapperToDaemon::JournalReadError { .. }
+                | WrapperToDaemon::End { .. }
+                | WrapperToDaemon::AttachRejected { .. }
+                | WrapperToDaemon::Register { .. }
+                | WrapperToDaemon::JournalReady
+                | WrapperToDaemon::Unregister
+                | WrapperToDaemon::Rename { .. }
+                | WrapperToDaemon::Send { .. }
+                | WrapperToDaemon::DeliveryRejected { .. }
+                | WrapperToDaemon::TurnState { .. }
+                | WrapperToDaemon::CancelRequest { .. }
+                | WrapperToDaemon::ListRequests { .. }
+                | WrapperToDaemon::LedgerProjection { .. }
+                | WrapperToDaemon::Heartbeat
+                | WrapperToDaemon::ListAgents
+                | WrapperToDaemon::Runtime { .. }
+                | WrapperToDaemon::ServedModel { .. }
+                | WrapperToDaemon::RateLimit { .. }
+                | WrapperToDaemon::Usage { .. }
+                | WrapperToDaemon::UsageWindow { .. }
+                | WrapperToDaemon::Domain { .. }
+                | WrapperToDaemon::Availability { .. } => {
+                    Some(ClientRefusal::MessageOutsideClientRole)
+                }
             },
             Some(ConnectionRole::Wrapper) | None
                 if matches!(
@@ -6061,6 +6180,20 @@ fn handle_wrapper_message(
                 issued_at,
                 deadline_at,
             };
+            // Seul endroit du programme où les deux machines coexistent : le
+            // daemon cherche le `cwd` chez LUI, le demandeur peut être au bout
+            // du tunnel. `conn_hosts` porte l'hôte attesté à l'enregistrement.
+            let hosts = crate::lifecycle::SpawnHosts {
+                searched_on: st.host.clone(),
+                // Absence de connexion connue OU hote non atteste : meme fait,
+                // meme valeur. Le rendu s en chargera, pas deux litteraux.
+                requested_from: st
+                    .conn_hosts
+                    .get(conn_id)
+                    .filter(|host| bridget_core::host_is_attested(host))
+                    .cloned()
+                    .unwrap_or_else(|| bridget_core::HOTE_NON_ATTESTE.to_string()),
+            };
             let decision = submit_spawn(
                 &st.fleet,
                 &st.registry,
@@ -6068,6 +6201,7 @@ fn handle_wrapper_message(
                 &order,
                 unix_timestamp(),
                 st.recovering,
+                &hosts,
             );
             match decision {
                 Ok(SpawnDecision::Ready(prepared)) => {
@@ -6888,6 +7022,16 @@ fn handle_wrapper_message(
             }
         }
 
+        // Le daemon atteste SA machine et SA base : le client n'a plus à
+        // deviner, et n'affiche plus les siennes à leur place.
+        WrapperToDaemon::DaemonIdentityRequest => {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            Some(DaemonToWrapper::DaemonIdentityReport {
+                host: st.host.clone(),
+                db_path: st.db_path.display().to_string(),
+            })
+        }
+
         WrapperToDaemon::ListAgents => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let agents = st.agent_infos();
@@ -7158,7 +7302,7 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
         return DaemonStatus::default();
     }
 
-    let build_id = daemon_build_id(&config.socket_path);
+    let identity = daemon_identity(&config.socket_path);
 
     let stream = match UnixStream::connect(&config.socket_path) {
         Ok(s) => s,
@@ -7177,7 +7321,7 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
     let reg = WrapperToDaemon::Register {
         agent_type: "status-probe".to_string(),
         name: Some(format!("status-{}", std::process::id())),
-        host: None,
+        host: Some(crate::build_info::local_host()),
         transport: None,
         channel: ChannelReport::Unknown,
         mode: Some(PresenceMode::Cli),
@@ -7231,17 +7375,33 @@ pub fn get_status(config: &DaemonConfig) -> DaemonStatus {
         _ => vec![],
     };
 
-    // Compter les messages en base
-    let message_count = match Store::open(&config.db_path) {
+    // Compter les messages en base — mais SEULEMENT si la base locale est
+    // celle du daemon interrogé. Sur une machine fédérée, `config.db_path`
+    // désigne un fichier d'ici, pas celui du daemon qui vient de répondre :
+    // le compte était lu dans un orphelin local et présenté sous le chemin
+    // d'à côté, comme s'il décrivait le daemon.
+    let daemon_host = identity.as_ref().and_then(|identity| identity.host.clone());
+    let daemon_db_path = identity
+        .as_ref()
+        .and_then(|identity| identity.db_path.clone());
+    let message_count = daemon_store_is_local(
+        daemon_host.as_deref(),
+        daemon_db_path.as_deref(),
+        &crate::build_info::local_host(),
+        &config.db_path,
+    )
+    .then(|| match Store::open(&config.db_path) {
         Ok(store) => store.recent_messages(1000).map(|v| v.len()).unwrap_or(0),
         Err(_) => 0,
-    };
+    });
 
     DaemonStatus {
         running: true,
         agents,
         message_count,
-        build_id,
+        build_id: identity.map(|identity| identity.build_id),
+        daemon_host,
+        daemon_db_path,
     }
 }
 
@@ -7251,7 +7411,229 @@ fn build_id_probe_issuer_scope() -> String {
     crate::mcp::issuer_scope(BUILD_ID_PROBE_IDENTITY)
 }
 
-fn daemon_build_id(socket_path: &std::path::Path) -> Option<String> {
+/// Matrice message-role : la sonde d'identite doit rester atteignable.
+///
+/// Ce module est DELIBEREMENT hors de `presence_tests` : cette famille est
+/// ecartee de toutes nos mesures a cause d'un test qui bloque, et un oracle
+/// range dans une famille que personne ne joue ne garde rien.
+#[cfg(test)]
+mod matrice_roles_tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    /// Etat minimal : on n'eprouve que la matrice, pas la presence.
+    ///
+    /// Le chemin porte l'horloge en plus du PID : deux executions successives
+    /// du meme binaire ne doivent pas se disputer le meme fichier SQLite, sinon
+    /// le banc devient intermittent et l'intermittence se paie plus tard.
+    fn etat_nu(etiquette: &str) -> (Arc<Mutex<DaemonState>>, DaemonConfig) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("horloge")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "bridget-{}-{}-{nanos}",
+            etiquette,
+            std::process::id()
+        ));
+        let config = DaemonConfig {
+            socket_path: base.with_extension("sock"),
+            db_path: base.with_extension("db"),
+            log_path: base.with_extension("log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+        };
+        let (managed_tx, _managed_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(DaemonState::new(&config, managed_tx).unwrap()));
+        (state, config)
+    }
+
+    /// La sonde d'identite doit etre atteignable sur les DEUX roles.
+    ///
+    /// Le greffe se connecte en role Client pour deleguer, mais son guichet
+    /// passe en role Service. Les deux matrices portaient le meme tiret bas et
+    /// la variante y tombait : refus SILENCIEUX, identite non attestee, et une
+    /// garde qui en conclurait « ne pas ecrire » — DEFINITIVEMENT. Une garde
+    /// qui refuse toujours ressemble a une garde qui marche.
+    ///
+    /// Mutant qui tue ce test : reclasser `DaemonIdentityRequest` dans le bras
+    /// de refus de l'un OU l'autre role -> le rejet apparait et l'assertion
+    /// meurt en nommant le role fautif.
+    #[test]
+    fn la_sonde_d_identite_est_atteignable_sur_les_roles_client_et_service() {
+        let (shared, config) = etat_nu("sonde-identite");
+
+        for (connexion, role) in [
+            ("conn-client", ConnectionRole::Client),
+            ("conn-service", ConnectionRole::Service),
+        ] {
+            assert!(matches!(
+                handle_wrapper_message(connexion, WrapperToDaemon::RoleHandshake { role }, &shared,),
+                Some(DaemonToWrapper::RoleAccepted { .. })
+            ));
+
+            // Demandee SANS negociation prealable : elle ne lit que ce que le
+            // daemon atteste de lui-meme, elle n'ouvre aucun droit.
+            let reponse =
+                handle_wrapper_message(connexion, WrapperToDaemon::DaemonIdentityRequest, &shared);
+            match reponse {
+                Some(DaemonToWrapper::DaemonIdentityReport { host, db_path }) => {
+                    // Les VALEURS, pas la presence : ce sont celles de l'etat.
+                    let attendu = shared.lock().unwrap_or_else(|p| p.into_inner());
+                    assert_eq!(host, attendu.host, "role {role:?}");
+                    assert_eq!(
+                        db_path,
+                        attendu.db_path.display().to_string(),
+                        "role {role:?}"
+                    );
+                }
+                autre => panic!("role {role:?} : identite attendue, obtenu {autre:?}"),
+            }
+        }
+        // Ne pas laisser de fichier derriere soi : c'est le meme reflexe que
+        // pour les processus, et il a deja coute une soiree a ce chantier.
+        let _ = std::fs::remove_file(&config.db_path);
+    }
+}
+
+/// Le compte de messages n'est mesurable d'ici que si la base locale est
+/// EXACTEMENT celle que le daemon atteste. Sans attestation, il ne l'est pas :
+/// une absence n'autorise pas à compter dans le fichier qu'on a sous la main.
+pub(crate) fn daemon_store_is_local(
+    daemon_host: Option<&str>,
+    daemon_db_path: Option<&str>,
+    local_host: &str,
+    local_db_path: &std::path::Path,
+) -> bool {
+    // MÊME CHEMIN N'EST PAS MÊME MACHINE. Deux hôtes Linux portent couramment
+    // le même `/home/moi/.cache/bridget/bridget.db` : comparer les chemins seuls
+    // déclarait locale une base qui vit ailleurs, et faisait lire le fichier d'à
+    // côté comme s'il décrivait le daemon. L'hôte était disponible et écarté de
+    // la décision — le système savait nommer la machine, il ne l'attribuait pas.
+    //
+    // Source UNIQUE : `get_status` et la carte de reprise passent tous deux ici,
+    // pour que deux vues du même système ne puissent pas diverger.
+    // UNE ABSENCE N'EST PAS UNE IDENTITE, ET DEUX ABSENCES NE SONT PAS EGALES.
+    // `local_host` retombe sur une sentinelle quand la machine ne peut pas etre
+    // determinee. Deux machines DIFFERENTES qui echouent toutes deux a se nommer
+    // rendent alors la MEME chaine — et avec le chemin de base standard,
+    // identique partout, l egalite les declarerait locales l une pour l autre.
+    // C'est la charge « meme chemin n'est pas meme machine » qui revient par la
+    // porte du repli : on ferme ici les hotes INDETERMINES, pas seulement les
+    // hotes DIFFERENTS.
+    bridget_core::host_is_attested(local_host)
+        && daemon_host
+            .is_some_and(|host| bridget_core::host_is_attested(host) && host == local_host)
+        && daemon_db_path.is_some_and(|path| std::path::Path::new(path) == local_db_path)
+}
+
+#[cfg(test)]
+mod attribution_tests {
+    use super::daemon_store_is_local;
+    use std::path::Path;
+
+    /// POINT 1 — la garde qui empêche de compter dans la base d'à côté.
+    ///
+    /// Éprouvée sur la décision elle-même, et non à travers `get_status` : un
+    /// premier oracle passait par une socket absente, donc `get_status` sortait
+    /// AVANT la garde et le test restait vert même sans elle.
+    ///
+    /// DEUX CONTRÔLES OPPOSÉS SUR LE MÊME CHEMIN, c'est le cœur du test :
+    /// même chemin + hôtes distincts doit rendre FAUX ; même chemin + même hôte
+    /// doit rendre VRAI. Un seul des deux ne prouverait rien — une garde qui
+    /// refuserait toujours passerait le premier, une garde qui ignorerait l'hôte
+    /// passerait le second.
+    ///
+    /// Mutant qui tue ce test : retirer la comparaison d'hôtes → le premier cas,
+    /// deux machines partageant le même chemin, devient vrai et meurt.
+    #[test]
+    fn compter_exige_la_meme_machine_et_le_meme_chemin() {
+        let chemin = Path::new("/home/moi/.cache/bridget/bridget.db");
+
+        // MÊME CHEMIN, HÔTES DISTINCTS — le cas que deux Linux produisent tout
+        // seuls. La base nommée existe ici ET là-bas ; elle n'est pas la même.
+        assert!(
+            !daemon_store_is_local(
+                Some("monordinateur"),
+                Some("/home/moi/.cache/bridget/bridget.db"),
+                "cartae",
+                chemin
+            ),
+            "même chemin sur deux machines distinctes ne doit PAS être local"
+        );
+
+        // MÊME CHEMIN, MÊME HÔTE — contrôle positif opposé.
+        assert!(
+            daemon_store_is_local(
+                Some("cartae"),
+                Some("/home/moi/.cache/bridget/bridget.db"),
+                "cartae",
+                chemin
+            ),
+            "même chemin sur la même machine DOIT être local"
+        );
+
+        // MÊME HÔTE, CHEMINS DISTINCTS — l'hôte seul ne suffit pas non plus.
+        assert!(
+            !daemon_store_is_local(Some("cartae"), Some("/autre/bridget.db"), "cartae", chemin),
+            "un autre chemin sur la même machine n'est pas cette base"
+        );
+
+        // DEUX HOTES INDETERMINES, MEME CHEMIN — signale par rc7. Les deux
+        // cotes rendent la sentinelle de repli ; l'egalite ne prouve alors rien
+        // du tout, et le cas courant est justement le meme chemin partout.
+        assert!(
+            !daemon_store_is_local(
+                Some(bridget_core::HOTE_NON_ATTESTE),
+                Some("/home/moi/.cache/bridget/bridget.db"),
+                bridget_core::HOTE_NON_ATTESTE,
+                chemin
+            ),
+            "deux machines indeterminees ne sont pas la meme machine"
+        );
+        // Et le cas mixte : un cote atteste, l'autre non.
+        assert!(!daemon_store_is_local(
+            Some(bridget_core::HOTE_NON_ATTESTE),
+            Some("/home/moi/.cache/bridget/bridget.db"),
+            "cartae",
+            chemin
+        ));
+        assert!(!daemon_store_is_local(
+            Some("cartae"),
+            Some("/home/moi/.cache/bridget/bridget.db"),
+            bridget_core::HOTE_NON_ATTESTE,
+            chemin
+        ));
+
+        // Daemon antérieur : rien d'attesté, donc rien à compter.
+        assert!(!daemon_store_is_local(None, None, "cartae", chemin));
+        assert!(!daemon_store_is_local(
+            Some("cartae"),
+            None,
+            "cartae",
+            chemin
+        ));
+        assert!(!daemon_store_is_local(
+            None,
+            Some("/home/moi/.cache/bridget/bridget.db"),
+            "cartae",
+            chemin
+        ));
+    }
+}
+
+/// Ce que le daemon atteste de LUI-MÊME au client qui l'interroge.
+#[derive(Debug, Clone, Default)]
+pub struct DaemonIdentity {
+    pub build_id: String,
+    pub host: Option<String>,
+    pub db_path: Option<String>,
+}
+
+fn daemon_identity(socket_path: &std::path::Path) -> Option<DaemonIdentity> {
     use std::io::{BufRead, BufReader, BufWriter, Write};
     use std::os::unix::net::UnixStream;
 
@@ -7299,9 +7681,46 @@ fn daemon_build_id(socket_path: &std::path::Path) -> Option<String> {
     match reader.read_line(&mut line).ok()? {
         0 => None,
         _ => match decode(line.trim()).ok()? {
-            DaemonToWrapper::ClientWelcome { build_id, .. } => Some(build_id),
+            DaemonToWrapper::ClientWelcome { build_id, .. } => {
+                // Second aller-retour, sur la MÊME connexion : la machine et la
+                // base ne sont pas déductibles côté client.
+                let (host, db_path) =
+                    match probe_daemon_identity(&mut writer, &mut reader, &mut line) {
+                        Some((host, db_path)) => (Some(host), Some(db_path)),
+                        // Daemon antérieur au message : non attesté, jamais deviné.
+                        None => (None, None),
+                    };
+                Some(DaemonIdentity {
+                    build_id,
+                    host,
+                    db_path,
+                })
+            }
             _ => None,
         },
+    }
+}
+
+/// Demande au daemon ce qu'il atteste de lui-même. `None` = daemon antérieur.
+fn probe_daemon_identity<W: std::io::Write, R: std::io::BufRead>(
+    writer: &mut W,
+    reader: &mut R,
+    line: &mut String,
+) -> Option<(String, String)> {
+    writeln!(
+        writer,
+        "{}",
+        encode(&WrapperToDaemon::DaemonIdentityRequest).ok()?
+    )
+    .ok()?;
+    writer.flush().ok()?;
+    line.clear();
+    if reader.read_line(line).ok()? == 0 {
+        return None;
+    }
+    match decode(line.trim()).ok()? {
+        DaemonToWrapper::DaemonIdentityReport { host, db_path } => Some((host, db_path)),
+        _ => None,
     }
 }
 
@@ -7309,8 +7728,13 @@ fn daemon_build_id(socket_path: &std::path::Path) -> Option<String> {
 pub struct DaemonStatus {
     pub running: bool,
     pub agents: Vec<bridget_transport::protocol::AgentInfo>,
-    pub message_count: usize,
+    /// `None` quand la base locale n'est PAS celle du daemon interrogé : on ne
+    /// rend alors aucun chiffre plutôt qu'un chiffre pris ailleurs.
+    pub message_count: Option<usize>,
     pub build_id: Option<String>,
+    /// Machine et base attestées par le daemon lui-même.
+    pub daemon_host: Option<String>,
+    pub daemon_db_path: Option<String>,
 }
 
 #[cfg(test)]
