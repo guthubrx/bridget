@@ -438,6 +438,13 @@ impl Presence {
         self.link_seen = now;
     }
 
+    /// Un message émis atteste une capacité métier, mais pas forcément le
+    /// socket principal : MCP et la CLI passent par une connexion auxiliaire.
+    /// Ne jamais prolonger le retain du wrapper à partir de cette observation.
+    fn touch_message_activity(&mut self) {
+        self.capacity_seen = Instant::now();
+    }
+
     /// Lien socket seul (heartbeat) : ne prouve aucune capacité.
     fn touch_link(&mut self) {
         self.link_seen = Instant::now();
@@ -508,12 +515,16 @@ fn desired_state_path(config: &DaemonConfig) -> PathBuf {
 
 /// État partagé du daemon.
 struct DaemonState {
-    /// Machine et base **de ce daemon**, retenues une fois au démarrage.
+    /// Machine, base et identité **de ce daemon**, retenues une fois au
+    /// démarrage.
     ///
-    /// Elles voyagent ensuite dans `ClientWelcome` : un client fédéré ne peut
-    /// pas les déduire, et jusqu'ici il affichait les siennes à leur place.
+    /// Le rapport dédié les atteste ensuite sur chaque connexion : un client
+    /// fédéré ne peut pas les déduire, ni confondre deux redémarrages locaux.
     host: String,
     db_path: PathBuf,
+    /// Valeur éphémère créée une fois pour ce démarrage. Elle rend observable
+    /// le remplacement d'un daemon même quand hôte, base et build sont égaux.
+    instance_id: String,
     router: Router,
     circuit_breaker: CircuitBreaker,
     deduplicator: Deduplicator,
@@ -1954,6 +1965,7 @@ impl DaemonState {
         Ok(DaemonState {
             host: crate::build_info::local_host(),
             db_path: config.db_path.clone(),
+            instance_id: Uuid::new_v4().to_string(),
             router: Router::new(),
             circuit_breaker: CircuitBreaker::new(
                 config.circuit_breaker_window,
@@ -4532,6 +4544,16 @@ fn presence_of_agent<'a>(state: &'a mut DaemonState, agent: &str) -> Option<&'a 
     state.presences.get_mut(&instance_id)
 }
 
+/// Date l'activité d'un expéditeur uniquement lorsqu'il correspond à une
+/// présence enregistrée. Un client éphémère peut transporter le message au nom
+/// de l'agent : la connexion courante n'est donc pas l'autorité, le principal
+/// logique du message l'est.
+fn touch_message_sender_activity(state: &mut DaemonState, sender: &str) {
+    if let Some(presence) = presence_of_agent(state, sender) {
+        presence.touch_message_activity();
+    }
+}
+
 /// Remplace le domaine d'un agent, ou le ramène à son domaine dérivé.
 fn handle_domain(agent: &str, domain: Option<String>, state: &mut DaemonState) -> DaemonToWrapper {
     if let Some(Err(reason)) = domain.as_deref().map(validate_runtime_value) {
@@ -5166,6 +5188,9 @@ fn handle_idempotent_send(
             reason: "impossible de préparer la remise".to_string(),
         };
     }
+    // La préparation durable est le premier point qui atteste l'envoi. Avant
+    // lui, un refus ne doit jamais faire passer l'expéditeur pour actif.
+    touch_message_sender_activity(st, &message.from);
     remember_reply_cycle(
         st,
         &message,
@@ -6914,8 +6939,13 @@ fn handle_wrapper_message(
             let target_conn = prepared.target_conn;
             let conv_key = format!("{}|{}", bridge_msg.from, bridge_msg.to);
 
-            if let Err(e) = st.store.record_message(&bridge_msg, &conv_key) {
-                error!("store: {}", e);
+            match st.store.record_message(&bridge_msg, &conv_key) {
+                Ok(()) => {
+                    // Même frontière que la voie idempotente : le message est
+                    // durable avant de rafraîchir la capacité de l'expéditeur.
+                    touch_message_sender_activity(&mut st, &bridge_msg.from);
+                }
+                Err(e) => error!("store: {}", e),
             }
             st.circuit_breaker
                 .record(&prepared.logical_sender, &bridge_msg.to);
@@ -7022,13 +7052,14 @@ fn handle_wrapper_message(
             }
         }
 
-        // Le daemon atteste SA machine et SA base : le client n'a plus à
-        // deviner, et n'affiche plus les siennes à leur place.
+        // Le daemon atteste SA machine, SA base et SON démarrage : le client
+        // n'a plus à deviner, ni à confondre deux instances du même binaire.
         WrapperToDaemon::DaemonIdentityRequest => {
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
             Some(DaemonToWrapper::DaemonIdentityReport {
                 host: st.host.clone(),
                 db_path: st.db_path.display().to_string(),
+                instance_id: st.instance_id.clone(),
             })
         }
 
@@ -7419,7 +7450,10 @@ fn build_id_probe_issuer_scope() -> String {
 #[cfg(test)]
 mod matrice_roles_tests {
     use super::*;
+    use std::os::unix::net::UnixListener;
+    use std::path::PathBuf;
     use std::sync::mpsc;
+    use std::thread;
 
     /// Etat minimal : on n'eprouve que la matrice, pas la presence.
     ///
@@ -7451,6 +7485,70 @@ mod matrice_roles_tests {
         (state, config)
     }
 
+    struct NettoyageSondeIdentite {
+        socket_path: PathBuf,
+        db_path: PathBuf,
+    }
+
+    impl Drop for NettoyageSondeIdentite {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.socket_path);
+            let _ = std::fs::remove_file(&self.db_path);
+        }
+    }
+
+    fn sert_une_identite(
+        listener: UnixListener,
+        state: Arc<Mutex<DaemonState>>,
+    ) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("connexion du client de sonde");
+            handle_connection(stream, state).expect("service de la sonde");
+        })
+    }
+
+    /// Oracle M1 local-vers-local : le socket est remplacé entre deux
+    /// démarrages qui partagent délibérément hôte, binaire et base. BUILD_ID
+    /// reste identique ; seule l'identité de démarrage doit changer.
+    #[test]
+    fn redemarrage_local_sur_le_meme_socket_change_l_identite_d_instance() {
+        let (premier_etat, config) = etat_nu("identite-instance-redemarrage");
+        let _nettoyage = NettoyageSondeIdentite {
+            socket_path: config.socket_path.clone(),
+            db_path: config.db_path.clone(),
+        };
+        let premier_listener = UnixListener::bind(&config.socket_path).expect("premier socket");
+        let premier_serveur = sert_une_identite(premier_listener, premier_etat);
+        let premier = daemon_identity(&config.socket_path).expect("premier rapport d'identite");
+        premier_serveur.join().expect("premier daemon termine");
+
+        std::fs::remove_file(&config.socket_path).expect("retrait premier socket");
+        let (managed_tx, _managed_rx) = mpsc::channel();
+        let second_etat = Arc::new(Mutex::new(
+            DaemonState::new(&config, managed_tx).expect("second daemon"),
+        ));
+        let second_listener = UnixListener::bind(&config.socket_path).expect("second socket");
+        let second_serveur = sert_une_identite(second_listener, second_etat);
+        let second = daemon_identity(&config.socket_path).expect("second rapport d'identite");
+        second_serveur.join().expect("second daemon termine");
+
+        assert_eq!(premier.build_id, second.build_id, "meme binaire attendu");
+        assert_eq!(premier.host, second.host, "meme hote attendu");
+        assert_eq!(premier.db_path, second.db_path, "meme base attendue");
+        let premier_id = premier
+            .instance_id
+            .as_deref()
+            .expect("le premier rapport doit attester une instance");
+        let second_id = second
+            .instance_id
+            .as_deref()
+            .expect("le second rapport doit attester une instance");
+        assert_ne!(
+            premier_id, second_id,
+            "un redemarrage local ne doit jamais reemployer l'identite d'instance"
+        );
+    }
+
     /// La sonde d'identite doit etre atteignable sur les DEUX roles.
     ///
     /// Le greffe se connecte en role Client pour deleguer, mais son guichet
@@ -7480,7 +7578,11 @@ mod matrice_roles_tests {
             let reponse =
                 handle_wrapper_message(connexion, WrapperToDaemon::DaemonIdentityRequest, &shared);
             match reponse {
-                Some(DaemonToWrapper::DaemonIdentityReport { host, db_path }) => {
+                Some(DaemonToWrapper::DaemonIdentityReport {
+                    host,
+                    db_path,
+                    instance_id,
+                }) => {
                     // Les VALEURS, pas la presence : ce sont celles de l'etat.
                     let attendu = shared.lock().unwrap_or_else(|p| p.into_inner());
                     assert_eq!(host, attendu.host, "role {role:?}");
@@ -7489,6 +7591,7 @@ mod matrice_roles_tests {
                         attendu.db_path.display().to_string(),
                         "role {role:?}"
                     );
+                    assert_eq!(instance_id, attendu.instance_id, "role {role:?}");
                 }
                 autre => panic!("role {role:?} : identite attendue, obtenu {autre:?}"),
             }
@@ -7631,6 +7734,8 @@ pub struct DaemonIdentity {
     pub build_id: String,
     pub host: Option<String>,
     pub db_path: Option<String>,
+    /// `None` désigne un daemon antérieur, donc une instance non attestée.
+    pub instance_id: Option<String>,
 }
 
 fn daemon_identity(socket_path: &std::path::Path) -> Option<DaemonIdentity> {
@@ -7684,16 +7789,19 @@ fn daemon_identity(socket_path: &std::path::Path) -> Option<DaemonIdentity> {
             DaemonToWrapper::ClientWelcome { build_id, .. } => {
                 // Second aller-retour, sur la MÊME connexion : la machine et la
                 // base ne sont pas déductibles côté client.
-                let (host, db_path) =
+                let (host, db_path, instance_id) =
                     match probe_daemon_identity(&mut writer, &mut reader, &mut line) {
-                        Some((host, db_path)) => (Some(host), Some(db_path)),
+                        Some((host, db_path, instance_id)) => {
+                            (Some(host), Some(db_path), Some(instance_id))
+                        }
                         // Daemon antérieur au message : non attesté, jamais deviné.
-                        None => (None, None),
+                        None => (None, None, None),
                     };
                 Some(DaemonIdentity {
                     build_id,
                     host,
                     db_path,
+                    instance_id,
                 })
             }
             _ => None,
@@ -7706,7 +7814,7 @@ fn probe_daemon_identity<W: std::io::Write, R: std::io::BufRead>(
     writer: &mut W,
     reader: &mut R,
     line: &mut String,
-) -> Option<(String, String)> {
+) -> Option<(String, String, String)> {
     writeln!(
         writer,
         "{}",
@@ -7719,7 +7827,11 @@ fn probe_daemon_identity<W: std::io::Write, R: std::io::BufRead>(
         return None;
     }
     match decode(line.trim()).ok()? {
-        DaemonToWrapper::DaemonIdentityReport { host, db_path } => Some((host, db_path)),
+        DaemonToWrapper::DaemonIdentityReport {
+            host,
+            db_path,
+            instance_id,
+        } => Some((host, db_path, instance_id)),
         _ => None,
     }
 }
@@ -8065,6 +8177,188 @@ mod presence_tests {
             },
         );
         (state, config)
+    }
+
+    /// Ajoute un expéditeur réellement enregistré dont la connexion reste
+    /// vivante, mais dont la dernière capacité remonte à plus de trente
+    /// minutes. Le cas reproduit les agents tmux reconnectés ensemble : lien
+    /// frais, activité publique ancienne.
+    fn state_with_aged_sender(label: &str) -> (DaemonState, DaemonConfig) {
+        let (mut state, config) = state_with_registered_agent(label);
+        assert!(matches!(
+            handle_register_with_channel(
+                "conn-sender",
+                "codex".to_string(),
+                Some("agent-sender".to_string()),
+                Some("cartae".to_string()),
+                Some("tmux".to_string()),
+                ChannelReport::Known("unix".to_string()),
+                Some(PresenceMode::Tmux),
+                Some("session:1.1".to_string()),
+                Some("Linux".to_string()),
+                Some("instance-sender".to_string()),
+                Some("bridget".to_string()),
+                false,
+                Some(false),
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { name } if name == "agent-sender"
+        ));
+        let stale = Instant::now()
+            .checked_sub(Duration::from_secs(1900))
+            .expect("horloge de capacité vieillie");
+        let sender = state.presences.get_mut("instance-sender").unwrap();
+        sender.capacity_seen = stale;
+        sender.link_seen = Instant::now()
+            .checked_sub(Duration::from_secs(120))
+            .expect("horloge de lien encore retenue");
+        (state, config)
+    }
+
+    fn assert_sender_last_seen(state: &mut DaemonState, expected_fresh: bool) {
+        assert!(
+            state
+                .presences
+                .get("instance-sender")
+                .unwrap()
+                .link_seen
+                .elapsed()
+                >= Duration::from_secs(60),
+            "l'activité MCP/CLI ne doit pas rajeunir le socket principal"
+        );
+        let sender = state
+            .agent_infos()
+            .into_iter()
+            .find(|agent| agent.name == "agent-sender")
+            .expect("expéditeur enregistré visible dans l'annuaire");
+        if expected_fresh {
+            assert!(
+                sender.last_seen_secs < 2,
+                "un message émis maintenant doit rajeunir last_seen_secs, reçu={} s",
+                sender.last_seen_secs
+            );
+        } else {
+            assert!(
+                sender.last_seen_secs >= 1800,
+                "un refus ou une réception seule ne doit pas inventer une activité, reçu={} s",
+                sender.last_seen_secs
+            );
+        }
+    }
+
+    #[test]
+    fn session_046_envoi_idempotent_ancien_agent_actif_rajeunit_last_seen() {
+        let (state, config) = state_with_aged_sender("last-seen-idempotent");
+        let shared = Arc::new(Mutex::new(state));
+        negotiate_idempotent_client(&shared, "client-activity", "046_scope_aaaaaaaaaaaa");
+        let mut message = BridgetMessage::new("agent-sender", "agent-2", "activité réelle");
+        message.hops = 4;
+        let result = handle_wrapper_message(
+            "client-activity",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "activity-idempotent".to_string(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        );
+        assert!(matches!(
+            result,
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown { .. },
+                ..
+            })
+        ));
+        assert_sender_last_seen(&mut shared.lock().unwrap(), true);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn session_046_envoi_historique_ancien_agent_actif_rajeunit_last_seen() {
+        let (mut state, config) = state_with_aged_sender("last-seen-historique");
+        let (target_writer, mut target_reader) = control_socket("last-seen-historique");
+        state
+            .connections
+            .insert("conn-1".to_string(), target_writer);
+        let shared = Arc::new(Mutex::new(state));
+        let result = handle_wrapper_message(
+            "conn-sender",
+            WrapperToDaemon::Send(BridgetMessage::new(
+                "identité-écrasée-par-le-wrapper",
+                "agent-2",
+                "activité historique réelle",
+            )),
+            &shared,
+        );
+        assert!(matches!(result, Some(DaemonToWrapper::Ack { .. })));
+        assert!(matches!(
+            read_control(&mut target_reader),
+            DaemonToWrapper::Deliver(message)
+                if message.from == "agent-sender" && message.to == "agent-2"
+        ));
+        assert_sender_last_seen(&mut shared.lock().unwrap(), true);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn session_046_envoi_refuse_ne_rajeunit_pas_last_seen() {
+        let (state, config) = state_with_aged_sender("last-seen-refus");
+        let shared = Arc::new(Mutex::new(state));
+        negotiate_idempotent_client(&shared, "client-refused", "046_scope_bbbbbbbbbbbb");
+        let mut message = BridgetMessage::new("agent-sender", "agent-inconnu", "à refuser");
+        message.hops = 4;
+        let result = handle_wrapper_message(
+            "client-refused",
+            WrapperToDaemon::SendIdempotent {
+                message,
+                message_id: "activity-refused".to_string(),
+                issued_at: unix_now_secs(),
+            },
+            &shared,
+        );
+        assert!(matches!(
+            result,
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::Rejected { .. },
+                ..
+            })
+        ));
+        assert_sender_last_seen(&mut shared.lock().unwrap(), false);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn session_046_reception_seule_ne_rajeunit_pas_last_seen() {
+        let (mut state, config) = state_with_aged_sender("last-seen-reception");
+        let (target_writer, mut target_reader) = control_socket("last-seen-reception");
+        state
+            .conn_names
+            .insert("conn-1".to_string(), "agent-2".to_string());
+        state
+            .connections
+            .insert("conn-sender".to_string(), target_writer);
+        let shared = Arc::new(Mutex::new(state));
+        let result = handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::Send(BridgetMessage::new(
+                "identité-écrasée-par-le-wrapper",
+                "agent-sender",
+                "mandat reçu sans activité émise",
+            )),
+            &shared,
+        );
+        assert!(matches!(result, Some(DaemonToWrapper::Ack { .. })));
+        let delivered = read_control(&mut target_reader);
+        assert!(
+            matches!(
+                delivered,
+                DaemonToWrapper::Deliver(ref message)
+                    if message.from == "agent-2" && message.to == "agent-sender"
+            ),
+            "trame reçue par la cible: {delivered:?}"
+        );
+        assert_sender_last_seen(&mut shared.lock().unwrap(), false);
+        let _ = std::fs::remove_file(config.db_path);
     }
 
     #[test]
