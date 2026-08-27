@@ -5,6 +5,7 @@
 **Base fonctionnelle** : session 021, tête `2623772`
 
 **Dépendance de schéma** : v17 (021) → v18 (refus local rc1) → v19 (026)
+→ v20 (reçus des mutations centrales)
 **Statut** : seconde tranche urgente — pilotage fédéré du greffe central
 
 ## Pourquoi cette tranche existe
@@ -18,9 +19,9 @@ cette citation. Le chemin fédéré ne pouvait pas même déposer `delegate`. Ce
 tranche admet donc l'enveloppe, applique la même règle déterministe et produit
 un refus terminal durable avant toute mutation métier.
 
-Elle ne prétend pas encore déléguer à distance. Une demande cohérente reçoit
-`operation_not_available`, elle aussi persistée : un dépôt n'est jamais vendu
-comme un effet applicatif.
+La première tranche ne prétendait pas encore déléguer à distance. Une demande
+cohérente recevait `operation_not_available`, lui aussi persisté : un dépôt
+n'était jamais vendu comme un effet applicatif.
 
 La seconde tranche conserve cette porte unique et rend applicatives trois
 mutations strictement bornées : `delegate`, `registre_add` et
@@ -76,6 +77,15 @@ les contraintes structurelles. Cela permet de conserver le nom d'une tentative
 refusée sans en faire une variante autorisée. Une chaîne inconnue injectée en
 SQL échoue `StoreError::Corrupt` à sa première lecture Rust.
 
+La migration v20 applique la même propriété à `guichet_receptions`. Son ancien
+`CHECK(operation IN ...)` recopiait les trois opérations historiques et faisait
+échouer la persistance du reçu après un effet `delegate`, `registre_add` ou
+`objective_close` pourtant appliqué. v20 retire cette seconde énumération SQL,
+conserve toutes les contraintes structurelles et laisse `OperationGuichet`
+être l'unique vocabulaire fermé. Le préflight prouve que la forme v19 refuse
+encore une opération nouvelle et que la forme v20 accepte son stockage tout en
+la refusant fermée à la lecture Rust.
+
 ### P2605 — Aucun saut de migration
 
 v19 ne s'applique qu'après la vraie v18 de rc1. Son préflight transactionnel :
@@ -88,6 +98,12 @@ v19 ne s'applique qu'après la vraie v18 de rc1. Son préflight transactionnel :
 
 Une base seulement estampillée v18, sans ce DDL, est refusée sans mutation. Une
 base estampillée v19 qui porte encore le CHECK v18 est également refusée.
+
+v20 ne s'applique qu'après une vraie v19 construite par le chemin de migration
+de production. Sa reconstruction copie les colonnes nommées dans la même
+transaction, puis compare le reçu historique complet, blobs compris, octet pour
+octet. Une sonde sous savepoint vérifie la forme avant et après sans laisser de
+ligne sentinelle.
 
 ### P2606 — Même service métier, quel que soit l'appelant
 
@@ -190,10 +206,11 @@ réservées à la frappe humaine.
    n'est pas encore disponible.
 3. Une valeur d'opération inconnue est injectée directement dans la table
    privée : la première lecture échoue fermée.
-4. Une vraie v18 migre vers v19 en conservant les octets historiques ; une
-   fausse v18 et une fausse v19 ne modifient ni schéma ni numéro.
-5. Une copie privée v14 emprunte réellement v17, v18 puis v19 ; sa source reste
-   octet-identique. Le bootstrap vide est exercé séparément.
+4. Une vraie v18 migre vers v19, puis une vraie v19 vers v20, en conservant les
+   octets historiques ; une fausse v18 et une fausse v19 ne modifient ni schéma
+   ni numéro.
+5. Une copie privée v14 emprunte réellement v17, v18, v19 puis v20 ; sa source
+   reste octet-identique. Le bootstrap vide est exercé séparément.
 6. Un MCP enregistré sous son identité résolue dépose chacune des trois
    mutations ; aucun premier retour ne prétend que l'effet est appliqué.
 7. La relève Maicie applique chaque mutation par le même service que le CLI,

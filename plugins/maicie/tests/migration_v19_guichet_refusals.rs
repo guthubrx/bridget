@@ -6,7 +6,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-const EXPECTED_SCHEMA_VERSION: i64 = 19;
+#[path = "support/historical_guichet_receptions.rs"]
+mod historical_guichet_receptions;
+
+const EXPECTED_SCHEMA_VERSION: i64 = 20;
 
 fn root(label: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("maicie-v19-{label}-{}", Uuid::new_v4()));
@@ -84,8 +87,9 @@ fn downgrade_to_v18(path: &Path) {
         )
         .unwrap();
     rebuild_closed_refusal_table(&connection, true);
+    historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
     connection
-        .execute("DELETE FROM schema_migrations WHERE version = 19", [])
+        .execute("DELETE FROM schema_migrations WHERE version >= 19", [])
         .unwrap();
     connection.pragma_update(None, "user_version", 18).unwrap();
 }
@@ -94,6 +98,7 @@ fn downgrade_to_v14(path: &Path) {
     drop(MaicieStore::open(path).unwrap());
     let connection = Connection::open(path).unwrap();
     rebuild_closed_refusal_table(&connection, false);
+    historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
     connection
         .execute_batch(
             "DROP TRIGGER local_delegate_refusals_append_only_update;
@@ -109,7 +114,7 @@ fn downgrade_to_v14(path: &Path) {
 }
 
 #[test]
-fn v19_succede_a_la_v18_reelle_et_conserve_les_refus_octet_par_octet() {
+fn v19_puis_v20_succedent_a_la_v18_reelle_et_conservent_les_refus_octet_par_octet() {
     let root = root("real-v18");
     let database = root.join("maicie.sqlite3");
     downgrade_to_v18(&database);
@@ -208,7 +213,7 @@ fn v19_refuse_son_propre_numero_si_le_check_v18_subsiste() {
     drop(connection);
     let before = schema_snapshot(&database);
 
-    let error = match MaicieStore::open(&database) {
+    let error = match MaicieStore::open_and_migrate(&database) {
         Ok(_) => panic!("le numéro v19 seul ne doit pas masquer le CHECK v18"),
         Err(error) => error,
     };
@@ -221,7 +226,7 @@ fn v19_refuse_son_propre_numero_si_le_check_v18_subsiste() {
 }
 
 #[test]
-fn parcours_prive_v14_v17_v18_v19_ne_mute_jamais_sa_source() {
+fn parcours_prive_v14_v17_v18_v19_v20_ne_mute_jamais_sa_source() {
     let root = root("production-path");
     let source = root.join("source-v14.sqlite3");
     let copy = root.join("copy-v14.sqlite3");
@@ -244,7 +249,7 @@ fn parcours_prive_v14_v17_v18_v19_ne_mute_jamais_sa_source() {
 }
 
 #[test]
-fn bootstrap_vide_exerce_separement_tous_les_paliers_jusqu_a_v19() {
+fn bootstrap_vide_exerce_separement_tous_les_paliers_jusqu_a_v20() {
     let root = root("bootstrap");
     let database = root.join("maicie.sqlite3");
     let store = MaicieStore::open(&database).unwrap();

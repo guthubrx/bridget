@@ -69,6 +69,7 @@ fn migration_v8_main_vers_v11_puis_seconde_ouverture_conservent_l_historique() {
             ],
         )
         .unwrap();
+    crate::historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
     connection.pragma_update(None, "user_version", 8).unwrap();
     connection
         .execute(
@@ -167,6 +168,7 @@ fn migration_v9_refuse_de_rejouer_une_notification_sans_horodatage_atteste() {
             ],
         )
         .unwrap();
+    crate::historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
     connection.pragma_update(None, "user_version", 9).unwrap();
     connection
         .execute(

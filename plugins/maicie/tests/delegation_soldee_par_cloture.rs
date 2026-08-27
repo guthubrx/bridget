@@ -15,6 +15,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+#[path = "support/historical_guichet_receptions.rs"]
+mod historical_guichet_receptions;
+
 const FRAME_LIMIT: usize = 256 * 1024;
 
 #[test]
@@ -202,6 +205,7 @@ fn migration_v16_solde_les_orphelines_sur_objectifs_clos() {
         // Et une outbox encore expédiable (régression pré-correctif greffe/action).
         force_outbox_dispatchable(&connection, delegation.id);
         // Après routines (v15) : orphelines = v16. Downgrade juste avant.
+        historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
         connection.pragma_update(None, "user_version", 15).unwrap();
         connection
             .execute("DELETE FROM schema_migrations WHERE version = 16", [])

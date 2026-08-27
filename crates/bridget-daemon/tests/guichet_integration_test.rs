@@ -29,6 +29,8 @@ const INHERITED_BRIDGET_ENV: &[&str] = &[
     "BRIDGET_MANAGED_COMMAND_ID",
     "BRIDGET_MANAGED_GENERATION",
     "BRIDGET_TRANSPORT",
+    "BRIDGET_GREFFE_POLICY_PATH",
+    "BRIDGET_GREFFE_AUDIT_PATH",
 ];
 
 fn isolated_bridget_command() -> Command {
@@ -51,6 +53,33 @@ fn unique_home() -> PathBuf {
 
 fn socket(home: &Path) -> PathBuf {
     home.join(".cache/bridget/bridget.sock")
+}
+
+fn write_greffe_policy(home: &Path, principal: &str, instance_id: &str, expires_at: i64) {
+    let directory = home.join(".config/bridget");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = directory.join("greffe-authorization.json");
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "generation": 1,
+            "attestation_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "principals": [{
+                "principal": principal,
+                "actions": ["delegate"],
+                "instances": [{
+                    "instance_id": instance_id,
+                    "expires_at": expires_at,
+                    "revoked": false
+                }]
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
 
 fn git(repo: &Path, arguments: &[&str]) -> String {
@@ -243,11 +272,12 @@ fn service(home: &Path, issuer_scope: &str) -> (BufReader<UnixStream>, BufWriter
 #[test]
 fn delegate_est_admis_comme_depot_sans_etre_confondu_avec_un_succes_metier() {
     let home = unique_home();
-    let daemon = DaemonGuard::start(&home);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
+    write_greffe_policy(&home, "jc6", "delegate-admission-instance", now + 300);
+    let daemon = DaemonGuard::start(&home);
     let (mut wrapper_reader, mut wrapper_writer) = connect(&home);
     assert!(matches!(
         request(

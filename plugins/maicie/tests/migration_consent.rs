@@ -16,6 +16,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
+#[path = "support/historical_guichet_receptions.rs"]
+mod historical_guichet_receptions;
+
 fn unique_root(label: &str) -> PathBuf {
     let n = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
     let root = std::env::temp_dir().join(format!("maicie-migration-consent-{label}-{n}"));
@@ -139,6 +142,7 @@ fn base_anterieure_sans_flag_refuse_parlant_sans_ecriture() {
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     }
     let connection = rusqlite::Connection::open(&database).unwrap();
+    historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
     connection
         .pragma_update(None, "user_version", SCHEMA_VERSION - 1)
         .unwrap();
@@ -167,6 +171,7 @@ fn base_peuplee_user_version_zero_refuse_sans_mutation() {
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     }
     let connection = rusqlite::Connection::open(&database).unwrap();
+    historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
     connection.pragma_update(None, "user_version", 0).unwrap();
     drop(connection);
     let avant = schema_snapshot(&database);
@@ -201,6 +206,7 @@ fn base_anterieure_avec_consentement_est_migree() {
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     }
     let connection = rusqlite::Connection::open(&database).unwrap();
+    historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
     connection
         .pragma_update(None, "user_version", SCHEMA_VERSION - 1)
         .unwrap();
@@ -223,6 +229,7 @@ fn migration_v18_pose_le_journal_ferme_des_refus_locaux() {
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     }
     let connection = rusqlite::Connection::open(&database).unwrap();
+    historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
     connection
         .execute_batch(
             "DROP TRIGGER local_delegate_refusals_append_only_update;
