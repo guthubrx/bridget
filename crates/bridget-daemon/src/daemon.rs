@@ -1870,6 +1870,82 @@ impl DaemonState {
         }
     }
 
+    /// Après purge de présence(s) : orpheliner les remises `dispatching` et
+    /// prévenir l'émetteur. Ne décide PAS de purger — seulement les suites.
+    fn orphan_deliveries_after_presence_purge(&mut self, purged_instance_ids: &[String]) {
+        const REASON: &str = "destinataire purgé — présence absente ; remise orpheline";
+        for instance_id in purged_instance_ids {
+            match self
+                .idempotency
+                .orphan_dispatching_for_instance(instance_id, REASON)
+            {
+                Ok(notices) => {
+                    for notice in &notices {
+                        info!(
+                            "remise orpheline delivery={} msg={} {}→{} ({})",
+                            notice.delivery_id,
+                            notice.message_id,
+                            notice.sender,
+                            notice.target,
+                            notice.reason
+                        );
+                    }
+                }
+                Err(error) => {
+                    error!("orphelinage des remises de {instance_id}: {error}");
+                }
+            }
+        }
+        self.flush_pending_orphan_emitter_notices();
+    }
+
+    /// Pousse les signaux ORPHELIN encore non notifiés (y compris après crash).
+    ///
+    /// Décision (écrite — charge jury) : rejouer au **Register de l'émetteur**,
+    /// pas seulement au moment de la purge. Les chemins « à aller chercher »
+    /// (MCP send / ledger / CLI) sont durables ; le Deliver poussé, lui, écrit
+    /// directement sur le socket — ni ledger, ni idempotence, ni accusé. Or la
+    /// purge frappe quand la flotte bouge, donc souvent quand l'émetteur est
+    /// hors ligne. Sans rejeu au Register, « pas en silence » ne tiendrait que
+    /// dans le cas le moins probable. Symétrique de
+    /// `schedule_idempotent_delivery_recovery` (côté destinataire, remises
+    /// `dispatching`) : ici le destinataire du *signal* est l'émetteur.
+    ///
+    /// Limite déclarée : `notified_at` atteste l'**émission** (`writeln!`+`flush`
+    /// Ok sur la socket), pas la **réception** par le wrapper. Si le wrapper
+    /// meurt juste après, le signal est perdu et la base dit qu'il a été
+    /// délivré — passage direct de rien à « notifié », sans état « en vol ».
+    /// Dimensionnement accepté ; pas corrigé dans ce lot.
+    fn flush_pending_orphan_emitter_notices(&mut self) {
+        let pending = match self.idempotency.pending_orphan_emitter_notices() {
+            Ok(pending) => pending,
+            Err(error) => {
+                error!("lecture des notices orphelines: {error}");
+                return;
+            }
+        };
+        let now = unix_now_secs();
+        for (delivery_id, sender, body) in pending {
+            if let Some(agent) = self.router.get_agent(&sender)
+                && let Some(writer) = self.connections.get(&agent.connection_id)
+            {
+                match deliver_to_agent(writer, &sender, &body) {
+                    Ok(_) => {
+                        if let Err(error) = self
+                            .idempotency
+                            .mark_orphan_emitter_notified(&delivery_id, now)
+                        {
+                            error!("mark notice orphelin {delivery_id}: {error}");
+                        }
+                    }
+                    Err(error) => warn!("signal orphelin non délivré à {sender}: {error}"),
+                }
+            } else {
+                warn!("émetteur {sender} hors ligne pour signal orphelin {delivery_id}");
+            }
+        }
+    }
+
     fn set_turn_state(&mut self, conn_id: &str, in_progress: bool) -> Result<(), String> {
         let instance_id = self
             .conn_instances
@@ -1885,13 +1961,26 @@ impl DaemonState {
     }
 
     fn agent_infos(&mut self) -> Vec<bridget_transport::protocol::AgentInfo> {
-        // Lot B : exemption `connected` levée — retain = horloge lien seule.
-        // Un connected mort (plus de heartbeat) disparaît sans redémarrage ;
-        // un busy jury sous heartbeat survit même si la capacité est gelée.
+        // Lot B (déjà sur main) : exemption `connected` levée — retain =
+        // horloge lien seule via `presence_within_retention`.
+        // Ce lot (purge/orphan) : capturer les IDs purgés pour orpheliner les
+        // remises `dispatching` — sans réintroduire l'exemption connected.
+        let before: HashSet<String> = self.presences.keys().cloned().collect();
         self.presences
             .retain(|_, presence| presence_within_retention(presence));
+        let purged: Vec<String> = before
+            .into_iter()
+            .filter(|id| !self.presences.contains_key(id))
+            .collect();
         // Présence expirée + nom encore au routeur = fantôme. On coupe le lien.
         self.release_router_for_dangling_instances();
+        // APRÈS la décision de purger (pas la politique de purge) : rendre
+        // visibles les remises qui ne partiront plus.
+        self.orphan_deliveries_after_presence_purge(&purged);
+        // Rejeu des notices dont le Deliver a échoué / crashé après orphan.
+        if purged.is_empty() {
+            self.flush_pending_orphan_emitter_notices();
+        }
         let mut agents: Vec<_> = self
             .router
             .list_agents()
@@ -2770,6 +2859,8 @@ fn handle_connection(
             }
 
             let response = handle_wrapper_message(&conn_id, msg, &state);
+            let registered_just_now =
+                matches!(response, Some(DaemonToWrapper::Registered { .. }));
             if let Some(dtw) = response {
                 let json = encode(&dtw)?;
                 writeln!(my_writer, "{}", json)?;
@@ -2782,6 +2873,14 @@ fn handle_connection(
                 .remove(&conn_id)
                 .unwrap_or_default();
             let _ = execute_controls(post_response_controls);
+            // Après Registered : rejouer les notices ORPHELIN dont l'émetteur
+            // était hors ligne à la purge (voir flush_pending_orphan_emitter_notices).
+            if registered_just_now {
+                state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .flush_pending_orphan_emitter_notices();
+            }
         }
         Ok(())
     })();
@@ -4126,6 +4225,15 @@ fn replay_issue(
                 .send_delivery(key)
                 .map_err(|error| error.to_string())?
                 .map(|delivery| delivery.delivery_id),
+        }),
+        LookupResult::Orphaned { expires_at, reason } => Ok(IdempotencyIssue::Orphaned {
+            expires_at,
+            delivery_id: st
+                .idempotency
+                .orphaned_delivery_id(key)
+                .map_err(|error| error.to_string())?
+                .unwrap_or_default(),
+            reason,
         }),
         LookupResult::IdempotencyExpired => Ok(IdempotencyIssue::IdempotencyExpired),
     }
@@ -9621,6 +9729,333 @@ mod presence_tests {
         assert!(!infos.iter().any(|agent| {
             agent.state == "connected" && agent.transport == "unix" && agent.mode.is_none()
         }));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    /// ORACLE — à la purge de présence, une remise `dispatching` devient
+    /// `orphaned` (visible), pas un `outcome_unknown` muet.
+    ///
+    /// Lot A : le retain lit `link_seen`. Stalifier seulement `capacity_seen`
+    /// laisserait le lien frais → présence non purgée → faux vert / faux rouge.
+    #[test]
+    fn purge_presence_orpheline_les_remises_dispatching() {
+        use crate::idempotency::{IdempotencyKey, OperationKind, Reservation, SendDelivery};
+
+        let (mut state, config) = state_with_registered_agent("purge-orphelin");
+        // busy + les DEUX horloges périmées (capacité et lien).
+        state.set_turn_state("conn-1", true).unwrap();
+        let stale = Instant::now()
+            .checked_sub(PRESENCE_RETENTION + Duration::from_secs(1))
+            .expect("horloge");
+        let presence = state.presences.get_mut("instance-1").unwrap();
+        presence.capacity_seen = stale;
+        presence.link_seen = stale;
+
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            "msg-jury-perdu",
+        )
+        .unwrap();
+        assert!(matches!(
+            state.idempotency.reserve(
+                &key,
+                b"canon-jury",
+                1_000_000,
+                3600,
+                1_000_000,
+                30
+            ),
+            Ok(Reservation::Prepared { .. })
+        ));
+        let mut message = BridgetMessage::new("bridget", "agent-2", "mandat de jury");
+        message.id = "msg-jury-perdu".to_string();
+        let message_bytes = serde_json::to_vec(&message).unwrap();
+        state
+            .idempotency
+            .begin_send_delivery(
+                &key,
+                &SendDelivery {
+                    delivery_id: "delivery-jury".to_string(),
+                    recipient_instance_id: "instance-1".to_string(),
+                    delivery_generation: 1,
+                    expires_at: 1_000_000 + 3600,
+                    message_bytes,
+                },
+            )
+            .unwrap();
+
+        let _ = state.agent_infos();
+        assert!(
+            !state.presences.contains_key("instance-1"),
+            "présence doit être purgée"
+        );
+        assert_eq!(
+            state
+                .idempotency
+                .dispatching_deliveries_for_instance("instance-1", 1_000_000)
+                .unwrap()
+                .len(),
+            0,
+            "plus de dispatching après purge"
+        );
+        assert_eq!(
+            state
+                .idempotency
+                .orphaned_delivery_id(&key)
+                .unwrap()
+                .as_deref(),
+            Some("delivery-jury")
+        );
+        assert_eq!(
+            state.idempotency.lookup(&key, 1_000_000).unwrap(),
+            crate::idempotency::LookupResult::Orphaned {
+                expires_at: 1_000_000 + 3600,
+                reason: "destinataire purgé — présence absente ; remise orpheline".to_string(),
+            }
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    /// ORACLE — moitié « pas en silence » : un Deliver ORPHELIN atteint l'émetteur.
+    /// Meurt si l'on retire le push (ou la notice durable) tout en gardant la phase.
+    #[test]
+    fn purge_presence_delivre_un_orphelin_a_l_emetteur() {
+        use crate::idempotency::{IdempotencyKey, OperationKind, Reservation, SendDelivery};
+        use std::io::Read;
+        use std::os::unix::net::UnixStream;
+
+        let (mut state, config) = state_with_registered_agent("purge-deliver");
+        // Émetteur « bridget » avec une vraie connexion lisible.
+        state
+            .router
+            .register(Some("bridget"), &bridget_core::AgentType::Claude, "conn-emitter")
+            .unwrap();
+        state
+            .conn_instances
+            .insert("conn-emitter".to_string(), "instance-emitter".to_string());
+        state.presences.insert(
+            "instance-emitter".to_string(),
+            Presence {
+                name: "bridget".to_string(),
+                agent_type: "claude".to_string(),
+                host: "macbook".to_string(),
+                transport: "acp".to_string(),
+                channel: None,
+                mode: Some(PresenceMode::Acp),
+                location: None,
+                journal_available: true,
+                os: "macOS".to_string(),
+                state: "connected".to_string(),
+                capacity_seen: Instant::now(),
+                link_seen: Instant::now(),
+                reconnect_count: 0,
+                model: None,
+                effort: None,
+                rate_limits: Default::default(),
+                served_model: None,
+                derived_domain: None,
+                domain: None,
+                dnd_until: None,
+            },
+        );
+        let (writer_stream, mut peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        state.connections.insert(
+            "conn-emitter".to_string(),
+            Arc::new(Mutex::new(BufWriter::new(writer_stream))),
+        );
+
+        state.set_turn_state("conn-1", true).unwrap();
+        let stale = Instant::now()
+            .checked_sub(PRESENCE_RETENTION + Duration::from_secs(1))
+            .expect("horloge");
+        let presence = state.presences.get_mut("instance-1").unwrap();
+        presence.capacity_seen = stale;
+        presence.link_seen = stale;
+
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            "msg-a-notifier",
+        )
+        .unwrap();
+        assert!(matches!(
+            state
+                .idempotency
+                .reserve(&key, b"canon-notify", 1_000_000, 3600, 1_000_000, 30),
+            Ok(Reservation::Prepared { .. })
+        ));
+        let mut message = BridgetMessage::new("bridget", "agent-2", "corps");
+        message.id = "msg-a-notifier".to_string();
+        state
+            .idempotency
+            .begin_send_delivery(
+                &key,
+                &SendDelivery {
+                    delivery_id: "delivery-notify".to_string(),
+                    recipient_instance_id: "instance-1".to_string(),
+                    delivery_generation: 1,
+                    expires_at: 1_000_000 + 3600,
+                    message_bytes: serde_json::to_vec(&message).unwrap(),
+                },
+            )
+            .unwrap();
+
+        let _ = state.agent_infos();
+
+        let mut buf = [0u8; 4096];
+        let n = peer
+            .read(&mut buf)
+            .expect("Deliver ORPHELIN attendu sur la socket émetteur");
+        let received = String::from_utf8_lossy(&buf[..n]);
+        assert!(
+            received.contains("ORPHELIN") && received.contains("msg-a-notifier"),
+            "la moitié « pas en silence » exige un Deliver lisible: {received}"
+        );
+        assert!(
+            received.contains("clé est close")
+                && received.contains("Change de destinataire"),
+            "le signal doit porter la conduite (pas seulement le constat): {received}"
+        );
+        assert!(
+            state
+                .idempotency
+                .pending_orphan_emitter_notices()
+                .unwrap()
+                .is_empty(),
+            "après Deliver réussi, plus aucune notice en attente"
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    /// ORACLE — prouve que `flush_pending_orphan_emitter_notices` pousse une
+    /// notice en attente dès que l'émetteur a une connexion lisible.
+    ///
+    /// **Ce qu'il ne prouve PAS** : que `handle_connection` appelle ce flush
+    /// après `Registered`. Ce branchement vit dans la boucle socket ; aucun
+    /// test unitaire ne l'atteint. Retirer `if registered_just_now { … }`
+    /// laisse cet oracle vert — trou déclaré, pas maquillé. Un témoin d'intégration
+    /// (vrai Register sur socket) fermerait le trou ; hors périmètre immédiat.
+    #[test]
+    fn register_emetteur_rejoue_les_notices_orphelines_en_attente() {
+        use crate::idempotency::{IdempotencyKey, OperationKind, Reservation, SendDelivery};
+        use std::io::Read;
+        use std::os::unix::net::UnixStream;
+
+        let (mut state, config) = state_with_registered_agent("purge-register-replay");
+        // Remise dispatching vers le destinataire qui va être purgé.
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            "msg-register-replay",
+        )
+        .unwrap();
+        assert!(matches!(
+            state
+                .idempotency
+                .reserve(&key, b"canon-reg", 1_000_000, 3600, 1_000_000, 30),
+            Ok(Reservation::Prepared { .. })
+        ));
+        let mut message = BridgetMessage::new("bridget", "agent-2", "corps");
+        message.id = "msg-register-replay".to_string();
+        state
+            .idempotency
+            .begin_send_delivery(
+                &key,
+                &SendDelivery {
+                    delivery_id: "delivery-register-replay".to_string(),
+                    recipient_instance_id: "instance-1".to_string(),
+                    delivery_generation: 1,
+                    expires_at: 1_000_000 + 3600,
+                    message_bytes: serde_json::to_vec(&message).unwrap(),
+                },
+            )
+            .unwrap();
+
+        // Purge sans émetteur en ligne → notice durable, Deliver impossible.
+        state.set_turn_state("conn-1", true).unwrap();
+        let stale = Instant::now()
+            .checked_sub(PRESENCE_RETENTION + Duration::from_secs(1))
+            .expect("horloge");
+        let presence = state.presences.get_mut("instance-1").unwrap();
+        presence.capacity_seen = stale;
+        presence.link_seen = stale;
+        let _ = state.agent_infos();
+        assert_eq!(
+            state
+                .idempotency
+                .pending_orphan_emitter_notices()
+                .unwrap()
+                .len(),
+            1,
+            "émetteur absent ⇒ notice reste en attente"
+        );
+
+        // L'émetteur revient en ligne (présence + socket). On appelle le flush
+        // directement — prouve la fonction, pas le branchement Register
+        // (voir doc de l'oracle : trou déclaré).
+        state
+            .router
+            .register(Some("bridget"), &bridget_core::AgentType::Claude, "conn-emitter")
+            .unwrap();
+        state
+            .conn_instances
+            .insert("conn-emitter".to_string(), "instance-emitter".to_string());
+        state.presences.insert(
+            "instance-emitter".to_string(),
+            Presence {
+                name: "bridget".to_string(),
+                agent_type: "claude".to_string(),
+                host: "macbook".to_string(),
+                transport: "acp".to_string(),
+                channel: None,
+                mode: Some(PresenceMode::Acp),
+                location: None,
+                journal_available: true,
+                os: "macOS".to_string(),
+                state: "connected".to_string(),
+                capacity_seen: Instant::now(),
+                link_seen: Instant::now(),
+                reconnect_count: 0,
+                model: None,
+                effort: None,
+                rate_limits: Default::default(),
+                served_model: None,
+                derived_domain: None,
+                domain: None,
+                dnd_until: None,
+            },
+        );
+        let (writer_stream, mut peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        state.connections.insert(
+            "conn-emitter".to_string(),
+            Arc::new(Mutex::new(BufWriter::new(writer_stream))),
+        );
+
+        state.flush_pending_orphan_emitter_notices();
+
+        let mut buf = [0u8; 4096];
+        let n = peer
+            .read(&mut buf)
+            .expect("Deliver ORPHELIN attendu au retour de l'émetteur");
+        let received = String::from_utf8_lossy(&buf[..n]);
+        assert!(
+            received.contains("ORPHELIN") && received.contains("msg-register-replay"),
+            "Register émetteur doit rejouer la notice: {received}"
+        );
+        assert!(
+            received.contains("clé est close"),
+            "rejeu Register porte aussi la conduite: {received}"
+        );
+        assert!(
+            state
+                .idempotency
+                .pending_orphan_emitter_notices()
+                .unwrap()
+                .is_empty()
+        );
         let _ = std::fs::remove_file(config.db_path);
     }
 

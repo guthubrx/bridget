@@ -1303,6 +1303,18 @@ fn print_idempotency_issue(issue: &IdempotencyIssue, options: &IdempotentSendOpt
                 ),
             }
         }
+        IdempotencyIssue::Orphaned {
+            delivery_id,
+            reason,
+            ..
+        } => eprintln!(
+            "ISSUE: {} id={} issued_at={} delivery_id={delivery_id} — {} ; {} ({reason})",
+            crate::mcp::STATUT_ORPHELIN,
+            options.id,
+            options.issued_at,
+            crate::mcp::DIAGNOSTIC_ORPHELIN,
+            crate::mcp::CONDUITE_ORPHELIN,
+        ),
         IdempotencyIssue::EnvelopeMismatch => eprintln!(
             "REJET: envelope_mismatch id={} issued_at={}",
             options.id, options.issued_at

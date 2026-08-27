@@ -83,6 +83,8 @@ impl RecordState {
 pub enum PublicResult {
     Accepted { expires_at: i64 },
     Rejected { category: String, reason: String },
+    /// Destinataire purgé : terminale, distincte d'un rejet métier.
+    Orphaned { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +99,10 @@ pub enum LookupResult {
     },
     OutcomeUnknown {
         expires_at: i64,
+    },
+    Orphaned {
+        expires_at: i64,
+        reason: String,
     },
     IdempotencyExpired,
 }
@@ -292,6 +298,16 @@ pub struct IdempotencyStore {
     conn: Connection,
 }
 
+/// Remise devenue orpheline après purge de la présence destinataire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrphanedDeliveryNotice {
+    pub delivery_id: String,
+    pub message_id: String,
+    pub sender: String,
+    pub target: String,
+    pub reason: String,
+}
+
 impl IdempotencyStore {
     pub fn open(path: &Path) -> Result<Self, IdempotencyError> {
         let mut conn = Connection::open(path)?;
@@ -355,7 +371,7 @@ impl IdempotencyStore {
                 idempotency_key TEXT NOT NULL,
                 recipient_instance_id TEXT NOT NULL,
                 delivery_generation INTEGER NOT NULL CHECK (delivery_generation > 0),
-                phase TEXT NOT NULL CHECK (phase IN ('dispatching', 'acked', 'indeterminate')),
+                phase TEXT NOT NULL CHECK (phase IN ('dispatching', 'acked', 'indeterminate', 'orphaned')),
                 expires_at INTEGER NOT NULL,
                 message_bytes BLOB,
                 FOREIGN KEY (issuer_scope, operation_kind, idempotency_key)
@@ -482,10 +498,119 @@ impl IdempotencyStore {
                 [],
             )?;
         }
-        // Pas de migration v4 : le CREATE INDEX IF NOT EXISTS du batch DDL
-        // (idx_send_deliveries_kind_key) suffit aussi sur une base où la table
-        // existait déjà sans l'index — éprouvé en revue. Un numéro de migration
-        // est une ressource ordonnée ; on ne le consomme pas pour un no-op.
+        // v4 : phase `orphaned` — destinataire purgé, sort CONNU (≠ indeterminate,
+        // ≠ outcome_unknown). SQLite ne sait pas élargir un CHECK : reconstruction.
+        //
+        // `foreign_keys=ON` à l'ouverture : l'INSERT SELECT revalide chaque
+        // enfant. Une base touchée hors daemon (`.backup`, SQL CLI — FK OFF
+        // par défaut) peut contenir des remises sans parent ; les laisser
+        // ferait échouer la migration au démarrage et bloquerait la flotte.
+        //
+        // Décision (écrite — charge 4) :
+        // - SUPPRIMER plutôt que conserver : sans parent `idempotency_records`,
+        //   la remise n'est plus adressable (lookup, rejeu, signal émetteur).
+        //   Ce n'est pas un orphelin métier (`orphaned`) : c'est un fantôme de
+        //   schéma que le daemon ne peut pas créer (FK ON à l'ouverture) ; seule
+        //   une intervention externe peut l'introduire. Origine inconnue ⇒
+        //   données hors contrat, pas un sort à préserver.
+        // - MAINTENANT (à la migration) plutôt qu'à l'usage : un seul fantôme
+        //   ferait échouer l'INSERT SELECT et bloquerait open() / la flotte.
+        // - Ne PAS désactiver `foreign_keys` : on reste sous la règle du daemon.
+        // - Ne PAS écarter en silence : `warn!` avec compte + delivery_id —
+        //   même règle que ce lot : un sort connu vaut mieux qu'un sort muet.
+        //
+        // Nature (mesurée, greffe) : PRÉCAUTION, pas incident évité de justesse.
+        // Copie `.backup` de `~/.cache/bridget/bridget.db` : 2477 send_deliveries,
+        // `PRAGMA foreign_key_check` → zéro ligne. Mécanisme prouvé ailleurs
+        // (contrôle négatif : orphelin injecté → Err FK sans ce geste ; Ok avec).
+        // Occurrence nulle aujourd'hui ≠ mécanisme inutile — les deux coexistent.
+        let orphan_migration_applied = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 4)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !orphan_migration_applied {
+            let schema_orphans: Vec<String> = {
+                let mut stmt = tx.prepare(
+                    "SELECT delivery_id FROM send_deliveries
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM idempotency_records r
+                         WHERE r.issuer_scope = send_deliveries.issuer_scope
+                           AND r.operation_kind = send_deliveries.operation_kind
+                           AND r.idempotency_key = send_deliveries.idempotency_key
+                     )",
+                )?;
+                stmt.query_map([], |row| row.get(0))?
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            if !schema_orphans.is_empty() {
+                log::warn!(
+                    "migration v4: écarté {} remise(s) send_deliveries sans parent \
+                     idempotency_records (origine hors daemon — CLI/backup, FK OFF ; \
+                     non rejouables ni signalables). Suppression plutôt que \
+                     conservation ou échec FK : démarrer en disant ce qui est perdu \
+                     plutôt que bloquer la flotte. delivery_id={:?}",
+                    schema_orphans.len(),
+                    schema_orphans
+                );
+                tx.execute(
+                    "DELETE FROM send_deliveries
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM idempotency_records r
+                         WHERE r.issuer_scope = send_deliveries.issuer_scope
+                           AND r.operation_kind = send_deliveries.operation_kind
+                           AND r.idempotency_key = send_deliveries.idempotency_key
+                     )",
+                    [],
+                )?;
+            }
+            tx.execute_batch(
+                "CREATE TABLE send_deliveries_v4 (
+                    delivery_id TEXT PRIMARY KEY,
+                    issuer_scope TEXT NOT NULL,
+                    operation_kind TEXT NOT NULL CHECK (operation_kind = 'send'),
+                    idempotency_key TEXT NOT NULL,
+                    recipient_instance_id TEXT NOT NULL,
+                    delivery_generation INTEGER NOT NULL CHECK (delivery_generation > 0),
+                    phase TEXT NOT NULL CHECK (phase IN ('dispatching', 'acked', 'indeterminate', 'orphaned')),
+                    expires_at INTEGER NOT NULL,
+                    message_bytes BLOB,
+                    FOREIGN KEY (issuer_scope, operation_kind, idempotency_key)
+                        REFERENCES idempotency_records(issuer_scope, operation_kind, idempotency_key)
+                        ON DELETE CASCADE
+                );
+                INSERT INTO send_deliveries_v4 (
+                    delivery_id, issuer_scope, operation_kind, idempotency_key,
+                    recipient_instance_id, delivery_generation, phase, expires_at, message_bytes
+                ) SELECT
+                    delivery_id, issuer_scope, operation_kind, idempotency_key,
+                    recipient_instance_id, delivery_generation, phase, expires_at, message_bytes
+                FROM send_deliveries;
+                DROP TABLE send_deliveries;
+                ALTER TABLE send_deliveries_v4 RENAME TO send_deliveries;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_send_deliveries_operation
+                    ON send_deliveries(issuer_scope, operation_kind, idempotency_key);
+                CREATE INDEX IF NOT EXISTS idx_send_deliveries_kind_key
+                    ON send_deliveries(operation_kind, idempotency_key);
+                INSERT INTO idempotency_schema_migrations(version) VALUES (4);",
+            )?;
+        }
+        // Une seule copie du DDL : bases neuves, montée v4, et têtes antérieures
+        // déjà en v4 sans la table. CREATE IF NOT EXISTS couvre les trois ;
+        // le dupliquer ailleurs (CHECK / schéma) rendait la migration invisible
+        // aux témoins — même motif que la charge 1 sur send_deliveries.
+        //
+        // `notified_at` : émission socket Ok, pas réception wrapper (limite
+        // déclarée — voir flush_pending_orphan_emitter_notices).
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS orphan_emitter_notices (
+                delivery_id TEXT PRIMARY KEY,
+                sender TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                notified_at INTEGER
+            );",
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -1084,6 +1209,8 @@ impl IdempotencyStore {
     /// corrige — d'où `dispatching` seul.
     ///
     /// Complexité : O(log n) via l'index unique de la clé idempotente.
+    /// `orphaned` est aussi absorbant : le destinataire a été purgé, le sort
+    /// est connu. Ne pas le confondre avec une remise en vol.
     pub fn send_delivery(
         &self,
         key: &IdempotencyKey,
@@ -1133,6 +1260,23 @@ impl IdempotencyStore {
         Ok(self
             .stored_send_delivery(key)?
             .and_then(StoredSendDelivery::into_delivery))
+    }
+
+    /// Identifiant de remise orpheline (phase `orphaned`), pour le rejeu honnête.
+    pub fn orphaned_delivery_id(
+        &self,
+        key: &IdempotencyKey,
+    ) -> Result<Option<String>, IdempotencyError> {
+        self.conn
+            .query_row(
+                "SELECT delivery_id FROM send_deliveries
+                 WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2
+                   AND phase = 'orphaned'",
+                params![key.issuer_scope, key.idempotency_key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     /// Reprise bornée : seules les remises encore en cours pour l'instance
@@ -1226,6 +1370,120 @@ impl IdempotencyStore {
         } else {
             Err(IdempotencyError::InvalidDelivery)
         }
+    }
+
+    /// Après purge d'une présence : les remises encore `dispatching` pour cette
+    /// instance deviennent `orphaned` (sort CONNU) et le socle passe en
+    /// terminal `orphaned`. Distinct de `indeterminate` (quarantaine d'injection)
+    /// et de `outcome_unknown` (sort réellement inconnu).
+    pub fn orphan_dispatching_for_instance(
+        &mut self,
+        recipient_instance_id: &str,
+        reason: &str,
+    ) -> Result<Vec<OrphanedDeliveryNotice>, IdempotencyError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut statement = tx.prepare(
+            "SELECT delivery_id, issuer_scope, idempotency_key, message_bytes
+             FROM send_deliveries
+             WHERE recipient_instance_id = ?1 AND phase = 'dispatching'",
+        )?;
+        let rows: Vec<(String, String, String, Vec<u8>)> = statement
+            .query_map(params![recipient_instance_id], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?.unwrap_or_default(),
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+
+        let mut notices = Vec::with_capacity(rows.len());
+        for (delivery_id, issuer_scope, idempotency_key, message_bytes) in rows {
+            let message =
+                serde_json::from_slice::<bridget_core::BridgetMessage>(&message_bytes).ok();
+            let (message_id, sender, target) = match &message {
+                Some(msg) => (msg.id.clone(), msg.from.clone(), msg.to.clone()),
+                None => (
+                    delivery_id.clone(),
+                    "inconnu".to_string(),
+                    "inconnu".to_string(),
+                ),
+            };
+            let delivery = tx.execute(
+                "UPDATE send_deliveries SET phase = 'orphaned'
+                 WHERE delivery_id = ?1 AND phase = 'dispatching'",
+                params![delivery_id],
+            )?;
+            let record = tx.execute(
+                "UPDATE idempotency_records
+                 SET state = 'terminal', public_result_kind = 'orphaned',
+                     public_result_category = NULL, public_result_reason = ?1
+                 WHERE issuer_scope = ?2 AND operation_kind = 'send'
+                   AND idempotency_key = ?3 AND state = 'dispatching'",
+                params![reason, issuer_scope, idempotency_key],
+            )?;
+            if delivery != 1 || record != 1 {
+                return Err(IdempotencyError::DispatchUnavailable);
+            }
+            // Conduite (pas seulement le constat) : `orphaned` est absorbant —
+            // le réflexe REJEU_A_L_IDENTIQUE enseigné pour in_flight/outcome_unknown
+            // ferait tourner l'émetteur en rond. Aligné sur mcp::CONDUITE_ORPHELIN.
+            let body = format!(
+                "ORPHELIN: le message {} destiné à {} n'a pas été livré — présence purgée (delivery {}). {}\n\
+                 Le rejeu à l'identique ne sert à rien — cette clé est close. \
+                 Change de destinataire, ou attends son retour avec une clé neuve.",
+                message_id, target, delivery_id, reason
+            );
+            // Même transaction : le signal survit à un crash avant le Deliver.
+            tx.execute(
+                "INSERT INTO orphan_emitter_notices (delivery_id, sender, body, created_at, notified_at)
+                 VALUES (?1, ?2, ?3, strftime('%s','now'), NULL)
+                 ON CONFLICT(delivery_id) DO NOTHING",
+                params![delivery_id, sender, body],
+            )?;
+            notices.push(OrphanedDeliveryNotice {
+                delivery_id,
+                message_id,
+                sender,
+                target,
+                reason: reason.to_string(),
+            });
+        }
+        tx.commit()?;
+        Ok(notices)
+    }
+
+    /// Notices émetteur encore non poussées (crash entre orphan et Deliver).
+    pub fn pending_orphan_emitter_notices(
+        &self,
+    ) -> Result<Vec<(String, String, String)>, IdempotencyError> {
+        let mut statement = self.conn.prepare(
+            "SELECT delivery_id, sender, body FROM orphan_emitter_notices
+             WHERE notified_at IS NULL ORDER BY created_at, delivery_id",
+        )?;
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Marque la notice comme émise sur la socket (`writeln!`+`flush` Ok).
+    /// Limite : ce n'est pas une attestation de réception par le wrapper.
+    pub fn mark_orphan_emitter_notified(
+        &self,
+        delivery_id: &str,
+        now: i64,
+    ) -> Result<(), IdempotencyError> {
+        self.conn.execute(
+            "UPDATE orphan_emitter_notices SET notified_at = ?1
+             WHERE delivery_id = ?2 AND notified_at IS NULL",
+            params![now, delivery_id],
+        )?;
+        Ok(())
     }
 
     /// Accusé aval : la remise et le résultat public deviennent terminaux dans
@@ -1322,6 +1580,7 @@ impl IdempotencyStore {
             PublicResult::Rejected { category, reason } => {
                 ("rejected", Some(category.as_str()), Some(reason.as_str()))
             }
+            PublicResult::Orphaned { reason } => ("orphaned", None, Some(reason.as_str())),
         };
         let updated = self.conn.execute(
             "UPDATE idempotency_records
@@ -1557,6 +1816,12 @@ impl Record {
                     .ok_or(IdempotencyError::CorruptRecord("motif absent"))?,
                 expires_at: self.expires_at,
             }),
+            Some("orphaned") => Ok(LookupResult::Orphaned {
+                expires_at: self.expires_at,
+                reason: self.public_result_reason.clone().unwrap_or_else(|| {
+                    "destinataire purgé — remise orpheline".to_string()
+                }),
+            }),
             _ => Err(IdempotencyError::CorruptRecord("issue terminale absente")),
         }
     }
@@ -1603,39 +1868,70 @@ mod tests {
     const NOW: i64 = 1_000_000;
     const HORIZON: i64 = 3600;
 
-    struct TraceSansEnveloppe;
+    /// Un seul logger global (contrainte `log`) ; les tests qui lisent la trace
+    /// prennent `TEST_LOG_LOCK` pour ne pas se marcher dessus.
+    static TEST_LOG_LOCK: Mutex<()> = Mutex::new(());
+    static TEST_WARN_LOGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-    static TRACE_SANS_ENVELOPPE: TraceSansEnveloppe = TraceSansEnveloppe;
-    static TRACES_SANS_ENVELOPPE: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    static INIT_TRACE_SANS_ENVELOPPE: Once = Once::new();
+    struct TempDbGuard(std::path::PathBuf);
 
-    impl log::Log for TraceSansEnveloppe {
-        fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
-            metadata.level() <= log::Level::Warn
+    impl TempDbGuard {
+        fn new(name_prefix: &str) -> Self {
+            Self(std::env::temp_dir().join(format!(
+                "{name_prefix}-{}.db",
+                uuid::Uuid::new_v4()
+            )))
         }
 
-        fn log(&self, record: &log::Record<'_>) {
-            if self.enabled(record.metadata()) {
-                let message = record.args().to_string();
-                if message.contains("corrélation in_reply_to impossible") {
-                    TRACES_SANS_ENVELOPPE.lock().unwrap().push(message);
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDbGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn init_test_warn_logger() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            struct CapturingLogger;
+            impl log::Log for CapturingLogger {
+                fn enabled(&self, metadata: &log::Metadata) -> bool {
+                    metadata.level() <= log::Level::Warn
                 }
+                fn log(&self, record: &log::Record) {
+                    if record.level() <= log::Level::Warn {
+                        TEST_WARN_LOGS
+                            .lock()
+                            .expect("TEST_WARN_LOGS")
+                            .push(record.args().to_string());
+                    }
+                }
+                fn flush(&self) {}
             }
-        }
-
-        fn flush(&self) {}
+            static LOGGER: CapturingLogger = CapturingLogger;
+            log::set_logger(&LOGGER).expect("logger de test installable");
+            log::set_max_level(log::LevelFilter::Warn);
+        });
     }
 
     fn commencer_capture_trace_sans_enveloppe() {
-        INIT_TRACE_SANS_ENVELOPPE.call_once(|| {
-            log::set_logger(&TRACE_SANS_ENVELOPPE).expect("logger de test installable");
-            log::set_max_level(log::LevelFilter::Warn);
-        });
-        TRACES_SANS_ENVELOPPE.lock().unwrap().clear();
+        init_test_warn_logger();
+        let _guard = TEST_LOG_LOCK.lock().expect("TEST_LOG_LOCK");
+        TEST_WARN_LOGS.lock().expect("TEST_WARN_LOGS").clear();
     }
 
     fn traces_sans_enveloppe() -> Vec<String> {
-        TRACES_SANS_ENVELOPPE.lock().unwrap().clone()
+        TEST_WARN_LOGS
+            .lock()
+            .expect("TEST_WARN_LOGS")
+            .iter()
+            .filter(|line| line.contains("corrélation in_reply_to impossible"))
+            .cloned()
+            .collect()
     }
 
     fn key() -> IdempotencyKey {
@@ -1702,6 +1998,385 @@ mod tests {
         );
         drop(store);
         std::fs::remove_file(path).unwrap();
+    }
+
+    /// ORACLE — migration v4 : une base pré-orphaned DOIT élargir le CHECK.
+    /// Meurt si l'on retire le bloc v4 alors que le CREATE fresh porte déjà
+    /// `orphaned` (les oracles de phase restent verts, la montée reste muette).
+    ///
+    /// Nature de la charge : trois migrations sur quatre avaient déjà leur
+    /// témoin dans ce fichier — la v4 était la seule orpheline. Ce n'est pas
+    /// une pratique à instaurer, c'est une pratique à ne pas rompre. Montage :
+    /// DDL **v3** à la main (CHECK à trois phases), pas une base neuve.
+    #[test]
+    fn migration_v4_elargit_le_check_pour_accepter_orphaned() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-idempotency-v4-orphan-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        {
+            let legacy = Connection::open(&path).unwrap();
+            legacy
+                .execute_batch(
+                    "CREATE TABLE idempotency_schema_migrations (version INTEGER PRIMARY KEY);
+                     INSERT INTO idempotency_schema_migrations(version) VALUES (2);
+                     INSERT INTO idempotency_schema_migrations(version) VALUES (3);
+                     CREATE TABLE idempotency_records (
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL,
+                        idempotency_key TEXT NOT NULL,
+                        canonical_bytes BLOB NOT NULL,
+                        state TEXT NOT NULL,
+                        public_result_kind TEXT,
+                        public_result_category TEXT,
+                        public_result_reason TEXT,
+                        issued_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        PRIMARY KEY (issuer_scope, operation_kind, idempotency_key)
+                     );
+                     CREATE TABLE send_deliveries (
+                        delivery_id TEXT PRIMARY KEY,
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL CHECK (operation_kind = 'send'),
+                        idempotency_key TEXT NOT NULL,
+                        recipient_instance_id TEXT NOT NULL,
+                        delivery_generation INTEGER NOT NULL CHECK (delivery_generation > 0),
+                        phase TEXT NOT NULL CHECK (phase IN ('dispatching', 'acked', 'indeterminate')),
+                        expires_at INTEGER NOT NULL,
+                        message_bytes BLOB,
+                        FOREIGN KEY (issuer_scope, operation_kind, idempotency_key)
+                            REFERENCES idempotency_records(issuer_scope, operation_kind, idempotency_key)
+                            ON DELETE CASCADE
+                     );
+                     CREATE TABLE spawn_commands (
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL,
+                        command_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        generation INTEGER NOT NULL,
+                        persistent INTEGER NOT NULL,
+                        state TEXT NOT NULL,
+                        instance_id TEXT,
+                        deadline_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        issue_kind TEXT,
+                        issue_category TEXT,
+                        issue_reason TEXT,
+                        resolved_definition_json TEXT,
+                        PRIMARY KEY (issuer_scope, operation_kind, command_id)
+                     );
+                     INSERT INTO idempotency_records VALUES (
+                        '012_scope_aaaaaaaaaaaa', 'send', 'legacy-key', X'00',
+                        'dispatching', NULL, NULL, NULL, 1000000, 1003600
+                     );
+                     INSERT INTO send_deliveries VALUES (
+                        'delivery-legacy', '012_scope_aaaaaaaaaaaa', 'send', 'legacy-key',
+                        'instance-1', 1, 'dispatching', 1003600, X'7b7d'
+                     );",
+                )
+                .unwrap();
+            // `X'7b7d'` (= `{}`) suffit ici : cet oracle ne teste que le CHECK
+            // via UPDATE brut. Un chemin réel (`orphan_dispatching_for_instance`)
+            // exige un vrai `BridgetMessage` sérialisé — voir
+            // `chemin_reel_sur_base_migree_depuis_v3`.
+            // Sur le CHECK pré-v4, orphaned est refusé.
+            let refused = legacy.execute(
+                "UPDATE send_deliveries SET phase = 'orphaned' WHERE delivery_id = 'delivery-legacy'",
+                [],
+            );
+            assert!(
+                refused.is_err(),
+                "précondition : le CHECK pré-v4 doit refuser orphaned"
+            );
+        }
+
+        let store = IdempotencyStore::open(&path).unwrap();
+        let has_v4: bool = store
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 4)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_v4, "la migration v4 doit être consignées");
+        store
+            .conn
+            .execute(
+                "UPDATE send_deliveries SET phase = 'orphaned' WHERE delivery_id = 'delivery-legacy'",
+                [],
+            )
+            .expect("après v4, orphaned doit passer le CHECK");
+        let phase: String = store
+            .conn
+            .query_row(
+                "SELECT phase FROM send_deliveries WHERE delivery_id = 'delivery-legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(phase, "orphaned");
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// ORACLE — chemin de production sur base réellement migrée v3→v4.
+    /// Complète `migration_v4_elargit…` (CHECK par UPDATE brut) : ici
+    /// `orphan_dispatching_for_instance` désérialise `message_bytes`, écrit
+    /// `orphan_emitter_notices`, et le lookup rend `Orphaned`.
+    #[test]
+    fn chemin_reel_sur_base_migree_depuis_v3() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-chemin-reel-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let message = bridget_core::BridgetMessage::new("emetteur-x", "cible-y", "mandat perdu");
+        let message_id = message.id.clone();
+        let bytes = serde_json::to_vec(&message).unwrap();
+        let key = IdempotencyKey::new(
+            "012_scope_aaaaaaaaaaaa",
+            OperationKind::Send,
+            "cle-reelle",
+        )
+        .unwrap();
+
+        {
+            let legacy = Connection::open(&path).unwrap();
+            legacy
+                .execute_batch(
+                    "CREATE TABLE idempotency_schema_migrations (version INTEGER PRIMARY KEY);
+                     INSERT INTO idempotency_schema_migrations(version) VALUES (2);
+                     INSERT INTO idempotency_schema_migrations(version) VALUES (3);
+                     CREATE TABLE idempotency_records (
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL,
+                        idempotency_key TEXT NOT NULL,
+                        canonical_bytes BLOB NOT NULL,
+                        state TEXT NOT NULL,
+                        public_result_kind TEXT,
+                        public_result_category TEXT,
+                        public_result_reason TEXT,
+                        issued_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        PRIMARY KEY (issuer_scope, operation_kind, idempotency_key)
+                     );
+                     CREATE TABLE send_deliveries (
+                        delivery_id TEXT PRIMARY KEY,
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL CHECK (operation_kind = 'send'),
+                        idempotency_key TEXT NOT NULL,
+                        recipient_instance_id TEXT NOT NULL,
+                        delivery_generation INTEGER NOT NULL CHECK (delivery_generation > 0),
+                        phase TEXT NOT NULL CHECK (phase IN ('dispatching', 'acked', 'indeterminate')),
+                        expires_at INTEGER NOT NULL,
+                        message_bytes BLOB,
+                        FOREIGN KEY (issuer_scope, operation_kind, idempotency_key)
+                            REFERENCES idempotency_records(issuer_scope, operation_kind, idempotency_key)
+                            ON DELETE CASCADE
+                     );
+                     CREATE TABLE spawn_commands (
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL,
+                        command_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        generation INTEGER NOT NULL,
+                        persistent INTEGER NOT NULL,
+                        state TEXT NOT NULL,
+                        instance_id TEXT,
+                        deadline_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        issue_kind TEXT,
+                        issue_category TEXT,
+                        issue_reason TEXT,
+                        resolved_definition_json TEXT,
+                        PRIMARY KEY (issuer_scope, operation_kind, command_id)
+                     );
+                     INSERT INTO idempotency_records VALUES (
+                        '012_scope_aaaaaaaaaaaa', 'send', 'cle-reelle', X'00',
+                        'dispatching', NULL, NULL, NULL, 1000000, 1003600
+                     );",
+                )
+                .unwrap();
+            legacy
+                .execute(
+                    "INSERT INTO send_deliveries VALUES (
+                        'delivery-reel', '012_scope_aaaaaaaaaaaa', 'send', 'cle-reelle',
+                        'instance-1', 1, 'dispatching', 1003600, ?1)",
+                    params![bytes],
+                )
+                .unwrap();
+        }
+
+        let mut store = IdempotencyStore::open(&path).expect("migration v4");
+        let notices = store
+            .orphan_dispatching_for_instance("instance-1", "destinataire purge")
+            .expect("chemin réel sur base migrée");
+
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].delivery_id, "delivery-reel");
+        assert_eq!(notices[0].message_id, message_id);
+        assert_eq!(notices[0].sender, "emetteur-x");
+        assert_eq!(notices[0].target, "cible-y");
+
+        let phase: String = store
+            .conn
+            .query_row(
+                "SELECT phase FROM send_deliveries WHERE delivery_id = 'delivery-reel'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(phase, "orphaned");
+
+        let notices_en_base: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM orphan_emitter_notices",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(notices_en_base, 1);
+
+        assert_eq!(
+            store.lookup(&key, 1_000_000).unwrap(),
+            LookupResult::Orphaned {
+                expires_at: 1_003_600,
+                reason: "destinataire purge".to_string(),
+            }
+        );
+
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// ORACLE — migration v4 face à des enfants sans parent (FK OFF hors daemon).
+    /// Meurt si l'INSERT SELECT échoue au démarrage : flotte bloquée.
+    /// Meurt aussi si l'écart est silencieux (mutant : DELETE sans `warn!`).
+    /// Nature : prouve le *mécanisme* (précaution). Occurrence nulle mesurée
+    /// sur la copie prod du jour — ne pas lire cet oracle comme un incident.
+    #[test]
+    fn migration_v4_nettoie_les_enfants_sans_parent_sans_bloquer_le_daemon() {
+        init_test_warn_logger();
+        let _log_guard = TEST_LOG_LOCK.lock().expect("TEST_LOG_LOCK");
+        TEST_WARN_LOGS.lock().expect("TEST_WARN_LOGS").clear();
+
+        let db = TempDbGuard::new("bridget-idempotency-v4-fk-orphan");
+        {
+            let legacy = Connection::open(db.path()).unwrap();
+            // Comme le CLI SQLite : FK OFF par défaut → orphelin de schéma possible.
+            legacy.pragma_update(None, "foreign_keys", false).unwrap();
+            legacy
+                .execute_batch(
+                    "CREATE TABLE idempotency_schema_migrations (version INTEGER PRIMARY KEY);
+                     INSERT INTO idempotency_schema_migrations(version) VALUES (2);
+                     INSERT INTO idempotency_schema_migrations(version) VALUES (3);
+                     CREATE TABLE idempotency_records (
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL,
+                        idempotency_key TEXT NOT NULL,
+                        canonical_bytes BLOB NOT NULL,
+                        state TEXT NOT NULL,
+                        public_result_kind TEXT,
+                        public_result_category TEXT,
+                        public_result_reason TEXT,
+                        issued_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        PRIMARY KEY (issuer_scope, operation_kind, idempotency_key)
+                     );
+                     CREATE TABLE send_deliveries (
+                        delivery_id TEXT PRIMARY KEY,
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL CHECK (operation_kind = 'send'),
+                        idempotency_key TEXT NOT NULL,
+                        recipient_instance_id TEXT NOT NULL,
+                        delivery_generation INTEGER NOT NULL CHECK (delivery_generation > 0),
+                        phase TEXT NOT NULL CHECK (phase IN ('dispatching', 'acked', 'indeterminate')),
+                        expires_at INTEGER NOT NULL,
+                        message_bytes BLOB,
+                        FOREIGN KEY (issuer_scope, operation_kind, idempotency_key)
+                            REFERENCES idempotency_records(issuer_scope, operation_kind, idempotency_key)
+                            ON DELETE CASCADE
+                     );
+                     CREATE TABLE spawn_commands (
+                        issuer_scope TEXT NOT NULL,
+                        operation_kind TEXT NOT NULL,
+                        command_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        generation INTEGER NOT NULL,
+                        persistent INTEGER NOT NULL,
+                        state TEXT NOT NULL,
+                        instance_id TEXT,
+                        deadline_at INTEGER NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        issue_kind TEXT,
+                        issue_category TEXT,
+                        issue_reason TEXT,
+                        resolved_definition_json TEXT,
+                        PRIMARY KEY (issuer_scope, operation_kind, command_id)
+                     );
+                     -- Parent valide + enfant valide.
+                     INSERT INTO idempotency_records VALUES (
+                        '012_scope_aaaaaaaaaaaa', 'send', 'kept-key', X'00',
+                        'dispatching', NULL, NULL, NULL, 1000000, 1003600
+                     );
+                     INSERT INTO send_deliveries VALUES (
+                        'delivery-kept', '012_scope_aaaaaaaaaaaa', 'send', 'kept-key',
+                        'instance-1', 1, 'dispatching', 1003600, X'7b7d'
+                     );
+                     -- Enfant SANS parent (impossible sous le daemon, possible hors daemon).
+                     INSERT INTO send_deliveries VALUES (
+                        'delivery-sans-parent', '012_scope_bbbbbbbbbbbb', 'send', 'ghost-key',
+                        'instance-ghost', 1, 'dispatching', 1003600, X'7b7d'
+                     );",
+                )
+                .unwrap();
+        }
+
+        // Ne doit PAS paniquer / échouer : c'est le démarrage du daemon.
+        let store = IdempotencyStore::open(db.path()).expect(
+            "v4 ne doit pas bloquer le démarrage sur un enfant sans parent",
+        );
+        let has_v4: bool = store
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 4)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_v4);
+        let kept: usize = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM send_deliveries WHERE delivery_id = 'delivery-kept'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let ghost: usize = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM send_deliveries WHERE delivery_id = 'delivery-sans-parent'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, 1, "l'enfant valide survit");
+        assert_eq!(ghost, 0, "l'enfant sans parent est nettoyé, pas bloquant");
+
+        let logs = TEST_WARN_LOGS.lock().expect("TEST_WARN_LOGS").clone();
+        let dit = logs.iter().any(|line| {
+            line.contains("migration v4")
+                && line.contains("écarté")
+                && line.contains("delivery-sans-parent")
+        });
+        assert!(
+            dit,
+            "l'écart doit être DIT (warn! compte + delivery_id) ; logs={logs:?}"
+        );
+
+        drop(store);
     }
 
     #[test]
@@ -2176,6 +2851,61 @@ mod tests {
                 .unwrap(),
             0,
             "une remise déjà acked ne migre pas"
+        );
+    }
+
+    /// ORACLE — purge de présence ⇒ phase `orphaned`, lookup ≠ outcome_unknown.
+    #[test]
+    fn purge_orpheline_les_remises_dispatching_sans_outcome_unknown() {
+        let mut store = IdempotencyStore::open_in_memory().unwrap();
+        let key = key();
+        assert!(matches!(
+            reserve(&store, b"canon"),
+            Reservation::Prepared { .. }
+        ));
+        let delivery = SendDelivery {
+            delivery_id: "delivery-purge".to_string(),
+            recipient_instance_id: "instance-purgée".to_string(),
+            delivery_generation: 2,
+            expires_at: NOW + HORIZON,
+            message_bytes: sample_message_bytes("msg-purge", "relec-zombie"),
+        };
+        store.begin_send_delivery(&key, &delivery).unwrap();
+        let notices = store
+            .orphan_dispatching_for_instance(
+                "instance-purgée",
+                "destinataire purgé — présence absente ; remise orpheline",
+            )
+            .unwrap();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].delivery_id, "delivery-purge");
+        assert_eq!(notices[0].target, "relec-zombie");
+        assert_eq!(delivery_phase(&store, "delivery-purge"), "orphaned");
+        assert!(
+            store
+                .dispatching_deliveries_for_instance("instance-purgée", NOW)
+                .unwrap()
+                .is_empty(),
+            "plus aucune remise en vol après orphelinage"
+        );
+        assert_eq!(
+            store.lookup(&key, NOW).unwrap(),
+            LookupResult::Orphaned {
+                expires_at: NOW + HORIZON,
+                reason: "destinataire purgé — présence absente ; remise orpheline".to_string(),
+            },
+            "le rejeu doit dire orphelin, jamais outcome_unknown"
+        );
+        assert_eq!(
+            store.orphaned_delivery_id(&key).unwrap().as_deref(),
+            Some("delivery-purge")
+        );
+        assert!(
+            store
+                .orphan_dispatching_for_instance("instance-purgée", "rejeu")
+                .unwrap()
+                .is_empty(),
+            "orphelinage absorbant"
         );
     }
 

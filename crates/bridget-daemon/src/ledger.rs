@@ -271,4 +271,71 @@ mod tests {
         drop(store);
         std::fs::remove_file(path).unwrap();
     }
+
+    /// Oracle : une remise `orphaned` se rend distinctement — pas en vol, pas
+    /// indéterminé. Meurt si `from_phase("orphaned")` perd sa correspondance.
+    #[test]
+    fn projection_rend_orphelin_distinctement() {
+        use crate::idempotency::{IdempotencyKey, IdempotencyStore, OperationKind, SendDelivery};
+
+        const NOW: i64 = 1_700_000_000;
+        const HORIZON: i64 = 3600;
+
+        let path = std::env::temp_dir().join(format!(
+            "bridget-ledger-orphelin-{}-{}.sqlite",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        {
+            let mut idem = IdempotencyStore::open(&path).unwrap();
+            let key = IdempotencyKey::new(
+                "012_scope_aaaaaaaaaaaa",
+                OperationKind::Send,
+                "msg-orphelin",
+            )
+            .unwrap();
+            let mut message = BridgetMessage::new("bridget", "relec-zombie", "mandat perdu");
+            message.id = "msg-orphelin".to_string();
+            let bytes = serde_json::to_vec(&message).unwrap();
+            idem.reserve(&key, &bytes, NOW, HORIZON, NOW, 30).unwrap();
+            idem.begin_send_delivery(
+                &key,
+                &SendDelivery {
+                    delivery_id: "delivery-orphelin".to_string(),
+                    recipient_instance_id: "instance-morte".to_string(),
+                    delivery_generation: 1,
+                    expires_at: NOW + HORIZON,
+                    message_bytes: bytes,
+                },
+            )
+            .unwrap();
+            idem.orphan_dispatching_for_instance(
+                "instance-morte",
+                "destinataire purgé — présence absente ; remise orpheline",
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        let projection = read_projection(&store, LedgerScope::Messages, 10).unwrap();
+        let entry = projection
+            .messages
+            .iter()
+            .find(|message| message.id == "msg-orphelin")
+            .expect("message orphelin visible");
+        assert_eq!(
+            entry.delivery_status,
+            Some(LedgerDeliveryStatus::Orphelin)
+        );
+        let rendered = crate::cli::render_ledger(std::slice::from_ref(entry));
+        assert!(
+            rendered.contains("[orphelin]"),
+            "l'orphelin doit s'afficher, pas se taire: {rendered}"
+        );
+        assert!(!rendered.contains("[en vol]"));
+        assert!(!rendered.contains("[indéterminé]"));
+
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
 }
