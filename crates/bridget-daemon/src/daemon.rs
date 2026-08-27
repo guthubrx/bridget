@@ -8396,6 +8396,7 @@ mod presence_tests {
     fn state_with_registered_agent(label: &str) -> (DaemonState, DaemonConfig) {
         let base = std::env::temp_dir().join(format!("bridget-{}-{}", label, std::process::id()));
         let registry_home = base.join("home");
+        let fixture_root = FixtureRoot(registry_home.clone());
         std::fs::create_dir_all(registry_home.join(".config/bridget")).unwrap();
         let registry_file = registry_home.join(".config/bridget/agents.json");
         std::fs::write(
@@ -8436,7 +8437,7 @@ mod presence_tests {
             unsafe { std::env::remove_var("HOME") };
         }
         let mut state = state_result.unwrap();
-        state.fixture_root = Some(FixtureRoot(registry_home));
+        state.fixture_root = Some(fixture_root);
         state
             .router
             .register(Some("agent-2"), &bridget_core::AgentType::Claude, "conn-1")
