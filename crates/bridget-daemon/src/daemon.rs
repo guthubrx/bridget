@@ -5341,14 +5341,64 @@ fn handle_wrapper_message(
                 {
                     Some(ServiceRefusal::CapabilityRequired)
                 }
+                // MATRICE EXHAUSTIVE — même raison que pour le rôle Client, et
+                // conséquence PIRE ici. Un message non classé y était refusé en
+                // silence : une sonde d'identité posée sur ce rôle rendrait
+                // « non attesté », une garde en conclurait « ne pas écrire », et
+                // le refus serait PERMANENT. Une garde qui refuse toujours
+                // ressemble à une garde qui marche — elle passe la revue verte
+                // et ne protège rien.
                 WrapperToDaemon::ServiceHello { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
                 | WrapperToDaemon::GuichetClaim { .. }
                 | WrapperToDaemon::GuichetLookup { .. }
                 | WrapperToDaemon::GuichetReply { .. }
-                | WrapperToDaemon::Heartbeat => None,
-                _ => Some(ServiceRefusal::MessageOutsideServiceRole),
+                | WrapperToDaemon::Heartbeat
+                // Sonde d'identité : lecture seule, aucune écriture durable. Le
+                // greffe en a besoin pour savoir SUR QUELLE MACHINE il écrirait.
+                | WrapperToDaemon::DaemonIdentityRequest => None,
+                WrapperToDaemon::RoleHandshake { .. }
+                | WrapperToDaemon::ClientHello { .. }
+                // Refusé AVANT ce lot aussi : il tombait dans le tiret bas.
+                // La forme change, le sort de ce message ne change pas.
+                | WrapperToDaemon::ServiceRequest { .. }
+                | WrapperToDaemon::SendIdempotent { .. }
+                | WrapperToDaemon::Lookup { .. }
+                | WrapperToDaemon::DeliverAcked { .. }
+                | WrapperToDaemon::DeliveryIndeterminate { .. }
+                | WrapperToDaemon::SpawnOrder { .. }
+                | WrapperToDaemon::StopOrder { .. }
+                | WrapperToDaemon::Subscribe { .. }
+                | WrapperToDaemon::Unsubscribe { .. }
+                | WrapperToDaemon::Subscribed { .. }
+                | WrapperToDaemon::JournalFragment { .. }
+                | WrapperToDaemon::LiveJournalFragment { .. }
+                | WrapperToDaemon::SnapshotCaughtUp { .. }
+                | WrapperToDaemon::Gap { .. }
+                | WrapperToDaemon::JournalReadError { .. }
+                | WrapperToDaemon::End { .. }
+                | WrapperToDaemon::AttachRejected { .. }
+                | WrapperToDaemon::Register { .. }
+                | WrapperToDaemon::JournalReady
+                | WrapperToDaemon::Unregister
+                | WrapperToDaemon::Rename { .. }
+                | WrapperToDaemon::Send { .. }
+                | WrapperToDaemon::DeliveryRejected { .. }
+                | WrapperToDaemon::TurnState { .. }
+                | WrapperToDaemon::CancelRequest { .. }
+                | WrapperToDaemon::ListRequests { .. }
+                | WrapperToDaemon::LedgerProjection { .. }
+                | WrapperToDaemon::ListAgents
+                | WrapperToDaemon::Runtime { .. }
+                | WrapperToDaemon::ServedModel { .. }
+                | WrapperToDaemon::RateLimit { .. }
+                | WrapperToDaemon::Usage { .. }
+                | WrapperToDaemon::UsageWindow { .. }
+                | WrapperToDaemon::Domain { .. }
+                | WrapperToDaemon::Availability { .. } => {
+                    Some(ServiceRefusal::MessageOutsideServiceRole)
+                }
             },
             Some(ConnectionRole::Wrapper) | None if is_service_message => {
                 Some(ServiceRefusal::ServiceRoleRequired)
@@ -7353,6 +7403,94 @@ const BUILD_ID_PROBE_IDENTITY: &str = "bridget-status-build-id";
 
 fn build_id_probe_issuer_scope() -> String {
     crate::mcp::issuer_scope(BUILD_ID_PROBE_IDENTITY)
+}
+
+/// Matrice message-role : la sonde d'identite doit rester atteignable.
+///
+/// Ce module est DELIBEREMENT hors de `presence_tests` : cette famille est
+/// ecartee de toutes nos mesures a cause d'un test qui bloque, et un oracle
+/// range dans une famille que personne ne joue ne garde rien.
+#[cfg(test)]
+mod matrice_roles_tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    /// Etat minimal : on n'eprouve que la matrice, pas la presence.
+    ///
+    /// Le chemin porte l'horloge en plus du PID : deux executions successives
+    /// du meme binaire ne doivent pas se disputer le meme fichier SQLite, sinon
+    /// le banc devient intermittent et l'intermittence se paie plus tard.
+    fn etat_nu(etiquette: &str) -> (Arc<Mutex<DaemonState>>, DaemonConfig) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("horloge")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "bridget-{}-{}-{nanos}",
+            etiquette,
+            std::process::id()
+        ));
+        let config = DaemonConfig {
+            socket_path: base.with_extension("sock"),
+            db_path: base.with_extension("db"),
+            log_path: base.with_extension("log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+        };
+        let (managed_tx, _managed_rx) = mpsc::channel();
+        let state = Arc::new(Mutex::new(DaemonState::new(&config, managed_tx).unwrap()));
+        (state, config)
+    }
+
+    /// La sonde d'identite doit etre atteignable sur les DEUX roles.
+    ///
+    /// Le greffe se connecte en role Client pour deleguer, mais son guichet
+    /// passe en role Service. Les deux matrices portaient le meme tiret bas et
+    /// la variante y tombait : refus SILENCIEUX, identite non attestee, et une
+    /// garde qui en conclurait « ne pas ecrire » — DEFINITIVEMENT. Une garde
+    /// qui refuse toujours ressemble a une garde qui marche.
+    ///
+    /// Mutant qui tue ce test : reclasser `DaemonIdentityRequest` dans le bras
+    /// de refus de l'un OU l'autre role -> le rejet apparait et l'assertion
+    /// meurt en nommant le role fautif.
+    #[test]
+    fn la_sonde_d_identite_est_atteignable_sur_les_roles_client_et_service() {
+        let (shared, config) = etat_nu("sonde-identite");
+
+        for (connexion, role) in [
+            ("conn-client", ConnectionRole::Client),
+            ("conn-service", ConnectionRole::Service),
+        ] {
+            assert!(matches!(
+                handle_wrapper_message(connexion, WrapperToDaemon::RoleHandshake { role }, &shared,),
+                Some(DaemonToWrapper::RoleAccepted { .. })
+            ));
+
+            // Demandee SANS negociation prealable : elle ne lit que ce que le
+            // daemon atteste de lui-meme, elle n'ouvre aucun droit.
+            let reponse =
+                handle_wrapper_message(connexion, WrapperToDaemon::DaemonIdentityRequest, &shared);
+            match reponse {
+                Some(DaemonToWrapper::DaemonIdentityReport { host, db_path }) => {
+                    // Les VALEURS, pas la presence : ce sont celles de l'etat.
+                    let attendu = shared.lock().unwrap_or_else(|p| p.into_inner());
+                    assert_eq!(host, attendu.host, "role {role:?}");
+                    assert_eq!(
+                        db_path,
+                        attendu.db_path.display().to_string(),
+                        "role {role:?}"
+                    );
+                }
+                autre => panic!("role {role:?} : identite attendue, obtenu {autre:?}"),
+            }
+        }
+        // Ne pas laisser de fichier derriere soi : c'est le meme reflexe que
+        // pour les processus, et il a deja coute une soiree a ce chantier.
+        let _ = std::fs::remove_file(&config.db_path);
+    }
 }
 
 /// Le compte de messages n'est mesurable d'ici que si la base locale est
