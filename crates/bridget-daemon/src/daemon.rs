@@ -13767,7 +13767,7 @@ mod presence_tests {
         std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         std::fs::write(
             &adapter,
-            "#!/bin/sh\nread initialize\necho '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1}}'\nread session\necho '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"fixture-session\"}}'\nwhile read line; do :; done\n",
+            "#!/bin/sh\nread initialize\necho '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1}}'\nread session\necho '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"fixture-session\"}}'\nwhile read line; do\n  case \"$line\" in\n    *Disconnect*|*disconnect*) exit 0 ;;\n  esac\ndone\n",
         )
         .unwrap();
         std::fs::set_permissions(&adapter, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -13894,7 +13894,7 @@ mod presence_tests {
             }
             assert!(
                 Instant::now() < stop_deadline,
-                "la chaîne réelle stop n'a pas produit d'issue"
+                "la chaîne réelle stop n'a pas produit d'issue : le superviseur n'a pas observé la terminaison de l'adaptateur après Disconnect"
             );
             thread::sleep(Duration::from_millis(10));
         };
