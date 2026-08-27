@@ -533,9 +533,6 @@ fn resolve_spawn_order(
     if !cwd.is_absolute() {
         return Err("--cwd doit être absolu".to_string());
     }
-    if !cwd.is_dir() {
-        return Err(format!("cwd absent ou non répertoire: {}", cwd.display()));
-    }
     let order = WrapperToDaemon::SpawnOrder {
         agent_type: parsed.agent_type.clone(),
         name: parsed.name.clone(),
@@ -553,6 +550,154 @@ fn resolve_spawn_order(
         )
     })?;
     Ok(order)
+}
+
+#[cfg(test)]
+mod spawn_executor_tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+    use std::path::{Path, PathBuf};
+    use std::thread;
+
+    /// Double de l'exécuteur : la CLI emprunte son vrai protocole Register /
+    /// SpawnOrder, puis reçoit l'issue que seul le daemon est autorisé à rendre.
+    fn daemon_repond_a_un_spawn(
+        socket: &Path,
+        response: DaemonToWrapper,
+    ) -> thread::JoinHandle<WrapperToDaemon> {
+        let listener = UnixListener::bind(socket).expect("socket d'exécuteur");
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("connexion CLI");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone lecture"));
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+
+            reader.read_line(&mut line).expect("Register CLI");
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).expect("Register décodable"),
+                WrapperToDaemon::Register { .. }
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::Registered {
+                    name: "cli-cwd-oracle".to_string(),
+                })
+                .expect("Registered encodable")
+            )
+            .expect("Registered écrit");
+            writer.flush().expect("Registered envoyé");
+
+            line.clear();
+            reader.read_line(&mut line).expect("SpawnOrder CLI");
+            let order = decode(line.trim()).expect("SpawnOrder décodable");
+            writeln!(writer, "{}", encode(&response).expect("réponse encodable"))
+                .expect("réponse écrite");
+            writer.flush().expect("réponse envoyée");
+            order
+        })
+    }
+
+    fn temporary_socket(label: &str) -> PathBuf {
+        PathBuf::from(format!(
+            "/tmp/bg-cwd-{label}-{}-{}.sock",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ))
+    }
+
+    #[test]
+    fn spawn_cli_laisse_l_executant_refuser_le_cwd_absent_et_garde_le_cas_valide() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-cli-cwd-executor-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("racine de test");
+        let cwd_absent = root.join("absent-sur-le-client");
+        assert!(!cwd_absent.exists(), "précondition : cwd client absent");
+        let args_absents = vec![
+            "fixture".to_string(),
+            "--cwd".to_string(),
+            cwd_absent.to_string_lossy().into_owned(),
+            "--command-id".to_string(),
+            "cwd-executor-absent".to_string(),
+        ];
+
+        // Le mutant qui réintroduit `cwd.is_dir()` tombe ICI, avant toute
+        // socket : la CLI doit transmettre le chemin à la machine exécutante.
+        let ordre_absent = resolve_spawn_order(
+            &parse_spawn_args(&args_absents).expect("arguments valides"),
+            100,
+            &root,
+            &root,
+        )
+        .expect("la CLI ne tranche pas l'existence d'un cwd exécutant");
+        let socket_absent = temporary_socket("absent");
+        let daemon_absent = daemon_repond_a_un_spawn(
+            &socket_absent,
+            DaemonToWrapper::SpawnRejected {
+                command_id: "cwd-executor-absent".to_string(),
+                reason: SpawnRefusal::CwdGone,
+            },
+        );
+        let refusal = send_control_to_daemon_at(&socket_absent, ordre_absent)
+            .expect("la CLI reçoit le refus de l'exécuteur");
+        let reason = match refusal {
+            DaemonToWrapper::SpawnRejected { command_id, reason } => {
+                assert_eq!(command_id, "cwd-executor-absent");
+                reason
+            }
+            other => panic!("SpawnRejected attendu, reçu {other:?}"),
+        };
+        assert_eq!(
+            format!("SPAWN REFUSÉ: {}", display_spawn_refusal(&reason)),
+            "SPAWN REFUSÉ: répertoire de travail disparu",
+            "le texte doit venir de CwdGone, pas du pré-contrôle client"
+        );
+        assert!(matches!(
+            daemon_absent.join().expect("daemon absent termine"),
+            WrapperToDaemon::SpawnOrder { cwd, .. } if cwd == cwd_absent.to_string_lossy()
+        ));
+        let _ = std::fs::remove_file(&socket_absent);
+
+        let cwd_valide = root.join("present-sur-le-client");
+        std::fs::create_dir_all(&cwd_valide).expect("cwd valide");
+        let args_valides = vec![
+            "fixture".to_string(),
+            "--cwd".to_string(),
+            cwd_valide.to_string_lossy().into_owned(),
+            "--command-id".to_string(),
+            "cwd-executor-valide".to_string(),
+        ];
+        let ordre_valide = resolve_spawn_order(
+            &parse_spawn_args(&args_valides).expect("arguments valides"),
+            100,
+            &root,
+            &root,
+        )
+        .expect("un cwd valide construit toujours un ordre");
+        let socket_valide = temporary_socket("valide");
+        let daemon_valide = daemon_repond_a_un_spawn(
+            &socket_valide,
+            DaemonToWrapper::SpawnAccepted {
+                command_id: "cwd-executor-valide".to_string(),
+                name: "fixture-cwd".to_string(),
+                definition: None,
+            },
+        );
+        assert!(matches!(
+            send_control_to_daemon_at(&socket_valide, ordre_valide),
+            Ok(DaemonToWrapper::SpawnAccepted { command_id, name, .. })
+                if command_id == "cwd-executor-valide" && name == "fixture-cwd"
+        ));
+        assert!(matches!(
+            daemon_valide.join().expect("daemon valide termine"),
+            WrapperToDaemon::SpawnOrder { cwd, .. } if cwd == cwd_valide.to_string_lossy()
+        ));
+        let _ = std::fs::remove_file(&socket_valide);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 fn validate_retry_options(
