@@ -73,6 +73,7 @@ fn status_capture_des_faits_acp_ephemeres_sans_etat_metier_invente() {
 fn status_sans_budget_ne_fabrique_ni_fraicheur_ni_capture() {
     let fixture = Fixture::new(None);
     fixture.seed_delegation_terminale();
+    let server = start_identity_then_unavailable(&fixture.socket);
 
     let output = Command::new(env!("CARGO_BIN_EXE_maicie"))
         .args([
@@ -94,7 +95,9 @@ fn status_sans_budget_ne_fabrique_ni_fraicheur_ni_capture() {
         "la relève Bridget indisponible reste une observation distincte des faits locaux"
     );
     assert!(value["runtime"].as_array().unwrap().is_empty());
+    server.join().unwrap();
 
+    let server = start_identity_then_unavailable(&fixture.socket);
     let plain = Command::new(env!("CARGO_BIN_EXE_maicie"))
         .args(["status", "--config", fixture.config.to_str().unwrap()])
         .output()
@@ -103,6 +106,7 @@ fn status_sans_budget_ne_fabrique_ni_fraicheur_ni_capture() {
     let rendered = String::from_utf8(plain.stdout).unwrap();
     assert!(rendered.contains("snapshot_transport=unknown"));
     assert!(rendered.contains("fraîcheur=unavailable"));
+    server.join().unwrap();
 }
 
 #[test]
@@ -154,6 +158,7 @@ fn status_expose_le_compteur_durable_des_contradictions_suite() {
             } if objectif_cite == known
         ));
     }
+    let server = start_identity_then_unavailable(&fixture.socket);
 
     let json_output = Command::new(env!("CARGO_BIN_EXE_maicie"))
         .args([
@@ -174,7 +179,9 @@ fn status_expose_le_compteur_durable_des_contradictions_suite() {
         value["refus_contraintes"]["suite_aucune_avec_citation_non_classee"], 1,
         "le chiffre durable doit être lisible sans observer le refus en direct"
     );
+    server.join().unwrap();
 
+    let server = start_identity_then_unavailable(&fixture.socket);
     let plain_output = Command::new(env!("CARGO_BIN_EXE_maicie"))
         .args(["status", "--config", fixture.config.to_str().unwrap()])
         .output()
@@ -185,6 +192,7 @@ fn status_expose_le_compteur_durable_des_contradictions_suite() {
             .unwrap()
             .contains("refus_contradiction_suite=1")
     );
+    server.join().unwrap();
 }
 
 #[test]
@@ -242,6 +250,7 @@ fn serve_status(socket: &std::path::Path, ready: mpsc::Sender<()>) {
     let _ = fs::remove_file(socket);
     let listener = UnixListener::bind(socket).unwrap();
     ready.send(()).unwrap();
+    accept_daemon_identity(&listener);
     accept_empty_guichet(&listener);
     accept_empty_coordination(&listener);
     let (stream, _) = listener.accept().unwrap();
@@ -312,6 +321,7 @@ fn serve_status_until_timeout(socket: &std::path::Path, ready: mpsc::Sender<()>)
     let _ = fs::remove_file(socket);
     let listener = UnixListener::bind(socket).unwrap();
     ready.send(()).unwrap();
+    accept_daemon_identity(&listener);
     accept_empty_guichet(&listener);
     accept_empty_coordination(&listener);
     accept_status_client(&listener);
@@ -344,6 +354,82 @@ fn serve_status_until_timeout(socket: &std::path::Path, ready: mpsc::Sender<()>)
         .unwrap();
     let mut unexpected = String::new();
     matches!(reader.read_line(&mut unexpected), Ok(0))
+}
+
+fn start_identity_then_unavailable(socket: &std::path::Path) -> thread::JoinHandle<()> {
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let socket = socket.to_owned();
+    let server = thread::spawn(move || {
+        let _ = fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        ready_tx.send(()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let (mut reader, mut writer) = split(stream);
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"RoleHandshake","role":"client"})
+        );
+        write_json(&mut writer, json!({"type":"RoleAccepted","role":"client"}));
+        assert_eq!(read_json(&mut reader)["type"], "ClientHello");
+        write_json(
+            &mut writer,
+            json!({
+                "type":"ClientWelcome",
+                "version":1,
+                "horizon_secs":3600,
+                "issued_at_tolerance_secs":30,
+                "capabilities":["send_idempotent","lookup"]
+            }),
+        );
+        assert_eq!(
+            read_json(&mut reader),
+            json!({"type":"DaemonIdentityRequest"})
+        );
+        drop(listener);
+        write_json(
+            &mut writer,
+            json!({
+                "type":"DaemonIdentityReport",
+                "host":bridget_core::local_host(),
+                "db_path":"/var/lib/bridget/bridget.db"
+            }),
+        );
+    });
+    ready_rx.recv().unwrap();
+    server
+}
+
+fn accept_daemon_identity(listener: &UnixListener) {
+    let (stream, _) = listener.accept().unwrap();
+    let (mut reader, mut writer) = split(stream);
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"RoleHandshake","role":"client"})
+    );
+    write_json(&mut writer, json!({"type":"RoleAccepted","role":"client"}));
+    assert_eq!(read_json(&mut reader)["type"], "ClientHello");
+    write_json(
+        &mut writer,
+        json!({
+            "type":"ClientWelcome",
+            "version":1,
+            "horizon_secs":3600,
+            "issued_at_tolerance_secs":30,
+            "capabilities":["send_idempotent","lookup"]
+        }),
+    );
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"DaemonIdentityRequest"})
+    );
+    write_json(
+        &mut writer,
+        json!({
+            "type":"DaemonIdentityReport",
+            "host":bridget_core::local_host(),
+            "db_path":"/var/lib/bridget/bridget.db"
+        }),
+    );
 }
 
 fn accept_empty_guichet(listener: &UnixListener) {

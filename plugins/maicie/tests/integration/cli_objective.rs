@@ -3,10 +3,15 @@ use maicie::config::DurationClasses;
 use maicie::domain::{ClasseDuree, DecisionCoordination, EtatDecision, EtatObjectif, TypeDecision};
 use maicie::store::{MaicieStore, StoreError};
 use serde_json::{Value, json};
+use std::cell::Cell;
 use std::fs;
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
 use uuid::Uuid;
 
 #[test]
@@ -203,16 +208,184 @@ fn decision_obsolete_nefface_pas_l_issue_terminale_reinjectee() {
 }
 
 fn run(fixture: &Fixture, tail: &[&str]) -> std::process::Output {
+    let server = start_local_daemon(&fixture.socket, fixture.first_run.replace(false));
     let mut command = Command::new(env!("CARGO_BIN_EXE_maicie"));
     command.args(tail);
     command.args(["--config", fixture.config.to_str().unwrap()]);
-    command.output().unwrap()
+    let output = command.output().unwrap();
+    server.join().unwrap();
+    output
+}
+
+fn start_local_daemon(socket: &std::path::Path, reconcile_outbox: bool) -> thread::JoinHandle<()> {
+    let socket = socket.to_owned();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let _ = fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        ready_tx.send(()).unwrap();
+        accept_daemon_identity(&listener);
+        if reconcile_outbox {
+            accept_reconcile_accepted(&listener);
+        }
+        accept_empty_guichet(&listener);
+        accept_empty_coordination(&listener);
+    });
+    ready_rx.recv().unwrap();
+    server
+}
+
+fn accept_reconcile_accepted(listener: &UnixListener) {
+    let (stream, _) = listener.accept().unwrap();
+    let (mut reader, mut writer) = split(stream);
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"RoleHandshake","role":"client"})
+    );
+    write_json(&mut writer, json!({"type":"RoleAccepted","role":"client"}));
+    assert_eq!(read_json(&mut reader)["type"], "ClientHello");
+    write_json(
+        &mut writer,
+        json!({
+            "type":"ClientWelcome",
+            "version":1,
+            "horizon_secs":3600,
+            "issued_at_tolerance_secs":30,
+            "capabilities":["send_idempotent","lookup"]
+        }),
+    );
+    let lookup = read_json(&mut reader);
+    assert_eq!(lookup["type"], "Lookup");
+    assert_eq!(lookup["operation_kind"], "send");
+    let message_id = lookup["idempotency_key"].as_str().unwrap();
+    write_json(
+        &mut writer,
+        json!({
+            "type":"IdempotencyResult",
+            "operation_kind":"send",
+            "idempotency_key":message_id,
+            "issue":{"kind":"accepted","expires_at":4_102_444_800i64}
+        }),
+    );
+}
+
+fn accept_daemon_identity(listener: &UnixListener) {
+    let (stream, _) = listener.accept().unwrap();
+    let (mut reader, mut writer) = split(stream);
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"RoleHandshake","role":"client"})
+    );
+    write_json(&mut writer, json!({"type":"RoleAccepted","role":"client"}));
+    assert_eq!(read_json(&mut reader)["type"], "ClientHello");
+    write_json(
+        &mut writer,
+        json!({
+            "type":"ClientWelcome",
+            "version":1,
+            "horizon_secs":3600,
+            "issued_at_tolerance_secs":30,
+            "capabilities":["send_idempotent","lookup"]
+        }),
+    );
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"DaemonIdentityRequest"})
+    );
+    write_json(
+        &mut writer,
+        json!({
+            "type":"DaemonIdentityReport",
+            "host":bridget_core::local_host(),
+            "db_path":"/var/lib/bridget/bridget.db"
+        }),
+    );
+}
+
+fn accept_empty_guichet(listener: &UnixListener) {
+    let (stream, _) = listener.accept().unwrap();
+    let (mut reader, mut writer) = split(stream);
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"RoleHandshake","role":"service"})
+    );
+    write_json(&mut writer, json!({"type":"RoleAccepted","role":"service"}));
+    let hello = read_json(&mut reader);
+    assert_eq!(hello["type"], "ServiceHello");
+    assert_eq!(hello["service"], "maicie");
+    assert_eq!(hello["capabilities"], json!(["maicie_guichet"]));
+    write_json(
+        &mut writer,
+        json!({
+            "type":"ServiceWelcome",
+            "version":1,
+            "horizon_secs":3600,
+            "issued_at_tolerance_secs":30,
+            "capabilities":["maicie_guichet"]
+        }),
+    );
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"guichet_claim_next","v":1})
+    );
+    write_json(&mut writer, json!({"type":"guichet_empty","v":1}));
+}
+
+fn accept_empty_coordination(listener: &UnixListener) {
+    let (stream, _) = listener.accept().unwrap();
+    let (mut reader, mut writer) = split(stream);
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"RoleHandshake","role":"service"})
+    );
+    write_json(&mut writer, json!({"type":"RoleAccepted","role":"service"}));
+    let hello = read_json(&mut reader);
+    assert_eq!(
+        hello["capabilities"],
+        json!(["maicie_guichet", "coordination_events_v2"])
+    );
+    write_json(
+        &mut writer,
+        json!({
+            "type":"ServiceWelcome",
+            "version":1,
+            "horizon_secs":3600,
+            "issued_at_tolerance_secs":30,
+            "capabilities":["maicie_guichet","coordination_events_v2"]
+        }),
+    );
+    assert_eq!(read_json(&mut reader)["type"], "coordination_subscribe");
+    write_json(
+        &mut writer,
+        json!({"type":"coordination_snapshot_caught_up","v":2}),
+    );
+}
+
+fn split(stream: UnixStream) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
+    (
+        BufReader::new(stream.try_clone().unwrap()),
+        BufWriter::new(stream),
+    )
+}
+
+fn read_json(reader: &mut BufReader<UnixStream>) -> Value {
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+fn write_json(writer: &mut BufWriter<UnixStream>, value: Value) {
+    serde_json::to_writer(&mut *writer, &value).unwrap();
+    writer.write_all(b"\n").unwrap();
+    writer.flush().unwrap();
 }
 
 struct Fixture {
     root: PathBuf,
     database: PathBuf,
     config: PathBuf,
+    socket: PathBuf,
+    first_run: Cell<bool>,
 }
 
 impl Fixture {
@@ -222,11 +395,12 @@ impl Fixture {
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let database = root.join("maicie.sqlite3");
         let config = root.join("maicie.json");
+        let socket = root.join("bridget.sock");
         fs::write(
             &config,
             serde_json::to_vec(&json!({
                 "version": 1,
-                "bridget_socket": "/tmp/mc-objective.sock",
+                "bridget_socket": socket,
                 "database_path": database,
                 "durations": {"short_secs": 30, "normal_secs": 60, "long_secs": 90},
                 "profiles": []
@@ -238,6 +412,8 @@ impl Fixture {
             root,
             database,
             config,
+            socket,
+            first_run: Cell::new(true),
         }
     }
 

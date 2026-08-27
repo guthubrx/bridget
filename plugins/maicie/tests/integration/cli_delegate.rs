@@ -66,7 +66,6 @@ fn deux_delegations_cli_avec_la_meme_cle_rejouent_les_memes_ids_sans_seconde_out
         .unwrap();
     assert_eq!(snapshot.outbox.state, EtatOutboxDelegation::Accepted);
     drop(store);
-    server.join().unwrap();
 
     let status = Command::new(env!("CARGO_BIN_EXE_maicie"))
         .args([
@@ -88,6 +87,7 @@ fn deux_delegations_cli_avec_la_meme_cle_rejouent_les_memes_ids_sans_seconde_out
         status_json["coordination"][0]["remises_locales"][0]["issue"]["kind"],
         "accepted"
     );
+    server.join().unwrap();
 }
 
 #[test]
@@ -149,6 +149,41 @@ fn cible_connectee_sans_profil_explique_l_inscription_maicie_manquante() {
     server.join().unwrap();
 }
 
+/// Le même protocole de fixture prouve aussi le chemin négatif : le rapport
+/// vient bien d'un daemon, mais son hôte est fédéré. L'assertion porte sur le
+/// nom distant, absent des refus de contrat ou d'attestation, et sur l'absence
+/// de création SQLite ; un refus générique ne peut donc pas faire passer ce
+/// témoin.
+#[test]
+fn delegation_federee_refuse_le_daemon_distant_avant_sqlite() {
+    let fixture = Fixture::new();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let socket = fixture.socket.clone();
+    let server = thread::spawn(move || {
+        let listener = UnixListener::bind(socket).unwrap();
+        ready_tx.send(()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        serve_daemon_identity(stream, "machine-federee-temoin");
+    });
+    ready_rx.recv().unwrap();
+
+    let output = run_delegate(&fixture, "delegation-federee-refusee");
+    assert_eq!(output.status.code(), Some(4));
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "daemon_store_not_local");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("machine-federee-temoin")),
+        "le refus doit nommer l'hôte distant attesté : {error}"
+    );
+    assert!(
+        !fixture.database.exists(),
+        "le daemon fédéré doit être refusé avant toute création SQLite"
+    );
+    server.join().unwrap();
+}
+
 fn run_delegate(fixture: &Fixture, idempotency_key: &str) -> std::process::Output {
     run_delegate_to(fixture, "prospective", idempotency_key)
 }
@@ -179,6 +214,8 @@ fn serve_delegate_fixture(socket: &Path, ready: mpsc::Sender<()>) {
     let listener = UnixListener::bind(socket).unwrap();
     ready.send(()).unwrap();
     let (stream, _) = listener.accept().unwrap();
+    serve_local_daemon_identity(stream);
+    let (stream, _) = listener.accept().unwrap();
     serve_guichet_empty(stream);
     let (stream, _) = listener.accept().unwrap();
     serve_coordination_empty(stream);
@@ -189,6 +226,8 @@ fn serve_delegate_fixture(socket: &Path, ready: mpsc::Sender<()>) {
     let (stream, _) = listener.accept().unwrap();
     serve_reconcile_send(stream);
     let (stream, _) = listener.accept().unwrap();
+    serve_local_daemon_identity(stream);
+    let (stream, _) = listener.accept().unwrap();
     serve_guichet_empty(stream);
     let (stream, _) = listener.accept().unwrap();
     serve_coordination_empty(stream);
@@ -196,6 +235,12 @@ fn serve_delegate_fixture(socket: &Path, ready: mpsc::Sender<()>) {
     serve_client_handshake(stream);
     let (stream, _) = listener.accept().unwrap();
     serve_agent_list(stream);
+    let (stream, _) = listener.accept().unwrap();
+    serve_local_daemon_identity(stream);
+    let (stream, _) = listener.accept().unwrap();
+    serve_guichet_empty(stream);
+    let (stream, _) = listener.accept().unwrap();
+    serve_coordination_empty(stream);
 }
 
 fn serve_list_only_fixture(socket: &Path, ready: mpsc::Sender<()>) {
@@ -205,6 +250,8 @@ fn serve_list_only_fixture(socket: &Path, ready: mpsc::Sender<()>) {
 fn serve_list_only_fixture_with_agent(socket: &Path, ready: mpsc::Sender<()>, agent: &str) {
     let listener = UnixListener::bind(socket).unwrap();
     ready.send(()).unwrap();
+    let (stream, _) = listener.accept().unwrap();
+    serve_local_daemon_identity(stream);
     let (stream, _) = listener.accept().unwrap();
     serve_guichet_empty(stream);
     let (stream, _) = listener.accept().unwrap();
@@ -291,6 +338,28 @@ fn serve_client_handshake(stream: UnixStream) {
     let mut writer = stream.try_clone().unwrap();
     let mut reader = BufReader::new(stream);
     serve_client_handshake_io(&mut reader, &mut writer);
+}
+
+fn serve_local_daemon_identity(stream: UnixStream) {
+    serve_daemon_identity(stream, &bridget_core::local_host());
+}
+
+fn serve_daemon_identity(stream: UnixStream, host: &str) {
+    let mut writer = stream.try_clone().unwrap();
+    let mut reader = BufReader::new(stream);
+    serve_client_handshake_io(&mut reader, &mut writer);
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type": "DaemonIdentityRequest"})
+    );
+    write_json(
+        &mut writer,
+        json!({
+            "type": "DaemonIdentityReport",
+            "host": host,
+            "db_path": "/var/lib/bridget/bridget.db"
+        }),
+    );
 }
 
 fn serve_client_handshake_io(reader: &mut BufReader<UnixStream>, writer: &mut UnixStream) {

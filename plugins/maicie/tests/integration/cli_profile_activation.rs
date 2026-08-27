@@ -1,11 +1,14 @@
 use maicie::store::MaicieStore;
 use serde_json::{Value, json};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::mpsc;
+use std::thread;
 use uuid::Uuid;
 
 /// Chemin absolu synthétique partagé par l'assertion et la fixture écrite.
@@ -71,7 +74,7 @@ fn profile_propose_puis_approve_expose_le_consentement_local_et_l_outbox() {
             .contains("approbation = terminal interactif uniquement")
     );
 
-    let scripted = fixture.run(&[
+    let scripted = fixture.run_without_daemon(&[
         "profile",
         "approve",
         &approval_id,
@@ -101,6 +104,7 @@ struct Fixture {
     database: PathBuf,
     config: PathBuf,
     definition: PathBuf,
+    socket: PathBuf,
 }
 
 impl Fixture {
@@ -112,11 +116,12 @@ impl Fixture {
         let database = root.join("maicie.sqlite3");
         let config = root.join("maicie.json");
         let definition = root.join("resolved-definition.json");
+        let socket = root.join("bridget.sock");
         fs::write(
             &config,
             serde_json::to_vec(&json!({
                 "version": 1,
-                "bridget_socket": root.join("bridget.sock"),
+                "bridget_socket": socket,
                 "database_path": database,
                 "durations": {"short_secs": 30, "normal_secs": 60, "long_secs": 90},
                 "profiles": [{
@@ -157,10 +162,21 @@ impl Fixture {
             database,
             config,
             definition,
+            socket,
         }
     }
 
     fn run(&self, tail: &[&str]) -> std::process::Output {
+        let server = start_local_daemon(&self.socket);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_maicie"));
+        command.args(tail);
+        command.args(["--config", self.config.to_str().unwrap()]);
+        let output = command.output().unwrap();
+        server.join().unwrap();
+        output
+    }
+
+    fn run_without_daemon(&self, tail: &[&str]) -> std::process::Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_maicie"));
         command.args(tail);
         command.args(["--config", self.config.to_str().unwrap()]);
@@ -168,6 +184,7 @@ impl Fixture {
     }
 
     fn approve_in_pseudo_tty(&self, approval_id: &str, confirmation: &str) -> (ExitStatus, String) {
+        let server = start_local_daemon(&self.socket);
         let pseudo_tty = PseudoTerminal::open();
         let mut command = Command::new(env!("CARGO_BIN_EXE_maicie"));
         command.args([
@@ -186,11 +203,138 @@ impl Fixture {
         let mut child = command.spawn().unwrap();
         pseudo_tty.write_all(confirmation.as_bytes());
         let status = child.wait().unwrap();
+        server.join().unwrap();
         (
             status,
             String::from_utf8_lossy(&pseudo_tty.read_available()).into_owned(),
         )
     }
+}
+
+fn start_local_daemon(socket: &std::path::Path) -> thread::JoinHandle<()> {
+    let socket = socket.to_owned();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let _ = fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        ready_tx.send(()).unwrap();
+        accept_daemon_identity(&listener);
+        accept_empty_guichet(&listener);
+        accept_empty_coordination(&listener);
+    });
+    ready_rx.recv().unwrap();
+    server
+}
+
+fn accept_daemon_identity(listener: &UnixListener) {
+    let (stream, _) = listener.accept().unwrap();
+    let (mut reader, mut writer) = split(stream);
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"RoleHandshake","role":"client"})
+    );
+    write_json(&mut writer, json!({"type":"RoleAccepted","role":"client"}));
+    assert_eq!(read_json(&mut reader)["type"], "ClientHello");
+    write_json(
+        &mut writer,
+        json!({
+            "type":"ClientWelcome",
+            "version":1,
+            "horizon_secs":3600,
+            "issued_at_tolerance_secs":30,
+            "capabilities":["send_idempotent","lookup"]
+        }),
+    );
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"DaemonIdentityRequest"})
+    );
+    write_json(
+        &mut writer,
+        json!({
+            "type":"DaemonIdentityReport",
+            "host":bridget_core::local_host(),
+            "db_path":"/var/lib/bridget/bridget.db"
+        }),
+    );
+}
+
+fn accept_empty_guichet(listener: &UnixListener) {
+    let (stream, _) = listener.accept().unwrap();
+    let (mut reader, mut writer) = split(stream);
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"RoleHandshake","role":"service"})
+    );
+    write_json(&mut writer, json!({"type":"RoleAccepted","role":"service"}));
+    let hello = read_json(&mut reader);
+    assert_eq!(hello["type"], "ServiceHello");
+    assert_eq!(hello["service"], "maicie");
+    assert_eq!(hello["capabilities"], json!(["maicie_guichet"]));
+    write_json(
+        &mut writer,
+        json!({
+            "type":"ServiceWelcome",
+            "version":1,
+            "horizon_secs":3600,
+            "issued_at_tolerance_secs":30,
+            "capabilities":["maicie_guichet"]
+        }),
+    );
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"guichet_claim_next","v":1})
+    );
+    write_json(&mut writer, json!({"type":"guichet_empty","v":1}));
+}
+
+fn accept_empty_coordination(listener: &UnixListener) {
+    let (stream, _) = listener.accept().unwrap();
+    let (mut reader, mut writer) = split(stream);
+    assert_eq!(
+        read_json(&mut reader),
+        json!({"type":"RoleHandshake","role":"service"})
+    );
+    write_json(&mut writer, json!({"type":"RoleAccepted","role":"service"}));
+    let hello = read_json(&mut reader);
+    assert_eq!(
+        hello["capabilities"],
+        json!(["maicie_guichet", "coordination_events_v2"])
+    );
+    write_json(
+        &mut writer,
+        json!({
+            "type":"ServiceWelcome",
+            "version":1,
+            "horizon_secs":3600,
+            "issued_at_tolerance_secs":30,
+            "capabilities":["maicie_guichet","coordination_events_v2"]
+        }),
+    );
+    assert_eq!(read_json(&mut reader)["type"], "coordination_subscribe");
+    write_json(
+        &mut writer,
+        json!({"type":"coordination_snapshot_caught_up","v":2}),
+    );
+}
+
+fn split(stream: UnixStream) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
+    (
+        BufReader::new(stream.try_clone().unwrap()),
+        BufWriter::new(stream),
+    )
+}
+
+fn read_json(reader: &mut BufReader<UnixStream>) -> Value {
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+fn write_json(writer: &mut BufWriter<UnixStream>, value: Value) {
+    serde_json::to_writer(&mut *writer, &value).unwrap();
+    writer.write_all(b"\n").unwrap();
+    writer.flush().unwrap();
 }
 
 /// Réutilise le motif `openpty` des tests attach du chantier : le test traverse
