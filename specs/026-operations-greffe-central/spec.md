@@ -5,7 +5,7 @@
 **Base fonctionnelle** : session 021, tête `2623772`
 
 **Dépendance de schéma** : v17 (021) → v18 (refus local rc1) → v19 (026)
-**Statut** : première tranche urgente — refus fédéré d'une contradiction attestable
+**Statut** : seconde tranche urgente — pilotage fédéré du greffe central
 
 ## Pourquoi cette tranche existe
 
@@ -21,6 +21,12 @@ un refus terminal durable avant toute mutation métier.
 Elle ne prétend pas encore déléguer à distance. Une demande cohérente reçoit
 `operation_not_available`, elle aussi persistée : un dépôt n'est jamais vendu
 comme un effet applicatif.
+
+La seconde tranche conserve cette porte unique et rend applicatives trois
+mutations strictement bornées : `delegate`, `registre_add` et
+`objective_close`. Leur consultation terminale est un quatrième verbe séparé :
+un dépôt `queued` ou un transport interrompu n'est jamais présenté comme un
+effet métier réussi.
 
 ## Propriétés livrées
 
@@ -83,6 +89,45 @@ v19 ne s'applique qu'après la vraie v18 de rc1. Son préflight transactionnel :
 Une base seulement estampillée v18, sans ce DDL, est refusée sans mutation. Une
 base estampillée v19 qui porte encore le CHECK v18 est également refusée.
 
+### P2606 — Même service métier, quel que soit l'appelant
+
+Les commandes locales et les claims fédérés appellent le même service Maicie
+pour déléguer, ajouter au registre et clore un objectif. Ce service ouvre la
+configuration centrale, la même base SQLite et le même journal déclarés par le
+greffe ; aucun chemin, URI de base ou journal n'est accepté depuis la charge.
+
+Les gardes, l'idempotence et les transactions restent celles des chemins
+locaux. Le guichet ne recopie pas la sélection des candidats, le parseur du
+journal ni la clôture d'objectif.
+
+### P2607 — Quatre verbes, résultats terminaux seulement
+
+Le client MCP expose exactement `maicie_delegate`, `maicie_registre_add`,
+`maicie_objective_close` et `maicie_request_status`. Les trois premiers
+déposent une demande canonique et rendent seulement `queued` ou
+`outcome_unknown` tant que le maître n'a pas persisté de reçu terminal.
+
+`maicie_request_status` relit ce reçu auprès du daemon maître. Seul ce résultat
+terminal peut annoncer `created`, `appended`, `closed`, `selection_required`
+ou `refused`, avec les identifiants durables correspondants.
+
+### P2608 — Identité de connexion, jamais autorité déclarative
+
+Le serveur MCP enregistre auprès du daemon le nom et l'instance déjà résolus au
+démarrage. Le daemon conserve cette identité canonique avec la connexion ; les
+charges de mutation ne portent aucun jeton ni principal forgeable.
+
+Le point d'appel du service reçoit un principal injecté par le daemon. Un champ
+`from` filaire reste une déclaration à comparer, jamais une source d'autorité.
+La politique d'autorisation elle-même appartient au lot dédié parallèle.
+
+### P2609 — Compatibilité et frontière humaine inchangées
+
+Les extensions filaires sont additives et gardent les anciennes trames
+décodables. `profile_approve`, `routine_approve` et toute commande arbitraire
+restent absentes des outils et des opérations autorisées : ces actions restent
+réservées à la frappe humaine.
+
 ## Scénarios d'acceptation
 
 1. Un objectif central existe. Un claim `delegate`, `suite=aucune`, cite son
@@ -97,6 +142,14 @@ base estampillée v19 qui porte encore le CHECK v18 est également refusée.
    fausse v18 et une fausse v19 ne modifient ni schéma ni numéro.
 5. Une copie privée v14 emprunte réellement v17, v18 puis v19 ; sa source reste
    octet-identique. Le bootstrap vide est exercé séparément.
+6. Un MCP enregistré sous son identité résolue dépose chacune des trois
+   mutations ; aucun premier retour ne prétend que l'effet est appliqué.
+7. La relève Maicie applique chaque mutation par le même service que le CLI,
+   persiste son reçu terminal, puis le statut rend l'issue et ses identifiants.
+8. Un dépôt interrompu avant résultat reste `outcome_unknown`; sa consultation
+   ultérieure relit le reçu du maître sans ouvrir de base sur l'appelant.
+9. Les charges ne peuvent fournir ni chemin de base, ni chemin de journal, ni
+   principal d'autorisation.
 
 ## Frontière de sécurité inchangée
 
@@ -111,11 +164,9 @@ comme acquise.
 
 ## Travail explicitement reporté
 
-- appliquer réellement `delegate` au greffe central ;
-- ajouter `registre_add` et `objective_close` ;
 - persister les tentatives `profile_approve` et `routine_approve` avant refus ;
-- exposer la consultation complète d'une issue terminale ;
-- fournir le client mince MCP éventuel du même guichet.
+- définir et brancher la politique d'autorisation du principal canonique ;
+- exposer toute autre commande Maicie.
 
 Ces éléments ne doivent jamais ouvrir une base locale ni créer une seconde
 porte d'écriture.

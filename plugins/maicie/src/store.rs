@@ -7,9 +7,9 @@
 use crate::app::ConversationRecord;
 use crate::bridget_client::{GuichetClaim, IdempotencyIssue, PublicMessage, SpawnOutcome};
 use crate::domain::guichet::{
-    EvenementCycleGuichet, ProjectionReply, RapportLivraison, RequeteCanonique,
-    delivery_reply_bytes, projection_reply_bytes, reclaim_projection_reply_bytes,
-    refusal_reply_bytes,
+    EvenementCycleGuichet, MutationReply, ProjectionReply, RapportLivraison, RequeteCanonique,
+    delivery_reply_bytes, mutation_reply_bytes, projection_reply_bytes,
+    reclaim_mutation_reply_bytes, reclaim_projection_reply_bytes, refusal_reply_bytes,
 };
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, AttenteNotification, ClasseDuree, CoutMissionAgent,
@@ -1824,6 +1824,184 @@ impl MaicieStore {
         Ok(links)
     }
 
+    /// Relit un reçu de mutation avant tout nouvel effet. Une génération de
+    /// claim plus récente ne modifie que l'enveloppe de lease ; le payload
+    /// métier et ses identifiants restent ceux du premier commit durable.
+    pub fn replay_guichet_mutation(
+        &mut self,
+        claim: &GuichetClaim,
+        canonical: &RequeteCanonique,
+    ) -> Result<Option<StoredGuichetReply>, StoreError> {
+        if canonical.issuer_scope != claim.issuer_scope
+            || canonical.request_id != claim.request_id
+            || !matches!(
+                canonical.request.operation(),
+                OperationGuichet::Delegate
+                    | OperationGuichet::RegistreAdd
+                    | OperationGuichet::ObjectiveClose
+            )
+        {
+            return Err(StoreError::Invalid("claim et mutation divergents"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let Some(mut reception) =
+            load_guichet_reception(&tx, &canonical.issuer_scope, &canonical.request_id)?
+        else {
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(None);
+        };
+        if reception.canonical_request_bytes != claim.canonical_request
+            || reception.operation != canonical.request.operation()
+        {
+            return Err(StoreError::EnvelopeMismatch);
+        }
+        if claim.claim_generation == reception.claim_generation
+            && claim.claim_token == reception.claim_token
+        {
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(Some(StoredGuichetReply {
+                reception,
+                correlation: None,
+                replayed: true,
+            }));
+        }
+        if claim.claim_generation <= reception.claim_generation {
+            return Err(StoreError::Conflict(
+                "claim de mutation obsolète ou divergent",
+            ));
+        }
+        let (reply_bytes, reply, stored_response_message_id) =
+            reclaim_mutation_reply_bytes(claim, &reception.reply_bytes)
+                .map_err(|_| StoreError::Corrupt("mutation durable invalide"))?;
+        if reply.operation() != reception.operation
+            || reply
+                .objective_id()
+                .map_err(|_| StoreError::Corrupt("objectif de mutation invalide"))?
+                != reception.objective_id
+            || reply
+                .delegation_id()
+                .map_err(|_| StoreError::Corrupt("délégation de mutation invalide"))?
+                != reception.delegation_id
+            || reply
+                .decision_id()
+                .map_err(|_| StoreError::Corrupt("décision de mutation invalide"))?
+                != reception.decision_id
+            || stored_response_message_id != reception.response_message_id
+        {
+            return Err(StoreError::Corrupt("mutation et reçu divergents"));
+        }
+        let changed = tx
+            .execute(
+                "UPDATE guichet_receptions\n\
+                 SET claim_generation = ?1, claim_token = ?2, reply_bytes = ?3\n\
+                 WHERE issuer_scope = ?4 AND request_id = ?5\n\
+                   AND claim_generation = ?6 AND claim_token = ?7",
+                params![
+                    i64::try_from(claim.claim_generation)
+                        .map_err(|_| StoreError::Invalid("génération de claim hors borne"))?,
+                    claim.claim_token,
+                    reply_bytes,
+                    canonical.issuer_scope,
+                    canonical.request_id,
+                    i64::try_from(reception.claim_generation)
+                        .map_err(|_| StoreError::Corrupt("génération de reçu invalide"))?,
+                    reception.claim_token,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict(
+                "reçu de mutation modifié concurremment",
+            ));
+        }
+        reception = load_guichet_reception(&tx, &canonical.issuer_scope, &canonical.request_id)?
+            .ok_or(StoreError::Corrupt("mutation absente après mise à jour"))?;
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(Some(StoredGuichetReply {
+            reception,
+            correlation: None,
+            replayed: true,
+        }))
+    }
+
+    /// Persiste le reçu terminal d'une mutation déjà appliquée par le service
+    /// partagé. Les opérations rejouables (`delegate`, journal append et
+    /// clôture à clé stable) rendent sûr le crash entre effet et reçu.
+    pub fn persist_guichet_mutation(
+        &mut self,
+        claim: &GuichetClaim,
+        canonical: &RequeteCanonique,
+        response_message_id: &str,
+        now: i64,
+        reply: &MutationReply,
+    ) -> Result<StoredGuichetReply, StoreError> {
+        if now <= 0 || response_message_id.trim().is_empty() {
+            return Err(StoreError::Invalid("réponse de mutation incomplète"));
+        }
+        if let Some(stored) = self.replay_guichet_mutation(claim, canonical)? {
+            return Ok(stored);
+        }
+        if reply.operation() != canonical.request.operation() {
+            return Err(StoreError::Invalid("mutation et requête divergentes"));
+        }
+        let objective_id = reply
+            .objective_id()
+            .map_err(|_| StoreError::Invalid("objectif de mutation invalide"))?;
+        let delegation_id = reply
+            .delegation_id()
+            .map_err(|_| StoreError::Invalid("délégation de mutation invalide"))?;
+        let decision_id = reply
+            .decision_id()
+            .map_err(|_| StoreError::Invalid("décision de mutation invalide"))?;
+        let reply_bytes = mutation_reply_bytes(claim, response_message_id, reply)
+            .map_err(|_| StoreError::Invalid("mutation non sérialisable"))?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let inserted = tx
+            .execute(
+                "INSERT INTO guichet_receptions(\n\
+                     issuer_scope, request_id, operation, canonical_request_bytes,\n\
+                     objective_id, delegation_id, delivery_hash, in_reply_to,\n\
+                     response_message_id, outcome, reply_bytes, decision_id, processed_at,\n\
+                     claim_generation, claim_token\n\
+                 ) VALUES (?1,?2,?3,?4,?5,?6,NULL,?7,?8,'accepted',?9,?10,?11,?12,?13)",
+                params![
+                    canonical.issuer_scope,
+                    canonical.request_id,
+                    operation_name(reply.operation()),
+                    claim.canonical_request,
+                    objective_id.map(|id| id.to_string()),
+                    delegation_id.map(|id| id.to_string()),
+                    canonical.request_id,
+                    response_message_id,
+                    reply_bytes,
+                    decision_id.map(|id| id.to_string()),
+                    now,
+                    i64::try_from(claim.claim_generation)
+                        .map_err(|_| StoreError::Invalid("génération de claim hors borne"))?,
+                    claim.claim_token,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if inserted != 1 {
+            return Err(StoreError::Conflict("reçu de mutation non enregistré"));
+        }
+        let reception =
+            load_guichet_reception(&tx, &canonical.issuer_scope, &canonical.request_id)?
+                .ok_or(StoreError::Corrupt("mutation introuvable après insertion"))?;
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(StoredGuichetReply {
+            reception,
+            correlation: None,
+            replayed: false,
+        })
+    }
+
     /// Persiste les octets exacts d'une projection consultative. Une relève
     /// répétée rejoue le reçu ; une nouvelle génération ne change que
     /// l'enveloppe de claim, jamais les faits déjà répondus.
@@ -1926,7 +2104,9 @@ impl MaicieStore {
                 *delegation_id
             }
             crate::domain::guichet::RequeteGuichet::DeliveryReport(_)
-            | crate::domain::guichet::RequeteGuichet::Delegate(_) => {
+            | crate::domain::guichet::RequeteGuichet::Delegate(_)
+            | crate::domain::guichet::RequeteGuichet::RegistreAdd(_)
+            | crate::domain::guichet::RequeteGuichet::ObjectiveClose(_) => {
                 return Err(StoreError::Invalid("opération de projection interdite"));
             }
         };
@@ -2738,10 +2918,99 @@ impl MaicieStore {
     where
         F: FnMut(ObjectiveClosureCommitPhase) -> Result<(), StoreError>,
     {
+        self.close_objective_observed_with_costs_and_id(
+            objective_id,
+            reason,
+            now,
+            costs,
+            None,
+            observer,
+        )
+        .map(|(decision, _)| decision)
+    }
+
+    /// Clôture rejouable réservée au guichet. La clé ne devient jamais une
+    /// autorité externe : elle sert uniquement à dériver l'identité stable de
+    /// la décision dans la portée durable du store central.
+    pub fn close_objective_idempotent_with_costs(
+        &mut self,
+        objective_id: Uuid,
+        reason: &str,
+        now: i64,
+        costs: Vec<CoutMissionAgent>,
+        idempotency_key: &str,
+    ) -> Result<(DecisionCoordination, bool), StoreError> {
+        if idempotency_key.trim().is_empty() || idempotency_key.len() > 128 {
+            return Err(StoreError::Invalid("clé de clôture invalide"));
+        }
+        let decision_id = identifiant_deterministe(
+            b"maicie-guichet-objective-close-v1",
+            &[self.issuer_scope.as_bytes(), idempotency_key.as_bytes()],
+        );
+        self.close_objective_observed_with_costs_and_id(
+            objective_id,
+            reason,
+            now,
+            Some(costs),
+            Some(decision_id),
+            |_| Ok(()),
+        )
+    }
+
+    fn close_objective_observed_with_costs_and_id<F>(
+        &mut self,
+        objective_id: Uuid,
+        reason: &str,
+        now: i64,
+        costs: Option<Vec<CoutMissionAgent>>,
+        stable_decision_id: Option<Uuid>,
+        mut observer: F,
+    ) -> Result<(DecisionCoordination, bool), StoreError>
+    where
+        F: FnMut(ObjectiveClosureCommitPhase) -> Result<(), StoreError>,
+    {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(StoreError::Sql)?;
+        if let Some(decision_id) = stable_decision_id {
+            let existing: Option<(String, Vec<u8>)> = tx
+                .query_row(
+                    "SELECT state, payload_json FROM coordination_decisions WHERE id = ?1",
+                    [decision_id.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(StoreError::Sql)?;
+            if let Some((state, payload)) = existing {
+                let decision: DecisionCoordination =
+                    serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+                let objective_state: Option<String> = tx
+                    .query_row(
+                        "SELECT state FROM objectives WHERE id = ?1",
+                        [objective_id.to_string()],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(StoreError::Sql)?;
+                if decision.id != decision_id
+                    || decision.objectif_id != objective_id
+                    || decision.kind != TypeDecision::Cloturer
+                    || decision.etat != EtatDecision::Appliquee
+                    || decision.motif != reason
+                    || parse_decision_state(&state)? != decision.etat
+                    || objective_state
+                        .as_deref()
+                        .map(parse_objective_state)
+                        .transpose()?
+                        != Some(EtatObjectif::Clos)
+                {
+                    return Err(StoreError::EnvelopeMismatch);
+                }
+                tx.commit().map_err(StoreError::Sql)?;
+                return Ok((decision, true));
+            }
+        }
         let stored: Option<(String, Vec<u8>)> = tx
             .query_row(
                 "SELECT state, payload_json FROM objectives WHERE id = ?1",
@@ -2763,7 +3032,7 @@ impl MaicieStore {
             .clore(now)
             .map_err(|_| StoreError::Invalid("objectif déjà clos"))?;
         let decision = DecisionCoordination {
-            id: Uuid::new_v4(),
+            id: stable_decision_id.unwrap_or_else(Uuid::new_v4),
             objectif_id: objective_id,
             kind: TypeDecision::Cloturer,
             proposee_par: "maicie".to_string(),
@@ -2783,7 +3052,7 @@ impl MaicieStore {
         observer(ObjectiveClosureCommitPhase::BeforeCommit)?;
         tx.commit().map_err(StoreError::Sql)?;
         observer(ObjectiveClosureCommitPhase::AfterCommit)?;
-        Ok(decision)
+        Ok((decision, false))
     }
 
     /// Relit une proposition d'activation durable pour une commande CLI

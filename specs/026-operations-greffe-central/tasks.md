@@ -20,16 +20,18 @@
 - [x] T2615 Refuser fail-closed une valeur SQL inconnue à la lecture.
 - [ ] T2616 Exécuter le comptage final, clippy, geler et pousser la tête.
 
-## Seconde tranche reportée
+## Seconde tranche urgente — pilotage fédéré
 
 - [ ] T2620 Appliquer réellement `delegate` avec configuration et candidats
-  centraux.
-- [ ] T2621 Ajouter `registre_add` sans chemin fourni par l'appelant.
-- [ ] T2622 Ajouter `objective_close` sur preuve centrale attestée.
+  centraux par le même service que le CLI.
+- [ ] T2621 Ajouter `registre_add` sans chemin fourni par l'appelant, via le
+  journal déclaré par le greffe.
+- [ ] T2622 Ajouter `objective_close` sur preuve centrale attestée, via la même
+  transaction et les mêmes gardes que le CLI.
 - [ ] T2623 Rendre durables les tentatives `profile_approve` et
   `routine_approve`, sans les ajouter à l'enum autorisé.
-- [ ] T2624 Exposer l'issue terminale complète à la consultation et au client
-  mince.
+- [ ] T2624 Exposer les quatre outils MCP, enregistrer l'identité MCP résolue et
+  rendre l'issue terminale complète depuis le daemon maître.
 
 ## Critères de livraison de la première tranche
 

@@ -1780,6 +1780,8 @@ define_sql_vocabulary! {
         MissionStatus => "mission_status",
         DeadlineQuestion => "deadline_question",
         Delegate => "delegate",
+        RegistreAdd => "registre_add",
+        ObjectiveClose => "objective_close",
     }
 }
 

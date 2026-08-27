@@ -10,19 +10,22 @@ use maicie::MAICIE_IDENTITY;
 use maicie::app::{
     CatalogueReconcileError, DelegateError, DelegateRequest, DelegateResult, DelegationCandidate,
     LocalProfileApproval, ObjectiveError, ProfileActivationError, ProfileActivationProposalRequest,
-    add_participant, approve_profile_activation, close_with_costs, delegate,
-    delegated_participants, pin_coordination_policy, propose_profile_activation,
-    reconcile_catalogue_from_store, remove_participant, status, stored_profile_activation_proposal,
-    summarize,
+    add_participant, approve_profile_activation, delegated_participants,
+    propose_profile_activation, reconcile_catalogue_from_store, remove_participant, status,
+    stored_profile_activation_proposal, summarize,
 };
 use maicie::bridget_client::{
     AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits,
 };
-use maicie::catalogue::{self, AppendOutcome, CatalogueEntry, CatalogueError, CatalogueJournal};
+use maicie::catalogue::{self, AppendOutcome, CatalogueError, CatalogueJournal};
 use maicie::config::{ConfigError, MaicieConfig};
 use maicie::domain::{
-    ClasseDuree, CoutMissionAgent, CoutMissionCompteurs, DecisionCoordination, Delegation,
-    EtatFlux, ObjectifCoordonne, SourceSnapshot, SuiteObjective,
+    ClasseDuree, CoutMissionAgent, DecisionCoordination, Delegation, EtatFlux, ObjectifCoordonne,
+    SourceSnapshot, SuiteObjective,
+};
+use maicie::greffe_service::{
+    GreffeServiceError, append_registre_add, apply_delegate, candidates_from,
+    close_objective as close_greffe_objective,
 };
 use maicie::profiles::{
     ApprovalProfileView, ProfileError, ResolvedAgentDefinition, approval_view, load_profiles,
@@ -347,10 +350,9 @@ fn run_objective(arguments: ObjectiveArgs, migrate: bool) -> Result<String, CliE
         ObjectiveAction::Close { reason } => {
             let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
             let now = unix_now()?;
-            let costs = collect_mission_costs(&config, &store, arguments.objective_id, now);
             let decision =
-                close_with_costs(&mut store, arguments.objective_id, &reason, now, costs)
-                    .map_err(CliError::Objective)?;
+                close_greffe_objective(&mut store, &config, arguments.objective_id, &reason, now)
+                    .map_err(greffe_service_error_for_cli)?;
             ObjectiveOutput::Decision { decision }
         }
     };
@@ -489,21 +491,9 @@ fn run_delegate(arguments: DelegateArgs, migrate: bool) -> Result<String, CliErr
         dedup_retained_until: retry_until,
         max_frame_bytes: client.limits().max_frame_bytes,
     };
-    let result = delegate(
-        &mut store,
-        config.durations,
-        MAICIE_IDENTITY,
-        &candidates,
-        &request,
-    )
-    .map_err(|error| delegate_error_for_cli(error, &config.profiles, &agents, &arguments.config))?;
-    if let (Some(policies), DelegateResult::Created(created)) =
-        (&config.coordination_policies, &result)
-    {
-        pin_coordination_policy(&mut store, policies, created).map_err(|error| {
-            delegate_error_for_cli(error, &config.profiles, &agents, &arguments.config)
-        })?;
-    }
+    let result = apply_delegate(&mut store, &config, &candidates, &request).map_err(|error| {
+        delegate_error_for_cli(error, &config.profiles, &agents, &arguments.config)
+    })?;
     // La transaction `delegate` est déjà commitée ici. T008 effectue ensuite
     // lookup puis replay des octets persistés, sans reconstruire le message.
     reconcile_pending(&mut store, &config, limits)?;
@@ -707,25 +697,6 @@ fn render_output(output: DelegateOutput, json: bool) -> Result<String, serde_jso
         }
         DelegateOutput::Candidates { candidates } => format!("candidats={}", candidates.join(",")),
     })
-}
-
-fn candidates_from(config: &MaicieConfig, agents: &[AgentInfo]) -> Vec<DelegationCandidate> {
-    let mut candidates = config
-        .profiles
-        .iter()
-        .filter_map(|profile| {
-            let agent_name = profile.agent_name.as_deref().unwrap_or(&profile.id);
-            let agent = agents.iter().find(|agent| agent.name == agent_name)?;
-            Some(DelegationCandidate {
-                name: agent.name.clone(),
-                tags: profile.tags.clone(),
-                available: matches!(agent.state.as_str(), "connected" | "dnd"),
-                dnd: agent.state == "dnd",
-            })
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| left.name.cmp(&right.name));
-    candidates
 }
 
 /// Précise un refus de cible explicite avec les deux inscriptions distinctes.
@@ -1681,9 +1652,11 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
                 next_value(tail, &mut index, "--constat")?,
                 "constat",
             )?,
-            "--raison" => {
-                set_once_string(&mut raison, next_value(tail, &mut index, "--raison")?, "raison")?
-            }
+            "--raison" => set_once_string(
+                &mut raison,
+                next_value(tail, &mut index, "--raison")?,
+                "raison",
+            )?,
             "--ref" => set_once_string(
                 &mut reference,
                 next_value(tail, &mut index, "--ref")?,
@@ -1758,7 +1731,14 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             }
         }
         "add" => {
-            if depuis.is_some() || attente || fermes || refutes || rectifies || pending_id.is_some() || fait.is_some() {
+            if depuis.is_some()
+                || attente
+                || fermes
+                || refutes
+                || rectifies
+                || pending_id.is_some()
+                || fait.is_some()
+            {
                 return Err(CliError::Usage("options incompatibles avec registre add"));
             }
             RegistreAction::Add {
@@ -1766,7 +1746,14 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             }
         }
         "migrer" => {
-            if line.is_some() || attente || fermes || refutes || rectifies || pending_id.is_some() || fait.is_some() {
+            if line.is_some()
+                || attente
+                || fermes
+                || refutes
+                || rectifies
+                || pending_id.is_some()
+                || fait.is_some()
+            {
                 return Err(CliError::Usage(
                     "options incompatibles avec registre migrer",
                 ));
@@ -1864,11 +1851,10 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             let raison_raw = raison.ok_or(CliError::Usage(
                 "--raison typée obligatoire pour registre rectifier",
             ))?;
-            let raison = catalogue::RaisonRectification::parse(&raison_raw).ok_or(
-                CliError::Usage(
+            let raison =
+                catalogue::RaisonRectification::parse(&raison_raw).ok_or(CliError::Usage(
                     "raison rectifier : fermeture_erronee|solde_mission_errone|refutation_erronee",
-                ),
-            )?;
+                ))?;
             RegistreAction::Rectifier {
                 constat_id: constat_id.ok_or(CliError::Usage("--constat obligatoire"))?,
                 raison,
@@ -1880,11 +1866,10 @@ fn parse_registre(arguments: &[String]) -> Result<RegistreArgs, CliError> {
             let raison_raw = raison.ok_or(CliError::Usage(
                 "--raison typée obligatoire pour registre requalifier",
             ))?;
-            let raison = catalogue::RaisonRequalification::parse(&raison_raw).ok_or(
-                CliError::Usage(
+            let raison =
+                catalogue::RaisonRequalification::parse(&raison_raw).ok_or(CliError::Usage(
                     "raison requalifier : severite_ajustee|perimetre_affine|nature_reclassee",
-                ),
-            )?;
+                ))?;
             let from = match de {
                 Some(raw) => Some(parse_severity(&raw)?),
                 None => None,
@@ -1947,9 +1932,8 @@ fn parse_severity(value: &str) -> Result<catalogue::Severity, CliError> {
 }
 
 fn parse_entry_nature(value: &str) -> Result<catalogue::EntryNature, CliError> {
-    catalogue::EntryNature::parse(value).ok_or(CliError::Usage(
-        "nature : constat, regle ou resultat",
-    ))
+    catalogue::EntryNature::parse(value)
+        .ok_or(CliError::Usage("nature : constat, regle ou resultat"))
 }
 
 fn parse_source_kind(value: &str) -> Result<catalogue::MissionSourceKind, CliError> {
@@ -1966,10 +1950,18 @@ fn parse_source_kind(value: &str) -> Result<catalogue::MissionSourceKind, CliErr
 
 fn run_registre(arguments: RegistreArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+    let store = open_maicie_store(&config.database_path, migrate)?;
+    if let RegistreAction::Add { line } = &arguments.action {
+        let result =
+            append_registre_add(&store, &config, line).map_err(greffe_service_error_for_cli)?;
+        return Ok(match result.outcome {
+            AppendOutcome::Appended => "registre add: appended".to_string(),
+            AppendOutcome::IdempotentNoop => "registre add: idempotent_noop".to_string(),
+        });
+    }
     let catalogue_path = config.catalogue_path.ok_or(CliError::Usage(
         "catalogue_path absent de la configuration : registre exige un journal déclaré",
     ))?;
-    let store = open_maicie_store(&config.database_path, migrate)?;
     let mut journal = CatalogueJournal::open(&catalogue_path).map_err(CliError::Catalogue)?;
     // T1710 : réconciliation idempotente au fil des commandes catalogue — jamais
     // en boucle résidente. Une clôture durable manquée est rattrapée ici.
@@ -1999,19 +1991,7 @@ fn run_registre(arguments: RegistreArgs, migrate: bool) -> Result<String, CliErr
             rendered.push_str(&render_mission_costs_section(&costs));
             Ok(rendered)
         }
-        RegistreAction::Add { line } => {
-            let entry = catalogue::parse_closed_line(line.trim()).map_err(CliError::Catalogue)?;
-            let CatalogueEntry::Add(add) = entry else {
-                return Err(CliError::Usage(
-                    "registre add n'accepte qu'une ligne kind=add fermée",
-                ));
-            };
-            let outcome = journal.append_add(add).map_err(CliError::Catalogue)?;
-            Ok(match outcome {
-                AppendOutcome::Appended => "registre add: appended".to_string(),
-                AppendOutcome::IdempotentNoop => "registre add: idempotent_noop".to_string(),
-            })
-        }
+        RegistreAction::Add { .. } => unreachable!("registre add traité par le service partagé"),
         RegistreAction::Migrer { depuis } => {
             let report = journal
                 .migrate_prose_file(&depuis)
@@ -3162,57 +3142,27 @@ fn render_mission_costs_section(costs: &[CoutMissionAgent]) -> String {
     out
 }
 
-/// Interroge le ledger Bridget pour chaque agent délégué. Indisponibilité ou
-/// absence d'échantillon → « inconnu », jamais zéro inventé.
-fn collect_mission_costs(
-    config: &MaicieConfig,
-    store: &MaicieStore,
-    objective_id: uuid::Uuid,
-    closed_at: i64,
-) -> Vec<CoutMissionAgent> {
-    let Ok(windows) = store.delegation_cost_windows(objective_id) else {
-        return Vec::new();
-    };
-    let client = BridgetClient::connect_with_limits(
-        &config.bridget_socket,
-        "maicie-usage",
-        BridgetClientLimits::default(),
-    )
-    .ok();
-    windows
-        .into_iter()
-        .map(|(agent, from_secs)| {
-            let from_secs = from_secs.max(1);
-            let to_secs = closed_at.max(from_secs);
-            match client
-                .as_ref()
-                .and_then(|client| client.usage_window(&agent, from_secs, to_secs).ok())
-                .flatten()
-            {
-                Some(aggregate) => CoutMissionAgent::attested(
-                    agent,
-                    from_secs,
-                    to_secs,
-                    CoutMissionCompteurs {
-                        turns: aggregate.turns,
-                        input_tokens: aggregate.input_tokens,
-                        output_tokens: aggregate.output_tokens,
-                        cache_creation_input_tokens: aggregate.cache_creation_input_tokens,
-                        cache_read_input_tokens: aggregate.cache_read_input_tokens,
-                    },
-                ),
-                None => CoutMissionAgent::unknown(agent, from_secs, to_secs),
-            }
-        })
-        .collect()
-}
-
 fn flux_name(state: EtatFlux) -> &'static str {
     match state {
         EtatFlux::Fresh => "fresh",
         EtatFlux::Gap => "gap",
         EtatFlux::Ended => "ended",
         EtatFlux::Unavailable => "unavailable",
+    }
+}
+
+fn greffe_service_error_for_cli(error: GreffeServiceError) -> CliError {
+    match error {
+        GreffeServiceError::CatalogueAbsent => CliError::Usage(
+            "catalogue_path absent de la configuration : registre exige un journal déclaré",
+        ),
+        GreffeServiceError::Catalogue(error) => CliError::Catalogue(error),
+        GreffeServiceError::CatalogueReconcile(error) => CliError::CatalogueReconcile(error),
+        GreffeServiceError::Objective(error) => CliError::Objective(error),
+        GreffeServiceError::Store(error) => CliError::Store(error),
+        GreffeServiceError::Bridget(error) => CliError::Bridget(error),
+        GreffeServiceError::Delegate(error) => CliError::Delegate(error),
+        GreffeServiceError::Invalid(reason) => CliError::Usage(reason),
     }
 }
 

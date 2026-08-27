@@ -26,6 +26,8 @@ pub enum RequeteGuichet {
     MissionStatus { delegation_id: Uuid },
     DeadlineQuestion { delegation_id: Uuid },
     Delegate(DemandeDelegation),
+    RegistreAdd(DemandeRegistreAdd),
+    ObjectiveClose(DemandeObjectiveClose),
 }
 
 impl RequeteGuichet {
@@ -35,15 +37,19 @@ impl RequeteGuichet {
             Self::MissionStatus { .. } => OperationGuichet::MissionStatus,
             Self::DeadlineQuestion { .. } => OperationGuichet::DeadlineQuestion,
             Self::Delegate(_) => OperationGuichet::Delegate,
+            Self::RegistreAdd(_) => OperationGuichet::RegistreAdd,
+            Self::ObjectiveClose(_) => OperationGuichet::ObjectiveClose,
         }
     }
 
     pub fn in_reply_to(&self, request_id: &str) -> String {
         match self {
             Self::DeliveryReport(report) => report.in_reply_to.clone(),
-            Self::MissionStatus { .. } | Self::DeadlineQuestion { .. } | Self::Delegate(_) => {
-                request_id.to_string()
-            }
+            Self::MissionStatus { .. }
+            | Self::DeadlineQuestion { .. }
+            | Self::Delegate(_)
+            | Self::RegistreAdd(_)
+            | Self::ObjectiveClose(_) => request_id.to_string(),
         }
     }
 }
@@ -75,6 +81,17 @@ pub struct DemandeDelegation {
     pub suite: SuiteObjective,
     pub depends_on: Vec<Uuid>,
     pub references: Vec<Uuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DemandeRegistreAdd {
+    pub line: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DemandeObjectiveClose {
+    pub objective_id: Uuid,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +188,19 @@ struct DelegatePayload {
     depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     references: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegistreAddPayload {
+    line: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObjectiveClosePayload {
+    objective_id: String,
+    reason: String,
 }
 
 pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDomainError> {
@@ -315,6 +345,32 @@ pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDoma
                 suite,
                 depends_on,
                 references,
+            })
+        }
+        "registre_add" => {
+            let payload: RegistreAddPayload = serde_json::from_value(wire.payload.clone())
+                .map_err(|_| GuichetDomainError::InvalidEnvelope("entrée de registre invalide"))?;
+            if payload.line.trim().is_empty() || payload.line.len() > 48 * 1024 {
+                return Err(GuichetDomainError::InvalidEnvelope(
+                    "ligne de registre hors borne",
+                ));
+            }
+            ensure_canonical(&claim.canonical_request, &wire, "registre_add", &payload)?;
+            RequeteGuichet::RegistreAdd(DemandeRegistreAdd { line: payload.line })
+        }
+        "objective_close" => {
+            let payload: ObjectiveClosePayload = serde_json::from_value(wire.payload.clone())
+                .map_err(|_| GuichetDomainError::InvalidEnvelope("clôture d'objectif invalide"))?;
+            let objective_id = parse_uuid(&payload.objective_id)?;
+            if payload.reason.trim().is_empty() || payload.reason.len() > 16 * 1024 {
+                return Err(GuichetDomainError::InvalidEnvelope(
+                    "motif de clôture hors borne",
+                ));
+            }
+            ensure_canonical(&claim.canonical_request, &wire, "objective_close", &payload)?;
+            RequeteGuichet::ObjectiveClose(DemandeObjectiveClose {
+                objective_id,
+                reason: payload.reason,
             })
         }
         _ => return Err(GuichetDomainError::UnsupportedOperation),
@@ -477,6 +533,87 @@ impl ProjectionReply {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegateMutationStatus {
+    Created,
+    SelectionRequired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistreAddMutationStatus {
+    Appended,
+    IdempotentNoop,
+}
+
+/// Réponse terminale d'une mutation du greffe. Les identifiants absents dans
+/// `selection_required` restent réellement absents ; aucun UUID n'est inventé.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MutationReply {
+    Delegate {
+        status: DelegateMutationStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        objective_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delegation_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        participant: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        candidates: Vec<String>,
+        waiting_on_prerequisites: bool,
+        replayed: bool,
+    },
+    RegistreAdd {
+        status: RegistreAddMutationStatus,
+        constat_id: String,
+    },
+    ObjectiveClose {
+        objective_id: String,
+        decision_id: String,
+        replayed: bool,
+    },
+}
+
+impl MutationReply {
+    pub fn operation(&self) -> OperationGuichet {
+        match self {
+            Self::Delegate { .. } => OperationGuichet::Delegate,
+            Self::RegistreAdd { .. } => OperationGuichet::RegistreAdd,
+            Self::ObjectiveClose { .. } => OperationGuichet::ObjectiveClose,
+        }
+    }
+
+    pub fn objective_id(&self) -> Result<Option<Uuid>, GuichetDomainError> {
+        match self {
+            Self::Delegate { objective_id, .. } => {
+                objective_id.as_deref().map(parse_uuid).transpose()
+            }
+            Self::RegistreAdd { .. } => Ok(None),
+            Self::ObjectiveClose { objective_id, .. } => parse_uuid(objective_id).map(Some),
+        }
+    }
+
+    pub fn delegation_id(&self) -> Result<Option<Uuid>, GuichetDomainError> {
+        match self {
+            Self::Delegate { delegation_id, .. } => {
+                delegation_id.as_deref().map(parse_uuid).transpose()
+            }
+            Self::RegistreAdd { .. } | Self::ObjectiveClose { .. } => Ok(None),
+        }
+    }
+
+    pub fn decision_id(&self) -> Result<Option<Uuid>, GuichetDomainError> {
+        match self {
+            Self::ObjectiveClose { decision_id, .. } => parse_uuid(decision_id).map(Some),
+            Self::Delegate { .. } | Self::RegistreAdd { .. } => Ok(None),
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct GuichetReplyWire<'a, T: Serialize> {
     #[serde(rename = "type")]
@@ -616,6 +753,142 @@ struct StoredProjectionReplyWire {
     payload: ProjectionReply,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredMutationReplyWire {
+    #[serde(rename = "type")]
+    kind: String,
+    v: u8,
+    issuer_scope: String,
+    request_id: String,
+    claim_generation: u64,
+    claim_token: String,
+    response_message_id: String,
+    in_reply_to: String,
+    outcome: String,
+    payload: MutationReply,
+}
+
+pub fn mutation_reply_bytes(
+    claim: &GuichetClaim,
+    response_message_id: &str,
+    reply: &MutationReply,
+) -> Result<Vec<u8>, GuichetDomainError> {
+    validate_identifier(response_message_id)?;
+    validate_identifier(&claim.claim_token)?;
+    validate_mutation_reply(reply)?;
+    serde_json::to_vec(&GuichetReplyWire {
+        kind: "guichet_reply",
+        v: 1,
+        issuer_scope: &claim.issuer_scope,
+        request_id: &claim.request_id,
+        claim_generation: claim.claim_generation,
+        claim_token: &claim.claim_token,
+        response_message_id,
+        in_reply_to: &claim.request_id,
+        outcome: "accepted",
+        payload: reply,
+    })
+    .map_err(|_| GuichetDomainError::InvalidEnvelope("réponse de mutation non sérialisable"))
+}
+
+/// Régénère seulement l'enveloppe de lease d'une mutation déjà durable.
+pub fn reclaim_mutation_reply_bytes(
+    claim: &GuichetClaim,
+    stored_reply: &[u8],
+) -> Result<(Vec<u8>, MutationReply, String), GuichetDomainError> {
+    let stored: StoredMutationReplyWire = serde_json::from_slice(stored_reply)
+        .map_err(|_| GuichetDomainError::InvalidEnvelope("mutation durable invalide"))?;
+    if stored.kind != "guichet_reply"
+        || stored.v != 1
+        || stored.issuer_scope != claim.issuer_scope
+        || stored.request_id != claim.request_id
+        || stored.in_reply_to != claim.request_id
+        || stored.outcome != "accepted"
+        || stored.claim_generation == 0
+        || stored.claim_token.is_empty()
+    {
+        return Err(GuichetDomainError::InvalidEnvelope(
+            "enveloppe de mutation durable divergente",
+        ));
+    }
+    validate_identifier(&stored.response_message_id)?;
+    validate_mutation_reply(&stored.payload)?;
+    let bytes = mutation_reply_bytes(claim, &stored.response_message_id, &stored.payload)?;
+    Ok((bytes, stored.payload, stored.response_message_id))
+}
+
+fn validate_mutation_reply(reply: &MutationReply) -> Result<(), GuichetDomainError> {
+    match reply {
+        MutationReply::Delegate {
+            status,
+            objective_id,
+            delegation_id,
+            message_id,
+            participant,
+            candidates,
+            waiting_on_prerequisites,
+            ..
+        } => match status {
+            DelegateMutationStatus::Created => {
+                let objective_id =
+                    objective_id
+                        .as_deref()
+                        .ok_or(GuichetDomainError::InvalidEnvelope(
+                            "délégation sans objectif",
+                        ))?;
+                let delegation_id =
+                    delegation_id
+                        .as_deref()
+                        .ok_or(GuichetDomainError::InvalidEnvelope(
+                            "délégation sans identifiant",
+                        ))?;
+                parse_uuid(objective_id)?;
+                parse_uuid(delegation_id)?;
+                if let Some(message_id) = message_id {
+                    parse_uuid(message_id)?;
+                }
+                if participant
+                    .as_deref()
+                    .is_none_or(|value| validate_identifier(value).is_err())
+                    || !candidates.is_empty()
+                    || (*waiting_on_prerequisites && message_id.is_some())
+                {
+                    return Err(GuichetDomainError::InvalidEnvelope(
+                        "résultat de délégation incohérent",
+                    ));
+                }
+            }
+            DelegateMutationStatus::SelectionRequired => {
+                if objective_id.is_some()
+                    || delegation_id.is_some()
+                    || message_id.is_some()
+                    || participant.is_some()
+                    || *waiting_on_prerequisites
+                    || candidates.len() > 128
+                    || candidates
+                        .iter()
+                        .any(|candidate| validate_identifier(candidate).is_err())
+                {
+                    return Err(GuichetDomainError::InvalidEnvelope(
+                        "sélection de délégation incohérente",
+                    ));
+                }
+            }
+        },
+        MutationReply::RegistreAdd { constat_id, .. } => validate_identifier(constat_id)?,
+        MutationReply::ObjectiveClose {
+            objective_id,
+            decision_id,
+            ..
+        } => {
+            parse_uuid(objective_id)?;
+            parse_uuid(decision_id)?;
+        }
+    }
+    Ok(())
+}
+
 /// Régénère uniquement l'enveloppe de claim d'une projection déjà durable.
 /// Le payload métier et le response_message_id restent ceux du premier reçu.
 pub fn reclaim_projection_reply_bytes(
@@ -733,4 +1006,108 @@ fn parse_uuid(value: &str) -> Result<Uuid, GuichetDomainError> {
         return Err(GuichetDomainError::InvalidEnvelope("référence trop longue"));
     }
     Uuid::parse_str(value).map_err(|_| GuichetDomainError::InvalidEnvelope("référence invalide"))
+}
+
+#[cfg(test)]
+mod mutation_tests {
+    use super::*;
+
+    fn claim(canonical_request: Vec<u8>, generation: u64, token: &str) -> GuichetClaim {
+        GuichetClaim {
+            issuer_scope: "scope-test".to_string(),
+            request_id: "request-test".to_string(),
+            canonical_request,
+            claimed_at: 1_000,
+            claim_generation: generation,
+            claim_token: token.to_string(),
+            claim_lease_expires_at: 1_060,
+            expires_at: 2_000,
+        }
+    }
+
+    fn canonical<T: Serialize>(operation: &'static str, payload: &T) -> Vec<u8> {
+        serde_json::to_vec(&CanonicalServiceRequest {
+            kind: "service_request",
+            v: 1,
+            issuer_scope: "scope-test",
+            request_id: "request-test",
+            issued_at: 1_000,
+            from: "agent-test",
+            to: "maicie",
+            operation,
+            payload,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn spec_026_parse_les_deux_nouvelles_mutations_sans_chemin_ni_principal() {
+        let registre_payload = RegistreAddPayload {
+            line: r#"{"v":1,"kind":"add"}"#.to_string(),
+        };
+        let registre = claim(canonical("registre_add", &registre_payload), 1, "token-a");
+        assert!(matches!(
+            parse_claim(&registre).unwrap().request,
+            RequeteGuichet::RegistreAdd(DemandeRegistreAdd { line })
+                if line == registre_payload.line
+        ));
+
+        let objective_id = Uuid::new_v4();
+        let close_payload = ObjectiveClosePayload {
+            objective_id: objective_id.to_string(),
+            reason: "preuve centrale attestée".to_string(),
+        };
+        let close = claim(canonical("objective_close", &close_payload), 1, "token-b");
+        assert!(matches!(
+            parse_claim(&close).unwrap().request,
+            RequeteGuichet::ObjectiveClose(DemandeObjectiveClose { objective_id: parsed, reason })
+                if parsed == objective_id && reason == close_payload.reason
+        ));
+    }
+
+    #[test]
+    fn spec_026_reclaim_mutation_renouvelle_la_lease_sans_reconstruire_le_payload() {
+        let first = claim(Vec::new(), 1, "token-first");
+        let reply = MutationReply::Delegate {
+            status: DelegateMutationStatus::Created,
+            objective_id: Some(Uuid::new_v4().to_string()),
+            delegation_id: Some(Uuid::new_v4().to_string()),
+            message_id: Some(Uuid::new_v4().to_string()),
+            participant: Some("agent-test".to_string()),
+            candidates: Vec::new(),
+            waiting_on_prerequisites: false,
+            replayed: false,
+        };
+        let stored = mutation_reply_bytes(&first, "response-test", &reply).unwrap();
+        let replay = claim(Vec::new(), 2, "token-second");
+        let (bytes, parsed, response_message_id) =
+            reclaim_mutation_reply_bytes(&replay, &stored).unwrap();
+
+        assert_eq!(parsed, reply);
+        assert_eq!(response_message_id, "response-test");
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["claim_generation"], 2);
+        assert_eq!(value["claim_token"], "token-second");
+        assert_eq!(value["payload"], serde_json::to_value(reply).unwrap());
+    }
+
+    #[test]
+    fn spec_026_selection_requise_n_invente_aucun_identifiant() {
+        let current = claim(Vec::new(), 1, "token-selection");
+        let reply = MutationReply::Delegate {
+            status: DelegateMutationStatus::SelectionRequired,
+            objective_id: None,
+            delegation_id: None,
+            message_id: None,
+            participant: None,
+            candidates: vec!["agent-a".to_string(), "agent-b".to_string()],
+            waiting_on_prerequisites: false,
+            replayed: false,
+        };
+        let bytes = mutation_reply_bytes(&current, "response-selection", &reply).unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(value["payload"].get("objective_id").is_none());
+        assert!(value["payload"].get("delegation_id").is_none());
+        assert!(value["payload"].get("message_id").is_none());
+    }
 }
