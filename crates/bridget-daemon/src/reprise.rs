@@ -166,6 +166,17 @@ pub fn collect_snapshot(
     }
 }
 
+/// Marqueur du refus pour INDÉTERMINATION — présent dans ce seul motif.
+///
+/// Les deux refus partagent la mention « machine non attestée », parce que le
+/// motif générique affiche lui aussi l'hôte du daemon. Une assertion sur cette
+/// mention ne DISCRIMINE donc rien : il faut une phrase qui n'appartienne qu'à
+/// une seule issue, et l'oracle doit exiger l'une ET refuser l'autre.
+const MOTIF_INDETERMINATION: &str = "Une machine indéterminée n'est pas une machine";
+
+/// Marqueur du refus pour BASES DIFFÉRENTES — présent dans ce seul motif.
+const MOTIF_BASES_DIFFERENTES: &str = "n'est pas celle du daemon";
+
 /// La trace de reprise locale ne décrit la flotte du daemon que si la base du
 /// daemon est bien celle d'ici — MACHINE **et** chemin.
 ///
@@ -189,15 +200,15 @@ fn recovery_trace_scope(
     if !atteste(daemon_host) || !bridget_core::host_is_attested(local_host) {
         return Err(format!(
             "trace de reprise non lisible d'ici : machine non attestée — locale « {} », daemon « {} ». \
-             Une machine indéterminée n'est pas une machine, et deux indéterminées ne sont pas la même.",
-            local_host,
+             {MOTIF_INDETERMINATION}, et deux indéterminées ne sont pas la même.",
+            crate::build_info::describe_host(Some(local_host)),
             crate::build_info::describe_host(daemon_host)
         ));
     }
     Err(format!(
-        "trace de reprise non lisible d'ici : la base locale ({} sur {}) n'est pas celle du daemon ({} sur {})",
+        "trace de reprise non lisible d'ici : la base locale ({} sur {}) {MOTIF_BASES_DIFFERENTES} ({} sur {})",
         local_db_path.display(),
-        local_host,
+        crate::build_info::describe_host(Some(local_host)),
         daemon_db_path.unwrap_or(crate::build_info::MACHINE_NON_ATTESTEE),
         crate::build_info::describe_host(daemon_host)
     ))
@@ -1238,8 +1249,12 @@ mod tests {
         // celui de l'INDÉTERMINATION, pas celui de deux machines différentes —
         // les deux n'appellent pas le même geste de la part d'un opérateur.
         assert!(
-            error.contains("machine non attestée"),
+            error.contains(MOTIF_INDETERMINATION),
             "le refus doit dire pourquoi: {error}"
+        );
+        assert!(
+            !error.contains(MOTIF_BASES_DIFFERENTES),
+            "le motif générique ne doit pas être rendu pour une indétermination: {error}"
         );
     }
 
@@ -1397,6 +1412,13 @@ mod tests {
             refus.contains("sur cartae") && refus.contains("sur monordinateur"),
             "le motif doit nommer LES DEUX machines : {refus}"
         );
+        // Contrôle de séparation dans l'autre sens : deux machines ATTESTÉES et
+        // différentes doivent recevoir le motif générique, jamais celui de
+        // l'indétermination.
+        assert!(
+            refus.contains(MOTIF_BASES_DIFFERENTES) && !refus.contains(MOTIF_INDETERMINATION),
+            "deux machines nommées ne relèvent pas de l'indétermination : {refus}"
+        );
 
         // Daemon antérieur : non attesté, donc refus explicite.
         let inconnu = recovery_trace_scope(None, None, "cartae", &chemin)
@@ -1416,9 +1438,24 @@ mod tests {
             &chemin,
         )
         .expect_err("deux machines indéterminées ne sont pas la même machine");
+        // LES DEUX CONDITIONS. La mention « machine non attestée » figure AUSSI
+        // dans le motif générique, qui affiche l'hôte du daemon : l'exiger seule
+        // ne sépare pas les issues. Il faut le motif spécifique PRÉSENT et le
+        // motif générique ABSENT — sinon un code qui ne changerait rien du tout
+        // passerait le test.
         assert!(
-            repli.contains("machine non attestée"),
-            "le motif doit nommer l'indétermination, pas une différence : {repli}"
+            repli.contains(MOTIF_INDETERMINATION),
+            "le motif doit nommer l'indétermination : {repli}"
+        );
+        assert!(
+            !repli.contains(MOTIF_BASES_DIFFERENTES),
+            "le motif générique des bases différentes ne doit PAS être rendu ici : {repli}"
+        );
+        // Rendu unique des DEUX côtés : la machine locale non attestée se lit
+        // comme telle, jamais sous sa valeur de repli brute.
+        assert!(
+            !repli.contains(&format!("sur {}", bridget_core::HOTE_NON_ATTESTE)),
+            "la machine locale non attestée doit se lire comme telle : {repli}"
         );
     }
 }
