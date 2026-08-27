@@ -3702,8 +3702,8 @@ fn handle_register(
 /// d'effort, alignée sur la validation des noms d'agent côté CLI.
 const MAX_RUNTIME_VALUE_LENGTH: usize = 100;
 
-/// Rejette une valeur trop longue ou porteuse de caractères de contrôle, qui
-/// casserait l'alignement de l'annuaire ou l'affichage du terminal.
+/// Rejette une valeur trop longue ou porteuse de caractères de contrôle / format
+/// (bidi), qui casserait l'alignement de l'annuaire ou mentirait à l'affichage.
 fn validate_runtime_value(value: &str) -> Result<(), String> {
     if value.is_empty() {
         return Err("valeur vide".to_string());
@@ -3714,10 +3714,43 @@ fn validate_runtime_value(value: &str) -> Result<(), String> {
             MAX_RUNTIME_VALUE_LENGTH
         ));
     }
-    if value.chars().any(char::is_control) {
+    if value.chars().any(bridget_core::is_disallowed_control) {
         return Err("valeur contenant des caractères de contrôle".to_string());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod validate_runtime_value_tests {
+    use super::validate_runtime_value;
+
+    /// Contrôle positif Cc ; puis bidi réel. Aveuglement Cc prouvé sans appeler
+    /// le prédicat sous test pour construire l'attente.
+    #[test]
+    fn oracle_runtime_refuse_une_valeur_bidi_reelle() {
+        assert!(
+            validate_runtime_value("claude\u{0007}").is_err(),
+            "PROMESSE — un Cc (BEL) DOIT être refusé"
+        );
+        assert!(
+            validate_runtime_value("claude-opus").is_ok(),
+            "PROMESSE — une valeur légitime DOIT passer"
+        );
+        let bidi = "claude\u{202e}edualc";
+        assert!(
+            !bidi.chars().any(char::is_control),
+            "preuve d'aveuglement Cc : sans is_format_character cette chaîne passerait"
+        );
+        let err = validate_runtime_value(bidi).expect_err("oracle — U+202E doit être refusé");
+        assert!(
+            err.contains("contrôle"),
+            "motif de refus attendu, reçu: {err}"
+        );
+        assert!(
+            validate_runtime_value("high\u{2069}").is_err(),
+            "oracle — isolat U+2069 DOIT être refusé"
+        );
+    }
 }
 
 /// Applique une observation de runtime à la présence d'un agent nommé.
