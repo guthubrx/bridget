@@ -3552,8 +3552,7 @@ fn cmd_reaper(args: &[String]) {
 /// machine courante, qui peut être un sous-répertoire sans rapport avec les
 /// arbres de travail à examiner.
 fn require_explicit_reaper_tmp(tmp_dir: Option<PathBuf>) -> Result<PathBuf, String> {
-    tmp_dir
-        .ok_or_else(|| "--tmp DIR est obligatoire : aucune racine TMPDIR implicite".to_string())
+    tmp_dir.ok_or_else(|| "--tmp DIR est obligatoire : aucune racine TMPDIR implicite".to_string())
 }
 
 fn parse_cleanup_args(args: &[String]) -> Result<(), String> {

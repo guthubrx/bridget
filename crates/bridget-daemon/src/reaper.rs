@@ -775,7 +775,7 @@ pub fn observe_live(
         None => world.agent_inventory_available = false,
     }
     world.open_request_participants = scan_open_request_participants_best_effort();
-    world.temp_dirs = scan_temp_dirs(tmp_dir, now)?;
+    scan_explicit_temp_root(&mut world, tmp_dir, now)?;
 
     // Enrichir les daemons avec leur HOME via lsof (best-effort).
     let mut enriched = Vec::new();
@@ -879,7 +879,16 @@ fn scan_open_request_participants_best_effort() -> Vec<String> {
     Vec::new()
 }
 
-fn scan_temp_dirs(tmp: &Path, now_unix: u64) -> io::Result<Vec<TempDirSnapshot>> {
+fn scan_explicit_temp_root(world: &mut WorldView, tmp: &Path, now_unix: u64) -> io::Result<()> {
+    world.temp_dirs = scan_temp_dirs(tmp, now_unix, &world.agents)?;
+    Ok(())
+}
+
+fn scan_temp_dirs(
+    tmp: &Path,
+    now_unix: u64,
+    known_agents: &[AgentPresence],
+) -> io::Result<Vec<TempDirSnapshot>> {
     let entries = match fs::read_dir(tmp) {
         Ok(e) => e,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -898,7 +907,7 @@ fn scan_temp_dirs(tmp: &Path, now_unix: u64) -> io::Result<Vec<TempDirSnapshot>>
         };
         let (kind, agent_name) = match harness_temp_prefix(name) {
             Some(kind) => (kind.to_string(), None),
-            None if meta.is_dir() => match agent_name_from_temp_dir(name) {
+            None if meta.is_dir() => match agent_name_from_temp_dir(name, known_agents) {
                 Some(agent_name) => ("agent".to_string(), Some(agent_name)),
                 None => continue,
             },
@@ -1005,7 +1014,18 @@ fn harness_temp_prefix(name: &str) -> Option<&'static str> {
 /// Extrait le préfixe d'un répertoire de travail d'agent (`jc2-attribution`,
 /// `gregen.abc`). Cette reconnaissance classe seulement : elle n'autorise
 /// jamais une suppression et une identité inconnue reste visible au rapport.
-fn agent_name_from_temp_dir(name: &str) -> Option<String> {
+fn agent_name_from_temp_dir(name: &str, known_agents: &[AgentPresence]) -> Option<String> {
+    if let Some(agent_name) = known_agents
+        .iter()
+        .map(|agent| agent.name.as_str())
+        .filter(|agent_name| {
+            name.strip_prefix(agent_name)
+                .is_some_and(|suffix| suffix.starts_with('-') || suffix.starts_with('.'))
+        })
+        .max_by_key(|agent_name| agent_name.len())
+    {
+        return Some(agent_name.to_string());
+    }
     let separator = name.find(|character| matches!(character, '-' | '.'))?;
     let candidate = &name[..separator];
     if candidate.is_empty()
@@ -1394,14 +1414,31 @@ mod tests {
         let target = root.join("jc6-revue");
         fs::create_dir_all(&target).unwrap();
 
-        let scanned = scan_temp_dirs(&root, 1_700_000_000).unwrap();
+        let scanned = scan_temp_dirs(&root, 1_700_000_000, &[]).unwrap();
         assert!(
             scanned.iter().any(|entry| {
                 entry.path == target && entry.agent_name.as_deref() == Some("jc6")
             }),
-            "la racine passée explicitement doit être lue, sans recours à TMPDIR"
+            "la racine passée explicitement doit être lue par le scanner, sans recours à TMPDIR"
         );
 
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn raccord_productif_lit_la_racine_fournie_et_protege_un_nom_avec_tiret() {
+        let root = PathBuf::from(format!(
+            "/tmp/bridget-reaper-raccord-productif-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let target = root.join("jc2-review-attribution");
+        fs::create_dir_all(&target).unwrap();
+        let state_dir = root.join("state");
+        fs::create_dir_all(&state_dir).unwrap();
+        let report = observe_live(&state_dir, &root, 60).unwrap();
+        assert!(report.targets.iter().any(|entry| {
+            entry.path.as_deref() == Some(target.to_str().unwrap())
+        }));
         fs::remove_dir_all(&root).unwrap();
     }
 

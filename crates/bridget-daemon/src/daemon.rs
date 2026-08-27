@@ -5440,6 +5440,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::End { .. }
                 | WrapperToDaemon::AttachRejected { .. }
                 | WrapperToDaemon::Register { .. }
+                | WrapperToDaemon::DiskSpace { .. }
                 | WrapperToDaemon::JournalReady
                 | WrapperToDaemon::Unregister
                 | WrapperToDaemon::Rename { .. }
@@ -5547,6 +5548,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::End { .. }
                 | WrapperToDaemon::AttachRejected { .. }
                 | WrapperToDaemon::Register { .. }
+                | WrapperToDaemon::DiskSpace { .. }
                 | WrapperToDaemon::JournalReady
                 | WrapperToDaemon::Unregister
                 | WrapperToDaemon::Rename { .. }
@@ -7459,12 +7461,15 @@ pub fn get_status(config: &DaemonConfig) -> Result<DaemonStatus, String> {
     if reader.read_line(&mut resp_line).is_err() {
         return Ok(DaemonStatus::default());
     }
-    let agents = match decode::<DaemonToWrapper>(resp_line.trim()) {
-        Ok(DaemonToWrapper::AgentList { agents }) => agents
-            .into_iter()
-            .filter(|agent| agent.agent_type != "status-probe")
-            .collect(),
-        _ => vec![],
+    let (agents, agents_inventory_available) = match decode::<DaemonToWrapper>(resp_line.trim()) {
+        Ok(DaemonToWrapper::AgentList { agents }) => (
+            agents
+                .into_iter()
+                .filter(|agent| agent.agent_type != "status-probe")
+                .collect(),
+            true,
+        ),
+        _ => (vec![], false),
     };
 
     // Compter les messages en base — mais SEULEMENT si la base locale est
@@ -7488,6 +7493,7 @@ pub fn get_status(config: &DaemonConfig) -> Result<DaemonStatus, String> {
     Ok(DaemonStatus {
         running: true,
         agents,
+        agents_inventory_available,
         message_count,
         build_id: Some(identity.build_id),
         daemon_host,
@@ -8104,6 +8110,7 @@ fn legacy_identity_report(line: &str) -> bool {
 pub struct DaemonStatus {
     pub running: bool,
     pub agents: Vec<bridget_transport::protocol::AgentInfo>,
+    pub agents_inventory_available: bool,
     /// `None` quand la base locale n'est PAS celle du daemon interrogé : on ne
     /// rend alors aucun chiffre plutôt qu'un chiffre pris ailleurs.
     pub message_count: Option<usize>,

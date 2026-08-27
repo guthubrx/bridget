@@ -12,8 +12,8 @@
   dans `crates/bridget-daemon/src/reaper.rs`.
 - [x] T006 [US3] Ajouter le témoin agent actif sans descripteur, le candidat
   arrêté et le contrôle hors `TMPDIR` dans `crates/bridget-daemon/src/reaper.rs`.
-- [ ] T007 Rejouer les mutants de garde active et de racine explicite, mesurer
+- [x] T007 Rejouer les mutants de garde active et de racine explicite, mesurer
   base/tête et documenter les preuves dans
   `specs/040-observateur-espace-disque/implementation.md`.
-- [ ] T008 Vérifier le périmètre, publier et consigner le REX dans
+- [x] T008 Vérifier le périmètre, publier et consigner le REX dans
   `specs/040-observateur-espace-disque/implementation.md`.
