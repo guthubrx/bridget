@@ -118,6 +118,38 @@ fn assert_command_value_rejected(command: &str, option: &str, invalid_value: Opt
     assert!(!database_exists, "la validation ne doit pas créer la base");
 }
 
+fn assert_unknown_message_option_rejected(args: &[&str], unknown: &str) {
+    let (output, serialized_message, pid_exists, database_exists) = run_message_cli(args);
+
+    assert_eq!(output.status.code(), Some(2), "sortie réelle: {output:?}");
+    assert!(
+        serialized_message.is_none(),
+        "{unknown} a corrompu le message sérialisé: {serialized_message:?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(unknown), "jeton absent de {stderr}");
+    assert!(!pid_exists, "la validation ne doit pas créer le PID file");
+    assert!(!database_exists, "la validation ne doit pas créer la base");
+}
+
+fn assert_missing_message_option_value_rejected(args: &[&str], option: &str) {
+    let (output, serialized_message, pid_exists, database_exists) = run_message_cli(args);
+
+    assert_eq!(output.status.code(), Some(2), "sortie réelle: {output:?}");
+    assert!(
+        serialized_message.is_none(),
+        "{option} sans valeur a laissé partir {serialized_message:?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(option), "option absente de {stderr}");
+    assert!(
+        stderr.contains("requiert une valeur"),
+        "cause absente de {stderr}"
+    );
+    assert!(!pid_exists, "la validation ne doit pas créer le PID file");
+    assert!(!database_exists, "la validation ne doit pas créer la base");
+}
+
 #[test]
 fn daemon_stop_est_refuse_avant_tout_effet_de_bord() {
     let root = fixture_root("daemon");
@@ -219,6 +251,90 @@ fn send_et_reply_conservent_les_valeurs_numeriques_valides() {
         assert!(!pid_exists, "la commande ne doit pas créer le PID file");
         assert!(!database_exists, "la commande ne doit pas créer la base");
     }
+}
+
+#[test]
+fn send_refuse_les_options_inconnues_sans_serialiser_de_message() {
+    for (args, unknown) in [
+        (
+            vec!["send", "--to", "destinataire", "--to-fallback"],
+            "--to-fallback",
+        ),
+        (
+            vec![
+                "send",
+                "--sonde-avant",
+                "--to",
+                "destinataire",
+                "corps",
+                "explicite",
+            ],
+            "--sonde-avant",
+        ),
+        (
+            vec![
+                "send",
+                "--to",
+                "destinataire",
+                "corps",
+                "explicite",
+                "--sonde-option-inexistante",
+            ],
+            "--sonde-option-inexistante",
+        ),
+    ] {
+        assert_unknown_message_option_rejected(&args, unknown);
+    }
+}
+
+#[test]
+fn reply_refuse_les_options_inconnues_sans_serialiser_de_message() {
+    for (args, unknown) in [
+        (
+            vec!["reply", "--sonde-avant", "corps", "explicite"],
+            "--sonde-avant",
+        ),
+        (
+            vec!["reply", "corps", "explicite", "--sonde-option-inexistante"],
+            "--sonde-option-inexistante",
+        ),
+    ] {
+        assert_unknown_message_option_rejected(&args, unknown);
+    }
+}
+
+#[test]
+fn le_separateur_preserve_un_corps_commencant_par_un_tiret() {
+    for args in [
+        vec![
+            "send",
+            "--to",
+            "destinataire",
+            "--",
+            "--body",
+            "TEST",
+            "IDENTITE",
+            "CLI",
+        ],
+        vec!["reply", "--", "--body", "TEST", "IDENTITE", "CLI"],
+    ] {
+        let (output, message, pid_exists, database_exists) = run_message_cli(&args);
+        assert!(output.status.success(), "sortie réelle: {output:?}");
+        let message: serde_json::Value =
+            serde_json::from_str(message.as_deref().expect("message sérialisé")).unwrap();
+        assert_eq!(message["body"], "--body TEST IDENTITE CLI");
+        assert!(!pid_exists, "la commande ne doit pas créer le PID file");
+        assert!(!database_exists, "la commande ne doit pas créer la base");
+    }
+}
+
+#[test]
+fn send_nomme_les_options_de_texte_privees_de_valeur() {
+    assert_missing_message_option_value_rejected(&["send", "--to"], "--to");
+    assert_missing_message_option_value_rejected(
+        &["send", "--to", "destinataire", "message", "--from"],
+        "--from",
+    );
 }
 
 #[test]
