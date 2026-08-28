@@ -7,9 +7,13 @@
 > façon** : elle a affirmé « 060 et 061 non intégrés » jusqu'au 28/08 20:57, où
 > les deux sont entrés dans `main` (`dda0843`). Le mensonge que le bandeau
 > annonçait s'est produit, et il a fallu venir le corriger à la main. Ce qui
-> reste vrai à cette heure : **intégrés, toujours PAS DÉPLOYÉS** — et c'est
-> désormais la seule affirmation fragile de cette carte. Avant de t'appuyer sur
-> l'une ou l'autre :
+> **Et elle a menti une seconde fois, trois minutes après cette correction** :
+> j'avais écrit « intégrés, toujours PAS DÉPLOYÉS » à 23:49 ; le daemon a
+> redémarré à 23:52:30 sur un binaire de 23:41:16. **Tout est intégré, déployé et
+> éprouvé en production** — j'ai mesuré les trois cas moi-même (§2). Deux
+> démentis en trois heures sur la même carte : ne crois aucune de ses
+> affirmations d'état sans la remesurer, quel que soit le soin avec lequel elle
+> est écrite. Avant de t'appuyer sur l'une ou l'autre :
 > `git fetch` puis `git merge-base --is-ancestor <sha> origin/main`. Ne déduis pas, mesure.
 > **NOMME LE REMOTE avant de le croire** : `origin` ne désigne pas le même dépôt
 > selon les checkouts. Défaut trouvé par `cartae0-flux` le 28/08, annoncé pour
@@ -106,11 +110,13 @@ la commande dans le doute : elle est sans effet de bord si le domaine est déjà
 
 Deux mandats livrés, publiés et **intégrés dans `main` le 28/08 à 20:57**
 (`dda0843`) : `50060f62` (session 060) et `3d7053a6` (session 061, qui ferme une
-faille d'usurpation ouverte par 060 — voir §2). **Aucun des deux n'est déployé** :
-le daemon en service tourne toujours un binaire antérieur, donc la faille reste
-ouverte en pratique. Intégration vérifiée par moi après `fetch`, et le contenu
-contrôlé — la garde de 061 est intacte dans `main`, les quatre témoins y sont, et
-le témoin fautif de 060 en a bien disparu. Aucun autre travail en cours. Arbre propre à la dernière mesure. Le gel humain tient : aucune
+faille d'usurpation ouverte par 060 — voir §2). **Les deux sont déployés depuis
+le 28/08 23:52:30**, redémarrage du daemon sur un binaire de 23:41:16 ; la faille
+d'usurpation est fermée en service, et non plus seulement dans `main`.
+Intégration vérifiée par moi après `fetch`, contenu contrôlé — garde de 061
+intacte, quatre témoins présents, témoin fautif de 060 disparu — puis
+comportement éprouvé en production (§2). `3d7053a6` a été clos sur cette base,
+décision `25b0b7f0`. Aucun autre travail en cours. Arbre propre à la dernière mesure. Le gel humain tient : aucune
 reprise de 055/057 ni de quoi que ce soit d'autre sans mandat à trois
 identifiants (objectif, délégation, message). Une notification seule n'est pas
 un mandat — trois agents ont refusé de travailler sur ce fondement le 28/08 et

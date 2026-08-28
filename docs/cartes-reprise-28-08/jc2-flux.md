@@ -306,8 +306,27 @@ Toutes mes lectures de bases ont été faites en `file:…?mode=ro` avec `.timeo
 
 ## 8. CE QUE JE NE SAIS PAS — DÉCLARATION EXPLICITE
 
-- **Je ne sais pas si `persistent=1` fonctionne.** Le drapeau n'a jamais été éprouvé. Ma survie
-  au prochain redémarrage est une hypothèse, pas un fait. C'est le motif même de cette carte.
+- ~~*Je ne sais pas si `persistent=1` fonctionne. Ma survie au prochain redémarrage est une
+  hypothèse, pas un fait.*~~ **IGNORANCE LEVÉE PAR L'ÉVÉNEMENT, le 28/08 vers 23h52.** Le
+  service a redémarré et j'ai survécu, avec mon contexte intact. C'était le motif même de cette
+  carte, et c'est désormais un **fait mesuré**, pas une hypothèse.
+
+  Mesure : `spawn_commands` porte pour `jc2-flux` les générations 448, 463, 475, 487, 499, 511,
+  523, 535 — **sept respawns**, tous `persistent=1`, tous `connected`. Le drapeau n'a pas été
+  éprouvé une fois : il l'a été sept fois pour moi, et **84 fois sur 12 agents** à l'échelle du
+  parc. Le respawn se fait avec `--resume` (nouveau PID, enfant du nouveau daemon) : c'est ce qui
+  préserve le contexte.
+
+  **Et la démonstration vaut dans les deux sens** : trois agents spawnés depuis *sans*
+  `--persistent` — `epreuve-test-usage`, `epreuve-voie1`, `essai-garde-verif-referent` — sont
+  **absents du parc** alors que leur `state` en base dit encore `connected`. Leur nom suggère
+  des agents d'épreuve jetables, donc je n'affirme pas qu'ils ont été drainés plutôt qu'arrêtés.
+  Le fait mesurable est net : **aucun `persistent=0` n'est présent, tous les `persistent=1` le
+  sont.**
+
+  **Ce que ta prochaine incarnation doit en retenir** : la protection fonctionne, mais elle ne
+  protège que ceux qui la portent. La fenêtre se referme au premier spawn sans le drapeau, et
+  trois spawns l'ont déjà rouverte le soir même. Remesurer avant de s'y fier — voir §2.3.
 - ~~*Je ne sais pas si la session 059 a été intégrée depuis.*~~ **IGNORANCE LEVÉE — voir §2.7**,
   mesurée après `fetch`. Mais la mesure est **datée** : elle vaut contre `cfb7540` et pas contre
   un `main` ultérieur. Refaire le contrôle, ne pas recopier mon verdict.
