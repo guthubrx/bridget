@@ -940,10 +940,11 @@ fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMes
                 // la file jusqu'à la fin du tour. Le message repart donc en mode
                 // « queue » — il sera traité au tour suivant plutôt que perdu ni
                 // rejoué en boucle.
-                let refus = error.to_string();
-                let non_pilotable = refus.contains("activeTurnNotSteerable")
-                    || refus.contains("NotSteerable")
-                    || refus.contains("not steerable");
+                // Le marqueur est pose par provider_error_reason a partir du
+                // champ structure du protocole. On NE cherche PAS le message du
+                // fournisseur : il n'est jamais remonte, remplace par une
+                // empreinte — mesure du 28/08, banc /tmp/steer-reel-28aout.
+                let non_pilotable = error.to_string().contains("tour non pilotable");
                 let (lock, wake) = &*worker.queue;
                 let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
                 if non_pilotable {
@@ -1896,9 +1897,23 @@ fn provider_error_reason(error: &Value) -> String {
         return CODEX_SATURATED_REASON.to_string();
     }
     let reference = provider_fingerprint(b"error", error.to_string().as_bytes());
+    // Marqueur de NOTRE cru, pose sur la seule foi d'un champ STRUCTURE du
+    // protocole (`codexErrorInfo.activeTurnNotSteerable`). Mesure du 28/08 sur
+    // codex-cli 0.150.1 : le message fournisseur est « cannot steer a review
+    // turn », mais il n'est jamais remonte — l'empreinte le remplace, et c'est
+    // voulu. Sans ce marqueur, aucun appelant ne peut distinguer un tour non
+    // pilotable d'un refus quelconque.
+    let non_pilotable = error
+        .pointer("/data/codexErrorInfo/activeTurnNotSteerable")
+        .is_some();
+    let suffixe = if non_pilotable {
+        "; tour non pilotable"
+    } else {
+        ""
+    };
     match code {
-        Some(code) => format!("erreur Codex (code {code}; référence {reference})"),
-        None => format!("erreur Codex (référence {reference})"),
+        Some(code) => format!("erreur Codex (code {code}{suffixe}; référence {reference})"),
+        None => format!("erreur Codex ({suffixe}référence {reference})"),
     }
 }
 fn provider_fingerprint(domain: &'static [u8], value: &[u8]) -> String {
@@ -2230,7 +2245,7 @@ mod tests {
                         *'"method":"turn/steer"'*)
                             steer_id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
                             if [ "${BRIDGET_CODEX_STEER_REFUSE:-0}" = 1 ]; then
-                                printf '%s\n' "{\"id\":$steer_id,\"error\":{\"code\":-32003,\"message\":\"steer refuse\"}}"
+                                printf '%s\n' "{\"id\":$steer_id,\"error\":{\"code\":-32600,\"message\":\"cannot steer a review turn\",\"data\":{\"message\":\"cannot steer a review turn\",\"codexErrorInfo\":{\"activeTurnNotSteerable\":{\"turnKind\":\"review\"}}}}}"
                             else
                                 printf '%s\n' "{\"id\":$steer_id,\"result\":{}}"
                             fi ;;
@@ -3132,6 +3147,88 @@ mod tests {
         assert!(
             ligne_steer.contains("\"clientUserMessageId\":\"codex-steer-injecte\""),
             "turn/steer doit porter le message arrivé, ligne={ligne_steer}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Un tour NON PILOTABLE (`activeTurnNotSteerable`, mesuré le 28/08 contre
+    /// codex-cli 0.150.1) doit rendre le message à la file PRINCIPALE, pour
+    /// qu'il soit traité au tour suivant — et non le rejouer en boucle dans la
+    /// file de pilotage, ce qui bloquerait tout ce qui suit.
+    ///
+    /// Assertion métier : après l'échéance du premier tour, un SECOND
+    /// `turn/start` est émis — preuve que le message refusé est reparti en mode
+    /// « queue ». Mutant qui le tue : remplacer `state.messages.push_front` par
+    /// `state.steer.push_front` dans la branche non pilotable.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_F_codex_tour_non_pilotable_rend_le_message_a_la_file() {
+        let root = root("temoin-non-pilotable");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 3;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
+                ("BRIDGET_CODEX_STEER_REFUSE".to_string(), "1".to_string()),
+            ],
+            false,
+        )
+        .expect("session native non pilotable");
+
+        let mut premier = message("np-1");
+        premier.id = "codex-np-tour".to_string();
+        transport.deliver(&premier).expect("livraison du premier");
+
+        let attente = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < attente {
+            if fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("\"method\":\"turn/start\"")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        thread::sleep(Duration::from_millis(150));
+
+        let mut second = message("np-2");
+        second.id = "codex-np-refuse".to_string();
+        transport.deliver(&second).expect("livraison du second");
+
+        // Le premier tour tombe sur son échéance (HOLD_TURN), puis le worker
+        // doit reprendre le message rendu à la file principale.
+        let deadline = Instant::now() + Duration::from_secs(14);
+        let mut deux_turn_start = false;
+        while Instant::now() < deadline {
+            let contenu = fs::read_to_string(&trace).unwrap_or_default();
+            let repris = contenu.lines().any(|ligne| {
+                ligne.contains("\"method\":\"turn/start\"")
+                    && ligne.contains("codex-np-refuse")
+            });
+            if repris {
+                deux_turn_start = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(40));
+        }
+        transport.stop();
+
+        let contenu = fs::read_to_string(&trace).unwrap_or_default();
+        assert!(
+            contenu.contains("\"method\":\"turn/steer\""),
+            "le second message devait d'abord être tenté en pilotage; trace={contenu}"
+        );
+        assert!(
+            deux_turn_start,
+            "un tour non pilotable doit rendre le message à la file : \
+             aucun second turn/start observé, le message est resté bloqué en \
+             pilotage; trace={contenu}"
         );
         let _ = fs::remove_dir_all(root);
     }
