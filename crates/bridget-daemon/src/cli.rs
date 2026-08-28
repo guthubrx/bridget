@@ -317,6 +317,8 @@ fn print_usage() {
            help                   Cette aide\n\n\
          Options de send :\n  \
            --to <nom>             Destinataire (requis)\n  \
+           --from <nom>           Se nommer ; le nom doit être adressable en\n  \
+           \x20                      retour, sinon l'envoi est refusé\n  \
            --in-reply-to <id>     Lie la réponse à une demande suivie\n  \
            --reply                Réponse attendue\n  \
            --timeout <S>          Délai avant échec (défaut: 60)\n  \
@@ -1052,7 +1054,7 @@ fn cmd_send(args: &[String]) {
         Some(t) => t,
         None => {
             eprintln!(
-                "usage: bridget send --to <nom> [--in-reply-to ID] [--reply] [--hops N] [--] <message>"
+                "usage: bridget send --to <nom> [--from <nom>] [--in-reply-to ID] [--reply] [--hops N] [--] <message>"
             );
             std::process::exit(2);
         }
@@ -1076,11 +1078,16 @@ fn cmd_send(args: &[String]) {
         std::process::exit(2);
     }
 
+    // Se nommer est un acte explicite : le daemon doit pouvoir le distinguer
+    // d'un nom de repli, sans quoi il ne sait pas s'il a le droit de le
+    // remplacer par l'identité éphémère de la connexion.
+    let from_declared = from.is_some();
     let sender = from.unwrap_or_else(current_agent_name);
     if let Err(error) = validate_reply_options(&sender, reply, timeout_secs) {
         exit_argument_error(&error);
     }
     let mut msg = BridgetMessage::new(&sender, &to, &body);
+    msg.from_declared = from_declared;
     msg.in_reply_to = in_reply_to;
     msg.reply = reply;
     msg.hops = hops;

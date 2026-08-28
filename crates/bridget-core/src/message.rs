@@ -67,6 +67,12 @@ pub struct BridgetMessage {
     /// Identifiant de la demande suivie à laquelle ce message répond.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_reply_to: Option<String>,
+    /// Vrai quand l'émetteur s'est nommé explicitement (`send --from`). Le
+    /// daemon ne remplace alors jamais ce nom en silence : il le conserve s'il
+    /// est adressable, sinon il refuse l'envoi. Absent du flux = faux, ce qui
+    /// laisse le comportement par défaut inchangé.
+    #[serde(default)]
+    pub from_declared: bool,
 }
 
 fn default_hops() -> i32 {
@@ -92,6 +98,7 @@ impl BridgetMessage {
             reply_timeout: None,
             deadline_at: None,
             in_reply_to: None,
+            from_declared: false,
         }
     }
 

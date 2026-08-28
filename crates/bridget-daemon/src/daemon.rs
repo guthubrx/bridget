@@ -1181,6 +1181,89 @@ fn purge_expired_attach_sends(state: &mut DaemonState) {
         .retain(|_, pending| pending.expires_at > now);
 }
 
+/// Sort de l'attribution de l'expéditeur pour un envoi hors rôle attach.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SenderAttribution {
+    /// Le nom porté par le message est conservé tel quel.
+    Keep,
+    /// Le nom est remplacé par celui de la connexion émettrice.
+    UseConnectionName,
+    /// L'émetteur s'est nommé, mais ce nom n'est adressable par personne :
+    /// l'envoi est refusé au lieu d'être attribué à une identité éphémère.
+    RefuseUnaddressable,
+}
+
+/// Décide à qui attribuer un envoi. Un wrapper garde toujours son nom
+/// enregistré (anti-usurpation). Sur une connexion de ligne de commande, un
+/// nom adressable est conservé ; un nom déclaré mais inadressable est refusé,
+/// car l'écraser fabriquerait un expéditeur auquel nul ne peut répondre.
+/// Complexité : O(1).
+pub(crate) fn resolve_sender_attribution(
+    connection_name: &str,
+    from_declared: bool,
+    from_is_addressable: bool,
+) -> SenderAttribution {
+    let ephemeral_cli = connection_name.is_empty() || connection_name.starts_with("cli-send-");
+    if !ephemeral_cli {
+        return SenderAttribution::UseConnectionName;
+    }
+    if from_is_addressable {
+        return SenderAttribution::Keep;
+    }
+    if from_declared {
+        return SenderAttribution::RefuseUnaddressable;
+    }
+    SenderAttribution::UseConnectionName
+}
+
+#[cfg(test)]
+mod attribution_emetteur_cli_tests {
+    use super::{SenderAttribution, resolve_sender_attribution};
+
+    /// Témoin de l'assertion métier : un émetteur en ligne de commande qui se
+    /// nomme sous une identité que personne ne porte est refusé, et non
+    /// réattribué en silence à `cli-send-<pid>`. C'est la propriété demandée —
+    /// une identité déclarée doit être adressable en retour.
+    #[test]
+    fn emetteur_cli_nomme_non_adressable_est_refuse() {
+        assert_eq!(
+            resolve_sender_attribution("cli-send-3675366", true, false),
+            SenderAttribution::RefuseUnaddressable
+        );
+    }
+
+    /// Un nom déclaré qui correspond à un agent connecté est conservé : c'est
+    /// ce qui rend l'identité stable d'un envoi à l'autre.
+    #[test]
+    fn emetteur_cli_nomme_adressable_est_conserve() {
+        assert_eq!(
+            resolve_sender_attribution("cli-send-3675366", true, true),
+            SenderAttribution::Keep
+        );
+    }
+
+    /// Contrôle de non-régression : sans `--from`, le comportement par défaut
+    /// reste l'attribution au nom de connexion. Le mandat ne demandait pas de
+    /// le changer.
+    #[test]
+    fn emetteur_cli_sans_nom_declare_garde_le_defaut() {
+        assert_eq!(
+            resolve_sender_attribution("cli-send-3675366", false, false),
+            SenderAttribution::UseConnectionName
+        );
+    }
+
+    /// Un wrapper ne peut pas emprunter une autre identité, même en se
+    /// nommant : son nom enregistré fait foi.
+    #[test]
+    fn wrapper_ne_peut_pas_usurper_par_from() {
+        assert_eq!(
+            resolve_sender_attribution("rc7-flux", true, false),
+            SenderAttribution::UseConnectionName
+        );
+    }
+}
+
 #[derive(Debug)]
 struct AttachSubscriptionRefusal {
     reason: AttachRefusal,
@@ -6970,18 +7053,35 @@ fn handle_wrapper_message(
                 // règle quand il raccordera les envois aux abonnements.
                 bridge_msg.from = "humain".to_string();
                 bridge_msg.in_reply_to = None;
-            } else if !sender_name.is_empty() && !sender_name.starts_with("cli-send-") {
-                // Wrapper : utiliser le nom enregistré
-                bridge_msg.from = sender_name.clone();
-            } else if st.router.get_agent(&bridge_msg.from).is_some() {
-                // CLI temporaire mais le from correspond à un agent enregistré
-                // → confiance accordée (le CLI tourne dans le contexte du wrapper)
-                // On garde bridge_msg.from tel quel
             } else {
-                // CLI temporaire avec from inconnu
-                // → utiliser le nom de connexion (cli-send-XXXXX ou human)
-                if !sender_name.is_empty() {
-                    bridge_msg.from = sender_name.clone();
+                let from_is_addressable = st.router.get_agent(&bridge_msg.from).is_some();
+                match resolve_sender_attribution(
+                    &sender_name,
+                    bridge_msg.from_declared,
+                    from_is_addressable,
+                ) {
+                    // CLI temporaire dont le from est un agent enregistré
+                    // → confiance accordée, le nom passe tel quel.
+                    SenderAttribution::Keep => {}
+                    // Wrapper, ou CLI qui ne s'est pas nommé : le nom de la
+                    // connexion fait foi.
+                    SenderAttribution::UseConnectionName => {
+                        if !sender_name.is_empty() {
+                            bridge_msg.from = sender_name.clone();
+                        }
+                    }
+                    // L'émetteur s'est nommé et ce nom n'est adressable par
+                    // personne. Le remplacer par cli-send-<pid> lui rendrait un
+                    // succès mensonger : on refuse et on dit pourquoi.
+                    SenderAttribution::RefuseUnaddressable => {
+                        return Some(DaemonToWrapper::Nack {
+                            id: bridge_msg.id.clone(),
+                            reason: format!(
+                                "expéditeur « {} » non adressable : aucun agent connecté ne porte ce nom, ta réponse n'aurait pas d'adresse de retour ; connecte un agent sous ce nom ou renonce à --from",
+                                bridge_msg.from
+                            ),
+                        });
+                    }
                 }
             }
 
