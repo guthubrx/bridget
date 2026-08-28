@@ -438,17 +438,18 @@ impl MaicieStore {
     /// `sqlite_master`) est bootstrappée : créer n'est pas migrer. Une base
     /// peuplée, même avec `user_version` remis à 0, ou dont le schéma est
     /// antérieur au binaire, est refusée tant que l'appelant n'a pas consenti
-    /// via [`Self::open_and_migrate`].
+    /// via [`crate::install_publish::PublishedMigration::open`].
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         Self::open_with_migration_consent(path, false)
     }
 
-    /// Ouvre la base privée et applique les migrations idempotentes jusqu'à
-    /// la version de schéma portée par ce binaire. Réservé au consentement
-    /// explicite (CLI `maicie migrate --config <chemin>` / flag `--migrate`) :
-    /// c'est le seul chemin qui peut avancer un schéma déjà versionné.
-    pub fn open_and_migrate(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-        Self::open_with_migration_consent(path, true)
+    /// Primitive brute réservée au module qui possède la preuve consommable
+    /// de publication. Le crate binaire ne peut pas l'appeler.
+    pub(crate) fn open_after_publication(
+        publication: &crate::install_publish::PublishedMigration,
+        _exclusion: &crate::install_publish::MigrationExclusion,
+    ) -> Result<Self, StoreError> {
+        Self::open_with_migration_consent(publication.database_path(), true)
     }
 
     fn open_with_migration_consent(
@@ -4396,11 +4397,14 @@ impl MaicieStore {
     }
 }
 
-fn set_wal_mode(connection: &Connection) -> Result<(), StoreError> {
+pub(crate) fn set_wal_mode(connection: &Connection) -> Result<(), StoreError> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        match connection.execute_batch("PRAGMA journal_mode = WAL;") {
-            Ok(()) => return Ok(()),
+        match connection.query_row("PRAGMA journal_mode = WAL", [], |row| {
+            row.get::<_, String>(0)
+        }) {
+            Ok(mode) if mode == "wal" => return Ok(()),
+            Ok(mode) => return Err(StoreError::JournalModeUnavailable { actual: mode }),
             Err(rusqlite::Error::SqliteFailure(error, _))
                 if error.code == ErrorCode::DatabaseBusy && Instant::now() < deadline =>
             {
@@ -9510,6 +9514,9 @@ pub enum StoreError {
         found: i64,
         supported: i64,
     },
+    JournalModeUnavailable {
+        actual: String,
+    },
     Io(std::io::Error),
     Sql(rusqlite::Error),
     Json(serde_json::Error),
@@ -9543,6 +9550,10 @@ impl fmt::Display for StoreError {
                 formatter,
                 "schéma SQLite {found} antérieur au binaire (attend {supported}) ; relancer avec : maicie migrate --config <chemin>"
             ),
+            Self::JournalModeUnavailable { actual } => write!(
+                formatter,
+                "journal SQLite WAL indisponible (mode obtenu : {actual})"
+            ),
             Self::Io(source) => write!(formatter, "I/O store impossible : {source}"),
             Self::Sql(source) => write!(formatter, "SQLite impossible : {source}"),
             Self::Json(source) => write!(formatter, "JSON store impossible : {source}"),
@@ -9568,7 +9579,8 @@ impl std::error::Error for StoreError {
             | Self::NotFound(_)
             | Self::Corrupt(_)
             | Self::UnsupportedSchema { .. }
-            | Self::MigrationRequired { .. } => None,
+            | Self::MigrationRequired { .. }
+            | Self::JournalModeUnavailable { .. } => None,
         }
     }
 }

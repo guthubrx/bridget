@@ -27,6 +27,7 @@ use maicie::greffe_service::{
     GreffeServiceError, append_registre_add, apply_delegate, candidates_from,
     close_objective as close_greffe_objective,
 };
+use maicie::install_publish::{self, InstallPublishError};
 use maicie::profiles::{
     ApprovalProfileView, ProfileError, ResolvedAgentDefinition, approval_view, load_profiles,
 };
@@ -133,7 +134,12 @@ fn run_status(arguments: StatusArgs, migrate: bool) -> Result<String, CliError> 
     let ReconciledStore {
         store,
         coordination: coordination_report,
-    } = open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)?;
+    } = open_store_with_reconciliation(
+        &arguments.config,
+        &config,
+        BridgetClientLimits::default(),
+        migrate,
+    )?;
     let snapshots = status(&store, arguments.objective_id).map_err(CliError::Objective)?;
     let review_continuity = capture_review_continuity(&config, &store, &snapshots)?;
     let refus_contraintes = store
@@ -397,8 +403,13 @@ fn run_objective(arguments: ObjectiveArgs, migrate: bool) -> Result<String, CliE
 
 fn open_store(config_path: &PathBuf, migrate: bool) -> Result<MaicieStore, CliError> {
     let config = MaicieConfig::load(config_path).map_err(CliError::Configuration)?;
-    open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)
-        .map(|opened| opened.store)
+    open_store_with_reconciliation(
+        config_path,
+        &config,
+        BridgetClientLimits::default(),
+        migrate,
+    )
+    .map(|opened| opened.store)
 }
 
 struct ReconciledStore {
@@ -406,32 +417,53 @@ struct ReconciledStore {
     coordination: CoordinationReconcileReport,
 }
 
+/// Republication **avant** migration. Après une erreur englobante, la version
+/// durable décide seule d'une éventuelle restauration : `Err` peut aussi
+/// naître après le commit du schéma.
+fn open_store_with_migrate_and_publish(
+    config_path: &std::path::Path,
+    database_path: &std::path::Path,
+) -> Result<MaicieStore, CliError> {
+    let publication = install_publish::republish_current_exe_before_migrate(database_path)
+        .map_err(CliError::InstallPublish)?;
+    let migrated = publication.open().map_err(|error| match error {
+        install_publish::PublishedMigrationOpenError::Store(error) => CliError::Store(error),
+        install_publish::PublishedMigrationOpenError::Install(error) => {
+            CliError::InstallPublish(error)
+        }
+    })?;
+    migrated
+        .verify_preflight(config_path)
+        .map_err(CliError::InstallPublish)
+}
+
 /// Unique frontière d'ouverture de la base Maicie configurée par le CLI.
 /// L'attestation et l'ouverture consomment la même configuration : aucun
 /// rechargement intermédiaire ne peut dissocier le daemon vérifié de la base.
 fn open_guarded_maicie_store(
+    config_path: &std::path::Path,
     config: &MaicieConfig,
     limits: BridgetClientLimits,
     migrate: bool,
 ) -> Result<MaicieStore, CliError> {
     require_local_daemon(config, limits)?;
     if migrate {
-        MaicieStore::open_and_migrate(&config.database_path)
+        open_store_with_migrate_and_publish(config_path, &config.database_path)
     } else {
-        MaicieStore::open(&config.database_path)
+        MaicieStore::open(&config.database_path).map_err(CliError::Store)
     }
-    .map_err(CliError::Store)
 }
 
 /// Toute commande qui ouvre la base rejoue d'abord les outboxes pendantes dans
 /// une fenêtre I/O bornée. L'indisponibilité Bridget laisse la ligne durable
 /// pending ; les erreurs de contrat restent explicites au CLI.
 fn open_store_with_reconciliation(
+    config_path: &std::path::Path,
     config: &MaicieConfig,
     limits: BridgetClientLimits,
     migrate: bool,
 ) -> Result<ReconciledStore, CliError> {
-    let mut store = open_guarded_maicie_store(config, limits, migrate)?;
+    let mut store = open_guarded_maicie_store(config_path, config, limits, migrate)?;
     reconcile_pending(&mut store, config, limits)?;
     reconcile_activation_startup_at(&mut store, &config.bridget_socket, unix_now()?)
         .map_err(CliError::Reconcile)?;
@@ -571,7 +603,8 @@ fn reconcile_pending(
 fn run_delegate(arguments: DelegateArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
     let limits = BridgetClientLimits::default();
-    let mut store = open_store_with_reconciliation(&config, limits, migrate)?.store;
+    let mut store =
+        open_store_with_reconciliation(&arguments.config, &config, limits, migrate)?.store;
     let client =
         BridgetClient::connect_with_limits(&config.bridget_socket, store.issuer_scope(), limits)
             .map_err(CliError::Bridget)?;
@@ -619,8 +652,13 @@ fn run_delegate(arguments: DelegateArgs, migrate: bool) -> Result<String, CliErr
 /// l'outbox, ensuite reprise par le protocole public Bridget.
 fn run_profile(arguments: ProfileArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let mut store =
-        open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)?.store;
+    let mut store = open_store_with_reconciliation(
+        &arguments.config,
+        &config,
+        BridgetClientLimits::default(),
+        migrate,
+    )?
+    .store;
     let now = unix_now()?;
     match arguments.action {
         ProfileAction::Propose {
@@ -1152,7 +1190,12 @@ fn parse_migrate(arguments: &[String]) -> Result<MigrateArgs, CliError> {
 
 fn run_migrate(arguments: MigrateArgs) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let store = open_guarded_maicie_store(&config, BridgetClientLimits::default(), true)?;
+    let store = open_guarded_maicie_store(
+        &arguments.config,
+        &config,
+        BridgetClientLimits::default(),
+        true,
+    )?;
     let version = store.schema_version().map_err(CliError::Store)?;
     Ok(format!("schéma migré vers {version}"))
 }
@@ -1310,8 +1353,13 @@ fn parse_routine(arguments: &[String]) -> Result<RoutineArgs, CliError> {
 
 fn run_routine(arguments: RoutineArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let mut store =
-        open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)?.store;
+    let mut store = open_store_with_reconciliation(
+        &arguments.config,
+        &config,
+        BridgetClientLimits::default(),
+        migrate,
+    )?
+    .store;
     let now = unix_now()?;
     match arguments.action {
         RoutineAction::Propose {
@@ -1659,7 +1707,12 @@ fn parse_plage(arguments: &[String]) -> Result<PlageArgs, CliError> {
 
 fn run_plage(arguments: PlageArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let mut store = open_guarded_maicie_store(&config, BridgetClientLimits::default(), migrate)?;
+    let mut store = open_guarded_maicie_store(
+        &arguments.config,
+        &config,
+        BridgetClientLimits::default(),
+        migrate,
+    )?;
     match arguments.action {
         PlageAction::Reserve {
             resource,
@@ -2063,7 +2116,12 @@ fn parse_source_kind(value: &str) -> Result<catalogue::MissionSourceKind, CliErr
 
 fn run_registre(arguments: RegistreArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let store = open_guarded_maicie_store(&config, BridgetClientLimits::default(), migrate)?;
+    let store = open_guarded_maicie_store(
+        &arguments.config,
+        &config,
+        BridgetClientLimits::default(),
+        migrate,
+    )?;
     if let RegistreAction::Add { line } = &arguments.action {
         let result =
             append_registre_add(&store, &config, line).map_err(greffe_service_error_for_cli)?;
@@ -3345,6 +3403,7 @@ enum CliError {
     Profile(ProfileError),
     ProfileActivation(ProfileActivationError),
     Routine(RoutineError),
+    InstallPublish(InstallPublishError),
 }
 
 impl CliError {
@@ -3371,6 +3430,7 @@ impl CliError {
             | Self::TargetEligibilityDivergence(_) => EXIT_DELEGATE,
             Self::Objective(_) => EXIT_DELEGATE,
             Self::Profile(_) | Self::ProfileActivation(_) | Self::Routine(_) => EXIT_DELEGATE,
+            Self::InstallPublish(_) => EXIT_STORE,
         }
     }
 
@@ -3407,6 +3467,7 @@ impl CliError {
             Self::Routine(RoutineError::Store(_)) => "store",
             Self::Routine(RoutineError::NotFound(_)) => "routine_not_found",
             Self::Routine(_) => "routine_invalid",
+            Self::InstallPublish(_) => "install_publish",
         }
     }
 
@@ -3472,6 +3533,7 @@ impl fmt::Display for CliError {
             Self::Profile(error) => error.fmt(formatter),
             Self::ProfileActivation(error) => error.fmt(formatter),
             Self::Routine(error) => error.fmt(formatter),
+            Self::InstallPublish(error) => error.fmt(formatter),
         }
     }
 }
@@ -3711,6 +3773,7 @@ mod tests {
             profiles: Vec::new(),
         };
         let error = match open_store_with_reconciliation(
+            &config.database_path,
             &config,
             maicie::bridget_client::BridgetClientLimits::default(),
             false,
@@ -3845,7 +3908,7 @@ mod tests {
                 .iter()
                 .map(|site| site.split_once(':').unwrap().0)
                 .collect::<Vec<_>>(),
-            vec!["open_guarded_maicie_store", "open_guarded_maicie_store"],
+            vec!["open_guarded_maicie_store"],
             "sites d'ouverture directe hors helper gardé : {sites:?}"
         );
     }

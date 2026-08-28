@@ -371,6 +371,26 @@ PY
   fi
 }
 
+replace_under_maicie_install_lock() {
+  local temporary="$1" destination="$2"
+  python3 - "$temporary" "$destination" <<'PY'
+import fcntl, os, sys
+temporary, destination = sys.argv[1:]
+parent = os.path.realpath(os.path.dirname(os.path.abspath(destination)))
+lock_path = os.path.join(parent, os.path.basename(destination) + ".install.lock")
+fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+try:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("republication ou migration Maicie déjà en cours", file=sys.stderr)
+        raise
+    os.replace(temporary, destination)
+finally:
+    os.close(fd)
+PY
+}
+
 atomic_publish_file() {
   local source="$1" destination="$2" mode="$3" temporary
   mkdir -p "$(dirname "$destination")"
@@ -379,7 +399,13 @@ atomic_publish_file() {
     rm -f -- "$temporary"
     die "publication Maicie impossible ($destination)"
   fi
-  if ! mv -f -- "$temporary" "$destination"; then
+  if [[ "$destination" == "$MAICIE_BIN" ]]; then
+    replace_under_maicie_install_lock "$temporary" "$destination" || {
+      rm -f -- "$temporary"
+      die "activation atomique Maicie impossible ($destination)"
+    }
+    return 0
+  elif ! mv -f -- "$temporary" "$destination"; then
     rm -f -- "$temporary"
     die "activation atomique Maicie impossible ($destination)"
   fi
