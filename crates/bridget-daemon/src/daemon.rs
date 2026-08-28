@@ -1191,12 +1191,26 @@ pub(crate) enum SenderAttribution {
     /// L'émetteur s'est nommé, mais ce nom n'est adressable par personne :
     /// l'envoi est refusé au lieu d'être attribué à une identité éphémère.
     RefuseUnaddressable,
+    /// L'émetteur s'est nommé sous l'identité d'un agent connecté depuis une
+    /// connexion de ligne de commande, qui ne prouve pas être cet agent :
+    /// l'envoi est refusé pour usurpation.
+    RefuseImpersonation,
 }
 
 /// Décide à qui attribuer un envoi. Un wrapper garde toujours son nom
-/// enregistré (anti-usurpation). Sur une connexion de ligne de commande, un
-/// nom adressable est conservé ; un nom déclaré mais inadressable est refusé,
-/// car l'écraser fabriquerait un expéditeur auquel nul ne peut répondre.
+/// enregistré (anti-usurpation). Une connexion de ligne de commande est
+/// éphémère et ne prouve rien sur qui la lance :
+///
+/// - si elle se nomme explicitement (`--from`), elle ne peut ni emprunter
+///   l'identité d'un agent connecté — ce serait une usurpation — ni se donner
+///   un nom que personne ne porte — ce serait un expéditeur sans adresse de
+///   retour. Les deux cas sont refusés, avec des motifs distincts ;
+/// - si elle ne se nomme pas, le comportement d'origine est conservé, y compris
+///   le nom hérité de l'environnement d'un wrapper qui l'a lancée.
+///
+/// La garde ne porte donc que sur le `--from` explicite. C'est la voie par
+/// laquelle les trois usurpations du 28/08 ont été produites, et la seule qui
+/// puisse être fermée sans casser un usage existant.
 /// Complexité : O(1).
 pub(crate) fn resolve_sender_attribution(
     connection_name: &str,
@@ -1207,11 +1221,14 @@ pub(crate) fn resolve_sender_attribution(
     if !ephemeral_cli {
         return SenderAttribution::UseConnectionName;
     }
+    if from_declared {
+        if from_is_addressable {
+            return SenderAttribution::RefuseImpersonation;
+        }
+        return SenderAttribution::RefuseUnaddressable;
+    }
     if from_is_addressable {
         return SenderAttribution::Keep;
-    }
-    if from_declared {
-        return SenderAttribution::RefuseUnaddressable;
     }
     SenderAttribution::UseConnectionName
 }
@@ -1232,12 +1249,59 @@ mod attribution_emetteur_cli_tests {
         );
     }
 
-    /// Un nom déclaré qui correspond à un agent connecté est conservé : c'est
-    /// ce qui rend l'identité stable d'un envoi à l'autre.
+    /// Résout l'attribution pour un nom littéral, en donnant la liste des
+    /// agents connectés. Le nom déclaré reste visible dans le témoin, ce qui
+    /// permet d'attester le cas « humain » nommément et pas par un booléen.
+    fn attribution(
+        connexion: &str,
+        declare: Option<&str>,
+        agents_connectes: &[&str],
+    ) -> SenderAttribution {
+        let nom_porte = declare.unwrap_or("human");
+        resolve_sender_attribution(
+            connexion,
+            declare.is_some(),
+            agents_connectes.contains(&nom_porte),
+        )
+    }
+
+    /// Témoin exigé par le mandat 3d7053a6 : c'est le cas qui a coûté une
+    /// fausse alerte de dette humaine le 28/08. Deux sondes de rc7-flux et une
+    /// du référent ont été inscrites au ledger sous « humain » sans qu'aucun
+    /// humain n'écrive, et un agent a été mis en demeure de répondre à un
+    /// message que personne n'avait envoyé.
     #[test]
-    fn emetteur_cli_nomme_adressable_est_conserve() {
+    fn un_cli_temporaire_ne_peut_pas_emettre_sous_le_nom_humain() {
         assert_eq!(
-            resolve_sender_attribution("cli-send-3675366", true, true),
+            attribution(
+                "cli-send-3845685",
+                Some("humain"),
+                &["humain", "bridget", "rc7-flux"]
+            ),
+            SenderAttribution::RefuseImpersonation
+        );
+    }
+
+    /// Généralisation du précédent : aucun agent connecté ne peut être emprunté
+    /// depuis une connexion de ligne de commande. Ce témoin remplace celui de la
+    /// session 060, `emetteur_cli_nomme_adressable_est_conserve`, qui attestait
+    /// exactement le comportement que le mandat demande de fermer.
+    #[test]
+    fn emetteur_cli_ne_peut_pas_usurper_un_agent_connecte() {
+        assert_eq!(
+            attribution("cli-send-3675366", Some("bridget"), &["humain", "bridget"]),
+            SenderAttribution::RefuseImpersonation
+        );
+    }
+
+    /// Non-régression du chemin implicite : sans `--from`, un CLI lancé dans le
+    /// contexte d'un wrapper porte encore le nom hérité de son environnement.
+    /// La garde ne vise que la déclaration explicite ; fermer aussi cette voie
+    /// casserait un usage existant sans fermer aucune usurpation mesurée.
+    #[test]
+    fn nom_herite_de_l_environnement_reste_conserve() {
+        assert_eq!(
+            resolve_sender_attribution("cli-send-3675366", false, true),
             SenderAttribution::Keep
         );
     }
@@ -7078,6 +7142,19 @@ fn handle_wrapper_message(
                             id: bridge_msg.id.clone(),
                             reason: format!(
                                 "expéditeur « {} » non adressable : aucun agent connecté ne porte ce nom, ta réponse n'aurait pas d'adresse de retour ; connecte un agent sous ce nom ou renonce à --from",
+                                bridge_msg.from
+                            ),
+                        });
+                    }
+                    // L'émetteur emprunte le nom d'un agent connecté depuis une
+                    // connexion qui ne prouve pas être cet agent. Laisser passer
+                    // fabriquerait un message faussement attribué : c'est ainsi
+                    // qu'une fausse alerte de dette humaine a été produite le 28/08.
+                    SenderAttribution::RefuseImpersonation => {
+                        return Some(DaemonToWrapper::Nack {
+                            id: bridge_msg.id.clone(),
+                            reason: format!(
+                                "usurpation refusée : « {} » est un agent connecté et cette connexion ne prouve pas être lui ; --from ne permet pas d'emprunter une identité, envoie depuis l'agent lui-même",
                                 bridge_msg.from
                             ),
                         });
