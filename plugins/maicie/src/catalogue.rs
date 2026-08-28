@@ -969,7 +969,8 @@ impl CatalogueJournal {
             nature_to: None,
         };
         let existing = self.read_entries()?;
-        let nature = resolve_open_nature(&link.constat_id, &existing).unwrap_or(EntryNature::Constat);
+        let nature =
+            resolve_open_nature(&link.constat_id, &existing).unwrap_or(EntryNature::Constat);
         if !nature.allows_closure() {
             return Err(CatalogueError::TransitionInvalide(format!(
                 "clôture refusée : nature={} n'est pas un constat fermable",
@@ -1765,8 +1766,12 @@ fn validate_transition_shape(entry: &TransitionEntry) -> Result<(), CatalogueErr
                     "raison de requalification inconnue '{raison}'"
                 )));
             }
-            match (entry.severity_from, entry.severity_to, entry.nature_from, entry.nature_to)
-            {
+            match (
+                entry.severity_from,
+                entry.severity_to,
+                entry.nature_from,
+                entry.nature_to,
+            ) {
                 (Some(from), Some(to), nature_from, nature_to) if from != to => {
                     if let (Some(nf), Some(nt)) = (nature_from, nature_to) {
                         if nf == nt {
@@ -2120,10 +2125,7 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
                 .get(&add.id)
                 .copied()
                 .unwrap_or(add.severity);
-            let nature = nature_override
-                .get(&add.id)
-                .copied()
-                .unwrap_or(add.nature);
+            let nature = nature_override.get(&add.id).copied().unwrap_or(add.nature);
             OpenConstatView {
                 id: add.id.clone(),
                 date: add.date.clone(),
@@ -2170,9 +2172,21 @@ pub fn project_registre(entries: &[CatalogueEntry]) -> RegistreView {
             ClosedKind::Refute => refutes.push(closed),
         }
     }
-    traites.sort_by(|a, b| a.observed_at.cmp(&b.observed_at).then_with(|| a.id.cmp(&b.id)));
-    soldes.sort_by(|a, b| a.observed_at.cmp(&b.observed_at).then_with(|| a.id.cmp(&b.id)));
-    refutes.sort_by(|a, b| a.observed_at.cmp(&b.observed_at).then_with(|| a.id.cmp(&b.id)));
+    traites.sort_by(|a, b| {
+        a.observed_at
+            .cmp(&b.observed_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    soldes.sort_by(|a, b| {
+        a.observed_at
+            .cmp(&b.observed_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    refutes.sort_by(|a, b| {
+        a.observed_at
+            .cmp(&b.observed_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
     rectifies.sort_by(|a, b| {
         a.rectified_at
             .cmp(&b.rectified_at)
@@ -2360,7 +2374,10 @@ pub fn render_registre_list_with_attente(view: &RegistreView, show_attente: bool
 
 /// Vue filtrable : ouverts par défaut ; `--fermes` / `--refutes` / `--rectifies`
 /// remplacent le corps (pas un élargissement). Pied toujours à trois comptes.
-pub fn render_registre_list_sections(view: &RegistreView, sections: RegistreListSections) -> String {
+pub fn render_registre_list_sections(
+    view: &RegistreView,
+    sections: RegistreListSections,
+) -> String {
     let mut out = String::new();
     out.push_str("registre list\n");
     // Restriction : dès qu'on demande un état spécialisé, les ouverts quittent
@@ -3167,10 +3184,8 @@ mod tests {
     #[allow(non_snake_case)]
     #[test]
     fn TEMOIN_A_registre_ouvert_apparait_avec_contenu_exact() {
-        let root = std::env::temp_dir().join(format!(
-            "maicie-temoin-a-ouvert-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("maicie-temoin-a-ouvert-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let mut journal = CatalogueJournal::open(root.join("c.jsonl")).unwrap();
         journal
@@ -3208,10 +3223,8 @@ mod tests {
     #[allow(non_snake_case)]
     #[test]
     fn TEMOIN_B_registre_ferme_quitte_les_ouverts_sans_vider_la_vue() {
-        let root = std::env::temp_dir().join(format!(
-            "maicie-temoin-b-ferme-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("maicie-temoin-b-ferme-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let mut journal = CatalogueJournal::open(root.join("c.jsonl")).unwrap();
         journal
@@ -3269,8 +3282,8 @@ mod tests {
                 fermes: true,
                 refutes: false,
                 attente: false,
-            rectifies: false,
-        },
+                rectifies: false,
+            },
         );
         assert!(
             rendered.contains("[FERMÉ] temoin-a-fermer")
@@ -3358,14 +3371,12 @@ mod tests {
                 fermes: true,
                 refutes: false,
                 attente: false,
-            rectifies: false,
-        },
+                rectifies: false,
+            },
         );
         assert!(
             fermes.contains("--- fermés")
-                && fermes.contains(
-                    "[FERMÉ] constat/echeance-dix-minutes-condamne-tout-tour-long"
-                )
+                && fermes.contains("[FERMÉ] constat/echeance-dix-minutes-condamne-tout-tour-long")
                 && fermes.contains("raison=corrige_en_production")
                 && fermes.contains("ref=sha:c3782e7b1c398ccf19d26d262f4f7cc169bcd16b"),
             "vue --fermes doit montrer le fermé avec raison typée et référence: {fermes}"
@@ -3385,10 +3396,8 @@ mod tests {
     #[allow(non_snake_case)]
     #[test]
     fn TEMOIN_C_registre_refute_distinct_du_ferme() {
-        let root = std::env::temp_dir().join(format!(
-            "maicie-temoin-c-refute-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("maicie-temoin-c-refute-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let mut journal = CatalogueJournal::open(root.join("c.jsonl")).unwrap();
         journal
@@ -3412,8 +3421,8 @@ mod tests {
                 fermes: false,
                 refutes: true,
                 attente: false,
-            rectifies: false,
-        },
+                rectifies: false,
+            },
         );
         assert!(
             rendered.contains("[RÉFUTÉ] temoin-a-refuter")
@@ -3435,10 +3444,7 @@ mod tests {
     /// Contrôle positif d'abord : un constat se ferme. Puis la règle refuse.
     #[test]
     fn oracle_une_regle_ne_peut_pas_etre_fermee() {
-        let root = std::env::temp_dir().join(format!(
-            "maicie-nature-close-{}",
-            std::process::id()
-        ));
+        let root = std::env::temp_dir().join(format!("maicie-nature-close-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let path = root.join("catalogue.jsonl");
@@ -3533,10 +3539,7 @@ mod tests {
     /// badge RECTIFIÉ, pas « jamais touchée ».
     #[test]
     fn oracle_une_transition_erronee_peut_etre_rectifiee() {
-        let root = std::env::temp_dir().join(format!(
-            "maicie-rectif-{}",
-            std::process::id()
-        ));
+        let root = std::env::temp_dir().join(format!("maicie-rectif-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let path = root.join("catalogue.jsonl");
@@ -3669,10 +3672,7 @@ mod tests {
             ouvert.rectifie,
             "PROMESSE — une entrée rectifiée NE se lit PAS comme jamais touchée"
         );
-        assert_eq!(
-            view.footer.traites, 0,
-            "aucune fermeture de fond restante"
-        );
+        assert_eq!(view.footer.traites, 0, "aucune fermeture de fond restante");
         assert_eq!(
             view.footer.rectifies, 2,
             "historique : solde + fermeture rectifiés"
@@ -3763,7 +3763,11 @@ mod tests {
         let mut journal = CatalogueJournal::open(&path).unwrap();
 
         // (0) Cas légitime : constat Major → règle sans toucher la sévérité.
-        let mut ok = sample_add("c-major-vers-regle", Severity::Major, "2026-08-27T04:00:00Z");
+        let mut ok = sample_add(
+            "c-major-vers-regle",
+            Severity::Major,
+            "2026-08-27T04:00:00Z",
+        );
         ok.nature = EntryNature::Constat;
         journal.append_add(ok).unwrap();
         assert_eq!(
@@ -3782,8 +3786,11 @@ mod tests {
         );
 
         // (1) Blocker → règle SANS baisser la sévérité : la garde DOIT tuer.
-        let mut blocker =
-            sample_add("c-blocker-vers-regle", Severity::Blocker, "2026-08-27T04:00:00Z");
+        let mut blocker = sample_add(
+            "c-blocker-vers-regle",
+            Severity::Blocker,
+            "2026-08-27T04:00:00Z",
+        );
         blocker.nature = EntryNature::Constat;
         journal.append_add(blocker).unwrap();
         let err = journal
@@ -3797,7 +3804,8 @@ mod tests {
             )
             .expect_err("PROMESSE — nature-seul Blocker→règle DOIT échouer");
         assert!(
-            err.to_string().contains("une règle ne peut pas porter blocker"),
+            err.to_string()
+                .contains("une règle ne peut pas porter blocker"),
             "motif garde attendu, reçu: {err}"
         );
 

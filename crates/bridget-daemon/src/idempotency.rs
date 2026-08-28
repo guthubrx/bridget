@@ -81,10 +81,17 @@ impl RecordState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublicResult {
-    Accepted { expires_at: i64 },
-    Rejected { category: String, reason: String },
+    Accepted {
+        expires_at: i64,
+    },
+    Rejected {
+        category: String,
+        reason: String,
+    },
     /// Destinataire purgé : terminale, distincte d'un rejet métier.
-    Orphaned { reason: String },
+    Orphaned {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1818,9 +1825,10 @@ impl Record {
             }),
             Some("orphaned") => Ok(LookupResult::Orphaned {
                 expires_at: self.expires_at,
-                reason: self.public_result_reason.clone().unwrap_or_else(|| {
-                    "destinataire purgé — remise orpheline".to_string()
-                }),
+                reason: self
+                    .public_result_reason
+                    .clone()
+                    .unwrap_or_else(|| "destinataire purgé — remise orpheline".to_string()),
             }),
             _ => Err(IdempotencyError::CorruptRecord("issue terminale absente")),
         }
@@ -1877,10 +1885,7 @@ mod tests {
 
     impl TempDbGuard {
         fn new(name_prefix: &str) -> Self {
-            Self(std::env::temp_dir().join(format!(
-                "{name_prefix}-{}.db",
-                uuid::Uuid::new_v4()
-            )))
+            Self(std::env::temp_dir().join(format!("{name_prefix}-{}.db", uuid::Uuid::new_v4())))
         }
 
         fn path(&self) -> &std::path::Path {
@@ -2126,19 +2131,13 @@ mod tests {
     /// `orphan_emitter_notices`, et le lookup rend `Orphaned`.
     #[test]
     fn chemin_reel_sur_base_migree_depuis_v3() {
-        let path = std::env::temp_dir().join(format!(
-            "bridget-chemin-reel-{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("bridget-chemin-reel-{}.db", uuid::Uuid::new_v4()));
         let message = bridget_core::BridgetMessage::new("emetteur-x", "cible-y", "mandat perdu");
         let message_id = message.id.clone();
         let bytes = serde_json::to_vec(&message).unwrap();
-        let key = IdempotencyKey::new(
-            "012_scope_aaaaaaaaaaaa",
-            OperationKind::Send,
-            "cle-reelle",
-        )
-        .unwrap();
+        let key = IdempotencyKey::new("012_scope_aaaaaaaaaaaa", OperationKind::Send, "cle-reelle")
+            .unwrap();
 
         {
             let legacy = Connection::open(&path).unwrap();
@@ -2230,11 +2229,9 @@ mod tests {
 
         let notices_en_base: i64 = store
             .conn
-            .query_row(
-                "SELECT COUNT(*) FROM orphan_emitter_notices",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM orphan_emitter_notices", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(notices_en_base, 1);
 
@@ -2334,9 +2331,8 @@ mod tests {
         }
 
         // Ne doit PAS paniquer / échouer : c'est le démarrage du daemon.
-        let store = IdempotencyStore::open(db.path()).expect(
-            "v4 ne doit pas bloquer le démarrage sur un enfant sans parent",
-        );
+        let store = IdempotencyStore::open(db.path())
+            .expect("v4 ne doit pas bloquer le démarrage sur un enfant sans parent");
         let has_v4: bool = store
             .conn
             .query_row(

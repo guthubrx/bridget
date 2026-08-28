@@ -92,7 +92,7 @@ fn gate_session_017_cinq_promesses() {
                     failed: None,
                 },
                 severity: Severity::Info,
-            nature: maicie::catalogue::EntryNature::Constat,
+                nature: maicie::catalogue::EntryNature::Constat,
                 recurrence_of: None,
                 text: "victime de troncature volontaire".into(),
             })
@@ -498,20 +498,14 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
         .filter(|add| !delivered.contains_key(&add.id))
         .collect();
     let nature_of = |add: &&maicie::catalogue::AddEntry| {
-        nature_override
-            .get(&add.id)
-            .copied()
-            .unwrap_or(add.nature)
+        nature_override.get(&add.id).copied().unwrap_or(add.nature)
     };
     let du: Vec<_> = ouverts
         .iter()
         .copied()
         .filter(|add| nature_of(add) == EntryNature::Constat)
         .collect();
-    let recurrents = du
-        .iter()
-        .filter(|add| add.recurrence_of.is_some())
-        .count();
+    let recurrents = du.iter().filter(|add| add.recurrence_of.is_some()).count();
     let gates_rates = du
         .iter()
         .filter(|add| {

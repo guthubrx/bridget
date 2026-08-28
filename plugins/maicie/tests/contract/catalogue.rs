@@ -53,7 +53,7 @@ fn sample_add(id: &str) -> AddEntry {
             failed: None,
         },
         severity: Severity::Minor,
-            nature: EntryNature::Constat,
+        nature: EntryNature::Constat,
         recurrence_of: None,
         text: format!("constat {id}"),
     }
