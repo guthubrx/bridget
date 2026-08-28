@@ -15,6 +15,7 @@
   --radius-medium: 1.25rem;
   --radius-large: 1.75rem;
   --agent-pane-width: 20rem;
+  --agent-pane-resizer-width: 0.5rem;
   --detail-panel-width: 22rem;
   font-family:
     Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text",
@@ -81,14 +82,48 @@ input:focus-visible,
 
 .workspace {
   display: grid;
-  grid-template-columns: var(--agent-pane-width) minmax(0, 1fr);
+  grid-template-columns:
+    var(--agent-pane-width)
+    var(--agent-pane-resizer-width)
+    minmax(0, 1fr);
   width: 100vw;
   height: 100dvh;
   background: var(--background);
 }
 
 .workspace:has(.detail-panel:not([hidden])) {
-  grid-template-columns: var(--agent-pane-width) minmax(0, 1fr) var(--detail-panel-width);
+  grid-template-columns:
+    var(--agent-pane-width)
+    var(--agent-pane-resizer-width)
+    minmax(0, 1fr)
+    var(--detail-panel-width);
+}
+
+.agent-pane-resizer {
+  position: relative;
+  min-height: 0;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.agent-pane-resizer::before {
+  position: absolute;
+  inset: 0.9rem calc(50% - 1px);
+  width: 2px;
+  border-radius: 99px;
+  background: transparent;
+  content: "";
+}
+
+.agent-pane-resizer:hover::before,
+.agent-pane-resizer:focus-visible::before,
+.agent-pane-resizer[data-dragging="true"]::before {
+  background: var(--accent);
+}
+
+body:has(.agent-pane-resizer[data-dragging="true"]) {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .agent-pane,
@@ -803,6 +838,10 @@ code {
     grid-template-columns: 1fr;
     height: auto;
     min-height: 100dvh;
+  }
+
+  .agent-pane-resizer {
+    display: none;
   }
 
   .agent-pane {

@@ -51,6 +51,13 @@
         assert.equal(state.sendCount, 0);
       });
 
+      test("largeur_colonne_agents_bornee_par_le_panneau_central", () => {
+        assert.deepEqual(api.agentPaneWidthBounds(960), { min: 224, max: 560 });
+        assert.equal(api.clampAgentPaneWidth(180, 960), 224);
+        assert.equal(api.clampAgentPaneWidth(900, 960), 560);
+        assert.equal(api.clampAgentPaneWidth(900, 800), 440);
+      });
+
       test("focus_conserve_sous_rafale", () => {
         let state = api.createUiState({
           draft: api.createDraft("travail", 3, 6, true),
@@ -1840,7 +1847,31 @@
   "use strict";
 
   const BOTTOM_THRESHOLD_PX = 2;
+  const AGENT_PANE_WIDTH_STORAGE_KEY = "bridget.ui.agent-pane-width.v1";
+  const AGENT_PANE_MIN_WIDTH_PX = 224;
+  const AGENT_PANE_MAX_WIDTH_PX = 560;
+  const MIN_CONVERSATION_WIDTH_PX = 360;
   const LOCAL_FORMATTERS = new Map();
+
+  function agentPaneWidthBounds(viewportWidth) {
+    const viewport = Number(viewportWidth);
+    const maxForViewport = Number.isFinite(viewport)
+      ? viewport - MIN_CONVERSATION_WIDTH_PX
+      : AGENT_PANE_MAX_WIDTH_PX;
+    return {
+      min: AGENT_PANE_MIN_WIDTH_PX,
+      max: Math.max(
+        AGENT_PANE_MIN_WIDTH_PX,
+        Math.min(AGENT_PANE_MAX_WIDTH_PX, maxForViewport),
+      ),
+    };
+  }
+
+  function clampAgentPaneWidth(value, viewportWidth) {
+    const { min, max } = agentPaneWidthBounds(viewportWidth);
+    const width = Number(value);
+    return Math.round(Math.min(max, Math.max(min, Number.isFinite(width) ? width : min)));
+  }
 
   function createDraft(value = "", selectionStart = 0, selectionEnd = 0, focused = false) {
     return {
@@ -3035,6 +3066,7 @@
     messageSearchStatus: "message-search-status",
     selectedAgent: "selected-agent",
     selectedMeta: "selected-meta",
+    agentPaneResizer: "agent-pane-resizer",
     selectedStateDot: "selected-state-dot",
     connectionIndicator: "connection-indicator",
     relayBanner: "relay-banner",
@@ -3126,6 +3158,89 @@
     let reconnectTimer = null;
     let reconnectAttempts = 0;
     let watchStreamEnded = false;
+
+    const rootStyle = documentRef.documentElement && documentRef.documentElement.style;
+    if (rootStyle && nodes.agentPaneResizer && typeof windowRef.addEventListener === "function") {
+      const resizer = nodes.agentPaneResizer;
+      const storedWidth = (() => {
+        try {
+          const raw = windowRef.localStorage && windowRef.localStorage.getItem(AGENT_PANE_WIDTH_STORAGE_KEY);
+          const width = Number(raw);
+          return raw !== null && Number.isFinite(width) ? width : null;
+        } catch (_error) {
+          return null;
+        }
+      })();
+      let agentPaneWidth = clampAgentPaneWidth(
+        storedWidth === null ? 320 : storedWidth,
+        windowRef.innerWidth,
+      );
+      let dragPointerId = null;
+
+      const applyAgentPaneWidth = (width, persist) => {
+        agentPaneWidth = clampAgentPaneWidth(width, windowRef.innerWidth);
+        const bounds = agentPaneWidthBounds(windowRef.innerWidth);
+        rootStyle.setProperty("--agent-pane-width", `${agentPaneWidth}px`);
+        resizer.setAttribute("aria-valuemin", String(bounds.min));
+        resizer.setAttribute("aria-valuemax", String(bounds.max));
+        resizer.setAttribute("aria-valuenow", String(agentPaneWidth));
+        if (!persist) return;
+        try {
+          windowRef.localStorage && windowRef.localStorage.setItem(
+            AGENT_PANE_WIDTH_STORAGE_KEY,
+            String(agentPaneWidth),
+          );
+        } catch (_error) {
+          // Le redimensionnement reste utilisable si le stockage est indisponible.
+        }
+      };
+
+      const finishResize = (event) => {
+        if (dragPointerId === null || event.pointerId !== dragPointerId) return;
+        if (
+          typeof resizer.releasePointerCapture === "function"
+          && (typeof resizer.hasPointerCapture !== "function" || resizer.hasPointerCapture(dragPointerId))
+        ) {
+          resizer.releasePointerCapture(dragPointerId);
+        }
+        dragPointerId = null;
+        delete resizer.dataset.dragging;
+        applyAgentPaneWidth(agentPaneWidth, true);
+      };
+
+      resizer.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        dragPointerId = event.pointerId;
+        resizer.dataset.dragging = "true";
+        if (typeof resizer.setPointerCapture === "function") {
+          resizer.setPointerCapture(dragPointerId);
+        }
+        applyAgentPaneWidth(event.clientX, false);
+        event.preventDefault();
+      });
+      resizer.addEventListener("pointermove", (event) => {
+        if (event.pointerId !== dragPointerId) return;
+        applyAgentPaneWidth(event.clientX, false);
+        event.preventDefault();
+      });
+      resizer.addEventListener("pointerup", finishResize);
+      resizer.addEventListener("pointercancel", finishResize);
+      resizer.addEventListener("lostpointercapture", finishResize);
+      resizer.addEventListener("keydown", (event) => {
+        const bounds = agentPaneWidthBounds(windowRef.innerWidth);
+        const changes = {
+          ArrowLeft: agentPaneWidth - 16,
+          ArrowRight: agentPaneWidth + 16,
+          Home: bounds.min,
+          End: bounds.max,
+        };
+        if (!(event.key in changes)) return;
+        event.preventDefault();
+        applyAgentPaneWidth(changes[event.key], true);
+      });
+      windowRef.addEventListener("resize", () => applyAgentPaneWidth(agentPaneWidth, false));
+      applyAgentPaneWidth(agentPaneWidth, false);
+    }
 
     const make = (tag, className, value) => {
       const node = documentRef.createElement(tag);
@@ -3940,6 +4055,8 @@
 
   return Object.freeze({
     BOTTOM_THRESHOLD_PX,
+    agentPaneWidthBounds,
+    clampAgentPaneWidth,
     createDraft,
     createUiState,
     preserveDraft,
