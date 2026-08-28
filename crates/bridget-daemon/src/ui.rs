@@ -34,6 +34,17 @@ const MAX_UI_AGENT_NAME_BYTES: usize = 100;
 const MAX_UI_SSE_EVENTS: usize = 20_000;
 const MAX_UI_RECONNECT_ATTEMPTS: usize = 50;
 const UI_RECONNECT_DELAY: Duration = Duration::from_millis(100);
+/// La rétention des présences côté daemon s'appuie sur `link_seen`, rafraîchi
+/// par le heartbeat. Une présence qui ne bat pas est donc jetée au bout de
+/// PRESENCE_RETENTION (300 s), même si sa socket est intacte. L'humain
+/// disparaissait ainsi de l'annuaire cinq minutes après son dernier message,
+/// et toute réponse à un humain silencieux était rejetée.
+const HUMAN_PRESENCE_HEARTBEAT: Duration = Duration::from_secs(3);
+/// Le battement maintient une présence vivante ; il ne la ressuscite pas.
+/// Quand le daemon redémarre, la socket meurt avec lui et l'humain sort de
+/// l'annuaire sans jamais y revenir, puisqu'il ne réémet rien de lui-même.
+/// Cette veille rouvre la présence dès qu'elle est tombée.
+const HUMAN_PRESENCE_WATCH: Duration = Duration::from_secs(10);
 /// Relecture ledger pendant un watch : le sortant référent→humain n'apparaît
 /// jamais au journal ; sans ce rythme le fil reste figé après l'ouverture.
 const UI_THREAD_LEDGER_POLL: Duration = Duration::from_millis(400);
@@ -325,6 +336,29 @@ fn open_human_presence(
     }
 
     let alive = Arc::new(AtomicBool::new(true));
+
+    // Battement de la présence humaine. Le thread de lecture ci-dessous est
+    // bloqué sur read_daemon et ne peut donc pas émettre lui-même ; l'écrivain
+    // est partagé, un second thread suffit. Sans ce battement la présence est
+    // valide cinq minutes puis jetée, alors que la socket reste ouverte.
+    let heartbeat_alive = Arc::clone(&alive);
+    let heartbeat_writer = Arc::clone(&writer);
+    thread::spawn(move || {
+        while heartbeat_alive.load(Ordering::Acquire) {
+            thread::sleep(HUMAN_PRESENCE_HEARTBEAT);
+            if !heartbeat_alive.load(Ordering::Acquire) {
+                break;
+            }
+            let mut writer_guard = heartbeat_writer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if send_daemon(&mut writer_guard, &WrapperToDaemon::Heartbeat).is_err() {
+                heartbeat_alive.store(false, Ordering::Release);
+                break;
+            }
+        }
+    });
+
     let thread_alive = Arc::clone(&alive);
     thread::spawn(move || {
         while let Ok(event) = read_daemon(&mut reader) {
@@ -412,6 +446,31 @@ impl UiRelay {
     }
 
     pub fn serve(self) -> Result<(), UiError> {
+        // L'humain doit être joignable dès le démarrage du relais, sans avoir
+        // rien envoyé et sans avoir coché « attendre une réponse ». Sinon il
+        // n'entre à l'annuaire qu'au premier envoi avec réponse attendue, et
+        // toute réponse qui lui est destinée est rejetée « agent introuvable ».
+        // L'échec n'empêche pas de servir : le sens humain -> agent doit tenir
+        // même si l'inscription échoue.
+        if let Err(error) = self.runtime.ensure_human_presence(&self.config.daemon_socket) {
+            eprintln!("relais UI: inscription de l'humain à l'annuaire impossible: {error}");
+        }
+
+        // Veille de présence. Mesuré le 28/08 : au redémarrage du daemon les
+        // agents se réinscrivent seuls, mais pas l'humain — il n'a pas de
+        // wrapper qui le reconnecte. Sans cette veille, un seul redémarrage le
+        // coupe définitivement et il faut relancer le relais à la main.
+        let veille_runtime = Arc::clone(&self.runtime);
+        let veille_socket = self.config.daemon_socket.clone();
+        thread::spawn(move || {
+            loop {
+                thread::sleep(HUMAN_PRESENCE_WATCH);
+                if let Err(error) = veille_runtime.ensure_human_presence(&veille_socket) {
+                    eprintln!("relais UI: réinscription de l'humain impossible: {error}");
+                }
+            }
+        });
+
         for stream in self.listener.incoming() {
             match stream {
                 Ok(stream) => {
@@ -721,10 +780,15 @@ fn post_ui_message(
     let agents = read_agent_list(&config.daemon_socket).map_err(|error| (503, "daemon_unavailable", error.to_string()))?;
     validate_ui_recipient(&agents, &request.to)
         .map_err(|(status, code)| (status, code, "destinataire indisponible".to_string()))?;
-    if request.reply {
-        runtime
-            .ensure_human_presence(&config.daemon_socket)
-            .map_err(|error| (503, "human_sender_unregistered", error.to_string()))?;
+    // Ré-assurée à chaque envoi, que la réponse soit attendue ou non : c'est
+    // ce qui rouvre l'inscription après un redémarrage du daemon. Quand aucune
+    // réponse n'est attendue, un échec ne doit pas faire perdre le message —
+    // le sens humain -> agent prime sur l'inscription.
+    if let Err(error) = runtime.ensure_human_presence(&config.daemon_socket) {
+        if request.reply {
+            return Err((503, "human_sender_unregistered", error.to_string()));
+        }
+        eprintln!("relais UI: inscription de l'humain à l'annuaire impossible: {error}");
     }
     send_ui_message(&config.daemon_socket, request)
         .map_err(|error| (503, "send_failed", error.to_string()))
@@ -1216,8 +1280,15 @@ fn load_human_referent_thread(socket_path: &Path, focus_agent: &str) -> Vec<UiTh
     let Ok(store) = crate::store::Store::open(&db_path) else {
         return Vec::new();
     };
-    let Ok(entries) = store.conversation_messages(UI_SENDER, focus_agent, UI_THREAD_MESSAGE_LIMIT)
-    else {
+    // La propre entrée de l'humain n'est pas un couple : la clé de conversation
+    // (humain, humain) n'existe pas et rendait un fil vide. Sa boîte se lit donc
+    // par participant, tous correspondants confondus.
+    let loaded = if focus_agent == UI_SENDER {
+        store.participant_messages(UI_SENDER, UI_THREAD_MESSAGE_LIMIT)
+    } else {
+        store.conversation_messages(UI_SENDER, focus_agent, UI_THREAD_MESSAGE_LIMIT)
+    };
+    let Ok(entries) = loaded else {
         return Vec::new();
     };
     let messages = entries
@@ -1257,8 +1328,20 @@ fn human_referent_thread_messages(
     let mut selected = messages
         .iter()
         .filter(|message| {
-            (message.sender == UI_SENDER && message.target == focus_agent)
-                || (message.sender == focus_agent && message.target == UI_SENDER)
+            if focus_agent == UI_SENDER {
+                // L'humain focalisé sur sa propre entrée : le filtre par paire
+                // cherchait alors des messages humain -> humain, qui n'existent
+                // pas, et rendait un fil vide. Mesuré le 28/08 : la colonne
+                // affichait le titre de chaque réponse et la conversation
+                // restait vide, donc l'humain ne pouvait pas lire ce qui lui
+                // était adressé sans deviner qu'il fallait sélectionner
+                // l'agent. Sa propre entrée montre désormais sa boîte entière,
+                // tous correspondants confondus.
+                message.sender == UI_SENDER || message.target == UI_SENDER
+            } else {
+                (message.sender == UI_SENDER && message.target == focus_agent)
+                    || (message.sender == focus_agent && message.target == UI_SENDER)
+            }
         })
         .collect::<Vec<_>>();
     selected.sort_by(|left, right| (left.ts, &left.id).cmp(&(right.ts, &right.id)));
@@ -2039,6 +2122,224 @@ mod tests {
         let error = post_ui_message(&config, &runtime, &body).unwrap_err();
         assert_eq!(error.1, "human_sender_unregistered");
         assert!(error.2.contains("présence UI humaine refusée"));
+        server.join().unwrap();
+        let _ = std::fs::remove_file(socket_path);
+    }
+
+    #[test]
+    fn la_propre_entree_de_l_humain_montre_sa_boite_entiere() {
+        // Mesure du 28/08 a 11h29 : en selectionnant sa propre entree dans la
+        // colonne des agents, l'humain voyait le titre de chaque reponse mais
+        // une conversation VIDE. Cause : le filtre par paire cherchait alors
+        // des messages humain -> humain, qui n'existent pas. Il ne pouvait donc
+        // pas lire ce qui lui etait adresse sans deviner qu'il fallait
+        // selectionner l'agent. Restaurer le filtre par paire pour ce cas rend
+        // zero bulle et tue ce temoin.
+        let messages = vec![
+            ledger_message("h1", 10, "humain", "bridget"),
+            ledger_message("b1", 20, "bridget", "humain"),
+            ledger_message("h2", 30, "humain", "jc6"),
+            ledger_message("j1", 40, "jc6", "humain"),
+            ledger_message("x1", 50, "jc2", "bridget"),
+        ];
+
+        let boite = human_referent_thread_messages(UI_SENDER, &messages);
+        let vus: Vec<&str> = boite.iter().map(|m| m.delivery_id.as_str()).collect();
+        assert_eq!(
+            vus,
+            vec!["h1", "b1", "h2", "j1"],
+            "la propre entree de l'humain doit montrer tous ses echanges, tous correspondants confondus, et exclure le trafic agent-agent"
+        );
+        assert_eq!(boite[0].role, UiThreadRoleV1::User);
+        assert_eq!(boite[1].role, UiThreadRoleV1::Agent);
+
+        // Le filtre par paire reste intact pour un agent focal ordinaire.
+        let fil_bridget = human_referent_thread_messages("bridget", &messages);
+        let vus_bridget: Vec<&str> = fil_bridget.iter().map(|m| m.delivery_id.as_str()).collect();
+        assert_eq!(vus_bridget, vec!["h1", "b1"]);
+    }
+
+    #[test]
+    fn presence_humaine_est_rouverte_apres_la_chute_du_daemon() {
+        // Mesure du 28/08 a 10h13 : au redemarrage du daemon les dix agents se
+        // sont reinscrits seuls, mais pas l'humain — il n'a aucun wrapper qui
+        // le reconnecte. Il a fallu relancer le relais a la main pour pouvoir
+        // lui repondre. ensure_human_presence doit donc ROUVRIR une presence
+        // tombee, et pas seulement en constater l'existence passee.
+        let socket_path = std::env::temp_dir().join(format!(
+            "bridget-ui-reouverture-{}.sock",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let (inscriptions, recues) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || {
+            for tour in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let trame = decode::<WrapperToDaemon>(line.trim()).unwrap();
+                inscriptions.send(matches!(trame, WrapperToDaemon::Register { .. })).unwrap();
+                writeln!(
+                    writer,
+                    "{}",
+                    encode(&DaemonToWrapper::Registered {
+                        name: UI_SENDER.to_string(),
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                writer.flush().unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if tour == 0 {
+                    // Chute du daemon : la socket meurt, la presence tombe.
+                    drop(writer);
+                    drop(reader);
+                }
+            }
+        });
+
+        let runtime = UiRelayRuntime::new(None);
+        runtime.ensure_human_presence(&socket_path).unwrap();
+        assert!(
+            recues.recv_timeout(Duration::from_secs(5)).unwrap(),
+            "premiere inscription attendue"
+        );
+
+        // La veille rappelle ensure_human_presence : une presence tombee doit
+        // etre rouverte, ce que prouve une SECONDE trame Register.
+        let mut rouverte = false;
+        for _ in 0..40 {
+            thread::sleep(Duration::from_millis(100));
+            if runtime.ensure_human_presence(&socket_path).is_ok()
+                && let Ok(vrai) = recues.try_recv()
+            {
+                rouverte = vrai;
+                break;
+            }
+        }
+        assert!(
+            rouverte,
+            "apres la chute du daemon, la presence humaine doit etre rouverte par une nouvelle inscription"
+        );
+        server.join().unwrap();
+        let _ = std::fs::remove_file(socket_path);
+    }
+
+    #[test]
+    fn presence_humaine_bat_pour_survivre_a_la_retention() {
+        // Mesure du 28/08 : l'humain disparaissait de l'annuaire cinq minutes
+        // apres son dernier message, socket pourtant intacte. Cause : le retain
+        // du daemon s'appuie sur link_seen, rafraichi par le heartbeat, et la
+        // presence UI n'en emettait aucun. Consequence directe : impossible de
+        // repondre a un humain silencieux — le cas d'usage meme du referent.
+        // Ce temoin exige un Heartbeat apres l'inscription. Retirer le thread
+        // de battement laisse la lecture bloquer jusqu'au delai et le tue.
+        let socket_path = std::env::temp_dir().join(format!(
+            "bridget-ui-heartbeat-{}.sock",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let (battement, recu) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::Register { .. }
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::Registered {
+                    name: UI_SENDER.to_string(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::JournalReady
+            ));
+            // La trame suivante doit etre le battement, et non le silence.
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            battement
+                .send(decode::<WrapperToDaemon>(line.trim()).unwrap())
+                .unwrap();
+        });
+
+        let presence = open_human_presence(&socket_path, None).unwrap();
+        let trame = recu
+            .recv_timeout(HUMAN_PRESENCE_HEARTBEAT * 4)
+            .expect("la presence humaine doit battre avant d'etre jetee par le retain");
+        assert!(
+            matches!(trame, WrapperToDaemon::Heartbeat),
+            "battement attendu pour rafraichir link_seen ; reçu {trame:?}"
+        );
+        drop(presence);
+        server.join().unwrap();
+        let _ = std::fs::remove_file(socket_path);
+    }
+
+    #[test]
+    fn presence_humaine_est_tentee_meme_sans_reponse_attendue() {
+        // Le défaut mesuré le 28/08 : l'humain n'entrait à l'annuaire que
+        // lorsqu'il cochait « attendre une réponse ». Décoché — son réglage
+        // courant — aucune inscription, donc tout retour vers lui était rejeté
+        // « agent introuvable: humain ».
+        // Ce témoin exerce le chemin réel avec reply=false et exige que le
+        // Register parte quand même. Remettre la condition sur reply fait
+        // recevoir au serveur autre chose qu'un Register : l'assertion du
+        // thread serveur tombe et le témoin meurt.
+        let socket_path = std::env::temp_dir().join(format!("bridget-ui-presence-sans-reply-{}.sock", uuid::Uuid::new_v4().simple()));
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(), WrapperToDaemon::ListAgents));
+            writeln!(writer, "{}", encode(&DaemonToWrapper::AgentList { agents: vec![agent_info("rc1", "idle")] }).unwrap()).unwrap();
+            writer.flush().unwrap();
+
+            // Connexion d'inscription : c'est elle qui n'existait pas.
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            let inscription = decode::<WrapperToDaemon>(line.trim()).unwrap();
+            assert!(
+                matches!(inscription, WrapperToDaemon::Register { .. }),
+                "sans réponse attendue, l'inscription de l'humain doit tout de même être tentée ; reçu {inscription:?}"
+            );
+            writeln!(writer, "{}", encode(&DaemonToWrapper::AttachRejected { subscription_id: None, reason: bridget_transport::protocol::AttachRefusal::JournalUnavailable, mode: None, location: None }).unwrap()).unwrap();
+            writer.flush().unwrap();
+
+            // L'envoi doit être tenté malgré le refus d'inscription.
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(), WrapperToDaemon::RoleHandshake { .. }));
+        });
+        let config = UiRelayConfig { daemon_socket: socket_path.clone(), maicie_config: PathBuf::new(), bind: "127.0.0.1:0".parse().unwrap(), token: "test".to_string() };
+        let runtime = UiRelayRuntime::new(None);
+        let body = serde_json::to_vec(&serde_json::json!({"version": UI_VERSION, "to": "rc1", "body": "ping", "reply": false})).unwrap();
+        let error = post_ui_message(&config, &runtime, &body).unwrap_err();
+        // Sans réponse attendue, un refus d'inscription ne doit pas faire
+        // perdre le message : la cause remontée est celle de l'envoi.
+        assert_eq!(error.1, "send_failed");
         server.join().unwrap();
         let _ = std::fs::remove_file(socket_path);
     }
