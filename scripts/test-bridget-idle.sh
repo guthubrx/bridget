@@ -1385,6 +1385,52 @@ if before != after:
     raise SystemExit("depot_git_lecture_seule: refs, fichiers Git ou worktree modifiés")
 print("depot_git_lecture_seule: OK")
 
+# --- Base datée : un verdict d'ascendance rendu contre une ref locale périmée
+# n'est pas recevable. Reproduit le faux « lot non mergé » d'un lot déjà
+# intégré côté remote, que la ref locale ignore faute de fetch.
+if branch_backlog["main_freshness"] != "a_jour":
+    raise SystemExit(
+        f"base_datee_verdict_recevable: base fraîche attendue, reçu {branch_backlog['main_freshness']}"
+    )
+if branch_backlog["remote_main_head"] != branch_backlog["main_head"]:
+    raise SystemExit("base_datee_verdict_recevable: tête distante != locale sur base fraîche")
+fresh_render = mod.format_branch_backlog(branch_backlog, branch_error=None)
+if "LOTS LIVRES NON MERGES :" not in fresh_render:
+    raise SystemExit(f"base_datee_verdict_recevable: affirmation attendue sur base fraîche\n{fresh_render}")
+print("base_datee_verdict_recevable: OK (base à jour, verdict affirmé)")
+
+# Le remote avance seul : le dépôt local n'est pas fetché, exactement comme en production.
+git(fixture, "--git-dir", str(remote), "update-ref", "refs/heads/main", pending_head)
+stale_backlog, stale_error = mod.read_branch_backlog(
+    str(repository), now=git_now, timeout_secs=5.0
+)
+if stale_error or stale_backlog is None:
+    raise SystemExit(f"base_perimee_verdict_non_recevable: analyse absente: {stale_error}")
+if stale_backlog["main_freshness"] != "perimee":
+    raise SystemExit(
+        f"base_perimee_verdict_non_recevable: périmée attendue, reçu {stale_backlog['main_freshness']}"
+    )
+if stale_backlog["remote_main_head"] != pending_head:
+    raise SystemExit("base_perimee_verdict_non_recevable: tête distante non lue")
+stale_render = mod.format_branch_backlog(stale_backlog, branch_error=None)
+# Assertion métier : plus aucune affirmation « non mergé » sur une base morte…
+if "LOTS LIVRES NON MERGES :" in stale_render:
+    raise SystemExit(
+        f"base_perimee_verdict_non_recevable: verdict encore affirmé sur base périmée\n{stale_render}"
+    )
+if "base perimee" not in stale_render or "LOTS CANDIDATS" not in stale_render:
+    raise SystemExit(f"base_perimee_verdict_non_recevable: qualification absente\n{stale_render}")
+# …et pas de faux négatif : les lots restent visibles, seule l'affirmation tombe.
+if "origin/pending-lot" not in stale_render:
+    raise SystemExit(f"base_perimee_verdict_non_recevable: lot masqué (faux négatif)\n{stale_render}")
+print("base_perimee_verdict_non_recevable: OK (qualifié, rien de masqué)")
+
+# Le dépôt observé reste inerte malgré la lecture réseau `ls-remote`.
+if git_inventory(repository) != before:
+    raise SystemExit("base_perimee_lecture_seule: dépôt muté par la mesure de fraîcheur")
+print("base_perimee_lecture_seule: OK")
+git(fixture, "--git-dir", str(remote), "update-ref", "refs/heads/main", branch_backlog["main_head"])
+
 # Un Git lent est borné globalement et rend une indisponibilité, jamais [].
 slow_git = fixture / "git-slow"
 slow_git.write_text("#!/bin/sh\nexec sleep 10\n", encoding="utf-8")
