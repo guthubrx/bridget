@@ -21,7 +21,9 @@ use crate::domain::guichet::{
     DelegateMutationStatus, MutationReply, RegistreAddMutationStatus, RequeteCanonique,
     RequeteGuichet,
 };
-use crate::domain::{CoutMissionAgent, CoutMissionCompteurs, DecisionCoordination};
+use crate::domain::{
+    CoutMissionAgent, CoutMissionCompteurs, DecisionCoordination, ObjectiveOpeningPermit,
+};
 use crate::store::{MaicieStore, StoreError, StoredGuichetReply};
 use bridget_transport::greffe_authorization::{
     GreffeAuthorizationGate, GreffeAuthorizationRefusal, GreffeEffectAuthorization,
@@ -164,6 +166,7 @@ pub fn apply_guichet_mutation(
                 .ok_or(GreffeServiceError::Invalid("horizon Bridget hors borne"))?;
             let delegate_request = DelegateRequest {
                 goal: &request.goal,
+                opening_permit: ObjectiveOpeningPermit::auto_generated(),
                 explicit_target: request.explicit_target.as_deref(),
                 required_tags: &request.required_tags,
                 duration: request.duration,

@@ -33,6 +33,7 @@ fn seed(database: &Path) -> maicie::app::DelegationCreated {
     }];
     let request = DelegateRequest {
         goal: "observer la projection",
+        opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
         explicit_target: Some("prospective"),
         required_tags: &[],
         duration: ClasseDuree::Normale,

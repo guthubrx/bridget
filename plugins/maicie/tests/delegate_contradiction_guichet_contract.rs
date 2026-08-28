@@ -33,6 +33,7 @@ fn root(label: &str) -> PathBuf {
 fn seed_objective(store: &mut MaicieStore) -> Uuid {
     let request = DelegateRequest {
         goal: "objectif préalable",
+        opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
         explicit_target: Some("prospective"),
         required_tags: &[],
         duration: ClasseDuree::Normale,
