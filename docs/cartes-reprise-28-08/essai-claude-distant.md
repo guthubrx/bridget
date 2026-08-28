@@ -41,7 +41,10 @@ portait. Cette carte ne repare pas le manque de contexte ; elle rend le manque e
 - Domaine : `bridget`
 - Etat a la reconstitution : `connected`, `last_seen_secs` = 3621, `reconnect_count` = 0
 - Production au ledger : **59 messages emis**, du 27/08 06:39 au **27/08 21:30**
-- Delegations a son nom : **5**
+- Delegations a son nom : **5 au total — dont 3 a l etat `creee` et 2 `soldee_par_cloture`**.
+  La carte d arrivee du successeur annoncait 3, celle-ci 5 : **les deux chiffres sont exacts**, ils ne
+  comptent pas la meme chose. Mesure du 28/08 16h48. Meme motif que le reste de la journee — deux nombres
+  justes se contredisent tant qu on ne nomme pas ce qu on compte.
 - Successeur : `essai-claude-distant-flux`, `conn-288`, ne le 28/08 vers 15h10
 
 ## Ce qui est CONNU par temoignage, non par mesure du referent
@@ -60,8 +63,12 @@ portait. Cette carte ne repare pas le manque de contexte ; elle rend le manque e
 
 ## Ce que son successeur a etabli lui-meme, et qui vaut mieux que cette carte
 
-- `/home/moi/revue/essai-claude-distant` **n est pas un depot git** : ni branche ni historique.
-  Toute mission de code exige de lui donner un point de travail d abord.
+- ~~`/home/moi/revue/essai-claude-distant` n est pas un depot git~~ — **FAUX, RETIRE LE 28/08 16h48.**
+  Le poste reel est un cran plus bas : `/home/moi/revue/essai-claude-distant/bridget` **EST un depot** —
+  branche `main`, HEAD `e75aa3b`, **1117 commits**, arbre propre. L erreur vient du premier rapport du
+  successeur, qui avait teste la seule racine ; le referent l a reprise sans verifier, puis a fonde sur
+  elle sa decision de ne pas lui confier de mandat de code. Le successeur l a lui-meme retiree.
+  **Il n a besoin d aucun point de travail : il en a un.**
 - Aucune memoire projet : `MEMORY.md` absent.
 - Il a refuse d attester une correction de domaine qu il n avait pas mesuree avant : il atteste
   l etat final, pas le delta. Seul des dix a avoir fait cette distinction.
