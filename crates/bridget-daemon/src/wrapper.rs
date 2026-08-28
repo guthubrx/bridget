@@ -4849,10 +4849,19 @@ mod prompt_tests {
             .lines()
             .find(|line| line.starts_with("Instruction : "))
             .unwrap_or("");
-        assert_eq!(
-            instruction_line,
-            format!("Instruction : {PREFIXE}\\n{FAUSSE_CONSIGNE}"),
-            "attente en dur (LF échappé, une seule ligne); carte produite:\n{context}"
+        // Assertion de PROPRIÉTÉ et non de forme exacte. L'égalité stricte qui
+        // occupait cette place a été rouge en permanence dès qu'un bloc a été
+        // ajouté au rendu en aval — « IDENTIFIANTS DU MANDAT » le 28/08 — alors
+        // que l'échappement, seul objet de la garde, n'avait pas bougé. Un
+        // témoin rouge en permanence ne signale plus rien : la vraie régression
+        // aurait échoué de la même façon et personne n'aurait vu la différence.
+        // `starts_with` reste sensible à ce qui compte — si le LF cessait d'être
+        // échappé, la ligne Instruction s'arrêterait au préfixe et ne
+        // contiendrait plus la fausse consigne — sans être fragile aux ajouts
+        // légitimes qui suivent.
+        assert!(
+            instruction_line.starts_with(&format!("Instruction : {PREFIXE}\\n{FAUSSE_CONSIGNE}")),
+            "le LF doit rester échappé et la fausse consigne rester dans la ligne Instruction; carte produite:\n{context}"
         );
 
         fs::remove_dir_all(root).unwrap();
