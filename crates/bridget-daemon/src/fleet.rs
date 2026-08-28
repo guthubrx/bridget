@@ -16,7 +16,7 @@ use crate::recovery_trace::{
 use bridget_transport::ResolvedAgentDefinition;
 use log::warn;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::fmt;
 use std::io;
@@ -423,6 +423,18 @@ impl FleetSupervisor {
 
     pub fn persistent_named(&self) -> Vec<(String, NamedRosterEntry)> {
         self.roster.persistent_entries()
+    }
+
+    /// Persistance attestée par nom, pour publication à l'annuaire.
+    ///
+    /// Lue au roster nommé et non à l'historique `spawn_commands` : le roster
+    /// ne garde qu'une entrée par nom, donc la dernière génération connectée,
+    /// alors que la table conserve toutes les générations et rend une ligne
+    /// arbitraire dès qu'on la groupe sans trier. C'est aussi la source que
+    /// consulte `drain_non_persistent_named` : l'annuaire publie donc
+    /// exactement ce qui décidera du drain.
+    pub fn named_persistence(&self) -> BTreeMap<String, bool> {
+        self.roster.persistence_by_name()
     }
 
     pub fn forget_named(&self, name: &str) {

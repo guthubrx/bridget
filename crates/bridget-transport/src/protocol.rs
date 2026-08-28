@@ -1725,6 +1725,13 @@ pub struct AgentInfo {
     /// Dernier espace libre attesté par cette machine. Informatif seulement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disk_space: Option<DiskSpaceFact>,
+    /// L'agent survit-il au redémarrage du service ? `None` quand aucune
+    /// entrée de flotte ne l'atteste — un agent lancé hors `bridget spawn`
+    /// n'est pas drainé, la question ne se pose pas pour lui. Toujours
+    /// sérialisé, `null` compris : une ronde doit pouvoir distinguer
+    /// « indéterminable » d'un daemon trop ancien pour publier le champ.
+    #[serde(default)]
+    pub persistent: Option<bool>,
 }
 
 /// Forme fil de lecture : accepte l'ancien champ mono-fenêtre `rate_limit`
@@ -1763,6 +1770,8 @@ struct AgentInfoWire {
     model_mismatch: Option<ModelMismatchFact>,
     #[serde(default)]
     disk_space: Option<DiskSpaceFact>,
+    #[serde(default)]
+    persistent: Option<bool>,
 }
 
 impl From<AgentInfoWire> for AgentInfo {
@@ -1791,6 +1800,7 @@ impl From<AgentInfoWire> for AgentInfo {
             rate_limits,
             model_mismatch: wire.model_mismatch,
             disk_space: wire.disk_space,
+            persistent: wire.persistent,
         }
     }
 }

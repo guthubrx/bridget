@@ -3107,7 +3107,7 @@ fn cmd_agents(args: &[String]) {
         println!("Agents connectes :");
         for agent in &status.agents {
             println!(
-                "  {} ({}) [{}] — {} / {} via {} (canal {}) — {} / {} [{}]",
+                "  {} ({}) [{}] — {} / {} via {} (canal {}) — {} / {} [{}] — persiste {}",
                 agent.name,
                 agent.agent_type,
                 cell(agent.domain.as_deref()),
@@ -3117,7 +3117,8 @@ fn cmd_agents(args: &[String]) {
                 cell(agent.channel.as_deref()),
                 format_model(agent),
                 cell(agent.effort.as_deref()),
-                agent.state
+                agent.state,
+                format_persistent(agent)
             );
         }
     }
@@ -3193,6 +3194,7 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
     });
     let rate_limit_w = column("LIMITE", &|a: &AgentInfo| format_rate_limit(a));
     let disk_w = column("DISQUE", &|a: &AgentInfo| format_disk_space(a));
+    let persistent_w = column("PERSIST", &|a: &AgentInfo| format_persistent(a).to_string());
 
     let mut output = String::new();
     match filter {
@@ -3201,14 +3203,14 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
     }
     writeln!(
         output,
-        "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {:<disk_w$}  ÉTAT",
-        "NOM", "TYPE", "HÔTE", "OS", "TRANSPORT", "CANAL", "MODE", "LOCALISATION", "DOMAINE", "MODÈLE", "EFFORT", "LIMITE", "DISQUE"
+        "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {:<disk_w$}  {:<persistent_w$}  ÉTAT",
+        "NOM", "TYPE", "HÔTE", "OS", "TRANSPORT", "CANAL", "MODE", "LOCALISATION", "DOMAINE", "MODÈLE", "EFFORT", "LIMITE", "DISQUE", "PERSIST"
     )
     .unwrap();
     for agent in agents {
         writeln!(
             output,
-            "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {:<disk_w$}  {}",
+            "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {:<disk_w$}  {:<persistent_w$}  {}",
             agent.name,
             agent.agent_type,
             agent.host,
@@ -3222,6 +3224,7 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
             cell(agent.effort.as_deref()),
             format_rate_limit(agent),
             format_disk_space(agent),
+            format_persistent(agent),
             agent.state
         )
         .unwrap();
@@ -3234,6 +3237,20 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
 /// colonnes.
 fn cell(value: Option<&str>) -> &str {
     value.unwrap_or("—")
+}
+
+/// Survie au redémarrage du service, telle qu'attestée par la flotte.
+///
+/// `—` n'est pas un « non » : il dit qu'aucune entrée de flotte ne couvre cet
+/// agent, donc que rien ne le drainera au redémarrage. Confondre les deux
+/// ferait croire à une disparition programmée et pousserait à relancer un
+/// agent sain, c'est-à-dire à détruire son contexte.
+fn format_persistent(agent: &AgentInfo) -> &'static str {
+    match agent.persistent {
+        Some(true) => "oui",
+        Some(false) => "non",
+        None => "—",
+    }
 }
 
 /// Marqueur d'écart : le modèle servi précède l'épinglé. Sans signal de flux,
@@ -4524,6 +4541,7 @@ mod hook_tests {
                 .collect(),
             model_mismatch: None,
             disk_space: None,
+            persistent: None,
         };
         let rendered = format_rate_limit(&agent);
         assert!(rendered.contains("5h 19% rst "), "{rendered}");
@@ -5277,6 +5295,126 @@ mod idempotency_projection_tests {
         }
     }
 
+    /// ORACLE — l'annuaire distingue trois réponses à « survit au redémarrage ? » :
+    /// oui, non, et « nul ne l'atteste ».
+    ///
+    /// Le troisième cas n'est pas un non. Le 28/08, lire un `0` là où la
+    /// question ne se posait pas a failli faire relancer cinq agents sains,
+    /// donc détruire leur contexte. La ligne rendue doit porter la réponse,
+    /// pas seulement l'en-tête.
+    #[test]
+    fn who_distingue_persistant_ephemere_et_non_atteste() {
+        let agent = |name: &str, persistent: Option<bool>| AgentInfo {
+            name: name.to_string(),
+            agent_type: "fixture".to_string(),
+            connection_id: format!("conn-{name}"),
+            host: "local".to_string(),
+            transport: "claude_stream_json".to_string(),
+            channel: Some("ssh-unix".to_string()),
+            mode: Some(PresenceMode::Cli),
+            location: None,
+            os: "Linux".to_string(),
+            state: "connected".to_string(),
+            last_seen_secs: 0,
+            reconnect_count: 0,
+            domain: Some("bridget".to_string()),
+            model: None,
+            effort: None,
+            rate_limits: vec![],
+            model_mismatch: None,
+            disk_space: None,
+            persistent,
+        };
+        let rendered = render_who(
+            &[
+                agent("survivant", Some(true)),
+                agent("ephemere", Some(false)),
+                agent("hors-flotte", None),
+            ],
+            None,
+        );
+
+        assert!(rendered.contains("PERSIST"), "colonne absente de l'en-tête");
+        let ligne = |nom: &str| {
+            rendered
+                .lines()
+                .find(|line| line.contains(nom))
+                .unwrap_or_else(|| panic!("ligne {nom} absente"))
+                .to_string()
+        };
+        assert!(
+            ligne("survivant").contains("  oui  "),
+            "un agent persistant doit se lire « oui » : {}",
+            ligne("survivant")
+        );
+        assert!(
+            ligne("ephemere").contains("  non  "),
+            "un agent qui sera drainé doit se lire « non » : {}",
+            ligne("ephemere")
+        );
+        assert!(
+            !ligne("hors-flotte").contains("non"),
+            "une persistance non attestée ne doit jamais se lire « non » : {}",
+            ligne("hors-flotte")
+        );
+        assert!(
+            ligne("hors-flotte").contains('—'),
+            "une persistance non attestée doit se lire « — » : {}",
+            ligne("hors-flotte")
+        );
+    }
+
+    /// ORACLE — la sortie machine publie toujours la clé, `null` compris.
+    /// Une ronde doit pouvoir distinguer « indéterminable » d'un daemon trop
+    /// ancien pour connaître le champ ; un champ escamoté rendrait les deux
+    /// cas identiques et ramènerait le détour par SQL.
+    #[test]
+    fn json_publie_la_persistance_meme_indeterminee() {
+        let agent = |persistent: Option<bool>| AgentInfo {
+            name: "jc1-flux".to_string(),
+            agent_type: "claude".to_string(),
+            connection_id: "conn-182".to_string(),
+            host: "cartae".to_string(),
+            transport: "claude_stream_json".to_string(),
+            channel: Some("ssh-unix".to_string()),
+            mode: Some(PresenceMode::Cli),
+            location: None,
+            os: "Linux".to_string(),
+            state: "connected".to_string(),
+            last_seen_secs: 0,
+            reconnect_count: 1,
+            domain: Some("bridget".to_string()),
+            model: None,
+            effort: None,
+            rate_limits: vec![],
+            model_mismatch: None,
+            disk_space: None,
+            persistent,
+        };
+
+        let atteste = serde_json::to_value(agent(Some(true))).unwrap();
+        assert_eq!(
+            atteste.get("persistent"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        let inconnu = serde_json::to_value(agent(None)).unwrap();
+        assert_eq!(
+            inconnu.get("persistent"),
+            Some(&serde_json::Value::Null),
+            "la clé doit rester présente et valoir null quand nul ne l'atteste"
+        );
+
+        // Compatibilité descendante : un daemon antérieur n'émet pas la clé,
+        // sa présence relue ne doit pas inventer de persistance.
+        let ancien: AgentInfo = serde_json::from_str(
+            r#"{"name":"vieux","agent_type":"codex","connection_id":"c","host":"h",
+                "transport":"tmux","os":"Linux","state":"connected",
+                "last_seen_secs":0,"reconnect_count":0}"#,
+        )
+        .unwrap();
+        assert_eq!(ancien.persistent, None);
+    }
+
     #[test]
     fn who_affiche_mode_et_localisation_sans_dependre_d_un_tty() {
         let agent = |name: &str, mode: Option<PresenceMode>, location: Option<&str>| AgentInfo {
@@ -5298,6 +5436,7 @@ mod idempotency_projection_tests {
             rate_limits: vec![],
             model_mismatch: None,
             disk_space: None,
+            persistent: None,
         };
         let mut acp = agent("acp-gere", Some(PresenceMode::Acp), None);
         acp.disk_space = Some(bridget_transport::protocol::DiskSpaceFact {
@@ -5362,6 +5501,7 @@ mod idempotency_projection_tests {
             }],
             model_mismatch: None,
             disk_space: None,
+            persistent: None,
         };
         let rendered = format_rate_limit(&agent);
         assert!(rendered.starts_with("5h 19% rst "), "{rendered}");
@@ -5425,6 +5565,7 @@ mod idempotency_projection_tests {
             rate_limits: vec![],
             model_mismatch: None,
             disk_space: None,
+            persistent: None,
         };
         assert_eq!(format_model(&agent), "claude-opus-5");
         agent.model_mismatch = Some(bridget_transport::protocol::ModelMismatchFact {

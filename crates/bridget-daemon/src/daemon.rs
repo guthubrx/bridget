@@ -2280,6 +2280,9 @@ impl DaemonState {
         if purged.is_empty() {
             self.flush_pending_orphan_emitter_notices();
         }
+        // Une seule lecture du roster pour tout l'annuaire : la persistance se
+        // résout ensuite par nom, sans E/S par agent.
+        let persistence = self.fleet.named_persistence();
         let mut agents: Vec<_> = self
             .router
             .list_agents()
@@ -2325,6 +2328,7 @@ impl DaemonState {
                         presence.served_model.as_deref(),
                     ),
                     disk_space: presence.disk_space.clone(),
+                    persistent: persistence.get(&agent.name).copied(),
                 })
             })
             .collect();
@@ -2367,6 +2371,7 @@ impl DaemonState {
                 rate_limits: Vec::new(),
                 model_mismatch: None,
                 disk_space: None,
+                persistent: persistence.get(&record.lease.name).copied(),
             });
         }
         let listed_names: std::collections::HashSet<String> =
@@ -2398,6 +2403,7 @@ impl DaemonState {
                     presence.served_model.as_deref(),
                 ),
                 disk_space: presence.disk_space.clone(),
+                persistent: persistence.get(&presence.name).copied(),
             });
         }
         agents.sort_by(|left, right| left.name.cmp(&right.name));
