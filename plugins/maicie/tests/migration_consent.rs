@@ -1,7 +1,7 @@
 //! Oracles : migration Maicie sous consentement explicite.
 //!
-//! Une base au schéma N-1 ne migre plus à l'ouverture silencieuse. Le flag /
-//! `open_and_migrate` reste le seul consentement. Créer une base neuve
+//! Une base au schéma N-1 ne migre plus à l'ouverture silencieuse. Une preuve
+//! de republication consommable reste le seul consentement. Créer une base neuve
 //! (user_version 0 ET sqlite_master utilisateur vide) n'est pas une migration.
 //! Une base peuplée avec user_version remis à 0 est une porte déguisée : refus.
 //!
@@ -190,7 +190,8 @@ fn base_peuplee_user_version_zero_refuse_sans_mutation() {
     assert_refusal_leaves_schema_untouched(&avant, &apres);
 
     // Avec consentement, la même base avance.
-    let store = MaicieStore::open_and_migrate(&database).unwrap();
+    let store =
+        crate::historical_guichet_receptions::open_after_published_migration(&database).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     drop(store);
     assert_eq!(schema_snapshot(&database).user_version, SCHEMA_VERSION);
@@ -213,7 +214,8 @@ fn base_anterieure_avec_consentement_est_migree() {
     drop(connection);
     assert_eq!(schema_snapshot(&database).user_version, SCHEMA_VERSION - 1);
 
-    let store = MaicieStore::open_and_migrate(&database).unwrap();
+    let store =
+        crate::historical_guichet_receptions::open_after_published_migration(&database).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     drop(store);
     assert_eq!(schema_snapshot(&database).user_version, SCHEMA_VERSION);
@@ -242,7 +244,8 @@ fn migration_v18_pose_le_journal_ferme_des_refus_locaux() {
         .unwrap();
     drop(connection);
 
-    let store = MaicieStore::open_and_migrate(&database).unwrap();
+    let store =
+        crate::historical_guichet_receptions::open_after_published_migration(&database).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     assert_eq!(
         store

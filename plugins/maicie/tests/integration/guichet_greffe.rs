@@ -691,7 +691,8 @@ fn parcours_v16_v17_v18_v19_v20_conserve_les_refus_et_motifs_de_revue() {
     connection.pragma_update(None, "user_version", 16).unwrap();
     drop(connection);
 
-    let store = MaicieStore::open_and_migrate(&database).unwrap();
+    let store =
+        crate::historical_guichet_receptions::open_after_published_migration(&database).unwrap();
     drop(store);
     let connection = Connection::open(&database).unwrap();
     let historical: (String, Vec<u8>, Vec<u8>) = connection
@@ -1018,7 +1019,8 @@ fn migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus() {
         .unwrap();
     drop(connection);
 
-    let mut store = MaicieStore::open_and_migrate(&database).unwrap();
+    let mut store =
+        crate::historical_guichet_receptions::open_after_published_migration(&database).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     assert_eq!(
         store
