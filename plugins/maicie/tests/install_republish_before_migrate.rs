@@ -23,10 +23,25 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::thread;
 use std::time::{Duration, Instant};
 
+struct FixtureRoot(PathBuf);
+
+impl std::ops::Deref for FixtureRoot {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for FixtureRoot {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
 
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
-fn unique_root(label: &str) -> PathBuf {
+fn unique_root(label: &str) -> FixtureRoot {
     let n = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
     let root = std::env::temp_dir().join(format!(
         "maicie-republish-oracle-{label}-{}-{n}",
@@ -35,7 +50,7 @@ fn unique_root(label: &str) -> PathBuf {
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
-    root
+    FixtureRoot(root)
 }
 
 fn write_config(root: &Path, database: &Path) -> PathBuf {
@@ -80,6 +95,7 @@ fn database_user_version(database: &Path) -> i64 {
 
 fn start_local_daemon_identity(socket: &Path) -> thread::JoinHandle<()> {
     let socket = socket.to_owned();
+    let _ = fs::remove_file(&socket);
     let local_host = bridget_core::local_host();
     assert!(bridget_core::host_is_attested(&local_host));
     let (ready_tx, ready_rx) = mpsc::channel();
@@ -143,6 +159,7 @@ fn migrate_cli_repare_la_divergence_du_binaire_installe() {
         "précondition : installé ≠ migrateur"
     );
 
+    let daemon = start_local_daemon_identity(&root.join("bridget.sock"));
     let output = Command::new(&migrateur)
         .args(["migrate", "--config", &config.display().to_string()])
         .env(INSTALL_BIN_ENV, &install_bin)
@@ -156,6 +173,7 @@ fn migrate_cli_repare_la_divergence_du_binaire_installe() {
         String::from_utf8_lossy(&output.stderr),
         String::from_utf8_lossy(&output.stdout),
     );
+    daemon.join().unwrap();
 
     assert!(
         files_equal(&install_bin, &migrateur),
@@ -194,9 +212,7 @@ fn migrate_cli_repare_la_divergence_du_binaire_installe() {
         "le binaire installé doit préflighter la base migrée: {}",
         String::from_utf8_lossy(&preflight.stderr)
     );
-
     assert_eq!(database_user_version(&database), SCHEMA_VERSION);
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -212,6 +228,7 @@ fn echec_reel_republication_avant_migration_ne_laisse_pas_greffe_en_avance() {
     let install_dir = install_bin.parent().unwrap();
     fs::set_permissions(install_dir, fs::Permissions::from_mode(0o500)).unwrap();
 
+    let daemon = start_local_daemon_identity(&root.join("bridget.sock"));
     let output = Command::new(&migrateur)
         .args(["migrate", "--config", &config.display().to_string()])
         .env(INSTALL_BIN_ENV, &install_bin)
@@ -223,6 +240,7 @@ fn echec_reel_republication_avant_migration_ne_laisse_pas_greffe_en_avance() {
         !output.status.success(),
         "migrate doit échouer quand la republication est refusée"
     );
+    daemon.join().unwrap();
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("Permission denied"),
         "l'échec doit venir des permissions réelles, stderr={}",
@@ -243,7 +261,6 @@ fn echec_reel_republication_avant_migration_ne_laisse_pas_greffe_en_avance() {
         !files_equal(&install_bin, &migrateur),
         "pas de divergence inversée : greffe en avance, installé en retard"
     );
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -292,7 +309,6 @@ fn lien_installe_est_remplace_par_un_fichier_independant_avant_migration() {
         "SOURCE-INDEPENDANTE"
     );
     assert_eq!(database_user_version(&database), SCHEMA_VERSION - 1);
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -319,7 +335,6 @@ fn lien_intermediaire_vers_le_chantier_est_refuse_sans_migrer() {
     assert_eq!(fs::read(&install_bin).unwrap(), install_avant);
     assert_eq!(database_user_version(&database), SCHEMA_VERSION - 1);
     fs::remove_file(install_dir).unwrap();
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -341,7 +356,6 @@ fn memes_octets_avec_mode_invalide_sont_republies() {
         & 0o777;
     assert_eq!(mode, 0o755);
     assert_eq!(database_user_version(&database), SCHEMA_VERSION - 1);
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -385,7 +399,6 @@ fn binaire_neuf_sur_greffe_ancien_refuse_parlant_puis_reprend_la_migration() {
     daemon.join().unwrap();
     assert_eq!(database_user_version(&database), SCHEMA_VERSION);
     assert!(files_equal(&install_bin, &migrateur));
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -398,6 +411,7 @@ fn echec_migration_et_restauration_est_signale_sans_masquer_les_deux_etats() {
     let verrou = rusqlite::Connection::open(&database).unwrap();
     verrou.execute_batch("BEGIN IMMEDIATE").unwrap();
 
+    let daemon = start_local_daemon_identity(&root.join("bridget.sock"));
     let child = Command::new(&migrateur)
         .args(["migrate", "--config", &config.display().to_string()])
         .env(INSTALL_BIN_ENV, &install_bin)
@@ -417,6 +431,7 @@ fn echec_migration_et_restauration_est_signale_sans_masquer_les_deux_etats() {
     fs::set_permissions(install_dir, fs::Permissions::from_mode(0o500)).unwrap();
 
     let output = child.wait_with_output().expect("attendre l'échec réel");
+    daemon.join().unwrap();
     fs::set_permissions(install_dir, fs::Permissions::from_mode(0o700)).unwrap();
     verrou.execute_batch("ROLLBACK").unwrap();
 
@@ -438,7 +453,6 @@ fn echec_migration_et_restauration_est_signale_sans_masquer_les_deux_etats() {
         "la restauration réellement refusée laisse le neuf installé"
     );
     assert!(files_equal(&install_bin, &migrateur));
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -458,6 +472,7 @@ fn erreur_identite_apres_commit_conserve_le_binaire_neuf() {
         .unwrap();
     drop(connection);
 
+    let daemon = start_local_daemon_identity(&root.join("bridget.sock"));
     let output = Command::new(&migrateur)
         .args(["migrate", "--config", &config.display().to_string()])
         .env(INSTALL_BIN_ENV, &install_bin)
@@ -471,6 +486,7 @@ fn erreur_identite_apres_commit_conserve_le_binaire_neuf() {
         "l'échec doit naître dans la transaction d'identité: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    daemon.join().unwrap();
     assert_eq!(
         database_user_version(&database),
         SCHEMA_VERSION,
@@ -481,7 +497,6 @@ fn erreur_identite_apres_commit_conserve_le_binaire_neuf() {
         files_equal(&install_bin, &migrateur),
         "un échec après commit ne doit jamais ressusciter l'ancien installé"
     );
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -512,7 +527,6 @@ fn relecture_durable_impossible_conserve_le_binaire_neuf() {
     assert_eq!(database_user_version(&database), SCHEMA_VERSION - 1);
     assert_ne!(fs::read(&install_bin).unwrap(), ancien);
     assert!(files_equal(&install_bin, &migrateur));
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -616,7 +630,6 @@ fn exclusion_commune_interdit_commit_19_pendant_restauration_ancien() {
     assert_eq!(database_user_version(&database), SCHEMA_VERSION);
     assert!(files_equal(&install_bin, &migrateur));
     drop(migrated);
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -642,7 +655,6 @@ fn preuve_invalidee_avant_consommation_ne_peut_pas_migrer() {
     ));
     assert_eq!(database_user_version(&database), SCHEMA_VERSION - 1);
     assert_eq!(fs::read(&install_bin).unwrap(), ancien);
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -662,5 +674,4 @@ fn preuve_de_republication_lie_le_consentement_au_greffe() {
 
     assert_eq!(database_user_version(&database), SCHEMA_VERSION);
     assert!(files_equal(&install_bin, &migrateur));
-    fs::remove_dir_all(root).unwrap();
 }
