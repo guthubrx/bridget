@@ -351,7 +351,25 @@ fn capture_runtime_agent(
 fn capture_reason(error: &BridgetClientError) -> String {
     match error {
         BridgetClientError::Timeout { .. } => "budget_capture_epuise".to_string(),
-        _ => "annuaire_bridget_indisponible".to_string(),
+        BridgetClientError::ClientRejected { .. }
+        | BridgetClientError::VersionUnsupported { .. }
+        | BridgetClientError::CapabilityMissing { .. } => {
+            "negociation_daemon_refusee".to_string()
+        }
+        BridgetClientError::Closed | BridgetClientError::ConnectionUnusable => {
+            "liaison_bridget_fermee".to_string()
+        }
+        BridgetClientError::Decode { .. }
+        | BridgetClientError::Protocol(_)
+        | BridgetClientError::InvalidEnvelope(_)
+        | BridgetClientError::Encode(_) => "reponse_bridget_illisible".to_string(),
+        BridgetClientError::Connect { .. }
+        | BridgetClientError::Read(_)
+        | BridgetClientError::Write(_)
+        | BridgetClientError::RemoteNack { .. }
+        | BridgetClientError::FrameTooLarge { .. }
+        | BridgetClientError::ItemLimitExceeded { .. }
+        | BridgetClientError::InvalidLimits(_) => "annuaire_bridget_indisponible".to_string(),
     }
 }
 
@@ -3544,6 +3562,7 @@ mod tests {
         CliError, Command, DelegateError, DelegateOutput, MigrateArgs, PlageAction, PlageArgs,
         RegistreAction, RegistreArgs, SchemaPreflightOutput, candidates_from,
         daemon_identity_failure_detail, daemon_store_is_local, delegate_error_for_cli,
+        capture_reason,
         format_routine_approval_screen, open_store_with_reconciliation, parse_command,
         peel_migrate_flag, routine_approval_preflight, run, run_migrate, run_plage, run_registre,
         sanitize_terminal,
@@ -3686,6 +3705,15 @@ mod tests {
             )),
             "rapport d'identité invalide"
         );
+    }
+
+    #[test]
+    fn capture_reason_expose_le_refus_reel_du_daemon() {
+        let error = BridgetClientError::ClientRejected {
+            reason: serde_json::json!({"code": "invalid_issuer_scope"}),
+        };
+        assert_eq!(capture_reason(&error), "negociation_daemon_refusee");
+        assert_ne!(capture_reason(&error), "annuaire_bridget_indisponible");
     }
 
     /// Le refus fédéré doit précéder l'ouverture SQLite. Ce témoin couvre le
