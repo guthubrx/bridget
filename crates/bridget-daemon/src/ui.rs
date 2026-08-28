@@ -34,6 +34,12 @@ const MAX_UI_AGENT_NAME_BYTES: usize = 100;
 const MAX_UI_SSE_EVENTS: usize = 20_000;
 const MAX_UI_RECONNECT_ATTEMPTS: usize = 50;
 const UI_RECONNECT_DELAY: Duration = Duration::from_millis(100);
+/// La rétention des présences côté daemon s'appuie sur `link_seen`, rafraîchi
+/// par le heartbeat. Une présence qui ne bat pas est donc jetée au bout de
+/// PRESENCE_RETENTION (300 s), même si sa socket est intacte. L'humain
+/// disparaissait ainsi de l'annuaire cinq minutes après son dernier message,
+/// et toute réponse à un humain silencieux était rejetée.
+const HUMAN_PRESENCE_HEARTBEAT: Duration = Duration::from_secs(3);
 /// Relecture ledger pendant un watch : le sortant référent→humain n'apparaît
 /// jamais au journal ; sans ce rythme le fil reste figé après l'ouverture.
 const UI_THREAD_LEDGER_POLL: Duration = Duration::from_millis(400);
@@ -325,6 +331,29 @@ fn open_human_presence(
     }
 
     let alive = Arc::new(AtomicBool::new(true));
+
+    // Battement de la présence humaine. Le thread de lecture ci-dessous est
+    // bloqué sur read_daemon et ne peut donc pas émettre lui-même ; l'écrivain
+    // est partagé, un second thread suffit. Sans ce battement la présence est
+    // valide cinq minutes puis jetée, alors que la socket reste ouverte.
+    let heartbeat_alive = Arc::clone(&alive);
+    let heartbeat_writer = Arc::clone(&writer);
+    thread::spawn(move || {
+        while heartbeat_alive.load(Ordering::Acquire) {
+            thread::sleep(HUMAN_PRESENCE_HEARTBEAT);
+            if !heartbeat_alive.load(Ordering::Acquire) {
+                break;
+            }
+            let mut writer_guard = heartbeat_writer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if send_daemon(&mut writer_guard, &WrapperToDaemon::Heartbeat).is_err() {
+                heartbeat_alive.store(false, Ordering::Release);
+                break;
+            }
+        }
+    });
+
     let thread_alive = Arc::clone(&alive);
     thread::spawn(move || {
         while let Ok(event) = read_daemon(&mut reader) {
@@ -2053,6 +2082,68 @@ mod tests {
         let error = post_ui_message(&config, &runtime, &body).unwrap_err();
         assert_eq!(error.1, "human_sender_unregistered");
         assert!(error.2.contains("présence UI humaine refusée"));
+        server.join().unwrap();
+        let _ = std::fs::remove_file(socket_path);
+    }
+
+    #[test]
+    fn presence_humaine_bat_pour_survivre_a_la_retention() {
+        // Mesure du 28/08 : l'humain disparaissait de l'annuaire cinq minutes
+        // apres son dernier message, socket pourtant intacte. Cause : le retain
+        // du daemon s'appuie sur link_seen, rafraichi par le heartbeat, et la
+        // presence UI n'en emettait aucun. Consequence directe : impossible de
+        // repondre a un humain silencieux — le cas d'usage meme du referent.
+        // Ce temoin exige un Heartbeat apres l'inscription. Retirer le thread
+        // de battement laisse la lecture bloquer jusqu'au delai et le tue.
+        let socket_path = std::env::temp_dir().join(format!(
+            "bridget-ui-heartbeat-{}.sock",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let (battement, recu) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::Register { .. }
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::Registered {
+                    name: UI_SENDER.to_string(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::JournalReady
+            ));
+            // La trame suivante doit etre le battement, et non le silence.
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            battement
+                .send(decode::<WrapperToDaemon>(line.trim()).unwrap())
+                .unwrap();
+        });
+
+        let presence = open_human_presence(&socket_path, None).unwrap();
+        let trame = recu
+            .recv_timeout(HUMAN_PRESENCE_HEARTBEAT * 4)
+            .expect("la presence humaine doit battre avant d'etre jetee par le retain");
+        assert!(
+            matches!(trame, WrapperToDaemon::Heartbeat),
+            "battement attendu pour rafraichir link_seen ; reçu {trame:?}"
+        );
+        drop(presence);
         server.join().unwrap();
         let _ = std::fs::remove_file(socket_path);
     }
