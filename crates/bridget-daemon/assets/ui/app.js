@@ -2871,7 +2871,16 @@
       });
     });
 
+    const ledgerUserMessages = new Set(
+      projected
+        .filter((entry) => entry.kind === "message" && entry.role === "user" && !entry.deliveryId)
+        .map((entry) => `${entry.agent || ""}\u0000${entry.text || ""}`),
+    );
     return projected
+      .filter((entry) => !(entry.kind === "message"
+        && entry.role === "user"
+        && entry.deliveryId
+        && ledgerUserMessages.has(`${entry.agent || ""}\u0000${entry.text || ""}`)))
       .sort((left, right) => (left.at || 0) - (right.at || 0) || left.__order - right.__order)
       .map(({ __order, ...entry }) => entry);
   }
@@ -3792,6 +3801,8 @@
           unknown_recipient: "agent inconnu",
           agent_stopped: "agent arrêté",
           daemon_unavailable: "daemon indisponible",
+          human_sender_unregistered: "émetteur humain non inscrit",
+          send_failed: "envoi refusé",
         };
         nodes.sendState.textContent = labels[error.message] || "envoi refusé";
       } finally {

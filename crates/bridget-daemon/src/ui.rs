@@ -561,6 +561,7 @@ struct UiSendAcceptedV1 {
 struct UiSendErrorV1 {
     version: u8,
     code: &'static str,
+    message: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -651,12 +652,13 @@ fn serve_connection(
         ("GET", "/") => write_asset(stream, "text/html; charset=utf-8", UI_INDEX, if_none_match),
         ("POST", "/v1/send") => match post_ui_message(config, runtime, &request.body) {
             Ok(response) => write_json(stream, 202, &response),
-            Err((status, code)) => write_json(
+            Err((status, code, message)) => write_json(
                 stream,
                 status,
                 &UiSendErrorV1 {
                     version: UI_VERSION,
                     code,
+                    message,
                 },
             ),
         },
@@ -708,22 +710,24 @@ fn post_ui_message(
     config: &UiRelayConfig,
     runtime: &UiRelayRuntime,
     body: &[u8],
-) -> Result<UiSendAcceptedV1, (u16, &'static str)> {
+) -> Result<UiSendAcceptedV1, (u16, &'static str, String)> {
     let request: UiSendRequestV1 =
-        serde_json::from_slice(body).map_err(|_| (400, "invalid_body"))?;
+        serde_json::from_slice(body).map_err(|_| (400, "invalid_body", "corps JSON invalide".to_string()))?;
     if request.version != UI_VERSION || request.body.trim().is_empty() {
-        return Err((400, "invalid_body"));
+        return Err((400, "invalid_body", "corps de message invalide".to_string()));
     }
-    validate_agent(&request.to).map_err(|_| (404, "unknown_recipient"))?;
+    validate_agent(&request.to).map_err(|_| (404, "unknown_recipient", "destinataire inconnu".to_string()))?;
 
-    let agents = read_agent_list(&config.daemon_socket).map_err(|_| (503, "daemon_unavailable"))?;
-    validate_ui_recipient(&agents, &request.to)?;
+    let agents = read_agent_list(&config.daemon_socket).map_err(|error| (503, "daemon_unavailable", error.to_string()))?;
+    validate_ui_recipient(&agents, &request.to)
+        .map_err(|(status, code)| (status, code, "destinataire indisponible".to_string()))?;
     if request.reply {
         runtime
             .ensure_human_presence(&config.daemon_socket)
-            .map_err(|_| (503, "daemon_unavailable"))?;
+            .map_err(|error| (503, "human_sender_unregistered", error.to_string()))?;
     }
-    send_ui_message(&config.daemon_socket, request).map_err(|_| (503, "daemon_unavailable"))
+    send_ui_message(&config.daemon_socket, request)
+        .map_err(|error| (503, "send_failed", error.to_string()))
 }
 
 fn post_ui_search(
