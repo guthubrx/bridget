@@ -6,6 +6,7 @@ mod connection_channel;
 pub mod daemon;
 pub mod desired_state;
 pub mod disk_hygiene;
+pub mod disk_trend;
 pub mod fleet;
 pub mod greffe_policy_refresh;
 pub mod idempotency;

@@ -345,6 +345,42 @@ fn unix_timestamp() -> i64 {
 // Constante pour la période de grâce des timeouts (M-004)
 const TIMEOUT_GRACE_PERIOD: u64 = 30; // secondes
 
+/// Plancher d'échéance quand un humain est de la partie (émetteur OU
+/// destinataire).
+///
+/// Mesure du 28/08 sur `tracked_requests` : 291 expirations, dont **220 à
+/// 60 s** (76 %). Deux demandes de l'humain en font partie — `0f2c81ee89924`,
+/// créée 27/08 18:31:19, expirée 18:32:20, soit **61 secondes**, pendant que
+/// l'humain mettait huit heures à répondre. Et `bridget → humain` a expiré en
+/// 120 s le 28/08 à 16:31 pendant qu'il vivait sa journée.
+///
+/// Une fenêtre de 60 s est calibrée pour un agent, dont le tour est borné par
+/// une boucle. Un humain n'a pas de boucle : appliquée à lui, la garde
+/// n'échantillonne pas un silence anormal, elle mesure le fait qu'il est
+/// humain. Elle expire donc *systématiquement*, et un signal qui se déclenche
+/// toujours n'est plus un signal.
+const HUMAN_REPLY_TIMEOUT_SECS: u64 = 24 * 60 * 60;
+
+/// Échéance effective d'une demande suivie.
+///
+/// `implique_humain` vaut vrai dès qu'un humain est à l'une des deux
+/// extrémités. Le plancher ne **remplace** pas le délai demandé par
+/// l'émetteur : il le relève. Un émetteur qui réclame plus de 24 h le garde.
+///
+/// La garde elle-même est préservée dans tous les cas — c'est un plancher, pas
+/// une suppression. Une demande vers un agent mort continue d'expirer à sa
+/// fenêtre d'origine, et une demande vers un humain finit par expirer aussi :
+/// on ne remplace pas une fausse alerte par une file qui ne se vide jamais.
+///
+/// Complexité : O(1).
+fn effective_reply_timeout(timeout_secs: u64, implique_humain: bool) -> u64 {
+    if implique_humain {
+        timeout_secs.max(HUMAN_REPLY_TIMEOUT_SECS)
+    } else {
+        timeout_secs
+    }
+}
+
 /// Vrai si un tour `busy` a dépassé notify_timeout + grâce et doit redevenir
 /// mandatable. Sans `busy_since`, on retombe sur `capacity_seen` (Register
 /// historique / upgrade à chaud).
@@ -4624,9 +4660,27 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
         .map(|(connection_id, _)| connection_id.clone())
         .collect();
 
+    // Les humains sont reconnus par leur TYPE d'inscription à l'annuaire, pas
+    // par leur nom : `agent_type == "ui"` est ce que pose `ui.rs` au moment de
+    // l'enregistrement. Un humain renommé reste couvert ; un agent qui se
+    // nommerait « humain » ne l'est pas.
+    let humains: std::collections::HashSet<String> = state
+        .presences
+        .values()
+        .filter(|presence| presence.agent_type == "ui")
+        .map(|presence| presence.name.clone())
+        .collect();
+
     for pending in state.pending_replies.iter_mut() {
         let elapsed = now.duration_since(pending.created_at).as_secs();
-        let timeout = pending.timeout_secs;
+        // Les deux extrémités comptent : `humain → agent` expirait aussi vite
+        // que `agent → humain`, et les deux sens ont été mesurés le 28/08.
+        let implique_humain =
+            humains.contains(&pending.to) || humains.contains(&pending.from);
+        // Le timeout effectif pilote AUSSI les paliers de relance (`timeout/3`,
+        // `2*timeout/3`) : relever le plancher évite du même geste de rappeler
+        // un humain toutes les vingt secondes.
+        let timeout = effective_reply_timeout(pending.timeout_secs, implique_humain);
         if elapsed >= timeout {
             pending.escalation_level = 3;
             timeout_candidates.push((
@@ -15766,6 +15820,141 @@ mod presence_tests {
         assert!(state.router.get_agent("agent-2").is_none());
         drop(state);
         let _ = std::fs::remove_dir_all(process_root);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    /// (GARDE) Le plancher humain relève l'échéance sans supprimer la garde.
+    /// Mutant : retirer le `.max(HUMAN_REPLY_TIMEOUT_SECS)` → la demande
+    /// humaine retombe à 60 s et l'assertion meurt. Mutant : appliquer le
+    /// plancher à tout le monde → l'agent cesse d'expirer et meurt aussi.
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_GARDE_plancher_humain_releve_l_echeance_sans_supprimer_la_garde() {
+        // Cas mesuré le 28/08 : demande `0f2c81ee89924`, fenêtre 60 s, expirée
+        // en 61 s pendant que l'humain mettait huit heures à répondre.
+        assert_eq!(
+            effective_reply_timeout(60, false),
+            60,
+            "entre agents, la fenêtre demandée reste intacte"
+        );
+        assert!(
+            effective_reply_timeout(60, true) > 61,
+            "une demande impliquant un humain ne doit plus expirer en 61 secondes"
+        );
+        assert_eq!(
+            effective_reply_timeout(60, true),
+            HUMAN_REPLY_TIMEOUT_SECS,
+            "le plancher humain s'applique quand la fenêtre demandée est plus courte"
+        );
+        // Plancher, pas plafond : un émetteur plus patient garde son délai.
+        let plus_patient = HUMAN_REPLY_TIMEOUT_SECS + 3_600;
+        assert_eq!(
+            effective_reply_timeout(plus_patient, true),
+            plus_patient,
+            "le plancher ne doit jamais RACCOURCIR une échéance demandée"
+        );
+        // La garde subsiste : l'échéance humaine reste finie.
+        assert!(
+            HUMAN_REPLY_TIMEOUT_SECS < u64::MAX,
+            "une file qui ne se vide jamais remplacerait une fausse alerte par une fuite"
+        );
+    }
+
+    /// (GARDE) Sur le vrai chemin d'expiration : à 61 s, la demande vers un
+    /// humain n'expire pas, celle vers un agent expire. L'humain est reconnu
+    /// par `agent_type == "ui"`, pas par son nom.
+    /// Mutant : reconnaître par `name == "humain"` → un humain renommé
+    /// expirerait. Mutant : retirer le plancher → les DEUX expirent et le
+    /// compte d'expirations passe à 2.
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_GARDE_a_61_secondes_l_humain_n_expire_pas_et_l_agent_expire() {
+        let (mut state, config) = state_with_registered_agent("garde-humain");
+        // L'humain s'inscrit avec le type que pose `ui.rs`, et sous un nom qui
+        // n'est PAS « humain » : la reconnaissance doit être structurelle.
+        state.presences.insert(
+            "instance-humain".to_string(),
+            Presence {
+                name: "operateur".to_string(),
+                agent_type: "ui".to_string(),
+                host: "localhost".to_string(),
+                transport: "cli".to_string(),
+                channel: Some("ssh-unix".to_string()),
+                mode: None,
+                location: None,
+                journal_available: false,
+                os: "linux".to_string(),
+                state: "connected".to_string(),
+                busy_since: None,
+                capacity_seen: Instant::now(),
+                link_seen: Instant::now(),
+                reconnect_count: 0,
+                model: None,
+                effort: None,
+                rate_limits: Default::default(),
+                served_model: None,
+                derived_domain: None,
+                domain: None,
+                dnd_until: None,
+                disk_space: None,
+            },
+        );
+        // `claim_timeout` n'émet que pour une demande réellement suivie en
+        // base : sans ces deux lignes, le témoin passerait au vert sur une
+        // absence d'action, pas sur une garde.
+        state
+            .store
+            .create_request("vers-humain", "bridget", "operateur", 60)
+            .expect("demande suivie vers l'humain");
+        state
+            .store
+            .create_request("vers-agent", "bridget", "agent-2", 60)
+            .expect("demande suivie vers l'agent");
+        let il_y_a_61s = Instant::now()
+            .checked_sub(std::time::Duration::from_secs(61))
+            .expect("61 secondes en arrière");
+        state.pending_replies.push(PendingReply {
+            msg_id: "vers-humain".to_string(),
+            from: "bridget".to_string(),
+            from_conn: "conn-1".to_string(),
+            to: "operateur".to_string(),
+            target_conn: "conn-1".to_string(),
+            timeout_secs: 60,
+            created_at: il_y_a_61s,
+            escalation_level: 0,
+            deferred_level: None,
+        });
+        state.pending_replies.push(PendingReply {
+            msg_id: "vers-agent".to_string(),
+            from: "bridget".to_string(),
+            from_conn: "conn-1".to_string(),
+            to: "agent-2".to_string(),
+            target_conn: "conn-1".to_string(),
+            timeout_secs: 60,
+            created_at: il_y_a_61s,
+            escalation_level: 0,
+            deferred_level: None,
+        });
+
+        let actions = collect_reminder_actions(&mut state, Instant::now());
+        let expires: Vec<&str> = actions
+            .iter()
+            .filter_map(|action| match action {
+                ReminderAction::Timeout { msg_id, .. } => Some(msg_id.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            !expires.contains(&"vers-humain"),
+            "la demande vers un humain ne doit PAS expirer à 61 s, reçu {expires:?}"
+        );
+        assert_eq!(
+            expires,
+            vec!["vers-agent"],
+            "la garde doit rester entière vers un agent, reçu {expires:?}"
+        );
+        drop(state);
         let _ = std::fs::remove_file(config.db_path);
     }
 }
