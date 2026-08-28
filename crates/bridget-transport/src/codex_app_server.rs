@@ -3151,6 +3151,88 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// Un tour NON PILOTABLE (`activeTurnNotSteerable`, mesuré le 28/08 contre
+    /// codex-cli 0.150.1) doit rendre le message à la file PRINCIPALE, pour
+    /// qu'il soit traité au tour suivant — et non le rejouer en boucle dans la
+    /// file de pilotage, ce qui bloquerait tout ce qui suit.
+    ///
+    /// Assertion métier : après l'échéance du premier tour, un SECOND
+    /// `turn/start` est émis — preuve que le message refusé est reparti en mode
+    /// « queue ». Mutant qui le tue : remplacer `state.messages.push_front` par
+    /// `state.steer.push_front` dans la branche non pilotable.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_F_codex_tour_non_pilotable_rend_le_message_a_la_file() {
+        let root = root("temoin-non-pilotable");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 3;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
+                ("BRIDGET_CODEX_STEER_REFUSE".to_string(), "1".to_string()),
+            ],
+            false,
+        )
+        .expect("session native non pilotable");
+
+        let mut premier = message("np-1");
+        premier.id = "codex-np-tour".to_string();
+        transport.deliver(&premier).expect("livraison du premier");
+
+        let attente = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < attente {
+            if fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("\"method\":\"turn/start\"")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        thread::sleep(Duration::from_millis(150));
+
+        let mut second = message("np-2");
+        second.id = "codex-np-refuse".to_string();
+        transport.deliver(&second).expect("livraison du second");
+
+        // Le premier tour tombe sur son échéance (HOLD_TURN), puis le worker
+        // doit reprendre le message rendu à la file principale.
+        let deadline = Instant::now() + Duration::from_secs(14);
+        let mut deux_turn_start = false;
+        while Instant::now() < deadline {
+            let contenu = fs::read_to_string(&trace).unwrap_or_default();
+            let repris = contenu.lines().any(|ligne| {
+                ligne.contains("\"method\":\"turn/start\"")
+                    && ligne.contains("codex-np-refuse")
+            });
+            if repris {
+                deux_turn_start = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(40));
+        }
+        transport.stop();
+
+        let contenu = fs::read_to_string(&trace).unwrap_or_default();
+        assert!(
+            contenu.contains("\"method\":\"turn/steer\""),
+            "le second message devait d'abord être tenté en pilotage; trace={contenu}"
+        );
+        assert!(
+            deux_turn_start,
+            "un tour non pilotable doit rendre le message à la file : \
+             aucun second turn/start observé, le message est resté bloqué en \
+             pilotage; trace={contenu}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn journal_echeance_fixture(label: &str) -> Vec<Value> {
         let root = root(label);
         let trace = root.join("trace.jsonl");
