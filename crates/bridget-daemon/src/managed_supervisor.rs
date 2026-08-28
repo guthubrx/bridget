@@ -6,14 +6,13 @@
 
 use log::warn;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::daemon::{
-    spawn_managed_supervisor_thread, DaemonConfig, ManagedSupervisorCommand,
-    ManagedSupervisorEvent,
+    DaemonConfig, ManagedSupervisorCommand, ManagedSupervisorEvent, spawn_managed_supervisor_thread,
 };
 use crate::fleet::FleetSupervisor;
 
@@ -35,13 +34,8 @@ impl ManagedSupervisorGuard {
         events: Sender<ManagedSupervisorEvent>,
         executable_override: Option<PathBuf>,
     ) -> Self {
-        let join = spawn_managed_supervisor_thread(
-            fleet,
-            config,
-            receiver,
-            events,
-            executable_override,
-        );
+        let join =
+            spawn_managed_supervisor_thread(fleet, config, receiver, events, executable_override);
         Self {
             sender: Some(sender),
             join: Some(join),
@@ -55,13 +49,8 @@ impl ManagedSupervisorGuard {
         executable_override: Option<PathBuf>,
     ) -> Self {
         let (sender, receiver) = mpsc::channel();
-        let join = spawn_managed_supervisor_thread(
-            fleet,
-            config,
-            receiver,
-            events,
-            executable_override,
-        );
+        let join =
+            spawn_managed_supervisor_thread(fleet, config, receiver, events, executable_override);
         Self {
             sender: Some(sender),
             join: Some(join),
@@ -147,13 +136,8 @@ mod tests {
     }
 
     fn empty_fleet(config: &DaemonConfig) -> Arc<FleetSupervisor> {
-        let desired = DesiredStateStore::at_path(
-            config
-                .db_path
-                .parent()
-                .unwrap()
-                .join("desired-state.json"),
-        );
+        let desired =
+            DesiredStateStore::at_path(config.db_path.parent().unwrap().join("desired-state.json"));
         Arc::new(
             FleetSupervisor::open(
                 &config.db_path,
@@ -188,12 +172,8 @@ mod tests {
         let fleet = empty_fleet(&config);
         let (events_tx, _events_rx) = mpsc::channel();
         {
-            let guard = ManagedSupervisorGuard::start_with_executable(
-                fleet,
-                &config,
-                events_tx,
-                None,
-            );
+            let guard =
+                ManagedSupervisorGuard::start_with_executable(fleet, &config, events_tx, None);
             let extra = guard.sender().clone();
             drop(extra);
             guard.shutdown();
