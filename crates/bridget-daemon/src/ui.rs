@@ -2011,6 +2011,39 @@ mod tests {
     }
 
     #[test]
+    fn refus_presence_humaine_remonte_le_code_reel() {
+        let socket_path = std::env::temp_dir().join(format!("bridget-ui-presence-{}.sock", uuid::Uuid::new_v4().simple()));
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(), WrapperToDaemon::ListAgents));
+            writeln!(writer, "{}", encode(&DaemonToWrapper::AgentList { agents: vec![agent_info("rc1", "idle")] }).unwrap()).unwrap();
+            writer.flush().unwrap();
+
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(), WrapperToDaemon::Register { .. }));
+            writeln!(writer, "{}", encode(&DaemonToWrapper::AttachRejected { subscription_id: None, reason: bridget_transport::protocol::AttachRefusal::JournalUnavailable, mode: None, location: None }).unwrap()).unwrap();
+            writer.flush().unwrap();
+        });
+        let config = UiRelayConfig { daemon_socket: socket_path.clone(), maicie_config: PathBuf::new(), bind: "127.0.0.1:0".parse().unwrap(), token: "test".to_string() };
+        let runtime = UiRelayRuntime::new(None);
+        let body = serde_json::to_vec(&serde_json::json!({"version": UI_VERSION, "to": "rc1", "body": "ping", "reply": true})).unwrap();
+        let error = post_ui_message(&config, &runtime, &body).unwrap_err();
+        assert_eq!(error.1, "human_sender_unregistered");
+        assert!(error.2.contains("présence UI humaine refusée"));
+        server.join().unwrap();
+        let _ = std::fs::remove_file(socket_path);
+    }
+
+    #[test]
     fn spec_024_presence_ui_locale_annonce_unix_dans_la_trame_reelle() {
         assert_eq!(
             capture_ui_registration_channel(Some("unix")),
