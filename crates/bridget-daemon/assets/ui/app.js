@@ -51,6 +51,44 @@
         assert.equal(state.sendCount, 0);
       });
 
+      test("largeur_colonne_agents_bornee_par_le_panneau_central", () => {
+        assert.deepEqual(api.agentPaneWidthBounds(960), { min: 224, max: 560 });
+        assert.equal(api.clampAgentPaneWidth(180, 960), 224);
+        assert.equal(api.clampAgentPaneWidth(900, 960), 560);
+        assert.equal(api.clampAgentPaneWidth(900, 800), 440);
+      });
+
+      test("apparence_agent_stable_et_etat_visuel_honnete", () => {
+        assert.equal(api.agentAvatarShape("jc1"), api.agentAvatarShape("jc1"));
+        assert.equal(api.agentAvatarShape("jc1", { jc1: { shape: "cloud" } }), "cloud");
+        assert.notEqual(api.agentAvatarShape("jc1", { jc1: { shape: "etoile" } }), "etoile");
+        assert.equal(api.agentVisualState("busy"), "busy");
+        assert.equal(api.agentVisualState("alive"), "connected");
+        assert.equal(api.agentVisualState("unreachable"), "unreachable");
+        assert.equal(api.agentVisualState("indetermine"), "unknown");
+        assert.equal(api.agentAvatarColor("jc1", { jc1: "#6e48c7" }), "#6e48c7");
+        assert.equal(api.agentAvatarColor("jc1", { jc1: { color: "#6e48c7" } }), "#6e48c7");
+        assert.notEqual(api.agentAvatarColor("jc1", { jc1: "#invalid" }), "#invalid");
+      });
+
+      test("carte_agent_synthetise_prefixe_et_fraicheur", () => {
+        assert.equal(
+          api.agentCardExcerpt("jc2-flux", "jc2-flux — VERIFICATION DE L INSTRUMENT"),
+          "VERIFICATION DE L INSTRUMENT",
+        );
+        assert.equal(
+          api.agentCardExcerpt("cartae0-flux", "cartae0-flux cartae0-flux : point utile"),
+          "point utile",
+        );
+        assert.equal(api.agentCardExcerpt("rc1", "un texte conserve"), "un texte conserve");
+        assert.equal(api.shouldShowAgentHost("cartae"), false);
+        assert.equal(api.shouldShowAgentHost("gpu-remote"), true);
+        assert.equal(api.formatAgentRelativeTime(9_980, 10_000), "à l’instant");
+        assert.equal(api.formatAgentRelativeTime(9_820, 10_000), "il y a 3 min");
+        assert.equal(api.formatAgentRelativeTime(2_800, 10_000), "il y a 2 h");
+        assert.equal(api.formatAgentRelativeTime(1_000_000 - 8 * 86_400, 1_000_000), "la semaine dernière");
+      });
+
       test("focus_conserve_sous_rafale", () => {
         let state = api.createUiState({
           draft: api.createDraft("travail", 3, 6, true),
@@ -1840,7 +1878,160 @@
   "use strict";
 
   const BOTTOM_THRESHOLD_PX = 2;
+  const AGENT_PANE_WIDTH_STORAGE_KEY = "bridget.ui.agent-pane-width.v1";
+  const AGENT_PANE_MIN_WIDTH_PX = 224;
+  const AGENT_PANE_MAX_WIDTH_PX = 560;
+  const MIN_CONVERSATION_WIDTH_PX = 360;
+  const AGENT_APPEARANCE_STORAGE_KEY = "bridget.ui.agent-appearance.v1";
+  const AGENT_AVATAR_COLORS = Object.freeze([
+    "#3f7fe0",
+    "#4bafa0",
+    "#6e48c7",
+    "#c33680",
+    "#d98b2b",
+    "#49b46c",
+    "#b08962",
+    "#e2e3e5",
+  ]);
+  const AGENT_AVATAR_SHAPES = Object.freeze([
+    "round", "soft-square", "pill", "triangle", "hexagon", "cloud", "drop", "pebble",
+  ]);
+  const AGENT_AVATAR_SHAPE_LABELS = Object.freeze({
+    round: "Ronde",
+    "soft-square": "Carrée douce",
+    pill: "Galette",
+    triangle: "Triangle",
+    hexagon: "Hexagone",
+    cloud: "Nuage",
+    drop: "Goutte",
+    pebble: "Galet",
+  });
   const LOCAL_FORMATTERS = new Map();
+
+  function agentPaneWidthBounds(viewportWidth) {
+    const viewport = Number(viewportWidth);
+    const maxForViewport = Number.isFinite(viewport)
+      ? viewport - MIN_CONVERSATION_WIDTH_PX
+      : AGENT_PANE_MAX_WIDTH_PX;
+    return {
+      min: AGENT_PANE_MIN_WIDTH_PX,
+      max: Math.max(
+        AGENT_PANE_MIN_WIDTH_PX,
+        Math.min(AGENT_PANE_MAX_WIDTH_PX, maxForViewport),
+      ),
+    };
+  }
+
+  function clampAgentPaneWidth(value, viewportWidth) {
+    const { min, max } = agentPaneWidthBounds(viewportWidth);
+    const width = Number(value);
+    return Math.round(Math.min(max, Math.max(min, Number.isFinite(width) ? width : min)));
+  }
+
+  function stableAgentHash(name) {
+    let hash = 2166136261;
+    for (const char of String(name || "")) {
+      hash ^= char.charCodeAt(0);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+
+  function storedAgentAppearance(name, appearances = {}) {
+    const selected = appearances && appearances[name];
+    if (typeof selected === "string") return { color: selected };
+    if (selected && typeof selected === "object" && !Array.isArray(selected)) return selected;
+    return {};
+  }
+
+  function agentAvatarShape(name, appearances = {}) {
+    const selected = storedAgentAppearance(name, appearances).shape;
+    if (AGENT_AVATAR_SHAPES.includes(selected)) return selected;
+    return AGENT_AVATAR_SHAPES[stableAgentHash(name) % AGENT_AVATAR_SHAPES.length];
+  }
+
+  function agentVisualState(state) {
+    const normalized = String(state || "").trim().toLowerCase();
+    if (normalized === "busy") return "busy";
+    if (normalized === "connected" || normalized === "alive") return "connected";
+    if (normalized === "stopped") return "stopped";
+    if (normalized === "unreachable" || normalized === "lost") return "unreachable";
+    return "unknown";
+  }
+
+  function agentAvatarColor(name, appearances = {}) {
+    const selected = storedAgentAppearance(name, appearances).color;
+    if (AGENT_AVATAR_COLORS.includes(selected)) return selected;
+    return AGENT_AVATAR_COLORS[stableAgentHash(name) % AGENT_AVATAR_COLORS.length];
+  }
+
+  function setStyleVariable(node, name, value) {
+    if (!node || !node.style) return;
+    if (typeof node.style.setProperty === "function") {
+      node.style.setProperty(name, value);
+    } else {
+      node.style[name] = value;
+    }
+  }
+
+  function createAgentAvatar(documentRef, agent, color, size = "small", shape) {
+    const avatar = documentRef.createElement("span");
+    const name = agent && agent.name;
+    avatar.className = `agent-avatar agent-avatar--${size}`;
+    avatar.dataset.shape = shape || agentAvatarShape(name);
+    avatar.dataset.visualState = agentVisualState(agent && agent.state);
+    setStyleVariable(avatar, "--avatar-color", color);
+    setStyleVariable(avatar, "--avatar-delay", `-${stableAgentHash(name) % 6}s`);
+    const face = documentRef.createElement("span");
+    face.className = "agent-avatar__face";
+    avatar.append(face);
+    return avatar;
+  }
+
+  function agentCardExcerpt(name, excerpt) {
+    const raw = String(excerpt || "").replace(/\s+/g, " ").trim();
+    if (!raw) return "";
+    const escapedName = String(name || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (!escapedName) return raw;
+    const prefix = new RegExp(
+      `^\\s*(?:${escapedName}\\s*){1,2}(?:[:;,=–—-]+\\s*)`,
+      "i",
+    );
+    return raw.replace(prefix, "").trim() || raw;
+  }
+
+  function shouldShowAgentHost(host) {
+    const normalized = String(host || "").trim().toLowerCase();
+    return normalized.length > 0 && !["cartae", "localhost", "127.0.0.1"].includes(normalized);
+  }
+
+  function formatAgentRelativeTime(at, now = Date.now() / 1000) {
+    const then = epochSeconds(at);
+    if (!(then > 0)) return "";
+    const elapsed = Math.max(0, Math.floor(now - then));
+    if (elapsed < 45) return "à l’instant";
+    if (elapsed < 90) return "il y a 1 min";
+
+    const minutes = Math.floor(elapsed / 60);
+    if (minutes < 60) return `il y a ${minutes} min`;
+    if (minutes < 90) return "il y a 1 h";
+
+    const hours = Math.floor(elapsed / 3_600);
+    if (hours < 24) return `il y a ${hours} h`;
+    if (hours < 48) return "hier";
+
+    const days = Math.floor(elapsed / 86_400);
+    if (days < 7) return `il y a ${days} jours`;
+    if (days < 14) return "la semaine dernière";
+    if (days < 28) return `il y a ${Math.floor(days / 7)} sem.`;
+
+    const date = new Date(then * 1000);
+    if (Number.isNaN(date.getTime())) return "";
+    return `le ${new Intl.DateTimeFormat("fr-FR", {
+      day: "numeric",
+      month: "short",
+    }).format(date)}`;
+  }
 
   function createDraft(value = "", selectionStart = 0, selectionEnd = 0, focused = false) {
     return {
@@ -3035,7 +3226,11 @@
     messageSearchStatus: "message-search-status",
     selectedAgent: "selected-agent",
     selectedMeta: "selected-meta",
-    selectedStateDot: "selected-state-dot",
+    selectedAgentAvatar: "selected-agent-avatar",
+    agentAppearancePicker: "agent-appearance-picker",
+    agentAppearanceShapes: "agent-appearance-shapes",
+    agentAppearanceColors: "agent-appearance-colors",
+    agentPaneResizer: "agent-pane-resizer",
     connectionIndicator: "connection-indicator",
     relayBanner: "relay-banner",
     stoppedBanner: "stopped-banner",
@@ -3127,6 +3322,89 @@
     let reconnectAttempts = 0;
     let watchStreamEnded = false;
 
+    const rootStyle = documentRef.documentElement && documentRef.documentElement.style;
+    if (rootStyle && nodes.agentPaneResizer && typeof windowRef.addEventListener === "function") {
+      const resizer = nodes.agentPaneResizer;
+      const storedWidth = (() => {
+        try {
+          const raw = windowRef.localStorage && windowRef.localStorage.getItem(AGENT_PANE_WIDTH_STORAGE_KEY);
+          const width = Number(raw);
+          return raw !== null && Number.isFinite(width) ? width : null;
+        } catch (_error) {
+          return null;
+        }
+      })();
+      let agentPaneWidth = clampAgentPaneWidth(
+        storedWidth === null ? 320 : storedWidth,
+        windowRef.innerWidth,
+      );
+      let dragPointerId = null;
+
+      const applyAgentPaneWidth = (width, persist) => {
+        agentPaneWidth = clampAgentPaneWidth(width, windowRef.innerWidth);
+        const bounds = agentPaneWidthBounds(windowRef.innerWidth);
+        rootStyle.setProperty("--agent-pane-width", `${agentPaneWidth}px`);
+        resizer.setAttribute("aria-valuemin", String(bounds.min));
+        resizer.setAttribute("aria-valuemax", String(bounds.max));
+        resizer.setAttribute("aria-valuenow", String(agentPaneWidth));
+        if (!persist) return;
+        try {
+          windowRef.localStorage && windowRef.localStorage.setItem(
+            AGENT_PANE_WIDTH_STORAGE_KEY,
+            String(agentPaneWidth),
+          );
+        } catch (_error) {
+          // Le redimensionnement reste utilisable si le stockage est indisponible.
+        }
+      };
+
+      const finishResize = (event) => {
+        if (dragPointerId === null || event.pointerId !== dragPointerId) return;
+        if (
+          typeof resizer.releasePointerCapture === "function"
+          && (typeof resizer.hasPointerCapture !== "function" || resizer.hasPointerCapture(dragPointerId))
+        ) {
+          resizer.releasePointerCapture(dragPointerId);
+        }
+        dragPointerId = null;
+        delete resizer.dataset.dragging;
+        applyAgentPaneWidth(agentPaneWidth, true);
+      };
+
+      resizer.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        dragPointerId = event.pointerId;
+        resizer.dataset.dragging = "true";
+        if (typeof resizer.setPointerCapture === "function") {
+          resizer.setPointerCapture(dragPointerId);
+        }
+        applyAgentPaneWidth(event.clientX, false);
+        event.preventDefault();
+      });
+      resizer.addEventListener("pointermove", (event) => {
+        if (event.pointerId !== dragPointerId) return;
+        applyAgentPaneWidth(event.clientX, false);
+        event.preventDefault();
+      });
+      resizer.addEventListener("pointerup", finishResize);
+      resizer.addEventListener("pointercancel", finishResize);
+      resizer.addEventListener("lostpointercapture", finishResize);
+      resizer.addEventListener("keydown", (event) => {
+        const bounds = agentPaneWidthBounds(windowRef.innerWidth);
+        const changes = {
+          ArrowLeft: agentPaneWidth - 16,
+          ArrowRight: agentPaneWidth + 16,
+          Home: bounds.min,
+          End: bounds.max,
+        };
+        if (!(event.key in changes)) return;
+        event.preventDefault();
+        applyAgentPaneWidth(changes[event.key], true);
+      });
+      windowRef.addEventListener("resize", () => applyAgentPaneWidth(agentPaneWidth, false));
+      applyAgentPaneWidth(agentPaneWidth, false);
+    }
+
     const make = (tag, className, value) => {
       const node = documentRef.createElement(tag);
       if (className) node.className = className;
@@ -3208,36 +3486,124 @@
       }
     };
 
+    let agentAppearances = (() => {
+      try {
+        const raw = windowRef.localStorage && windowRef.localStorage.getItem(AGENT_APPEARANCE_STORAGE_KEY);
+        const parsed = raw ? JSON.parse(raw) : {};
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+      } catch (_error) {
+        return {};
+      }
+    })();
+    let appearancePickerAgent = null;
+
+    const colorForAgent = (name) => agentAvatarColor(name, agentAppearances);
+    const shapeForAgent = (name) => agentAvatarShape(name, agentAppearances);
+    const storeAgentAppearance = (name, update) => {
+      agentAppearances = {
+        ...agentAppearances,
+        [name]: { ...storedAgentAppearance(name, agentAppearances), ...update },
+      };
+      try {
+        windowRef.localStorage && windowRef.localStorage.setItem(
+          AGENT_APPEARANCE_STORAGE_KEY,
+          JSON.stringify(agentAppearances),
+        );
+      } catch (_error) {
+        // La couleur reste appliquée dans l'onglet si le stockage est indisponible.
+      }
+    };
+
+    const renderAppearancePicker = (agent) => {
+      nodes.agentAppearanceShapes.replaceChildren();
+      nodes.agentAppearanceColors.replaceChildren();
+      if (!agent) {
+        nodes.agentAppearancePicker.hidden = true;
+        return;
+      }
+      const selectedColor = colorForAgent(agent.name);
+      const selectedShape = shapeForAgent(agent.name);
+      for (const shape of AGENT_AVATAR_SHAPES) {
+        const shapeButton = make("button", "agent-appearance-shape");
+        shapeButton.type = "button";
+        shapeButton.setAttribute("aria-label", `Choisir la forme ${AGENT_AVATAR_SHAPE_LABELS[shape]}`);
+        shapeButton.setAttribute("aria-pressed", String(shape === selectedShape));
+        const preview = createAgentAvatar(
+          documentRef,
+          { ...agent, state: "alive" },
+          selectedColor,
+          "picker",
+          shape,
+        );
+        preview.setAttribute("aria-hidden", "true");
+        shapeButton.append(preview);
+        shapeButton.addEventListener("click", () => {
+          storeAgentAppearance(agent.name, { shape });
+          nodes.agentAppearancePicker.hidden = true;
+          nodes.selectedAgentAvatar.setAttribute("aria-expanded", "false");
+          renderAgents();
+          renderHeader();
+        });
+        nodes.agentAppearanceShapes.append(shapeButton);
+      }
+      for (const color of AGENT_AVATAR_COLORS) {
+        const colorButton = make("button", "agent-appearance-color");
+        colorButton.type = "button";
+        setStyleVariable(colorButton, "--appearance-color", color);
+        colorButton.setAttribute("aria-label", `Choisir la couleur ${color}`);
+        colorButton.setAttribute("aria-pressed", String(color === selectedColor));
+        colorButton.addEventListener("click", () => {
+          storeAgentAppearance(agent.name, { color });
+          nodes.agentAppearancePicker.hidden = true;
+          nodes.selectedAgentAvatar.setAttribute("aria-expanded", "false");
+          renderAgents();
+          renderHeader();
+        });
+        nodes.agentAppearanceColors.append(colorButton);
+      }
+    };
+
     const renderAgentButton = (agent) => {
       const button = make("button", "agent-row");
       button.type = "button";
       button.dataset.agent = agent.name;
       button.setAttribute("aria-current", String(agent.name === state.selectedAgent));
 
+      const layout = make("span", "agent-row__layout");
+      const avatar = createAgentAvatar(
+        documentRef,
+        agent,
+        colorForAgent(agent.name),
+        "card",
+        shapeForAgent(agent.name),
+      );
+      avatar.setAttribute("aria-hidden", "true");
+      layout.append(avatar);
+
+      const content = make("span", "agent-row__content");
       const top = make("span", "agent-row__top");
       const identity = make("span", "agent-row__identity");
-      const dot = make("span", "state-dot");
-      dot.dataset.state = agent.state;
-      dot.setAttribute("aria-hidden", "true");
-      identity.append(dot, make("span", "agent-row__name", agent.name));
+      identity.append(make("span", "agent-row__name", agent.name));
+      if (shouldShowAgentHost(agent.host)) {
+        identity.append(make("span", "agent-row__host", agent.host));
+      }
       top.append(identity);
-      if (agent.unread > 0) top.append(make("span", "unread-badge", String(agent.unread)));
-      button.append(top);
+      const topEnd = make("span", "agent-row__top-end");
+      if (agent.unread > 0) topEnd.append(make("span", "unread-badge", String(agent.unread)));
+      const recency = formatAgentRelativeTime(agent.last_message_at);
+      if (recency) topEnd.append(make("time", "agent-row__recency", recency));
+      top.append(topEnd);
+      content.append(top);
 
-      button.append(
-        make("p", "agent-row__excerpt", agent.last_excerpt || "Aucun message récent"),
-      );
-      const meta = make("p", "agent-row__meta");
-      meta.append(
-        make("span", "", agent.state),
-        make("span", "", agent.host),
-        make(
-          "span",
-          "",
-          agent.last_message_at ? timestamp(agent.last_message_at) : "heure inconnue",
-        ),
-      );
-      button.append(meta);
+      const excerpt = agentCardExcerpt(agent.name, agent.last_excerpt);
+      if (excerpt) {
+        content.append(make("p", "agent-row__excerpt", excerpt));
+        const tooltip = make("span", "agent-row__tooltip", excerpt);
+        tooltip.setAttribute("aria-hidden", "true");
+        button.append(tooltip);
+      }
+      layout.append(content);
+      button.append(layout);
       button.addEventListener("click", () => selectAgent(agent.name));
       return button;
     };
@@ -3258,7 +3624,25 @@
       nodes.selectedMeta.textContent = agent
         ? `${agent.state} · ${agent.host}`
         : "Sélectionnez un agent dans la liste.";
-      nodes.selectedStateDot.dataset.state = agent ? agent.state : "unknown";
+      nodes.selectedAgentAvatar.replaceChildren();
+      nodes.selectedAgentAvatar.disabled = !agent;
+      if (agent) {
+        const avatar = createAgentAvatar(
+          documentRef,
+          agent,
+          colorForAgent(agent.name),
+          "large",
+          shapeForAgent(agent.name),
+        );
+        avatar.setAttribute("aria-hidden", "true");
+        nodes.selectedAgentAvatar.append(avatar);
+      }
+      if (appearancePickerAgent !== (agent && agent.name)) {
+        appearancePickerAgent = null;
+        nodes.agentAppearancePicker.hidden = true;
+        nodes.selectedAgentAvatar.setAttribute("aria-expanded", "false");
+      }
+      renderAppearancePicker(agent);
       nodes.stoppedBanner.hidden = !agent || agent.state !== "stopped";
       nodes.draft.disabled = !agent;
       nodes.send.disabled = !agent || nodes.draft.value.trim().length === 0;
@@ -3854,6 +4238,15 @@
     nodes.closeDetail.addEventListener("click", () => {
       nodes.detailPanel.hidden = true;
     });
+    nodes.selectedAgentAvatar.addEventListener("click", () => {
+      const agent = state.agents.find((entry) => entry.name === state.selectedAgent);
+      if (!agent) return;
+      const open = nodes.agentAppearancePicker.hidden;
+      appearancePickerAgent = open ? agent.name : null;
+      renderAppearancePicker(agent);
+      nodes.agentAppearancePicker.hidden = !open;
+      nodes.selectedAgentAvatar.setAttribute("aria-expanded", String(open));
+    });
 
     const renderSearchHits = (payload) => {
       const hits = payload && Array.isArray(payload.hits) ? payload.hits : [];
@@ -3940,6 +4333,15 @@
 
   return Object.freeze({
     BOTTOM_THRESHOLD_PX,
+    agentPaneWidthBounds,
+    clampAgentPaneWidth,
+    agentAvatarShape,
+    agentAvatarColor,
+    agentCardExcerpt,
+    shouldShowAgentHost,
+    formatAgentRelativeTime,
+    agentVisualState,
+    createAgentAvatar,
     createDraft,
     createUiState,
     preserveDraft,
