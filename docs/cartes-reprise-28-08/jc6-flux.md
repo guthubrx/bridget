@@ -153,7 +153,16 @@ Mes envois : `af1b320a80774`, `4ce9161b03d64`, `1d1f9ff8a2734`, `ee90412814e54`,
 ```
 maicie objective <UUID-COMPLET> close --reason "…" --config /home/moi/.config/maicie/config.json
 ```
-**L'identifiant avant l'action**, et **`--config` en toute fin de ligne** — placé avant, il consomme l'argument positionnel. L'UUID doit être **entier** : un préfixe court échoue plus tôt, sur « identifiant objectif UUID invalide », sans jamais atteindre le parseur d'action.
+**LA RÈGLE EXACTE, mesurée par moi avec une action inexistante donc sans aucun effet : RIEN NE DOIT S'INTERCALER ENTRE `objective` ET SON UUID.** `--config` peut ensuite venir n'importe où après, y compris avant `--reason`.
+
+| forme testée | résultat |
+|---|---|
+| `objective <UUID> <action> --config <C>` | « action objectif inconnue » → **l'UUID et l'action ont été lus** |
+| `objective --config <C> <UUID> <action>` | « identifiant objectif UUID invalide » → **`--config` a été pris pour l'identifiant** |
+| `--config <C> objective …` | « commande inconnue : delegate, status, … » → le premier niveau ignore `--config` |
+| `objective <PRÉFIXE-COURT> <action> --config <C>` | « identifiant objectif UUID invalide » → **l'UUID entier est obligatoire** |
+
+**Le message « identifiant objectif UUID invalide » a donc DEUX causes distinctes** — un préfixe court, ou une option intercalée avant l'UUID. Elles sont indiscernables au message. Si tu le rencontres, vérifie les deux.
 *Mécanisme sous-jacent, mesuré par moi :* la fermeture n'écrit pas dans `evaluated_closure_acts` — table **vide**, jamais servie — mais dans `coordination_decisions`, sous la forme `{objectif_id, kind:"cloturer", proposee_par, etat:"appliquee", motif}`. 540 décisions `cloturer` pour 540 objectifs `clos` : correspondance exacte.
 *Où vit la preuve de remise :* dans `delegation_outbox` de la base **Maicie** — `state`, `terminal`, `issue_observed_at`, `body_hash`, `deadline_contractuelle`. Ce n'est **pas** dans `bridget.db`. `[MESURÉ]` Sur l'ensemble : 626 remises `accepted` `terminal=1` et **six** rejetées — deux vrais échecs (rc1, routing/agent introuvable, 26/08 17:56 ; jc3, duplicate_content, 26/08 06:55) et quatre clôtures locales. `[TENU DE bridget]`
 
