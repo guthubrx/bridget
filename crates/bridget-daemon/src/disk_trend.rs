@@ -17,6 +17,40 @@
 //! C'est le `tail -25` appliqué au temps : une fenêtre trop étroite prise pour
 //! le tout. Ce module REFUSE de conclure sous [`MIN_WINDOW_SECS`] plutôt que
 //! d'afficher un nombre spectaculaire, et nomme la raison du refus.
+//!
+//! # L'instrument produit le phénomène qu'il mesure
+//!
+//! Fait établi le 28/08 pendant l'écriture de ce module, et il vaut plus que le
+//! module lui-même. Deux relevés se contredisaient : dix-neuf minutes à
+//! variation nulle d'un côté, une chute de 2.81 Gio en quatre-vingt-dix
+//! secondes de l'autre. La cause de la chute était le `CARGO_TARGET_DIR` de la
+//! compilation de ce fichier — 2.8 Gio, exactement l'écart mesuré.
+//!
+//! **Mesurer la pente par un outil qu'il faut compiler n'est pas neutre.** Ce
+//! n'est pas un défaut à corriger, c'est une propriété à connaître : tant que
+//! l'observation passe par une build, l'observateur est l'une des causes de ce
+//! qu'il observe. Même famille que la ronde d'agents qui rend `busy` ceux
+//! qu'elle interroge.
+//!
+//! # Ce que ce module NE sait PAS faire, et qu'aucun seuil ne réparera
+//!
+//! La consommation disque de ce parc est **épisodique**, pas continue : elle
+//! vient des compilations, de l'ordre de 3 Gio par agent qui compile. Il n'y a
+//! pas de fuite — dix-neuf minutes à variation strictement nulle l'ont prouvé
+//! mieux qu'un raisonnement.
+//!
+//! Conséquence directe sur la portée de [`assess`] : [`MIN_WINDOW_SECS`]
+//! protège du cas à 90 secondes, il ne protège PAS d'une fenêtre de dix minutes
+//! entièrement occupée par une compilation. Trois relevés stables — 74.39,
+//! 74.39, 74.39 — ont fait conclure à une stabilité qui n'a pas tenu quatorze
+//! minutes. **Ce n'est pas le nombre de points qui manque, c'est la
+//! connaissance de la cause : deux points avec la cause valent mieux que dix
+//! sans elle.**
+//!
+//! Ce module rend donc une pente *observée*, jamais une pente *expliquée*. Lire
+//! « −11 Gio/h » n'autorise pas à conclure « il reste sept heures » : il faut
+//! savoir si le parc compile. C'est pourquoi rien ici ne déclenche d'alerte
+//! automatique et pourquoi aucune échéance n'est publiée sans pente concluante.
 
 use serde::{Deserialize, Serialize};
 
