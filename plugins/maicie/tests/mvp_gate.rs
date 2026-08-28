@@ -194,7 +194,14 @@ impl Fixture {
         while Instant::now() < deadline {
             if self.socket.exists() {
                 let spawn = isolated_bridget_command(&self.bridget)
-                    .args(["spawn", "mvp_fixture", "--name", "mvp-agent", "--cwd"])
+                    .args([
+                        "spawn",
+                        "mvp_fixture",
+                        "--name",
+                        "mvp-agent",
+                        "--no-persistent",
+                        "--cwd",
+                    ])
                     .arg(&self.root)
                     .env("HOME", &self.root)
                     .output()

@@ -1208,6 +1208,7 @@ impl RealGateFixture {
                     "g1504_fixture".to_string(),
                     "--name".to_string(),
                     "g1504-agent".to_string(),
+                    "--no-persistent".to_string(),
                     "--cwd".to_string(),
                     self.root.display().to_string(),
                 ]);
@@ -1244,6 +1245,7 @@ impl RealGateFixture {
             "maicie_emitter".to_string(),
             "--name".to_string(),
             "maicie".to_string(),
+            "--no-persistent".to_string(),
             "--cwd".to_string(),
             self.root.display().to_string(),
         ]);
