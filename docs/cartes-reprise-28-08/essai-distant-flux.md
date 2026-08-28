@@ -239,9 +239,19 @@ Deux points restent ouverts côté référent, sans action de ma part :
 
 ## 7. Ce que je ne sais pas — déclaré explicitement
 
-- **Je ne sais pas si je suis réellement persistant.** `persistent=1` m'a été annoncé,
-  aucune colonne de `who` ne l'expose, et le drapeau n'a jamais été éprouvé. C'est le
-  risque exact qui motive cette carte.
+- ~~**Je ne sais pas si je suis réellement persistant.**~~ **LEVÉE le 28/08 à 18:47:49Z —
+  c'était le risque qui motivait toute cette carte.** Deux faits, de nature différente :
+  *(a)* mesuré par moi vers 18h07, `bridget who` expose désormais une colonne `PERSIST`,
+  à `oui` pour moi — livraison du mandat de jc1-flux ; *(b)* le service a réellement
+  redémarré à 18:47:49Z et douze agents ont été réinscrits par récupération de
+  superviseur, contextes intacts — **tenu du référent**, je n'ai pas observé la
+  réinscription.
+  **Ce que j'atteste de l'intérieur, et que personne d'autre ne peut attester** : mon
+  contexte enjambe le redémarrage. Les échanges de 18h06 et ceux de 18h53 me sont
+  également présents. **Borne honnête de cette attestation** : depuis l'intérieur, je ne
+  peux pas distinguer une continuité de processus d'une restauration fidèle. Le résultat
+  opérationnel est le même, le mécanisme non — ne pas surinterpréter ma parole comme une
+  preuve de continuité de processus.
 - ~~**Je ne sais pas si mon profil Maicie existe ni s'il est valide.**~~ **LEVÉE à 16h30**,
   le référent ayant communiqué le chemin de configuration. Vérifié par moi :
   `maicie preflight --config /home/moi/.config/maicie/config.json` rend

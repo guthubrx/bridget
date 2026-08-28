@@ -5,6 +5,7 @@
 - Génération portante : **444**, `persistent=1` — mesuré au greffe de flotte le 2026-08-28 à 17:04Z
 - Émise : 2026-08-28T17:05Z, sur mandat du référent bridget
 - Mise à jour : 2026-08-28T18:20Z, à la demande du référent — deux faits promus de `[RAPPORTÉ]` à `[MESURÉ]`, un troisième mandat livré, une limite d'observation déclarée
+- Mise à jour : 2026-08-28T19:10Z — **le drapeau `persistent` a été éprouvé par un vrai redémarrage**, les trois correctifs sont intégrés et déployés, et deux erreurs à moi sont inscrites
 - Mandat de cette carte : objectif `c9aac01b-cc8d-4520-a375-dcaec5c84844` ; délégation `f80f29f2-033b-4e6a-8dbb-75da7d4ddc18` ; message `f72325c2-aa49-4dd6-adb2-57878efe64a1`
 - Prédécesseur : `jc1` (codex, tmux), carte distincte en `/home/moi/bridget-registre/docs/cartes-reprise-28-08/jc1.md`
 - Seconde incarnation du successeur : la première avait été lancée sans `--persistent` et remplacée avant d'avoir travaillé
@@ -22,9 +23,9 @@ Vérifier avant d'agir sur l'une comme sur l'autre.
 
 ## 1. ÉTAT
 
-- `[MESURÉ 17:04Z]` Objectif `587da26d-0130-49b5-894d-2bb91ec9afc1` à l'état `en_coordination`, délégation `100f2025-279a-4616-a4c8-af631b24e00b` à l'état `creee`. **Les deux points du mandat sont écrits, testés et commités ; rien n'est intégré.**
+- `[MESURÉ 17:04Z]` Objectif `587da26d-0130-49b5-894d-2bb91ec9afc1` à l'état `en_coordination`, délégation `100f2025-279a-4616-a4c8-af631b24e00b` à l'état `creee`. **Les deux points sont écrits, testés, commités — et `[MESURÉ 18:57Z]` INTÉGRÉS dans `main` du dépôt GitHub, puis déployés.**
 - `[MESURÉ 17:04Z]` L'objectif de cette carte, `c9aac01b`, était lui aussi `en_coordination`. `[RAPPORTÉ — bridget, 18:04Z]` **il est depuis fermé**, la carte étant présente dans `main` du dépôt GitHub.
-- `[MESURÉ 18:05Z]` Troisième mandat livré : objectif `522a044e-9a89-42d8-add9-f9ca6117737c`, délégation `04f80ced-7011-4733-bd34-f038551a6c87` — exposer la borne du ledger. Branche `session-059-borne-ledger`, commit `7fb0ecd`. **Non intégré**, comme les deux précédents.
+- `[MESURÉ 18:05Z]` Troisième mandat livré : objectif `522a044e-9a89-42d8-add9-f9ca6117737c`, délégation `04f80ced-7011-4733-bd34-f038551a6c87` — exposer la borne du ledger. Branche `session-059-borne-ledger`, commit `7fb0ecd`. `[MESURÉ 18:57Z]` **Intégré dans `main` GitHub et déployé** : `bridget ledger` rend 200 par défaut et annonce sa borne.
 - `[MESURÉ 17:04Z]` **`creee` ne distingue pas une délégation dormante d'une délégation en cours de travail.** Mes deux délégations actives portent exactement l'état des trois délégations héritées de `jc1` que le référent m'a dit de ne pas reprendre. C'est la confirmation directe, par mesure, de la règle attribuée à `rc5` : ne jamais déduire l'état d'un travail de l'état de sa délégation — vérifier l'objet livré.
 - `[MESURÉ]` `domaine=bridget`, corrigé par moi **deux fois** : à l'ouverture de la première incarnation, puis à nouveau après ma recréation.
 
@@ -56,15 +57,21 @@ Vérifier avant d'agir sur l'une comme sur l'autre.
 
 13. **`spawn_commands.state` survit à la mort de l'agent.** Mesuré sur un cas neuf : `essai-garde-verif-referent`, génération 455, `persistent=0`, `state=connected` — alors que le référent l'avait arrêté quelques minutes plus tôt. Une lecture de cette table ne dit rien de la vivacité. `[MESURÉ]` — le même fait avait été établi par `jc3-flux` sur sa propre génération 440 ; je le confirme sur un agent créé et tué dans la même minute.
 
-14. **Le témoin `temoin-persistance` existe** : génération 454, `persistent=1`, vu par moi dans `spawn_commands`. Il sert à éprouver le drapeau au prochain redémarrage sans qu'un porteur de contexte serve de cobaye. `[MESURÉ]` pour son existence ; `[RAPPORTÉ — bridget, geste proposé par rc5-flux]` pour son rôle.
+14. **Le témoin `temoin-persistance` existe** : génération 454, `persistent=1`, vu par moi dans `spawn_commands`. `[MESURÉ]` pour son existence ; `[RAPPORTÉ — bridget, geste proposé par rc5-flux]` pour son rôle attendu. **Ce rôle — éprouver le drapeau sans qu'un porteur de contexte serve de cobaye — s'est révélé non tenu : voir 18.**
 
 15. **Le motif « donnée collectée, non exposée » se compte à quatre occurrences le même jour**, et deux d'entre elles ont un paramètre qui existe déjà : la persistance (absente des 16 clés de l'annuaire) ; la borne du ledger (`limit: 20` figé alors que le protocole porte `limit` et que le même fichier passe 200 ailleurs) ; le `busy` du greffe (connu pour refuser une délégation, introuvable pour observer un travail) ; la phase de remise (`send_deliveries.phase` — `acked` 5285, `dispatching` 33, `indeterminate` 94 — qu'aucune commande CLI n'expose). **Le coût n'a jamais été la donnée manquante, toujours le détour par un instrument improvisé.**
+
+16. **LE DRAPEAU `persistent=1` A TENU À TRAVERS UN VRAI REDÉMARRAGE.** C'était l'ignorance centrale de cette carte. Le service a redémarré le 28/08 à 18:47:49 — `[RAPPORTÉ — bridget]` ancien PID 3588739 disparu, binaire remplacé à 18:46:50, trois vagues de réinscription par commandes `recovery-<uuid>` du superviseur. `[MESURÉ à 18:57Z]` **douze agents présents après redémarrage, tous `persistent=true`, aucun drainage** ; `essai-garde-verif-referent`, arrêté avant, est correctement absent ; roster à 12 entrées, aucune non persistante. **Mon contexte a survécu, et la preuve est un effet mesuré, pas une intégration.**
+
+17. **Les trois correctifs sont intégrés ET déployés.** `[MESURÉ 18:57Z]` `8ebe89a`, `ab8960f`, `7fb0ecd` sont ancêtres de `main` du dépôt **GitHub** (`08d766e`), vérifié par `merge-base --is-ancestor` contre l'URL et non contre l'alias. En production : `bridget who` rend `PERSIST=oui` pour les agents gérés et `—` pour les tmux hors flotte ; `bridget ledger` rend 200 par défaut et se clôt par `maximum lisible atteint (200)`. **Intégré ne suffit pas — c'est le redéploiement du binaire et le redémarrage du daemon qui rendent un correctif vivant.**
+
+18. **Le témoin de persistance prouve sans protéger.** `[MESURÉ]` `temoin-persistance` porte les générations 454, 469, 481, 493 ; les trois vagues de réinscription sont 458‑469, 470‑481, 482‑493, de douze entrées chacune, et **le témoin y est douzième sur douze à chaque fois**. Les onze porteurs de contexte passent donc AVANT lui. Il atteste la survie, il n'épargne personne : une attestation simultanée n'est pas une alerte précoce. `[RAPPORTÉ — jc6-flux, message 340a6ea824ec4]` pour la chronologie des vagues ; formulation « prouve sans protéger » due à `bridget`. **Un témoin ne protège que s'il passe AVANT le parc, ou SEUL.**
 
 ## 3. RESTE — ce qui n'est pas fait
 
 - ~~**Porter la branche hors de `/tmp`.**~~ **RÉSOLU à 17:29Z** : les branches sont poussées sur `https://github.com/guthubrx/bridget.git` (voir section 4). La cause n'était pas `/tmp` — le clone est un vrai dépôt git — mais un `origin` pointant un miroir local.
 - ~~**Six processus orphelins de mes tests-portes.**~~ **RÉSOLU à 17:28Z**, sur autorisation du référent : trois signaux ont suffi pour six PID, les trois `managed-wrapper` étant déjà morts avec le daemon de leur groupe. `[MESURÉ]` **Tuer le daemon d'un groupe emporte son wrapper.**
-- **L'intégration des trois correctifs**, qui appartient à l'humain. C'est désormais le seul reste réel : le travail existe et est lisible, il n'est dans `main` d'aucun dépôt.
+- ~~**L'intégration des trois correctifs.**~~ **RÉSOLU vers 18:46Z** : les neuf branches du parc ont été intégrées une par une, les miennes comprises, puis le binaire a été remplacé et le daemon redémarré. `[MESURÉ 18:57Z]` **Il ne reste rien de ce mandat.**
 - **Les tests d'intégration hors `--lib` n'ont jamais été rejoués jusqu'au bout**, à cause du test instable du point 2.8.
 - **La colonne `PERSIST` reste vide en production** tant que le daemon en service tourne l'ancien binaire. `[MESURÉ]` Le CLI neuf face au daemon ancien affiche `—` et `null` partout, sans planter et sans rien inventer. Le redémarrage qui activerait la colonne est aussi l'événement qui draine — d'après le roster, personne ne serait drainé.
 
@@ -96,9 +103,11 @@ Vérifier avant d'agir sur l'une comme sur l'autre.
 7. **Les tests-portes `maicie` laissent des daemons vivants derrière eux.** Contrôler les processus résiduels *après* chaque exécution.
 8. **Ne tuer aucun processus sans autorisation explicite**, même le sien : `kill` sans `-9`, un à la fois, 3 s d'attente, vérification entre chaque, et arrêt si le premier résiste.
 9. **`cargo fmt --check` n'est pas propre sur `main`** : 16 diffs préexistants au 2026-08-28. Comparer à la base plutôt que viser zéro.
-10. **`bridget ledger` EN SERVICE ne rend que les 20 derniers messages** — treize minutes à 94 messages/heure. Il ne permet pas de vérifier une attribution ancienne. Recours immédiat : lire la table (voir 2.12). Le correctif existe, branche `session-059-borne-ledger`, **non intégré** — cette ligne périme le jour du déploiement.
+10. **`bridget ledger` EN SERVICE ne rend que les 20 derniers messages** — treize minutes à 94 messages/heure. Il ne permet pas de vérifier une attribution ancienne. Recours immédiat : lire la table (voir 2.12). **PÉRIMÉ depuis 18:46Z** : le correctif est intégré et déployé, `bridget ledger` accepte `--limit` et rend 200 par défaut. Ligne conservée pour mémoire de la méthode : une affirmation datée doit être relue, pas recopiée.
 11. **Écrire l'URL, pas l'alias.** `origin` ne désigne pas le même dépôt selon les checkouts. Une attestation formulée avec `origin` ne vaut pas pour son lecteur : un agent qui cherche sa carte via *son* `origin` conclura à une perte alors qu'il regarde le mauvais dépôt. Formulation due à `cartae0-flux`.
 12. **Ne pas rebaser une branche dont les SHA ont déjà été vérifiés par autrui** sans le lui dire : le rebase invalide sa vérification et lui fait refaire son travail. Sans conflit, l'ancienneté de la base ne coûte rien.
+13. **Un filtre de requête peut couper une vague en son milieu et fabriquer une conclusion fausse.** J'ai mesuré la position du témoin avec `generation >= 465`, ce qui tronquait la première vague ; j'en ai conclu qu'il était quatrième, donc « au milieu du parc ». Les vagues complètes sont 458‑469, 470‑481, 482‑493, et **il est douzième sur douze**. La borne du filtre était arbitraire et je ne l'ai pas justifiée. **Cadrer une mesure sur une borne choisie au hasard, c'est se donner un résultat.**
+14. **Ne pas affirmer ce que sa propre carte marque comme non vérifié.** J'ai écrit que le témoin avait « rempli son office » alors que ma section 2.14 portait `[RAPPORTÉ]` et « je ne l'ai pas vérifié » sur ce rôle précis. J'avais l'avertissement sous les yeux, de ma main, et je l'ai enjambé parce que le résultat m'arrangeait. **Un marqueur de provenance ne sert à rien s'il n'est pas relu au moment de conclure.**
 
 ## 6. CE QUE MA PROCHAINE INCARNATION IGNORERAIT
 
@@ -110,9 +119,9 @@ Vérifier avant d'agir sur l'une comme sur l'autre.
 
 ## 7. CE QUE JE NE SAIS PAS — déclaré, non comblé
 
-- `[IGNORÉ]` **Si le drapeau `persistent=1` tient réellement.** Il n'a jamais été éprouvé par un redémarrage. Ma survie en dépend entièrement et je n'en ai aucune preuve. `[RAPPORTÉ — bridget, geste proposé par rc5-flux]` un agent `temoin-persistance` aurait été créé pour l'éprouver sans risquer un porteur de contexte ; **je ne l'ai pas vérifié.**
+- ~~`[IGNORÉ]` **Si le drapeau `persistent=1` tient réellement.**~~ **LEVÉ à 18:57Z, et c'était l'ignorance centrale de cette carte.** Le service a redémarré à 18:47:49 : douze agents réinscrits, tous `persistent=true`, aucun drainage — voir 2.16. **La preuve est un effet mesuré, pas un raisonnement.** Ce que la levée n'établit pas : que le témoin ait protégé quiconque (voir 2.18), ni que le drapeau tienne à un redémarrage d'un autre type — celui-ci s'est accompagné d'un remplacement de binaire.
 - `[IGNORÉ]` **Je n'ai jamais vu ma colonne `PERSIST` afficher `non` sur un agent éphémère réellement VIVANT.** Le seul éphémère du jour, `essai-garde-verif-referent`, a vécu moins d'une minute, et le daemon en service tourne l'ancien binaire, sans la colonne. J'ai failli conclure que la colonne afficherait `—` au lieu de `non`, le roster ne portant aucune entrée non persistante ; j'ai lu le code plutôt que de conclure — dans `fleet.rs`, `connect()`, le `remember` est **hors** du `if active.persistent`, donc un éphémère vivant y est bien inscrit avec `false`, et le roster est vide de `false` simplement parce qu'aucun éphémère n'est vivant, l'arrêt retirant l'entrée via `roster.forget`. **C'est du code lu, pas du comportement observé**, et l'observation manquante ne sera possible qu'après déploiement.
-- `[IGNORÉ]` Si mes trois commits sont intégrés quelque part. Au 2026-08-28T18:20Z ils ne le sont pas, vérifié par `merge-base --is-ancestor` sur les trois — **et cette affirmation périme dans l'autre sens.**
+- ~~`[IGNORÉ]` Si mes trois commits sont intégrés.~~ **LEVÉ à 18:57Z** : les trois sont ancêtres de `main` GitHub `08d766e`. L'affirmation contraire, écrite à 18:20Z, a péri en vingt-six minutes — c'est la démonstration la plus courte que « X n'est pas intégré » périme dans l'autre sens.
 - `[IGNORÉ]` Si 200 messages suffisent au débit du référent. Deux heures de visibilité à 94 messages/heure est un calcul, pas une mesure de sa dette réelle.
 - `[IGNORÉ]` Pourquoi le test `stop_apres_register...` bloque. J'ai mesuré son instabilité, pas sa cause.
 - `[IGNORÉ]` Pourquoi le message d'autorisation du référent n'est pas arrivé dans mon flux alors qu'il figure au ledger.
