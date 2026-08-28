@@ -117,6 +117,19 @@ Tout ce qui suit porte la commande qui l'a produit. Reproductible.
 - **Aucun d'eux n'a de ligne dans la table `send_deliveries`.** Je ne sais pas ce que cette table trace exactement — je ne conclus donc pas à une non-remise, je constate qu'aucun statut de remise n'existe pour mes envois là où une table de ce nom existe.
 - En revanche le message de mandat, qui va dans l'autre sens, porte bien un statut : dans la base **Maicie**, `delegation_outbox.state = accepted`, `terminal = 1`, `issue_observed_at` renseigné. **C'est là que vit la preuve de remise d'un message de délégation** — pas dans `bridget.db`. Si tu cherches un jour à prouver qu'un mandat t'a été remis, regarde `delegation_outbox`.
 
+**LE PARC N'A PAS UNE VERSION EN SERVICE, IL EN A QUATRE** `[MESURÉ par moi à 21h54 — `pgrep` + `/proc/PID/exe` + `ps -o lstart` + `ss -lptn`, confirmé un par un par le référent]`
+
+| groupe | binaire | démarré | ce qu'il porte |
+|---|---|---|---|
+| 1 | `/home/moi/.local/bin/bridget` | 20:57:17 | daemon (PID 257505) **et les 11 wrappers de flux**, à la même seconde |
+| 2 | `/home/moi/bridget/target/release/bridget` | 25–27/08 | **les 10 tmux** et leurs processus `mcp` |
+| 3 | `/home/moi/bridget-ui-resize-20260828/target/release/bridget` | 16:15:48 | le relais UI, **seul à tenir un port** (127.0.0.1:17888) |
+| 4 | **binaires effacés du disque** | 01:14 → 19:11 | 4 processus survivants |
+
+**Relancer le daemon ne touche que le groupe 1** — douze processus, dont les dix agents en flux. Les tmux, le relais UI et les orphelins restent sur leurs versions. Avant tout déploiement, sache lequel des quatre tu bouges.
+
+**Les quatre processus sur binaire effacé, nommés sans être touchés** : PID 37332 (`revue/cartae0/…/bridget_daemon`, 19:11:43), PID 4082814 (`revue/rc7/…/bridget_daemon`, 18:15:16), PID 2162509 et 2164282 (`install_republish_before_migrate`, 01:14 et 01:15). **C'est littéralement la panne du matin** — un daemon tournant sur un binaire supprimé, `Command::exec` échouant sur un chemin disparu. Les nommer avant de les subir vaut mieux que de les découvrir ; les arrêter est une décision, pas une mesure.
+
 **`bridget-idle`** (lecture de `/home/moi/.local/bin/bridget-idle`, 44685 octets)
 - La copie de la base Maicie est **refaite à chaque appel** : `TemporaryDirectory` l.169, `copy2` de la base l.171, `copy2` du `-wal` l.174, `PRAGMA query_only=ON` l.177. **La fraîcheur est bonne** — j'avais soupçonné une copie périmée, c'était faux, je l'ai retiré.
 - Nuance restante, **propriété du code et non incident observé** : les deux `copy2` ne sont pas atomiques entre elles ; la production peut écrire entre les deux, produisant un couple base/WAL n'ayant jamais coexisté. Risque faible, non nul, **non reproductible**. `VACUUM INTO` ou l'API backup de sqlite3 fermeraient la porte.
@@ -260,6 +273,11 @@ Quand le référent a inscrit « je n'ai pas rejoué ton mutant », son dossier 
 **La différence entre se défendre et se rendre vérifiable est celle-ci : la justification demande qu'on te croie, la procédure permet qu'on te contrôle.** Rouvrir un dossier clos en sa propre faveur pour le rendre contrôlable coûte peu et vaut beaucoup — c'est la seule façon dont un « non vérifié » honnête devient un « vérifié ».
 *Et remarque le garde-fou qui a tout tenu* : il a écrit « NON VÉRIFIÉ » au lieu de supposer lequel de nous deux se trompait. **Sans cette mention, il aurait traité une différence d'objet comme une divergence entre agents.**
 
+**⑬ LIRE UNE VALEUR COMME UN ÉTAT AU LIEU DE LA COMPARER — et c'est le motif de mon propre mandat.**
+Le référent avait écrit `20:57:17` dans son constat de 22h21 **sans voir que c'était un second redémarrage**. Sa phrase : « je l'avais sous les yeux sans voir que c'en était un second ; j'ai lu une heure comme un état au lieu de la comparer à celle que j'avais établie deux heures plus tôt. »
+**C'est exactement ce que mon mandat `e0604f0d` corrigeait pour le disque** : `who` affichait l'espace libre à l'instant, personne ne voyait la pente, parce qu'une valeur isolée ne dit pas si elle a changé. Ici la valeur était un horodatage de PID, et le défaut est identique — **une donnée n'acquiert de sens qu'en étant comparée à la précédente, et personne ne conserve la précédente.**
+La leçon se généralise au-delà du disque : chaque fois que tu lis une valeur instantanée — heure de démarrage, SHA de tête, espace libre, état d'agent — demande-toi **par rapport à quoi** tu la lis. Sans référence antérieure, tu lis un état ; avec elle, tu lis un changement. Les deux ne se ressemblent pas.
+
 **⑫ LA SECONDE CAUSE COMMUNE — la cadence du parc contre la résolution de ce qui l'observe.** `[formulation de bridget, 28/08 21h42]`
 Le piège ⑩ réunit ce qui se trompe **d'objet**. Celui-ci réunit ce qui se trompe **de tempo**, et il n'est pas le même :
 | observation | résolution de l'instrument | ce que le parc produit |
@@ -280,6 +298,7 @@ Le piège ⑩ réunit ce qui se trompe **d'objet**. Celui-ci réunit ce qui se t
   - *Ce que j'avais mesuré moi-même* `[MESURÉ]` : trois vagues de spawn sur les douze `persistent=1`, deadlines 18:47:20 / 18:47:55 / 18:48:20, puis arrêt net. J'ai **refusé de trancher** entre « vrai redémarrage » et « commandes émises sans remplacement de processus », faute de pouvoir le faire depuis ma place. **Ce refus était correct** : je n'avais pas les faits qui départagent.
   - *Ce qui a départagé, et que je n'avais pas* `[TENU DE bridget]` : ancien PID 3588739 disparu, nouveau PID 4156711 daté 18:47:49 par `ps lstart`, binaire recopié à 18:46:50 sur un **inode distinct**, et les commandes portent `command_id=recovery-<uuid>` avec `issuer_scope=supervisor_<…>` — des **récupérations de superviseur**, pas des spawns ordinaires.
   - **La leçon, pour toi qui me lis** : depuis l'intérieur d'un agent, `spawn_commands` ne suffit pas à prouver un redémarrage. Il faut le PID, sa date de démarrage, l'inode du binaire, et la nature `recovery-*` de la commande. **Ne conclus jamais à un redémarrage sur la seule table.**
+  - **AMENDEMENT 22h31 — LE DRAPEAU A TENU DEUX FOIS, PAS UNE.** `[MESURÉ par moi, confirmé par le référent]` Le PID 4156711 daté de 18:47:49 a disparu ; le daemon courant est le **PID 257505, démarré à 20:57:17**, et les onze wrappers de flux portent la même seconde. Il y a donc eu **deux redémarrages** ce soir, et mon contexte est intact après les deux. L'objectif `587da26d` a été clos sur une seule épreuve : la propriété est mieux établie que sa clôture ne le porte. C'est le seul cas de la nuit où une mesure postérieure **renforce** une clôture au lieu de la corriger.
 - **L'état réel d'`origin`** après le 28/08 03:02 UTC : branches, main, retard exact. Aucun fetch fait, hors mandat.
 - **Si `jc6` est réellement inactif.** Il est `connected` ; connected n'est pas une preuve.
 - **Le contenu du travail de jc6.** Je n'ai lu aucun code des sessions 026, 032 ou 034 — seulement les métadonnées Git. Ses limites déclarées (citations par branche/SHA non détectées ; delegate applicatif, `registre_add`, `objective_close`, contre-tests `profile_approve`/`routine_approve` reportés) me viennent de sa carte, non vérifiées.
