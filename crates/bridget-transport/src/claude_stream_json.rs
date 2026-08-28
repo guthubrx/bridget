@@ -73,6 +73,10 @@ struct QueueState {
     messages: VecDeque<BridgetMessage>,
     active: Option<ActiveTurn>,
     closed: bool,
+    /// `request_id` du `control_request` d'interruption émis et non encore
+    /// corrélé par son `control_response`. Porté par l'état de file parce que
+    /// l'émetteur (`cancel_delivery`) et le lecteur le partagent déjà.
+    pending_interrupt: Option<String>,
 }
 
 pub struct ClaudeStreamJsonTransport {
@@ -136,6 +140,7 @@ impl ClaudeStreamJsonTransport {
                 messages: VecDeque::new(),
                 active: None,
                 closed: false,
+                pending_interrupt: None,
             }),
             Condvar::new(),
         ));
@@ -349,9 +354,27 @@ impl ManagedSession for ClaudeStreamJsonTransport {
             .as_ref()
             .is_some_and(|active| active.message_id == message_id)
         {
-            // Aucun contrôle d'interruption Claude n'est attesté dans le
-            // contrat G5. On termine donc honnêtement la livraison en cours,
-            // sans inventer une interaction de permission fournisseur.
+            // Le contrôle d'interruption Claude est désormais attesté (mesures
+            // du 28/08) : on coupe le tour au lieu de tuer l'agent, qui reste
+            // vivant et enchaîne. Le terminal `aborted_*` clôt la livraison ;
+            // l'échéance du tour (`recv_timeout`) reste le repli si le
+            // fournisseur ne rend ni accusé ni terminal.
+            let request_id = format!("bridget-interrupt-{message_id}");
+            if write_control_interrupt(&self.writer, &request_id).is_ok() {
+                queue.pending_interrupt = Some(request_id.clone());
+                drop(queue);
+                wake.notify_one();
+                record_or_terminal(
+                    &self.journal,
+                    &self.events,
+                    "interrupt_requested",
+                    Some(message_id),
+                    json!({ "request_id": request_id, "reason": reason }),
+                );
+                return true;
+            }
+            // Repli historique : sans canal d'écriture, la seule fin honnête
+            // reste de terminer la livraison et d'arrêter le groupe.
             let active = queue.active.take().expect("tour Claude actif");
             let _ = active.completion.send(ManagedTerminal::Cancelled);
             wake.notify_one();
@@ -767,6 +790,32 @@ fn write_input(writer: &Writer, message: &BridgetMessage) -> Result<(), Transpor
         .map_err(|error| TransportError::Io(error.to_string()))
 }
 
+/// Trame de contrôle mesurée le 28/08 : `control_request` / `interrupt` sur
+/// l'entrée standard. Claude accuse par `control_response` en 3 ms puis rend un
+/// terminal `aborted_tools` ou `aborted_streaming` en 25 ms, sous-processus
+/// réellement arrêté, sans aucun signal POSIX. Le tour suivant repart.
+fn write_control_interrupt(writer: &Writer, request_id: &str) -> Result<(), TransportError> {
+    let frame = json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": { "subtype": "interrupt" },
+    });
+    let mut writer = writer
+        .lock()
+        .map_err(|error| TransportError::Io(error.to_string()))?;
+    let writer = writer.as_mut().ok_or(TransportError::AgentDead)?;
+    writeln!(writer, "{frame}").map_err(|error| TransportError::Io(error.to_string()))?;
+    writer
+        .flush()
+        .map_err(|error| TransportError::Io(error.to_string()))
+}
+
+/// Terminaux d'interruption Claude. Distincts d'un échec : le tour est coupé à
+/// la demande, l'agent reste vivant et enchaîne.
+fn interrupt_terminal_reason(reason: &str) -> bool {
+    matches!(reason, "aborted_tools" | "aborted_streaming")
+}
+
 fn spawn_reader(
     stdout: ChildStdout,
     prefetch: Vec<String>,
@@ -853,6 +902,41 @@ fn spawn_reader(
             // (deltas→assistant→result, ou assistant→result sans partial).
             // Une fixture assistant-puis-deltas testerait un fantôme de
             // protocole, pas un trou du pilote.
+            if kind == "control_response" {
+                // Forme mesurée le 28/08 : {"type":"control_response",
+                // "response":{"subtype":"success","request_id":…,
+                // "response":{"still_queued":[]}}}. Corrélation stricte : seul
+                // l'accusé portant le `request_id` émis solde l'interruption.
+                // Un accusé étranger est ignoré plutôt que d'éteindre une
+                // interruption qui n'est pas la sienne.
+                if let Some(acked) = value.pointer("/response/request_id").and_then(Value::as_str) {
+                    let matched = {
+                        let mut state =
+                            queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                        if state.pending_interrupt.as_deref() == Some(acked) {
+                            state.pending_interrupt = None;
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if matched {
+                        record_or_terminal(
+                            &journal,
+                            &events,
+                            "interrupt_acked",
+                            None,
+                            json!({
+                                "request_id": acked,
+                                "subtype": value
+                                    .pointer("/response/subtype")
+                                    .and_then(Value::as_str),
+                            }),
+                        );
+                    }
+                }
+                continue;
+            }
             if kind == "assistant" {
                 // TOOL : le content_block_start arrive tôt avec name mais
                 // input={}. On journalise ici le bloc assistant qui porte
@@ -910,6 +994,15 @@ fn spawn_reader(
                     && value.get("terminal_reason").and_then(Value::as_str) == Some("completed")
                 {
                     ManagedTerminal::Completed
+                } else if value
+                    .get("terminal_reason")
+                    .and_then(Value::as_str)
+                    .is_some_and(interrupt_terminal_reason)
+                {
+                    // `aborted_tools` / `aborted_streaming` : le tour a été
+                    // coupé à la demande. C'est une annulation, pas un échec —
+                    // sans quoi bridget-idle classerait l'agent en bloqué.
+                    ManagedTerminal::Cancelled
                 } else {
                     ManagedTerminal::Failed {
                         detail: value
@@ -1726,20 +1819,39 @@ mod tests {
         assert!(ensure_stream_arguments(&mut args).is_err());
     }
 
+    /// Contrat changé le 28/08, sur mesures : jusqu'ici, faute de trame
+    /// d'interruption attestée, l'annulation d'un tour actif tuait le groupe de
+    /// processus. Claude accuse un `control_request` en 3 ms et rend un
+    /// terminal `aborted_tools` en 25 ms, sous-processus arrêté sans signal
+    /// POSIX, tour suivant réussi en 1,594 s. On coupe donc le tour SANS tuer
+    /// l'agent — c'est déjà ce que fait Codex (`codex_app_server.rs`), qui
+    /// signale et laisse le worker émettre `turn/interrupt`.
+    ///
+    /// Le faux fournisseur répond ici exactement les formes mesurées.
     #[test]
-    fn annulation_active_termine_et_recolte_le_processus_claude() {
+    fn interruption_active_coupe_le_tour_sans_tuer_l_agent_claude() {
         let mut slow = options();
-        slow.args[1] = "while IFS= read -r line; do sleep 10; done".to_string();
+        slow.args[1] = concat!(
+            "while IFS= read -r line; do case \"$line\" in ",
+            "*control_request*) ",
+            "rid=$(printf '%s' \"$line\" | sed 's/.*\"request_id\":\"\\([^\"]*\\)\".*/\\1/'); ",
+            "printf '{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",",
+            "\"request_id\":\"%s\",\"response\":{\"still_queued\":[]}}}\\n' \"$rid\"; ",
+            "printf '{\"type\":\"result\",\"is_error\":true,",
+            "\"terminal_reason\":\"aborted_tools\"}\\n';; ",
+            "*) : ;; esac; done"
+        )
+        .to_string();
         let mut transport = ClaudeStreamJsonTransport::spawn(slow).unwrap();
         transport.deliver(&message("claude-cancel")).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = Instant::now() + Duration::from_secs(2);
         while !transport.is_busy() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(transport.is_busy());
         assert!(transport.cancel_delivery("claude-cancel", "annulé par le daemon"));
 
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = Instant::now() + Duration::from_secs(5);
         let mut events = Vec::new();
         while Instant::now() < deadline {
             events.extend(transport.drain_events());
@@ -1756,16 +1868,26 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(10));
         }
-        assert!(events.iter().any(|event| {
-            matches!(
-                event.kind,
-                ManagedEventKind::TurnFinished {
-                    terminal: ManagedTerminal::Cancelled,
-                    ..
-                }
-            )
-        }));
-        assert!(!transport.is_alive());
+        // Assertion métier 1 : `aborted_tools` est un terminal d'annulation,
+        // pas un échec — sinon l'agent serait classé bloqué par la ronde.
+        assert!(
+            events.iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::TurnFinished {
+                        terminal: ManagedTerminal::Cancelled,
+                        ..
+                    }
+                )
+            }),
+            "terminal d'interruption absent : {events:?}"
+        );
+        // Assertion métier 2 : c'est tout l'objet de la trame — l'agent
+        // survit à l'interruption et peut enchaîner le tour suivant.
+        assert!(
+            transport.is_alive(),
+            "l'agent a été tué au lieu d'être interrompu"
+        );
         transport.stop();
     }
 
