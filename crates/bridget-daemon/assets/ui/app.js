@@ -613,6 +613,17 @@
         assert.equal(messages[0].at, 110);
       });
 
+      test("message_optimiste_est_rattache_au_record_par_delivery_id", () => {
+        const events = [
+          { kind: "message", role: "user", agent: "bridget", text: "ping", at: 10, deliveryId: "D1", messageId: "D1" },
+          { kind: "message", role: "user", agent: "bridget", text: "ping", at: 11, deliveryId: "D2", messageId: "D2" },
+          { kind: "record", agent: "bridget", at: 12, record: { message_id: "D1", session_id: "s", seq: 1, event: "turn_start", payload: { body: "ping" } } },
+          { kind: "record", agent: "bridget", at: 13, record: { message_id: "D2", session_id: "s", seq: 2, event: "turn_start", payload: { body: "ping" } } },
+        ];
+        const messages = api.projectTimeline(events).filter((entry) => entry.kind === "message");
+        assert.deepEqual(messages.map((entry) => entry.deliveryId || entry.messageId), ["D1", "D2"]);
+      });
+
       test("contrat_c3_assemble_actes_raisonnement_et_reponse", () => {
         const records = [
           { v: 1, seq: 1, ts: "2026-08-25T20:00:00Z", session_id: "s1", event: "turn_start", message_id: "m1", payload: {} },
@@ -2709,15 +2720,10 @@
     const ordered = (Array.isArray(events) ? events : [])
       .map((event, index) => ({ ...event, __order: index }))
       .sort((left, right) => (left.at || 0) - (right.at || 0) || left.__order - right.__order);
-    const optimisticDeliveries = new Set(
+    const ledgerMessageIds = new Set(
       ordered
-        .filter((entry) => entry.kind === "message" && entry.deliveryId)
-        .map((entry) => entry.deliveryId),
-    );
-    const knownMessageIds = new Set(
-      ordered
-        .filter((entry) => entry.kind === "message")
-        .flatMap((entry) => [entry.deliveryId, entry.messageId].filter(Boolean)),
+        .filter((entry) => entry.kind === "record" && entry.record && entry.record.message_id)
+        .map((entry) => entry.record.message_id),
     );
     const turns = new Map();
     const projected = [];
@@ -2753,6 +2759,9 @@
 
     ordered.forEach((entry) => {
       if (entry.kind !== "record") {
+        if (entry.kind === "message" && entry.deliveryId && ledgerMessageIds.has(entry.deliveryId)) {
+          return;
+        }
         projected.push(entry);
         return;
       }
@@ -2838,9 +2847,7 @@
 
     turns.forEach((turn) => {
       if (
-        turn.promptText &&
-        !optimisticDeliveries.has(turn.key) &&
-        !knownMessageIds.has(turn.key)
+        turn.promptText
       ) {
         projected.push({
           kind: "message",
@@ -2849,6 +2856,7 @@
           text: turn.promptText,
           at: turn.promptAt || turn.startAt,
           messageId: turn.key,
+          deliveryId: ledgerMessageIds.has(turn.key) ? turn.key : undefined,
         });
       }
       if (turn.textParts.length > 0) {
@@ -2871,16 +2879,7 @@
       });
     });
 
-    const ledgerUserMessages = new Set(
-      projected
-        .filter((entry) => entry.kind === "message" && entry.role === "user" && !entry.deliveryId)
-        .map((entry) => `${entry.agent || ""}\u0000${entry.text || ""}`),
-    );
     return projected
-      .filter((entry) => !(entry.kind === "message"
-        && entry.role === "user"
-        && entry.deliveryId
-        && ledgerUserMessages.has(`${entry.agent || ""}\u0000${entry.text || ""}`)))
       .sort((left, right) => (left.at || 0) - (right.at || 0) || left.__order - right.__order)
       .map(({ __order, ...entry }) => entry);
   }
