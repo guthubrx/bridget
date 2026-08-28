@@ -57,7 +57,19 @@ dispatching   | enveloppe présente |   35
 - **Contrôle négatif** : `delivery_id = ledger.id` → **0**. La jointure n'est pas un artefact.
 - **Preuve sur un cas connu** — ma propre remise : `ledger.id = e99afe7c1c7c4` ↔ `send_deliveries.idempotency_key = e99afe7c1c7c4`, `delivery_id = 795e9b6e-…`, `phase = indeterminate`.
 
-jc1-flux déclarait ne pas l'avoir cherchée. Elle est là. **La dette cesse donc d'être un minorant structurel : on peut désormais nommer qui a perdu quoi.**
+jc1-flux déclarait ne pas l'avoir cherchée. Elle est là. On peut désormais **nommer qui a perdu quoi**.
+
+> ### ⚠ CORRECTION DE MON PROPRE RAPPORT — mesurée à 18h35, après coup
+>
+> **J'avais écrit que la dette « cesse d'être un minorant structurel ». C'est trop fort, et je le retire.**
+>
+> Mesure : `ledger` = **9227** lignes · `send_deliveries` = **5420** sagas · jointes = **5349** · **sans aucune saga = 3878, soit 42 %**.
+>
+> Découvert par un cas propre : mes envois qui rendent `OK: envoyé` directement n'ont **aucune ligne** dans `send_deliveries` ; seuls ceux passés par le dépôt idempotent (`DÉPÔT: in_flight`) en créent une. **`send_deliveries` ne couvre donc pas tous les messages.**
+>
+> **Conséquence honnête :** la jointure lève la limite pour les 58 % couverts par une saga. Pour les **3878 autres (42 %), aucune information de remise n'existe** — ni succès, ni échec. Le chiffre de 79 reste donc **un plancher**, comme annoncé, mais désormais on sait *de combien* la zone d'ombre s'étend : `bridget` elle-même compte **1945** messages sans saga.
+>
+> *Je corrige plutôt que de laisser passer : mon rapport est dans `main`, et une formule trop forte y aurait circulé comme un fait.*
 
 ## 3. La dette réelle, nommée
 

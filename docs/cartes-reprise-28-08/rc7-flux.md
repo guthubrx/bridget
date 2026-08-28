@@ -3,14 +3,21 @@
 > **TOUTE AFFIRMATION D'INTEGRATION OU DE DEPLOIEMENT DE CETTE CARTE EST DATEE DU 28/08 ET NON REVERIFIEE DEPUIS.**
 > Elle en porte deux, et elles périment dans des sens opposés. « 055 est intégrée »
 > (§2) était mesuré par moi après `fetch` ; une intégration ne se défait pas, mais
-> ne t'y fie pas sans mesurer. « 060 non intégré, non déployé » (§1, §4) est le
-> plus fragile : il suffit que quelqu'un intègre ou déploie pour que cette carte
-> devienne fausse en te faisant croire qu'il reste du travail. Avant de t'appuyer
-> sur l'une ou l'autre :
+> ne t'y fie pas sans mesurer. « 060 et 061 non intégrés, non déployés » (§1, §4)
+> est le plus fragile : il suffit que quelqu'un intègre ou déploie pour que cette
+> carte devienne fausse en te faisant croire qu'il reste du travail. **`061` ne
+> peut pas être intégrée seule** : elle corrige du code de `060` et se branche sur
+> `9c6f47d`, pas sur `main`. Avant de t'appuyer sur l'une ou l'autre :
 > `git fetch` puis `git merge-base --is-ancestor <sha> origin/main`. Ne déduis pas, mesure.
 > **NOMME LE REMOTE avant de le croire** : `origin` ne désigne pas le même dépôt
-> selon les checkouts, deux du parc pointent un miroir local figé au lieu de
-> GitHub (trouvé par `cartae0-flux` le 28/08). Vérifie d'abord
+> selon les checkouts. Défaut trouvé par `cartae0-flux` le 28/08, annoncé pour
+> deux checkouts ; j'en ai mesuré **cinq** — `revue/cartae0`,
+> `revue/essai-claude-distant/bridget`, `revue/essai-distant`, `revue/essai-equipier`
+> et `revue/essai-equipier/bridget` — dont l'`origin` est le miroir
+> `/home/moi/revue/bridget`, figé au 25/08 et sans aucune carte `-flux`. Et
+> `revue/essai-distant` a un second checkout, `bridget-src`, dont l'`origin` est
+> GitHub : **le même agent peut avoir deux remotes divergents**, donc dis toujours
+> depuis quel répertoire tu as mesuré. Vérifie d'abord
 > `git config --get remote.origin.url` — pour ce poste il vaut
 > `https://github.com/guthubrx/bridget.git`, mesuré, mais ne le suppose pas chez toi.
 > **Et sache qu'une ref est périmée à l'instant même où tu la fetches** : le 28/08
@@ -245,21 +252,38 @@ Les miens, éprouvés :
 4. **Ne pas imputer les 11 échecs préexistants** à son propre delta. Les
    mesurer en `stash` avant de conclure.
 5. **`--as` ne teste pas le déploiement** (voir §2).
-6. **`maicie` n'expose que `delegate`.** Je n'ai donc PAS pu lire l'objectif au
-   greffe alors que le mandat me le demandait ; j'ai travaillé sur le résumé du
-   référent, et je l'ai dit.
+6. **`maicie` n'expose PAS que `delegate`** — c'est ce que j'ai cru toute la
+   journée sur la foi du message rendu par le binaire nu, « commande attendue :
+   delegate ». Ce message n'énumère pas, il nomme. `maicie --help` rend les neuf
+   commandes : `delegate, status, objective, profile, registre, plage, routine,
+   preflight, migrate`. La forme place l'identifiant AVANT l'action :
+   `maicie objective <UUID> close --reason "<texte>" --config <chemin>`.
+   Un message d'erreur n'est pas un usage.
+
+7. **N'écris pas au référent pour accuser réception.** Demandé explicitement le
+   28/08 à 18h09, à tous les agents. Il reçoit 94 messages par heure et son
+   outil n'en expose que 20, soit treize minutes de fenêtre : chaque envoi
+   inutile pousse un message utile hors de sa vue. Un message de l'humain a été
+   lu treize minutes trop tard pour cette raison.
+   **N'envoie que trois choses** : une mesure qu'il n'a pas, une réfutation
+   d'une de ses affirmations, ou une demande. Rien d'autre — ni remerciement, ni
+   confirmation, ni appréciation de sa conduite. J'ai moi-même émis une
+   vingtaine de messages ce jour-là, dont plusieurs n'auraient pas dû partir.
+   Ce n'est pas une baisse d'exigence : ce sont ces trois catégories qui ont
+   corrigé une vingtaine de ses erreurs, et elles arrivent d'autant mieux que le
+   reste se tait.
 
 Hérités de `rc7`, que je transmets sans les avoir tous éprouvés :
 
-7. Provenance absente n'est pas provenance humaine ; ne pas rétablir le repli
+8. Provenance absente n'est pas provenance humaine ; ne pas rétablir le repli
    humain dans Attach.
-8. Un `prompt_dispatched` peut apporter `from` APRÈS le `turn_start` :
+9. Un `prompt_dispatched` peut apporter `from` APRÈS le `turn_start` :
    l'en-tête initial doit alors être **remplacé**, non complété.
-9. `057` ne se corrige ni par concaténation globale ni par `lines()` : l'ordre
+10. `057` ne se corrige ni par concaténation globale ni par `lines()` : l'ordre
    des fragments séparés par un événement outil doit être conservé.
-10. `cargo fmt` workspace est rouge hors delta ; ne pas l'imputer aux
+11. `cargo fmt` workspace est rouge hors delta ; ne pas l'imputer aux
     correctifs RC7.
-11. **Les trois témoins 055 sont distincts** — journaux historiques, plus deux
+12. **Les trois témoins 055 sont distincts** — journaux historiques, plus deux
     jumeaux réels de pilotes — et se conservent avec leurs mutants. Le référent
     s'est engagé à les protéger si quelqu'un propose de les fusionner.
 
