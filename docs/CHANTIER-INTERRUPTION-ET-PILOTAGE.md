@@ -294,7 +294,14 @@ Codex expose **`turn/steer`** : injecter un message dans un tour en cours
 
 ## Référence : openclaw
 
-`~/11.Repositories/openclaw/extensions/codex/src/app-server/`
+> ATTENTION — CES CHEMINS N EXISTENT PAS SUR CETTE MACHINE. Mesure du 28/08 a 21h47
+> par essai-claude-distant-flux, verifiee par le referent : /home/moi/11.Repositories
+> est ABSENT, et find ne rend ni openclaw, ni attempt-steering.ts, ni
+> CodexSessionRuntime.ts. Le document affirmait une disponibilite fausse.
+> LES EXTRAITS REPRODUITS CI-DESSOUS ONT SUFFI : turn/steer a ete livre sur leur
+> seule foi, branche feat/codex-turn-steer. Ne pas chercher les fichiers.
+
+`~/11.Repositories/openclaw/extensions/codex/src/app-server/` (inaccessible)
 - `attempt-steering.ts` — la file de pilotage, `createCodexSteeringQueue` ligne 45
 - `run-attempt-active-turn.ts` — son usage dans un tour actif, ligne 63
 - `run-attempt-lifecycle-controller.ts:73` — « Interrupt drops accepted pending »
