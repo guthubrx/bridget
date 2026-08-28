@@ -380,7 +380,11 @@ parent = os.path.realpath(os.path.dirname(os.path.abspath(destination)))
 lock_path = os.path.join(parent, os.path.basename(destination) + ".install.lock")
 fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
 try:
-    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("republication ou migration Maicie déjà en cours", file=sys.stderr)
+        raise
     os.replace(temporary, destination)
 finally:
     os.close(fd)
