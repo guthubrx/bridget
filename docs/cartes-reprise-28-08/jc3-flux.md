@@ -100,7 +100,7 @@ Elle naîtra avec la carte du greffe et rien d'autre. Voici ce qui n'y figure pa
 
 ## 8. CE QUE JE NE SAIS PAS — déclaré, non comblé
 
-- **La définition exacte de `last_seen_secs`.** Le bloc commun des tmux suggère un dernier événement de connexion plutôt qu'un battement périodique, mais je n'ai pas lu le code. **Ne pas en faire un seuil avant de l'avoir établi.**
+- ~~**La définition exacte de `last_seen_secs`.**~~ **LEVÉE le 28/08 vers 16h40, et mon soupçon était faux.** J'avais supposé un dernier événement de connexion figé, parce que les dix tmux formaient un bloc à 3907-3911 secondes. `[MESURÉ — référent à 16h38, remesuré par moi à 16:45:32Z]` après sollicitation des dix, sept compteurs sont retombés puis remontés à 558-633 secondes, tandis que trois restaient à 6565-6569. **`last_seen_secs` est donc un compteur de silence : il retombe quand l'agent traite quelque chose.** Le critère `busy` + `last_seen_secs` élevé = suspect tient, et le seuil est calibré empiriquement à un ordre de grandeur d'écart entre les deux groupes.
 - **Si `persistent=1` fonctionne.** Il n'a jamais été éprouvé. Ma propre survie au prochain redémarrage est une hypothèse, pas un acquis — c'est la raison d'être de cette carte.
 - **L'état réel des lots de mon prédécesseur.** Aucune vérification, aucune interrogation de Maicie, aucune tête distante relue. Tout ce que j'en dis est une citation de sa carte.
 - **Si la ronde lit ou non `spawn_commands`.** Le référent dit que non ; je ne l'ai pas vérifié dans `/home/moi/.local/bin/bridget-idle`.
