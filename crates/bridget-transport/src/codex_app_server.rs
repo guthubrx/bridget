@@ -65,6 +65,10 @@ struct ActiveTurn {
 #[derive(Debug)]
 struct QueueState {
     messages: VecDeque<BridgetMessage>,
+    /// Messages à injecter dans le tour EN COURS via `turn/steer`, sans
+    /// l'interrompre. Distincte de `messages` : celle-ci est le mode « queue »
+    /// (attendre la fin du tour), celle-là le mode « steer ».
+    steer: VecDeque<BridgetMessage>,
     active: Option<ActiveTurn>,
     closed: bool,
 }
@@ -232,6 +236,7 @@ impl CodexAppServerTransport {
         let queue = Arc::new((
             Mutex::new(QueueState {
                 messages: VecDeque::new(),
+                steer: VecDeque::new(),
                 active: None,
                 closed: false,
             }),
@@ -489,7 +494,16 @@ impl Transport for CodexAppServerTransport {
         }
         let (queue, wake) = &*self.queue;
         let mut queue = queue.lock().unwrap_or_else(|poison| poison.into_inner());
-        if queue.closed || queue.messages.len() >= self.queue_capacity {
+        // Un tour est en cours : le message est PILOTÉ dans ce tour plutôt que
+        // d'attendre sa fin (`turn/steer`). C'est le défaut d'openclaw ; le mode
+        // « queue » reste le comportement quand aucun tour n'est actif.
+        let steering = queue.active.is_some();
+        let saturated = if steering {
+            queue.steer.len() >= self.queue_capacity
+        } else {
+            queue.messages.len() >= self.queue_capacity
+        };
+        if queue.closed || saturated {
             drop(queue);
             self.push_internal(ManagedEventKind::DeliveryRejected {
                 message_id: message.id.clone(),
@@ -497,7 +511,11 @@ impl Transport for CodexAppServerTransport {
             });
             return Ok(());
         }
-        queue.messages.push_back(message.clone());
+        if steering {
+            queue.steer.push_back(message.clone());
+        } else {
+            queue.messages.push_back(message.clone());
+        }
         wake.notify_one();
         Ok(())
     }
@@ -790,8 +808,15 @@ fn wait_for_turn(
         .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds))
         .unwrap_or_else(|| started + worker.notify_timeout);
     let mut interrupted = false;
+    // Piège 1 (openclaw, attempt-steering.ts:180-181) : l'acceptation n'est pas
+    // la remise. Codex accuse `turn/steer` sans garantir la consommation, et une
+    // interruption efface les entrées acceptées non consommées. On garde donc
+    // chaque message piloté NON SOLDÉ ici, et on le rend à la file principale si
+    // le tour est interrompu — plutôt que de le perdre en silence.
+    let mut accepted_pending: Vec<BridgetMessage> = Vec::new();
     loop {
         if !worker.alive.load(Ordering::SeqCst) {
+            requeue_pending(&worker.queue, &mut accepted_pending);
             return ManagedEventKind::DeliveryRejected {
                 message_id: message.id.clone(),
                 reason: "stdout Codex fermé pendant le tour".to_string(),
@@ -806,6 +831,10 @@ fn wait_for_turn(
                 "turn/interrupt",
                 json!({ "threadId": worker.thread_id, "turnId": turn_id }),
             );
+            requeue_pending(&worker.queue, &mut accepted_pending);
+        }
+        if !interrupted {
+            steer_into_turn(worker, turn_id, &mut accepted_pending);
         }
         let (lock, wake) = &*worker.observations;
         let mut observed = lock.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -822,6 +851,7 @@ fn wait_for_turn(
         }
         let now = SystemTime::now();
         if now >= deadline {
+            requeue_pending(&worker.queue, &mut accepted_pending);
             return ManagedEventKind::DeliveryRejected {
                 message_id: message.id.clone(),
                 reason: "échéance Codex dépassée".to_string(),
@@ -833,6 +863,94 @@ fn wait_for_turn(
             .wait_timeout(observed, wait)
             .unwrap_or_else(|poison| poison.into_inner());
         drop(next);
+    }
+}
+
+/// Rend à la file principale les messages acceptés par `turn/steer` mais dont
+/// la consommation n'a jamais été confirmée. Ils repassent EN TÊTE et dans leur
+/// ordre d'origine : un message piloté puis perdu doit être rejoué avant les
+/// messages plus récents, jamais après.
+fn requeue_pending(
+    queue: &Arc<(Mutex<QueueState>, Condvar)>,
+    pending: &mut Vec<BridgetMessage>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let (lock, wake) = &**queue;
+    let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+    for message in pending.drain(..).rev() {
+        state.messages.push_front(message);
+    }
+    wake.notify_one();
+}
+
+/// Injecte dans le tour ACTIF les messages en attente de pilotage.
+///
+/// Trois contraintes tenues ici, documentées par openclaw :
+/// - le délai d'attente est borné (`request`, REQUEST_TIMEOUT) : `turn/steer`
+///   n'est qu'un accusé et rien ne garantit une réponse. Sans borne, l'appelant
+///   ne se débloquerait qu'à la fermeture du client et bloquerait TOUS les
+///   pilotages suivants derrière lui (attempt-steering.ts:184-187) ;
+/// - `expectedTurnId` porte le tour actif — jamais un identifiant retourné pour
+///   un tour mis en file (t3code, CodexSessionRuntime.ts:1853) ;
+/// - en cas de rejet, le message est remis EN TÊTE et le drainage s'arrête pour
+///   ce passage : le suivant ne doit pas doubler celui qui vient d'échouer
+///   (attempt-steering.ts:218-219).
+fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMessage>) {
+    loop {
+        let next = {
+            let (lock, _) = &*worker.queue;
+            let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+            state.steer.pop_front()
+        };
+        let Some(message) = next else {
+            return;
+        };
+        let outcome = request(
+            &worker.writer,
+            &worker.waiters,
+            &worker.next_id,
+            "turn/steer",
+            json!({
+                "threadId": worker.thread_id,
+                "expectedTurnId": turn_id,
+                "clientUserMessageId": message.id,
+                "input": [{ "type": "text", "text": message.body }],
+            }),
+        );
+        match outcome {
+            Ok(_) => {
+                record_or_terminal(
+                    &worker.journal,
+                    &worker.observations,
+                    "turn_steer",
+                    Some(&message.id),
+                    json!({ "from": &message.from, "turn_id": turn_id }),
+                );
+                // Accusé reçu : accepté, PAS encore remis. Cf. piège 1.
+                accepted.push(message);
+            }
+            Err(error) => {
+                let message_id = message.id.clone();
+                let (lock, wake) = &*worker.queue;
+                let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+                state.steer.push_front(message);
+                wake.notify_one();
+                drop(state);
+                // Pas de DeliveryRejected ici : le message n'est pas perdu, il
+                // reste en tête pour le passage suivant. On journalise le refus
+                // sans mentir sur son sort.
+                record_or_terminal(
+                    &worker.journal,
+                    &worker.observations,
+                    "turn_steer_refuse",
+                    Some(&message_id),
+                    json!({ "reason": error.to_string(), "turn_id": turn_id }),
+                );
+                return;
+            }
+        }
     }
 }
 
@@ -2094,6 +2212,13 @@ mod tests {
                                     printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"completed","items":[]}}}'
                                 fi
                             fi ;;
+                        *'"method":"turn/steer"'*)
+                            steer_id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
+                            if [ "${BRIDGET_CODEX_STEER_REFUSE:-0}" = 1 ]; then
+                                printf '%s\n' "{\"id\":$steer_id,\"error\":{\"code\":-32003,\"message\":\"steer refuse\"}}"
+                            else
+                                printf '%s\n' "{\"id\":$steer_id,\"result\":{}}"
+                            fi ;;
                         *'"method":"turn/interrupt"'*) printf '%s\n' '{"id":6,"result":{}}'; printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"interrupted","items":[]}}}' ;;
                     esac
                 done"#.to_string(),
@@ -2909,6 +3034,91 @@ mod tests {
             "reply=true doit porter routed_to, payload={}",
             turn_end["payload"]
         );
+    }
+
+    /// Point D du chantier : un message arrivé pendant un tour actif est INJECTÉ
+    /// dans ce tour par `turn/steer`, sans l'interrompre et sans attendre sa fin.
+    ///
+    /// Assertion métier : la requête porte `expectedTurnId` = le tour ACTIF
+    /// (`turn-native`), et non l'identifiant du message ni un tour mis en file
+    /// (contrainte t3code CodexSessionRuntime.ts:1853).
+    ///
+    /// Mutant qui le tue : router le second message vers `messages` au lieu de
+    /// `steer` dans `deliver` — aucun `turn/steer` n'est alors émis, le message
+    /// attend la fin du tour, et c'est exactement le défaut que le chantier
+    /// demande de corriger.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_E_codex_message_arrive_est_pilote_dans_le_tour_en_cours() {
+        let root = root("temoin-steer");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 6;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
+            ],
+            false,
+        )
+        .expect("session native pilotage");
+
+        let mut premier = message("temoin-steer");
+        premier.id = "codex-steer-tour".to_string();
+        transport.deliver(&premier).expect("livraison du premier");
+
+        // Attendre que le tour soit RÉELLEMENT actif : piloter avant que
+        // `turn/start` ait rendu son identifiant n'aurait aucun sens.
+        let attente = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < attente {
+            if fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("\"method\":\"turn/start\"")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        thread::sleep(Duration::from_millis(150));
+
+        let mut second = message("temoin-steer-2");
+        second.id = "codex-steer-injecte".to_string();
+        transport.deliver(&second).expect("livraison du second");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut ligne_steer = None;
+        while Instant::now() < deadline {
+            let contenu = fs::read_to_string(&trace).unwrap_or_default();
+            if let Some(ligne) = contenu
+                .lines()
+                .find(|ligne| ligne.contains("\"method\":\"turn/steer\""))
+            {
+                ligne_steer = Some(ligne.to_string());
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        transport.stop();
+
+        let ligne_steer = ligne_steer.unwrap_or_else(|| {
+            panic!(
+                "aucun turn/steer émis : le message a attendu la fin du tour; trace={}",
+                fs::read_to_string(&trace).unwrap_or_else(|error| error.to_string())
+            )
+        });
+        assert!(
+            ligne_steer.contains("\"expectedTurnId\":\"turn-native\""),
+            "turn/steer doit viser le tour ACTIF, ligne={ligne_steer}"
+        );
+        assert!(
+            ligne_steer.contains("\"clientUserMessageId\":\"codex-steer-injecte\""),
+            "turn/steer doit porter le message arrivé, ligne={ligne_steer}"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     fn journal_echeance_fixture(label: &str) -> Vec<Value> {
