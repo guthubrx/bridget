@@ -22,10 +22,12 @@ des deux pilotes doit écrire `turn_start.payload.from == "jc2"`. La même ligne
 JSONL, rendue par Attach, doit contenir `jc2 →` et ne doit pas contenir
 `humain →`.
 
-## Hors périmètre
+## Rendu des journaux historiques
 
-- Le repli `unwrap_or("humain")` dans Attach reste inchangé : il conserve son
-  comportement pour les journaux historiques réellement incomplets.
+- Si `prompt_dispatched` fournit un `from` attesté après un `turn_start` qui
+  en était dépourvu, Attach remplace l’en-tête initial par cet émetteur.
+- Si aucune entrée du tour ne porte de `from`, Attach rend
+  `émetteur non attesté` : une provenance inconnue ne devient jamais humaine.
 - `ui.rs` et `app.js` appartiennent à un autre correctif.
 - Aucun changement de contrat de journal ou de protocole n’est nécessaire.
 
@@ -38,6 +40,9 @@ JSONL, rendue par Attach, doit contenir `jc2 →` et ne doit pas contenir
 3. Retirer `from` de `turn_start` Codex doit tuer le témoin Codex sur
    l’assertion métier de provenance ou d’en-tête, avant toute réponse métier.
 4. Retirer `from` de `turn_start` Claude doit tuer le témoin jumeau.
+5. Un même rendu permanent rejoue deux tours historiques : l’un enrichi par
+   `prompt_dispatched.from=jc2`, l’autre sans provenance. Il exige
+   respectivement `jc2 →` et `émetteur non attesté →`, jamais `humain →`.
 
 ## Critères d’acceptation
 
@@ -45,4 +50,6 @@ JSONL, rendue par Attach, doit contenir `jc2 →` et ne doit pas contenir
 - Les deux témoins de traversée passent.
 - Les deux mutants meurent sur une assertion de propriété, puis sont restaurés
   par empreinte et rejeu nominal.
+- Les mutants qui ignorent l’enrichissement tardif ou rétablissent le repli
+  humain meurent sur ce même témoin de rendu.
 - `cargo check --workspace --all-targets` passe.

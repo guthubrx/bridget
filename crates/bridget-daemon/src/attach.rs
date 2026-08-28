@@ -32,6 +32,7 @@ const MAX_TURN_BLOCK_LINES: usize = 400;
 const MAX_TURN_RENDERED_CHARS: usize = 2 * MAX_TURN_BLOCK_BYTES;
 const DEFAULT_TERMINAL_COLUMNS: usize = 80;
 const DEFAULT_TERMINAL_ROWS: usize = 24;
+const UNATTESTED_SENDER_LABEL: &str = "émetteur non attesté";
 
 /// Garde minimale du terminal d'entrée. Le mode désactive le traitement des
 /// signaux afin que Ctrl-C arrive comme l'octet `0x03` à la boucle de saisie.
@@ -734,6 +735,7 @@ struct TurnKey {
 struct TurnBlock {
     key: TurnKey,
     header: Vec<String>,
+    header_sender_attested: bool,
     response: String,
     details: Vec<String>,
     stored_bytes: usize,
@@ -742,17 +744,34 @@ struct TurnBlock {
 }
 
 impl TurnBlock {
-    fn new(key: TurnKey, header: String) -> Self {
+    fn new(key: TurnKey, header: String, header_sender_attested: bool) -> Self {
         let header = header.lines().map(str::to_owned).collect::<Vec<_>>();
         Self {
             key,
             stored_bytes: header.iter().map(String::len).sum(),
             stored_lines: header.len(),
             header,
+            header_sender_attested,
             response: String::new(),
             details: Vec::new(),
             omitted_lines: 0,
         }
+    }
+
+    fn replace_header_with_attested_sender(&mut self, header: String) {
+        let previous_bytes = self.header.iter().map(String::len).sum::<usize>();
+        let previous_lines = self.header.len();
+        let header = header.lines().map(str::to_owned).collect::<Vec<_>>();
+        self.stored_bytes = self
+            .stored_bytes
+            .saturating_sub(previous_bytes)
+            .saturating_add(header.iter().map(String::len).sum::<usize>());
+        self.stored_lines = self
+            .stored_lines
+            .saturating_sub(previous_lines)
+            .saturating_add(header.len());
+        self.header = header;
+        self.header_sender_attested = true;
     }
 
     fn append_response(&mut self, content: &str) {
@@ -838,6 +857,7 @@ struct JournalRenderRecord {
     terminal: bool,
     /// `prompt_dispatched` sans corps : accusé transport, pas un message.
     ack_only: bool,
+    sender_attested: bool,
     rendered: String,
 }
 
@@ -872,6 +892,11 @@ fn journal_render_record(bytes: &[u8], agent: &str) -> Option<JournalRenderRecor
             .and_then(serde_json::Value::as_str)
             .filter(|body| !body.is_empty())
             .is_none();
+    let sender_attested = matches!(event.as_str(), "turn_start" | "prompt_dispatched")
+        && payload
+            .get("from")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|sender| !sender.is_empty());
     Some(JournalRenderRecord {
         key,
         event,
@@ -883,6 +908,7 @@ fn journal_render_record(bytes: &[u8], agent: &str) -> Option<JournalRenderRecor
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
         ack_only,
+        sender_attested,
         rendered: render_journal_event(bytes, agent),
     })
 }
@@ -1152,7 +1178,7 @@ impl BlockRenderer {
             } else {
                 format!("{} [tour repris en cours]", record.timestamp)
             };
-            self.current = Some(TurnBlock::new(key.clone(), header));
+            self.current = Some(TurnBlock::new(key.clone(), header, record.sender_attested));
         }
         if record.event == "turn_start" {
             if live {
@@ -1163,6 +1189,13 @@ impl BlockRenderer {
         // Accusé de livraison sous un tour déjà ouvert : corps déjà affiché.
         // Orphelin riche : le header vient d'être posé — redessiner comme turn_start.
         if record.event == "prompt_dispatched" {
+            if !record.ack_only
+                && record.sender_attested
+                && let Some(block) = self.current.as_mut()
+                && !block.header_sender_attested
+            {
+                block.replace_header_with_attested_sender(record.rendered.clone());
+            }
             if live && !record.ack_only {
                 self.redraw(input, output);
             }
@@ -1877,7 +1910,8 @@ fn inbound_message_parts(payload: &serde_json::Value) -> (String, String) {
             payload
                 .get("from")
                 .and_then(serde_json::Value::as_str)
-                .unwrap_or("humain")
+                .filter(|sender| !sender.is_empty())
+                .unwrap_or(UNATTESTED_SENDER_LABEL)
         ),
         payload
             .get("body")
@@ -2652,6 +2686,81 @@ mod tests {
         assert_sender_attribution(record, rendered);
     }
 
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_prompt_dispatched_enrichi_remplace_l_entete_legacy_sans_from() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new("codex-legacy".to_string(), false, true);
+        renderer.terminal_fd = None;
+        let mut output = Vec::new();
+        for (seq, message_id, event, payload) in [
+            (
+                1,
+                "legacy-enriched",
+                "turn_start",
+                json!({"body":"TRANCHE SPEC 052 POUSSEE"}),
+            ),
+            (
+                2,
+                "legacy-enriched",
+                "prompt_dispatched",
+                json!({"from":"jc2","body":"TRANCHE SPEC 052 POUSSEE"}),
+            ),
+            (
+                3,
+                "legacy-enriched",
+                "turn_end",
+                json!({"stop_reason":"end_turn"}),
+            ),
+            (
+                4,
+                "legacy-unattested",
+                "turn_start",
+                json!({"body":"ARCHIVE SANS EMETTEUR"}),
+            ),
+            (
+                5,
+                "legacy-unattested",
+                "turn_end",
+                json!({"stop_reason":"end_turn"}),
+            ),
+        ] {
+            renderer.apply(
+                RendererCommand::Event(AttachEvent::Journal {
+                    seq,
+                    bytes: journal_record_for_turn(
+                        seq,
+                        "session-legacy",
+                        message_id,
+                        event,
+                        payload,
+                    ),
+                    live: false,
+                }),
+                &input,
+                &mut output,
+            );
+        }
+
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(
+            rendered.contains("jc2 → TRANCHE SPEC 052 POUSSEE"),
+            "le prompt enrichi doit remplacer l’émetteur de l’en-tête : {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("humain → TRANCHE SPEC 052 POUSSEE"),
+            "le repli historique ne doit plus survivre à l’enrichissement : {rendered:?}"
+        );
+        assert!(
+            rendered.contains("émetteur non attesté → ARCHIVE SANS EMETTEUR"),
+            "une provenance absente doit rester explicitement non attestée : {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("humain → ARCHIVE SANS EMETTEUR"),
+            "une provenance absente ne doit jamais devenir humaine : {rendered:?}"
+        );
+    }
+
     #[test]
     fn matrice_stdin_stdout_selectionne_le_renderer_par_stdout_seul() {
         for (stdin_tty, stdout_tty) in [(false, false), (true, false), (false, true), (true, true)]
@@ -3247,6 +3356,7 @@ mod tests {
                 message_id: "message".to_string(),
             },
             "09:07 humain → Question".to_string(),
+            true,
         );
         for _ in 0..500 {
             block.append_response(&format!("{}\n", "x".repeat(200)));

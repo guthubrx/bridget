@@ -8,14 +8,21 @@
 
 ## Correctif
 
-Les pilotes Codex et Claude ajoutent `from` au payload de `turn_start`. Le
-repli Attach est conservé : ce correctif rend les nouveaux événements complets
-sans modifier le rendu des événements historiques incomplets.
+Les pilotes Codex et Claude ajoutent `from` au payload de `turn_start`. Pour
+les journaux historiques, Attach remplace l’en-tête initial non attesté si le
+`prompt_dispatched` du même tour apporte ensuite un `from` attesté. Si aucune
+source du tour ne porte cette provenance, le renderer affiche explicitement
+`émetteur non attesté` plutôt que d’inférer `humain`.
 
 Deux témoins de traversée lancent les pilotes réels sur des fournisseurs de
 test, lisent le JSONL de `JournalWriter`, puis donnent la même ligne à Attach.
 Ils vérifient ensemble le payload `from=jc2`, l’en-tête `jc2 →` et l’absence
 d’étiquette `humain →`.
+
+Un témoin de rendu rejoue dans le même `BlockRenderer` un tour historique
+enrichi et un tour sans provenance. Il vérifie les deux issues : correction de
+l’en-tête par `prompt_dispatched.from=jc2`, puis libellé non attesté quand ce
+champ est absent partout.
 
 ## Mesures
 
@@ -27,9 +34,18 @@ d’étiquette `humain →`.
 - Mutant Claude, même retrait :
   `0 passed; 1 failed; 0 ignored; 0 measured; 595 filtered out`, à la même
   assertion métier.
+- Univers du témoin historique : 1 test.
+- Nominal historique :
+  `1 passed; 0 failed; 0 ignored; 0 measured; 596 filtered out`.
+- Mutant historique A, qui ignore le `prompt_dispatched` enrichi :
+  `0 passed; 1 failed; 0 ignored; 0 measured; 596 filtered out`, à
+  l’assertion exigeant l’en-tête `jc2 →`.
+- Mutant historique B, qui rétablit le repli `humain` :
+  `0 passed; 1 failed; 0 ignored; 0 measured; 596 filtered out`, à
+  l’assertion exigeant le libellé `émetteur non attesté`.
 - Restauration : empreintes SHA-256 des trois fichiers de code identiques aux
   empreintes prises avant les mutations, puis rejeu nominal vert.
-- Non-régression ciblée : Codex `28/0/0`, Claude `19/0/0`, Attach `53/0/0`.
+- Non-régression ciblée : Codex `28/0/0`, Claude `19/0/0`, Attach `54/0/0`.
 - `cargo check --workspace --all-targets` : vert, avec avertissements
   préexistants hors périmètre.
 
