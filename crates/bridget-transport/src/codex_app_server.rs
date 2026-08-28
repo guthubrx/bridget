@@ -940,10 +940,11 @@ fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMes
                 // la file jusqu'à la fin du tour. Le message repart donc en mode
                 // « queue » — il sera traité au tour suivant plutôt que perdu ni
                 // rejoué en boucle.
-                let refus = error.to_string();
-                let non_pilotable = refus.contains("activeTurnNotSteerable")
-                    || refus.contains("NotSteerable")
-                    || refus.contains("not steerable");
+                // Le marqueur est pose par provider_error_reason a partir du
+                // champ structure du protocole. On NE cherche PAS le message du
+                // fournisseur : il n'est jamais remonte, remplace par une
+                // empreinte — mesure du 28/08, banc /tmp/steer-reel-28aout.
+                let non_pilotable = error.to_string().contains("tour non pilotable");
                 let (lock, wake) = &*worker.queue;
                 let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
                 if non_pilotable {
@@ -1896,9 +1897,23 @@ fn provider_error_reason(error: &Value) -> String {
         return CODEX_SATURATED_REASON.to_string();
     }
     let reference = provider_fingerprint(b"error", error.to_string().as_bytes());
+    // Marqueur de NOTRE cru, pose sur la seule foi d'un champ STRUCTURE du
+    // protocole (`codexErrorInfo.activeTurnNotSteerable`). Mesure du 28/08 sur
+    // codex-cli 0.150.1 : le message fournisseur est « cannot steer a review
+    // turn », mais il n'est jamais remonte — l'empreinte le remplace, et c'est
+    // voulu. Sans ce marqueur, aucun appelant ne peut distinguer un tour non
+    // pilotable d'un refus quelconque.
+    let non_pilotable = error
+        .pointer("/data/codexErrorInfo/activeTurnNotSteerable")
+        .is_some();
+    let suffixe = if non_pilotable {
+        "; tour non pilotable"
+    } else {
+        ""
+    };
     match code {
-        Some(code) => format!("erreur Codex (code {code}; référence {reference})"),
-        None => format!("erreur Codex (référence {reference})"),
+        Some(code) => format!("erreur Codex (code {code}{suffixe}; référence {reference})"),
+        None => format!("erreur Codex ({suffixe}référence {reference})"),
     }
 }
 fn provider_fingerprint(domain: &'static [u8], value: &[u8]) -> String {
@@ -2230,7 +2245,7 @@ mod tests {
                         *'"method":"turn/steer"'*)
                             steer_id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
                             if [ "${BRIDGET_CODEX_STEER_REFUSE:-0}" = 1 ]; then
-                                printf '%s\n' "{\"id\":$steer_id,\"error\":{\"code\":-32003,\"message\":\"steer refuse\"}}"
+                                printf '%s\n' "{\"id\":$steer_id,\"error\":{\"code\":-32600,\"message\":\"cannot steer a review turn\",\"data\":{\"message\":\"cannot steer a review turn\",\"codexErrorInfo\":{\"activeTurnNotSteerable\":{\"turnKind\":\"review\"}}}}}"
                             else
                                 printf '%s\n' "{\"id\":$steer_id,\"result\":{}}"
                             fi ;;
