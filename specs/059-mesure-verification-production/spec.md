@@ -1,6 +1,6 @@
 # Spécification 059 — Mesure vérification / production
 
-**Statut** : Spécifiée, implémentation en cours
+**Statut** : Implémentée, prête pour revue
 
 **Branche** : `session-059-mesure-verification-production`
 
@@ -199,4 +199,3 @@ constats de ronde restent publiables.
   aucune attestation d'effort exploitable n'existe pour la baseline.
 - La session ne modifie ni `plugins/maicie/src/main.rs`, ni
   `plugins/maicie/src/lib.rs`, ni les autres fichiers portés par la session 058.
-

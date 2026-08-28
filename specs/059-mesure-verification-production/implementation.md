@@ -37,6 +37,11 @@ AssertionError: la ronde réelle ne publie pas encore la mesure V/P
 
 Code de sortie : 1. Aucun payload du corpus n'est imprimé par le harnais.
 
+La reproduction du cardinal 169 exige la fenêtre gelée en heure de Paris,
+distincte du jour civil UTC et de la glissante courante. Le triplet
+`169 / 6253 / e2a279…` et `reference.matches=true` prouve que la mesure porte
+bien sur l'objet humain, pas sur une population voisine.
+
 ## Tranche 3 — mesure et contre-épreuve
 
 La ronde lit désormais tous les objectifs dans sa copie SQLite, valide leurs
@@ -72,7 +77,7 @@ Le montage et la lecture des 169 objectifs réussissent. Le témoin meurt à
 l'assertion finale de racine avec la valeur interdite réellement produite :
 
 ```text
-AssertionError: le découpage a changé la racine vérifiée: 4
+AssertionError: le découpage a déplacé le ratio par racines: 4.0
 ```
 
 Code de sortie : 1. Après restauration, le même harnais rend :
@@ -87,3 +92,41 @@ Le SHA-256 de `scripts/bridget-ronde.py` vaut avant et après mutant :
 Le harnais historique de ronde reste vert et exerce en plus la dégradation :
 un ancien schéma sans `payload_json` rend la mesure `unavailable`, tandis que
 les agents, demandes et objectifs à évaluer restent publiés.
+
+La couverture historique opposable est donc 5 sur 169, soit 2,96 %. Avec 164
+causalités indéterminées, un ratio historique ponctuel honnête est impossible ;
+le résultat livré est cette impossibilité mesurée, pas un pourcentage inféré.
+
+## Portes finales
+
+```text
+rapport V/P réel : baseline, couverture et invariance de racine vérifiées
+ronde portable : rapport normal et dégradation Maicie vérifiés ; installation couverte par test-018-pilotage-install
+All checks passed!
+test-018-pilotage-install: checks OK
+```
+
+Les commandes correspondantes sont le harnais réel, le harnais historique,
+`ruff check`, `python3 -m py_compile`, `bash -n`, `git diff --check` et le banc
+de publication admise de la ronde. Le banc d'installation vérifie notamment
+le timer périodique et l'activation depuis une release contenue dans `main` ;
+aucune installation de la branche non jugée n'a été tentée.
+
+`ruff format --check scripts/bridget-ronde.py` reste rouge sur la base gelée et
+sur la tête. Aucun vert de format global n'est revendiqué ; le diff-check et le
+lint ciblé sont verts.
+
+Après `git fetch`, `origin/main` vaut toujours la base gelée. Divergence
+`0/3`, merge-base exact `394c0f5c8d352a606c85db7232bb1ad4fa79446e` ;
+`git merge-tree --write-tree` rend le code 0 et l'arbre
+`ea50f83cac9b0bf503ec9308517e7a34c5f52d0a`.
+
+## Non mesuré
+
+- aucune cible de ratio, volontairement réservée à l'humain ;
+- aucune classification exhaustive du corpus historique : la couverture
+  publiée est précisément `5/169` sur la baseline ;
+- aucune estimation de temps actif, tours ou jetons, faute d'attestation
+  durable correspondante ;
+- aucune activation du timer depuis cette branche : le mécanisme refuse à
+  juste titre une release non intégrée.

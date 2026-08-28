@@ -82,9 +82,13 @@ for population in (baseline, rolling):
         "indeterminate": 164,
     }
     assert population["roots"]["counts"]["production"] == 1
-    assert population["roots"]["counts"]["verification"] == 1, (
-        "le découpage a changé la racine vérifiée: "
-        f"{population['roots']['counts']['verification']}"
+    root_ratio = (
+        population["roots"]["counts"]["verification"]
+        / population["roots"]["counts"]["production"]
+    )
+    assert root_ratio == 1.0, (
+        "le découpage a déplacé le ratio par racines: "
+        f"{root_ratio}"
     )
     assert population["roots"]["expansion_factor"]["verification"] == 4.0
     assert population["objectives"]["ratios"]["verification_per_production"]["state"] == "unavailable"
@@ -108,6 +112,10 @@ assert entries["17441d4f-244b-41dc-8c0f-a26110a55276"]["root_id"] == root
 # une même racine ne produisent qu'une racine vérifiée. Le mutant qui remplace
 # root_id par objective_id rendrait 4 ici et meurt après lecture réussie.
 assert baseline["objectives"]["counts"]["verification"] == 4
+assert (
+    baseline["objectives"]["counts"]["verification"]
+    / baseline["objectives"]["counts"]["production"]
+) == 4.0
 assert baseline["roots"]["counts"]["verification"] == 1, (
     "le mutant objectif-comme-racine a survécu: "
     f"{baseline['roots']['counts']['verification']} racines"

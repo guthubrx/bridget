@@ -14,5 +14,5 @@
   explicite et archive atomique.
 - [x] **T5907** — Exécuter le mutant causal, restaurer au SHA-256 identique et
   rejouer les contrôles positifs.
-- [ ] **T5908** — Rejouer le harnais complet, vérifier syntaxe, diff, passivité
+- [x] **T5908** — Rejouer le harnais complet, vérifier syntaxe, diff, passivité
   et composition, puis rendre les trois identifiants du mandat.
