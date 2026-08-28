@@ -52,6 +52,12 @@ DEFAULT_GIT_REPO = str(Path(__file__).resolve().parent.parent)
 DEFAULT_GIT_TIMEOUT_SECS = 5.0
 BRANCH_BACKLOG_UNAVAILABLE = "greffe sans etat exploitable"
 BRANCH_REFS_SCOPE = "refs locales sans fetch"
+# Un verdict d'ascendance n'est recevable que daté de sa base. `origin/main`
+# local est figé au dernier fetch : comparé à la tête distante réelle, il dit
+# « non mergé » d'un lot déjà intégré. On ne supprime rien, on qualifie.
+BRANCH_MAIN_FRESH = "base locale a jour"
+BRANCH_MAIN_STALE = "base locale perimee — verdict d ascendance non recevable"
+BRANCH_MAIN_UNVERIFIED = "fraicheur de la base non verifiee"
 BRANCH_AGE_BASIS = "age du commit de tete uniquement"
 BRANCH_DELIVERY_LIMIT = "une ref distante ne prouve pas une livraison"
 
@@ -1135,6 +1141,39 @@ def _run_git(
     return result, None
 
 
+def _remote_main_head(
+    repository: Path,
+    *,
+    deadline: float,
+    git_bin: str,
+) -> tuple[str | None, str | None]:
+    """Tête réelle de `origin/main` chez le remote, sans fetch ni mutation.
+
+    Lecture seule : `ls-remote` n'écrit aucune ref locale. Retourne
+    (sha, None) ou (None, motif) — un échec réseau n'est jamais un verdict.
+
+    Complexité : O(1) commande Git, incluse dans l'échéance murale existante.
+    """
+    result, error = _run_git(
+        repository,
+        ["ls-remote", "origin", "refs/heads/main"],
+        deadline=deadline,
+        git_bin=git_bin,
+    )
+    if error:
+        return None, error
+    assert result is not None
+    if result.returncode:
+        return None, f"ls-remote indisponible: {_git_detail(result)}"
+    first = result.stdout.strip().splitlines()
+    if not first:
+        return None, "ls-remote sans refs/heads/main"
+    sha = first[0].split("\t")[0].strip()
+    if not sha:
+        return None, "ls-remote sans objet"
+    return sha, None
+
+
 def read_branch_backlog(
     repository_path: str,
     *,
@@ -1169,6 +1208,20 @@ def read_branch_backlog(
     main_head = main_result.stdout.strip()
     if not main_head:
         return None, f"{main_ref} vide"
+
+    # Dater la base AVANT d'en tirer le moindre verdict d'ascendance.
+    remote_head, remote_error = _remote_main_head(
+        repository, deadline=deadline, git_bin=git_bin
+    )
+    if remote_head is None:
+        main_freshness = "inverifiable"
+        main_freshness_reason = remote_error or "motif inconnu"
+    elif remote_head == main_head:
+        main_freshness = "a_jour"
+        main_freshness_reason = None
+    else:
+        main_freshness = "perimee"
+        main_freshness_reason = None
 
     refs_result, error = _run_git(
         repository,
@@ -1329,6 +1382,9 @@ def read_branch_backlog(
         "reason": BRANCH_BACKLOG_UNAVAILABLE,
         "main_ref": main_ref,
         "main_head": main_head,
+        "main_freshness": main_freshness,
+        "main_freshness_reason": main_freshness_reason,
+        "remote_main_head": remote_head,
         "refs_scope": BRANCH_REFS_SCOPE,
         "age_basis": BRANCH_AGE_BASIS,
         "delivery_limit": BRANCH_DELIVERY_LIMIT,
@@ -1355,9 +1411,30 @@ def format_branch_backlog(
         )
     else:
         lines.append(f"BACKLOG BRANCHES INDISPONIBLE ({branch_backlog['reason']})")
+        # La base date le verdict : périmée, l'ascendance n'est plus recevable.
+        # On ne masque aucun lot — on retire seulement l'affirmation.
+        freshness = branch_backlog.get("main_freshness", "inverifiable")
+        local_head = str(branch_backlog.get("main_head") or "")
+        remote_head = str(branch_backlog.get("remote_main_head") or "")
+        if freshness == "perimee":
+            lines.append(
+                f"BASE : {BRANCH_MAIN_STALE} — {branch_backlog['main_ref']} local "
+                f"{local_head[:12]} != distant {remote_head[:12]}"
+            )
+            title = "LOTS CANDIDATS (ascendance non recevable, base perimee) :"
+            empty = "LOTS CANDIDATS : aucun dans les refs locales"
+        elif freshness == "inverifiable":
+            reason = branch_backlog.get("main_freshness_reason") or "motif inconnu"
+            lines.append(f"BASE : {BRANCH_MAIN_UNVERIFIED} ({str(reason)[:80]})")
+            title = "LOTS LIVRES NON MERGES (base non datee) :"
+            empty = "LOTS LIVRES NON MERGES : aucun dans les refs locales"
+        else:
+            lines.append(f"BASE : {BRANCH_MAIN_FRESH} — {local_head[:12]}")
+            title = "LOTS LIVRES NON MERGES :"
+            empty = "LOTS LIVRES NON MERGES : aucun dans les refs locales"
         lots = branch_backlog["lots"]
         if lots:
-            lines.append("LOTS LIVRES NON MERGES :")
+            lines.append(title)
             for lot in lots:
                 if lot["base_state"] == "dans_main":
                     base = f"base {lot['base_sha'][:12]} dans main"
@@ -1368,7 +1445,7 @@ def format_branch_backlog(
                     f"{lot['textual_merge']} | verdict indisponible | {lot['blocking']}"
                 )
         else:
-            lines.append("LOTS LIVRES NON MERGES : aucun dans les refs locales")
+            lines.append(empty)
     lines.append(
         "LIMITES BRANCHES : refs locales sans fetch ; age du commit de tete uniquement ; "
         "une ref distante ne prouve pas une livraison"
