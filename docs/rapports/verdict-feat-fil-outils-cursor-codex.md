@@ -94,7 +94,17 @@ Traité comme **rapport**, pas comme fait, puis mesuré.
 
 ## 7. Portée et péremption du verdict
 
-**Ce verdict vaut contre `github/main` = `e3b1c0b`, à la date du 28/08, et périme dans les deux sens.**
+> ### ⚠ CE VERDICT A PÉRIMÉ — mesuré à 17h50 UTC, soit ~5 minutes après sa rédaction
+>
+> `github/main` est passé de `e3b1c0b` → `bc59d43` → **`7884528`**. Toutes les mesures ci-dessus portent sur `e3b1c0b`. **Refais-les avant de t'en servir.**
+>
+> **ÉTAT D'INTÉGRATION RÉEL, vérifié et non déduit :**
+> - `git merge-base --is-ancestor e3331fb 7884528` → **NON. LE LOT N'EST PAS INTÉGRÉ.**
+> - `bc59d43` n'est **pas** l'intégration du lot. Son message est : *« docs(rapports): Integrer le verdict du lot orphelin fil-outils-cursor-codex et la carte revisee de jc2-flux »*. C'est **ce document-ci** qui a été intégré, pas le code.
+>
+> **La distinction est vitale et ce document existe pour la porter :** *le verdict est intégré ; le lot ne l'est pas ; la décision humaine d'intégration est en attente.* Une lecture rapide de « le lot orphelin… il est intégré dans `origin/main`, commit `bc59d43` » conclut le contraire — et c'est exactement le type de fausse certitude que ce mandat servait à éviter.
+
+**Le verdict de fond vaut contre `github/main` = `e3b1c0b`, à la date du 28/08, et périme dans les deux sens.**
 
 Zéro conflit mesuré aujourd'hui contre cet état **ne dit rien** de ce que donnerait une republication après d'autres branches. Un ordre date un verdict de conflit — avertissement du référent, retenu et non contourné.
 
