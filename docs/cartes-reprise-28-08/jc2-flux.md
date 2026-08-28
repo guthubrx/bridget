@@ -260,6 +260,22 @@ Toutes mes lectures de bases ont été faites en `file:…?mode=ro` avec `.timeo
 5. **Le nom d'un champ ment plus souvent que sa valeur.** `provenance` n'existe pas, `state`
    n'est pas un état, `turn_end` n'est pas une panne. Vérifier ce que le champ *est*, pas ce
    qu'il *prétend*.
+6. **Une mesure refaite à l'identique ne vérifie rien — elle confirme l'angle mort.** C'est le
+   piège le plus coûteux de la journée, et j'y suis tombé le dernier. Le référent avait cherché
+   une table `%verdict%` dans `sqlite_master`, n'avait rien trouvé, et en avait conclu que le
+   dépôt de verdict n'existait pas. **J'ai refait sa requête**, obtenu le même vide, et publié la
+   même conclusion fausse — en croyant l'avoir vérifiée. Le dépôt existe : la table s'appelle
+   `guichet_receptions` (`operation='delivery_report'`, `outcome='accepted'`, 41 lignes acceptées),
+   et la commande est `bridget guichet deposer`. Chercher un nom qui n'existe pas ne pouvait
+   *jamais* le trouver.
+
+   **Ce qui distingue une vérification qui vaut d'une qui ne vaut rien, c'est le changement
+   d'angle, pas la répétition du geste.** Preuve sur la journée entière : tout ce que j'ai
+   trouvé de neuf est venu d'un angle différent — lire le code plutôt qu'interroger la base
+   (le roster peuplé par une seule voie), élargir le périmètre (six dépôts sur miroir au lieu
+   de deux), lire le *texte* des messages plutôt que leurs métadonnées (neuf sondes sur douze
+   dettes). Et tout ce que j'ai confirmé à tort est venu d'avoir refait le même geste.
+   Formulation due au référent ; l'erreur qui l'a produite est la mienne autant que la sienne.
 
 ---
 
