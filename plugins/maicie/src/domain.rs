@@ -99,9 +99,155 @@ impl ObjectiveOpeningPermit {
         }
     }
 
+    /// Construit le permis d'origine humaine, et uniquement si les cinq
+    /// vérifications de T5611 passent. Aucun appelant ne peut fabriquer cette
+    /// variante autrement : c'est le seul constructeur, et il exige des faits
+    /// observés que seul le daemon détient.
+    ///
+    /// Ce que cette vérification établit : que l'ouverture est **causée** par un
+    /// message précis, existant, non altéré et non rejoué. Ce qu'elle
+    /// n'établit pas : **qui** a écrit ce message. L'authentification de
+    /// `sender` est explicitement hors portée (spec 056) ; l'attestation vaut
+    /// donc ce que vaut l'attribution d'émetteur du daemon, et ne la répare pas.
+    pub fn human_request(
+        attestation: HumanRequestOriginAttestation,
+        observed: &ObservedHumanMessage,
+        issuer_scope: &str,
+        canonical_request_sha256: &str,
+        consumption: AttestationConsumption,
+    ) -> Result<Self, HumanOriginRefusal> {
+        if attestation.version != HUMAN_ORIGIN_ATTESTATION_VERSION {
+            return Err(HumanOriginRefusal::VersionInconnue);
+        }
+        if attestation.issuer_scope != issuer_scope {
+            return Err(HumanOriginRefusal::PerimetreEmetteurDivergent);
+        }
+        // 1. Le message attesté est bien celui qui a été observé.
+        if observed.message_id.is_empty() {
+            return Err(HumanOriginRefusal::MessageIdDivergent);
+        }
+        // 2. L'émetteur observé est l'identité humaine adressable, à l'exclusion
+        //    des replis de nommage (`human`, `cli-send-<pid>`) qui n'attestent
+        //    personne.
+        if observed.sender != HUMAN_SENDER_NAME {
+            return Err(HumanOriginRefusal::EmetteurNonHumain);
+        }
+        // 3. Le contenu du message n'a pas bougé depuis l'observation.
+        if attestation.signature != human_message_content_seal(observed) {
+            return Err(HumanOriginRefusal::ScelleDeContenuDivergent);
+        }
+        // 4. L'attestation vise bien cette ouverture-ci, et pas une autre.
+        if attestation.canonical_request_sha256 != canonical_request_sha256 {
+            return Err(HumanOriginRefusal::HashCanoniqueDivergent);
+        }
+        // 5. Usage unique : un même message humain n'ouvre jamais deux fois.
+        if consumption == AttestationConsumption::AlreadyConsumed {
+            return Err(HumanOriginRefusal::AttestationDejaConsommee);
+        }
+        Ok(Self {
+            origin: ObjectiveOrigin::HumanRequest {
+                message_id: observed.message_id.clone(),
+                attestation,
+            },
+        })
+    }
+
     pub fn origin(&self) -> &ObjectiveOrigin {
         &self.origin
     }
+}
+
+/// Version courante de l'attestation d'origine humaine.
+pub const HUMAN_ORIGIN_ATTESTATION_VERSION: u16 = 1;
+
+/// Seule identité d'émetteur acceptée comme humaine.
+///
+/// Les replis de nommage du daemon — `human` quand aucun nom n'est résolu,
+/// `cli-send-<pid>` quand seul le processus l'est — décrivent une connexion
+/// éphémère et n'attestent personne. Ils sont refusés plutôt qu'interprétés.
+pub const HUMAN_SENDER_NAME: &str = "humain";
+
+/// Message humain observé au ledger, tel que le daemon le lit.
+///
+/// Ce n'est pas une preuve d'identité : c'est le fait causal que l'attestation
+/// scelle, afin qu'il ne puisse être ni inventé, ni altéré, ni rejoué.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedHumanMessage {
+    pub message_id: String,
+    pub ts: i64,
+    pub sender: String,
+    pub target: String,
+    pub body: String,
+}
+
+/// Verdict d'usage unique. Produit par le store, jamais par l'appelant : le
+/// type force à se prononcer au lieu de laisser l'oubli passer silencieusement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttestationConsumption {
+    NeverConsumed,
+    AlreadyConsumed,
+}
+
+/// Motifs fermés du refus d'ouverture humaine. Le code public est unique :
+/// l'appelant apprend qu'il a été refusé, jamais quelle garde l'a arrêté.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HumanOriginRefusal {
+    VersionInconnue,
+    PerimetreEmetteurDivergent,
+    MessageIdDivergent,
+    EmetteurNonHumain,
+    ScelleDeContenuDivergent,
+    HashCanoniqueDivergent,
+    AttestationDejaConsommee,
+}
+
+impl HumanOriginRefusal {
+    /// Refus fermé exposé publiquement, identique pour tous les motifs.
+    pub const fn code(self) -> &'static str {
+        "HUMAN_ORIGIN_UNATTESTED"
+    }
+
+    /// Motif interne, destiné au seul audit local.
+    pub const fn motif(self) -> &'static str {
+        match self {
+            Self::VersionInconnue => "version_inconnue",
+            Self::PerimetreEmetteurDivergent => "perimetre_emetteur_divergent",
+            Self::MessageIdDivergent => "message_id_divergent",
+            Self::EmetteurNonHumain => "emetteur_non_humain",
+            Self::ScelleDeContenuDivergent => "scelle_de_contenu_divergent",
+            Self::HashCanoniqueDivergent => "hash_canonique_divergent",
+            Self::AttestationDejaConsommee => "attestation_deja_consommee",
+        }
+    }
+}
+
+/// Scellé de contenu d'un message humain observé.
+///
+/// Chaque champ est précédé de sa longueur : sans ce préfixe, deux messages
+/// distincts pourraient produire le même scellé par simple décalage de
+/// frontière entre champs. Même motif que `identifiant_deterministe`.
+pub fn human_message_content_seal(message: &ObservedHumanMessage) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"maicie/human-origin-seal/v1");
+    for field in [
+        message.message_id.as_bytes(),
+        message.sender.as_bytes(),
+        message.target.as_bytes(),
+        message.body.as_bytes(),
+    ] {
+        digest.update((field.len() as u64).to_be_bytes());
+        digest.update(field);
+    }
+    digest.update(message.ts.to_be_bytes());
+    hex_lower(&digest.finalize())
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
 }
 
 /// Suite déclarée à la création (F36). Absent uniquement pour les objectifs
