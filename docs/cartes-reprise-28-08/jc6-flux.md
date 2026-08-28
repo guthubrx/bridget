@@ -133,9 +133,17 @@ Tout ce bloc vient du référent `bridget`. **Je ne l'ai pas mesuré.** Plusieur
 
 Mes envois : `af1b320a80774`, `4ce9161b03d64`, `1d1f9ff8a2734`, `ee90412814e54`, `731070f2eead4`, `e3e85bdafbc44`.
 
-**LE MANDAT EST LIVRÉ MAIS LE GREFFE L'IGNORE — constat mesuré, à traiter en priorité.**
-À 16h09, soit après ma livraison et après la deadline contractuelle : `objectives.state = en_coordination` et `delegations.state = creee` pour ma propre délégation `61a450dc`. J'ai rendu la carte à 16:05:56Z et prévenu le référent à 16:06:42Z, **par message Bridget** — or un message Bridget vers l'agent référent ne ferme pas une délégation Maicie. Conséquences observées : le mandat m'a été **redélivré à l'identique**, et je reste dans `occupied`, donc jamais LIBRE, tant que la délégation n'est pas close.
-C'est exactement le corollaire que j'avais signalé au référent quelques minutes plus tôt — « un agent inactif sous mandat non clos reste OCCUPÉ » — et j'en suis devenu le cas concret. **Si tu livres un mandat, la livraison n'est pas enregistrée par le seul fait de répondre : il faut une clôture au greffe.** Je n'ai pas clos moi-même : `objective close` n'était pas dans mon mandat et je ne l'exécute pas de ma propre initiative.
+**UN MESSAGE BRIDGET NE FERME PAS UNE DÉLÉGATION MAICIE — épisode clos, règle conservée.**
+*Déroulé, gardé comme exemple :* carte rendue 16:05:56Z, référent prévenu 16:06:42Z **par message Bridget**, deadline contractuelle 16:07:41Z. À 16h09 le greffe portait toujours `objectives.state = en_coordination` et `delegations.state = creee`. Conséquences observées : le mandat m'a été **redélivré à l'identique**, et je suis resté dans `occupied`, donc jamais LIBRE. J'étais devenu en dix minutes le cas concret du corollaire que j'avais écrit au référent une heure plus tôt — « un agent inactif sous mandat non clos reste OCCUPÉ ».
+*Dénouement, mesuré à 16h40 :* objectif `2bd689ad` → **`clos`**, délégation `61a450dc` → **`soldee_par_cloture`**. Le référent a fermé les neuf mandats de carte vers 16h34 : `clos` 540→549, `en_coordination` 93→84.
+**LA RÈGLE RESTE — elle ne dépendait pas de l'épisode : répondre ne clôt pas, il faut une clôture au greffe.** Je n'ai pas clos moi-même : hors mandat, et surtout juge et partie sur mon propre objectif.
+**LA COMMANDE EXACTE**, établie par le référent au prix de trois échecs, qu'aucune carte ne portait :
+```
+maicie objective <UUID-COMPLET> close --reason "…" --config /home/moi/.config/maicie/config.json
+```
+**L'identifiant avant l'action**, et **`--config` en toute fin de ligne** — placé avant, il consomme l'argument positionnel. L'UUID doit être **entier** : un préfixe court échoue plus tôt, sur « identifiant objectif UUID invalide », sans jamais atteindre le parseur d'action.
+*Mécanisme sous-jacent, mesuré par moi :* la fermeture n'écrit pas dans `evaluated_closure_acts` — table **vide**, jamais servie — mais dans `coordination_decisions`, sous la forme `{objectif_id, kind:"cloturer", proposee_par, etat:"appliquee", motif}`. 540 décisions `cloturer` pour 540 objectifs `clos` : correspondance exacte.
+*Où vit la preuve de remise :* dans `delegation_outbox` de la base **Maicie** — `state`, `terminal`, `issue_observed_at`, `body_hash`, `deadline_contractuelle`. Ce n'est **pas** dans `bridget.db`. `[MESURÉ]` Sur l'ensemble : 626 remises `accepted` `terminal=1` et **six** rejetées — deux vrais échecs (rc1, routing/agent introuvable, 26/08 17:56 ; jc3, duplicate_content, 26/08 06:55) et quatre clôtures locales. `[TENU DE bridget]`
 
 **Reste** — aucune mission de code, gel entier. Ouvert et non tranché :
 1. Question posée au référent, **sans réponse à ce jour** : les 85 objectifs qui ne se fermaient pas ont-ils laissé des participants dans `occupied` ? Si oui, une part des OCCUPÉS serait un résidu de bug plutôt qu'un mandat vivant. **Je n'ai pas regardé et je ne dois pas le faire sans mandat.**

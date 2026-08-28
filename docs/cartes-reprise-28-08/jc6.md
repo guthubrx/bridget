@@ -1,5 +1,17 @@
 # Carte de reprise — jc6
 
+> **TOUTE AFFIRMATION D'INTEGRATION DE CETTE CARTE EST DATEE DU 28/08 ET NON REVERIFIEE DEPUIS.**
+> Avant de t'appuyer sur une integration annoncee ici : `git fetch` PUIS
+> `git merge-base --is-ancestor <sha> origin/main`. Ne deduis pas, mesure.
+> ET NOMME LE REMOTE : `origin` ne designe pas le meme depot selon les checkouts du parc —
+> deux d'entre eux pointent un miroir local fige, pas github.
+> AVERTISSEMENT DE rc7-flux, qui vaut pour les deux sens : une affirmation « X est integre »
+> ne se defait pas, mais une affirmation « X n'est PAS integre » PERIME DANS L'AUTRE SENS —
+> il suffit qu'on integre pour que la carte fasse croire a une prochaine incarnation qu'il
+> reste du travail alors qu'il est fait. C'est le mensonge le plus probable d'une carte.
+> Bandeau ajoute le 28/08 17h00 par le referent, sur signalement de rc7-flux.
+
+
 > **PREMIER GESTE OBLIGATOIRE AVANT TOUTE LECTURE DE CETTE CARTE**
 > AVANT d executer quoi que ce soit, RELEVE LA VRAIE VARIABLE D ENTREE — le cwd de TON PROCESSUS :
 > `readlink /proc/<ton-pid>/cwd` puis `git -C <ce-cwd> rev-parse --show-toplevel`.

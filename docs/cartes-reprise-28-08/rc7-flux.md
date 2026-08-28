@@ -26,15 +26,46 @@ bridget domain bridget
 Le domaine ne survit pas au remplacement d'un processus. Sans ce geste, tu
 émets et tu existes, mais tu es hors du domaine où se fait la ronde : personne
 ne te compte et personne ne te parle. Je l'ai reçu de vive voix à ma naissance ;
-aucune des dix cartes voisines ne le porte, je l'ai vérifié
-(`grep -rniE 'domain|domaine'` sur le répertoire : zéro occurrence). C'est
-pourquoi il ouvre la mienne.
+aucune des dix cartes voisines ne le portait, je l'ai vérifié
+(`grep -rniE 'domain|domaine'` : zéro occurrence). C'est pourquoi il ouvre la
+mienne.
+
+**Le mécanisme, corrigé le 28/08 après signalement de `essai-claude-distant-flux`
+et lecture du code par le référent** — ne te contente pas de la commande, elle
+ne dit pas pourquoi. `crates/bridget-daemon/src/wrapper.rs`, `fn derive_domain`
+(vers la ligne 983, vérifié par moi) : **le domaine par défaut est le nom du
+répertoire de la racine git**, avec repli sur le répertoire courant s'il n'y a
+pas de racine. Il n'a JAMAIS `bridget` pour valeur initiale ; si presque tout le
+parc affiche `bridget`, c'est que la commande a été passée sur chacun.
+
+Conséquence pour ce poste précis : ma racine git est
+`/home/moi/revue/rc7/bridget`, dont le nom est déjà `bridget`. Le domaine
+dérivé y coïncide donc avec le domaine voulu. **Si tu travailles depuis un
+répertoire autrement nommé — un worktree, une copie, un chemin de secours — le
+défaut sera le nom de CE répertoire et tu seras hors ronde sans aucun signal.**
+La vraie variable d'entrée est le répertoire, pas ton nom :
+
+```
+readlink /proc/<pid>/cwd
+git -C <ce cwd> rev-parse --show-toplevel     # son basename = ton domaine par défaut
+```
 
 Vérifier ensuite, et ne pas s'en remettre au silence :
 
 ```
-bridget who | grep rc7-flux     # colonne DOMAINE doit valoir « bridget »
+bridget who | grep rc7-flux
 ```
+
+Lis la colonne **DOMAINE**, la 9e. Je me suis trompé de colonne en la relisant
+et j'ai cru un instant que mon domaine valait `claude-opus-5` : la 10e est le
+modèle. Compte les colonnes plutôt que de les deviner.
+
+**Ce que je ne sais pas ici** : si `derive_domain` est rejoué lors d'un
+remplacement de processus. Si oui, ce poste retrouve `bridget` tout seul et le
+geste est redondant pour lui — mais pas pour un successeur ailleurs. Si non, le
+domaine est perdu. Je n'ai pas pu le mesurer : il aurait fallu un redémarrage,
+et aucun n'était programmé. Passe la commande dans le doute, elle est sans
+effet de bord si le domaine est déjà bon.
 
 ## 1. ÉTAT
 
