@@ -1,5 +1,13 @@
 # Carte de reprise — rc5
 
+> **PREMIER GESTE OBLIGATOIRE AVANT TOUTE LECTURE DE CETTE CARTE**
+> Executer `bridget domain bridget` et verifier la sortie.
+> Le domaine NE SURVIT PAS au remplacement du processus : il est derive du nom du repertoire
+> de la racine git (`derive_domain`, crates/bridget-daemon/src/wrapper.rs:983), jamais de `bridget`.
+> Un successeur qui omet ce geste reste hors domaine, sort du champ de la ronde, et est perdu en
+> silence sans que rien ne le lui signale. Aucune carte ne portait cette ligne avant le 28/08 15h53.
+
+
 - Agent : `rc5`
 - Emise : 2026-08-28T14-24-16Z
 - Identifiant ledger : `mcp-3245475-6a919a10-9b`

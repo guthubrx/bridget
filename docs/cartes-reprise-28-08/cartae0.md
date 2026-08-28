@@ -1,5 +1,13 @@
 # Carte de reprise — cartae0
 
+> **PREMIER GESTE OBLIGATOIRE AVANT TOUTE LECTURE DE CETTE CARTE**
+> Executer `bridget domain bridget` et verifier la sortie.
+> Le domaine NE SURVIT PAS au remplacement du processus : il est derive du nom du repertoire
+> de la racine git (`derive_domain`, crates/bridget-daemon/src/wrapper.rs:983), jamais de `bridget`.
+> Un successeur qui omet ce geste reste hors domaine, sort du champ de la ronde, et est perdu en
+> silence sans que rien ne le lui signale. Aucune carte ne portait cette ligne avant le 28/08 15h53.
+
+
 - Agent : `cartae0`
 - Emise : 2026-08-28T14-35-53Z
 - Identifiant ledger : `mcp-1468209-6a919cc9-76`

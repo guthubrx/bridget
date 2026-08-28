@@ -1,5 +1,13 @@
 # Carte de reprise — essai-distant
 
+> **PREMIER GESTE OBLIGATOIRE AVANT TOUTE LECTURE DE CETTE CARTE**
+> Executer `bridget domain bridget` et verifier la sortie.
+> Le domaine NE SURVIT PAS au remplacement du processus : il est derive du nom du repertoire
+> de la racine git (`derive_domain`, crates/bridget-daemon/src/wrapper.rs:983), jamais de `bridget`.
+> Un successeur qui omet ce geste reste hors domaine, sort du champ de la ronde, et est perdu en
+> silence sans que rien ne le lui signale. Aucune carte ne portait cette ligne avant le 28/08 15h53.
+
+
 - Agent : `essai-distant`
 - Emise : 2026-08-28T14-35-43Z
 - Identifiant ledger : `mcp-1418654-6a919cbf-41`
