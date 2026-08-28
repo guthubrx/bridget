@@ -14,6 +14,11 @@ Le chemin de création n'est pas limité à une interface : CLI, guichet et
 routines convergent vers deux réservations transactionnelles et une branche
 SQL d'insertion commune.
 
+Une sonde de migration v19 emploie aussi textuellement `INSERT INTO objectives`,
+mais uniquement sous savepoint avec `ROLLBACK` et contrôle du cardinal
+avant/après. Elle n'est pas une ouverture durable ; l'inventaire structurel la
+nomme séparément au lieu de la faire disparaître par un filtre de forme.
+
 ## Décision
 
 Nous livrons le mécanisme en trois tranches ordonnées.

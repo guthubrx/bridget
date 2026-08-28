@@ -2,8 +2,10 @@
 
 ## Sources locales mesurées
 
-- L'ouverture immédiate et l'ouverture différée utilisent deux transactions
-  distinctes mais convergent sur `upsert_objective`.
+- Sur la base gelée, l'ouverture immédiate et l'ouverture différée utilisent
+  deux transactions distinctes mais convergent sur `upsert_objective`. La
+  tranche sépare ensuite `open_objective`, seule ouverture durable, de
+  `update_objective`, qui refuse l'absence.
 - Une routine construit directement `DelegateRequest` puis appelle `delegate` :
   une garde seulement MCP ou CLI serait contournable.
 - Les objectifs sont stockés comme payload JSON sans colonne de provenance.
@@ -35,4 +37,3 @@ explicitement `auto_generated` ; la voie humaine reste fermée.
 La commande DevKMS `mem` n'est pas installée sur cette machine. Ces résultats
 ne peuvent pas être capturés dans DevKMS pendant cette tranche ; ils voyagent
 dans la présente spec et l'ADR.
-

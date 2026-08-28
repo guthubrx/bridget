@@ -4,7 +4,7 @@
 
 - Branche : `session-056-provenance-dette-humaine`
 - Base gelée : `2750bdf6889e1f664fff11a72a4719d00509e599`
-- Statut : tranche 1 en cours
+- Statut : tranche 1 publiée pour revue
 
 ## Inventaire initial
 
@@ -21,7 +21,8 @@ Le cardinal initial « treize sites » était un compte des occurrences du symbo
 sur la base gelée donne trois constructions productives : guichet, CLI et
 routine, plus la structure canonique interne. Le contrôle workspace a ensuite
 révélé trois constructions de fixtures hors Maicie, dans `daemon.rs` et
-`wrapper.rs` ; leur adaptation attend l'arbitrage de périmètre.
+`wrapper.rs`. Elles déclarent désormais explicitement le permit automatique ;
+le contrôle workspace compile ces trois contacts.
 
 ## Borne de tranche
 
@@ -103,9 +104,9 @@ Empreintes restaurées :
 ### Compilation
 
 `cargo check -p maicie --all-targets` est vert. Le premier contrôle workspace
-a trouvé trois constructeurs de fixtures daemon dépourvus du nouveau champ ;
-aucun verdict workspace n'est rendu avant leur arbitrage et leur éventuelle
-adaptation.
+a trouvé trois constructeurs de fixtures daemon dépourvus du nouveau champ.
+Après leur adaptation mécanique, `cargo check --workspace --all-targets` est
+vert ; seuls des avertissements préexistants hors tranche subsistent.
 
 Une tentative intermédiaire de dériver `Default` a ciblé par erreur le premier
 enum du fichier (`DomainError`) et ne compilait pas. Elle a été exclue avant
@@ -127,7 +128,7 @@ listés.
 
 ### Format et lint
 
-Les 21 fichiers Rust touchés sont verts sous `rustfmt --check --edition 2024`.
+Les 23 fichiers Rust touchés sont verts sous `rustfmt --check --edition 2024`.
 Le gate workspace `cargo fmt --all -- --check` reste rouge exactement sur les
 quatre dettes différées connues et intactes : `attach.rs`, `reaper.rs`, `acp.rs`
 et `codex_app_server.rs`.
@@ -138,3 +139,31 @@ Le Clippy strict global s'arrête sur sept diagnostics hors delta dans
 et un `collapsible_if` dans `catalogue_session_gate.rs`, tous hors hunks 056.
 Après exclusion nommée de ces deux catégories préexistantes, le crate modifié
 est vert avec `-D warnings`. Aucun vert global n'est revendiqué.
+
+### Auto-revue hostile après première publication
+
+La première tête durable est `303961d7d75ba5ef11de0b987cf722ebb14b411b`.
+La relecture a refusé l'affirmation « une seule occurrence INSERT » : une
+seconde forme, sans espaces après les virgules, vit dans le préflight v19.
+Elle est antérieure à la tranche, s'exécute sous savepoint, est toujours
+annulée et compare le cardinal avant/après. Elle ne contourne donc pas la
+frontière durable, mais l'oracle initial comptait une forme en croyant compter
+la propriété.
+
+L'oracle amendé retire les espaces avant de compter les deux formes, puis
+prouve séparément : permit au point `open_objective`, absence d'INSERT dans
+`update_objective`, et savepoint + rollback + cardinal pour la sonde v19. Le
+témoin historique compare désormais les octets réels avant/après au lieu de
+seulement constater l'absence logique du champ `origin`.
+
+Un premier tir du témoin octet utilisait à tort un littéral d'octets Rust
+contenant `é` et ne compilait pas ; il est exclu. Le littéral corrigé est une
+chaîne UTF-8 convertie explicitement en octets, et l'univers complet rend
+`4/0/0/0`.
+
+Le nouvel œil structurel a ensuite été muté en renommant uniquement la cible
+du `ROLLBACK` v19. Il meurt à l'assertion métier qui exige une sonde annulée :
+`0 passed; 1 failed; 3 filtered out`. Après restauration, `store.rs` retrouve
+son SHA-256
+`46539568efc2182cda5a49d6c51e2536349093a63bf86d113e932320540d6a33`
+et le témoin revient à `1/0/3`.

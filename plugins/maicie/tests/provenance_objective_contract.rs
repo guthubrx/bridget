@@ -26,24 +26,14 @@ fn spec_056_nouvel_objectif_porte_une_origine_automatique_explicitement() {
 
 #[test]
 fn spec_056_payload_historique_sans_origine_reste_inconnu() {
-    let historique = json!({
-        "id": Uuid::new_v4(),
-        "but": "objectif antérieur",
-        "mode": "delegue",
-        "etat": "ouvert",
-        "cree_at": 1,
-        "mis_a_jour_at": 1,
-        "synthese": null,
-        "decision_en_attente_id": null
-    });
+    let historique = r#"{"id":"00000000-0000-0000-0000-000000000056","but":"objectif antérieur","mode":"delegue","etat":"ouvert","cree_at":1,"mis_a_jour_at":1,"synthese":null,"decision_en_attente_id":null}"#;
 
-    let decoded: ObjectifCoordonne = serde_json::from_value(historique).unwrap();
+    let decoded: ObjectifCoordonne = serde_json::from_slice(historique.as_bytes()).unwrap();
     assert_eq!(decoded.origin, ObjectiveOrigin::LegacyUnknown);
-    let roundtrip = serde_json::to_value(decoded).unwrap();
-
-    assert!(
-        roundtrip.get("origin").is_none(),
-        "un payload historique doit rester byte-compatible sans champ ajouté"
+    assert_eq!(
+        serde_json::to_vec(&decoded).unwrap(),
+        historique.as_bytes(),
+        "un payload historique doit rester identique octet par octet"
     );
 }
 
@@ -137,7 +127,7 @@ fn spec_056_toutes_les_frontieres_d_ouverture_exigent_un_permit() {
     );
     assert_eq!(domain.matches("pub fn auto_generated() -> Self").count(), 1);
     assert!(
-        !domain.contains("pub fn human_request"),
+        !domain.contains("fn human_request"),
         "la voie humaine ne doit pas être constructible avant l'attestation daemon"
     );
 
@@ -167,17 +157,42 @@ fn spec_056_toutes_les_frontieres_d_ouverture_exigent_un_permit() {
         "le constructeur et les deux réservations doivent consommer le même permit"
     );
 
-    let insert = "INSERT INTO objectives(id, state, payload_json)";
+    let compact_store: String = store.chars().filter(|c| !c.is_whitespace()).collect();
+    let insert = "INSERTINTOobjectives(id,state,payload_json)";
     assert_eq!(
-        store.matches(insert).count(),
-        1,
-        "une seule insertion neuve"
+        compact_store.matches(insert).count(),
+        2,
+        "l'inventaire doit voir l'ouverture durable et la sonde de migration annulée"
     );
-    let insert_at = store.find(insert).unwrap();
-    let guard_start = insert_at.saturating_sub(1_500);
+
+    let open_start = store.find("fn open_objective(").unwrap();
+    let update_start = store.find("fn update_objective(").unwrap();
+    let open_block = &store[open_start..update_start];
     assert!(
-        store[guard_start..insert_at].contains("opening_permit"),
-        "la branche INSERT ne vérifie aucun permit"
+        open_block.contains("if &objective.origin != opening_permit.origin()")
+            && open_block.contains("INSERT INTO objectives(id, state, payload_json)"),
+        "l'ouverture durable ne vérifie pas le permit au point INSERT"
+    );
+    let transition_start = store.find("fn transition_existing_objective(").unwrap();
+    assert!(
+        !store[update_start..transition_start].contains("INSERT INTO objectives"),
+        "la mise à jour peut encore créer implicitement un objectif"
+    );
+
+    let preflight_start = store
+        .find("fn verify_local_delegate_refusals_shape_v18(")
+        .unwrap();
+    let preflight_end = store[preflight_start..]
+        .find("fn migrate_guichet_refusal_vocabulary_v19(")
+        .unwrap()
+        + preflight_start;
+    let preflight = &store[preflight_start..preflight_end];
+    assert!(
+        preflight.contains("SAVEPOINT maicie_v19_preflight_v18")
+            && preflight.contains("INSERT INTO objectives(id,state,payload_json)")
+            && preflight.contains("ROLLBACK TO maicie_v19_preflight_v18")
+            && preflight.contains("objectives_before != objectives_after"),
+        "la seconde insertion doit rester une sonde annulée dont le cardinal est contrôlé"
     );
 
     for (producer, source, marker) in [

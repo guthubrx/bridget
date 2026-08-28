@@ -11,4 +11,3 @@ Depuis la racine du worktree, avec un `CARGO_TARGET_DIR` dédié :
 
 Les commandes et lignes natives exactes sont consignées dans
 `implementation.md` au moment de la livraison.
-

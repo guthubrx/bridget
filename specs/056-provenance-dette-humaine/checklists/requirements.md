@@ -10,6 +10,5 @@
 - [x] Les dix oracles et cinq mutants globaux sont nommés.
 - [x] Les limites d'authentification, contention, récupération et déploiement
   progressif sont explicites.
-- [ ] Les oracles rouges de tranche 1 ont été observés.
-- [ ] Les mutants de tranche 1 ont été observés puis restaurés.
-
+- [x] Les oracles rouges de tranche 1 ont été observés.
+- [x] Les mutants de tranche 1 ont été observés puis restaurés.

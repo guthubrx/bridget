@@ -1,8 +1,8 @@
 # Plan 056
 
 1. Écrire le contrat global et l'ADR, puis isoler la tranche 1.
-2. Mesurer sur la base les constructeurs, les deux réservations et l'unique
-   branche d'insertion.
+2. Mesurer sur la base les constructeurs, les deux réservations et toutes les
+   formes SQL ; distinguer l'ouverture durable de la sonde de migration annulée.
 3. Obtenir les oracles rouges de provenance et de couverture structurelle.
 4. Ajouter l'origine durable, le permit opaque et l'identité canonique.
 5. Marquer explicitement CLI, guichet et routines `auto_generated`.

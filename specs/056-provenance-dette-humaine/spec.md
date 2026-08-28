@@ -1,6 +1,6 @@
 # Spécification 056 — Provenance des objectifs et dette humaine
 
-**Statut** : Tranche 1 en implémentation
+**Statut** : Tranche 1 publiée pour revue
 
 **Base gelée** : `2750bdf6889e1f664fff11a72a4719d00509e599`
 
@@ -36,8 +36,9 @@ ouvert. Aucun travail n'est réordonné ni placé dans une file prioritaire.
   `human_request` attestée.
 - Un payload antérieur dépourvu d'origine se relit comme `legacy_unknown` ; il
   n'est jamais reclassé.
-- Les deux réservations créatrices et l'unique branche SQL `INSERT` exigent un
-  `ObjectiveOpeningPermit` opaque correspondant à l'origine persistée.
+- Les deux réservations créatrices et l'unique branche SQL d'ouverture
+  **durable** exigent un `ObjectiveOpeningPermit` opaque correspondant à
+  l'origine persistée.
 - Les chemins actuels — CLI, guichet et routines — sont explicitement
   `auto_generated` : aucun d'eux ne possède aujourd'hui de preuve causale
   émise par le daemon.
@@ -51,6 +52,12 @@ ouvert. Aucun travail n'est réordonné ni placé dans une file prioritaire.
 
 Cette tranche rend les créations postérieures au déploiement comptables sans
 inventer l'histoire. Elle ne tient pas encore la règle globale.
+
+Le fichier contient aussi une seconde forme textuelle `INSERT INTO objectives`
+dans le préflight de migration v19. Elle crée une sonde sous savepoint, impose
+un `ROLLBACK` et vérifie que le cardinal d'objectifs est identique avant/après :
+ce n'est pas une ouverture durable. L'oracle structurel inventorie et distingue
+explicitement ces deux formes au lieu d'en masquer une par sa mise en page SQL.
 
 ### Tranche 2 — fait canonique de dette
 

@@ -12,9 +12,9 @@ Somme fermée persistée dans le payload JSON de chaque objectif :
 
 ## ObjectiveOpeningPermit
 
-Capacité opaque et non sérialisable. Elle porte l'origine autorisée pour une
-seule tentative d'ouverture. L'insertion vérifie l'égalité avec l'origine du
-payload. Un permit automatique ne peut donc pas persister une origine humaine.
+Capacité opaque et non sérialisable. Elle porte l'origine autorisée par une
+requête d'ouverture. L'insertion vérifie l'égalité avec l'origine du payload.
+Un permit automatique ne peut donc pas persister une origine humaine.
 
 Le permit est exigé par :
 
@@ -26,9 +26,17 @@ Le permit est exigé par :
 Les transitions d'un objectif déjà existant utilisent une opération distincte
 qui ne possède aucune branche d'insertion.
 
-La capacité n'implémente ni sérialisation ni clonage. Dans cette tranche, son
-unique constructeur public produit `auto_generated` ; aucun appelant ne peut
-fabriquer un permit `human_request` à partir d'un identifiant déclaré.
+La capacité n'implémente ni sérialisation ni clonage. Ce n'est toutefois pas
+un type linéaire : l'usage unique d'une future attestation humaine sera tenu
+par le ledger et le gate des tranches suivantes, pas revendiqué ici. Dans cette
+tranche, son unique constructeur public produit `auto_generated` ; aucun
+appelant ne peut fabriquer un permit `human_request` à partir d'un identifiant
+déclaré.
+
+Le store contient par ailleurs une sonde de compatibilité v19 qui insère une
+ligne temporaire sous savepoint puis l'annule et compare les cardinaux. Cette
+écriture n'est pas une ouverture durable et reste séparée de la frontière
+`open_objective`.
 
 ## Compatibilité historique
 
