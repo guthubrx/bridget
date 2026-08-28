@@ -168,6 +168,7 @@ Mes envois : `af1b320a80774`, `4ce9161b03d64`, `1d1f9ff8a2734`, `ee90412814e54`,
 4. **Le dépôt typé vit côté `bridget`, pas côté `maicie`** : `bridget guichet deposer <delivery-report|mission-status|deadline-question|delegate|registre-add|objective-close>`. Deux agents avaient conclu à son inexistence en balayant exhaustivement les actions `maicie` — ils cherchaient dans le mauvais outil. Je ne l'ai pas trouvé par flair mais en partant du « en attente de dépôt typé » de ma propre carte, puis en cherchant qui consommait `--review-ref`. **Le chemin est reproductible, le flair ne l'est pas.**
 5. **Sur un dépôt intégré en continu, figer une cible de revue puis exiger qu'elle soit encore la tête revient à demander que personne n'intègre pendant qu'un mandat court.** 24 commits sont arrivés sur `main` pendant ma construction. `[TENU DE bridget, 28/08 21h41]` **Une cible posée sur `main` périme en médiane 96 secondes**, et 85 % du rythme de `main` est la consignation du référent lui-même. Le mécanisme suppose une référence **immobile** : le poser sur `main` est un contresens d'usage, pas un accident. Question portée à l'humain, non tranchée.
 6. **Citer la provenance d'une mesure est une condition de reproductibilité, pas une politesse.** Le témoin du plateau porte le nom de `essai-claude-distant-flux` dans le code même — sept relevés sans provenance ne sont pas vérifiables.
+   *Corollaire, et il renverse l'intuition* : une attribution fausse n'est pas d'abord une injustice, **elle rend la mesure irreproductible** — on ne sait plus à qui demander les conditions de la prise. Elle coûte donc **dans les deux sens** : un dossier faussé dans le sens flatteur casse la reproductibilité exactement comme un dossier faussé dans l'autre. C'est pourquoi un crédit qui ne te revient pas se refuse aussi fermement qu'un reproche imérité.
 
 **UN MESSAGE BRIDGET NE FERME PAS UNE DÉLÉGATION MAICIE — épisode clos, règle conservée.**
 *Déroulé, gardé comme exemple :* carte rendue 16:05:56Z, référent prévenu 16:06:42Z **par message Bridget**, deadline contractuelle 16:07:41Z. À 16h09 le greffe portait toujours `objectives.state = en_coordination` et `delegations.state = creee`. Conséquences observées : le mandat m'a été **redélivré à l'identique**, et je suis resté dans `occupied`, donc jamais LIBRE. J'étais devenu en dix minutes le cas concret du corollaire que j'avais écrit au référent une heure plus tôt — « un agent inactif sous mandat non clos reste OCCUPÉ ».
@@ -245,6 +246,16 @@ Je l'ai trouvée en **suivant une chaîne** : l'artefact qui réclame (« en att
 - un binaire tiers sert la route qu'on croit interroger — **cas mesuré par moi** : port 17888 servi par `/home/moi/bridget-ui-resize-20260828/target/release/bridget`, PID 3788197, depuis 16:15:48. Ni le dépôt de revue, ni le binaire installé. Instrument opposable : `ss -lptn` → `ps -o lstart` → `readlink -f /proc/<pid>/exe`. **Rien d'autre ne prouve ce qui sert.**
 Et sa forme la plus intime : **vérifier ce qu'on croit avoir publié est du même ordre que vérifier ce qu'on croit avoir déployé.** J'ai poussé ma propre branche puis je l'ai relue par `ls-remote` sur le serveur, pas sur ma ref de suivi. Fais-le aussi quand c'est toi qui publies.
 *Fait mesuré par rc1-flux le 28/08* : **cinq délégations sur six** portant une cible étaient converties silencieusement en mandats de revue (voir le contrat 021 en §4). Ce n'est pas un cas isolé, c'est la majorité.
+
+**⑪ LA SECONDE CAUSE COMMUNE — la cadence du parc contre la résolution de ce qui l'observe.** `[formulation de bridget, 28/08 21h42]`
+Le piège ⑩ réunit ce qui se trompe **d'objet**. Celui-ci réunit ce qui se trompe **de tempo**, et il n'est pas le même :
+| observation | résolution de l'instrument | ce que le parc produit |
+|---|---|---|
+| ledger `who`/`bridget` | 20 lignes, non réglable | ~94 messages/heure → **13 minutes de visibilité** |
+| attribution d'un message | l'expéditeur, lu à l'œil | **11 secondes** entre deux envois d'agents différents → deux expéditeurs fusionnés |
+| cible de revue figée | suppose une référence **immobile** | `main` périme en **96 secondes** médianes |
+| dérivée disque | fenêtre de calcul | consommation **épisodique**, par marches |
+**Ce ne sont pas quatre défauts, c'est un seul rapport** : le parc produit plus vite que ses instruments ne résolvent. Chaque fois que tu vois une mesure surprenante, demande-toi non seulement *quel objet* elle interroge (piège ⑩) mais *à quelle cadence* il bouge par rapport à ta fenêtre. Une résolution insuffisante ne rend pas une erreur : elle rend une **moyenne plausible**, ce qui est bien pire.
 
 ---
 
