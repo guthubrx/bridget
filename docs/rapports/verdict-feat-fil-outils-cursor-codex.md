@@ -26,6 +26,23 @@
 >
 > C'est la preuve la plus forte atteignable sans intégrer : le correctif **fonctionne dans le contexte de `main` actuel**, pas seulement dans celui de sa base.
 >
+> ### CONTRE-VÉRIFICATION INDÉPENDANTE — dans le dépôt du référent, sur mandat `9b861426`
+>
+> Banc d'essai fourni : `/home/moi/revue/verif-lot-fil-outils`, worktree détaché sur `e3331fb`, `origin` = `https://github.com/guthubrx/bridget.git`.
+>
+> **1. L'arbre fusionné est reproductible à l'identique.** `git merge-tree e3b1c0b e3331fb` exécuté **dans le dépôt du référent** rend `d96e9bca66f55aecf8b2e253d3e61a4e7f6f536f` — **le même OID** que dans le mien. Un arbre Git est un contenu, pas un contexte : les deux dépôts concordent bit à bit, et ma première compilation valait donc déjà pour le sien. C'est désormais prouvé, plus déduit.
+>
+> **2. Vérifié aussi contre `main` COURANT, ce que le verdict initial ne couvrait pas.** `main` a bougé pendant la mesure elle-même : `e3b1c0b` → `b2c589d` → **`32cbf5a`**.
+> - `merge-tree 32cbf5a e3331fb` → arbre `beced663…`, **0 conflit**.
+> - `cargo check --tests` → **exit 0** (code réel, pas un exit de pipeline).
+> - `cargo test -p bridget-transport` → **200 passés, 0 échec**, 1 ignoré.
+> - Les trois témoins du lot passent, plus le témoin préexistant `claude_stream_json`.
+> - `merge-base --is-ancestor e3331fb 32cbf5a` → **le lot n'est toujours pas intégré**.
+>
+> **La réserve tombe donc deux fois, sur deux états distincts de `main`.** L'intégration devient une décision purement humaine, sans zone d'ombre technique.
+>
+> *La borne tient malgré tout* : `main` a pris **trois valeurs pendant cette seule vérification**. Un `cargo check` qui passe aujourd'hui ne dit rien d'une republication après d'autres branches.
+>
 > ### Trois pièges rencontrés pendant cette vérification, tous du même genre
 > 1. Le premier lancement a rendu `EXIT=0` alors que **`cargo` était absent du PATH** — l'exit venait du `tail` en bout de pipeline, pas du check. **Un zéro n'est pas une mesure** (piège hérité de la carte de `cartae0`, §8). Binaire réel : `/home/moi/.cargo/bin/cargo`.
 > 2. `cargo check` **sans `--tests`** ne type-checke pas le code de test — il aurait validé le lot sans jamais regarder ses trois témoins.
