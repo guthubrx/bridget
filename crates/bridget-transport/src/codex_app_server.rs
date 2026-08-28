@@ -646,7 +646,10 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                 &worker.observations,
                 "turn_start",
                 Some(&message.id),
-                json!({ "body": message.body }),
+                json!({
+                    "from": &message.from,
+                    "body": message.body,
+                }),
             );
             *worker
                 .active_detail

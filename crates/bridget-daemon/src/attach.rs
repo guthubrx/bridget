@@ -32,6 +32,7 @@ const MAX_TURN_BLOCK_LINES: usize = 400;
 const MAX_TURN_RENDERED_CHARS: usize = 2 * MAX_TURN_BLOCK_BYTES;
 const DEFAULT_TERMINAL_COLUMNS: usize = 80;
 const DEFAULT_TERMINAL_ROWS: usize = 24;
+const UNATTESTED_SENDER_LABEL: &str = "émetteur non attesté";
 
 /// Garde minimale du terminal d'entrée. Le mode désactive le traitement des
 /// signaux afin que Ctrl-C arrive comme l'octet `0x03` à la boucle de saisie.
@@ -734,6 +735,7 @@ struct TurnKey {
 struct TurnBlock {
     key: TurnKey,
     header: Vec<String>,
+    header_sender_attested: bool,
     response: String,
     details: Vec<String>,
     stored_bytes: usize,
@@ -742,17 +744,34 @@ struct TurnBlock {
 }
 
 impl TurnBlock {
-    fn new(key: TurnKey, header: String) -> Self {
+    fn new(key: TurnKey, header: String, header_sender_attested: bool) -> Self {
         let header = header.lines().map(str::to_owned).collect::<Vec<_>>();
         Self {
             key,
             stored_bytes: header.iter().map(String::len).sum(),
             stored_lines: header.len(),
             header,
+            header_sender_attested,
             response: String::new(),
             details: Vec::new(),
             omitted_lines: 0,
         }
+    }
+
+    fn replace_header_with_attested_sender(&mut self, header: String) {
+        let previous_bytes = self.header.iter().map(String::len).sum::<usize>();
+        let previous_lines = self.header.len();
+        let header = header.lines().map(str::to_owned).collect::<Vec<_>>();
+        self.stored_bytes = self
+            .stored_bytes
+            .saturating_sub(previous_bytes)
+            .saturating_add(header.iter().map(String::len).sum::<usize>());
+        self.stored_lines = self
+            .stored_lines
+            .saturating_sub(previous_lines)
+            .saturating_add(header.len());
+        self.header = header;
+        self.header_sender_attested = true;
     }
 
     fn append_response(&mut self, content: &str) {
@@ -838,6 +857,7 @@ struct JournalRenderRecord {
     terminal: bool,
     /// `prompt_dispatched` sans corps : accusé transport, pas un message.
     ack_only: bool,
+    sender_attested: bool,
     rendered: String,
 }
 
@@ -872,6 +892,11 @@ fn journal_render_record(bytes: &[u8], agent: &str) -> Option<JournalRenderRecor
             .and_then(serde_json::Value::as_str)
             .filter(|body| !body.is_empty())
             .is_none();
+    let sender_attested = matches!(event.as_str(), "turn_start" | "prompt_dispatched")
+        && payload
+            .get("from")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|sender| !sender.is_empty());
     Some(JournalRenderRecord {
         key,
         event,
@@ -883,6 +908,7 @@ fn journal_render_record(bytes: &[u8], agent: &str) -> Option<JournalRenderRecor
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
         ack_only,
+        sender_attested,
         rendered: render_journal_event(bytes, agent),
     })
 }
@@ -1152,7 +1178,7 @@ impl BlockRenderer {
             } else {
                 format!("{} [tour repris en cours]", record.timestamp)
             };
-            self.current = Some(TurnBlock::new(key.clone(), header));
+            self.current = Some(TurnBlock::new(key.clone(), header, record.sender_attested));
         }
         if record.event == "turn_start" {
             if live {
@@ -1163,6 +1189,13 @@ impl BlockRenderer {
         // Accusé de livraison sous un tour déjà ouvert : corps déjà affiché.
         // Orphelin riche : le header vient d'être posé — redessiner comme turn_start.
         if record.event == "prompt_dispatched" {
+            if !record.ack_only
+                && record.sender_attested
+                && let Some(block) = self.current.as_mut()
+                && !block.header_sender_attested
+            {
+                block.replace_header_with_attested_sender(record.rendered.clone());
+            }
             if live && !record.ack_only {
                 self.redraw(input, output);
             }
@@ -1877,7 +1910,8 @@ fn inbound_message_parts(payload: &serde_json::Value) -> (String, String) {
             payload
                 .get("from")
                 .and_then(serde_json::Value::as_str)
-                .unwrap_or("humain")
+                .filter(|sender| !sender.is_empty())
+                .unwrap_or(UNATTESTED_SENDER_LABEL)
         ),
         payload
             .get("body")
@@ -2327,12 +2361,17 @@ fn write_plain_message(
 mod tests {
     use super::*;
     use bridget_transport::protocol::MAX_ATTACH_FRAGMENT_BYTES;
+    use bridget_transport::{
+        ClaudeStreamJsonOptions, ClaudeStreamJsonTransport, CodexAppServerOptions,
+        CodexAppServerTransport, ManagedEventKind, ManagedSession, ManagedTerminal,
+    };
     use serde_json::json;
-    use std::fs::File;
+    use std::fs::{self, File};
     use std::io::{BufRead, BufReader, Read, Write};
     use std::os::fd::{AsRawFd, FromRawFd, RawFd};
     use std::os::unix::net::UnixListener;
     use std::process::Command;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
     use std::sync::mpsc;
 
     fn test_renderer_sender(raw_terminal: bool, tty_output: bool) -> RendererSender {
@@ -2499,6 +2538,227 @@ mod tests {
             "payload": payload,
         }))
         .unwrap()
+    }
+
+    static SENDER_ATTRIBUTION_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn sender_attribution_root(pilot: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "bridget-attach-sender-attribution-{pilot}-{}-{}",
+            std::process::id(),
+            SENDER_ATTRIBUTION_SEQ.fetch_add(1, AtomicOrdering::Relaxed)
+        ))
+    }
+
+    fn turn_start_from_real_pilot<S: ManagedSession>(
+        transport: &mut S,
+        root: &std::path::Path,
+        agent: &str,
+        message_id: &str,
+    ) -> (serde_json::Value, String) {
+        fs::create_dir_all(root).expect("racine de journal du témoin");
+        transport
+            .activate_journal(root, agent, None)
+            .expect("activation du JournalWriter");
+        let mut message = BridgetMessage::new("jc2", "bridget", "TRANCHE SPEC 052 POUSSEE");
+        message.id = message_id.to_string();
+        transport.deliver(&message).expect("livraison au pilote");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut finished = false;
+        while Instant::now() < deadline {
+            finished |= transport.drain_events().iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::TurnFinished {
+                        terminal: ManagedTerminal::Completed,
+                        ..
+                    }
+                )
+            });
+            if finished {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            finished,
+            "le pilote doit terminer avant la lecture du journal"
+        );
+        transport.stop();
+
+        let journal_path = fs::read_dir(root.join(agent))
+            .expect("répertoire JournalWriter")
+            .next()
+            .expect("fichier JSONL")
+            .expect("entrée JSONL")
+            .path();
+        let line = fs::read_to_string(journal_path)
+            .expect("lecture JSONL")
+            .lines()
+            .find(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .ok()
+                    .is_some_and(|record| record["event"] == "turn_start")
+            })
+            .expect("turn_start écrit par le pilote")
+            .to_string();
+        let record = serde_json::from_str(&line).expect("turn_start JSON valide");
+        let rendered = render_journal_event(line.as_bytes(), agent);
+        fs::remove_dir_all(root).expect("nettoyage du témoin");
+        (record, rendered)
+    }
+
+    fn assert_sender_attribution(record: serde_json::Value, rendered: String) {
+        assert_eq!(
+            record
+                .pointer("/payload/from")
+                .and_then(serde_json::Value::as_str),
+            Some("jc2"),
+            "turn_start doit persister l’émetteur réel avant tout enrichissement ultérieur"
+        );
+        assert!(
+            rendered.contains("jc2 →"),
+            "Attach doit rendre l’émetteur persistant, reçu {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("humain →"),
+            "Attach ne doit pas appliquer son repli humain, reçu {rendered:?}"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_codex_turn_start_attribue_le_sender_reel_jusqu_a_Attach() {
+        let root = sender_attribution_root("codex");
+        let options = CodexAppServerOptions {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                r#"while IFS= read -r line; do
+                    case "$line" in
+                        *'"method":"initialize"'*) printf '%s\n' '{"id":1,"result":{"userAgent":"fake","codexHome":"/tmp","platformFamily":"unix","platformOs":"linux"}}' ;;
+                        *'"method":"thread/start"'*) printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-attribution"}}}' ;;
+                        *'"method":"account/rateLimits/read"'*) printf '%s\n' '{"id":3,"result":{"rateLimits":{}}}' ;;
+                        *'"method":"turn/start"'*)
+                            printf '%s\n' '{"id":4,"result":{"turn":{"id":"turn-attribution"}}}'
+                            printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-attribution","turnId":"turn-attribution","itemId":"item","delta":"ok"}}'
+                            printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-attribution","turn":{"id":"turn-attribution","status":"completed","items":[]}}}'
+                            ;;
+                    esac
+                done"#
+                    .to_string(),
+            ],
+            queue_capacity: 1,
+            notify_timeout_secs: 2,
+            model: None,
+            permissions: "allow".to_string(),
+        };
+        let mut transport = CodexAppServerTransport::spawn(options).expect("pilote Codex");
+        let (record, rendered) =
+            turn_start_from_real_pilot(&mut transport, &root, "codex-attribution", "codex-055");
+        assert_sender_attribution(record, rendered);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_claude_turn_start_attribue_le_sender_reel_jusqu_a_Attach() {
+        let root = sender_attribution_root("claude");
+        let options = ClaudeStreamJsonOptions {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                concat!(
+                    "while IFS= read -r line; do ",
+                    "printf '%s\\n' '{\"type\":\"result\",\"is_error\":false,\"terminal_reason\":\"completed\",\"result\":\"ok\"}'; ",
+                    "done"
+                )
+                .to_string(),
+            ],
+            queue_capacity: 1,
+            notify_timeout_secs: 2,
+            session_store_root: None,
+            agent_name: None,
+        };
+        let mut transport = ClaudeStreamJsonTransport::spawn(options).expect("pilote Claude");
+        let (record, rendered) =
+            turn_start_from_real_pilot(&mut transport, &root, "claude-attribution", "claude-055");
+        assert_sender_attribution(record, rendered);
+    }
+
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_prompt_dispatched_enrichi_remplace_l_entete_legacy_sans_from() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new("codex-legacy".to_string(), false, true);
+        renderer.terminal_fd = None;
+        let mut output = Vec::new();
+        for (seq, message_id, event, payload) in [
+            (
+                1,
+                "legacy-enriched",
+                "turn_start",
+                json!({"body":"TRANCHE SPEC 052 POUSSEE"}),
+            ),
+            (
+                2,
+                "legacy-enriched",
+                "prompt_dispatched",
+                json!({"from":"jc2","body":"TRANCHE SPEC 052 POUSSEE"}),
+            ),
+            (
+                3,
+                "legacy-enriched",
+                "turn_end",
+                json!({"stop_reason":"end_turn"}),
+            ),
+            (
+                4,
+                "legacy-unattested",
+                "turn_start",
+                json!({"body":"ARCHIVE SANS EMETTEUR"}),
+            ),
+            (
+                5,
+                "legacy-unattested",
+                "turn_end",
+                json!({"stop_reason":"end_turn"}),
+            ),
+        ] {
+            renderer.apply(
+                RendererCommand::Event(AttachEvent::Journal {
+                    seq,
+                    bytes: journal_record_for_turn(
+                        seq,
+                        "session-legacy",
+                        message_id,
+                        event,
+                        payload,
+                    ),
+                    live: false,
+                }),
+                &input,
+                &mut output,
+            );
+        }
+
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(
+            rendered.contains("jc2 → TRANCHE SPEC 052 POUSSEE"),
+            "le prompt enrichi doit remplacer l’émetteur de l’en-tête : {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("humain → TRANCHE SPEC 052 POUSSEE"),
+            "le repli historique ne doit plus survivre à l’enrichissement : {rendered:?}"
+        );
+        assert!(
+            rendered.contains("émetteur non attesté → ARCHIVE SANS EMETTEUR"),
+            "une provenance absente doit rester explicitement non attestée : {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("humain → ARCHIVE SANS EMETTEUR"),
+            "une provenance absente ne doit jamais devenir humaine : {rendered:?}"
+        );
     }
 
     #[test]
@@ -3096,6 +3356,7 @@ mod tests {
                 message_id: "message".to_string(),
             },
             "09:07 humain → Question".to_string(),
+            true,
         );
         for _ in 0..500 {
             block.append_response(&format!("{}\n", "x".repeat(200)));

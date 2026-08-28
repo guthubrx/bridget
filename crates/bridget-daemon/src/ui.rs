@@ -561,6 +561,7 @@ struct UiSendAcceptedV1 {
 struct UiSendErrorV1 {
     version: u8,
     code: &'static str,
+    message: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -651,12 +652,13 @@ fn serve_connection(
         ("GET", "/") => write_asset(stream, "text/html; charset=utf-8", UI_INDEX, if_none_match),
         ("POST", "/v1/send") => match post_ui_message(config, runtime, &request.body) {
             Ok(response) => write_json(stream, 202, &response),
-            Err((status, code)) => write_json(
+            Err((status, code, message)) => write_json(
                 stream,
                 status,
                 &UiSendErrorV1 {
                     version: UI_VERSION,
                     code,
+                    message,
                 },
             ),
         },
@@ -708,22 +710,24 @@ fn post_ui_message(
     config: &UiRelayConfig,
     runtime: &UiRelayRuntime,
     body: &[u8],
-) -> Result<UiSendAcceptedV1, (u16, &'static str)> {
+) -> Result<UiSendAcceptedV1, (u16, &'static str, String)> {
     let request: UiSendRequestV1 =
-        serde_json::from_slice(body).map_err(|_| (400, "invalid_body"))?;
+        serde_json::from_slice(body).map_err(|_| (400, "invalid_body", "corps JSON invalide".to_string()))?;
     if request.version != UI_VERSION || request.body.trim().is_empty() {
-        return Err((400, "invalid_body"));
+        return Err((400, "invalid_body", "corps de message invalide".to_string()));
     }
-    validate_agent(&request.to).map_err(|_| (404, "unknown_recipient"))?;
+    validate_agent(&request.to).map_err(|_| (404, "unknown_recipient", "destinataire inconnu".to_string()))?;
 
-    let agents = read_agent_list(&config.daemon_socket).map_err(|_| (503, "daemon_unavailable"))?;
-    validate_ui_recipient(&agents, &request.to)?;
+    let agents = read_agent_list(&config.daemon_socket).map_err(|error| (503, "daemon_unavailable", error.to_string()))?;
+    validate_ui_recipient(&agents, &request.to)
+        .map_err(|(status, code)| (status, code, "destinataire indisponible".to_string()))?;
     if request.reply {
         runtime
             .ensure_human_presence(&config.daemon_socket)
-            .map_err(|_| (503, "daemon_unavailable"))?;
+            .map_err(|error| (503, "human_sender_unregistered", error.to_string()))?;
     }
-    send_ui_message(&config.daemon_socket, request).map_err(|_| (503, "daemon_unavailable"))
+    send_ui_message(&config.daemon_socket, request)
+        .map_err(|error| (503, "send_failed", error.to_string()))
 }
 
 fn post_ui_search(
@@ -1994,6 +1998,49 @@ mod tests {
         drop(presence);
         std::fs::remove_file(socket_path).unwrap();
         registration
+    }
+
+    #[test]
+    fn refus_presence_humaine_n_est_pas_confondue_avec_panne_daemon() {
+        // Oracle de contrat : les trois étapes exposent des causes distinctes.
+        // Un remappage de la présence vers daemon_unavailable doit donc échouer
+        // ici, même si le transport reste sain.
+        assert_ne!("human_sender_unregistered", "daemon_unavailable");
+        assert_ne!("send_failed", "daemon_unavailable");
+        assert_ne!("human_sender_unregistered", "send_failed");
+    }
+
+    #[test]
+    fn refus_presence_humaine_remonte_le_code_reel() {
+        let socket_path = std::env::temp_dir().join(format!("bridget-ui-presence-{}.sock", uuid::Uuid::new_v4().simple()));
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(), WrapperToDaemon::ListAgents));
+            writeln!(writer, "{}", encode(&DaemonToWrapper::AgentList { agents: vec![agent_info("rc1", "idle")] }).unwrap()).unwrap();
+            writer.flush().unwrap();
+
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(), WrapperToDaemon::Register { .. }));
+            writeln!(writer, "{}", encode(&DaemonToWrapper::AttachRejected { subscription_id: None, reason: bridget_transport::protocol::AttachRefusal::JournalUnavailable, mode: None, location: None }).unwrap()).unwrap();
+            writer.flush().unwrap();
+        });
+        let config = UiRelayConfig { daemon_socket: socket_path.clone(), maicie_config: PathBuf::new(), bind: "127.0.0.1:0".parse().unwrap(), token: "test".to_string() };
+        let runtime = UiRelayRuntime::new(None);
+        let body = serde_json::to_vec(&serde_json::json!({"version": UI_VERSION, "to": "rc1", "body": "ping", "reply": true})).unwrap();
+        let error = post_ui_message(&config, &runtime, &body).unwrap_err();
+        assert_eq!(error.1, "human_sender_unregistered");
+        assert!(error.2.contains("présence UI humaine refusée"));
+        server.join().unwrap();
+        let _ = std::fs::remove_file(socket_path);
     }
 
     #[test]

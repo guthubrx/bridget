@@ -41,6 +41,7 @@ fn base_request<'a>(
 ) -> DelegateRequest<'a> {
     DelegateRequest {
         goal,
+        opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
         explicit_target: Some("prospective"),
         required_tags: &[],
         duration: ClasseDuree::Normale,

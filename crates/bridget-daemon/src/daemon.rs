@@ -9924,6 +9924,7 @@ mod presence_tests {
             }],
             &maicie::app::DelegateRequest {
                 goal: "reprendre la bissection",
+                opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
                 explicit_target: Some("persistent-one"),
                 required_tags: &[],
                 duration: maicie::domain::ClasseDuree::Normale,

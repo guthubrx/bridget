@@ -427,6 +427,7 @@ impl Fixture {
         }];
         let request = DelegateRequest {
             goal: "objectif de test",
+            opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
             explicit_target: Some("prospective"),
             required_tags: &[],
             duration: ClasseDuree::Normale,

@@ -4498,6 +4498,7 @@ mod prompt_tests {
             }],
             &DelegateRequest {
                 goal: "reprendre la bissection durable",
+                opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
                 explicit_target: Some(participant),
                 required_tags: &[],
                 duration: ClasseDuree::Normale,
@@ -4799,6 +4800,7 @@ mod prompt_tests {
             }],
             &DelegateRequest {
                 goal: &poisoned_goal,
+                opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
                 explicit_target: Some("agent-lf"),
                 required_tags: &[],
                 duration: ClasseDuree::Normale,

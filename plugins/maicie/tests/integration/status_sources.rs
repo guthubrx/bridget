@@ -132,6 +132,7 @@ fn status_expose_le_compteur_durable_des_contradictions_suite() {
             }],
             &DelegateRequest {
                 goal: &goal,
+                opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
                 explicit_target: Some("prospective"),
                 required_tags: &[],
                 duration: ClasseDuree::Normale,
@@ -584,6 +585,7 @@ impl Fixture {
             &candidates,
             &DelegateRequest {
                 goal: "observer une permission",
+                opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
                 explicit_target: Some("prospective"),
                 required_tags: &[],
                 duration: ClasseDuree::Normale,

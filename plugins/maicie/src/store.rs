@@ -20,9 +20,9 @@ use crate::domain::{
     EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, EvenementCoordination,
     FaitReassignation, FraicheurCoordination, GenerationDelegation, IssueGreffe, LienArbitrage,
     LigneeDelegation, LotReassignation, MotifRefusDelegationLocale, MotifRefusGreffe,
-    NotificationOutbox, NotificationReassignation, ObjectifCoordonne, OperationGuichet,
-    OutboxDelegation, PolitiqueReassignation, QualificationDependance, ReceptionGreffe,
-    RecuCorrelation, ReductionCoordinationActive, ReductionOuvertureDelegation,
+    NotificationOutbox, NotificationReassignation, ObjectifCoordonne, ObjectiveOpeningPermit,
+    OperationGuichet, OutboxDelegation, PolitiqueReassignation, QualificationDependance,
+    ReceptionGreffe, RecuCorrelation, ReductionCoordinationActive, ReductionOuvertureDelegation,
     ReductionReassignation, SuiteObjective, TransitionCoordinationActive, TypeDecision,
     TypeEffetDemandeSuivie, TypeEvenementAttendu, TypeFaitReassignation,
     TypeNotificationReassignation, identifiant_deterministe, reduire_coordination,
@@ -3279,7 +3279,12 @@ impl MaicieStore {
         }
 
         let tx = self.connection.transaction().map_err(StoreError::Sql)?;
-        insert_prepared(&tx, prepared)?;
+        // Cette API de bas niveau n'est utilisée que par les harnais de store.
+        // Elle reste incapable de fabriquer une origine humaine : son seul
+        // permit est explicitement automatique et subit la même vérification
+        // au point INSERT que les deux réservations productives.
+        let opening_permit = ObjectiveOpeningPermit::auto_generated();
+        insert_prepared(&tx, prepared, &opening_permit)?;
         observer(StoreCommitPhase::BeforeCommit)?;
         tx.commit().map_err(StoreError::Sql)?;
         observer(StoreCommitPhase::AfterCommit)?;
@@ -3411,11 +3416,13 @@ impl MaicieStore {
         idempotency_key: &str,
         canonical_request_bytes: &[u8],
         prepared: &PreparedDelegation,
+        opening_permit: &ObjectiveOpeningPermit,
     ) -> Result<DelegateReservation, StoreError> {
         self.lookup_or_reserve_delegate_observed(
             idempotency_key,
             canonical_request_bytes,
             prepared,
+            opening_permit,
             |_| Ok(()),
         )
     }
@@ -3426,6 +3433,7 @@ impl MaicieStore {
         idempotency_key: &str,
         canonical_request_bytes: &[u8],
         prepared: &PreparedDelegation,
+        opening_permit: &ObjectiveOpeningPermit,
         mut observer: impl FnMut(StoreCommitPhase) -> Result<(), StoreError>,
     ) -> Result<DelegateReservation, StoreError> {
         validate_delegate_idempotency_key(idempotency_key)?;
@@ -3469,7 +3477,7 @@ impl MaicieStore {
                 .map(DelegateReservation::Replay);
         }
 
-        insert_prepared(&tx, prepared)?;
+        insert_prepared(&tx, prepared, opening_permit)?;
         tx.execute(
             "INSERT INTO delegate_idempotency(\n\
                  idempotency_key, canonical_request_bytes, objective_id, delegation_id,\n\
@@ -3535,6 +3543,7 @@ impl MaicieStore {
         objective: &ObjectifCoordonne,
         delegation: &Delegation,
         deferred: &DeferredDispatchParams,
+        opening_permit: &ObjectiveOpeningPermit,
     ) -> Result<DelegateReservation, StoreError> {
         validate_delegate_idempotency_key(idempotency_key)?;
         if deferred.issuer_scope != self.issuer_scope {
@@ -3583,7 +3592,7 @@ impl MaicieStore {
                 .map(DelegateReservation::Replay);
         }
 
-        upsert_objective(&tx, objective)?;
+        open_objective(&tx, objective, opening_permit)?;
         let delegation_json = serde_json::to_vec(delegation).map_err(StoreError::Json)?;
         tx.execute(
             "INSERT INTO delegations(id, objective_id, state, payload_json) VALUES (?1, ?2, ?3, ?4)",
@@ -8642,9 +8651,13 @@ fn load_or_create_issuer_scope(connection: &mut Connection) -> Result<String, St
     Ok(scope)
 }
 
-fn insert_prepared(tx: &Transaction<'_>, prepared: &PreparedDelegation) -> Result<(), StoreError> {
+fn insert_prepared(
+    tx: &Transaction<'_>,
+    prepared: &PreparedDelegation,
+    opening_permit: &ObjectiveOpeningPermit,
+) -> Result<(), StoreError> {
     prepared.delegation.verifier().map_err(StoreError::Domain)?;
-    upsert_objective(tx, &prepared.objective)?;
+    open_objective(tx, &prepared.objective, opening_permit)?;
     let delegation_json = serde_json::to_vec(&prepared.delegation).map_err(StoreError::Json)?;
     tx.execute(
         "INSERT INTO delegations(id, objective_id, state, payload_json) VALUES (?1, ?2, ?3, ?4)",
@@ -8747,9 +8760,23 @@ fn validate_delegate_idempotency_key(key: &str) -> Result<(), StoreError> {
     Ok(())
 }
 
-fn upsert_objective(tx: &Transaction<'_>, objective: &ObjectifCoordonne) -> Result<(), StoreError> {
+/// Seule frontière capable d'insérer une ligne d'objectif absente.
+///
+/// Le permit n'est pas une décoration de l'appelant : son origine doit être
+/// exactement celle du payload qui sera écrit. La voie de transition d'un
+/// objectif existant est séparée et ne contient aucun `INSERT`.
+fn open_objective(
+    tx: &Transaction<'_>,
+    objective: &ObjectifCoordonne,
+    opening_permit: &ObjectiveOpeningPermit,
+) -> Result<(), StoreError> {
     if objective.etat == EtatObjectif::Clos {
         return Err(StoreError::Invalid("clôture réservée à close_objective"));
+    }
+    if &objective.origin != opening_permit.origin() {
+        return Err(StoreError::Invalid(
+            "origine objectif divergente du permit d'ouverture",
+        ));
     }
     let id = objective.id.to_string();
     let incoming_json = serde_json::to_vec(objective).map_err(StoreError::Json)?;
@@ -8771,6 +8798,52 @@ fn upsert_objective(tx: &Transaction<'_>, objective: &ObjectifCoordonne) -> Resu
         return Ok(());
     };
 
+    transition_existing_objective(
+        tx,
+        objective,
+        &id,
+        incoming_json,
+        current_state,
+        current_json,
+    )
+}
+
+/// Met à jour uniquement une ligne déjà présente. L'absence est un invariant
+/// rompu, jamais une invitation implicite à créer sans permit.
+fn update_objective(tx: &Transaction<'_>, objective: &ObjectifCoordonne) -> Result<(), StoreError> {
+    if objective.etat == EtatObjectif::Clos {
+        return Err(StoreError::Invalid("clôture réservée à close_objective"));
+    }
+    let id = objective.id.to_string();
+    let incoming_json = serde_json::to_vec(objective).map_err(StoreError::Json)?;
+    let (current_state, current_json): (String, Vec<u8>) = tx
+        .query_row(
+            "SELECT state, payload_json FROM objectives WHERE id = ?1",
+            [&id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(StoreError::Sql)?
+        .ok_or(StoreError::NotFound("objectif à mettre à jour absent"))?;
+
+    transition_existing_objective(
+        tx,
+        objective,
+        &id,
+        incoming_json,
+        current_state,
+        current_json,
+    )
+}
+
+fn transition_existing_objective(
+    tx: &Transaction<'_>,
+    objective: &ObjectifCoordonne,
+    id: &str,
+    incoming_json: Vec<u8>,
+    current_state: String,
+    current_json: Vec<u8>,
+) -> Result<(), StoreError> {
     let mut current_objective: ObjectifCoordonne =
         serde_json::from_slice(&current_json).map_err(StoreError::Json)?;
     if parse_objective_state(&current_state)? != current_objective.etat {
@@ -8979,7 +9052,7 @@ fn coordinate_delegation_outcome(
         ));
     }
 
-    upsert_objective(tx, &objective)?;
+    update_objective(tx, &objective)?;
     upsert_delegation(tx, &delegation)?;
     let inserted = tx
         .execute(
@@ -9607,7 +9680,7 @@ mod coordination_transaction_tests {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .unwrap();
         assert!(matches!(
-            upsert_objective(&tx, &objective),
+            open_objective(&tx, &objective, &ObjectiveOpeningPermit::auto_generated()),
             Err(StoreError::Invalid("clôture réservée à close_objective"))
         ));
         assert_eq!(
@@ -9615,6 +9688,42 @@ mod coordination_transaction_tests {
                 .get::<_, i64>(0))
                 .unwrap(),
             0
+        );
+    }
+
+    #[test]
+    fn spec_056_permit_et_origine_divergents_refusent_avant_insertion() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE objectives(
+                     id TEXT PRIMARY KEY, state TEXT NOT NULL, payload_json BLOB NOT NULL
+                 );",
+            )
+            .unwrap();
+        let mut objective = ObjectifCoordonne::nouveau(
+            "origine discordante",
+            crate::domain::ModeObjectif::Delegue,
+            10,
+        )
+        .unwrap();
+        objective.origin = crate::domain::ObjectiveOrigin::LegacyUnknown;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+
+        assert!(matches!(
+            open_objective(&tx, &objective, &ObjectiveOpeningPermit::auto_generated()),
+            Err(StoreError::Invalid(
+                "origine objectif divergente du permit d'ouverture"
+            ))
+        ));
+        assert_eq!(
+            tx.query_row("SELECT COUNT(*) FROM objectives", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "un refus de provenance ne doit créer aucune ligne"
         );
     }
 
