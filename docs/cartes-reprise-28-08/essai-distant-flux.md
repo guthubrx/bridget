@@ -233,7 +233,11 @@ Deux points restent ouverts côté référent, sans action de ma part :
 - `/home/moi/.claude/skills/maicie` — la skill dont la section « Chemins réels » est
   fausse sur cartae
 - `/home/moi/revue/hygiene-disque-ToHHyG` — 1,4 Go, résidu non attribué ; **aucune demande
-  dessus**, le disque est à ~110 Gio libres et ce serait du travail pour du travail
+  dessus**. Attention, le chiffre que portait cette ligne a péri en quatre heures : le
+  disque n'est plus à ~110 Gio libres mais à **74,4 Gio mesurés par `df` le 28/08 à
+  19:16:56Z**, avec une pente d'environ 11 Gio/h confirmée par le référent sur deux
+  intervalles indépendants — soit environ sept heures d'autonomie. Un mandat est ouvert
+  chez jc6-flux. **Ne pas mesurer le disque avec `bridget who`** : voir le piège n°11.
 - `/home/moi/revue/fixtures-integration-ephemeres-42` — hérité de la carte prédécesseur,
   non visité par moi
 
@@ -307,10 +311,21 @@ Pièges de **preuve** avant d'être des pièges de code — c'est ce qui les ren
    après que je l'avais rendu. Avant de refaire un travail qu'un message semble redemander,
    **vérifier le ledger et le fichier** : le mandat peut être déjà honoré. Refaire écrase
    du travail bon et coûte un tour.
-11. Hérités du prédécesseur, **encore valables sous Claude** : ne pas amender une tête déjà
+11. **Une fenêtre longue sur un instrument gelé est pire qu'une fenêtre courte, parce
+    qu'elle inspire confiance.** Mesuré le 28/08 à 19:16:56Z : la colonne `DISQUE` de
+    `bridget who` affiche `79.0 Gio` **à l'identique pour les douze agents**, y compris
+    `temoin-persistance` ; au même instant `df` rend `74.4 Gio`. La valeur n'avait pas
+    bougé d'un dixième depuis 18h07 — soixante-dix minutes pendant lesquelles la pente
+    réelle de ~11 Gio/h aurait dû retirer ~12,7 Gio — et elle a traversé le redémarrage de
+    18:47:49 sans changer. Qui calcule une pente avec `who` obtient **zéro** et conclut que
+    la fuite s'est arrêtée : fausse assurance, sens dangereux. J'ai failli envoyer une
+    pente de 10,5 Gio/h « corroborante » calculée sur trois heures de lectures `who` ; elle
+    était fausse par construction. **Vérifier qu'un instrument BOUGE avant d'en tirer une
+    pente.** `df -B1` bouge, `bridget who` ne bouge pas.
+12. Hérités du prédécesseur, **encore valables sous Claude** : ne pas amender une tête déjà
    relue — empiler les commits pour conserver l'ancêtre du verdict ; et `user_version=19`
    seul ne prouve pas un schéma v19.
-12. Hérités du prédécesseur mais **propres à Codex, écartés** : `managed_test_binary` sur
+13. Hérités du prédécesseur mais **propres à Codex, écartés** : `managed_test_binary` sur
     cibles filtrées neuves, rejeu des mutants après amendement, fixture lisant la
     configuration réelle si les chemins ne sont pas isolés. Conservés ici pour mémoire, pas
     comme consignes actives.
