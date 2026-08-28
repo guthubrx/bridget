@@ -67,7 +67,10 @@ const EXIT_BRIDGET: u8 = 4;
 const EXIT_DELEGATE: u8 = 5;
 const EXIT_STORE: u8 = 6;
 const MAX_STATUS_RUNTIME_OBSERVATIONS: usize = 256;
-const LOCALITY_GUARD_ISSUER_SCOPE: &str = "maicie-locality-guard";
+use maicie::{
+    LOCALITY_GUARD_ISSUER_SCOPE, MIN_ISSUER_SCOPE_LEN, ROUTINES_ISSUER_SCOPE, STATUS_ISSUER_SCOPE,
+    USAGE_ISSUER_SCOPE,
+};
 
 fn main() -> ExitCode {
     match run(env::args().skip(1).collect()) {
@@ -210,7 +213,7 @@ fn capture_status_sources(config: &MaicieConfig, participants: &[String]) -> Sta
     let deadline = Instant::now() + Duration::from_millis(budget_ms);
     let client = match BridgetClient::connect_with_limits_until(
         &config.bridget_socket,
-        "maicie-status",
+        STATUS_ISSUER_SCOPE,
         status_limits(deadline),
         deadline,
     ) {
@@ -584,7 +587,7 @@ fn list_routine_candidates(
     limits: BridgetClientLimits,
 ) -> Result<Vec<DelegationCandidate>, CliError> {
     let client =
-        BridgetClient::connect_with_limits(&config.bridget_socket, "maicie-routines", limits)
+        BridgetClient::connect_with_limits(&config.bridget_socket, ROUTINES_ISSUER_SCOPE, limits)
             .map_err(CliError::Bridget)?;
     let agents = client.list_agents().map_err(CliError::Bridget)?;
     Ok(candidates_from(config, &agents))
@@ -4421,5 +4424,35 @@ mod tests {
         assert!(migrate);
         assert_eq!(rest, vec!["status".to_string()]);
         assert!(peel_migrate_flag(&["--migrate".to_string(), "--migrate".to_string()]).is_err());
+    }
+
+    #[test]
+    fn toutes_les_portees_emetteur_atteignent_le_minimum_du_daemon() {
+        // Mesure du 28/08 : les quatre portees literales de Maicie faisaient 12
+        // a 21 caracteres alors que le daemon en exige 22 depuis le 22/08. Tout
+        // ClientHello etait donc refuse en invalid_issuer_scope, observe a la
+        // socket, et le refus remontait deguise en « annuaire indisponible ».
+        // Aucune commande CLI ne pouvait negocier : la garde de localite n'a
+        // jamais fonctionne depuis sa naissance.
+        // Raccourcir une portee sous le minimum tue ce temoin.
+        for portee in [
+            maicie::LOCALITY_GUARD_ISSUER_SCOPE,
+            maicie::STATUS_ISSUER_SCOPE,
+            maicie::ROUTINES_ISSUER_SCOPE,
+            maicie::USAGE_ISSUER_SCOPE,
+        ] {
+            assert!(
+                portee.len() >= maicie::MIN_ISSUER_SCOPE_LEN,
+                "portee « {portee} » : {} caracteres, le daemon en exige {} et refuse en invalid_issuer_scope",
+                portee.len(),
+                maicie::MIN_ISSUER_SCOPE_LEN
+            );
+            assert!(
+                portee
+                    .bytes()
+                    .all(|octet: u8| octet.is_ascii_alphanumeric() || matches!(octet, b'-' | b'_')),
+                "portee « {portee} » : caractere hors alphabet accepte par le daemon"
+            );
+        }
     }
 }

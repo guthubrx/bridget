@@ -362,7 +362,7 @@ pub fn collect_mission_costs(
     };
     let client = BridgetClient::connect_with_limits(
         &config.bridget_socket,
-        "maicie-usage",
+        crate::USAGE_ISSUER_SCOPE,
         BridgetClientLimits::default(),
     )
     .ok();
