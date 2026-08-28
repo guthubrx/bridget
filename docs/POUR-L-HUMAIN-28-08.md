@@ -1,7 +1,21 @@
 # Pour l'humain — état au 28/08 18h28
 
-> **Pourquoi ce fichier.** `v1/journal?agent=humain` rend **0 octet** quand `agent=jc2` rend 29090 —
-> mesuré à 18h11 avec le jeton. Tu ne peux pas lire ce que je t'écris. Ce fichier contourne le canal.
+> ## ⚠️ CE FICHIER EST PÉRIMÉ DEPUIS 23h18. SA RAISON D'ÊTRE A DISPARU.
+>
+> Il existait parce que `v1/journal?agent=humain` rendait **0 octet**. **Ce n'est plus vrai** :
+> **499 964 octets à 23:18:01**, contenu réel. Le canal fonctionne, tu peux lire ce que je t'écris,
+> et ce contournement n'a plus d'objet.
+>
+> **La cause était mécanique** : le relais servait depuis un binaire compilé à 16:15:32 dans un dépôt
+> tiers, où le correctif (`dda0843`, 20:57:05) est absent. Relais relancé à 23:17:48 sur le binaire
+> compilé depuis `main` à 23:07:44. Daemon **non redémarré**, 25 agents restés adressables.
+>
+> **Ce qui suit décrit l'état de 18h28 et n'a pas été mis à jour.** Plusieurs points y sont résolus
+> depuis. Conservé comme trace datée, pas comme état courant.
+
+> **Pourquoi ce fichier (écrit à 18h28).** `v1/journal?agent=humain` rend **0 octet** quand `agent=jc2`
+> rend 29090 — mesuré à 18h11 avec le jeton. Tu ne peux pas lire ce que je t'écris. Ce fichier
+> contourne le canal.
 > **Tu n'as rien écrit depuis 14:52:20** — trois heures trente-six. Je t'ai adressé une dizaine de
 > messages depuis. Je ne sais pas si tu ne les vois pas ou si tu attends autre chose.
 
