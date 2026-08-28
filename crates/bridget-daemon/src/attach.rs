@@ -2327,12 +2327,17 @@ fn write_plain_message(
 mod tests {
     use super::*;
     use bridget_transport::protocol::MAX_ATTACH_FRAGMENT_BYTES;
+    use bridget_transport::{
+        ClaudeStreamJsonOptions, ClaudeStreamJsonTransport, CodexAppServerOptions,
+        CodexAppServerTransport, ManagedEventKind, ManagedSession, ManagedTerminal,
+    };
     use serde_json::json;
-    use std::fs::File;
+    use std::fs::{self, File};
     use std::io::{BufRead, BufReader, Read, Write};
     use std::os::fd::{AsRawFd, FromRawFd, RawFd};
     use std::os::unix::net::UnixListener;
     use std::process::Command;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
     use std::sync::mpsc;
 
     fn test_renderer_sender(raw_terminal: bool, tty_output: bool) -> RendererSender {
@@ -2499,6 +2504,152 @@ mod tests {
             "payload": payload,
         }))
         .unwrap()
+    }
+
+    static SENDER_ATTRIBUTION_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn sender_attribution_root(pilot: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "bridget-attach-sender-attribution-{pilot}-{}-{}",
+            std::process::id(),
+            SENDER_ATTRIBUTION_SEQ.fetch_add(1, AtomicOrdering::Relaxed)
+        ))
+    }
+
+    fn turn_start_from_real_pilot<S: ManagedSession>(
+        transport: &mut S,
+        root: &std::path::Path,
+        agent: &str,
+        message_id: &str,
+    ) -> (serde_json::Value, String) {
+        fs::create_dir_all(root).expect("racine de journal du témoin");
+        transport
+            .activate_journal(root, agent, None)
+            .expect("activation du JournalWriter");
+        let mut message = BridgetMessage::new("jc2", "bridget", "TRANCHE SPEC 052 POUSSEE");
+        message.id = message_id.to_string();
+        transport.deliver(&message).expect("livraison au pilote");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut finished = false;
+        while Instant::now() < deadline {
+            finished |= transport.drain_events().iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::TurnFinished {
+                        terminal: ManagedTerminal::Completed,
+                        ..
+                    }
+                )
+            });
+            if finished {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            finished,
+            "le pilote doit terminer avant la lecture du journal"
+        );
+        transport.stop();
+
+        let journal_path = fs::read_dir(root.join(agent))
+            .expect("répertoire JournalWriter")
+            .next()
+            .expect("fichier JSONL")
+            .expect("entrée JSONL")
+            .path();
+        let line = fs::read_to_string(journal_path)
+            .expect("lecture JSONL")
+            .lines()
+            .find(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .ok()
+                    .is_some_and(|record| record["event"] == "turn_start")
+            })
+            .expect("turn_start écrit par le pilote")
+            .to_string();
+        let record = serde_json::from_str(&line).expect("turn_start JSON valide");
+        let rendered = render_journal_event(line.as_bytes(), agent);
+        fs::remove_dir_all(root).expect("nettoyage du témoin");
+        (record, rendered)
+    }
+
+    fn assert_sender_attribution(record: serde_json::Value, rendered: String) {
+        assert_eq!(
+            record
+                .pointer("/payload/from")
+                .and_then(serde_json::Value::as_str),
+            Some("jc2"),
+            "turn_start doit persister l’émetteur réel avant tout enrichissement ultérieur"
+        );
+        assert!(
+            rendered.contains("jc2 →"),
+            "Attach doit rendre l’émetteur persistant, reçu {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("humain →"),
+            "Attach ne doit pas appliquer son repli humain, reçu {rendered:?}"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_codex_turn_start_attribue_le_sender_reel_jusqu_a_Attach() {
+        let root = sender_attribution_root("codex");
+        let options = CodexAppServerOptions {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                r#"while IFS= read -r line; do
+                    case "$line" in
+                        *'"method":"initialize"'*) printf '%s\n' '{"id":1,"result":{"userAgent":"fake","codexHome":"/tmp","platformFamily":"unix","platformOs":"linux"}}' ;;
+                        *'"method":"thread/start"'*) printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-attribution"}}}' ;;
+                        *'"method":"account/rateLimits/read"'*) printf '%s\n' '{"id":3,"result":{"rateLimits":{}}}' ;;
+                        *'"method":"turn/start"'*)
+                            printf '%s\n' '{"id":4,"result":{"turn":{"id":"turn-attribution"}}}'
+                            printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-attribution","turnId":"turn-attribution","itemId":"item","delta":"ok"}}'
+                            printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-attribution","turn":{"id":"turn-attribution","status":"completed","items":[]}}}'
+                            ;;
+                    esac
+                done"#
+                    .to_string(),
+            ],
+            queue_capacity: 1,
+            notify_timeout_secs: 2,
+            model: None,
+            permissions: "allow".to_string(),
+        };
+        let mut transport = CodexAppServerTransport::spawn(options).expect("pilote Codex");
+        let (record, rendered) =
+            turn_start_from_real_pilot(&mut transport, &root, "codex-attribution", "codex-055");
+        assert_sender_attribution(record, rendered);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_claude_turn_start_attribue_le_sender_reel_jusqu_a_Attach() {
+        let root = sender_attribution_root("claude");
+        let options = ClaudeStreamJsonOptions {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                concat!(
+                    "while IFS= read -r line; do ",
+                    "printf '%s\\n' '{\"type\":\"result\",\"is_error\":false,\"terminal_reason\":\"completed\",\"result\":\"ok\"}'; ",
+                    "done"
+                )
+                .to_string(),
+            ],
+            queue_capacity: 1,
+            notify_timeout_secs: 2,
+            session_store_root: None,
+            agent_name: None,
+        };
+        let mut transport = ClaudeStreamJsonTransport::spawn(options).expect("pilote Claude");
+        let (record, rendered) =
+            turn_start_from_real_pilot(&mut transport, &root, "claude-attribution", "claude-055");
+        assert_sender_attribution(record, rendered);
     }
 
     #[test]
