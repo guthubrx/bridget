@@ -247,7 +247,20 @@ Je l'ai trouvée en **suivant une chaîne** : l'artefact qui réclame (« en att
 Et sa forme la plus intime : **vérifier ce qu'on croit avoir publié est du même ordre que vérifier ce qu'on croit avoir déployé.** J'ai poussé ma propre branche puis je l'ai relue par `ls-remote` sur le serveur, pas sur ma ref de suivi. Fais-le aussi quand c'est toi qui publies.
 *Fait mesuré par rc1-flux le 28/08* : **cinq délégations sur six** portant une cible étaient converties silencieusement en mandats de revue (voir le contrat 021 en §4). Ce n'est pas un cas isolé, c'est la majorité.
 
-**⑪ LA SECONDE CAUSE COMMUNE — la cadence du parc contre la résolution de ce qui l'observe.** `[formulation de bridget, 28/08 21h42]`
+**LA SÉRIE COMPLÈTE DU MOTIF, trois fois en une journée — et une quatrième qu'on ne voyait pas.** Deux mesures exactes qui semblent diverger parce qu'elles portent sur **des objets différents** :
+| ce qui semblait diverger | en réalité |
+|---|---|
+| `libre` contre `busy` | deux états justes, sur l'annuaire et sur le routeur |
+| 499 contre 293 contre 0 | trois comptages justes, sur trois arbres |
+| 4,26 contre 2,66 Gio/h | deux mesures justes, sur deux témoins |
+**Et la quatrième, que le référent a reliée le dernier soir : ses cinq erreurs d'attribution sont le même motif.** Deux expéditeurs à onze secondes d'intervalle, une phrase de l'un prise pour une phrase de l'autre — ce ne sont pas des mesures fausses, ce sont **des mesures justes sur le mauvais objet**. D'où la règle sous sa forme complète : **nommer la référence n'est pas une précaution de style, c'est ce qui rend deux chiffres comparables.** Sans elle, deux agents honnêtes se croient en désaccord.
+
+**⑪ FOURNIR UNE PROCÉDURE, PAS UNE JUSTIFICATION.** `[formulation de bridget, 28/08 21h45]`
+Quand le référent a inscrit « je n'ai pas rejoué ton mutant », son dossier était **déjà clos et en ma faveur**. Je lui ai envoyé le bloc exact à remplacer et le résultat attendu — 11 passed / 2 failed — plutôt qu'un argument expliquant pourquoi j'avais raison. Il l'a rejoué : les deux témoins tombent, les deux nombres apparaissent dans la même sortie, restauration SHA-256 identique.
+**La différence entre se défendre et se rendre vérifiable est celle-ci : la justification demande qu'on te croie, la procédure permet qu'on te contrôle.** Rouvrir un dossier clos en sa propre faveur pour le rendre contrôlable coûte peu et vaut beaucoup — c'est la seule façon dont un « non vérifié » honnête devient un « vérifié ».
+*Et remarque le garde-fou qui a tout tenu* : il a écrit « NON VÉRIFIÉ » au lieu de supposer lequel de nous deux se trompait. **Sans cette mention, il aurait traité une différence d'objet comme une divergence entre agents.**
+
+**⑫ LA SECONDE CAUSE COMMUNE — la cadence du parc contre la résolution de ce qui l'observe.** `[formulation de bridget, 28/08 21h42]`
 Le piège ⑩ réunit ce qui se trompe **d'objet**. Celui-ci réunit ce qui se trompe **de tempo**, et il n'est pas le même :
 | observation | résolution de l'instrument | ce que le parc produit |
 |---|---|---|
