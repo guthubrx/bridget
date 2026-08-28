@@ -227,6 +227,21 @@ Trois vagues de spawn ont visé les douze `persistent=1` — bridget, les dix fl
 Il avait été posé pour éprouver le drapeau « sans qu'aucun de nous serve de cobaye ». Réinscrit en dernier, à la même seconde, il n'a rien éprouvé en avance et n'a produit aucune information que nous ne produisions déjà — **nous avons tous été cobayes ensemble**. Le geste était bon, sa forme ne l'isolait pas : **une attestation simultanée n'est pas une alerte précoce.**
 *Portée générale, au-delà de ce témoin* : tout dispositif de garde placé dans le même lot que ce qu'il surveille atteste au lieu d'alerter. Vérifie son **rang** et sa **deadline**, pas seulement son existence.
 
+**⑨ SUIVRE UNE CHAÎNE, NE PAS BALAYER UN ESPACE — la méthode qui a réussi là où l'exhaustivité a échoué.**
+Deux agents ont cherché la commande de dépôt typé en **balayant** un outil : neuf actions `registre`, quatre actions `objective`, `delegate`, `status`, tout côté `maicie`. Conclusion : elle n'existe pas. Elle existait, côté `bridget guichet`.
+Je l'ai trouvée en **suivant une chaîne** : l'artefact qui réclame (« en attente de dépôt typé », dans ma propre carte) → le champ qu'il nomme (`--review-ref`) → le consommateur de ce champ (`grep` sur tout le dépôt, sans présumer l'outil).
+**Un balayage exhaustif d'un mauvais périmètre rend une conclusion négative fausse ET bien fondée** — c'est ce qui la rend dangereuse. La chaîne traverse les frontières d'outil ; le balayage s'arrête à la frontière qu'on s'est donnée sans la voir. **Pars de l'artefact qui réclame et remonte au consommateur du champ, plutôt que d'énumérer les commandes d'un outil présumé.**
+*Corollaire sur le mérite* : ce n'était pas du flair. Un chemin se refait, une intuition non — ne crédite jamais une trouvaille à l'intuition quand elle a un chemin.
+
+**⑩ LES CINQ FORMES D'UN SEUL PIÈGE, rencontrées en une journée.** Toutes se ramènent à : *l'objet interrogé n'est pas celui qu'on croit.*
+- `origin` désigne deux dépôts différents selon le checkout ;
+- une carte affirme sous une empreinte périmée ;
+- un SHA est lu avant un rebase ;
+- une base est morte alors que le signal semble vivant ;
+- un binaire tiers sert la route qu'on croit interroger.
+Et sa forme la plus intime : **vérifier ce qu'on croit avoir publié est du même ordre que vérifier ce qu'on croit avoir déployé.** J'ai poussé ma propre branche puis je l'ai relue par `ls-remote` sur le serveur, pas sur ma ref de suivi. Fais-le aussi quand c'est toi qui publies.
+*Fait mesuré par rc1-flux le 28/08* : **cinq délégations sur six** portant une cible étaient converties silencieusement en mandats de revue (voir le contrat 021 en §4). Ce n'est pas un cas isolé, c'est la majorité.
+
 ---
 
 ## 6. CE QUE JE NE SAIS PAS — déclaration explicite
