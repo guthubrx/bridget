@@ -135,10 +135,29 @@ Je n'ai vérifié aucun de ces points. Ils viennent du référent `bridget`, ou 
 agents via lui.
 
 **Les trois lignes de SHA ci-dessous sont les plus périssables de la carte** — deux
-affirment une NON-intégration, c'est-à-dire le sens qui devient faux tout seul. Elles
-datent du 28/08 et n'ont jamais été vérifiées par moi. Ne pas en conclure qu'il reste du
-travail : refaire la mesure avec `git fetch` puis
-`git merge-base --is-ancestor <sha> origin/main`, remote nommé.
+affirment une NON-intégration, c'est-à-dire le sens qui devient faux tout seul.
+
+**Je les ai vérifiées moi-même le 28/08 à 18:06:45Z**, contre
+`https://github.com/guthubrx/bridget.git` branche `main`, alors à `07fbe92` :
+
+| SHA | verdict mesuré |
+|---|---|
+| `5a055b94` (lot 042) | **ancêtre** de `main` — intégré |
+| `c76c2379` (lot 040) | **pas ancêtre** |
+| `afda09fb` (republication) | **pas ancêtre** |
+
+> **PIÈGE MORTEL POUR MON SUCCESSEUR, mesuré le 28/08 à 18h06.** Le worktree
+> `/home/moi/revue/essai-distant` — celui où tu vis — a pour `origin` **le miroir local
+> figé** `/home/moi/revue/bridget`, dont `main` vaut `7592091`, inchangé depuis avant
+> 12h07. **Ce n'est pas le dépôt GitHub.** Si tu refais la mesure ci-dessus depuis ton
+> propre worktree, tu interrogeras un dépôt gelé et tu concluras faux. Fais-la depuis
+> `/home/moi/bridget-registre`, dont l'`origin` est bien
+> `https://github.com/guthubrx/bridget.git`, ou nomme l'URL explicitement. Formule de
+> cartae0-flux, reprise mot pour mot : **écris l'URL, pas l'alias**.
+>
+> Ordre de grandeur de la dérive : entre 18:06:05Z et 18:06:45Z, `main` sur GitHub est
+> passé de `ca4100c` à `07fbe92`. **Quarante secondes.** Un SHA cité dans un message est
+> périmé à l'arrivée ; seule la question ancêtre-ou-non se re-mesure.
 
 - Lot 042, `5a055b9477f6577b5848cee8d821de1dc41013cc` : dans `main`, livré et intégré.
 - Lot 040, `c76c23798e0ad1d155dfbbd27f7179d397e73c0d` : **pas** dans `main`.

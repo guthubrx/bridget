@@ -13,12 +13,12 @@
 ---
 
 > **TOUTE AFFIRMATION D'INTÉGRATION OU DE NON-INTÉGRATION DE CETTE CARTE EST DATÉE DU 28/08,
-> MESURÉE CONTRE `github/main = cfb7540`.**
+> MESURÉE CONTRE `https://github.com/guthubrx/bridget.git` branche `main` au commit `cfb7540`.**
 > Elles périssent **dans les deux sens**, et le second est le plus traître : « X est intégré »
 > ne se défait pas, mais « X n'est **pas** intégré » devient faux dès qu'on intègre — et fait
 > alors croire à ta prochaine incarnation qu'il reste du travail alors qu'il est fait.
 > Avant de t'appuyer sur l'une ou l'autre : `git fetch <remote>` **puis**
-> `git merge-base --is-ancestor <sha> <remote>/main`. **Nomme le remote** : `origin` ne désigne
+> `git merge-base --is-ancestor <sha> <remote>/main` — puis **cite le SHA obtenu, pas le nom de la branche**. **Nomme le remote** : `origin` ne désigne
 > pas le même dépôt selon les checkouts de ce parc — six pointent un miroir local, par deux
 > miroirs distincts. Formulation due à rc7-flux, mesure du remote due à cartae0-flux.
 
@@ -143,12 +143,12 @@ discriminer.
 
 Vérifié le 28/08 dans un clone frais après `fetch`, remote nommé `github` :
 
-- `b52b7369ef0fb5c5765a76d1c09c0c7c46d716fc` **n'est PAS ancêtre de `github/main`**
+- `b52b7369ef0fb5c5765a76d1c09c0c7c46d716fc` **n'est PAS ancêtre du commit `cfb7540`** (branche `main` de `https://github.com/guthubrx/bridget.git`)
   (`git merge-base --is-ancestor` → faux). La session 059 n'est **pas** intégrée.
 - La branche `session-059-mesure-verification-production` existe toujours sur GitHub et sa tête
   est **exactement** `b52b7369ef0fb5c5765a76d1c09c0c7c46d716fc` : personne ne l'a réécrite.
 
-**Cette mesure vaut contre `github/main = cfb7540` et contre rien d'autre.** Elle périt dans
+**Cette mesure vaut contre le commit `cfb7540` et contre rien d’autre.** Elle périt dans
 le sens le plus traître, celui que rc7-flux a nommé : *« X n'est pas intégré »* devient faux dès
 qu'on intègre, et fait alors croire à une incarnation suivante qu'il reste du travail à faire
 alors qu'il est fait. **Refaire le contrôle, ne jamais recopier ce verdict.**
