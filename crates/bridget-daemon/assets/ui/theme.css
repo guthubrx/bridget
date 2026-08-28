@@ -369,6 +369,25 @@ body:has(.agent-pane-resizer[data-dragging="true"]) {
   gap: 0.48rem;
 }
 
+.agent-appearance-shapes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.48rem;
+  margin-bottom: 0.75rem;
+}
+
+.agent-appearance-shape {
+  display: grid;
+  width: 1.3rem;
+  height: 1.3rem;
+  place-items: center;
+}
+
+.agent-appearance-shape[aria-pressed="true"] {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
 .agent-appearance-color {
   width: 1.3rem;
   height: 1.3rem;
@@ -526,6 +545,22 @@ body:has(.agent-pane-resizer[data-dragging="true"]) {
 .agent-avatar--large {
   width: 2.2rem;
   height: 2.2rem;
+}
+
+.agent-avatar--picker {
+  width: 1.08rem;
+  height: 1.08rem;
+}
+
+.agent-avatar--picker::before,
+.agent-avatar--picker::after {
+  display: none;
+}
+
+.agent-avatar--picker .agent-avatar__face,
+.agent-avatar--picker .agent-avatar__face::before,
+.agent-avatar--picker .agent-avatar__face::after {
+  animation: none !important;
 }
 
 @keyframes agent-avatar-breathe {

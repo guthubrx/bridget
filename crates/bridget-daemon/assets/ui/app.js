@@ -60,11 +60,14 @@
 
       test("apparence_agent_stable_et_etat_visuel_honnete", () => {
         assert.equal(api.agentAvatarShape("jc1"), api.agentAvatarShape("jc1"));
+        assert.equal(api.agentAvatarShape("jc1", { jc1: { shape: "cloud" } }), "cloud");
+        assert.notEqual(api.agentAvatarShape("jc1", { jc1: { shape: "etoile" } }), "etoile");
         assert.equal(api.agentVisualState("busy"), "busy");
         assert.equal(api.agentVisualState("alive"), "connected");
         assert.equal(api.agentVisualState("unreachable"), "unreachable");
         assert.equal(api.agentVisualState("indetermine"), "unknown");
         assert.equal(api.agentAvatarColor("jc1", { jc1: "#6e48c7" }), "#6e48c7");
+        assert.equal(api.agentAvatarColor("jc1", { jc1: { color: "#6e48c7" } }), "#6e48c7");
         assert.notEqual(api.agentAvatarColor("jc1", { jc1: "#invalid" }), "#invalid");
       });
 
@@ -1875,6 +1878,16 @@
   const AGENT_AVATAR_SHAPES = Object.freeze([
     "round", "soft-square", "pill", "triangle", "hexagon", "cloud", "drop", "pebble",
   ]);
+  const AGENT_AVATAR_SHAPE_LABELS = Object.freeze({
+    round: "Ronde",
+    "soft-square": "Carrée douce",
+    pill: "Galette",
+    triangle: "Triangle",
+    hexagon: "Hexagone",
+    cloud: "Nuage",
+    drop: "Goutte",
+    pebble: "Galet",
+  });
   const LOCAL_FORMATTERS = new Map();
 
   function agentPaneWidthBounds(viewportWidth) {
@@ -1906,7 +1919,16 @@
     return hash >>> 0;
   }
 
-  function agentAvatarShape(name) {
+  function storedAgentAppearance(name, appearances = {}) {
+    const selected = appearances && appearances[name];
+    if (typeof selected === "string") return { color: selected };
+    if (selected && typeof selected === "object" && !Array.isArray(selected)) return selected;
+    return {};
+  }
+
+  function agentAvatarShape(name, appearances = {}) {
+    const selected = storedAgentAppearance(name, appearances).shape;
+    if (AGENT_AVATAR_SHAPES.includes(selected)) return selected;
     return AGENT_AVATAR_SHAPES[stableAgentHash(name) % AGENT_AVATAR_SHAPES.length];
   }
 
@@ -1920,7 +1942,7 @@
   }
 
   function agentAvatarColor(name, appearances = {}) {
-    const selected = appearances && appearances[name];
+    const selected = storedAgentAppearance(name, appearances).color;
     if (AGENT_AVATAR_COLORS.includes(selected)) return selected;
     return AGENT_AVATAR_COLORS[stableAgentHash(name) % AGENT_AVATAR_COLORS.length];
   }
@@ -1934,11 +1956,11 @@
     }
   }
 
-  function createAgentAvatar(documentRef, agent, color, size = "small") {
+  function createAgentAvatar(documentRef, agent, color, size = "small", shape) {
     const avatar = documentRef.createElement("span");
     const name = agent && agent.name;
     avatar.className = `agent-avatar agent-avatar--${size}`;
-    avatar.dataset.shape = agentAvatarShape(name);
+    avatar.dataset.shape = shape || agentAvatarShape(name);
     avatar.dataset.visualState = agentVisualState(agent && agent.state);
     setStyleVariable(avatar, "--avatar-color", color);
     setStyleVariable(avatar, "--avatar-delay", `-${stableAgentHash(name) % 6}s`);
@@ -3143,6 +3165,7 @@
     selectedMeta: "selected-meta",
     selectedAgentAvatar: "selected-agent-avatar",
     agentAppearancePicker: "agent-appearance-picker",
+    agentAppearanceShapes: "agent-appearance-shapes",
     agentAppearanceColors: "agent-appearance-colors",
     agentPaneResizer: "agent-pane-resizer",
     connectionIndicator: "connection-indicator",
@@ -3412,8 +3435,12 @@
     let appearancePickerAgent = null;
 
     const colorForAgent = (name) => agentAvatarColor(name, agentAppearances);
-    const storeAgentColor = (name, color) => {
-      agentAppearances = { ...agentAppearances, [name]: color };
+    const shapeForAgent = (name) => agentAvatarShape(name, agentAppearances);
+    const storeAgentAppearance = (name, update) => {
+      agentAppearances = {
+        ...agentAppearances,
+        [name]: { ...storedAgentAppearance(name, agentAppearances), ...update },
+      };
       try {
         windowRef.localStorage && windowRef.localStorage.setItem(
           AGENT_APPEARANCE_STORAGE_KEY,
@@ -3425,12 +3452,37 @@
     };
 
     const renderAppearancePicker = (agent) => {
+      nodes.agentAppearanceShapes.replaceChildren();
       nodes.agentAppearanceColors.replaceChildren();
       if (!agent) {
         nodes.agentAppearancePicker.hidden = true;
         return;
       }
       const selectedColor = colorForAgent(agent.name);
+      const selectedShape = shapeForAgent(agent.name);
+      for (const shape of AGENT_AVATAR_SHAPES) {
+        const shapeButton = make("button", "agent-appearance-shape");
+        shapeButton.type = "button";
+        shapeButton.setAttribute("aria-label", `Choisir la forme ${AGENT_AVATAR_SHAPE_LABELS[shape]}`);
+        shapeButton.setAttribute("aria-pressed", String(shape === selectedShape));
+        const preview = createAgentAvatar(
+          documentRef,
+          { ...agent, state: "alive" },
+          selectedColor,
+          "picker",
+          shape,
+        );
+        preview.setAttribute("aria-hidden", "true");
+        shapeButton.append(preview);
+        shapeButton.addEventListener("click", () => {
+          storeAgentAppearance(agent.name, { shape });
+          nodes.agentAppearancePicker.hidden = true;
+          nodes.selectedAgentAvatar.setAttribute("aria-expanded", "false");
+          renderAgents();
+          renderHeader();
+        });
+        nodes.agentAppearanceShapes.append(shapeButton);
+      }
       for (const color of AGENT_AVATAR_COLORS) {
         const colorButton = make("button", "agent-appearance-color");
         colorButton.type = "button";
@@ -3438,7 +3490,7 @@
         colorButton.setAttribute("aria-label", `Choisir la couleur ${color}`);
         colorButton.setAttribute("aria-pressed", String(color === selectedColor));
         colorButton.addEventListener("click", () => {
-          storeAgentColor(agent.name, color);
+          storeAgentAppearance(agent.name, { color });
           nodes.agentAppearancePicker.hidden = true;
           nodes.selectedAgentAvatar.setAttribute("aria-expanded", "false");
           renderAgents();
@@ -3456,7 +3508,13 @@
 
       const top = make("span", "agent-row__top");
       const identity = make("span", "agent-row__identity");
-      const avatar = createAgentAvatar(documentRef, agent, colorForAgent(agent.name));
+      const avatar = createAgentAvatar(
+        documentRef,
+        agent,
+        colorForAgent(agent.name),
+        "small",
+        shapeForAgent(agent.name),
+      );
       avatar.setAttribute("aria-hidden", "true");
       identity.append(avatar, make("span", "agent-row__name", agent.name));
       top.append(identity);
@@ -3500,7 +3558,13 @@
       nodes.selectedAgentAvatar.replaceChildren();
       nodes.selectedAgentAvatar.disabled = !agent;
       if (agent) {
-        const avatar = createAgentAvatar(documentRef, agent, colorForAgent(agent.name), "large");
+        const avatar = createAgentAvatar(
+          documentRef,
+          agent,
+          colorForAgent(agent.name),
+          "large",
+          shapeForAgent(agent.name),
+        );
         avatar.setAttribute("aria-hidden", "true");
         nodes.selectedAgentAvatar.append(avatar);
       }
