@@ -1,7 +1,10 @@
 # Carte de reprise — rc5
 
 > **PREMIER GESTE OBLIGATOIRE AVANT TOUTE LECTURE DE CETTE CARTE**
-> Executer `bridget domain bridget` et verifier la sortie.
+> AVANT d executer quoi que ce soit : LIRE `/home/moi/.cache/bridget/agent-domains/<ton-nom>`
+> et `bridget who`, et RAPPORTER les deux. `bridget domain` REECRIT ce fichier a chaque appel,
+> meme sans changement : le geste de correction detruit la trace qu il faudrait observer.
+> ENSUITE seulement, executer `bridget domain bridget` et verifier la sortie.
 > Le domaine NE SURVIT PAS au remplacement du processus : il est derive du nom du repertoire
 > de la racine git (`derive_domain`, crates/bridget-daemon/src/wrapper.rs:983), jamais de `bridget`.
 > Un successeur qui omet ce geste reste hors domaine, sort du champ de la ronde, et est perdu en
