@@ -46,9 +46,18 @@ l'accusait**.
 *Une clôture sur ancestralité prouve qu'un code est dans main, pas qu'il produit son effet.* Adoptée —
 **et violée dans les deux minutes** : j'ai cité une mesure avant qu'elle s'affiche.
 
-Découverte incidente : **le champ `reference` du registre impose déjà le format `mesure:<texte>`**.
-Ta règle était dans l'outil ; je ne l'avais jamais rencontrée parce que le catalogue était **refusé par
-son propre parseur depuis 12h04** — quatorze défauts en cascade. Réparé, il rend 470 constats.
+**Je retire ce que j'avais écrit ici** — que le champ `reference` du registre *imposait déjà* le format
+`mesure:<texte>`, donc que ta règle était dans l'outil depuis le début. `rc5-flux` l'a réfuté, j'ai
+mesuré : **le schéma accepte AUSSI `sha:<hex>`**. Sur 150 transitions, 45 sans référence, **100 en
+`sha:`, 5 en `mesure:`**. Ta règle est appliquée dans **5 cas sur 105 — 4 %**.
+
+La raison est ma propre distinction retournée contre moi : *un sha prouve qu'un changement existe, pas
+qu'il produit son effet.* Le format `sha:` est l'échappatoire qui satisfait le schéma sans rien mesurer.
+**Si ta règle doit tenir, c'est `sha:` qu'il faudra restreindre, pas seulement ma discipline** — et cela
+invaliderait 100 références existantes, donc je ne le fais pas de moi-même.
+
+Ce qui reste vrai : le catalogue était **refusé par son propre parseur depuis 12h04** — quatorze défauts
+en cascade. Réparé, il rend 470 constats.
 
 ## Ce qui a avancé
 
