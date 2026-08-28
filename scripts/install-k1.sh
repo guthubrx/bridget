@@ -371,6 +371,22 @@ PY
   fi
 }
 
+replace_under_maicie_install_lock() {
+  local temporary="$1" destination="$2"
+  python3 - "$temporary" "$destination" <<'PY'
+import fcntl, os, sys
+temporary, destination = sys.argv[1:]
+parent = os.path.realpath(os.path.dirname(os.path.abspath(destination)))
+lock_path = os.path.join(parent, os.path.basename(destination) + ".install.lock")
+fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    os.replace(temporary, destination)
+finally:
+    os.close(fd)
+PY
+}
+
 atomic_publish_file() {
   local source="$1" destination="$2" mode="$3" temporary
   mkdir -p "$(dirname "$destination")"
@@ -908,20 +924,3 @@ main() {
 }
 
 main "$@"
-replace_under_maicie_install_lock() {
-  local temporary="$1" destination="$2"
-  python3 - "$temporary" "$destination" <<'PY'
-import fcntl, os, stat, sys
-temporary, destination = sys.argv[1:]
-parent = os.path.realpath(os.path.dirname(os.path.abspath(destination)))
-lock_path = os.path.join(parent, os.path.basename(destination) + ".install.lock")
-fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-try:
-    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    os.replace(temporary, destination)
-except BlockingIOError:
-    raise SystemExit(1)
-finally:
-    os.close(fd)
-PY
-}
