@@ -40,6 +40,11 @@ const UI_RECONNECT_DELAY: Duration = Duration::from_millis(100);
 /// disparaissait ainsi de l'annuaire cinq minutes après son dernier message,
 /// et toute réponse à un humain silencieux était rejetée.
 const HUMAN_PRESENCE_HEARTBEAT: Duration = Duration::from_secs(3);
+/// Le battement maintient une présence vivante ; il ne la ressuscite pas.
+/// Quand le daemon redémarre, la socket meurt avec lui et l'humain sort de
+/// l'annuaire sans jamais y revenir, puisqu'il ne réémet rien de lui-même.
+/// Cette veille rouvre la présence dès qu'elle est tombée.
+const HUMAN_PRESENCE_WATCH: Duration = Duration::from_secs(10);
 /// Relecture ledger pendant un watch : le sortant référent→humain n'apparaît
 /// jamais au journal ; sans ce rythme le fil reste figé après l'ouverture.
 const UI_THREAD_LEDGER_POLL: Duration = Duration::from_millis(400);
@@ -450,6 +455,22 @@ impl UiRelay {
         if let Err(error) = self.runtime.ensure_human_presence(&self.config.daemon_socket) {
             eprintln!("relais UI: inscription de l'humain à l'annuaire impossible: {error}");
         }
+
+        // Veille de présence. Mesuré le 28/08 : au redémarrage du daemon les
+        // agents se réinscrivent seuls, mais pas l'humain — il n'a pas de
+        // wrapper qui le reconnecte. Sans cette veille, un seul redémarrage le
+        // coupe définitivement et il faut relancer le relais à la main.
+        let veille_runtime = Arc::clone(&self.runtime);
+        let veille_socket = self.config.daemon_socket.clone();
+        thread::spawn(move || {
+            loop {
+                thread::sleep(HUMAN_PRESENCE_WATCH);
+                if let Err(error) = veille_runtime.ensure_human_presence(&veille_socket) {
+                    eprintln!("relais UI: réinscription de l'humain impossible: {error}");
+                }
+            }
+        });
+
         for stream in self.listener.incoming() {
             match stream {
                 Ok(stream) => {
@@ -2082,6 +2103,75 @@ mod tests {
         let error = post_ui_message(&config, &runtime, &body).unwrap_err();
         assert_eq!(error.1, "human_sender_unregistered");
         assert!(error.2.contains("présence UI humaine refusée"));
+        server.join().unwrap();
+        let _ = std::fs::remove_file(socket_path);
+    }
+
+    #[test]
+    fn presence_humaine_est_rouverte_apres_la_chute_du_daemon() {
+        // Mesure du 28/08 a 10h13 : au redemarrage du daemon les dix agents se
+        // sont reinscrits seuls, mais pas l'humain — il n'a aucun wrapper qui
+        // le reconnecte. Il a fallu relancer le relais a la main pour pouvoir
+        // lui repondre. ensure_human_presence doit donc ROUVRIR une presence
+        // tombee, et pas seulement en constater l'existence passee.
+        let socket_path = std::env::temp_dir().join(format!(
+            "bridget-ui-reouverture-{}.sock",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let (inscriptions, recues) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || {
+            for tour in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let trame = decode::<WrapperToDaemon>(line.trim()).unwrap();
+                inscriptions.send(matches!(trame, WrapperToDaemon::Register { .. })).unwrap();
+                writeln!(
+                    writer,
+                    "{}",
+                    encode(&DaemonToWrapper::Registered {
+                        name: UI_SENDER.to_string(),
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                writer.flush().unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if tour == 0 {
+                    // Chute du daemon : la socket meurt, la presence tombe.
+                    drop(writer);
+                    drop(reader);
+                }
+            }
+        });
+
+        let runtime = UiRelayRuntime::new(None);
+        runtime.ensure_human_presence(&socket_path).unwrap();
+        assert!(
+            recues.recv_timeout(Duration::from_secs(5)).unwrap(),
+            "premiere inscription attendue"
+        );
+
+        // La veille rappelle ensure_human_presence : une presence tombee doit
+        // etre rouverte, ce que prouve une SECONDE trame Register.
+        let mut rouverte = false;
+        for _ in 0..40 {
+            thread::sleep(Duration::from_millis(100));
+            if runtime.ensure_human_presence(&socket_path).is_ok()
+                && let Ok(vrai) = recues.try_recv()
+            {
+                rouverte = vrai;
+                break;
+            }
+        }
+        assert!(
+            rouverte,
+            "apres la chute du daemon, la presence humaine doit etre rouverte par une nouvelle inscription"
+        );
         server.join().unwrap();
         let _ = std::fs::remove_file(socket_path);
     }
