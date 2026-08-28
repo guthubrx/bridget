@@ -36,7 +36,9 @@ pub(crate) fn fold_for_search(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
         let mapped = match ch {
-            'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' | 'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' => 'a',
+            'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' | 'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' => {
+                'a'
+            }
             'È' | 'É' | 'Ê' | 'Ë' | 'è' | 'é' | 'ê' | 'ë' => 'e',
             'Ì' | 'Í' | 'Î' | 'Ï' | 'ì' | 'í' | 'î' | 'ï' => 'i',
             'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' | 'ò' | 'ó' | 'ô' | 'õ' | 'ö' => 'o',
@@ -2177,10 +2179,7 @@ mod tests {
             Uuid::new_v4()
         ));
         let mut store = Store::open(&path).unwrap();
-        let deposit = guichet_deposit(
-            "request-terminal-bytes",
-            br#"{"request":"terminal-bytes"}"#,
-        );
+        let deposit = guichet_deposit("request-terminal-bytes", br#"{"request":"terminal-bytes"}"#);
         let now = deposit.issued_at;
         store.deposit_guichet(&deposit, 600, 60, now).unwrap();
         let claim = match store.claim_next_guichet("service-terminal", now).unwrap() {

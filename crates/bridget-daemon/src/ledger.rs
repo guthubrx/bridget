@@ -323,10 +323,7 @@ mod tests {
             .iter()
             .find(|message| message.id == "msg-orphelin")
             .expect("message orphelin visible");
-        assert_eq!(
-            entry.delivery_status,
-            Some(LedgerDeliveryStatus::Orphelin)
-        );
+        assert_eq!(entry.delivery_status, Some(LedgerDeliveryStatus::Orphelin));
         let rendered = crate::cli::render_ledger(std::slice::from_ref(entry));
         assert!(
             rendered.contains("[orphelin]"),

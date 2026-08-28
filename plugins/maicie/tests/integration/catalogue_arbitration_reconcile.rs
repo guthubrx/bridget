@@ -110,7 +110,7 @@ fn sample_add(id: &str, date: &str) -> AddEntry {
             failed: None,
         },
         severity: Severity::Major,
-            nature: EntryNature::Constat,
+        nature: EntryNature::Constat,
         text: "constat ouvert".into(),
         recurrence_of: None,
     }

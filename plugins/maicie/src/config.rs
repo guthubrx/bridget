@@ -103,7 +103,10 @@ impl ReviewProjectConfig {
             MAX_SHORT_TEXT_BYTES,
         )?;
         if self.referent_id.trim() != self.referent_id
-            || self.referent_id.chars().any(bridget_core::is_disallowed_control)
+            || self
+                .referent_id
+                .chars()
+                .any(bridget_core::is_disallowed_control)
         {
             return Err(ConfigError::validation(
                 "review_project.referent_id",

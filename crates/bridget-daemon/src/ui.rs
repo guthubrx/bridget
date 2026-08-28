@@ -5,11 +5,11 @@
 //! `LedgerProjection`, Attach) puis les traduit en HTTP/SSE loopback.
 
 use bridget_core::BridgetMessage;
+use bridget_transport::journal::valid_events;
 use bridget_transport::protocol::{
     AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
     LedgerMessage, LedgerScope, PresenceMode, decode, encode,
 };
-use bridget_transport::journal::valid_events;
 use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
 use maicie::ui_projection::{
     UiMissionProjectionV1, read_ui_mission_projection_v1, retain_living_objectives,
@@ -121,8 +121,7 @@ fn write_ui_endpoint_state(path: &Path, endpoint: &UiEndpoint) -> Result<(), UiE
             {
                 Ok(file) => file,
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let absolute = std::fs::canonicalize(&tmp)
-                        .unwrap_or_else(|_| tmp.clone());
+                    let absolute = std::fs::canonicalize(&tmp).unwrap_or_else(|_| tmp.clone());
                     return Err(UiError::Configuration(format!(
                         "fichier temporaire d'endpoint UI déjà présent — supprimez ce fichier puis relancez le relais : {}",
                         absolute.display()
@@ -151,10 +150,7 @@ fn write_ui_endpoint_state(path: &Path, endpoint: &UiEndpoint) -> Result<(), UiE
 }
 
 /// Charge l'endpoint persistant, ou le crée une seule fois (port défaut + jeton neuf).
-pub fn load_or_create_ui_endpoint(
-    path: &Path,
-    default_port: u16,
-) -> Result<UiEndpoint, UiError> {
+pub fn load_or_create_ui_endpoint(path: &Path, default_port: u16) -> Result<UiEndpoint, UiError> {
     if path.exists() {
         return load_ui_endpoint(path);
     }
@@ -170,10 +166,7 @@ pub fn load_or_create_ui_endpoint(
 pub fn load_ui_endpoint(path: &Path) -> Result<UiEndpoint, UiError> {
     let raw = std::fs::read_to_string(path)?;
     let parsed: UiEndpointStateFile = serde_json::from_str(&raw).map_err(|error| {
-        UiError::Configuration(format!(
-            "état UI illisible ({}) : {error}",
-            path.display()
-        ))
+        UiError::Configuration(format!("état UI illisible ({}) : {error}", path.display()))
     })?;
     if parsed.version != UI_ENDPOINT_STATE_VERSION {
         return Err(UiError::Configuration(format!(
@@ -655,12 +648,7 @@ fn serve_connection(
         return write_text(stream, 403, "jeton UI invalide");
     }
     match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/") => write_asset(
-            stream,
-            "text/html; charset=utf-8",
-            UI_INDEX,
-            if_none_match,
-        ),
+        ("GET", "/") => write_asset(stream, "text/html; charset=utf-8", UI_INDEX, if_none_match),
         ("POST", "/v1/send") => match post_ui_message(config, runtime, &request.body) {
             Ok(response) => write_json(stream, 202, &response),
             Err((status, code)) => write_json(
@@ -703,7 +691,14 @@ fn serve_connection(
             // La vue combinée est la porte d'entrée de la future page : elle
             // raccorde Attach avant de capturer l'instantané, donc aucun delta
             // journal ne peut se glisser silencieusement entre les deux.
-            stream_sse_journal(stream, &config.daemon_socket, agent, window, page, Some(config))
+            stream_sse_journal(
+                stream,
+                &config.daemon_socket,
+                agent,
+                window,
+                page,
+                Some(config),
+            )
         }
         _ => write_text(stream, 404, "ressource UI inconnue"),
     }
@@ -918,7 +913,12 @@ fn resolve_ui_journal_window(
 
 fn agent_journal_dir(agent: &str) -> PathBuf {
     let root = std::env::var("HOME")
-        .map(|home| PathBuf::from(home).join(".cache").join("bridget").join("sessions"))
+        .map(|home| {
+            PathBuf::from(home)
+                .join(".cache")
+                .join("bridget")
+                .join("sessions")
+        })
         .unwrap_or_else(|_| PathBuf::from("/tmp/bridget/sessions"));
     root.join(agent)
 }
@@ -1036,21 +1036,18 @@ fn resolve_ui_journal_window_in(
             let has_more = turns.iter().any(|turn| turn.first_seq < from_seq);
             Ok((
                 AttachWindow::Seq(from_seq),
-                UiJournalPage {
-                    has_more,
-                    from_seq,
-                },
+                UiJournalPage { has_more, from_seq },
             ))
         }
         None => {
-            let (from_seq, has_more) =
-                select_recent_turns(&turns, UI_JOURNAL_OPEN_TURNS, UI_JOURNAL_MAX_REPLAY_FRAGMENTS);
+            let (from_seq, has_more) = select_recent_turns(
+                &turns,
+                UI_JOURNAL_OPEN_TURNS,
+                UI_JOURNAL_MAX_REPLAY_FRAGMENTS,
+            );
             Ok((
                 AttachWindow::Seq(from_seq),
-                UiJournalPage {
-                    has_more,
-                    from_seq,
-                },
+                UiJournalPage { has_more, from_seq },
             ))
         }
     }
@@ -1215,8 +1212,7 @@ fn load_human_referent_thread(socket_path: &Path, focus_agent: &str) -> Vec<UiTh
     let Ok(store) = crate::store::Store::open(&db_path) else {
         return Vec::new();
     };
-    let Ok(entries) =
-        store.conversation_messages(UI_SENDER, focus_agent, UI_THREAD_MESSAGE_LIMIT)
+    let Ok(entries) = store.conversation_messages(UI_SENDER, focus_agent, UI_THREAD_MESSAGE_LIMIT)
     else {
         return Vec::new();
     };
@@ -2206,10 +2202,7 @@ mod tests {
             message.contains("déjà pris") && message.contains(&occupied.to_string()),
             "message attendu de refus explicite, reçu: {message}"
         );
-        assert!(
-            message.contains("aucun repli"),
-            "{message}"
-        );
+        assert!(message.contains("aucun repli"), "{message}");
     }
 
     /// Gardien d'écriture sur le chemin réel : load_or_create → fichier → relecture.
@@ -2256,7 +2249,10 @@ mod tests {
         }
         std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o666)).unwrap();
         let stale_mode = std::fs::metadata(&tmp).unwrap().permissions().mode() & 0o777;
-        assert_eq!(stale_mode, 0o666, "précondition: temporaire ouvert {stale_mode:#o}");
+        assert_eq!(
+            stale_mode, 0o666,
+            "précondition: temporaire ouvert {stale_mode:#o}"
+        );
         tmp
     }
 
@@ -2311,7 +2307,10 @@ mod tests {
             final_mode, 0o600,
             "final ne doit pas hériter des droits ouverts du temporaire: {final_mode:#o}"
         );
-        assert!(!tmp.exists(), "le temporaire ne doit plus rester après rename");
+        assert!(
+            !tmp.exists(),
+            "le temporaire ne doit plus rester après rename"
+        );
         let reloaded = load_or_create_ui_endpoint(&path, DEFAULT_UI_PORT).unwrap();
         assert_eq!(reloaded.token, created.token);
 
@@ -2587,8 +2586,11 @@ mod tests {
                 record_count: 3,
             })
             .collect();
-        let (open_from, has_more) =
-            select_recent_turns(&turns, UI_JOURNAL_OPEN_TURNS, UI_JOURNAL_MAX_REPLAY_FRAGMENTS);
+        let (open_from, has_more) = select_recent_turns(
+            &turns,
+            UI_JOURNAL_OPEN_TURNS,
+            UI_JOURNAL_MAX_REPLAY_FRAGMENTS,
+        );
         assert_eq!(open_from, 910);
         assert!(has_more);
         let (older, older_more) = older_page_from_turns(
@@ -2628,8 +2630,7 @@ mod tests {
             }
         }
         std::fs::write(root.join("2026-08-26.jsonl"), lines).unwrap();
-        let (window, page) =
-            resolve_ui_journal_window_in(root.clone(), &HashMap::new()).unwrap();
+        let (window, page) = resolve_ui_journal_window_in(root.clone(), &HashMap::new()).unwrap();
         // 15 tours × 2 = 30 seqs ; 10 derniers tours → from_seq = seq du turn 6 start = 11
         assert_eq!(window, AttachWindow::Seq(11));
         assert!(page.has_more);
@@ -2812,8 +2813,11 @@ mod tests {
         let relay = UiRelay::bind(config).unwrap();
         let address = relay.local_addr().unwrap();
         let worker = thread::spawn(move || relay.serve_one().unwrap());
-        let (miss_status, miss_raw) =
-            post_search(address, "jeton-search", r#"{"version":1,"q":"motabsentxyz"}"#);
+        let (miss_status, miss_raw) = post_search(
+            address,
+            "jeton-search",
+            r#"{"version":1,"q":"motabsentxyz"}"#,
+        );
         worker.join().unwrap();
         assert_eq!(miss_status, 200, "{miss_raw}");
         let miss_value = json_body(&miss_raw);
@@ -2916,9 +2920,8 @@ mod tests {
             Some(etag) => format!("If-None-Match: {etag}\r\n"),
             None => String::new(),
         };
-        let request = format!(
-            "GET {path} HTTP/1.1\r\nHost: localhost\r\n{extra}Connection: close\r\n\r\n"
-        );
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n{extra}Connection: close\r\n\r\n");
         client.write_all(request.as_bytes()).unwrap();
         client
             .set_read_timeout(Some(Duration::from_secs(2)))
@@ -2971,7 +2974,10 @@ mod tests {
         worker.join().unwrap();
         assert_eq!(status, 200, "{raw}");
         let etag = header_value(&raw, "ETag").expect("ETag obligatoire sur asset statique");
-        assert!(etag.starts_with('"') && etag.ends_with('"'), "ETag fort: {etag}");
+        assert!(
+            etag.starts_with('"') && etag.ends_with('"'),
+            "ETag fort: {etag}"
+        );
         let cache = header_value(&raw, "Cache-Control").expect("Cache-Control obligatoire");
         assert!(
             cache.split(',').any(|d| d.trim() == "no-cache"),
@@ -3009,7 +3015,10 @@ mod tests {
             "304 garde no-cache, reçu {second}"
         );
         let body = second.split("\r\n\r\n").nth(1).unwrap_or("x");
-        assert!(body.is_empty(), "304 ne doit pas renvoyer le CSS, corps={body:?}");
+        assert!(
+            body.is_empty(),
+            "304 ne doit pas renvoyer le CSS, corps={body:?}"
+        );
     }
 
     /// Témoin « modifié servi comme inchangé » : mauvais ETag → 200 corps complet.
@@ -3026,9 +3035,16 @@ mod tests {
         let stale = "\"0000000000000000000000000000000000000000000000000000000000000000\"";
         let (status, raw) = get_asset(address, "/vendor/marked.min.js", Some(stale));
         worker.join().unwrap();
-        assert_eq!(status, 200, "ETag périmé doit forcer le téléchargement: {raw}");
+        assert_eq!(
+            status, 200,
+            "ETag périmé doit forcer le téléchargement: {raw}"
+        );
         let body = raw.split("\r\n\r\n").nth(1).unwrap_or("");
-        assert_eq!(body.as_bytes(), UI_MARKED, "corps 200 doit être le fichier actuel");
+        assert_eq!(
+            body.as_bytes(),
+            UI_MARKED,
+            "corps 200 doit être le fichier actuel"
+        );
         assert_eq!(
             header_value(&raw, "ETag").as_deref(),
             Some(asset_etag(UI_MARKED).as_str())

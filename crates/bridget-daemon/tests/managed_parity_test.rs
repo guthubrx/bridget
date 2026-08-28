@@ -1946,7 +1946,6 @@ fn daemon_process_nettoie_apres_une_panique_injectee() {
     let _ = fs::remove_dir_all(root);
 }
 
-
 const ABANDON_CAUSE_HARDCODED: &str =
     "abandon relance fournisseur après 2 tentatives (processus fournisseur terminé)";
 
@@ -2056,7 +2055,10 @@ fn TEMOIN_persistant_tue_redevient_joignable_sans_redemarrer_le_daemon() {
     assert_eq!(pgids.len(), 1);
     let wrapper_before = wrapper_pid_in_group(pgids[0]).expect("wrapper avant kill");
     let killed = kill_provider_sigterm(pgids[0]);
-    assert_ne!(killed, wrapper_before, "on tue le fournisseur, pas le wrapper");
+    assert_ne!(
+        killed, wrapper_before,
+        "on tue le fournisseur, pas le wrapper"
+    );
 
     // Le wrapper doit survivre (propriété nommée par Maicie).
     let survive_deadline = Instant::now() + Duration::from_secs(2);
