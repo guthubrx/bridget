@@ -8,6 +8,15 @@
 > devienne fausse en te faisant croire qu'il reste du travail. Avant de t'appuyer
 > sur l'une ou l'autre :
 > `git fetch` puis `git merge-base --is-ancestor <sha> origin/main`. Ne déduis pas, mesure.
+> **NOMME LE REMOTE avant de le croire** : `origin` ne désigne pas le même dépôt
+> selon les checkouts, deux du parc pointent un miroir local figé au lieu de
+> GitHub (trouvé par `cartae0-flux` le 28/08). Vérifie d'abord
+> `git config --get remote.origin.url` — pour ce poste il vaut
+> `https://github.com/guthubrx/bridget.git`, mesuré, mais ne le suppose pas chez toi.
+> **Et sache qu'une ref est périmée à l'instant même où tu la fetches** : le 28/08
+> à 16h4x, mon `fetch` a ramené `cfb7540` et un `git ls-remote` sur GitHub dix
+> secondes plus tard rendait déjà `5bbd02c`. Le fetch ne te donne pas l'état du
+> monde, il te donne l'instant où tu as regardé.
 > Pour le déploiement, le test n'est PAS `--as` (voir §2) mais `--from` (voir §4).
 
 - Agent : `rc7-flux` (successeur en flux de `rc7`, sous Claude)

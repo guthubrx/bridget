@@ -9,6 +9,16 @@
 
 ---
 
+## 0. AVERTISSEMENT DE PÉREMPTION — À LIRE AVANT TOUTE AFFIRMATION D'INTÉGRATION
+
+Toute affirmation d'intégration de cette carte est **datée du 28/08/2026** et n'a pas été revérifiée depuis. Avant de s'appuyer sur l'une d'elles : `git fetch`, **puis** `git merge-base --is-ancestor <sha> <remote>/main`.
+
+**Nommer le remote** : `origin` ne désigne pas le même dépôt selon les checkouts, et deux checkouts du parc pointent un miroir local figé au lieu de GitHub. Les vérifications de cette carte ont été faites depuis `/home/moi/bridget-registre`, où `origin` valait `https://github.com/guthubrx/bridget.git` — mesuré. Ne pas supposer que c'est le cas ailleurs.
+
+**Les affirmations périssent dans LES DEUX SENS** — l'avertissement est de `rc7-flux` et je le reprends sous son nom. « X est intégré » ne se défait pas. Mais **« X n'est PAS intégré » périme dans l'autre sens** : il suffit qu'on intègre pour que cette carte fasse croire à une prochaine incarnation qu'il reste du travail alors qu'il est fait. C'est le mensonge le plus probable d'une carte de reprise, et il vise ici directement le §5 : `a5721fa`, `session-058`, et les tranches 2 et 3 de la session 056.
+
+---
+
 ## 1. ÉTAT
 
 Aucune mission de code. Aucune écriture hors cette carte. Gel de l'humain du 28/08 tenu d'un bout à l'autre : je n'ai repris aucun travail de `rc5`, ouvert aucune branche, lancé aucun test, aucun build, aucun mutant.
@@ -81,8 +91,8 @@ Je les inscris parce qu'une carte qui cache ses fautes fait perdre du temps à c
 
 Hérité de la carte de `rc5`, non repris, non commencé :
 
-- **Priorité humaine / réadressabilité** : `a5721fa` est déployé mais **n'est pas ancêtre de `origin/main`**. Le troisième constat ne peut pas être fermé sur les seules observations runtime. Étape : décision humaine, puis intégration mesurée de `session-058`.
-- **Session 056** : tranche 1 livrée et intégrée. Tranche 2 (fait canonique de dette humaine, permit `HumanRequest` opaque) et tranche 3 (`human_debt_gate` dans la transaction d'INSERT) restent. **Ordre impératif : la 3 ne peut pas précéder la 2.**
+- **Priorité humaine / réadressabilité** : `a5721fa` est déployé mais **n'était pas ancêtre de `origin/main`** — état mesuré le 28/08, **non revérifié depuis**. ⚠️ C'est une affirmation négative, donc périssable dans le sens dangereux (§0) : si `session-058` a été intégrée entre-temps, ce point est **clos** et non ouvert. Vérifier d'abord `git fetch && git merge-base --is-ancestor a5721fa origin/main` avant de considérer qu'il reste quoi que ce soit à faire. Étape à l'époque : décision humaine, puis intégration mesurée de `session-058`.
+- **Session 056** : tranche 1 livrée et intégrée. Tranche 2 (fait canonique de dette humaine, permit `HumanRequest` opaque) et tranche 3 (`human_debt_gate` dans la transaction d'INSERT) **restaient à faire au 28/08** — affirmation négative, même réserve qu'au §0 : vérifier avant de les croire ouvertes. **Ordre impératif, lui, non périssable : la 3 ne peut pas précéder la 2.**
 - Le mandat sur la propriété « pas d'objectif auto-généré tant qu'un message humain est sans réponse » est chez **jc2-flux** (objectif `bedaf54d-4807-4774-abd9-1581aea4b9b2`). Ce n'est pas à moi.
 - La publication de la persistance dans `who` est chez **jc1-flux** (objectif `587da26d`). Pas à moi non plus.
 

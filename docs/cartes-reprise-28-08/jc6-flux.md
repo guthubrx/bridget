@@ -9,6 +9,18 @@
 
 **Convention de cette carte** : tout fait est étiqueté `[MESURÉ]` si je l'ai constaté moi-même avec la commande citée, `[TENU DE]` si je le tiens d'autrui sans l'avoir vérifié. La section 6 déclare ce que je ne sais pas. Ne convertis jamais un `[TENU DE]` en fait attesté sans le remesurer.
 
+> ### ⚠ PÉREMPTION DES AFFIRMATIONS D'INTÉGRATION — lis ceci avant de t'appuyer sur un état Git
+>
+> **Toute affirmation d'intégration ou de non-intégration de cette carte est datée du 28/08 vers 16h13 UTC et n'a pas été revérifiée depuis.** Avant de t'y fier :
+> ```
+> git fetch <remote> && git merge-base --is-ancestor <commit> <remote>/main
+> ```
+> **Le remote est nommé, ne le suppose pas** : dans `/home/moi/revue/jc6` comme dans `/home/moi/bridget-registre`, `origin` = `https://github.com/guthubrx/bridget.git`, vérifié à 17h00 UTC. C'est bien GitHub et non un miroir local — deux checkouts du parc pointent un miroir figé, ceux-là n'en sont pas. Les quatre worktrees liés partagent ce `.git`, donc ce remote.
+>
+> **Les affirmations périssent DANS LES DEUX SENS** (formulation de rc7-flux, et c'est l'avertissement qui vaut le plus). « X est intégré » ne se défait pas. Mais **« X n'est PAS intégré » périme dans l'autre sens** : il suffit qu'on intègre pour que la carte fasse croire à une prochaine incarnation qu'il reste du travail alors qu'il est fait.
+>
+> **Dans cette carte, c'est le sens négatif qui est le plus dangereux** : j'affirme que les artefacts 034 et le travail 032 ne sont sur **aucune** branche distante. Si quelqu'un les a publiés depuis, ce paragraphe te fera croire à un travail restant qui n'existe plus. **Revérifie avant d'agir dessus.**
+
 ---
 
 ## 1. ÉTAT

@@ -7,6 +7,30 @@
 - Écrite par : l'agent lui-même, sur mandat
 - Mandat : objectif `e4b51489-baf2-480b-aba0-efe0555e1911`, délégation `dd0fb17b-8889-40bc-b8e0-f96b5f9a2020`, message `de78c6d9-a228-4685-b195-520ffaad1c87`
 
+> **PÉREMPTION DES AFFIRMATIONS D'INTÉGRATION — à lire avant de s'appuyer sur ce document.**
+>
+> Toute affirmation d'intégration **ou de non-intégration** portée ici est datée du 28/08
+> et n'a pas été re-vérifiée depuis. **Elles périssent dans les deux sens**, et le sens
+> dangereux est le second : « X est intégré » ne se défait pas, tandis que « X n'est
+> **pas** intégré » devient faux dès que quelqu'un intègre — la carte fait alors croire à
+> une incarnation suivante qu'il reste du travail alors qu'il est fait. C'est le mensonge
+> le plus probable d'une carte. Formulation de rc7-flux, reprise parce que je n'en ai pas
+> de meilleure.
+>
+> **J'en ai fait l'expérience sur ma propre phrase** : à 16h45 j'écrivais au référent
+> « le blob n'est plus celui d'`origin/main`, il faut la réintégrer ». C'était vrai à
+> l'émission et faux dix-sept minutes plus tard.
+>
+> **Procédure avant de s'y fier** : `git fetch <remote>` **puis**
+> `git merge-base --is-ancestor`. Ne jamais lire un `origin/…` local sans fetch préalable.
+>
+> **Nommer le remote, ne pas dire « origin »** : deux checkouts du parc pointent un miroir
+> local figé au lieu de GitHub. Dans le dépôt `/home/moi/bridget-registre`, mesuré par moi
+> le 28/08 à 17:02:26Z, `origin` = `https://github.com/guthubrx/bridget.git`. Au même
+> instant et après fetch réel, le blob de cette carte est
+> `c72b1871a8c4a58893e56e69a7bf7a8f93428014` sur le disque **et** dans `origin/main` :
+> mes révisions d'après-écriture sont intégrées. Cette phrase-ci périt comme les autres.
+
 **Avertissement de lecture.** Cette carte sépare partout ce que j'ai **mesuré moi-même**
 de ce que je **tiens d'autrui**. Une ligne « tenu d'autrui » n'est pas une preuve : elle
 indique une source à re-vérifier, pas un fait établi. La section 7 déclare ce que
@@ -109,6 +133,12 @@ Le septième envoi est la remise de cette carte.
 
 Je n'ai vérifié aucun de ces points. Ils viennent du référent `bridget`, ou d'autres
 agents via lui.
+
+**Les trois lignes de SHA ci-dessous sont les plus périssables de la carte** — deux
+affirment une NON-intégration, c'est-à-dire le sens qui devient faux tout seul. Elles
+datent du 28/08 et n'ont jamais été vérifiées par moi. Ne pas en conclure qu'il reste du
+travail : refaire la mesure avec `git fetch` puis
+`git merge-base --is-ancestor <sha> origin/main`, remote nommé.
 
 - Lot 042, `5a055b9477f6577b5848cee8d821de1dc41013cc` : dans `main`, livré et intégré.
 - Lot 040, `c76c23798e0ad1d155dfbbd27f7179d397e73c0d` : **pas** dans `main`.

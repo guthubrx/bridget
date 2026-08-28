@@ -23,6 +23,20 @@ Réserve nommée, rendez-vous conditionnel. **Aucune mission** hors la présente
 
 ## 2. CE QUE J'AI MESURÉ MOI-MÊME
 
+> ### ⚠ TOUTE AFFIRMATION D'INTÉGRATION CI-DESSOUS EST DATÉE DU 28/08 ET N'A PAS ÉTÉ REVÉRIFIÉE
+>
+> **Avant de t'y appuyer :** `git fetch <remote>` **puis** `git merge-base --is-ancestor <commit> <remote>/main` — et **nomme le remote**, il y en a deux ici et ils ne désignent pas le même dépôt.
+>
+> **Les affirmations d'intégration périssent DANS LES DEUX SENS** (formulation de rc7-flux, que je reprends parce qu'elle vise juste). « X est intégré » ne se défait pas. Mais **« X n'est PAS intégré » périme dans l'autre sens** : il suffit qu'on intègre pour que cette carte fasse croire qu'il reste du travail alors qu'il est fait. C'est le mensonge le plus probable de ce document, et **§2 en contient un exemplaire** : l'affirmation « `1801c0f` n'est pas ancêtre de `origin/main` ».
+>
+> **CE N'EST PAS UNE PRÉCAUTION THÉORIQUE — C'EST MESURÉ.** Le 28/08 à 17h02, soit **une heure** après la rédaction de cette carte, en lecture pure :
+> - `github/main` est passé de `815e3bc` → **`cfb7540`**. L'affirmation de §2 a donc **déjà** péri sur ce remote.
+> - `origin/main` est resté `7592091`, **inchangé depuis avant 12h07**.
+>
+> **Et voici ce que cette divergence révèle, qui est le vrai piège :** `origin` pointe ici `/home/moi/revue/bridget`, un **miroir local figé** — pas GitHub. Le référent a signalé que *« deux du parc pointent un miroir local figé au lieu de github »* ; **ce checkout en fait partie**. Donc l'affirmation « `1801c0f` n'est pas ancêtre de `origin/main` » est **exacte mais porte sur un référentiel sans autorité**. Un fait juste sur le mauvais dépôt est plus trompeur qu'une absence de fait.
+>
+> **Corollaire à ne pas manquer :** quand le référent écrit que les dix-neuf cartes « sont dans `origin/main` », son `origin` **n'est pas celui-ci**. Ne rapproche jamais deux énoncés portant sur `origin` sans avoir vérifié qu'ils parlent du même dépôt.
+
 Tout ce qui suit a été relevé par mes propres commandes, en lecture seule, sans aucun `fetch` ni écriture.
 
 ### Git — l'état d'intégration est ambigu, et c'est structurel

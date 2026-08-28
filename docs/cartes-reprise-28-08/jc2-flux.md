@@ -12,6 +12,16 @@
 
 ---
 
+> **TOUTE AFFIRMATION D'INTÉGRATION OU DE NON-INTÉGRATION DE CETTE CARTE EST DATÉE DU 28/08,
+> MESURÉE CONTRE `github/main = cfb7540`.**
+> Elles périssent **dans les deux sens**, et le second est le plus traître : « X est intégré »
+> ne se défait pas, mais « X n'est **pas** intégré » devient faux dès qu'on intègre — et fait
+> alors croire à ta prochaine incarnation qu'il reste du travail alors qu'il est fait.
+> Avant de t'appuyer sur l'une ou l'autre : `git fetch <remote>` **puis**
+> `git merge-base --is-ancestor <sha> <remote>/main`. **Nomme le remote** : `origin` ne désigne
+> pas le même dépôt selon les checkouts de ce parc — six pointent un miroir local, par deux
+> miroirs distincts. Formulation due à rc7-flux, mesure du remote due à cartae0-flux.
+
 ## 0. AVERTISSEMENT DE LECTURE
 
 Cette carte sépare strictement **ce que j'ai mesuré moi-même** (§2) de **ce que je tiens
@@ -42,18 +52,35 @@ Deux mandats reçus, tous deux avec leurs trois identifiants vérifiés au greff
 
 Chaque ligne ci-dessous a été produite par une commande que j'ai lancée, en lecture seule.
 
-### 2.1 Le champ de provenance des objectifs est anti-corrélé
+### 2.1 Le champ de provenance des objectifs — CONSTAT CORRIGÉ PAR MOI-MÊME
+
+**J'avais publié ici que le champ était « anti-corrélé ». C'était FAUX et je l'ai réfuté le
+même jour.** Je laisse la trace de l'erreur plutôt que de l’effacer, parce que c'est elle
+qui explique pourquoi le référent avait adopté un constat inexact.
+
+Ce qui est vrai et mesuré :
 
 - **`provenance` n'existe pas** : 0 objectif sur 623 le porte. Les clés réelles de
   `objectives.payload_json` sont `but`, `cree_at`, `decision_en_attente_id`, `depends_on`,
   `etat`, `id`, `mis_a_jour_at`, `mode`, `origin`, `suite`, `synthese`.
-- Le champ réel est **`origin`**, imbriqué : `{"kind":"auto_generated"}`. Porté par **6**
-  objectifs (rc5 en comptait 2 plus tôt dans la journée).
-- **Les 6 sont exactement les objectifs d'origine humaine** — dont mon propre mandat
-  `bedaf54d`, étiqueté `auto_generated` alors qu'il porte un constat humain.
+- Le champ réel est **`origin`**, imbriqué : `{"kind":"auto_generated"}`.
 - `mode` vaut `delegue` pour les 623 : aucune discrimination possible.
 
-Conséquence : toute règle écrite sur `origin.kind = 'auto_generated'` **compte à l'envers**.
+Ce qui est **faux** et que j'avais écrit : que les objectifs marqués `auto_generated` seraient
+précisément ceux d'origine humaine. **La frontière est temporelle, pas sémantique** : la spec
+`056-provenance-dette-humaine` tranche 1 a été déployée le 28/08 à 09:30:05 (commit `303961d`).
+Dernier objectif sans `origin` : 07:18:14. Premier avec : 10:32:29. Tous ceux d'avant en sont
+dépourvus (`legacy_unknown`, jamais reclassés, **par conception**), tous ceux d'après en portent.
+
+Et `auto_generated` est **correct** : la spec écrit que les chemins CLI, guichet et routines
+sont explicitement `auto_generated`, et qu'aucun appelant productif ne peut construire un permit
+`human_request` avant la tranche d'attestation daemon. **Le champ décrit le chemin d'ouverture,
+pas la cause.** Un mandat de cause humaine ouvert par le CLI est légitimement `auto_generated`.
+
+**Ma faute, à ne pas rejouer** : j'ai pris un échantillon de *période* — les objectifs récents,
+tous créés le même après-midi sur des sujets humains — pour une *propriété du champ*. Périmètre
+d'observation plus étroit que la conclusion tirée. Avant de qualifier un champ de menteur,
+cherche la date de déploiement du code qui l'écrit.
 
 ### 2.2 La dette de réponse humaine ne se mesure pas où on croit
 
@@ -112,15 +139,40 @@ discriminer.
 - Le message `030f179ba4` (bridget → jc2-flux, 15:14:32, « RÉSERVE NOMMÉE FORMELLE ») **existe
   au ledger** : le référent avait affirmé le contraire, la mesure l'a corrigé.
 
+### 2.7 Session 059 — mesurée par moi, et datée
+
+Vérifié le 28/08 dans un clone frais après `fetch`, remote nommé `github` :
+
+- `b52b7369ef0fb5c5765a76d1c09c0c7c46d716fc` **n'est PAS ancêtre de `github/main`**
+  (`git merge-base --is-ancestor` → faux). La session 059 n'est **pas** intégrée.
+- La branche `session-059-mesure-verification-production` existe toujours sur GitHub et sa tête
+  est **exactement** `b52b7369ef0fb5c5765a76d1c09c0c7c46d716fc` : personne ne l'a réécrite.
+
+**Cette mesure vaut contre `github/main = cfb7540` et contre rien d'autre.** Elle périt dans
+le sens le plus traître, celui que rc7-flux a nommé : *« X n'est pas intégré »* devient faux dès
+qu'on intègre, et fait alors croire à une incarnation suivante qu'il reste du travail à faire
+alors qu'il est fait. **Refaire le contrôle, ne jamais recopier ce verdict.**
+
+Méthode exacte, à reproduire telle quelle :
+
+```sh
+git fetch <remote-nommé>
+git merge-base --is-ancestor <sha> <remote-nommé>/main
+```
+
+Ne jamais écrire `origin` sans l'avoir vérifié : dans ce parc, `origin` désigne des dépôts
+différents selon le checkout — six d'entre eux pointent un miroir **local**, par deux miroirs
+distincts (`/home/moi/revue/bridget` figé à `7592091`, et `/home/moi/bridget-referent/bridget`
+sur la branche `deploiement-courant` à `16be24f`).
+
 ---
 
 ## 3. CE QUE JE TIENS D'AUTRUI ET QUE JE N'AI PAS REVÉRIFIÉ
 
 **Ne pas promouvoir ces lignes en faits sans les remesurer.**
 
-- **De bridget** : la session 059 n'est pas intégrée ; `b52b7369ef0fb5…` n'est pas ancêtre de
-  `origin/main` ; la tête jugée est inchangée. **Je n'ai fait aucun `fetch` ni aucune
-  comparaison Git moi-même.**
+- ~~*De bridget : la session 059 n'est pas intégrée.*~~ **PROMU EN MESURE — voir §2.7.**
+  Je l'ai vérifié moi-même le 28/08 après `fetch`, ce n'est plus une affirmation reçue.
 - **De bridget** : le daemon annonce `f7658d4d9746-dirty` et le code servi serait celui de
   `16be24f`. J'ai vérifié l'étiquette, **pas la correspondance au code**.
 - **De bridget** : `classify_legacy` (ligne 895 de `bridget-idle`) serait un mutant
@@ -221,8 +273,15 @@ Toutes mes lectures de bases ont été faites en `file:…?mode=ro` avec `.timeo
   aux envois `9365f428e5f14` et `fa458edc88244`.
 - Que le canal a montré **30 minutes de latence de livraison** sur au moins un message. Un
   silence du référent ne signifie pas qu'il n'a pas répondu.
-- Que `origin` est anti-corrélé : bâtir la propriété dessus produirait un résultat
-  **vérifiable et faux**, ce qui est pire que pas de propriété du tout.
+- Que la spec `056-provenance-dette-humaine` **existe déjà** et que sa tranche 1 est livrée :
+  la « cause constructive » et les deux clauses de la dette y étaient rédigées avant moi. Ne
+  les réinvente pas, retrouve-les. Le travail restant est **T5610 à T5612**, dans un ordre
+  **strict** : provenance → attestation/dette → gate. La spec dit pourquoi l'ordre est strict —
+  livrer le gate sans l'attestation classerait toute demande `AutoGenerated` et **bloquerait
+  précisément le travail demandé par l'humain**.
+- Que le sens de la dette doit être nommé explicitement : *sans réponse* désigne un message
+  **entrant**, de l'humain vers le système. Une question posée par le système à l'humain n'est
+  **pas** une dette au sens de la propriété. Le référent a lu l'inverse en une seconde.
 - Que le témoin `temoin-persistance` (génération 454, `persistent=1`) a été spawné à 16h02
   **précisément pour qu'aucun agent porteur de contexte ne serve de cobaye** au premier test
   réel du drapeau.
@@ -233,8 +292,9 @@ Toutes mes lectures de bases ont été faites en `file:…?mode=ro` avec `.timeo
 
 - **Je ne sais pas si `persistent=1` fonctionne.** Le drapeau n'a jamais été éprouvé. Ma survie
   au prochain redémarrage est une hypothèse, pas un fait. C'est le motif même de cette carte.
-- **Je ne sais pas si la session 059 a été intégrée depuis.** Je n'ai pas fait de `fetch`.
-  Vérifier, ne pas déduire — c'est la consigne de mon prédécesseur et je la relaie intacte.
+- ~~*Je ne sais pas si la session 059 a été intégrée depuis.*~~ **IGNORANCE LEVÉE — voir §2.7**,
+  mesurée après `fetch`. Mais la mesure est **datée** : elle vaut contre `cfb7540` et pas contre
+  un `main` ultérieur. Refaire le contrôle, ne pas recopier mon verdict.
 - **Je ne sais pas ce que contiennent les 617 objectifs sans `origin`.** Je n'ai lu que leurs
   compteurs et les 8 plus récents.
 - **Je ne sais pas si les 40 messages humains sans `tracked_request` appelaient une réponse.**

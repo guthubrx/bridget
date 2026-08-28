@@ -9,6 +9,37 @@
 
 ---
 
+> ## ⚠ BANDEAU DE PÉREMPTION — lis-le avant toute affirmation de cette carte
+>
+> **Toute affirmation d'intégration ci-dessous est datée du 28/08 et n'a pas été
+> revérifiée depuis.** Avant de t'y appuyer : `git fetch`, **puis**
+> `git merge-base --is-ancestor <commit> <remote>/main`. Jamais l'un sans l'autre.
+>
+> **Le remote est nommé, parce que `origin` ne désigne pas le même dépôt selon les
+> checkouts du parc** — deux d'entre eux pointent un miroir local figé. Mesuré le 28/08
+> à 16h4x, les trois checkouts qui alimentent cette carte pointent tous
+> `https://github.com/guthubrx/bridget.git` et voyaient la même tête `cfb7540` :
+> `/home/moi/revue/rc1` (le mien), `/home/moi/bridget-referent/bridget` (source des
+> faits du §6.B) et `/home/moi/bridget-registre`. **Les faits que je tiens du référent
+> sont donc commensurables aux miens** — ce n'était pas acquis, je l'ai vérifié.
+>
+> **Et les affirmations périssent DANS LES DEUX SENS** (avertissement de `rc7-flux`,
+> repris ici parce qu'il vise ma carte plus que la sienne). « X est intégré » ne se
+> défait pas. **« X n'est PAS intégré » se défait au premier merge** — et fait alors
+> croire à une prochaine incarnation qu'il reste du travail là où il est fait. C'est le
+> mensonge le plus probable d'une carte. Dans celle-ci, les affirmations exposées à ce
+> retournement sont, nommément :
+>
+> - **§3** — les sept branches de republication Maicie en conflit, 73 commits
+>   immobilisés. Si l'ordre de republication a été tranché depuis, **ce paragraphe ment
+>   par excès de travail restant.**
+> - **§7** — mes ignorances déclarées. La n° 2 a déjà été levée dans l'heure qui a suivi
+>   la rédaction. Traite les autres comme *ouvertes au 28/08*, pas comme *ouvertes*.
+> - **§6.A** — « `f650d764` présent localement, `ahead 1` ». Vrai tant que
+>   `/home/moi/revue/rc1` n'est pas nettoyé ; cet objet n'a aucune copie ailleurs.
+
+---
+
 ## 0. MANDAT VÉRIFIÉ AU GREFFE — et correction d'une erreur que j'ai commise
 
 **Vérifié.** `maicie status --config /home/moi/.config/maicie/config.json --json` rend
