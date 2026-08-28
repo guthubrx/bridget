@@ -5,16 +5,16 @@
 //! pas avoir avancé le greffe. L'installé reste inchangé.
 
 use maicie::install_publish::{
-    reconcile_failed_migration, republish_exe_and_preflight, republish_exe_before_migrate,
-    InstallPublishError, INSTALL_BIN_ENV,
+    INSTALL_BIN_ENV, InstallPublishError, reconcile_failed_migration, republish_exe_and_preflight,
+    republish_exe_before_migrate,
 };
-use maicie::store::{StoreError, SCHEMA_VERSION};
-use serde_json::{json, Value};
+use maicie::store::{SCHEMA_VERSION, StoreError};
+use serde_json::{Value, json};
 use std::ffi::CString;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{symlink, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt, symlink};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
