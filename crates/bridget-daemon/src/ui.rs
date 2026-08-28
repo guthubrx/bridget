@@ -1321,8 +1321,20 @@ fn human_referent_thread_messages(
     let mut selected = messages
         .iter()
         .filter(|message| {
-            (message.sender == UI_SENDER && message.target == focus_agent)
-                || (message.sender == focus_agent && message.target == UI_SENDER)
+            if focus_agent == UI_SENDER {
+                // L'humain focalisé sur sa propre entrée : le filtre par paire
+                // cherchait alors des messages humain -> humain, qui n'existent
+                // pas, et rendait un fil vide. Mesuré le 28/08 : la colonne
+                // affichait le titre de chaque réponse et la conversation
+                // restait vide, donc l'humain ne pouvait pas lire ce qui lui
+                // était adressé sans deviner qu'il fallait sélectionner
+                // l'agent. Sa propre entrée montre désormais sa boîte entière,
+                // tous correspondants confondus.
+                message.sender == UI_SENDER || message.target == UI_SENDER
+            } else {
+                (message.sender == UI_SENDER && message.target == focus_agent)
+                    || (message.sender == focus_agent && message.target == UI_SENDER)
+            }
         })
         .collect::<Vec<_>>();
     selected.sort_by(|left, right| (left.ts, &left.id).cmp(&(right.ts, &right.id)));
@@ -2105,6 +2117,39 @@ mod tests {
         assert!(error.2.contains("présence UI humaine refusée"));
         server.join().unwrap();
         let _ = std::fs::remove_file(socket_path);
+    }
+
+    #[test]
+    fn la_propre_entree_de_l_humain_montre_sa_boite_entiere() {
+        // Mesure du 28/08 a 11h29 : en selectionnant sa propre entree dans la
+        // colonne des agents, l'humain voyait le titre de chaque reponse mais
+        // une conversation VIDE. Cause : le filtre par paire cherchait alors
+        // des messages humain -> humain, qui n'existent pas. Il ne pouvait donc
+        // pas lire ce qui lui etait adresse sans deviner qu'il fallait
+        // selectionner l'agent. Restaurer le filtre par paire pour ce cas rend
+        // zero bulle et tue ce temoin.
+        let messages = vec![
+            ledger_message("h1", 10, "humain", "bridget"),
+            ledger_message("b1", 20, "bridget", "humain"),
+            ledger_message("h2", 30, "humain", "jc6"),
+            ledger_message("j1", 40, "jc6", "humain"),
+            ledger_message("x1", 50, "jc2", "bridget"),
+        ];
+
+        let boite = human_referent_thread_messages(UI_SENDER, &messages);
+        let vus: Vec<&str> = boite.iter().map(|m| m.delivery_id.as_str()).collect();
+        assert_eq!(
+            vus,
+            vec!["h1", "b1", "h2", "j1"],
+            "la propre entree de l'humain doit montrer tous ses echanges, tous correspondants confondus, et exclure le trafic agent-agent"
+        );
+        assert_eq!(boite[0].role, UiThreadRoleV1::User);
+        assert_eq!(boite[1].role, UiThreadRoleV1::Agent);
+
+        // Le filtre par paire reste intact pour un agent focal ordinaire.
+        let fil_bridget = human_referent_thread_messages("bridget", &messages);
+        let vus_bridget: Vec<&str> = fil_bridget.iter().map(|m| m.delivery_id.as_str()).collect();
+        assert_eq!(vus_bridget, vec!["h1", "b1"]);
     }
 
     #[test]
