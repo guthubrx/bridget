@@ -69,7 +69,6 @@ fn validate_zero_arity_command(command: &str, args: &[String]) -> Result<(), Str
             | "mcp"
             | "discover"
             | "status"
-            | "ledger"
             | "version"
             | "--version"
             | "-v"
@@ -151,7 +150,7 @@ pub fn run() {
         "agents" => cmd_agents(&args[2..]),
         "discover" => cmd_discover(),
         "status" => cmd_status(),
-        "ledger" => cmd_ledger(),
+        "ledger" => cmd_ledger(&args[2..]),
         "reprise" => cmd_reprise(&args[2..]),
         "reaper" => cmd_reaper(&args[2..]),
         "cleanup" => cmd_cleanup(&args[2..]),
@@ -309,7 +308,7 @@ fn print_usage() {
            who [--domain <D>]     Agents connectés\n  \
            agents [--json]        Idem, format machine [--domain <D>]\n  \
            status                 Santé du daemon\n  \
-           ledger                 Historique des messages\n  \
+           ledger [--limit N]     Historique des messages (défaut : maximum lisible)\n  \
            reprise [--write P]    Carte de reprise du référent\n  \
            reaper report          Observateur J2 (ne tue jamais)\n  \
            cleanup --dry-run      Liste target/ des worktrees mergés\n  \
@@ -3645,10 +3644,194 @@ fn emit_disk_warning() {
     }
 }
 
-fn cmd_ledger() {
+/// Borne d'affichage par défaut du ledger : le maximum que la projection
+/// accepte de lire.
+///
+/// Le CLI figeait 20 alors que le protocole porte déjà un champ `limit` et que
+/// la projection lit jusqu'à `MAX_LEDGER_PROJECTION`. Cette borne n'était
+/// écrite nulle part dans la sortie : à 94 messages par heure, elle réduisait
+/// la vue à treize minutes sans le dire. Une borne subie est pire qu'une borne
+/// étroite — celle-ci est désormais la plus large possible, et surtout elle
+/// s'annonce.
+const DEFAULT_LEDGER_LIMIT: usize = crate::ledger::MAX_LEDGER_PROJECTION;
+
+#[cfg(test)]
+mod ledger_borne_tests {
+    use super::*;
+
+    fn message(index: usize) -> LedgerMessage {
+        LedgerMessage {
+            id: format!("m{index}"),
+            // Décroissant : la projection rend `ORDER BY ts DESC`.
+            ts: 1_000 - index as i64,
+            sender: "bridget".into(),
+            target: "jc1-flux".into(),
+            body: format!("message {index}"),
+            delivery_status: None,
+        }
+    }
+
+    /// ORACLE — une vue bornée DIT qu'elle est bornée.
+    ///
+    /// Le CLI figeait 20 sans l'écrire nulle part : à 94 messages par heure,
+    /// il ne montrait pas les vingt derniers messages, il montrait le dernier
+    /// quart d'heure. Un message humain du 27/08 est ainsi sorti de la vue du
+    /// référent en 17 min 52 s et a attendu huit heures. Une borne silencieuse
+    /// se lit comme « il n'y a rien d'autre ».
+    #[test]
+    fn vue_bornee_declare_ce_qu_elle_ne_montre_pas() {
+        // Une entrée de plus que la borne : c'est ainsi que le surplus se
+        // détecte, sans rien demander de plus au daemon.
+        let entrees: Vec<_> = (0..4).map(message).collect();
+        let rendu = render_ledger_borne(&entrees, 3);
+
+        assert!(
+            rendu.contains("message 0") && rendu.contains("message 2"),
+            "les trois plus récents doivent être rendus : {rendu}"
+        );
+        assert!(
+            !rendu.contains("message 3"),
+            "le surplus ne doit pas être affiché : {rendu}"
+        );
+        assert!(
+            rendu.contains("vue bornée à 3"),
+            "la troncature doit être déclarée, pas subie : {rendu}"
+        );
+        assert!(
+            rendu.contains("--limit"),
+            "le refus doit dire comment élargir : {rendu}"
+        );
+    }
+
+    /// ORACLE — sans surplus, aucune mention parasite : une vue complète ne
+    /// doit pas faire croire qu'il manque quelque chose.
+    #[test]
+    fn vue_complete_n_annonce_aucune_troncature() {
+        let entrees: Vec<_> = (0..3).map(message).collect();
+        let rendu = render_ledger_borne(&entrees, 20);
+        assert!(rendu.contains("message 2"));
+        assert!(
+            !rendu.contains("vue bornée"),
+            "aucune troncature à déclarer ici : {rendu}"
+        );
+        assert!(
+            !rendu.contains("maximum lisible"),
+            "le maximum n'est pas atteint : {rendu}"
+        );
+    }
+
+    /// ORACLE — au maximum lisible, l'ignorance est déclarée plutôt que tue.
+    /// La projection borne à `MAX_LEDGER_PROJECTION` : au-delà, le CLI ne peut
+    /// pas savoir s'il existe des messages plus anciens. Se taire ferait passer
+    /// cette ignorance pour une absence.
+    #[test]
+    fn maximum_lisible_declare_l_ignorance_au_lieu_de_la_taire() {
+        let entrees: Vec<_> = (0..DEFAULT_LEDGER_LIMIT).map(message).collect();
+        let rendu = render_ledger_borne(&entrees, DEFAULT_LEDGER_LIMIT);
+        assert!(
+            rendu.contains("maximum lisible"),
+            "atteindre le plafond doit se dire : {rendu}"
+        );
+        assert!(
+            rendu.contains("n'est pas observable"),
+            "l'ignorance doit être nommée, pas déguisée en absence : {rendu}"
+        );
+    }
+
+    /// ORACLE — la borne est réglable, et le défaut n'est plus 20.
+    #[test]
+    fn borne_reglable_et_defaut_au_maximum_lisible() {
+        assert_eq!(parse_ledger_args(&[]).unwrap(), DEFAULT_LEDGER_LIMIT);
+        assert_eq!(DEFAULT_LEDGER_LIMIT, crate::ledger::MAX_LEDGER_PROJECTION);
+        assert_ne!(
+            DEFAULT_LEDGER_LIMIT, 20,
+            "le défaut figé à 20 était le défaut mesuré"
+        );
+        assert_eq!(
+            parse_ledger_args(&["--limit".into(), "5".into()]).unwrap(),
+            5
+        );
+
+        // Un dépassement est refusé et NOMME le plafond, au lieu d'être raboté
+        // en silence par la projection.
+        let refus = parse_ledger_args(&["--limit".into(), "10000".into()])
+            .expect_err("au-delà du maximum lisible doit être refusé");
+        assert!(refus.contains(&DEFAULT_LEDGER_LIMIT.to_string()), "{refus}");
+        assert!(parse_ledger_args(&["--limit".into(), "0".into()]).is_err());
+        assert!(parse_ledger_args(&["--limit".into()]).is_err());
+        assert!(parse_ledger_args(&["--inconnu".into()]).is_err());
+    }
+}
+
+fn parse_ledger_args(args: &[String]) -> Result<usize, String> {
+    let mut limite = DEFAULT_LEDGER_LIMIT;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--limit" => {
+                let valeur = args
+                    .get(index + 1)
+                    .ok_or_else(|| "valeur manquante pour --limit".to_string())?;
+                let demande = valeur
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|nombre| *nombre >= 1)
+                    .ok_or_else(|| {
+                        "--limit doit être un entier supérieur ou égal à 1".to_string()
+                    })?;
+                // Refus explicite plutôt que rabotage silencieux : la projection
+                // ramènerait la valeur à son maximum sans le dire, et l'appelant
+                // croirait avoir demandé plus qu'il ne recevra.
+                if demande > DEFAULT_LEDGER_LIMIT {
+                    return Err(format!(
+                        "--limit {demande} dépasse le maximum lisible ({DEFAULT_LEDGER_LIMIT})"
+                    ));
+                }
+                limite = demande;
+                index += 2;
+            }
+            option => return Err(format!("option ledger inconnue: {option}")),
+        }
+    }
+    Ok(limite)
+}
+
+/// Rend la vue en disant ce qu'elle ne montre pas.
+///
+/// L'appelant demande une entrée de plus que la borne : si elle revient, des
+/// messages plus anciens existent et la vue le déclare. Aucune modification du
+/// protocole ni du daemon n'est nécessaire pour cela.
+fn render_ledger_borne(entries: &[LedgerMessage], limite: usize) -> String {
+    // Les entrées arrivent du plus récent au plus ancien (`ORDER BY ts DESC`) :
+    // le surplus à écarter est en queue, pas en tête.
+    let visibles = &entries[..entries.len().min(limite)];
+    let mut rendu = render_ledger(visibles);
+    if entries.len() > limite {
+        rendu.push_str(&format!(
+            "… vue bornée à {limite} : des messages plus anciens existent et ne sont pas montrés (élargir avec --limit N, maximum {DEFAULT_LEDGER_LIMIT}).\n"
+        ));
+    } else if limite >= DEFAULT_LEDGER_LIMIT && entries.len() >= DEFAULT_LEDGER_LIMIT {
+        rendu.push_str(&format!(
+            "… maximum lisible atteint ({DEFAULT_LEDGER_LIMIT}) : l'existence de messages plus anciens n'est pas observable par cette commande.\n"
+        ));
+    }
+    rendu
+}
+
+fn cmd_ledger(args: &[String]) {
+    let limite = parse_ledger_args(args).unwrap_or_else(|error| {
+        eprintln!("bridget ledger: {error}");
+        eprintln!("usage: bridget ledger [--limit N]");
+        std::process::exit(2);
+    });
+    // Une de plus que la borne, pour savoir s'il y en a plus — jamais au-delà
+    // de ce que la projection accepte.
+    let demande = limite.saturating_add(1).min(DEFAULT_LEDGER_LIMIT);
     let messages = match send_control_to_daemon(WrapperToDaemon::LedgerProjection {
         scope: LedgerScope::Messages,
-        limit: 20,
+        // `demande` est borné par `DEFAULT_LEDGER_LIMIT` : la conversion ne
+        // peut pas déborder, le repli n'existe que pour ne jamais paniquer.
+        limit: u16::try_from(demande).unwrap_or(u16::MAX),
     }) {
         Ok(DaemonToWrapper::LedgerProjection { messages, .. }) => Ok(messages),
         Ok(DaemonToWrapper::Nack { reason, .. }) => Err(format!("erreur lecture ledger: {reason}")),
@@ -3658,23 +3841,19 @@ fn cmd_ledger() {
             crate::store::Store::open(&config.db_path)
                 .map_err(|error| format!("base inaccessible: {error}"))
                 .and_then(|store| {
-                    crate::ledger::read_projection(&store, LedgerScope::Messages, 20)
+                    crate::ledger::read_projection(&store, LedgerScope::Messages, demande)
                         .map(|projection| projection.messages)
                         .map_err(|error| format!("erreur lecture ledger: {error}"))
                 })
         }
     };
     match messages {
-        Ok(messages) => print_ledger(&messages),
+        Ok(messages) => print!("{}", render_ledger_borne(&messages, limite)),
         Err(error) => {
             eprintln!("{error}");
             std::process::exit(1);
         }
     }
-}
-
-fn print_ledger(entries: &[LedgerMessage]) {
-    print!("{}", render_ledger(entries));
 }
 
 pub(crate) fn render_ledger(entries: &[LedgerMessage]) -> String {
@@ -3732,7 +3911,6 @@ mod hook_tests {
             "mcp",
             "discover",
             "status",
-            "ledger",
             "version",
             "--version",
             "-v",
@@ -3746,6 +3924,11 @@ mod hook_tests {
             assert!(error.contains("SURPLUS"), "argument absent de {error}");
             assert!(validate_zero_arity_command(command, &[]).is_ok());
         }
+        // `ledger` a quitté cette grammaire en recevant `--limit` : il ne doit
+        // plus être refusé en amont, sinon l'option n'atteindrait jamais son
+        // parseur. Le refus du surplus lui reste dû, mais par `parse_ledger_args`.
+        assert!(validate_zero_arity_command("ledger", &argv(&["--limit", "5"])).is_ok());
+        assert!(parse_ledger_args(&argv(&["SURPLUS"])).is_err());
     }
 
     #[test]
