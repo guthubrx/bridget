@@ -69,12 +69,29 @@ Lis la colonne **DOMAINE**, la 9e. Je me suis trompé de colonne en la relisant
 et j'ai cru un instant que mon domaine valait `claude-opus-5` : la 10e est le
 modèle. Compte les colonnes plutôt que de les deviner.
 
-**Ce que je ne sais pas ici** : si `derive_domain` est rejoué lors d'un
-remplacement de processus. Si oui, ce poste retrouve `bridget` tout seul et le
-geste est redondant pour lui — mais pas pour un successeur ailleurs. Si non, le
-domaine est perdu. Je n'ai pas pu le mesurer : il aurait fallu un redémarrage,
-et aucun n'était programmé. Passe la commande dans le doute, elle est sans
-effet de bord si le domaine est déjà bon.
+**Ignorance levée le 28/08 à 17h36** — je l'avais déclarée ici, elle a trouvé sa
+réponse ; je la laisse visible avec sa réponse plutôt que de l'effacer.
+`fn effective_domain` (`wrapper.rs`, vers 1017) lit `agent-domains/<nom>`, écarte
+le vide, puis `.or_else(derive_domain)`. Elle est appelée en **cinq** points de
+production — 1561, 1934, 2114, 3210, 4036 — donc le domaine est **recalculé à
+chaque enregistrement**, y compris après reconnexion, et non une fois au
+lancement. Le référent en citait trois ; j'ai vérifié dans mon propre arbre et
+il y en a cinq. La conclusion n'en est que plus forte.
+
+**Et ce n'est pas qu'une lecture de code : c'est déjà testé.** Le témoin
+`le_domaine_surcharge_prime_sur_le_derive` (`wrapper.rs` vers 6410) écrit un
+fichier de domaine, vérifie qu'il prime, le supprime, puis assène
+`assert_eq!(effective_domain(&agent), derive_domain())`. La propriété que trois
+d'entre nous ont établie en lisant le source était attestée par un témoin depuis
+le début. Cherche le témoin avant de relire le code.
+
+**Donc ce poste retrouve `bridget` seul, et le premier geste y est redondant.**
+Ne le retire pas pour autant, et voici la vraie raison : ta redondance tient à
+ton **répertoire**, pas à ton nom, et un répertoire ne se transmet pas avec une
+carte. Cas mesuré par le référent : le prédécesseur de `essai-claude-distant-flux`
+tournait dans `…/essai-claude-distant/bridget`, dérive juste ; son successeur un
+cran au-dessus, dérive fausse — **sans que personne n'ait rien déplacé**. Passe
+la commande dans le doute : elle est sans effet de bord si le domaine est déjà bon.
 
 ## 1. ÉTAT
 
