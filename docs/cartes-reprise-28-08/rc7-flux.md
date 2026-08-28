@@ -102,8 +102,9 @@ la commande dans le doute : elle est sans effet de bord si le domaine est déjà
 
 ## 1. ÉTAT
 
-Mandat `50060f62` livré et publié, non intégré, non déployé. Aucun autre travail
-en cours. Arbre propre à la dernière mesure. Le gel humain tient : aucune
+Deux mandats livrés et publiés, **aucun intégré, aucun déployé** :
+`50060f62` (session 060) et `3d7053a6` (session 061, qui ferme une faille
+d'usurpation ouverte par 060 — voir §2). Aucun autre travail en cours. Arbre propre à la dernière mesure. Le gel humain tient : aucune
 reprise de 055/057 ni de quoi que ce soit d'autre sans mandat à trois
 identifiants (objectif, délégation, message). Une notification seule n'est pas
 un mandat — trois agents ont refusé de travailler sur ce fondement le 28/08 et
@@ -153,6 +154,39 @@ Tout ce qui suit a été exécuté par moi, sortie lue, dans
   remesuré sur `70ef619` nu, `581 passed / 11 failed`, **les mêmes onze**
   (`daemon::presence_tests` ×10, `wrapper::prompt_tests` ×1). Ils préexistent.
   C'est la comparaison qui atteste, pas le premier chiffre seul.
+
+### Session 061 — fermer l'usurpation d'identité par `--from`
+
+- Branche `session-061-usurpation-emetteur`, code `b04cd3a`, docs `0e83ecd`,
+  **base gelée `9c6f47d` — la tête de 060, PAS `main`**. Poussée sur
+  `https://github.com/guthubrx/bridget.git`.
+- **Ce que 060 n'avait pas fermé, et que j'ai découvert en me réfutant
+  moi-même.** `--from <nom d'un agent enregistré>` permettait d'émettre sous
+  l'identité de cet agent. Quatre usurpations involontaires mesurées le 28/08 —
+  deux miennes (sondes T2 et test B), deux du référent —, toutes inscrites au
+  ledger sous `humain` sans qu'aucun humain n'écrive. L'une d'elles a produit
+  une **fausse alerte de dette humaine** : un agent a été mis en demeure de
+  répondre à un message que personne n'avait envoyé.
+- Correctif : `from_declared` est examiné **avant** `from_is_addressable`. La
+  branche `Keep` subsiste mais n'est plus atteignable par une déclaration
+  explicite. Preuves : témoins `6/0/599` ; mutant
+  `RefuseImpersonation → Keep`, sha256 `10980343…`, qui **tue les deux témoins
+  d'usurpation et épargne les deux contrôles** ; restauration `git checkout` sur
+  arbre commité, sha256 revenu à `0293191b…`, identique au blob de `b04cd3a`.
+- **Un témoin de 060 attestait la faille.**
+  `emetteur_cli_nomme_adressable_est_conserve` affirmait qu'un nom déclaré
+  correspondant à un agent connecté est *conservé* — exactement le comportement à
+  fermer. Je l'avais écrit vert et présenté comme une preuve. Retiens ceci :
+  **un témoin vert n'atteste pas qu'un comportement est bon, il atteste qu'il est
+  celui qu'on a écrit.** Celui-là aurait défendu la faille contre qui l'aurait
+  corrigée.
+- **Limite déclarée** : la garde ne vise que le `--from` explicite. Le chemin
+  implicite (`BRIDGET_AGENT_NAME`) reste ouvert — c'est délibéré, il est la voie
+  des émetteurs automatiques légitimes — et il reste falsifiable. Ce correctif
+  protège contre l'erreur, **pas contre une intention hostile**.
+- **Non mesuré** : la suite `--workspace --lib` n'a pas abouti, elle bloque dans
+  `daemon::presence_tests`. J'ai `cargo check --workspace --all-targets` vert et
+  la famille à `6/0/599`, rien de plus.
 
 ### Constats hors session, mesurés
 
@@ -211,10 +245,17 @@ comme mien :
 
 Rien de ma propre initiative. Sur mandat explicite seulement :
 
-- Faire intégrer `9c6f47d` dans `main` — décision humaine.
-- Faire **déployer** le correctif. Tant qu'il ne l'est pas, les expéditeurs
-  jetables continuent de s'accumuler et mon travail ne sert à rien. C'est le
-  seul point où le livrable est inerte, et il ne dépend pas de moi.
+- Faire intégrer `9c6f47d` **puis** `b04cd3a` dans `main` — décision humaine.
+  **Dans cet ordre, ou ensemble.** N'intégrer que `060`, c'est intégrer la faille
+  d'usurpation ; n'intégrer que `061`, c'est n'intégrer rien qui s'applique.
+- Faire **déployer**. Tant que ce n'est pas fait, les expéditeurs jetables
+  continuent de s'accumuler et le travail ne sert à rien. C'est le seul point où
+  le livrable est inerte, et il ne dépend pas de moi.
+- Compteur de référence pour juger l'effet : **616 expéditeurs jetables hors
+  ronde de vigilance**, et non les 728 bruts. La ronde du référent produisait
+  elle-même 112 des 728, soit 15 % du défaut qu'elle sert à surveiller ; mesurée
+  sur la série brute, une correction efficace aurait pu ressembler à un échec.
+  Quelques unités des 616 viennent de mes propres sondes de diagnostic.
 - Test discriminant à utiliser APRÈS déploiement, celui-là est valide :
   ```
   bridget send --from un-nom-jamais-connecte --to <soi> "sonde"
