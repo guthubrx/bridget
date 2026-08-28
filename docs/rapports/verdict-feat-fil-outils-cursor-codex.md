@@ -18,9 +18,18 @@
 > **La réserve initiale — « je n'ai pas vérifié la compilation » — est LEVÉE par mesure**, sans point de travail et sans merge : l'arbre fusionné `d96e9bc`, déjà calculé par `merge-tree`, a été extrait hors du dépôt dans `/tmp/fusion-lot` puis compilé.
 >
 > - `cargo check -p bridget-transport` → **`Finished` en 4,07 s**, zéro erreur.
-> - `cargo check --tests -p bridget-transport` → **`Finished` en 2,35 s, exit 0** — les trois témoins ajoutés type-checkent aussi.
+> - `cargo check --tests -p bridget-transport` → **`Finished`, exit 0** — le code de test type-checke aussi.
+> - `cargo test -p bridget-transport` → **200 passés, 0 échec**, 1 ignoré, en 30 s.
+> - **Les trois témoins du lot passent sur l'arbre fusionné**, donc *avec* les 262 lignes que `main` a ajoutées depuis la base :
+>   `TEMOIN_TOOL_acp_permission_remplace_MCP_tool_par_vrai_nom` ok · `TEMOIN_TOOL_acp_retranscrit_rawInput_et_titre_enrichi` ok · `TEMOIN_TOOL_codex_app_server_retranscrit_command_execution_nom` ok.
+>   Le témoin préexistant `TEMOIN_TOOL_claude_stream_json_retranscrit_tool_use_nom_et_contenu` passe également : **aucune régression sur la famille.**
 >
-> *Piège évité au passage, et il mérite d'être noté :* le premier lancement avait rendu `EXIT=0` alors que `cargo` était **absent du PATH** — l'exit venait du `tail` en bout de pipeline, pas du check. **Un zéro n'est pas une mesure** (piège hérité de la carte de `cartae0`, §8). Le binaire réel est `/home/moi/.cargo/bin/cargo`.
+> C'est la preuve la plus forte atteignable sans intégrer : le correctif **fonctionne dans le contexte de `main` actuel**, pas seulement dans celui de sa base.
+>
+> ### Trois pièges rencontrés pendant cette vérification, tous du même genre
+> 1. Le premier lancement a rendu `EXIT=0` alors que **`cargo` était absent du PATH** — l'exit venait du `tail` en bout de pipeline, pas du check. **Un zéro n'est pas une mesure** (piège hérité de la carte de `cartae0`, §8). Binaire réel : `/home/moi/.cargo/bin/cargo`.
+> 2. `cargo check` **sans `--tests`** ne type-checke pas le code de test — il aurait validé le lot sans jamais regarder ses trois témoins.
+> 3. Le relevé par `tail -25` ne montrait **qu'un** des trois témoins : les deux autres étaient hors fenêtre. *Une fenêtre d'observation trop étroite prise pour le tout* — il a fallu un run ciblé pour les voir tous. Et un `grep -i failed` comptait « 0 failed » comme un échec.
 
 ---
 
