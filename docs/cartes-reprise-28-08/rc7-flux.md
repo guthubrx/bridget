@@ -3,11 +3,13 @@
 > **TOUTE AFFIRMATION D'INTEGRATION OU DE DEPLOIEMENT DE CETTE CARTE EST DATEE DU 28/08 ET NON REVERIFIEE DEPUIS.**
 > Elle en porte deux, et elles périment dans des sens opposés. « 055 est intégrée »
 > (§2) était mesuré par moi après `fetch` ; une intégration ne se défait pas, mais
-> ne t'y fie pas sans mesurer. « 060 et 061 non intégrés, non déployés » (§1, §4)
-> est le plus fragile : il suffit que quelqu'un intègre ou déploie pour que cette
-> carte devienne fausse en te faisant croire qu'il reste du travail. **`061` ne
-> peut pas être intégrée seule** : elle corrige du code de `060` et se branche sur
-> `9c6f47d`, pas sur `main`. Avant de t'appuyer sur l'une ou l'autre :
+> ne t'y fie pas sans mesurer. **Cette carte a déjà menti une fois de cette
+> façon** : elle a affirmé « 060 et 061 non intégrés » jusqu'au 28/08 20:57, où
+> les deux sont entrés dans `main` (`dda0843`). Le mensonge que le bandeau
+> annonçait s'est produit, et il a fallu venir le corriger à la main. Ce qui
+> reste vrai à cette heure : **intégrés, toujours PAS DÉPLOYÉS** — et c'est
+> désormais la seule affirmation fragile de cette carte. Avant de t'appuyer sur
+> l'une ou l'autre :
 > `git fetch` puis `git merge-base --is-ancestor <sha> origin/main`. Ne déduis pas, mesure.
 > **NOMME LE REMOTE avant de le croire** : `origin` ne désigne pas le même dépôt
 > selon les checkouts. Défaut trouvé par `cartae0-flux` le 28/08, annoncé pour
@@ -102,9 +104,13 @@ la commande dans le doute : elle est sans effet de bord si le domaine est déjà
 
 ## 1. ÉTAT
 
-Deux mandats livrés et publiés, **aucun intégré, aucun déployé** :
-`50060f62` (session 060) et `3d7053a6` (session 061, qui ferme une faille
-d'usurpation ouverte par 060 — voir §2). Aucun autre travail en cours. Arbre propre à la dernière mesure. Le gel humain tient : aucune
+Deux mandats livrés, publiés et **intégrés dans `main` le 28/08 à 20:57**
+(`dda0843`) : `50060f62` (session 060) et `3d7053a6` (session 061, qui ferme une
+faille d'usurpation ouverte par 060 — voir §2). **Aucun des deux n'est déployé** :
+le daemon en service tourne toujours un binaire antérieur, donc la faille reste
+ouverte en pratique. Intégration vérifiée par moi après `fetch`, et le contenu
+contrôlé — la garde de 061 est intacte dans `main`, les quatre témoins y sont, et
+le témoin fautif de 060 en a bien disparu. Aucun autre travail en cours. Arbre propre à la dernière mesure. Le gel humain tient : aucune
 reprise de 055/057 ni de quoi que ce soit d'autre sans mandat à trois
 identifiants (objectif, délégation, message). Une notification seule n'est pas
 un mandat — trois agents ont refusé de travailler sur ce fondement le 28/08 et
@@ -223,7 +229,13 @@ comme mien :
 
 - 701 messages à expéditeur dérivé du PID, 701 identités distinctes, 8 dans la
   dernière heure (mesure de 15h38).
-- `057` publié non intégré ; `058` 8 commits non intégrés ; `059` 4 commits.
+- ~~`057` publié non intégré ; `058` 8 commits non intégrés ; `059` 4 commits.~~
+  **Vieilli, et remesuré par moi le 28/08 au soir** — ce qui montre à quelle
+  vitesse le §3 se périme : `057` reste non intégrée (tête `89f244d`, 1 commit
+  d'écart), mais `058` (`16be24f`) et `059` (`b52b736`) **sont désormais dans
+  `main`**. Deux affirmations sur trois étaient devenues fausses en quelques
+  heures. Ce que tu lis au §3 vient d'autrui et n'a pas d'échéance écrite :
+  remesure avant d'en faire quoi que ce soit.
 - 45 branches repassées sur refs fraîches : 31 intégrées, 14 non.
 - Les dix prédécesseurs tmux n'ont **aucune ligne** dans `spawn_commands`, et
   leur survie repose sur la réinscription de leur wrapper, propriété éprouvée
@@ -245,9 +257,9 @@ comme mien :
 
 Rien de ma propre initiative. Sur mandat explicite seulement :
 
-- Faire intégrer `9c6f47d` **puis** `b04cd3a` dans `main` — décision humaine.
-  **Dans cet ordre, ou ensemble.** N'intégrer que `060`, c'est intégrer la faille
-  d'usurpation ; n'intégrer que `061`, c'est n'intégrer rien qui s'applique.
+- ~~Faire intégrer `9c6f47d` puis `b04cd3a`~~ — **FAIT le 28/08 à 20:57**,
+  `dda0843`. Les deux sont dans `main`, dans le bon ordre, et le contenu a été
+  contrôlé après coup.
 - Faire **déployer**. Tant que ce n'est pas fait, les expéditeurs jetables
   continuent de s'accumuler et le travail ne sert à rien. C'est le seul point où
   le livrable est inerte, et il ne dépend pas de moi.
