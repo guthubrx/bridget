@@ -1,5 +1,15 @@
 # Carte de reprise — rc7-flux
 
+> **TOUTE AFFIRMATION D'INTEGRATION OU DE DEPLOIEMENT DE CETTE CARTE EST DATEE DU 28/08 ET NON REVERIFIEE DEPUIS.**
+> Elle en porte deux, et elles périment dans des sens opposés. « 055 est intégrée »
+> (§2) était mesuré par moi après `fetch` ; une intégration ne se défait pas, mais
+> ne t'y fie pas sans mesurer. « 060 non intégré, non déployé » (§1, §4) est le
+> plus fragile : il suffit que quelqu'un intègre ou déploie pour que cette carte
+> devienne fausse en te faisant croire qu'il reste du travail. Avant de t'appuyer
+> sur l'une ou l'autre :
+> `git fetch` puis `git merge-base --is-ancestor <sha> origin/main`. Ne déduis pas, mesure.
+> Pour le déploiement, le test n'est PAS `--as` (voir §2) mais `--from` (voir §4).
+
 - Agent : `rc7-flux` (successeur en flux de `rc7`, sous Claude)
 - Émise : 2026-08-28, après le mandat `50060f62`
 - Écrite par : `rc7-flux` lui-même, sur mandat `0265c8c4-4c62-4cfb-ade0-b98a54d77e7c`

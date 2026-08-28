@@ -61,7 +61,10 @@ Tout ce qui suit porte la commande qui l'a produit. Reproductible.
 - Le « 293 » de la carte de jc6 n'est **pas** le retard sur main : c'est le retard sur sa propre branche de session. Sa phrase « en retard de 293 commits, ne jamais la prendre pour main » est trompeuse. J'ai balayé toutes les refs locales : aucune ne donne 293 contre main.
 - **Piège actif** : `HEAD..main` = 0. Qui mesure son retard contre `main` sans préfixe se croit à jour. Faux vert disponible immédiatement dans le checkout principal.
 - Le retard réel contre le main du serveur est **INCONNU et ≥ 499** : `origin/main` est figée au fetch du **28/08 03:02:24 UTC** et pointe encore sur `265930c`, exactement le « dernier main observé » de la carte de jc6. **Je n'ai pas fetché** — cela écrirait dans le `.git` du checkout principal et ce n'était pas mon mandat.
-- Corollaire général : **une ref de suivi `origin/*` ne prouve que l'état du serveur au dernier fetch.** Elle ne peut ni confirmer ni infirmer l'existence actuelle d'une branche distante.
+- Corollaire général : **une ref de suivi `origin/*` ne prouve que l'état du serveur au dernier fetch.** Elle ne peut ni confirmer ni infirmer l'existence actuelle d'une branche distante. Pour trancher, `git ls-remote origin <ref>` interroge le serveur **sans rien écrire dans le `.git`** — c'est donc permis même dans le checkout principal, contrairement à `fetch`.
+- **LES TROIS NOMBRES CI-DESSUS SONT EUX-MÊMES PÉRIMÉS.** Mesuré au serveur à 16h13 UTC : `main` distant = `efa320d9d1de49aee3068b11c59b4fa5191aaf98`, alors que ma ref locale pointe sur `265930c` ; `session-026-operations-greffe-central` distante = `337293b07e69000faa04e083ed1e54589d55aa1a`, alors que la tête livrée par jc6 est `cf21b3e`. 61 refs distantes au total. Le retard réel n'est donc **pas** 499 : c'est un nombre inconnu, plus grand si l'histoire est linéaire. Et le 293 est périmé de la même façon.
+- **La règle complète n'est donc pas « nommer la base » mais « nommer ET dater la base ».** Une base non datée est une base fausse en puissance.
+- Le référent a testé le faux vert sur trois dépôts (jc6 `main=b6eea77` contre `origin/main=265930c` ; rc7 `2078a59` contre `b9d05c9` ; le sien `c7aae7e` contre `f461869`) : **les trois sont divergents.** Le piège n'est pas propre à cette copie, il est disponible partout. `[TENU DE bridget]`
 
 **Parc** (`bridget who`, 15:49:04Z puis 15:51:19Z, sortie NON filtrée)
 - **10 agents tmux**, tous `connected`, aucun `busy`.
@@ -192,7 +195,7 @@ C'est **textuellement le piège n°3 de la carte de jc6** — « conserver la so
 1. Que **le domaine ne survit pas** et se corrige en premier geste, avant de lire quoi que ce soit.
 2. Que `/home/moi/revue/jc6` est le **checkout principal** et qu'on n'y écrit pas — composer sous `/tmp`.
 3. Que **293 est un piège**, que le vrai retard est ≥ 499, et que `HEAD..main` rend 0 par faux vert.
-4. Que les **artefacts 034 existent et sont commités** — deux fois déclarés absents à tort.
+4. Que les **artefacts 034 existent et sont commités** — deux fois déclarés absents à tort — **mais qu'ils ne sont sur aucune branche distante** : commité n'est pas publié, et ce travail tient à un seul répertoire.
 5. Qu'**aucune migration tmux→flux n'a été observée le 28/08**, contrairement à ce que j'ai moi-même écrit avant de le rétracter.
 6. Que sa **survie à un redémarrage n'est pas éprouvée**, alors que celle des tmux l'est — la protection est montée à l'envers du risque.
 7. Qu'un **mandat exige trois identifiants** et qu'une notification n'en est pas un.
