@@ -71,6 +71,24 @@
         assert.notEqual(api.agentAvatarColor("jc1", { jc1: "#invalid" }), "#invalid");
       });
 
+      test("carte_agent_synthetise_prefixe_et_fraicheur", () => {
+        assert.equal(
+          api.agentCardExcerpt("jc2-flux", "jc2-flux — VERIFICATION DE L INSTRUMENT"),
+          "VERIFICATION DE L INSTRUMENT",
+        );
+        assert.equal(
+          api.agentCardExcerpt("cartae0-flux", "cartae0-flux cartae0-flux : point utile"),
+          "point utile",
+        );
+        assert.equal(api.agentCardExcerpt("rc1", "un texte conserve"), "un texte conserve");
+        assert.equal(api.shouldShowAgentHost("cartae"), false);
+        assert.equal(api.shouldShowAgentHost("gpu-remote"), true);
+        assert.equal(api.formatAgentRelativeTime(9_980, 10_000), "à l’instant");
+        assert.equal(api.formatAgentRelativeTime(9_820, 10_000), "il y a 3 min");
+        assert.equal(api.formatAgentRelativeTime(2_800, 10_000), "il y a 2 h");
+        assert.equal(api.formatAgentRelativeTime(1_000_000 - 8 * 86_400, 1_000_000), "la semaine dernière");
+      });
+
       test("focus_conserve_sous_rafale", () => {
         let state = api.createUiState({
           draft: api.createDraft("travail", 3, 6, true),
@@ -1970,6 +1988,51 @@
     return avatar;
   }
 
+  function agentCardExcerpt(name, excerpt) {
+    const raw = String(excerpt || "").replace(/\s+/g, " ").trim();
+    if (!raw) return "";
+    const escapedName = String(name || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (!escapedName) return raw;
+    const prefix = new RegExp(
+      `^\\s*(?:${escapedName}\\s*){1,2}(?:[:;,=–—-]+\\s*)`,
+      "i",
+    );
+    return raw.replace(prefix, "").trim() || raw;
+  }
+
+  function shouldShowAgentHost(host) {
+    const normalized = String(host || "").trim().toLowerCase();
+    return normalized.length > 0 && !["cartae", "localhost", "127.0.0.1"].includes(normalized);
+  }
+
+  function formatAgentRelativeTime(at, now = Date.now() / 1000) {
+    const then = epochSeconds(at);
+    if (!(then > 0)) return "";
+    const elapsed = Math.max(0, Math.floor(now - then));
+    if (elapsed < 45) return "à l’instant";
+    if (elapsed < 90) return "il y a 1 min";
+
+    const minutes = Math.floor(elapsed / 60);
+    if (minutes < 60) return `il y a ${minutes} min`;
+    if (minutes < 90) return "il y a 1 h";
+
+    const hours = Math.floor(elapsed / 3_600);
+    if (hours < 24) return `il y a ${hours} h`;
+    if (hours < 48) return "hier";
+
+    const days = Math.floor(elapsed / 86_400);
+    if (days < 7) return `il y a ${days} jours`;
+    if (days < 14) return "la semaine dernière";
+    if (days < 28) return `il y a ${Math.floor(days / 7)} sem.`;
+
+    const date = new Date(then * 1000);
+    if (Number.isNaN(date.getTime())) return "";
+    return `le ${new Intl.DateTimeFormat("fr-FR", {
+      day: "numeric",
+      month: "short",
+    }).format(date)}`;
+  }
+
   function createDraft(value = "", selectionStart = 0, selectionEnd = 0, focused = false) {
     return {
       value,
@@ -3506,35 +3569,41 @@
       button.dataset.agent = agent.name;
       button.setAttribute("aria-current", String(agent.name === state.selectedAgent));
 
-      const top = make("span", "agent-row__top");
-      const identity = make("span", "agent-row__identity");
+      const layout = make("span", "agent-row__layout");
       const avatar = createAgentAvatar(
         documentRef,
         agent,
         colorForAgent(agent.name),
-        "small",
+        "card",
         shapeForAgent(agent.name),
       );
       avatar.setAttribute("aria-hidden", "true");
-      identity.append(avatar, make("span", "agent-row__name", agent.name));
-      top.append(identity);
-      if (agent.unread > 0) top.append(make("span", "unread-badge", String(agent.unread)));
-      button.append(top);
+      layout.append(avatar);
 
-      button.append(
-        make("p", "agent-row__excerpt", agent.last_excerpt || "Aucun message récent"),
-      );
-      const meta = make("p", "agent-row__meta");
-      meta.append(
-        make("span", "", agent.state),
-        make("span", "", agent.host),
-        make(
-          "span",
-          "",
-          agent.last_message_at ? timestamp(agent.last_message_at) : "heure inconnue",
-        ),
-      );
-      button.append(meta);
+      const content = make("span", "agent-row__content");
+      const top = make("span", "agent-row__top");
+      const identity = make("span", "agent-row__identity");
+      identity.append(make("span", "agent-row__name", agent.name));
+      if (shouldShowAgentHost(agent.host)) {
+        identity.append(make("span", "agent-row__host", agent.host));
+      }
+      top.append(identity);
+      const topEnd = make("span", "agent-row__top-end");
+      if (agent.unread > 0) topEnd.append(make("span", "unread-badge", String(agent.unread)));
+      const recency = formatAgentRelativeTime(agent.last_message_at);
+      if (recency) topEnd.append(make("time", "agent-row__recency", recency));
+      top.append(topEnd);
+      content.append(top);
+
+      const excerpt = agentCardExcerpt(agent.name, agent.last_excerpt);
+      if (excerpt) {
+        content.append(make("p", "agent-row__excerpt", excerpt));
+        const tooltip = make("span", "agent-row__tooltip", excerpt);
+        tooltip.setAttribute("aria-hidden", "true");
+        button.append(tooltip);
+      }
+      layout.append(content);
+      button.append(layout);
       button.addEventListener("click", () => selectAgent(agent.name));
       return button;
     };
@@ -4268,6 +4337,9 @@
     clampAgentPaneWidth,
     agentAvatarShape,
     agentAvatarColor,
+    agentCardExcerpt,
+    shouldShowAgentHost,
+    formatAgentRelativeTime,
     agentVisualState,
     createAgentAvatar,
     createDraft,
