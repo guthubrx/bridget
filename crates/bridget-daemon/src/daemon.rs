@@ -15446,14 +15446,15 @@ mod presence_tests {
             event_tx,
             Some(managed_test_binary()),
         );
-        shared
-            .lock()
-            .unwrap()
-            .managed_tx
-            .send(ManagedSupervisorCommand::Start {
-                prepared,
-                stop: Arc::clone(&shared.lock().unwrap().managed_spawns[&lease.command_id].stop),
-            })
+        let (managed_tx, stop) = {
+            let state = shared.lock().unwrap();
+            (
+                state.managed_tx.clone(),
+                Arc::clone(&state.managed_spawns[&lease.command_id].stop),
+            )
+        };
+        managed_tx
+            .send(ManagedSupervisorCommand::Start { prepared, stop })
             .unwrap();
 
         let ready_deadline = Instant::now() + Duration::from_secs(5);
@@ -15498,10 +15499,22 @@ mod presence_tests {
             if let Ok(result) = result_rx.try_recv() {
                 break result;
             }
-            assert!(
-                Instant::now() < stop_deadline,
-                "la chaîne réelle stop n'a pas produit d'issue"
-            );
+            if Instant::now() >= stop_deadline {
+                let pgid = marker.pgid as libc::pid_t;
+                let _ = unsafe { libc::kill(-pgid, libc::SIGTERM) };
+                let cleanup_deadline = Instant::now() + Duration::from_millis(500);
+                while crate::managed_process::group_exists(marker.pgid).unwrap_or(false)
+                    && Instant::now() < cleanup_deadline
+                {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                if crate::managed_process::group_exists(marker.pgid).unwrap_or(false) {
+                    let _ = unsafe { libc::kill(-pgid, libc::SIGKILL) };
+                }
+                panic!(
+                    "la chaîne réelle stop n'a pas produit d'issue : le superviseur n'a pas observé la terminaison de l'adaptateur après Disconnect (groupe nettoyé directement)"
+                );
+            }
             thread::sleep(Duration::from_millis(10));
         };
         assert!(matches!(
