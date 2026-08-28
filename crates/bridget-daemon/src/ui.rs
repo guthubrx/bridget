@@ -1280,8 +1280,15 @@ fn load_human_referent_thread(socket_path: &Path, focus_agent: &str) -> Vec<UiTh
     let Ok(store) = crate::store::Store::open(&db_path) else {
         return Vec::new();
     };
-    let Ok(entries) = store.conversation_messages(UI_SENDER, focus_agent, UI_THREAD_MESSAGE_LIMIT)
-    else {
+    // La propre entrée de l'humain n'est pas un couple : la clé de conversation
+    // (humain, humain) n'existe pas et rendait un fil vide. Sa boîte se lit donc
+    // par participant, tous correspondants confondus.
+    let loaded = if focus_agent == UI_SENDER {
+        store.participant_messages(UI_SENDER, UI_THREAD_MESSAGE_LIMIT)
+    } else {
+        store.conversation_messages(UI_SENDER, focus_agent, UI_THREAD_MESSAGE_LIMIT)
+    };
+    let Ok(entries) = loaded else {
         return Vec::new();
     };
     let messages = entries

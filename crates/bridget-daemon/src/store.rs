@@ -1286,6 +1286,46 @@ impl Store {
     /// Parcourt le ledger (pas d'index FTS) : chaque mot doit apparaître dans
     /// le corps. Ordre chronologique. Les jokers LIKE du needle sont échappés.
     /// Accents repliés (cafe ↔ café). `truncated` si plus de hits que le plafond.
+    /// Tous les messages où `party` est émetteur OU destinataire, quel que soit
+    /// son correspondant. `conversation_messages` interroge la clé de couple :
+    /// demandée pour le couple (humain, humain) elle ne peut rien rendre, ce
+    /// qui vidait la propre entrée de l'humain dans la vue. Les plus RÉCENTS
+    /// sont retenus puis rendus en ordre croissant : borner en ordre croissant
+    /// masquerait justement les derniers échanges.
+    pub fn participant_messages(
+        &self,
+        party: &str,
+        limit: usize,
+    ) -> Result<Vec<LedgerEntry>, StoreError> {
+        let limit = limit.max(1) as i64;
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, ts, sender, target, body FROM (
+                     SELECT id, ts, sender, target, body FROM ledger
+                     WHERE sender = ?1 OR target = ?1
+                     ORDER BY ts DESC, id DESC
+                     LIMIT ?2
+                 ) ORDER BY ts ASC, id ASC",
+            )
+            .map_err(StoreError::Sqlite)?;
+        let entries = stmt
+            .query_map(rusqlite::params![party, limit], |row| {
+                Ok(LedgerEntry {
+                    id: row.get(0)?,
+                    ts: row.get(1)?,
+                    sender: row.get(2)?,
+                    target: row.get(3)?,
+                    body: row.get(4)?,
+                    delivery_phase: None,
+                })
+            })
+            .map_err(StoreError::Sqlite)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Sqlite)?;
+        Ok(entries)
+    }
+
     pub fn search_messages(
         &self,
         query: &str,
