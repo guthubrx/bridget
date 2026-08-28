@@ -67,6 +67,28 @@ Chacun de ces points a été obtenu par une commande que j'ai exécutée, et non
   `24e800377db2e5ec68c87a9e6e6450e7d4c2be53`, aucune branche, un seul élément non suivi,
   `bridget-src/`, pesant 17 Mo.
 - **Le daemon annonce `f7658d4d9746-dirty`** en pied de `bridget who`.
+- **Un état de délégation ne peut PAS dire qu'un travail est livré — par construction.**
+  Relevé sur les 633 objectifs de la base : 93 `en_coordination` et 540 `clos` ; côté
+  délégations, 93 `creee` et 540 `soldee_par_cloture`, et **aucun autre état**. Une
+  délégation passe donc directement de `creee` à `soldee_par_cloture` au moment de la
+  clôture de son objectif. Il n'existe aucun état intermédiaire pour « livré ». Ce n'est
+  pas un retard de mise à jour, c'est une absence de vocabulaire. Mon propre cas le
+  prouve : `dd0fb17b` est à `creee` alors que ma carte est dans `origin/main` à l'octet
+  près. C'est la version forte de la règle de rc5.
+  **Couplage confirmé par une transition observée** : quand le référent a fermé les neuf
+  objectifs de carte, le relevé est passé de 93 `en_coordination` / 540 `clos` à 84 / 549,
+  et les délégations de 93 `creee` / 540 `soldee_par_cloture` à 84 / 549. Les deux
+  décomptes restent égaux sans exception, avant comme après. Le mien : objectif `clos`,
+  délégation `soldee_par_cloture`, décision `732043f2` de type `cloturer` à l'état
+  `appliquee`.
+- **La forme de clôture d'un objectif**, trouvée par sondage sur un UUID **inexistant**,
+  donc sans aucune mutation possible :
+  `maicie objective <uuid> close --reason "<texte libre>" --config <chemin>`.
+  Discriminant : `close` répond `--reason est obligatoire` (action valide) tandis que
+  `cloture`, `cloturer`, `clore`, `synthese` répondent `action objectif inconnue`. Avec
+  `--reason` fourni, la commande atteint la recherche et échoue sur `objective_not_found`.
+  `add-participant` et `remove-participant` sont également valides. **Je n'ai fermé aucun
+  objectif : la clôture est une décision, pas une manipulation.**
 
 ## 3. Ce que j'ai produit (messages, pas code)
 
@@ -154,6 +176,11 @@ Deux points restent ouverts côté référent, sans action de ma part :
 - `/home/moi/bridget-registre/docs/cartes-reprise-28-08/essai-distant-flux.md` — cette carte
 - `/home/moi/.local/bin/maicie` — le binaire Maicie **réel** de cet hôte, contrairement à
   ce qu'affirme la skill
+- `/home/moi/.config/maicie/config.json` — la configuration Maicie, obligatoire pour
+  toute commande via `--config`. **Aucun emplacement implicite : ne jamais le deviner.**
+  Communiqué par le référent le 28/08 à 16h30 ; permissions 600, même utilisateur que nous
+- `/home/moi/.config/maicie/config.json.avant-profils-flux-20260828T153827Z` — sauvegarde
+  antérieure à l'ajout des profils flux
 - `/home/moi/.claude/skills/maicie` — la skill dont la section « Chemins réels » est
   fausse sur cartae
 - `/home/moi/revue/hygiene-disque-ToHHyG` — 1,4 Go, résidu non attribué ; **aucune demande
@@ -166,9 +193,13 @@ Deux points restent ouverts côté référent, sans action de ma part :
 - **Je ne sais pas si je suis réellement persistant.** `persistent=1` m'a été annoncé,
   aucune colonne de `who` ne l'expose, et le drapeau n'a jamais été éprouvé. C'est le
   risque exact qui motive cette carte.
-- **Je ne sais pas si mon profil Maicie existe ni s'il est valide.** Il me manque le
-  chemin `--config`, et la skill interdit de le deviner. Je ne me suis donc jamais vu
-  moi-même dans Maicie.
+- ~~**Je ne sais pas si mon profil Maicie existe ni s'il est valide.**~~ **LEVÉE à 16h30**,
+  le référent ayant communiqué le chemin de configuration. Vérifié par moi :
+  `maicie preflight --config /home/moi/.config/maicie/config.json` rend
+  `schéma=compatible base=20 binaire=20 schéma-écriture=compatible bootstrap=non`, et
+  `maicie status` m'expose bien — objectif `e4b51489`, délégation `dd0fb17b` avec
+  `participant = essai-distant-flux`, remise `de78c6d9` à l'état `accepted`. Je suis
+  délégable et je me vois moi-même.
 - **Je ne sais pas dater la reconstruction du binaire du daemon.** Je ne peux donc pas
   affirmer que les mesures du matin et celles de l'après-midi ont été prises avec le même
   instrument. Mon constat de section 2 sur la population tient sans cela, parce qu'il
@@ -205,15 +236,22 @@ Pièges de **preuve** avant d'être des pièges de code — c'est ce qui les ren
 8. **Un rapport peut arriver sans auteur** si l'en-tête n'est pas reporté lors d'une
    rediffusion. Ce n'est pas la même famille qu'un expéditeur jetable : l'identité existe à
    la source et dans le ledger, elle se perd à la relecture.
-9. **Les diffusions du référent croisent les réponses individuelles.** Observé trois fois
+9. **Le verbe de la ligne de commande n'est pas le verbe du modèle de données.** L'action
+   CLI est `close`, en anglais, alors que la décision enregistrée porte `kind = cloturer`,
+   en français. Lire la base et en déduire le nom de la commande conduit donc à essayer
+   `cloturer`, qui est refusé. Le référent a cherché cette forme pendant quatre heures pour
+   cette raison. Sonder les noms d'action, ne pas les déduire du vocabulaire métier — et
+   sonder **sur un identifiant inexistant**, pour qu'une erreur de sonde ne puisse rien
+   muter.
+10. **Les diffusions du référent croisent les réponses individuelles.** Observé trois fois
    le 28/08 : un briefing arrivé après mon accusé, puis ce même mandat de carte rediffusé
    après que je l'avais rendu. Avant de refaire un travail qu'un message semble redemander,
    **vérifier le ledger et le fichier** : le mandat peut être déjà honoré. Refaire écrase
    du travail bon et coûte un tour.
-10. Hérités du prédécesseur, **encore valables sous Claude** : ne pas amender une tête déjà
+11. Hérités du prédécesseur, **encore valables sous Claude** : ne pas amender une tête déjà
    relue — empiler les commits pour conserver l'ancêtre du verdict ; et `user_version=19`
    seul ne prouve pas un schéma v19.
-11. Hérités du prédécesseur mais **propres à Codex, écartés** : `managed_test_binary` sur
+12. Hérités du prédécesseur mais **propres à Codex, écartés** : `managed_test_binary` sur
     cibles filtrées neuves, rejeu des mutants après amendement, fixture lisant la
     configuration réelle si les chemins ne sont pas isolés. Conservés ici pour mémoire, pas
     comme consignes actives.

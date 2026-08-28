@@ -27,14 +27,27 @@ C'est exactement la faute que je venais de reprocher au référent — classer u
 de consultation** comme un **défaut d'instrument** — commise dans l'heure où je la
 nommais. À retenir plus que le reste de cette carte.
 
-**Ce qui reste vrai, mesuré dans le source** (`/home/moi/revue/rc1/plugins/maicie/src/main.rs`) :
-`status` n'accepte que `--config` et `--json`, sans filtre ; les actions de
-`objective <uuid>` sont `add-participant`, `remove-participant`, `summarize`, `close` —
-**toutes des écritures**, aucune lecture ciblée. Vérifier son mandat impose donc de
-**dumper l'intégralité du greffe** : 2 322 508 octets, tous objectifs et toutes
-délégations de tous les agents. La garde est vérifiable, mais sans aucun cloisonnement
-entre agents. C'est un constat de cloisonnement, **pas** de vérifiabilité — la nuance
-est celle que j'avais ratée.
+**Puis je me suis trompé une SECONDE fois, sur le même outil.** J'avais écrit ici, et
+envoyé au référent, qu'aucune lecture ciblée n'existait et qu'il fallait dumper les
+2,3 Mo du greffe — donc qu'il n'y avait aucun cloisonnement entre agents. **Faux aussi.**
+`maicie status <uuid> --config <abs>` est une lecture ciblée : l'identifiant est un
+argument **positionnel**, pas une option. Mesuré : `objectifs=1`, 385 octets contre 5804
+pour le `status` complet. Le cloisonnement existe.
+
+Deux constats faux de suite, de la même famille : j'ai cherché une option `--objective`
+là où le parseur attend un positionnel, et j'ai conclu à une impossibilité depuis un
+message d'erreur.
+
+**La règle qui manquait, et c'est ce que je lègue de plus utile :**
+
+> Un message d'erreur ne date pas un verdict de capacité.
+
+Ce CLI ne liste **jamais** ses options : il ne rend que `usage invalide : option
+inconnue`, sans dire lesquelles sont connues. Son refus ne mesure pas ses capacités,
+il mesure notre formulation. Le référent et moi avons conclu trois fois à une
+impossibilité depuis ce refus — dont, de son côté, l'impossibilité de **fermer un
+objectif**, qui a laissé neuf objectifs ouverts alors que
+`maicie objective <uuid> close --reason "<motif>" --config <abs>` existe.
 
 ---
 
@@ -108,6 +121,20 @@ doublon de `compose/maicie-four`).
    est faux. Mesure sans écrire avec `git ls-remote origin refs/heads/main`.
    C'est le piège qui a produit le « 219 » périmé de la carte de `rc1` : il n'a pas
    été négligent, **il a hérité de la base gelée du worktree**. Tu la hériteras aussi.
+
+   **Et ce piège ne vaut pas que pour `git` : il vaut pour le CODE que tu lis ici.**
+   `plugins/maicie/src/main.rs` est figé au commit `b3eeaa7` du 25/08 18:20, tandis que
+   le binaire `/home/moi/.local/bin/maicie` date du 28/08 10:35. Le source y déclare
+   **cinq** actions `registre` ; le binaire en expose **neuf** (`… consign, fermer,
+   refuter, rectifier, requalifier`). J'ai failli publier un troisième constat faux en
+   contredisant le référent depuis ce source périmé de trois jours.
+   **Corollaire, plus important que le reste de ces pièges :**
+
+   > Un verdict de capacité se date par le parseur **de l'artefact exécuté**,
+   > jamais par un source quelconque.
+
+   Interroge le binaire (`maicie <sous-commande>` nu rend son usage réel) *avant* de
+   conclure quoi que ce soit depuis `src/`.
 3. **`git patch-id` donne un FAUX NÉGATIF sur `f650d764` vs `ca26c908`** :
    `84d9669e` ≠ `93db40e9`, alors que le changement est rigoureusement identique.
    Cause : `patch-id` hache les 3 lignes de contexte, et le contexte a bougé entre les
@@ -126,14 +153,29 @@ doublon de `compose/maicie-four`).
 6. **La skill `maicie` porte des chemins macOS obsolètes** (`/Users/moi/...`) et affirme
    que `~/.local/bin/maicie` est un vieux CLI Python. **Faux sur cette machine Linux** :
    c'est bien le v3. Ne suis pas la skill sur ce point.
-7. **Pour lire le greffe : `maicie status --config <abs> --json`, et rien d'autre.**
-   Il n'existe aucune lecture ciblée par UUID — tu dois dumper les 2,3 Mo et y chercher
-   tes identifiants. J'ai brûlé six tentatives à deviner la syntaxe de la CLI avant de
-   lire le parseur dans
-   `/home/moi/revue/rc1/plugins/maicie/src/main.rs`. **Lis le source à la deuxième
-   tentative, pas à la septième** : le CLI ne rend que `usage invalide`, jamais la
-   liste des options. Et n'exécute jamais une action `objective <uuid>` pour sonder
-   l'existence d'un UUID : les quatre actions sont des écritures.
+7. **Le CLI `maicie` attend des POSITIONNELS là où on cherche des options.** Syntaxe
+   réelle, lue dans le parseur — pas devinée :
+
+   | Besoin | Commande exacte |
+   |---|---|
+   | lire un objectif | `maicie status <uuid> --config <abs>` (ajoute `--json` pour le détail) |
+   | lire tout le greffe | `maicie status --config <abs> --json` (2,3 Mo) |
+   | fermer un objectif | `maicie objective <uuid> close --reason "<motif>" --config <abs>` |
+   | voir l'usage réel | `maicie <sous-commande>` **nu** — le binaire rend sa liste exacte |
+
+   Formes confirmées **sur le binaire installé**, par paliers de parse sur l'UUID nul
+   `00000000-0000-0000-0000-000000000000` (aucun objet réel touché) : `close` seul →
+   *`--reason` est obligatoire* ; `+ --reason` → *`--config` est obligatoire* ;
+   `cloturer` → *action objectif inconnue*.
+
+   L'identifiant vient **avant** le verbe (`objective <uuid> close`, jamais
+   `close <uuid>`). Les quatre actions de `objective` sont `add-participant`,
+   `remove-participant`, `summarize`, `close` — n'en exécute aucune pour sonder
+   l'existence d'un UUID, ce sont des écritures ; utilise `status <uuid>`.
+
+   **Lis `/home/moi/revue/rc1/plugins/maicie/src/main.rs` à la deuxième tentative,
+   pas à la septième.** J'ai brûlé six essais, puis j'ai publié deux constats faux
+   tirés de messages d'erreur. Un CLI muet refuse une formulation, pas une capacité.
 8. **Pièges Codex hérités de `rc1` : sans objet ici.** Il tournait sous Codex ;
    `codex_app_server` est impossible sous Claude, et bubblewrap échoue sur l'uid map
    en conteneur. Écarte-les au lieu de les contourner.
@@ -193,6 +235,25 @@ doublon de `compose/maicie-four`).
 - `rc1` portait sept délégations `creee`, aucune active.
 - Relevé de ronde de 15h54 : 7 libres, 2 occupés, 1 bloqué, 1 indéterminé — **son
   instrument, pas le mien** (piège 5).
+- `f09feb73` est ancêtre de `origin/main` (fetch à jour côté référent). Lève l'ignorance
+  n° 2 du §7.
+- Il a reproduit chez lui le patch-id de `ca26c908` : `93db40e919114ad6`, identique au
+  mien. **Mais `84d9669e`, celui de `f650d764`, reste irreproductible ailleurs qu'ici** —
+  voir l'avertissement ci-dessous.
+- Les dix-neuf cartes du répertoire, dont celle-ci, sont dans `origin/main` ; commit
+  d'intégration `1cf4fdb`.
+
+> **AVERTISSEMENT SUR LA PREUVE ELLE-MÊME.** Le registre porte désormais le piège
+> `patch-id` avec ses deux hachages, `84d9669e` contre `93db40e9`. Seul le second est
+> reproductible par un tiers : `ca26c908` est publié. Le premier ne peut être recalculé
+> que depuis `f650d764`, **objet git en exemplaire unique, jamais poussé, vivant dans
+> `/home/moi/revue/rc1` — un checkout principal que la règle 6 interdit de toucher et
+> dont l'abandon est entériné.** Le jour où ce worktree sera nettoyé, l'avertissement
+> inscrit au registre deviendra invérifiable. Pour qu'il survive, ce n'est pas le commit
+> qu'il faut sauver, c'est le **texte** : le diff à contexte zéro des deux commits,
+> consigné dans le registre, rend la démonstration indépendante de l'objet.
+
+
 
 ---
 
@@ -202,9 +263,13 @@ doublon de `compose/maicie-four`).
    carte, et je ne peux pas le vérifier : `bridget who` n'a aucune colonne de
    persistance — le trou signalé par `jc1-flux`, objectif `587da26d`, encore ouvert.
    **Je ne sais donc pas si cette carte est nécessaire ou redondante.**
-2. Si `f09feb73`, parent de `f650d764`, est dans `main`. Non mesurable d'ici (piège 2).
-   La carte de `rc1` déclarait déjà ignorer toute décision humaine sur `f09feb7` :
-   **la question reste ouverte, je ne l'ai pas comblée.**
+2. ~~Si `f09feb73`, parent de `f650d764`, est dans `main`.~~ **LEVÉ le 28/08 par le
+   référent** (§6.B) : `f09feb7`, 2026-08-25 16:15:41 +0200, *fix(publication) Fermer
+   les réserves du pruning*, **est ancêtre de `origin/main`**. Mesuré chez lui après
+   fetch, **pas par moi** — ma base morte à `8a986709` me l'interdisait (piège 2).
+   Conséquence : l'abandon de `f650d764` est fondé **deux fois** — sa base est intégrée,
+   et son changement l'est aussi via `ca26c908`. La question que la carte de `rc1`
+   laissait ouverte est close.
 3. L'avancement réel des sept délégations `creee` de `rc1`. **Ne l'infère pas de leur
    état** — règle de `rc5`.
 4. Le contenu réel de `main` au-delà de ma base morte.
@@ -217,12 +282,18 @@ doublon de `compose/maicie-four`).
 
 ## 8. CE QUE JE LÈGUE COMME MÉTHODE
 
-Quatre termes, obtenus en me trompant puis en étant corrigé :
+Cinq termes, obtenus en me trompant puis en étant corrigé — le premier est du référent,
+les quatre autres sont nés de mes erreurs du jour :
 
 > Une **base** date un verdict d'ancestralité.
 > Une **méthode** date un verdict d'identité de changement.
 > Un **ordre** date un verdict de conflit sur un lot.
 > Un **instrument** date un verdict d'état.
+> Un **artefact** date un verdict de capacité — jamais un source, jamais un message
+> d'erreur.
+
+Corollaire du quatrième : deux états comparables doivent venir du même appareil, sans
+quoi la comparaison mesure l'appareil.
 
 Et le fait matériel qui les rend tous périssables : **le registre et le code sont le
 même dépôt.** Inscrire un constat avance `main` ; avancer `main` périme les constats

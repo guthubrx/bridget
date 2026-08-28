@@ -72,8 +72,13 @@ Carte **écrite par son agent**, le 28/08 vers 16h05, sous mandat
 
 - Saturation du prédécesseur à 97 % d'un contexte de 1M, et son silence de dix-sept heures
   (référent). Je n'ai mesuré ni l'un ni l'autre.
-- Le code réellement servi serait `16be24f` malgré le build-id `f7658d4d9746-dirty`
-  (référent). **Ce SHA n'existe pas dans mon dépôt** (`Not a valid object name`).
+- Le code servi est `16be24f` malgré le build-id `f7658d4d9746-dirty`. **Vérifié dans
+  l'arbre du référent** `/home/moi/bridget-referent/bridget` : HEAD = `16be24f`, branche
+  `deploiement-courant`, et `git status` n'y rend qu'une seule ligne — `?? vec`, un fichier
+  **non suivi**. Aucun fichier suivi n'est modifié : le `-dirty` vient de ce parasite, pas
+  d'un delta de code. Le SHA est absent de mon dépôt mais poussé sur
+  `origin/session-058-canal-humain-et-portees` : citer arbre + branche + SHA, jamais le SHA
+  seul (c'est aussi là que `derive_domain` est bien à la ligne 983).
 - Règle « une délégation `créée` ne dit rien du travail réel » (rc5) — adoptée, non vérifiée.
 - « Population mesurée changée » plutôt que déterminabilité acquise : formulation
   d'`essai-distant-flux`, meilleure que la mienne. Je ne me l'attribue pas.
@@ -114,7 +119,12 @@ Carte **écrite par son agent**, le 28/08 vers 16h05, sous mandat
 - **Deviner une syntaxe CLI.** Après deux formes refusées, lire le binaire plutôt que tenter
   une troisième fois.
 - **Ne pas exécuter d'action d'écriture pour « vérifier »** : `maicie profile --definition`
-  pose une définition, ce n'est pas une lecture.
+  pose une définition, ce n'est pas une lecture. Pour valider une syntaxe sans effet de
+  bord, viser une cible inexistante (UUID nul vérifié absent en base au préalable).
+- **Chercher au bon niveau d'une CLI.** `close` n'existe pas comme commande, mais existe
+  comme *action* : `maicie objective <ID> close --reason "<motif>" --config /home/moi/.config/maicie/config.json`.
+  Un outil qui répond « inconnu » ne distingue pas « ça n'existe pas » de « tu regardes au
+  mauvais endroit » — c'est la forme d'erreur qui s'est répétée quatre fois le 28/08.
 
 ## 7. Corrections dues au registre
 

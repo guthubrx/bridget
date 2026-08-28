@@ -1,9 +1,13 @@
 # Carte de reprise — jc2
 
 > **PREMIER GESTE OBLIGATOIRE AVANT TOUTE LECTURE DE CETTE CARTE**
-> AVANT d executer quoi que ce soit : LIRE `/home/moi/.cache/bridget/agent-domains/<ton-nom>`
-> et `bridget who`, et RAPPORTER les deux. `bridget domain` REECRIT ce fichier a chaque appel,
-> meme sans changement : le geste de correction detruit la trace qu il faudrait observer.
+> AVANT d executer quoi que ce soit, RELEVE LA VRAIE VARIABLE D ENTREE — le cwd de TON PROCESSUS :
+> `readlink /proc/<ton-pid>/cwd` puis `git -C <ce-cwd> rev-parse --show-toplevel`.
+> C est le `basename` de cette racine git qui devient ton domaine. Ton cwd n est PAS celui que
+> tu crois : le processus tourne souvent un cran plus bas que le repertoire que tu observes.
+> NE PERDS PAS DE TEMPS a lire `agent-domains/<ton-nom>` : un nom neuf n a JAMAIS de fichier,
+> la reponse sera toujours `absent`. Cette consigne, presente ici jusqu au 28/08 16h44, etait
+> un rite — corrigee sur demonstration de rc5-flux, qui a invalide sa propre proposition.
 > ENSUITE seulement, executer `bridget domain bridget` et verifier la sortie.
 > Le domaine NE SURVIT PAS au remplacement du processus : il est derive du nom du repertoire
 > de la racine git (`derive_domain`, crates/bridget-daemon/src/wrapper.rs:983), jamais de `bridget`.
