@@ -85,11 +85,36 @@ pub enum Inconclusive {
     WindowTooShort { window_secs: i64, need_secs: i64 },
 }
 
-/// Verdict de tendance. `Slope` n'est produit que si la fenêtre ET le nombre
-/// d'échantillons sont suffisants.
+/// Sous ce taux, un intervalle est considéré comme plat : il ne consomme rien.
+/// 0.5 Gio/h absorbe le bruit d'un journal ou d'un cache sans masquer une
+/// consommation réelle.
+pub const FLAT_RATE_BYTES_PER_HOUR: f64 = 512.0 * 1024.0 * 1024.0;
+
+/// Fraction du temps qui doit être plate pour que la série soit dite en
+/// escalier. À la moitié, une droite moyenne ne décrit plus rien de réel.
+pub const STEPWISE_FLAT_RATIO: f64 = 0.5;
+
+/// Verdict de tendance. `Slope` n'est produit que si la fenêtre et le nombre
+/// d'échantillons sont suffisants ET que la consommation est régulière.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Trend {
     Inconclusive(Inconclusive),
+    /// Rien ne se consomme depuis `stable_since_secs`. C'est le fait dominant :
+    /// il établit que le processus n'est pas une fuite.
+    Plateau {
+        stable_since_secs: i64,
+        window_secs: i64,
+        samples: usize,
+    },
+    /// Consommation par marches séparées de plateaux. Aucune pente moyenne
+    /// n'est publiée : la question utile devient « quoi déclenche une marche,
+    /// et de combien », pas « à quelle vitesse ça se vide ».
+    Stepwise {
+        steps: usize,
+        largest_step_bytes: u64,
+        window_secs: i64,
+        samples: usize,
+    },
     Slope {
         /// Positif = le disque se remplit (l'espace libre baisse).
         consumed_bytes_per_hour: f64,
@@ -146,6 +171,51 @@ pub fn assess(samples: &[DiskSample], min_window_secs: i64, min_samples: usize) 
             window_secs,
             need_secs: min_window_secs,
         });
+    }
+
+    // La forme prime sur la durée. Une fenêtre longue ne rend pas une droite
+    // légitime : si le temps est majoritairement plat, la série est un escalier
+    // et sa pente moyenne ne décrit aucun instant réel.
+    let mut flat_secs = 0_i64;
+    let mut steps = 0_usize;
+    let mut largest_step_bytes = 0_u64;
+    let mut stable_since_secs = 0_i64;
+    for pair in ordered.windows(2) {
+        let duration = pair[1].observed_at_unix - pair[0].observed_at_unix;
+        if duration <= 0 {
+            continue;
+        }
+        let consumed = pair[0].free_bytes.saturating_sub(pair[1].free_bytes);
+        // La platitude se juge sur la variation ABSOLUE : un volume qui se
+        // libère vite n'est pas stable non plus. Ne regarder que la
+        // consommation ferait passer une purge pour un plateau.
+        let rate = pair[0].free_bytes.abs_diff(pair[1].free_bytes) as f64 * 3600.0
+            / duration as f64;
+        if rate < FLAT_RATE_BYTES_PER_HOUR {
+            flat_secs += duration;
+            stable_since_secs += duration;
+        } else {
+            steps += 1;
+            largest_step_bytes = largest_step_bytes.max(consumed);
+            // Une marche interrompt le plateau courant.
+            stable_since_secs = 0;
+        }
+    }
+
+    if window_secs > 0 && (flat_secs as f64 / window_secs as f64) >= STEPWISE_FLAT_RATIO {
+        if stable_since_secs >= min_window_secs {
+            return Trend::Plateau {
+                stable_since_secs,
+                window_secs,
+                samples: ordered.len(),
+            };
+        }
+        return Trend::Stepwise {
+            steps,
+            largest_step_bytes,
+            window_secs,
+            samples: ordered.len(),
+        };
     }
 
     // Moindres carrés de free_bytes en fonction du temps. L'origine des temps
@@ -245,6 +315,16 @@ pub fn record_and_assess(path: &std::path::Path, sample: DiskSample) -> Trend {
 
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
+/// Durée lisible : « 1 h 44 » plutôt qu'un nombre de secondes que personne ne
+/// convertit de tête au moment où il lit une alerte.
+fn format_duration(secs: i64) -> String {
+    let minutes = secs / 60;
+    if minutes < 60 {
+        return format!("{minutes} min");
+    }
+    format!("{} h {:02}", minutes / 60, minutes % 60)
+}
+
 /// Rend la tendance pour un affichage humain. Un refus s'affiche comme un
 /// refus — jamais comme une pente nulle.
 pub fn format_trend(trend: &Trend, free_bytes: u64) -> String {
@@ -258,6 +338,26 @@ pub fn format_trend(trend: &Trend, free_bytes: u64) -> String {
             need_secs,
         }) => {
             format!("pente ? (fenêtre {window_secs}s < {need_secs}s)")
+        }
+        Trend::Plateau {
+            stable_since_secs, ..
+        } => {
+            format!(
+                "stable depuis {} — aucune consommation",
+                format_duration(*stable_since_secs)
+            )
+        }
+        Trend::Stepwise {
+            steps,
+            largest_step_bytes,
+            window_secs,
+            ..
+        } => {
+            format!(
+                "{steps} marche(s) en {}, plus grande {:.1} Gio — pas de pente",
+                format_duration(*window_secs),
+                *largest_step_bytes as f64 / GIB
+            )
         }
         Trend::Slope {
             consumed_bytes_per_hour,
@@ -334,6 +434,100 @@ mod tests {
         assert!(
             (hours - 7.0).abs() < 0.6,
             "échéance attendue ≈ 7 h, obtenue {hours:.2}"
+        );
+    }
+
+    /// TÉMOIN DU PLATEAU — série RÉELLE du 28/08, mesurée par
+    /// essai-claude-distant-flux et confirmée par le référent :
+    /// 18:48 79.0 | 19:07 79.0 | 19:14 74.4 | 19:18 75.0 | 19:22 68.1 |
+    /// 20:57 68.0 | 21:06 68.0. Trois plateaux, deux marches.
+    ///
+    /// Avant ce test, `assess` rendait ici une pente de 4.26 Gio/h et une
+    /// échéance de seize heures — sur un disque qui n'avait rien consommé
+    /// depuis cent quatre minutes. La fenêtre de 2 h 18 passait largement le
+    /// contrôle de durée : c'est la FORME de la série qui trompe, pas sa durée.
+    ///
+    /// Mutant qui tue ce test : supprimer la détection d'escalier et retomber
+    /// sur la régression. Le verdict redevient une `Slope` de 4.26 Gio/h, donc
+    /// une échéance publiée sur un disque stable — la troisième fausse alerte
+    /// de la soirée, celle que le mandat exige d'empêcher.
+    #[test]
+    fn temoin_plateau_serie_reelle_du_28_08_ne_produit_aucune_pente() {
+        let base = 1_787_000_000;
+        let minute = 60;
+        let samples = vec![
+            sample(base, 79.0),
+            sample(base + 19 * minute, 79.0),
+            sample(base + 26 * minute, 74.4),
+            sample(base + 30 * minute, 75.0),
+            sample(base + 34 * minute, 68.1),
+            sample(base + 129 * minute, 68.0),
+            sample(base + 138 * minute, 68.0),
+        ];
+
+        let trend = assess(&samples, MIN_WINDOW_SECS, MIN_SAMPLES);
+
+        let Trend::Plateau {
+            stable_since_secs, ..
+        } = trend
+        else {
+            panic!(
+                "cent quatre minutes sans consommation doivent rendre un PLATEAU, obtenu {trend:?}"
+            );
+        };
+        assert!(
+            stable_since_secs >= 104 * minute,
+            "le plateau courant vaut au moins 104 min, obtenu {stable_since_secs}s"
+        );
+        assert!(
+            trend.hours_to_exhaustion(68 * GIB_U).is_none(),
+            "un plateau ne doit produire AUCUNE échéance de saturation"
+        );
+        let rendered = format_trend(&trend, 68 * GIB_U);
+        assert!(
+            rendered.contains("stable depuis"),
+            "le plateau doit se nommer, obtenu {rendered}"
+        );
+        assert!(
+            !rendered.contains("Gio/h"),
+            "aucune pente ne doit s'afficher sur un plateau, obtenu {rendered}"
+        );
+    }
+
+    /// Les marches doivent être comptées et mesurées — « de combien », qui est
+    /// la question utile — sans qu'aucune pente moyenne ne soit publiée.
+    #[test]
+    fn serie_en_marches_rend_les_marches_et_jamais_une_pente() {
+        let base = 1_787_000_000;
+        let minute = 60;
+        let samples = vec![
+            sample(base, 79.0),
+            sample(base + 60 * minute, 79.0),
+            sample(base + 64 * minute, 76.2), // marche de 2.8 Gio
+            sample(base + 120 * minute, 76.2),
+            sample(base + 124 * minute, 73.0), // marche de 3.2 Gio
+            sample(base + 130 * minute, 73.0),
+        ];
+
+        let trend = assess(&samples, MIN_WINDOW_SECS, MIN_SAMPLES);
+
+        let Trend::Stepwise {
+            steps,
+            largest_step_bytes,
+            ..
+        } = trend
+        else {
+            panic!("deux marches entre trois plateaux, obtenu {trend:?}");
+        };
+        assert_eq!(steps, 2, "les deux marches doivent être comptées");
+        let largest = largest_step_bytes as f64 / GIB;
+        assert!(
+            (largest - 3.2).abs() < 0.1,
+            "la plus grande marche vaut 3.2 Gio, obtenu {largest:.2}"
+        );
+        assert!(
+            trend.hours_to_exhaustion(73 * GIB_U).is_none(),
+            "une série en marches ne prédit aucune saturation"
         );
     }
 
