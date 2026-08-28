@@ -1,5 +1,12 @@
 # Carte de reprise — jc3
 
+> **TOUTE AFFIRMATION D'INTEGRATION DE CETTE CARTE EST DATEE DU 28/08 ET NON REVERIFIEE DEPUIS.**
+> Les cartes ne vieillissent pas toutes de la meme facon : certaines disent « integre dans main »,
+> d'autres « non attesté par moi ». La seconde posture est celle qui a servi le 28/08, parce qu'elle
+> fait porter la charge de preuve. Avant de t'appuyer sur une integration annoncee ici :
+> `git fetch` puis `git merge-base --is-ancestor <sha> origin/main`. Ne deduis pas, mesure.
+
+
 > **PREMIER GESTE OBLIGATOIRE AVANT TOUTE LECTURE DE CETTE CARTE**
 > AVANT d executer quoi que ce soit : LIRE `/home/moi/.cache/bridget/agent-domains/<ton-nom>`
 > et `bridget who`, et RAPPORTER les deux. `bridget domain` REECRIT ce fichier a chaque appel,
