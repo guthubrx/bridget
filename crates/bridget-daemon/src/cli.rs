@@ -295,7 +295,7 @@ fn print_usage() {
            mcp                    Lance le serveur MCP sur stdio\n  \
            ui --maicie-config <P> Lance le relais UI (port+jeton stables)\n  \
            attach <N>             Suit un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
-           spawn <TYPE>           Lance un équipier géré [--name N] [--persistent]\n  \
+           spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--name N]\n  \
            stop <N>               Arrête un équipier géré\n  \
            send --to <N> [--] <MSG> Envoie un message\n  \
            reply [--] <MSG>       Répond au dernier expéditeur\n  \
@@ -357,6 +357,25 @@ fn cmd_attach(args: &[String]) {
 
 const DEFAULT_SPAWN_TIMEOUT_SECS: i64 = 10;
 
+/// Refus opposé à un spawn qui n'a pas décidé du sort de son équipier.
+///
+/// Un défaut silencieux se subit ; un choix obligatoire se décide. L'ancien
+/// avertissement était affiché puis ignoré cinq fois de suite le 28/08, et
+/// l'omission est irrattrapable : le `cwd` d'un équipier non persistant
+/// n'existe plus nulle part une fois qu'il est connecté, donc rien ne permet
+/// de le promouvoir après coup. Le seul moment où ce choix peut encore être
+/// fait est celui-ci.
+const SPAWN_SURVIE_NON_CHOISIE: &str = "choix de survie obligatoire : ajouter --persistent \
+     (l'équipier est repris au redémarrage du service) ou --no-persistent (il est retiré de \
+     la flotte au redémarrage et son contexte est perdu). Ce choix ne peut pas être omis : \
+     il est irrattrapable une fois l'équipier lancé";
+
+/// Les deux drapeaux ensemble ne sont pas un choix : c'est une intention
+/// contradictoire, et la trancher par « le dernier gagne » rétablirait le
+/// défaut silencieux que la garde supprime.
+const SPAWN_SURVIE_CONTRADICTOIRE: &str =
+    "--persistent et --no-persistent sont contradictoires : n'en garder qu'un";
+
 #[derive(Debug)]
 struct ParsedSpawnArgs {
     agent_type: String,
@@ -372,8 +391,8 @@ struct ParsedSpawnArgs {
 fn cmd_spawn(args: &[String]) {
     let parsed = parse_spawn_args(args).unwrap_or_else(|error| {
         eprintln!(
-            "usage: bridget spawn <type> [--name N] [--cwd CHEMIN] [--persistent] \
-             [--timeout S] [--command-id ID]"
+            "usage: bridget spawn <type> (--persistent | --no-persistent) [--name N] \
+             [--cwd CHEMIN] [--timeout S] [--command-id ID]"
         );
         eprintln!("erreur: {error}");
         std::process::exit(2);
@@ -493,7 +512,18 @@ fn parse_spawn_args(args: &[String]) -> Result<ParsedSpawnArgs, String> {
     while index < args.len() {
         match args[index].as_str() {
             "--persistent" => {
+                if parsed.persistent_was_set && !parsed.persistent {
+                    return Err(SPAWN_SURVIE_CONTRADICTOIRE.to_string());
+                }
                 parsed.persistent = true;
+                parsed.persistent_was_set = true;
+                index += 1;
+            }
+            "--no-persistent" => {
+                if parsed.persistent_was_set && parsed.persistent {
+                    return Err(SPAWN_SURVIE_CONTRADICTOIRE.to_string());
+                }
+                parsed.persistent = false;
                 parsed.persistent_was_set = true;
                 index += 1;
             }
@@ -567,6 +597,13 @@ fn resolve_spawn_order(
             .map_err(|error| format!("ordre mémorisé invalide {}: {error}", path.display()))?;
         validate_retry_options(parsed, &stored)?;
         return Ok(stored);
+    }
+    // Ordre NEUF seulement : au-dessus, un `--command-id` déjà mémorisé rend
+    // l'enveloppe figée telle quelle, et le choix de survie y est déjà inscrit.
+    // Le redemander au rejeu bloquerait un rappel légitime et ouvrirait une
+    // divergence entre ce qui est retapé et ce qui est mémorisé.
+    if !parsed.persistent_was_set {
+        return Err(SPAWN_SURVIE_NON_CHOISIE.to_string());
     }
     let cwd = parsed.cwd.as_deref().unwrap_or(current_dir);
     if !cwd.is_absolute() {
@@ -661,6 +698,7 @@ mod spawn_executor_tests {
             cwd_absent.to_string_lossy().into_owned(),
             "--command-id".to_string(),
             "cwd-executor-absent".to_string(),
+            "--no-persistent".to_string(),
         ];
 
         // Le mutant qui réintroduit `cwd.is_dir()` tombe ICI, avant toute
@@ -720,6 +758,7 @@ mod spawn_executor_tests {
             cwd_valide.to_string_lossy().into_owned(),
             "--command-id".to_string(),
             "cwd-executor-valide".to_string(),
+            "--no-persistent".to_string(),
         ];
         let ordre_valide = resolve_spawn_order(
             &parse_spawn_args(&args_valides).expect("arguments valides"),
@@ -774,7 +813,11 @@ fn validate_retry_options(
             .cwd
             .as_ref()
             .is_some_and(|value| value.to_string_lossy() != cwd.as_str())
-        || (parsed.persistent_was_set && !persistent)
+        // Le choix de survie étant désormais obligatoire, `persistent_was_set`
+        // est toujours vrai : la comparaison doit porter sur la valeur choisie
+        // dans les DEUX sens. Ne tester que `!persistent` laisserait rejouer
+        // un ordre persistant sous --no-persistent sans détecter la divergence.
+        || (parsed.persistent_was_set && parsed.persistent != *persistent)
         || (parsed.timeout_was_set
             && stored_spawn_timeout(stored).is_some_and(|value| value != parsed.timeout_secs))
     {
@@ -3114,7 +3157,7 @@ fn cmd_agents(args: &[String]) {
         println!("Agents connectes :");
         for agent in &status.agents {
             println!(
-                "  {} ({}) [{}] — {} / {} via {} (canal {}) — {} / {} [{}]",
+                "  {} ({}) [{}] — {} / {} via {} (canal {}) — {} / {} [{}] — persiste {}",
                 agent.name,
                 agent.agent_type,
                 cell(agent.domain.as_deref()),
@@ -3124,7 +3167,8 @@ fn cmd_agents(args: &[String]) {
                 cell(agent.channel.as_deref()),
                 format_model(agent),
                 cell(agent.effort.as_deref()),
-                agent.state
+                agent.state,
+                format_persistent(agent)
             );
         }
     }
@@ -3200,6 +3244,7 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
     });
     let rate_limit_w = column("LIMITE", &|a: &AgentInfo| format_rate_limit(a));
     let disk_w = column("DISQUE", &|a: &AgentInfo| format_disk_space(a));
+    let persistent_w = column("PERSIST", &|a: &AgentInfo| format_persistent(a).to_string());
 
     let mut output = String::new();
     match filter {
@@ -3208,14 +3253,14 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
     }
     writeln!(
         output,
-        "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {:<disk_w$}  ÉTAT",
-        "NOM", "TYPE", "HÔTE", "OS", "TRANSPORT", "CANAL", "MODE", "LOCALISATION", "DOMAINE", "MODÈLE", "EFFORT", "LIMITE", "DISQUE"
+        "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {:<disk_w$}  {:<persistent_w$}  ÉTAT",
+        "NOM", "TYPE", "HÔTE", "OS", "TRANSPORT", "CANAL", "MODE", "LOCALISATION", "DOMAINE", "MODÈLE", "EFFORT", "LIMITE", "DISQUE", "PERSIST"
     )
     .unwrap();
     for agent in agents {
         writeln!(
             output,
-            "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {:<disk_w$}  {}",
+            "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {:<disk_w$}  {:<persistent_w$}  {}",
             agent.name,
             agent.agent_type,
             agent.host,
@@ -3229,6 +3274,7 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
             cell(agent.effort.as_deref()),
             format_rate_limit(agent),
             format_disk_space(agent),
+            format_persistent(agent),
             agent.state
         )
         .unwrap();
@@ -3241,6 +3287,20 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
 /// colonnes.
 fn cell(value: Option<&str>) -> &str {
     value.unwrap_or("—")
+}
+
+/// Survie au redémarrage du service, telle qu'attestée par la flotte.
+///
+/// `—` n'est pas un « non » : il dit qu'aucune entrée de flotte ne couvre cet
+/// agent, donc que rien ne le drainera au redémarrage. Confondre les deux
+/// ferait croire à une disparition programmée et pousserait à relancer un
+/// agent sain, c'est-à-dire à détruire son contexte.
+fn format_persistent(agent: &AgentInfo) -> &'static str {
+    match agent.persistent {
+        Some(true) => "oui",
+        Some(false) => "non",
+        None => "—",
+    }
 }
 
 /// Marqueur d'écart : le modèle servi précède l'épinglé. Sans signal de flux,
@@ -4210,6 +4270,7 @@ mod hook_tests {
             "cursor".to_string(),
             "--name".to_string(),
             "cursor3".to_string(),
+            "--no-persistent".to_string(),
         ])
         .unwrap();
         assert!(!parsed.persistent);
@@ -4218,6 +4279,126 @@ mod hook_tests {
         assert!(warning.contains("cursor3"));
         assert!(warning.contains("ne survivra pas au redémarrage"));
         assert!(warning.contains("sans --persistent"));
+    }
+
+    /// ORACLE — un spawn neuf REFUSE de partir tant que le sort de l'équipier
+    /// n'est pas décidé, et le refus nomme les deux options.
+    ///
+    /// L'avertissement précédent était affiché puis ignoré cinq fois de suite
+    /// le 28/08 : un avertissement qu'on peut ignorer n'est pas une garde.
+    /// L'omission est irrattrapable, le `cwd` d'un équipier non persistant
+    /// n'existant plus nulle part une fois connecté.
+    #[test]
+    fn spawn_neuf_refuse_de_partir_sans_choix_de_survie() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-garde-survie-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("work");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let neuf = |options: &[&str]| {
+            let mut args = vec!["codex".to_string()];
+            args.extend(options.iter().map(|option| option.to_string()));
+            resolve_spawn_order(
+                &parse_spawn_args(&args).expect("arguments analysables"),
+                100,
+                &cwd,
+                &root,
+            )
+        };
+
+        let refus = neuf(&["--name", "sans-choix"]).expect_err("un spawn muet doit être refusé");
+        assert!(
+            refus.contains("--persistent") && refus.contains("--no-persistent"),
+            "le refus doit nommer les deux options : {refus}"
+        );
+        assert!(
+            refus.contains("irrattrapable"),
+            "le refus doit dire pourquoi le choix ne peut pas être différé : {refus}"
+        );
+
+        match neuf(&["--name", "durable", "--persistent"]).expect("choix explicite accepté") {
+            WrapperToDaemon::SpawnOrder { persistent, .. } => assert!(persistent),
+            other => panic!("ordre inattendu: {other:?}"),
+        }
+        match neuf(&["--name", "jetable", "--no-persistent"]).expect("choix explicite accepté") {
+            WrapperToDaemon::SpawnOrder { persistent, .. } => assert!(!persistent),
+            other => panic!("ordre inattendu: {other:?}"),
+        }
+
+        // Deux drapeaux opposés ne valent pas décision : les départager par
+        // « le dernier gagne » restaurerait le défaut silencieux supprimé.
+        let contradiction = parse_spawn_args(&[
+            "codex".to_string(),
+            "--persistent".to_string(),
+            "--no-persistent".to_string(),
+        ])
+        .expect_err("intention contradictoire refusée");
+        assert!(contradiction.contains("contradictoires"), "{contradiction}");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// ORACLE — le rejeu d'un `--command-id` mémorisé reste possible SANS
+    /// redéclarer le choix : l'enveloppe figée le porte déjà. Une garde qui
+    /// bloquerait ce rappel bloquerait un lancement légitime.
+    #[test]
+    fn rejeu_d_un_ordre_memorise_n_exige_pas_de_redeclarer_la_survie() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-garde-survie-rejeu-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("work");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let premier = resolve_spawn_order(
+            &parse_spawn_args(&[
+                "codex".to_string(),
+                "--name".to_string(),
+                "rejoue".to_string(),
+                "--persistent".to_string(),
+                "--command-id".to_string(),
+                "garde-survie-rejeu".to_string(),
+            ])
+            .unwrap(),
+            100,
+            &cwd,
+            &root,
+        )
+        .expect("premier envoi accepté");
+
+        let rejeu = resolve_spawn_order(
+            &parse_spawn_args(&[
+                "codex".to_string(),
+                "--command-id".to_string(),
+                "garde-survie-rejeu".to_string(),
+            ])
+            .unwrap(),
+            999,
+            &cwd,
+            &root,
+        )
+        .expect("le rejeu ne doit pas exiger de redéclarer le choix");
+        assert_eq!(encode(&premier).unwrap(), encode(&rejeu).unwrap());
+
+        // En revanche, rejouer en RENVERSANT le choix reste une divergence.
+        let divergent = resolve_spawn_order(
+            &parse_spawn_args(&[
+                "codex".to_string(),
+                "--no-persistent".to_string(),
+                "--command-id".to_string(),
+                "garde-survie-rejeu".to_string(),
+            ])
+            .unwrap(),
+            999,
+            &cwd,
+            &root,
+        )
+        .expect_err("un choix renversé au rejeu doit être refusé");
+        assert!(divergent.contains("options divergentes"), "{divergent}");
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -4531,6 +4712,7 @@ mod hook_tests {
                 .collect(),
             model_mismatch: None,
             disk_space: None,
+            persistent: None,
         };
         let rendered = format_rate_limit(&agent);
         assert!(rendered.contains("5h 19% rst "), "{rendered}");
@@ -5284,6 +5466,126 @@ mod idempotency_projection_tests {
         }
     }
 
+    /// ORACLE — l'annuaire distingue trois réponses à « survit au redémarrage ? » :
+    /// oui, non, et « nul ne l'atteste ».
+    ///
+    /// Le troisième cas n'est pas un non. Le 28/08, lire un `0` là où la
+    /// question ne se posait pas a failli faire relancer cinq agents sains,
+    /// donc détruire leur contexte. La ligne rendue doit porter la réponse,
+    /// pas seulement l'en-tête.
+    #[test]
+    fn who_distingue_persistant_ephemere_et_non_atteste() {
+        let agent = |name: &str, persistent: Option<bool>| AgentInfo {
+            name: name.to_string(),
+            agent_type: "fixture".to_string(),
+            connection_id: format!("conn-{name}"),
+            host: "local".to_string(),
+            transport: "claude_stream_json".to_string(),
+            channel: Some("ssh-unix".to_string()),
+            mode: Some(PresenceMode::Cli),
+            location: None,
+            os: "Linux".to_string(),
+            state: "connected".to_string(),
+            last_seen_secs: 0,
+            reconnect_count: 0,
+            domain: Some("bridget".to_string()),
+            model: None,
+            effort: None,
+            rate_limits: vec![],
+            model_mismatch: None,
+            disk_space: None,
+            persistent,
+        };
+        let rendered = render_who(
+            &[
+                agent("survivant", Some(true)),
+                agent("ephemere", Some(false)),
+                agent("hors-flotte", None),
+            ],
+            None,
+        );
+
+        assert!(rendered.contains("PERSIST"), "colonne absente de l'en-tête");
+        let ligne = |nom: &str| {
+            rendered
+                .lines()
+                .find(|line| line.contains(nom))
+                .unwrap_or_else(|| panic!("ligne {nom} absente"))
+                .to_string()
+        };
+        assert!(
+            ligne("survivant").contains("  oui  "),
+            "un agent persistant doit se lire « oui » : {}",
+            ligne("survivant")
+        );
+        assert!(
+            ligne("ephemere").contains("  non  "),
+            "un agent qui sera drainé doit se lire « non » : {}",
+            ligne("ephemere")
+        );
+        assert!(
+            !ligne("hors-flotte").contains("non"),
+            "une persistance non attestée ne doit jamais se lire « non » : {}",
+            ligne("hors-flotte")
+        );
+        assert!(
+            ligne("hors-flotte").contains('—'),
+            "une persistance non attestée doit se lire « — » : {}",
+            ligne("hors-flotte")
+        );
+    }
+
+    /// ORACLE — la sortie machine publie toujours la clé, `null` compris.
+    /// Une ronde doit pouvoir distinguer « indéterminable » d'un daemon trop
+    /// ancien pour connaître le champ ; un champ escamoté rendrait les deux
+    /// cas identiques et ramènerait le détour par SQL.
+    #[test]
+    fn json_publie_la_persistance_meme_indeterminee() {
+        let agent = |persistent: Option<bool>| AgentInfo {
+            name: "jc1-flux".to_string(),
+            agent_type: "claude".to_string(),
+            connection_id: "conn-182".to_string(),
+            host: "cartae".to_string(),
+            transport: "claude_stream_json".to_string(),
+            channel: Some("ssh-unix".to_string()),
+            mode: Some(PresenceMode::Cli),
+            location: None,
+            os: "Linux".to_string(),
+            state: "connected".to_string(),
+            last_seen_secs: 0,
+            reconnect_count: 1,
+            domain: Some("bridget".to_string()),
+            model: None,
+            effort: None,
+            rate_limits: vec![],
+            model_mismatch: None,
+            disk_space: None,
+            persistent,
+        };
+
+        let atteste = serde_json::to_value(agent(Some(true))).unwrap();
+        assert_eq!(
+            atteste.get("persistent"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        let inconnu = serde_json::to_value(agent(None)).unwrap();
+        assert_eq!(
+            inconnu.get("persistent"),
+            Some(&serde_json::Value::Null),
+            "la clé doit rester présente et valoir null quand nul ne l'atteste"
+        );
+
+        // Compatibilité descendante : un daemon antérieur n'émet pas la clé,
+        // sa présence relue ne doit pas inventer de persistance.
+        let ancien: AgentInfo = serde_json::from_str(
+            r#"{"name":"vieux","agent_type":"codex","connection_id":"c","host":"h",
+                "transport":"tmux","os":"Linux","state":"connected",
+                "last_seen_secs":0,"reconnect_count":0}"#,
+        )
+        .unwrap();
+        assert_eq!(ancien.persistent, None);
+    }
+
     #[test]
     fn who_affiche_mode_et_localisation_sans_dependre_d_un_tty() {
         let agent = |name: &str, mode: Option<PresenceMode>, location: Option<&str>| AgentInfo {
@@ -5305,6 +5607,7 @@ mod idempotency_projection_tests {
             rate_limits: vec![],
             model_mismatch: None,
             disk_space: None,
+            persistent: None,
         };
         let mut acp = agent("acp-gere", Some(PresenceMode::Acp), None);
         acp.disk_space = Some(bridget_transport::protocol::DiskSpaceFact {
@@ -5369,6 +5672,7 @@ mod idempotency_projection_tests {
             }],
             model_mismatch: None,
             disk_space: None,
+            persistent: None,
         };
         let rendered = format_rate_limit(&agent);
         assert!(rendered.starts_with("5h 19% rst "), "{rendered}");
@@ -5432,6 +5736,7 @@ mod idempotency_projection_tests {
             rate_limits: vec![],
             model_mismatch: None,
             disk_space: None,
+            persistent: None,
         };
         assert_eq!(format_model(&agent), "claude-opus-5");
         agent.model_mismatch = Some(bridget_transport::protocol::ModelMismatchFact {

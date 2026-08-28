@@ -177,6 +177,28 @@ impl NamedRosterStore {
             .collect()
     }
 
+    /// Persistance attestée, par nom, en une seule lecture.
+    ///
+    /// Le roster est indexé par nom : chaque génération connectée écrase la
+    /// précédente via `remember`. La dernière valeur est donc structurellement
+    /// la courante — il n'y a pas de ligne périmée à trier, contrairement à
+    /// l'historique `spawn_commands` où plusieurs générations d'un même nom
+    /// coexistent. C'est aussi la source exacte que lit `drain_non_persistent` :
+    /// ce qui est publié ici est ce qui décide du drain, sans second oracle.
+    ///
+    /// Complexité : O(n log n) pour n noms au roster, une seule E/S.
+    pub fn persistence_by_name(&self) -> BTreeMap<String, bool> {
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        self.load_unlocked()
+            .named
+            .into_iter()
+            .map(|(name, entry)| (name, entry.persistent))
+            .collect()
+    }
+
     fn load_unlocked(&self) -> NamedRosterFile {
         match fs::read(&self.path) {
             Ok(bytes) => match serde_json::from_slice(&bytes) {
@@ -339,6 +361,65 @@ mod tests {
         assert_eq!(drained[0].0, "ephemere");
         let again = store.drain_non_persistent();
         assert!(again.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// ORACLE — la persistance publiée est celle de la DERNIÈRE génération
+    /// connectée, jamais une antérieure.
+    ///
+    /// Le 28/08, la même question posée à l'historique `spawn_commands` groupé
+    /// sans tri a rendu des lignes périmées : cinq agents vivants annoncés
+    /// `persistent=0` alors qu'ils venaient d'être recréés avec `--persistent`.
+    /// Le roster ne peut pas produire cette réponse : une seule entrée par nom,
+    /// écrasée à chaque génération.
+    #[test]
+    fn persistance_publiee_est_celle_de_la_derniere_generation() {
+        let root = temp_dir("roster-derniere-gen");
+        fs::create_dir_all(&root).unwrap();
+        let store = NamedRosterStore::at_path(root.join(ROSTER_FILE_NAME));
+        // Génération n : lancé sans --persistent, l'erreur du 28/08.
+        store.remember(
+            "jc1-flux".into(),
+            NamedRosterEntry {
+                agent_type: "claude".into(),
+                persistent: false,
+                domain: Some("bridget".into()),
+            },
+        );
+        // Génération n+1 : recréé avec --persistent, même nom.
+        store.remember(
+            "jc1-flux".into(),
+            NamedRosterEntry {
+                agent_type: "claude".into(),
+                persistent: true,
+                domain: Some("bridget".into()),
+            },
+        );
+        store.remember(
+            "ephemere".into(),
+            NamedRosterEntry {
+                agent_type: "claude".into(),
+                persistent: false,
+                domain: Some("bridget".into()),
+            },
+        );
+
+        let persistence = store.persistence_by_name();
+        assert_eq!(
+            persistence.get("jc1-flux"),
+            Some(&true),
+            "la génération recréée avec --persistent doit primer sur la précédente"
+        );
+        assert_eq!(
+            persistence.get("ephemere"),
+            Some(&false),
+            "un agent réellement non persistant doit rester lisible comme tel"
+        );
+        assert_eq!(
+            persistence.get("agent-hors-flotte"),
+            None,
+            "un agent absent du roster n'a pas de persistance inventée"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

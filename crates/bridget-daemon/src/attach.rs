@@ -4638,6 +4638,7 @@ mod tests {
                 rate_limits: Default::default(),
                 model_mismatch: None,
                 disk_space: None,
+                persistent: None,
             };
         let attachable = attachable_agent_names(vec![
             agent("connected", "acp", Some(PresenceMode::Acp), "connected"),

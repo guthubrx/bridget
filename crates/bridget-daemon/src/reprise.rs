@@ -1153,6 +1153,7 @@ mod tests {
                     rate_limits: Default::default(),
                     model_mismatch: None,
                     disk_space: None,
+                    persistent: None,
                 }],
                 message_count: Some(3),
                 build_id: Some("abc123".to_string()),
