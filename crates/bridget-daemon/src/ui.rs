@@ -412,6 +412,15 @@ impl UiRelay {
     }
 
     pub fn serve(self) -> Result<(), UiError> {
+        // L'humain doit être joignable dès le démarrage du relais, sans avoir
+        // rien envoyé et sans avoir coché « attendre une réponse ». Sinon il
+        // n'entre à l'annuaire qu'au premier envoi avec réponse attendue, et
+        // toute réponse qui lui est destinée est rejetée « agent introuvable ».
+        // L'échec n'empêche pas de servir : le sens humain -> agent doit tenir
+        // même si l'inscription échoue.
+        if let Err(error) = self.runtime.ensure_human_presence(&self.config.daemon_socket) {
+            eprintln!("relais UI: inscription de l'humain à l'annuaire impossible: {error}");
+        }
         for stream in self.listener.incoming() {
             match stream {
                 Ok(stream) => {
@@ -721,10 +730,15 @@ fn post_ui_message(
     let agents = read_agent_list(&config.daemon_socket).map_err(|error| (503, "daemon_unavailable", error.to_string()))?;
     validate_ui_recipient(&agents, &request.to)
         .map_err(|(status, code)| (status, code, "destinataire indisponible".to_string()))?;
-    if request.reply {
-        runtime
-            .ensure_human_presence(&config.daemon_socket)
-            .map_err(|error| (503, "human_sender_unregistered", error.to_string()))?;
+    // Ré-assurée à chaque envoi, que la réponse soit attendue ou non : c'est
+    // ce qui rouvre l'inscription après un redémarrage du daemon. Quand aucune
+    // réponse n'est attendue, un échec ne doit pas faire perdre le message —
+    // le sens humain -> agent prime sur l'inscription.
+    if let Err(error) = runtime.ensure_human_presence(&config.daemon_socket) {
+        if request.reply {
+            return Err((503, "human_sender_unregistered", error.to_string()));
+        }
+        eprintln!("relais UI: inscription de l'humain à l'annuaire impossible: {error}");
     }
     send_ui_message(&config.daemon_socket, request)
         .map_err(|error| (503, "send_failed", error.to_string()))
@@ -2039,6 +2053,60 @@ mod tests {
         let error = post_ui_message(&config, &runtime, &body).unwrap_err();
         assert_eq!(error.1, "human_sender_unregistered");
         assert!(error.2.contains("présence UI humaine refusée"));
+        server.join().unwrap();
+        let _ = std::fs::remove_file(socket_path);
+    }
+
+    #[test]
+    fn presence_humaine_est_tentee_meme_sans_reponse_attendue() {
+        // Le défaut mesuré le 28/08 : l'humain n'entrait à l'annuaire que
+        // lorsqu'il cochait « attendre une réponse ». Décoché — son réglage
+        // courant — aucune inscription, donc tout retour vers lui était rejeté
+        // « agent introuvable: humain ».
+        // Ce témoin exerce le chemin réel avec reply=false et exige que le
+        // Register parte quand même. Remettre la condition sur reply fait
+        // recevoir au serveur autre chose qu'un Register : l'assertion du
+        // thread serveur tombe et le témoin meurt.
+        let socket_path = std::env::temp_dir().join(format!("bridget-ui-presence-sans-reply-{}.sock", uuid::Uuid::new_v4().simple()));
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(), WrapperToDaemon::ListAgents));
+            writeln!(writer, "{}", encode(&DaemonToWrapper::AgentList { agents: vec![agent_info("rc1", "idle")] }).unwrap()).unwrap();
+            writer.flush().unwrap();
+
+            // Connexion d'inscription : c'est elle qui n'existait pas.
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            let inscription = decode::<WrapperToDaemon>(line.trim()).unwrap();
+            assert!(
+                matches!(inscription, WrapperToDaemon::Register { .. }),
+                "sans réponse attendue, l'inscription de l'humain doit tout de même être tentée ; reçu {inscription:?}"
+            );
+            writeln!(writer, "{}", encode(&DaemonToWrapper::AttachRejected { subscription_id: None, reason: bridget_transport::protocol::AttachRefusal::JournalUnavailable, mode: None, location: None }).unwrap()).unwrap();
+            writer.flush().unwrap();
+
+            // L'envoi doit être tenté malgré le refus d'inscription.
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(), WrapperToDaemon::RoleHandshake { .. }));
+        });
+        let config = UiRelayConfig { daemon_socket: socket_path.clone(), maicie_config: PathBuf::new(), bind: "127.0.0.1:0".parse().unwrap(), token: "test".to_string() };
+        let runtime = UiRelayRuntime::new(None);
+        let body = serde_json::to_vec(&serde_json::json!({"version": UI_VERSION, "to": "rc1", "body": "ping", "reply": false})).unwrap();
+        let error = post_ui_message(&config, &runtime, &body).unwrap_err();
+        // Sans réponse attendue, un refus d'inscription ne doit pas faire
+        // perdre le message : la cause remontée est celle de l'envoi.
+        assert_eq!(error.1, "send_failed");
         server.join().unwrap();
         let _ = std::fs::remove_file(socket_path);
     }
