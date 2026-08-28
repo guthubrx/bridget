@@ -97,7 +97,10 @@ fn start_local_daemon_identity(socket: &Path) -> thread::JoinHandle<()> {
     let socket = socket.to_owned();
     let _ = fs::remove_file(&socket);
     let local_host = bridget_core::local_host();
-    assert!(bridget_core::host_is_attested(&local_host));
+    assert!(
+        bridget_core::host_is_attested(&local_host),
+        "la fixture exige une identité locale attestée, host={local_host:?}"
+    );
     let (ready_tx, ready_rx) = mpsc::channel();
     let server = thread::spawn(move || {
         let listener = UnixListener::bind(&socket).unwrap();
