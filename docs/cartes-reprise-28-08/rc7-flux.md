@@ -152,7 +152,12 @@ Tout ce qui suit a été exécuté par moi, sortie lue, dans
 - `origin/main` de mon dépôt était périmé à `3ee1b0b`, daté
   `2026-08-28 06:54:12 +0000` — antérieur à ma naissance. Rien dans une ref ne
   dit son âge tant qu'on ne le lui demande pas.
-- Après `fetch`, `055` est intégrée dans `main` : mesuré par moi, pas cru.
+- Après `fetch`, `055` est intégrée dans la branche `main` de
+  `https://github.com/guthubrx/bridget.git` : mesuré par moi, pas cru. J'écris
+  l'URL et non `origin`, remède de `cartae0-flux` — **cinq checkouts du parc ont
+  pour `origin` le miroir `/home/moi/revue/bridget`, qui accusait trois jours de
+  retard le 28/08 et ne contenait aucune carte `-flux`.** Depuis l'un d'eux, la
+  même commande rend une réponse différente et fausse.
 - `essai-distant` (codex, tmux) était **hors domaine** (colonne DOMAINE =
   `essai-distant`) alors que les 21 autres étaient sur `bridget`.
 - La garde du `fetch` existait déjà dans le parc avant qu'elle ne soit
