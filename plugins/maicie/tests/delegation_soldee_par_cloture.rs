@@ -214,7 +214,9 @@ fn migration_v16_solde_les_orphelines_sur_objectifs_clos() {
     drop(store);
 
     // Consentement explicite : open() refuse de migrer 15→16.
-    let store = MaicieStore::open_and_migrate(&fixture.database).unwrap();
+    let store =
+        crate::historical_guichet_receptions::open_after_published_migration(&fixture.database)
+            .unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     let snapshot = store
         .objective_snapshots(Some(objective_id))

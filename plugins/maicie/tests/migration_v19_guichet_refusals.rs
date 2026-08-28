@@ -119,7 +119,8 @@ fn v19_puis_v20_succedent_a_la_v18_reelle_et_conservent_les_refus_octet_par_octe
     let database = root.join("maicie.sqlite3");
     downgrade_to_v18(&database);
 
-    let store = MaicieStore::open_and_migrate(&database).unwrap();
+    let store =
+        crate::historical_guichet_receptions::open_after_published_migration(&database).unwrap();
     assert_eq!(SCHEMA_VERSION, EXPECTED_SCHEMA_VERSION);
     assert_eq!(store.schema_version().unwrap(), EXPECTED_SCHEMA_VERSION);
     drop(store);
@@ -185,10 +186,11 @@ fn v19_refuse_une_estampille_v18_sans_son_ddl_et_ne_mute_rien() {
     drop(connection);
     let before = schema_snapshot(&database);
 
-    let error = match MaicieStore::open_and_migrate(&database) {
-        Ok(_) => panic!("le numéro v18 seul ne doit pas autoriser v19"),
-        Err(error) => error,
-    };
+    let error =
+        match crate::historical_guichet_receptions::open_after_published_migration(&database) {
+            Ok(_) => panic!("le numéro v18 seul ne doit pas autoriser v19"),
+            Err(error) => error,
+        };
     assert!(matches!(
         error,
         StoreError::Corrupt("forme v18 du greffe local incompatible avec v19")
@@ -213,10 +215,11 @@ fn v19_refuse_son_propre_numero_si_le_check_v18_subsiste() {
     drop(connection);
     let before = schema_snapshot(&database);
 
-    let error = match MaicieStore::open_and_migrate(&database) {
-        Ok(_) => panic!("le numéro v19 seul ne doit pas masquer le CHECK v18"),
-        Err(error) => error,
-    };
+    let error =
+        match crate::historical_guichet_receptions::open_after_published_migration(&database) {
+            Ok(_) => panic!("le numéro v19 seul ne doit pas masquer le CHECK v18"),
+            Err(error) => error,
+        };
     assert!(matches!(
         error,
         StoreError::Corrupt("forme v19 des refus fédérés incomplète")
@@ -237,7 +240,8 @@ fn parcours_prive_v14_v17_v18_v19_v20_ne_mute_jamais_sa_source() {
     let copy_before = hash_file(&copy);
     assert_eq!(source_before, copy_before);
 
-    let store = MaicieStore::open_and_migrate(&copy).unwrap();
+    let store =
+        crate::historical_guichet_receptions::open_after_published_migration(&copy).unwrap();
     assert_eq!(store.schema_version().unwrap(), EXPECTED_SCHEMA_VERSION);
     drop(store);
 
