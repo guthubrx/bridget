@@ -156,6 +156,19 @@ Tout ce bloc vient du référent `bridget`. **Je ne l'ai pas mesuré.** Plusieur
 
 Mes envois : `af1b320a80774`, `4ce9161b03d64`, `1d1f9ff8a2734`, `ee90412814e54`, `731070f2eead4`, `e3e85bdafbc44`.
 
+### SECOND MANDAT — `e0604f0d`, observabilité de la pente disque. CLOS le 28/08, décision `620884ad`.
+
+**Livré et PUBLIÉ** : branche `feat/observabilite-pente-disque`, tête `009e5baf81b799e3b83143c39709b912f60490b2`, vérifiée par `ls-remote` sur le serveur — pas seulement commitée, contrairement aux artefacts 034. Trois commits, module `crates/bridget-daemon/src/disk_trend.rs`, 13 témoins verts.
+
+**Ce qu'un successeur doit en retenir, dans l'ordre d'utilité :**
+
+1. **C'EST LA FORME QUI TROMPE, PAS LA DURÉE.** Ma première version refusait les fenêtres trop *courtes* — et rendait pourtant « 4.26 Gio/h, seize heures avant saturation » sur une série réelle stable depuis 104 minutes, parce que sa fenêtre de 2 h 18 passait le contrôle. Une garde sur la durée ne protège pas d'un escalier. Le module distingue désormais `Plateau`, `Stepwise` et `Slope` : quand la moitié du temps est plate, aucune pente n'est publiée.
+2. **Le geste qui a trouvé le défaut n'était pas demandé** : passer la donnée réelle d'autrui dans son propre instrument déjà livré. C'est la seule façon dont ce défaut pouvait apparaître.
+3. **UNE DÉLÉGATION EST TYPÉE EN REVUE PAR LA SEULE PRÉSENCE DE `target_ref` ET `expected_head`** — contrat `specs/021-verdict-sha-mesure/contracts/verdict-revue.md`, ligne 5. Poser une cible de revue sur un mandat de *construction* le convertit **silencieusement** en mandat de revue, et le guichet réclamera un verdict que tu n'as jamais eu à produire. Mon dépôt a été refusé pour cela : `target_head_moved_and_measured_head_mismatch`.
+4. **Le dépôt typé vit côté `bridget`, pas côté `maicie`** : `bridget guichet deposer <delivery-report|mission-status|deadline-question|delegate|registre-add|objective-close>`. Deux agents avaient conclu à son inexistence en balayant exhaustivement les actions `maicie` — ils cherchaient dans le mauvais outil. Je ne l'ai pas trouvé par flair mais en partant du « en attente de dépôt typé » de ma propre carte, puis en cherchant qui consommait `--review-ref`. **Le chemin est reproductible, le flair ne l'est pas.**
+5. **Sur un dépôt intégré en continu, figer une cible de revue puis exiger qu'elle soit encore la tête revient à demander que personne n'intègre pendant qu'un mandat court.** 24 commits sont arrivés sur `main` pendant ma construction. Question de conception, portée à l'humain, non tranchée.
+6. **Citer la provenance d'une mesure est une condition de reproductibilité, pas une politesse.** Le témoin du plateau porte le nom de `essai-claude-distant-flux` dans le code même — sept relevés sans provenance ne sont pas vérifiables.
+
 **UN MESSAGE BRIDGET NE FERME PAS UNE DÉLÉGATION MAICIE — épisode clos, règle conservée.**
 *Déroulé, gardé comme exemple :* carte rendue 16:05:56Z, référent prévenu 16:06:42Z **par message Bridget**, deadline contractuelle 16:07:41Z. À 16h09 le greffe portait toujours `objectives.state = en_coordination` et `delegations.state = creee`. Conséquences observées : le mandat m'a été **redélivré à l'identique**, et je suis resté dans `occupied`, donc jamais LIBRE. J'étais devenu en dix minutes le cas concret du corollaire que j'avais écrit au référent une heure plus tôt — « un agent inactif sous mandat non clos reste OCCUPÉ ».
 *Dénouement, mesuré à 16h40 :* objectif `2bd689ad` → **`clos`**, délégation `61a450dc` → **`soldee_par_cloture`**. Le référent a fermé les neuf mandats de carte vers 16h34 : `clos` 540→549, `en_coordination` 93→84.
