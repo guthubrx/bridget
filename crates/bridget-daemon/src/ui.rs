@@ -740,6 +740,18 @@ fn serve_connection(
                 .ok_or_else(|| UiError::Protocol("paramètre agent absent".to_string()))?;
             validate_agent(agent)?;
             let (window, page) = resolve_ui_journal_window(agent, &request.query)?;
+            // Un participant sans journal de tour — l'humain, qui écrit depuis
+            // l'interface et n'est piloté par aucun wrapper — n'a pas de
+            // répertoire sous ~/.cache/bridget/sessions/. L'attache échouait
+            // alors APRÈS l'envoi du 200, laissant un corps vide : mesuré le
+            // 28/08, `agent=humain` rendait 0 octet quand `agent=jc2` en
+            // rendait 26170. Un corps vide ne dit pas « pas de journal », il
+            // ressemble à une panne. On sert ici ses messages, par le même
+            // mécanisme que /v1/watch. Le chemin des agents pilotés est
+            // inchangé : ils ont des tours, donc la condition est fausse.
+            if projected_turns(&agent_journal_dir(agent)).is_empty() {
+                return stream_sse_thread_only(stream, config, agent);
+            }
             stream_sse_journal(stream, &config.daemon_socket, agent, window, page, None)
         }
         ("GET", "/v1/watch") => {
@@ -1736,6 +1748,27 @@ fn write_relay_state(http: &mut TcpStream, state: &'static str, since: i64) -> R
             since,
         },
     )
+}
+
+/// Sert les messages d'un participant qui n'a pas de journal de tour.
+///
+/// Réutilise `read_snapshot` + `write_snapshot_sse`, exactement ce que fait
+/// `/v1/watch` ; rien n'est inventé ici. La différence avec `stream_sse_journal`
+/// est qu'aucune attache n'est ouverte : il n'y a rien à quoi s'attacher.
+fn stream_sse_thread_only(
+    http: &mut TcpStream,
+    config: &UiRelayConfig,
+    agent: &str,
+) -> Result<(), UiError> {
+    let snapshot = read_snapshot(config, Some(agent))?;
+    write!(
+        http,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
+    )?;
+    http.flush()?;
+    write_snapshot_sse(http, &snapshot)?;
+    let _ = http.shutdown(Shutdown::Both);
+    Ok(())
 }
 
 fn write_snapshot_sse(http: &mut TcpStream, snapshot: &UiSnapshotV1) -> Result<(), UiError> {
