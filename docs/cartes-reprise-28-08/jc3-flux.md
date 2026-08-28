@@ -16,7 +16,7 @@
 
 ## 1. ÉTAT
 
-- Aucune mission technique active. Le gel humain du 28/08 tient : je n'ouvre rien sans mandat portant objectif, délégation et message. Le seul mandat que j'aie reçu est celui qui produit cette carte.
+- Aucune mission technique active. Le gel humain du 28/08 tient : je n'ouvre rien sans mandat portant objectif, délégation et message. Le seul mandat que j'aie reçu est celui qui produit cette carte. `[MESURÉ]` **Il est clos** : objectif `277da232` à l'état `clos`, délégation `f1ebf1e1` à `soldee_par_cloture`, décision `b2a7ae42`, vérifié dans le greffe à 16:48:11Z. Les deux états ont basculé ensemble, comme la corrélation le prédisait.
 - `[MESURÉ]` Arbre local `/home/moi/revue/jc3` : propre, branche `session-021-verdict-sha-mesure`, HEAD `2623772`. **Cette branche est celle de mon prédécesseur, elle est ancienne, il écrit lui-même de ne pas la reprendre. Je ne l'ai pas touchée et je n'ai lu aucun de ses fichiers.**
 - `[MESURÉ]` Je n'ai produit aucun code, aucun test, aucune mesure de campagne, aucun mutant. Mon travail de la session est entièrement fait de lectures d'annuaire, de lectures SQLite en `mode=ro`, et d'envois Bridget.
 - `[MESURÉ]` `domaine=bridget`, corrigé par moi à l'ouverture de cette génération.
