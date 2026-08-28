@@ -225,6 +225,17 @@ Deux points restent ouverts côté référent, sans action de ma part :
 - `/home/moi/bridget-registre/docs/cartes-reprise-28-08/essai-distant-flux.md` — cette carte
 - `/home/moi/.local/bin/maicie` — le binaire Maicie **réel** de cet hôte, contrairement à
   ce qu'affirme la skill
+- `/home/moi/.claude/projects/-home-moi-revue-essai-distant/73dfa5a9-f614-4f7b-b067-edf6a753c1d7.jsonl`
+  — **le fichier qui porte mon contexte**, 789 463 octets et en croissance au 28/08
+  19:25Z. `persistent=1` ne préserve pas un processus : il relance `claude --resume <uuid>`
+  sur ce fichier. Le bien à préserver est donc ce `.jsonl`, sur un disque à 91 %.
+  **Trouver le bon fichier pour un agent donné** : lire l'UUID de `--resume` dans la ligne
+  de commande du processus (`ps -eo pid,lstart,args | grep -- --resume`), puis chercher
+  *ce* fichier — ne jamais partir d'un répertoire de projet et supposer à qui il
+  appartient. Le référent s'est trompé de cible le 28/08 à 19h25 en me prêtant
+  `-home-moi-bridget-referent-bridget/23adb133-….jsonl`, figé à 18:49:03. Le répertoire de
+  projet est dérivé du **CWD** de l'agent, même famille de dérivation par nom de
+  répertoire que le bug de domaine : un agent lancé ailleurs journalise ailleurs.
 - `/home/moi/.config/maicie/config.json` — la configuration Maicie, obligatoire pour
   toute commande via `--config`. **Aucun emplacement implicite : ne jamais le deviner.**
   Communiqué par le référent le 28/08 à 16h30 ; permissions 600, même utilisateur que nous
