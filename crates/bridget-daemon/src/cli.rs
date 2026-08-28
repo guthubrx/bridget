@@ -3198,6 +3198,7 @@ fn cmd_who(args: &[String]) {
 
     print!("{}", render_who(&agents, parsed.domain.as_deref()));
     println!("Daemon build-id: {build_id}");
+    emit_disk_trend();
     emit_stale_daemon_warning(status.build_id.as_deref(), status.daemon_host.as_deref());
     emit_disk_warning();
 }
@@ -3709,6 +3710,40 @@ fn emit_disk_warning() {
     if let Some(warning) = crate::disk_hygiene::disk_warning_for_display(Path::new("/")) {
         eprintln!("{warning}");
     }
+}
+
+/// Relève l'espace libre, l'ajoute à l'historique, et publie la pente en pied
+/// d'annuaire.
+///
+/// La colonne DISQUE de `who` est une photographie : elle dit l'espace libre à
+/// l'instant, jamais la vitesse à laquelle il s'en va. Calculer cette vitesse
+/// demande deux relevés espacés, et aucun observateur ne conserve le précédent.
+/// C'est l'historique qui s'en souvient — chaque `who` alimente la mesure que
+/// le `who` suivant pourra lire.
+///
+/// Sous la fenêtre minimale, on affiche un refus nommé plutôt qu'un nombre :
+/// une dérivée sur 90 secondes mesure une compilation, pas une tendance.
+fn emit_disk_trend() {
+    let Some(free_bytes) = crate::disk_hygiene::free_bytes_for(Path::new("/")) else {
+        return;
+    };
+    let observed_at_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or_default();
+    let path = crate::disk_trend::history_path(&crate::reaper::default_state_dir());
+    let trend = crate::disk_trend::record_and_assess(
+        &path,
+        crate::disk_trend::DiskSample {
+            observed_at_unix,
+            free_bytes,
+        },
+    );
+    println!(
+        "Disque / : {:.1} Gio libres · {}",
+        free_bytes as f64 / 1024_f64.powi(3),
+        crate::disk_trend::format_trend(&trend, free_bytes)
+    );
 }
 
 /// Borne d'affichage par défaut du ledger : le maximum que la projection
