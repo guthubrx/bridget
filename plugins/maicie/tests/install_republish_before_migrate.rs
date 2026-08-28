@@ -5,21 +5,21 @@
 //! pas avoir avancé le greffe. L'installé reste inchangé.
 
 use maicie::install_publish::{
-    INSTALL_BIN_ENV, InstallPublishError, reconcile_failed_migration, republish_exe_and_preflight,
-    republish_exe_before_migrate,
+    reconcile_failed_migration, republish_exe_and_preflight, republish_exe_before_migrate,
+    InstallPublishError, INSTALL_BIN_ENV,
 };
-use maicie::store::{SCHEMA_VERSION, StoreError};
-use serde_json::{Value, json};
+use maicie::store::{StoreError, SCHEMA_VERSION};
+use serde_json::{json, Value};
 use std::ffi::CString;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt, symlink};
+use std::os::unix::fs::{symlink, OpenOptionsExt, PermissionsExt};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -100,19 +100,43 @@ fn start_local_daemon_identity(socket: &Path) -> thread::JoinHandle<()> {
     assert!(bridget_core::host_is_attested(&local_host));
     let (ready_tx, ready_rx) = mpsc::channel();
     let server = thread::spawn(move || {
-        let listener = UnixListener::bind(&socket).unwrap(); ready_tx.send(()).unwrap();
+        let listener = UnixListener::bind(&socket).unwrap();
+        ready_tx.send(()).unwrap();
         let (stream, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(stream.try_clone().unwrap()); let mut writer = BufWriter::new(stream);
-        assert_eq!(read_json_line(&mut reader), json!({"type":"RoleHandshake","role":"client"}));
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
+        assert_eq!(
+            read_json_line(&mut reader),
+            json!({"type":"RoleHandshake","role":"client"})
+        );
         write_json_line(&mut writer, json!({"type":"RoleAccepted","role":"client"}));
         assert_eq!(read_json_line(&mut reader)["type"], "ClientHello");
-        write_json_line(&mut writer, json!({"type":"ClientWelcome","version":1,"horizon_secs":60,"issued_at_tolerance_secs":5,"capabilities":["send_idempotent","lookup"]}));
-        assert_eq!(read_json_line(&mut reader), json!({"type":"DaemonIdentityRequest"}));
-        write_json_line(&mut writer, json!({"type":"DaemonIdentityReport","host":local_host,"db_path":"/var/lib/bridget/bridget.db"}));
-    }); ready_rx.recv().unwrap(); server
+        write_json_line(
+            &mut writer,
+            json!({"type":"ClientWelcome","version":1,"horizon_secs":60,"issued_at_tolerance_secs":5,"capabilities":["send_idempotent","lookup"]}),
+        );
+        assert_eq!(
+            read_json_line(&mut reader),
+            json!({"type":"DaemonIdentityRequest"})
+        );
+        write_json_line(
+            &mut writer,
+            json!({"type":"DaemonIdentityReport","host":local_host,"db_path":"/var/lib/bridget/bridget.db"}),
+        );
+    });
+    ready_rx.recv().unwrap();
+    server
 }
-fn read_json_line(r: &mut BufReader<UnixStream>) -> Value { let mut s=String::new(); r.read_line(&mut s).unwrap(); serde_json::from_str(&s).unwrap() }
-fn write_json_line(w: &mut BufWriter<UnixStream>, v: Value) { serde_json::to_writer(&mut *w,&v).unwrap(); w.write_all(b"\n").unwrap(); w.flush().unwrap(); }
+fn read_json_line(r: &mut BufReader<UnixStream>) -> Value {
+    let mut s = String::new();
+    r.read_line(&mut s).unwrap();
+    serde_json::from_str(&s).unwrap()
+}
+fn write_json_line(w: &mut BufWriter<UnixStream>, v: Value) {
+    serde_json::to_writer(&mut *w, &v).unwrap();
+    w.write_all(b"\n").unwrap();
+    w.flush().unwrap();
+}
 
 fn fabricate_divergence(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
     let database = root.join("maicie.sqlite3");
@@ -128,13 +152,25 @@ fn fabricate_divergence(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
         let mut statement = connection
             .prepare("SELECT version FROM schema_migrations ORDER BY version")
             .unwrap();
-        statement.query_map([], |row| row.get(0)).unwrap().map(Result::unwrap).collect()
+        statement
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
     };
     assert_eq!(versions, (1..=19).collect::<Vec<i64>>());
-    let ddl: String = connection.query_row(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='guichet_receptions'",
-        [], |row| row.get(0)).unwrap();
-    assert!(ddl.contains("delivery_report") && ddl.contains("mission_status") && ddl.contains("deadline_question"));
+    let ddl: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='guichet_receptions'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        ddl.contains("delivery_report")
+            && ddl.contains("mission_status")
+            && ddl.contains("deadline_question")
+    );
 
     let install_bin = root.join("installed").join("maicie");
     fs::create_dir_all(install_bin.parent().unwrap()).unwrap();
