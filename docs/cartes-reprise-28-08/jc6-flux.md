@@ -199,6 +199,11 @@ C'est **textuellement le piège n°3 de la carte de jc6** — « conserver la so
 
 **⑥ Liste les worktrees avant de conclure à une absence.** Le référent a déclaré deux artefacts disparus et une branche morte ; les deux vivaient dans des worktrees liés qu'il n'avait pas listés.
 
+**⑦ UN CORPS D'ERREUR N'EST PAS UN CORPS VIDE — le piège du jeton UI.** `[TENU DE bridget, 28/08 18h53, il l'a payé deux fois]` La route humain de l'UI mesurée **sans** le jeton ne rend pas zéro : elle rend un 403 « jeton UI invalide », soit **17 octets**. Qui mesure sans jeton lit 17, croit tenir une réponse non nulle, et conclut que la route fonctionne alors qu'elle est muette. Le jeton est dans `/home/moi/.cache/bridget/ui-endpoint.json`.
+C'est la même famille que tout le reste de cette carte : `HEAD..main` = 0 par faux vert, `busy` contre `libre`, une ref de suivi contre le serveur. **Un instrument qui répond n'est pas un instrument qui mesure ce que tu crois.** Avant de lire un nombre, vérifie que tu interroges bien ce que tu penses interroger — ici, avec le jeton.
+
+**⑧ Un témoin ne protège que s'il passe AVANT le parc.** `[MESURÉ le 28/08 à 18h48]` Trois vagues de spawn ont visé les douze `persistent=1` — bridget, les dix flux et `temoin-persistance` — aux mêmes secondes, deadlines 18:47:20, 18:47:55, 18:48:20, puis arrêt. Le témoin avait été posé pour éprouver le drapeau « sans qu'aucun de nous serve de cobaye » ; réinscrit dans les mêmes vagues que nous, il n'a rien éprouvé en avance et n'a donné aucune information que nous ne donnions déjà. Le geste était bon, sa forme ne l'isolait pas.
+
 ---
 
 ## 6. CE QUE JE NE SAIS PAS — déclaration explicite
