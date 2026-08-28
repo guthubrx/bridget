@@ -15,9 +15,28 @@
 > revérifiée depuis.** Avant de t'y appuyer : `git fetch`, **puis**
 > `git merge-base --is-ancestor <commit> <remote>/main`. Jamais l'un sans l'autre.
 >
-> **Le remote est nommé, parce que `origin` ne désigne pas le même dépôt selon les
-> checkouts du parc** — deux d'entre eux pointent un miroir local figé. Mesuré le 28/08
-> à 16h4x, les trois checkouts qui alimentent cette carte pointent tous
+> **Le remote est nommé — mais nommer l'URL ne suffit PAS**, et c'est le piège le plus
+> coûteux de la journée. Le parc a d'abord cru que certains checkouts pointaient « un
+> miroir local figé ». **Mesuré le 28/08 vers 18h10 : c'est faux.**
+> `/home/moi/revue/bridget`, le checkout accusé, a pour `origin`
+> `https://github.com/guthubrx/bridget.git`, URL effective identique
+> (`ls-remote --get-url`), **sans aucun `insteadOf`**. Ce n'est pas un autre dépôt.
+> Il porte **trois valeurs différentes du mot `main`** :
+>
+> | ref | valeur |
+> |---|---|
+> | `main` (branche locale) | `7592091` |
+> | `origin/main` (remote-tracking) | `2078a59` |
+> | tête distante réelle (`ls-remote`) | `07fbe92` |
+>
+> Dernier `fetch` : **28/08 à 02:24** — la même heure que celui de `/home/moi/revue/rc1`.
+> La cause n'est donc pas l'ambiguïté d'`origin`, **c'est la péremption des refs
+> locales** : exactement le piège n° 2 de cette carte. Un agent qui lit « les cartes
+> sont dans `https://github.com/guthubrx/bridget.git` branche main », puis fait
+> `git ls-tree main` dans ce checkout, **ne les trouvera pas — avec la bonne URL sous
+> les yeux** — et conclura à une perte. Écrire l'URL ne protège de rien sans `fetch`.
+>
+> Mesuré le 28/08 à 16h4x, les trois checkouts qui alimentent cette carte pointent tous
 > `https://github.com/guthubrx/bridget.git` et voyaient la même tête `cfb7540` :
 > `/home/moi/revue/rc1` (le mien), `/home/moi/bridget-referent/bridget` (source des
 > faits du §6.B) et `/home/moi/bridget-registre`. **Les faits que je tiens du référent
