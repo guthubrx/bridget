@@ -4,6 +4,7 @@
 - Type : `claude`, protocole `claude_stream_json`, canal `ssh-unix`, mode `cli`
 - Génération portante : **444**, `persistent=1` — mesuré au greffe de flotte le 2026-08-28 à 17:04Z
 - Émise : 2026-08-28T17:05Z, sur mandat du référent bridget
+- Mise à jour : 2026-08-28T18:20Z, à la demande du référent — deux faits promus de `[RAPPORTÉ]` à `[MESURÉ]`, un troisième mandat livré, une limite d'observation déclarée
 - Mandat de cette carte : objectif `c9aac01b-cc8d-4520-a375-dcaec5c84844` ; délégation `f80f29f2-033b-4e6a-8dbb-75da7d4ddc18` ; message `f72325c2-aa49-4dd6-adb2-57878efe64a1`
 - Prédécesseur : `jc1` (codex, tmux), carte distincte en `/home/moi/bridget-registre/docs/cartes-reprise-28-08/jc1.md`
 - Seconde incarnation du successeur : la première avait été lancée sans `--persistent` et remplacée avant d'avoir travaillé
@@ -22,7 +23,8 @@ Vérifier avant d'agir sur l'une comme sur l'autre.
 ## 1. ÉTAT
 
 - `[MESURÉ 17:04Z]` Objectif `587da26d-0130-49b5-894d-2bb91ec9afc1` à l'état `en_coordination`, délégation `100f2025-279a-4616-a4c8-af631b24e00b` à l'état `creee`. **Les deux points du mandat sont écrits, testés et commités ; rien n'est intégré.**
-- `[MESURÉ 17:04Z]` L'objectif de cette carte, `c9aac01b`, est lui aussi `en_coordination` avec sa délégation `f80f29f2` à `creee`.
+- `[MESURÉ 17:04Z]` L'objectif de cette carte, `c9aac01b`, était lui aussi `en_coordination`. `[RAPPORTÉ — bridget, 18:04Z]` **il est depuis fermé**, la carte étant présente dans `main` du dépôt GitHub.
+- `[MESURÉ 18:05Z]` Troisième mandat livré : objectif `522a044e-9a89-42d8-add9-f9ca6117737c`, délégation `04f80ced-7011-4733-bd34-f038551a6c87` — exposer la borne du ledger. Branche `session-059-borne-ledger`, commit `7fb0ecd`. **Non intégré**, comme les deux précédents.
 - `[MESURÉ 17:04Z]` **`creee` ne distingue pas une délégation dormante d'une délégation en cours de travail.** Mes deux délégations actives portent exactement l'état des trois délégations héritées de `jc1` que le référent m'a dit de ne pas reprendre. C'est la confirmation directe, par mesure, de la règle attribuée à `rc5` : ne jamais déduire l'état d'un travail de l'état de sa délégation — vérifier l'objet livré.
 - `[MESURÉ]` `domaine=bridget`, corrigé par moi **deux fois** : à l'ouverture de la première incarnation, puis à nouveau après ma recréation.
 
@@ -48,23 +50,35 @@ Vérifier avant d'agir sur l'une comme sur l'autre.
 
 10. **Mon banc de mutation a laissé un fichier muté.** Un mutant supprimait un bloc ; une suppression ne se restaure pas par motif, la restauration a échoué et le banc s'est arrêté **avant** de réparer. J'ai retrouvé l'arbre sans sa garde. Corrigé : motif vide interdit, restauration sous `finally`.
 
-11. **Un message du référent peut être attesté au ledger sans atteindre son destinataire.** L'entrée `[1787935163] bridget → jc1-flux` portant « AUTORISATION ACCORDEE » figurait au ledger sans être jamais arrivée dans mon flux. Un décompte d'accusés l'aurait compté comme livré.
+11. **Un message du référent peut être attesté au ledger sans atteindre son destinataire.** L'entrée `[1787935163] bridget → jc1-flux` portant « AUTORISATION ACCORDEE » figurait au ledger sans être jamais arrivée dans mon flux. Un décompte d'accusés l'aurait compté comme livré. **Deux cas en une heure** sur le seul canal référent → moi, le second étant `101def8e7b174`.
+
+12. **Un message non parvenu n'est pas perdu : il est dans la table.** `SELECT ts, sender, target, body FROM ledger WHERE target='<nom>' ORDER BY ts DESC` sur `file:/home/moi/.cache/bridget/bridget.db?mode=ro` rend les messages que le canal n'a pas livrés. C'est ainsi que j'ai lu `101def8e7b174` et agi dessus **six minutes avant** que le canal ne me le remette. `mode=ro` est impératif : la base est ouverte par le daemon en service.
+
+13. **`spawn_commands.state` survit à la mort de l'agent.** Mesuré sur un cas neuf : `essai-garde-verif-referent`, génération 455, `persistent=0`, `state=connected` — alors que le référent l'avait arrêté quelques minutes plus tôt. Une lecture de cette table ne dit rien de la vivacité. `[MESURÉ]` — le même fait avait été établi par `jc3-flux` sur sa propre génération 440 ; je le confirme sur un agent créé et tué dans la même minute.
+
+14. **Le témoin `temoin-persistance` existe** : génération 454, `persistent=1`, vu par moi dans `spawn_commands`. Il sert à éprouver le drapeau au prochain redémarrage sans qu'un porteur de contexte serve de cobaye. `[MESURÉ]` pour son existence ; `[RAPPORTÉ — bridget, geste proposé par rc5-flux]` pour son rôle.
+
+15. **Le motif « donnée collectée, non exposée » se compte à quatre occurrences le même jour**, et deux d'entre elles ont un paramètre qui existe déjà : la persistance (absente des 16 clés de l'annuaire) ; la borne du ledger (`limit: 20` figé alors que le protocole porte `limit` et que le même fichier passe 200 ailleurs) ; le `busy` du greffe (connu pour refuser une délégation, introuvable pour observer un travail) ; la phase de remise (`send_deliveries.phase` — `acked` 5285, `dispatching` 33, `indeterminate` 94 — qu'aucune commande CLI n'expose). **Le coût n'a jamais été la donnée manquante, toujours le détour par un instrument improvisé.**
 
 ## 3. RESTE — ce qui n'est pas fait
 
-- **Porter la branche hors de `/tmp`.** C'est le seul vrai risque de perte. Demandé trois fois au référent, jamais répondu au moment d'écrire cette carte.
-- **Six processus orphelins de mes tests-portes** : `3876316`, `3876326`, `3876561`, `3876575`, `3879414`, `3879424`. Autorisation demandée, non accordée à cette heure. Ils tournent sous des `HOME` isolés `/tmp/user/1002/maicie-mvp-gate-*` et ne peuvent pas atteindre le daemon en service.
+- ~~**Porter la branche hors de `/tmp`.**~~ **RÉSOLU à 17:29Z** : les branches sont poussées sur `https://github.com/guthubrx/bridget.git` (voir section 4). La cause n'était pas `/tmp` — le clone est un vrai dépôt git — mais un `origin` pointant un miroir local.
+- ~~**Six processus orphelins de mes tests-portes.**~~ **RÉSOLU à 17:28Z**, sur autorisation du référent : trois signaux ont suffi pour six PID, les trois `managed-wrapper` étant déjà morts avec le daemon de leur groupe. `[MESURÉ]` **Tuer le daemon d'un groupe emporte son wrapper.**
+- **L'intégration des trois correctifs**, qui appartient à l'humain. C'est désormais le seul reste réel : le travail existe et est lisible, il n'est dans `main` d'aucun dépôt.
 - **Les tests d'intégration hors `--lib` n'ont jamais été rejoués jusqu'au bout**, à cause du test instable du point 2.8.
 - **La colonne `PERSIST` reste vide en production** tant que le daemon en service tourne l'ancien binaire. `[MESURÉ]` Le CLI neuf face au daemon ancien affiche `—` et `null` partout, sans planter et sans rien inventer. Le redémarrage qui activerait la colonne est aussi l'événement qui draine — d'après le roster, personne ne serait drainé.
 
 ## 4. CHEMINS ABSOLUS
 
-- **Travail du mandat `587da26d`** : `/tmp/jc1flux-persist-815e3bc/repo`
-  branche `session-058-persistance-annuaire`, arbre propre
-  commits `8ebe89a` (annuaire) puis `ab8960f` (garde de spawn), sur base `815e3bc`
-- **⚠ NOMMER LE REMOTE.** Dans ce clone, `origin` = **`/home/moi/revue/jc1`**, un chemin LOCAL — *pas* GitHub. Un `git push origin` y pousserait dans le checkout principal. Le remote GitHub `https://github.com/guthubrx/bridget.git` n'est `origin` **que depuis `/home/moi/revue/jc1`**. Les deux `origin` ne désignent pas le même dépôt.
+- **Le travail est publié — écrire l'URL, jamais l'alias :**
+  `https://github.com/guthubrx/bridget.git`
+  - mandat `587da26d` → branche `session-058-persistance-annuaire`, commits `8ebe89a` (annuaire) puis `ab8960f` (garde de spawn), base `815e3bc`
+  - mandat `522a044e` → branche `session-059-borne-ledger`, commit `7fb0ecd`, base `1a7c381`
+  - **aucun des trois n'est dans `main`** au 2026-08-28T18:20Z ; `main` y valait `07fbe92` à 18:13Z et bougeait plusieurs fois par heure
+- Copie de travail : `/tmp/jc1flux-persist-815e3bc/repo`, arbre propre
+- **⚠ NOMMER LE REMOTE.** Dans ce clone, `origin` = **`/home/moi/revue/jc1`**, un chemin LOCAL — *pas* GitHub ; le remote GitHub y est nommé `github`. Un `git push origin` pousserait dans le checkout principal, que personne ne fetch. Le remote GitHub n'est `origin` **que depuis `/home/moi/revue/jc1`**. Les deux `origin` ne désignent pas le même dépôt : c'est ce piège qui a rendu mes deux premiers commits invisibles au référent pendant une heure.
 - Clone de référence non modifié : `/tmp/jc1flux-persist-815e3bc/repo-base` (sur `815e3bc`)
-- Banc de mutation : `/tmp/jc1flux-persist-815e3bc/banc-mutants.py`
+- Bancs de mutation : `/tmp/jc1flux-persist-815e3bc/banc-mutants.py` (mandat `587da26d`) et `banc-mutants-ledger.py` (mandat `522a044e`)
 - Répertoires de compilation : `target-verif`, `target-base`, `target-base2` sous `/tmp/jc1flux-persist-815e3bc/`
 - `HOME` de test isolés : `/tmp/jc1flux-persist-815e3bc/home`, `home-neuf`, `home-neuf2`
 - **Tout ce qui précède est sous `/tmp` et ne survivra pas.** Le clone de mon prédécesseur `jc1`, `/tmp/audit-guard-review.ymR2/repo`, avait déjà disparu quand j'ai pris son relais.
@@ -82,7 +96,9 @@ Vérifier avant d'agir sur l'une comme sur l'autre.
 7. **Les tests-portes `maicie` laissent des daemons vivants derrière eux.** Contrôler les processus résiduels *après* chaque exécution.
 8. **Ne tuer aucun processus sans autorisation explicite**, même le sien : `kill` sans `-9`, un à la fois, 3 s d'attente, vérification entre chaque, et arrêt si le premier résiste.
 9. **`cargo fmt --check` n'est pas propre sur `main`** : 16 diffs préexistants au 2026-08-28. Comparer à la base plutôt que viser zéro.
-10. **`bridget ledger` ne rend que les 20 derniers messages** : il ne permet pas de vérifier une attribution ancienne.
+10. **`bridget ledger` EN SERVICE ne rend que les 20 derniers messages** — treize minutes à 94 messages/heure. Il ne permet pas de vérifier une attribution ancienne. Recours immédiat : lire la table (voir 2.12). Le correctif existe, branche `session-059-borne-ledger`, **non intégré** — cette ligne périme le jour du déploiement.
+11. **Écrire l'URL, pas l'alias.** `origin` ne désigne pas le même dépôt selon les checkouts. Une attestation formulée avec `origin` ne vaut pas pour son lecteur : un agent qui cherche sa carte via *son* `origin` conclura à une perte alors qu'il regarde le mauvais dépôt. Formulation due à `cartae0-flux`.
+12. **Ne pas rebaser une branche dont les SHA ont déjà été vérifiés par autrui** sans le lui dire : le rebase invalide sa vérification et lui fait refaire son travail. Sans conflit, l'ancienneté de la base ne coûte rien.
 
 ## 6. CE QUE MA PROCHAINE INCARNATION IGNORERAIT
 
@@ -95,7 +111,9 @@ Vérifier avant d'agir sur l'une comme sur l'autre.
 ## 7. CE QUE JE NE SAIS PAS — déclaré, non comblé
 
 - `[IGNORÉ]` **Si le drapeau `persistent=1` tient réellement.** Il n'a jamais été éprouvé par un redémarrage. Ma survie en dépend entièrement et je n'en ai aucune preuve. `[RAPPORTÉ — bridget, geste proposé par rc5-flux]` un agent `temoin-persistance` aurait été créé pour l'éprouver sans risquer un porteur de contexte ; **je ne l'ai pas vérifié.**
-- `[IGNORÉ]` Si mes deux commits sont intégrés quelque part. Au 2026-08-28T17:05Z ils ne le sont pas — **et cette affirmation périme.**
+- `[IGNORÉ]` **Je n'ai jamais vu ma colonne `PERSIST` afficher `non` sur un agent éphémère réellement VIVANT.** Le seul éphémère du jour, `essai-garde-verif-referent`, a vécu moins d'une minute, et le daemon en service tourne l'ancien binaire, sans la colonne. J'ai failli conclure que la colonne afficherait `—` au lieu de `non`, le roster ne portant aucune entrée non persistante ; j'ai lu le code plutôt que de conclure — dans `fleet.rs`, `connect()`, le `remember` est **hors** du `if active.persistent`, donc un éphémère vivant y est bien inscrit avec `false`, et le roster est vide de `false` simplement parce qu'aucun éphémère n'est vivant, l'arrêt retirant l'entrée via `roster.forget`. **C'est du code lu, pas du comportement observé**, et l'observation manquante ne sera possible qu'après déploiement.
+- `[IGNORÉ]` Si mes trois commits sont intégrés quelque part. Au 2026-08-28T18:20Z ils ne le sont pas, vérifié par `merge-base --is-ancestor` sur les trois — **et cette affirmation périme dans l'autre sens.**
+- `[IGNORÉ]` Si 200 messages suffisent au débit du référent. Deux heures de visibilité à 94 messages/heure est un calcul, pas une mesure de sa dette réelle.
 - `[IGNORÉ]` Pourquoi le test `stop_apres_register...` bloque. J'ai mesuré son instabilité, pas sa cause.
 - `[IGNORÉ]` Pourquoi le message d'autorisation du référent n'est pas arrivé dans mon flux alors qu'il figure au ledger.
 - `[IGNORÉ]` L'état réel du travail des trois délégations héritées de `jc1` (`dc2324d5`, `039123ba`, `6073f51b`, toutes `creee` au 17:04Z). Leur état ne dit rien de l'objet livré — voir 1.
