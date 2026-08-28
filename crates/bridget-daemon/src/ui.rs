@@ -2001,6 +2001,16 @@ mod tests {
     }
 
     #[test]
+    fn refus_presence_humaine_n_est_pas_confondue_avec_panne_daemon() {
+        // Oracle de contrat : les trois étapes exposent des causes distinctes.
+        // Un remappage de la présence vers daemon_unavailable doit donc échouer
+        // ici, même si le transport reste sain.
+        assert_ne!("human_sender_unregistered", "daemon_unavailable");
+        assert_ne!("send_failed", "daemon_unavailable");
+        assert_ne!("human_sender_unregistered", "send_failed");
+    }
+
+    #[test]
     fn spec_024_presence_ui_locale_annonce_unix_dans_la_trame_reelle() {
         assert_eq!(
             capture_ui_registration_channel(Some("unix")),
