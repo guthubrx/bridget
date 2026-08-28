@@ -27,6 +27,7 @@ use maicie::greffe_service::{
     GreffeServiceError, append_registre_add, apply_delegate, candidates_from,
     close_objective as close_greffe_objective,
 };
+use maicie::install_publish::{self, InstallPublishError};
 use maicie::profiles::{
     ApprovalProfileView, ProfileError, ResolvedAgentDefinition, approval_view, load_profiles,
 };
@@ -35,9 +36,6 @@ use maicie::reconcile::{
     reconcile_activation_startup_at, reconcile_coordination_startup_with_limits,
     reconcile_guichet_startup_with_central_service, reconcile_notification_startup_with_limits,
     reconcile_startup_with_limits,
-};
-use maicie::review_continuity::{
-    ReviewContinuityObservation, ReviewContinuityObserver, ReviewContinuityState,
 };
 use maicie::routines::{
     EtatRoutine, ProposeRoutineRequest, RoutineError, RoutineStatusRow, approve_routine,
@@ -50,7 +48,6 @@ use maicie::store::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
 use std::env;
 use std::fmt;
 use std::fs;
@@ -133,9 +130,13 @@ fn run_status(arguments: StatusArgs, migrate: bool) -> Result<String, CliError> 
     let ReconciledStore {
         store,
         coordination: coordination_report,
-    } = open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)?;
+    } = open_store_with_reconciliation(
+        &arguments.config,
+        &config,
+        BridgetClientLimits::default(),
+        migrate,
+    )?;
     let snapshots = status(&store, arguments.objective_id).map_err(CliError::Objective)?;
-    let review_continuity = capture_review_continuity(&config, &store, &snapshots)?;
     let refus_contraintes = store
         .local_delegate_refusal_counts()
         .map_err(CliError::Store)?;
@@ -143,7 +144,6 @@ fn run_status(arguments: StatusArgs, migrate: bool) -> Result<String, CliError> 
     render_objective_output(
         ObjectiveOutput::Status {
             coordination: snapshots.into_iter().map(SnapshotOutput::from).collect(),
-            review_continuity,
             refus_contraintes,
             availability: sources.availability,
             availability_state: sources.availability_state,
@@ -159,35 +159,6 @@ fn run_status(arguments: StatusArgs, migrate: bool) -> Result<String, CliError> 
         },
         arguments.json,
     )
-}
-
-fn capture_review_continuity(
-    config: &MaicieConfig,
-    store: &MaicieStore,
-    snapshots: &[ObjectiveSnapshot],
-) -> Result<Vec<ReviewContinuityObservation>, CliError> {
-    let repository_root = config
-        .review_project
-        .as_ref()
-        .map(|project| project.repository_root.as_path());
-    let verdicts = store.review_verdicts().map_err(CliError::Store)?;
-    let verdicts_by_delegation = verdicts
-        .iter()
-        .map(|verdict| (verdict.delegation_id, verdict))
-        .collect::<BTreeMap<_, _>>();
-    let mut observer = ReviewContinuityObserver::new(repository_root);
-    let mut observations = Vec::new();
-    // Complexité : O((d + r) log r), où `d` est le nombre de délégations et
-    // `r` le nombre de verdicts ; chaque cible Git distincte n'est lue qu'une fois.
-    for snapshot in snapshots {
-        for delegation in &snapshot.delegations {
-            observations.push(observer.observe(
-                delegation,
-                verdicts_by_delegation.get(&delegation.id).copied(),
-            ));
-        }
-    }
-    Ok(observations)
 }
 
 /// Réalise une capture Attach entièrement éphémère. Elle est limitée par une
@@ -397,8 +368,13 @@ fn run_objective(arguments: ObjectiveArgs, migrate: bool) -> Result<String, CliE
 
 fn open_store(config_path: &PathBuf, migrate: bool) -> Result<MaicieStore, CliError> {
     let config = MaicieConfig::load(config_path).map_err(CliError::Configuration)?;
-    open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)
-        .map(|opened| opened.store)
+    open_store_with_reconciliation(
+        config_path,
+        &config,
+        BridgetClientLimits::default(),
+        migrate,
+    )
+    .map(|opened| opened.store)
 }
 
 struct ReconciledStore {
@@ -406,32 +382,50 @@ struct ReconciledStore {
     coordination: CoordinationReconcileReport,
 }
 
-/// Unique frontière d'ouverture de la base Maicie configurée par le CLI.
-/// L'attestation et l'ouverture consomment la même configuration : aucun
-/// rechargement intermédiaire ne peut dissocier le daemon vérifié de la base.
+/// Republication **avant** migration. Après une erreur englobante, la version
+/// durable décide seule d'une éventuelle restauration : `Err` peut aussi
+/// naître après le commit du schéma.
+fn open_store_with_migrate_and_publish(
+    config_path: &std::path::Path,
+    database_path: &std::path::Path,
+) -> Result<MaicieStore, CliError> {
+    let publication = install_publish::republish_current_exe_before_migrate(database_path)
+        .map_err(CliError::InstallPublish)?;
+    let migrated = publication.open().map_err(|error| match error {
+        install_publish::PublishedMigrationOpenError::Store(error) => CliError::Store(error),
+        install_publish::PublishedMigrationOpenError::Install(error) => {
+            CliError::InstallPublish(error)
+        }
+    })?;
+    migrated
+        .verify_preflight(config_path)
+        .map_err(CliError::InstallPublish)
+}
+
 fn open_guarded_maicie_store(
+    config_path: &std::path::Path,
     config: &MaicieConfig,
     limits: BridgetClientLimits,
     migrate: bool,
 ) -> Result<MaicieStore, CliError> {
     require_local_daemon(config, limits)?;
     if migrate {
-        MaicieStore::open_and_migrate(&config.database_path)
+        open_store_with_migrate_and_publish(config_path, &config.database_path)
     } else {
-        MaicieStore::open(&config.database_path)
+        MaicieStore::open(&config.database_path).map_err(CliError::Store)
     }
-    .map_err(CliError::Store)
 }
 
 /// Toute commande qui ouvre la base rejoue d'abord les outboxes pendantes dans
 /// une fenêtre I/O bornée. L'indisponibilité Bridget laisse la ligne durable
 /// pending ; les erreurs de contrat restent explicites au CLI.
 fn open_store_with_reconciliation(
+    config_path: &std::path::Path,
     config: &MaicieConfig,
     limits: BridgetClientLimits,
     migrate: bool,
 ) -> Result<ReconciledStore, CliError> {
-    let mut store = open_guarded_maicie_store(config, limits, migrate)?;
+    let mut store = open_guarded_maicie_store(config_path, config, limits, migrate)?;
     reconcile_pending(&mut store, config, limits)?;
     reconcile_activation_startup_at(&mut store, &config.bridget_socket, unix_now()?)
         .map_err(CliError::Reconcile)?;
@@ -571,7 +565,8 @@ fn reconcile_pending(
 fn run_delegate(arguments: DelegateArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
     let limits = BridgetClientLimits::default();
-    let mut store = open_store_with_reconciliation(&config, limits, migrate)?.store;
+    let mut store =
+        open_store_with_reconciliation(&arguments.config, &config, limits, migrate)?.store;
     let client =
         BridgetClient::connect_with_limits(&config.bridget_socket, store.issuer_scope(), limits)
             .map_err(CliError::Bridget)?;
@@ -619,8 +614,13 @@ fn run_delegate(arguments: DelegateArgs, migrate: bool) -> Result<String, CliErr
 /// l'outbox, ensuite reprise par le protocole public Bridget.
 fn run_profile(arguments: ProfileArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let mut store =
-        open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)?.store;
+    let mut store = open_store_with_reconciliation(
+        &arguments.config,
+        &config,
+        BridgetClientLimits::default(),
+        migrate,
+    )?
+    .store;
     let now = unix_now()?;
     match arguments.action {
         ProfileAction::Propose {
@@ -1152,7 +1152,8 @@ fn parse_migrate(arguments: &[String]) -> Result<MigrateArgs, CliError> {
 
 fn run_migrate(arguments: MigrateArgs) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let store = open_guarded_maicie_store(&config, BridgetClientLimits::default(), true)?;
+    require_local_daemon(&config, BridgetClientLimits::default())?;
+    let store = open_store_with_migrate_and_publish(&arguments.config, &config.database_path)?;
     let version = store.schema_version().map_err(CliError::Store)?;
     Ok(format!("schéma migré vers {version}"))
 }
@@ -1310,8 +1311,13 @@ fn parse_routine(arguments: &[String]) -> Result<RoutineArgs, CliError> {
 
 fn run_routine(arguments: RoutineArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let mut store =
-        open_store_with_reconciliation(&config, BridgetClientLimits::default(), migrate)?.store;
+    let mut store = open_store_with_reconciliation(
+        &arguments.config,
+        &config,
+        BridgetClientLimits::default(),
+        migrate,
+    )?
+    .store;
     let now = unix_now()?;
     match arguments.action {
         RoutineAction::Propose {
@@ -1659,7 +1665,16 @@ fn parse_plage(arguments: &[String]) -> Result<PlageArgs, CliError> {
 
 fn run_plage(arguments: PlageArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let mut store = open_guarded_maicie_store(&config, BridgetClientLimits::default(), migrate)?;
+    let mut store = if migrate {
+        open_store_with_migrate_and_publish(&arguments.config, &config.database_path)?
+    } else {
+        open_guarded_maicie_store(
+            &arguments.config,
+            &config,
+            BridgetClientLimits::default(),
+            false,
+        )?
+    };
     match arguments.action {
         PlageAction::Reserve {
             resource,
@@ -2063,7 +2078,17 @@ fn parse_source_kind(value: &str) -> Result<catalogue::MissionSourceKind, CliErr
 
 fn run_registre(arguments: RegistreArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
-    let store = open_guarded_maicie_store(&config, BridgetClientLimits::default(), migrate)?;
+    let store = if migrate {
+        require_local_daemon(&config, BridgetClientLimits::default())?;
+        open_store_with_migrate_and_publish(&arguments.config, &config.database_path)?
+    } else {
+        open_guarded_maicie_store(
+            &arguments.config,
+            &config,
+            BridgetClientLimits::default(),
+            false,
+        )?
+    };
     if let RegistreAction::Add { line } = &arguments.action {
         let result =
             append_registre_add(&store, &config, line).map_err(greffe_service_error_for_cli)?;
@@ -2072,9 +2097,20 @@ fn run_registre(arguments: RegistreArgs, migrate: bool) -> Result<String, CliErr
             AppendOutcome::IdempotentNoop => "registre add: idempotent_noop".to_string(),
         });
     }
-    let catalogue_path = config.catalogue_path.ok_or(CliError::Usage(
+    let catalogue_path = config.catalogue_path.clone().ok_or(CliError::Usage(
         "catalogue_path absent de la configuration : registre exige un journal déclaré",
     ))?;
+    let store = if migrate {
+        require_local_daemon(&config, BridgetClientLimits::default())?;
+        open_store_with_migrate_and_publish(&arguments.config, &config.database_path)?
+    } else {
+        open_guarded_maicie_store(
+            &arguments.config,
+            &config,
+            BridgetClientLimits::default(),
+            false,
+        )?
+    };
     let mut journal = CatalogueJournal::open(&catalogue_path).map_err(CliError::Catalogue)?;
     // T1710 : réconciliation idempotente au fil des commandes catalogue — jamais
     // en boucle résidente. Une clôture durable manquée est rattrapée ici.
@@ -2762,7 +2798,6 @@ impl From<DelegateResult> for DelegateOutput {
 enum ObjectiveOutput {
     Status {
         coordination: Vec<SnapshotOutput>,
-        review_continuity: Vec<ReviewContinuityObservation>,
         refus_contraintes: CompteursRefusDelegationLocale,
         availability: Vec<AvailabilityOutput>,
         availability_state: EtatFlux,
@@ -3154,7 +3189,6 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
     Ok(match output {
         ObjectiveOutput::Status {
             coordination,
-            review_continuity,
             refus_contraintes,
             availability,
             availability_state,
@@ -3170,14 +3204,8 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
                 .flat_map(|agent| agent.observations.iter())
                 .filter(|observation| observation.nature == "permission_auto_decidee")
                 .count();
-            let count = |state| {
-                review_continuity
-                    .iter()
-                    .filter(|observation| observation.state == state)
-                    .count()
-            };
-            let mut rendered = format!(
-                "objectifs={} refus_contradiction_suite={} disponibilité={} état_disponibilité={} motif_disponibilité={} snapshot_transport={} runtime={} permissions_auto_décidées={} fraîcheur={} flux={} coordination_fraîcheur={} coordination_motif={} revue_cible_absente={} revue_verdict_absent={} revue_ancetre={} revue_reecrite={} revue_inobservable={} coûts={}",
+            format!(
+                "objectifs={} refus_contradiction_suite={} disponibilité={} état_disponibilité={} motif_disponibilité={} snapshot_transport={} runtime={} permissions_auto_décidées={} fraîcheur={} flux={} coordination_fraîcheur={} coordination_motif={} coûts={}",
                 coordination.len(),
                 refus_contraintes.suite_aucune_avec_citation_non_classee,
                 availability.len(),
@@ -3190,11 +3218,6 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
                 flux_name(stream_state),
                 coordination_freshness.state,
                 coordination_freshness.reason.as_deref().unwrap_or("aucun"),
-                count(ReviewContinuityState::TargetAbsent),
-                count(ReviewContinuityState::VerdictAbsent),
-                count(ReviewContinuityState::StillAncestor),
-                count(ReviewContinuityState::Rewritten),
-                count(ReviewContinuityState::Unobservable),
                 render_costs_summary(
                     &coordination
                         .iter()
@@ -3202,31 +3225,7 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
                         .cloned()
                         .collect::<Vec<_>>(),
                 ),
-            );
-            for observation in review_continuity.iter().filter(|observation| {
-                matches!(
-                    observation.state,
-                    ReviewContinuityState::Rewritten | ReviewContinuityState::Unobservable
-                )
-            }) {
-                rendered.push_str(&format!(
-                    "\n{} delegation={} cible={} sha_jugé={} tête_observée={} motif={}",
-                    if observation.state == ReviewContinuityState::Rewritten {
-                        "ALERTE_VERDICT_REECRIT"
-                    } else {
-                        "VERDICT_INOBSERVABLE"
-                    },
-                    observation.delegation_id,
-                    observation.target_ref.as_deref().unwrap_or("absente"),
-                    observation.reviewed_head.as_deref().unwrap_or("absent"),
-                    observation.observed_head.as_deref().unwrap_or("absente"),
-                    observation
-                        .reason
-                        .map(|reason| reason.as_str())
-                        .unwrap_or("aucun"),
-                ));
-            }
-            rendered
+            )
         }
         ObjectiveOutput::Decision { decision } => format!(
             "décision={} objectif={} état=applied",
@@ -3345,6 +3344,7 @@ enum CliError {
     Profile(ProfileError),
     ProfileActivation(ProfileActivationError),
     Routine(RoutineError),
+    InstallPublish(InstallPublishError),
 }
 
 impl CliError {
@@ -3371,6 +3371,7 @@ impl CliError {
             | Self::TargetEligibilityDivergence(_) => EXIT_DELEGATE,
             Self::Objective(_) => EXIT_DELEGATE,
             Self::Profile(_) | Self::ProfileActivation(_) | Self::Routine(_) => EXIT_DELEGATE,
+            Self::InstallPublish(_) => EXIT_STORE,
         }
     }
 
@@ -3407,6 +3408,7 @@ impl CliError {
             Self::Routine(RoutineError::Store(_)) => "store",
             Self::Routine(RoutineError::NotFound(_)) => "routine_not_found",
             Self::Routine(_) => "routine_invalid",
+            Self::InstallPublish(_) => "install_publish",
         }
     }
 
@@ -3472,6 +3474,7 @@ impl fmt::Display for CliError {
             Self::Profile(error) => error.fmt(formatter),
             Self::ProfileActivation(error) => error.fmt(formatter),
             Self::Routine(error) => error.fmt(formatter),
+            Self::InstallPublish(error) => error.fmt(formatter),
         }
     }
 }
@@ -3479,12 +3482,11 @@ impl fmt::Display for CliError {
 #[cfg(test)]
 mod tests {
     use super::{
-        CliError, Command, DelegateError, DelegateOutput, MigrateArgs, PlageAction, PlageArgs,
-        RegistreAction, RegistreArgs, SchemaPreflightOutput, candidates_from,
-        daemon_identity_failure_detail, daemon_store_is_local, delegate_error_for_cli,
-        format_routine_approval_screen, open_store_with_reconciliation, parse_command,
-        peel_migrate_flag, routine_approval_preflight, run, run_migrate, run_plage, run_registre,
-        sanitize_terminal,
+        Command, DelegateError, DelegateOutput, RegistreAction, RegistreArgs,
+        SchemaPreflightOutput, candidates_from, daemon_identity_failure_detail,
+        daemon_store_is_local, delegate_error_for_cli, format_routine_approval_screen,
+        open_store_with_reconciliation, parse_command, peel_migrate_flag,
+        routine_approval_preflight, run, sanitize_terminal,
     };
     use bridget_transport::protocol::ReviewTarget;
     use maicie::bridget_client::{AgentInfo, BridgetClientError, DaemonIdentity};
@@ -3496,7 +3498,7 @@ mod tests {
     use std::fs;
     use std::io::{BufRead, BufReader, BufWriter, Write};
     use std::os::unix::{fs::PermissionsExt, net::UnixListener};
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::thread;
     use uuid::Uuid;
 
@@ -3711,6 +3713,7 @@ mod tests {
             profiles: Vec::new(),
         };
         let error = match open_store_with_reconciliation(
+            &config.database_path,
             &config,
             maicie::bridget_client::BridgetClientLimits::default(),
             false,
@@ -3731,92 +3734,8 @@ mod tests {
         fs::remove_dir_all(root).expect("nettoyage témoin");
     }
 
-    fn config_sans_daemon(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
-        fs::create_dir_all(root).expect("répertoire temporaire");
-        fs::set_permissions(root, fs::Permissions::from_mode(0o700))
-            .expect("permissions du répertoire temporaire");
-        let database = root.join("maicie.sqlite3");
-        let catalogue = root.join("catalogue.jsonl");
-        let config_path = root.join("config.json");
-        let config = MaicieConfig {
-            version: 1,
-            bridget_socket: root.join("daemon-absent.sock"),
-            database_path: database.clone(),
-            durations: DurationClasses {
-                short_secs: 30,
-                normal_secs: 60,
-                long_secs: 90,
-            },
-            status_capture_budget_ms: None,
-            catalogue_path: Some(catalogue.clone()),
-            coordination_policies: None,
-            review_project: None,
-            profiles: Vec::new(),
-        };
-        fs::write(
-            &config_path,
-            serde_json::to_vec_pretty(&config).expect("configuration JSON"),
-        )
-        .expect("écriture configuration");
-        (config_path, database, catalogue)
-    }
-
-    /// Oracle de couverture runtime : les trois entrées qui contournaient le
-    /// helper historique doivent toutes refuser avant SQLite ou le journal.
-    #[test]
-    fn garde_federee_couvre_chaque_entree_directe_du_store() {
-        let mut failures = Vec::new();
-        for (index, entry) in ["migrate", "plage-list", "registre-list"]
-            .into_iter()
-            .enumerate()
-        {
-            // Les sockets Unix sont bornées à 103 octets sur macOS. Garder la
-            // fixture courte même si TMPDIR est déjà un chemin assez long.
-            let root = std::env::temp_dir().join(format!("m54-{index}-{}", Uuid::new_v4()));
-            let (config, database, catalogue) = config_sans_daemon(&root);
-            let result = match entry {
-                "migrate" => run_migrate(MigrateArgs { config }),
-                "plage-list" => run_plage(
-                    PlageArgs {
-                        config,
-                        action: PlageAction::List,
-                    },
-                    false,
-                ),
-                "registre-list" => run_registre(
-                    RegistreArgs {
-                        config,
-                        action: RegistreAction::List {
-                            fermes: false,
-                            refutes: false,
-                            attente: false,
-                            rectifies: false,
-                        },
-                    },
-                    false,
-                ),
-                _ => unreachable!("inventaire fermé"),
-            };
-            let refused = matches!(&result, Err(CliError::DaemonStoreLocality(_)));
-            let database_created = database.exists();
-            let catalogue_created = catalogue.exists();
-            if !refused || database_created || catalogue_created {
-                failures.push(format!(
-                    "{entry}: result={result:?} sqlite={database_created} catalogue={catalogue_created}"
-                ));
-            }
-            fs::remove_dir_all(root).expect("nettoyage témoin");
-        }
-        assert!(
-            failures.is_empty(),
-            "{} sur 3 entrées contournent la garde : {}",
-            failures.len(),
-            failures.join(" ; ")
-        );
-    }
-
-    /// Oracle structurel : une nouvelle ouverture directe doit rendre le banc
-    /// rouge, même si les trois entrées connues restent correctement gardées.
+    /// Oracle structurel : les ouvertures directes restent derrière l’unique
+    /// helper gardé ; le chemin migrant est contrôlé séparément par son API.
     #[test]
     fn inventaire_des_ouvertures_sqlite_reste_derriere_l_unique_helper_garde() {
         let source = include_str!("main.rs");
@@ -3845,7 +3764,7 @@ mod tests {
                 .iter()
                 .map(|site| site.split_once(':').unwrap().0)
                 .collect::<Vec<_>>(),
-            vec!["open_guarded_maicie_store", "open_guarded_maicie_store"],
+            vec!["open_guarded_maicie_store"],
             "sites d'ouverture directe hors helper gardé : {sites:?}"
         );
     }
