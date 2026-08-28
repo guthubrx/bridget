@@ -105,10 +105,7 @@ impl Router {
             Some(explicit) => {
                 validate_agent_name(explicit).map_err(RouterError::InvalidName)?;
                 if self.agents.contains_key(explicit) {
-                    return Err(RouterError::AgentNotFound(format!(
-                        "nom déjà pris: {}",
-                        explicit
-                    )));
+                    return Err(RouterError::NameTaken(explicit.to_string()));
                 }
                 explicit.to_string()
             }
