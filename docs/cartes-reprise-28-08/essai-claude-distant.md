@@ -1,5 +1,15 @@
 # Carte de reprise — essai-claude-distant
 
+> **TOUTE AFFIRMATION DATABLE DE CETTE CARTE EST DU 28/08 ET NON REVERIFIEE DEPUIS.**
+> Elle ne porte aucune affirmation d'integration POSITIVE — mais ce n'est pas une raison de ne pas la dater,
+> et le referent avait conclu l'inverse a tort. Reserve de jc2-flux, 28/08 18h24 : **les NEGATIONS perissent
+> dans le sens le plus traitre** — « X n'est PAS integre » devient faux des qu'on integre. Exclure les negations
+> pour conclure qu'il n'y a rien a dater reintroduit exactement le defaut que ce bandeau corrige.
+> CE QUI EST DATABLE ICI : `MEMORY.md` absent ; HEAD `e75aa3b` avec 1117 commits — **un HEAD perime comme tout
+> HEAD** ; et l'etat de l'agent au 28/08 17h. Avant de t'y fier : `git fetch` puis mesure, et NOMME LE REMOTE —
+> `origin` ne designe pas le meme depot selon les checkouts du parc.
+
+
 > **PREMIER GESTE OBLIGATOIRE AVANT TOUTE LECTURE DE CETTE CARTE**
 > AVANT d executer quoi que ce soit, RELEVE LA VRAIE VARIABLE D ENTREE — le cwd de TON PROCESSUS :
 > `readlink /proc/<ton-pid>/cwd` puis `git -C <ce-cwd> rev-parse --show-toplevel`.
