@@ -18,6 +18,12 @@ l'objectif `096e4ca9`, `mode=delegue`, `etat=en_coordination`, dont le `but` cor
 explicite`. Le `message_id` `5722d6b3` figure dans les remises locales. Aucune
 divergence entre la notification et le greffe.
 
+**Clôturé depuis.** Mesuré par moi après annonce du référent, et non cru sur parole :
+objectif `etat=clos`, délégation `etat=soldee_par_cloture`, décision
+`88d4964f-aea5-472a-b820-9ffeb7a86c1f` `etat=appliquee`. Les deux constats de ce
+paragraphe sont vrais **chacun à sa date** — le premier n'est pas périmé par le second,
+il est clos. C'est la forme que je défends dans toute cette carte.
+
 **Première version de cette carte : j'avais écrit ici que le mandat était INVÉRIFIABLE,
 et je l'avais envoyé au référent. C'était faux.** Je n'avais pas essayé `--json`, alors
 que le parseur du source le documente. J'ai tâtonné sur la CLI, échoué six fois, et

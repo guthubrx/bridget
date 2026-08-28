@@ -16,8 +16,15 @@
 > la reponse sera toujours `absent`. Cette consigne, presente ici jusqu au 28/08 16h44, etait
 > un rite — corrigee sur demonstration de rc5-flux, qui a invalide sa propre proposition.
 > ENSUITE seulement, executer `bridget domain bridget` et verifier la sortie.
-> Le domaine NE SURVIT PAS au remplacement du processus : il est derive du nom du repertoire
-> de la racine git (`derive_domain`, crates/bridget-daemon/src/wrapper.rs:983), jamais de `bridget`.
+> Le domaine NE SURVIT PAS AU CHANGEMENT DE NOM — et non au respawn, requalification du 28/08 :
+> il est persiste dans `agent-domains/<nom>`, RELU a chaque enregistrement y compris apres
+> reconnexion, et un respawn du MEME nom retrouve donc son domaine. Un nom neuf n a pas de
+> fichier : `derive_domain` s applique alors et rend le `basename` de la racine git du cwd,
+> avec repli sur le cwd lui-meme. IL PEUT DONC VALOIR `bridget` NATIVEMENT si ce repertoire
+> s appelle `bridget` — c est le cas de `rc7` et `essai-claude-distant`, verifie par leur PID.
+> Source : `fn derive_domain` et `fn effective_domain`, `crates/bridget-daemon/src/wrapper.rs`,
+> ligne 983 DANS L ARBRE `/home/moi/revue/rc7/bridget` — la ligne differe selon les checkouts,
+> il y en a six sous /home/moi. `effective_domain` n a AUCUN repli code en dur vers `bridget`.
 > Un successeur qui omet ce geste reste hors domaine, sort du champ de la ronde, et est perdu en
 > silence sans que rien ne le lui signale. Aucune carte ne portait cette ligne avant le 28/08 15h53.
 
