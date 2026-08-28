@@ -71,7 +71,25 @@
       <section class="conversation" aria-label="Conversation courante">
         <header class="conversation-header">
           <div class="agent-heading">
-            <span class="state-dot" id="selected-state-dot" aria-hidden="true"></span>
+            <div class="agent-avatar-control">
+              <button
+                class="selected-agent-avatar"
+                id="selected-agent-avatar"
+                type="button"
+                aria-label="Choisir la couleur de cet agent"
+                aria-controls="agent-appearance-picker"
+                aria-expanded="false"
+              ></button>
+              <div class="agent-appearance-picker" id="agent-appearance-picker" hidden>
+                <p>Couleur de l’agent</p>
+                <div
+                  class="agent-appearance-colors"
+                  id="agent-appearance-colors"
+                  role="group"
+                  aria-label="Choisir la couleur de l’agent"
+                ></div>
+              </div>
+            </div>
             <div>
               <h2 id="selected-agent">Aucun agent</h2>
               <p id="selected-meta">Sélectionnez un agent dans la liste.</p>
