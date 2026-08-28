@@ -660,7 +660,10 @@ fn spawn_worker(
                 &events,
                 "turn_start",
                 Some(&message.id),
-                json!({ "body": message.body }),
+                json!({
+                    "from": &message.from,
+                    "body": message.body,
+                }),
             );
             let terminal = match write_input(&writer, &message) {
                 Ok(()) => {
