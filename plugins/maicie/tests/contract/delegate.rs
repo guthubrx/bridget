@@ -32,6 +32,7 @@ fn request<'a>(
 ) -> DelegateRequest<'a> {
     DelegateRequest {
         goal: "vérifier le contrat",
+        opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
         explicit_target: target,
         required_tags: tags,
         duration,
@@ -573,6 +574,7 @@ fn concurrent_delegate(
         }];
         let request = DelegateRequest {
             goal,
+            opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
             explicit_target: Some("prospective"),
             required_tags: &[],
             duration: ClasseDuree::Normale,

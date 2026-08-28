@@ -45,6 +45,7 @@ fn les_trois_classes_produisent_le_timeout_et_l_echeance_contractuelle_persistes
         );
         let request = DelegateRequest {
             goal: "vérifier les délais passifs",
+            opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
             explicit_target: Some("prospective"),
             required_tags: &[],
             duration,

@@ -21,7 +21,7 @@ use maicie::catalogue::{self, AppendOutcome, CatalogueError, CatalogueJournal};
 use maicie::config::{ConfigError, MaicieConfig};
 use maicie::domain::{
     ClasseDuree, CoutMissionAgent, DecisionCoordination, Delegation, EtatFlux, ObjectifCoordonne,
-    SourceSnapshot, SuiteObjective,
+    ObjectiveOpeningPermit, SourceSnapshot, SuiteObjective,
 };
 use maicie::greffe_service::{
     GreffeServiceError, append_registre_add, apply_delegate, candidates_from,
@@ -619,6 +619,7 @@ fn run_delegate(arguments: DelegateArgs, migrate: bool) -> Result<String, CliErr
         .unwrap_or_else(|| Uuid::new_v4().to_string());
     let request = DelegateRequest {
         goal: &arguments.goal,
+        opening_permit: ObjectiveOpeningPermit::auto_generated(),
         explicit_target: arguments.target.as_deref(),
         required_tags: &arguments.required_tags,
         duration: arguments.duration,

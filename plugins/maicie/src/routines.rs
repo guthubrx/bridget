@@ -12,7 +12,7 @@
 
 use crate::app::{DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, delegate};
 use crate::config::DurationClasses;
-use crate::domain::{ClasseDuree, SuiteObjective};
+use crate::domain::{ClasseDuree, ObjectiveOpeningPermit, SuiteObjective};
 use crate::store::{MaicieStore, StoreError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -471,6 +471,7 @@ pub fn evaluate_routines_with(
             );
             let request = DelegateRequest {
                 goal: &goal,
+                opening_permit: ObjectiveOpeningPermit::auto_generated(),
                 explicit_target: Some(routine.participant.as_str()),
                 required_tags: &[],
                 duration: ClasseDuree::Normale,

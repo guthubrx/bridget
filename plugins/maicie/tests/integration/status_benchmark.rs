@@ -388,6 +388,7 @@ impl BenchmarkFixture {
                 &candidates,
                 &DelegateRequest {
                     goal: &goal,
+                    opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
                     explicit_target: Some("benchmark-agent"),
                     required_tags: &[],
                     duration: ClasseDuree::Normale,

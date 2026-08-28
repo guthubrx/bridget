@@ -126,6 +126,7 @@ fn seed(database: &Path) -> maicie::app::DelegationCreated {
     }];
     let request = DelegateRequest {
         goal: "produire le rapport",
+        opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
         explicit_target: Some("prospective"),
         required_tags: &[],
         duration: ClasseDuree::Normale,
@@ -171,6 +172,7 @@ fn seed_review_target(
     }];
     let request = DelegateRequest {
         goal: "relire la tête gelée",
+        opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
         explicit_target: Some("prospective"),
         required_tags: &[],
         duration: ClasseDuree::Normale,

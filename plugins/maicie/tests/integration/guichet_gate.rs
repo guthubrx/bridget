@@ -88,6 +88,7 @@ fn seed_with_review(
         &candidates,
         &DelegateRequest {
             goal: "produire le rapport",
+            opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
             explicit_target: Some(participant),
             required_tags: &[],
             duration: ClasseDuree::Normale,
