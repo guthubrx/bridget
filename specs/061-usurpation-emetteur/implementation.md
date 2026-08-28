@@ -78,10 +78,38 @@ la mutation a eu lieu, ce qui masquait le danger.
 propre. Sur un travail non commité, il faut copier le fichier avant mutation et
 restaurer depuis la copie.
 
+## Non-régression, complétée après coup
+
+La suite `--workspace --lib` bloquait dans `daemon::presence_tests`, qui lancent
+des processus réels. Mesure reprise en les écartant :
+
+```
+cargo test -p bridget-daemon --lib -- --skip presence_tests
+→ 487 passed / 1 failed / 6 ignored / 111 filtered
+```
+
+L’unique échec est `wrapper::prompt_tests::TEMOIN_carte_de_reprise_instruction_lf_ne_cree_pas_de_ligne_de_consigne`,
+l’un des onze échecs préexistants relevés sur `70ef619`. Il vit dans
+`wrapper.rs`, que ce delta ne touche pas.
+
+**Diagnostic de cet échec, pour qu’il ne soit pas pris pour une régression.**
+La protection qu’il garde fonctionne : le saut de ligne est bien échappé et la
+fausse consigne reste sur une seule ligne. Le témoin échoue parce que son
+attente est écrite en dur et ne prévoit pas le bloc `IDENTIFIANTS DU MANDAT`
+que le rendu ajoute désormais à la ligne `Instruction`.
+
+Conséquence, qui dépasse ce delta : **un témoin de sécurité rouge en permanence
+ne protège plus rien.** Si la vraie garde cassait — un LF non échappé, donc une
+fausse consigne devenue ligne de consigne — le test échouerait de la même
+façon, et personne ne verrait la différence. C’est le pendant exact de ce que
+`061` a appris sur les témoins verts : un témoin vert atteste ce qu’on a écrit,
+un témoin rouge chronique cesse d’être un témoin.
+
 ## Non attesté
 
 - L’intégration de cette branche. Elle dépend de `060`, elle-même non intégrée :
   **`061` ne peut pas être intégrée seule.**
+- La suite `presence_tests` elle-même, toujours pas exécutée.
 - Le déploiement. La faille reste ouverte sur le daemon en service tant que le
   binaire n’est pas remplacé.
 - Toute résistance à un adversaire : voir la limite déclarée dans `spec.md`.
