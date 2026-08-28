@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import shutil
@@ -15,6 +16,46 @@ from pathlib import Path
 from typing import Any
 
 ATTESTED_OUTBOX_STATES = ("accepted", "outcome_unknown", "rejected")
+
+VP_CLASSES = ("production", "verification", "instruction", "repair", "indeterminate")
+VP_CLASSIFIER_VERSION = "vp-manifest-v1"
+VP_BASELINE_START_EXCLUSIVE = 1787788534
+VP_BASELINE_END_INCLUSIVE = 1787874934
+VP_BASELINE_COUNT = 169
+VP_BASELINE_ID_BYTES = 6253
+VP_BASELINE_SHA256 = "e2a279624ecd4fbd9ca7f8f97effa45777c15b6b3b9574f3d43a9d90298d5a55"
+VP_ROOT_REPUBLISH = "lot:maicie-republish-before-migrate"
+
+# Annotations historiques volontairement petites et réfutables. Elles sont
+# issues de la lecture des buts durables, jamais d'un motif lexical ni du champ
+# `origin` actuellement trompeur. Tout identifiant absent reste indéterminé.
+VP_ANNOTATIONS: dict[str, dict[str, str]] = {
+    "17441d4f-244b-41dc-8c0f-a26110a55276": {
+        "class": "production",
+        "root_id": VP_ROOT_REPUBLISH,
+        "basis": "mandat initial de mise en oeuvre de la republication",
+    },
+    "d105d9c4-8f67-482f-8f53-5f6725229f74": {
+        "class": "verification",
+        "root_id": VP_ROOT_REPUBLISH,
+        "basis": "revue explicite du lot de republication",
+    },
+    "3344a60b-6f3f-4cd3-ac07-84ab40483cef": {
+        "class": "verification",
+        "root_id": VP_ROOT_REPUBLISH,
+        "basis": "amendement cause par le verdict de revue",
+    },
+    "f11f889b-4f22-482a-9960-fb45348bdd01": {
+        "class": "verification",
+        "root_id": VP_ROOT_REPUBLISH,
+        "basis": "seconde revue explicite du meme lot",
+    },
+    "83240941-9a69-4879-8bd7-95b5534c01c3": {
+        "class": "verification",
+        "root_id": VP_ROOT_REPUBLISH,
+        "basis": "correction des charges produites par la revue",
+    },
+}
 
 
 def args() -> argparse.Namespace:
@@ -60,7 +101,232 @@ def unavailable(reason: str) -> dict[str, Any]:
     return {"state": "unavailable", "reason": reason}
 
 
-def read_maicie_read_only(config_path: str) -> tuple[dict[str, Any] | None, str | None]:
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def objective_rows(connection: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = connection.execute(
+        "SELECT id, payload_json FROM objectives ORDER BY id"
+    ).fetchall()
+    objectives: list[dict[str, Any]] = []
+    for objective_id, payload_json in rows:
+        payload = json.loads(payload_json)
+        created_at = payload.get("cree_at") if isinstance(payload, dict) else None
+        goal = payload.get("but") if isinstance(payload, dict) else None
+        if (
+            not isinstance(objective_id, str)
+            or not isinstance(created_at, int)
+            or isinstance(created_at, bool)
+        ):
+            raise ValueError("objectif sans identifiant ou horodatage exploitable")
+        if payload.get("id") != objective_id:
+            raise ValueError(f"identifiant divergent dans le payload de {objective_id}")
+        if not isinstance(goal, str):
+            raise ValueError(f"objectif {objective_id} sans but textuel exploitable")
+        objectives.append({"id": objective_id, "created_at": created_at, "goal": goal})
+    return objectives
+
+
+def select_objective_window(
+    rows: list[dict[str, Any]], start_exclusive: int, end_inclusive: int
+) -> list[dict[str, Any]]:
+    return sorted(
+        (row for row in rows if start_exclusive < row["created_at"] <= end_inclusive),
+        key=lambda row: (row["created_at"], row["id"]),
+    )
+
+
+def ratio_result(
+    numerator: int, denominator: int, complete: bool, reason: str
+) -> dict[str, Any]:
+    if not complete:
+        return unavailable(reason)
+    if denominator == 0:
+        return unavailable("denominator_zero")
+    return {
+        "state": "available",
+        "numerator": numerator,
+        "denominator": denominator,
+        "value": numerator / denominator,
+    }
+
+
+def measure_objective_population(
+    rows: list[dict[str, Any]], window: dict[str, Any]
+) -> dict[str, Any]:
+    id_bytes = "".join(f"{row['id']}\n" for row in rows).encode("ascii")
+    entries: list[dict[str, Any]] = []
+    objective_counts = {name: 0 for name in VP_CLASSES}
+    roots = {name: set() for name in VP_CLASSES}
+    classified = 0
+    rooted = 0
+
+    for row in rows:
+        annotation = VP_ANNOTATIONS.get(row["id"])
+        if annotation is None:
+            classification = "indeterminate"
+            root_id = None
+            basis = "causalite_historique_indisponible"
+        else:
+            classification = annotation["class"]
+            root_id = annotation["root_id"]
+            basis = annotation["basis"]
+        if classification not in VP_CLASSES:
+            raise ValueError(f"classe inconnue pour {row['id']}: {classification}")
+        objective_counts[classification] += 1
+        if classification != "indeterminate":
+            classified += 1
+        if root_id is not None:
+            rooted += 1
+            roots[classification].add(root_id)
+        entries.append(
+            {
+                "objective_id": row["id"],
+                "class": classification,
+                "root_id": root_id,
+                "basis": basis,
+                "goal_sha256": sha256_bytes(row["goal"].encode("utf-8")),
+            }
+        )
+
+    total = len(rows)
+    classification_complete = classified == total
+    root_complete = rooted == total
+    root_counts = {name: len(values) for name, values in roots.items()}
+    objective_ratios = {
+        "verification_per_production": ratio_result(
+            objective_counts["verification"],
+            objective_counts["production"],
+            classification_complete,
+            "classification_coverage_incomplete",
+        ),
+        "verification_per_production_and_repair": ratio_result(
+            objective_counts["verification"],
+            objective_counts["production"] + objective_counts["repair"],
+            classification_complete,
+            "classification_coverage_incomplete",
+        ),
+    }
+    root_measure_complete = classification_complete and root_complete
+    root_reason = (
+        "classification_coverage_incomplete"
+        if not classification_complete
+        else "root_coverage_incomplete"
+    )
+    root_ratios = {
+        "verification_per_production": ratio_result(
+            root_counts["verification"],
+            root_counts["production"],
+            root_measure_complete,
+            root_reason,
+        ),
+        "verification_per_production_and_repair": ratio_result(
+            root_counts["verification"],
+            len(roots["production"] | roots["repair"]),
+            root_measure_complete,
+            root_reason,
+        ),
+    }
+    expansion = {
+        name: (
+            objective_counts[name] / root_counts[name] if root_counts[name] else None
+        )
+        for name in VP_CLASSES
+    }
+    manifest_bytes = json.dumps(
+        entries, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return {
+        "window": window,
+        "population": {
+            "count": total,
+            "id_bytes": len(id_bytes),
+            "sha256": sha256_bytes(id_bytes),
+        },
+        "manifest": {"sha256": sha256_bytes(manifest_bytes), "entries": entries},
+        "coverage": {
+            "classification": {
+                "classified": classified,
+                "total": total,
+                "ratio": classified / total if total else 0.0,
+            },
+            "root": {
+                "rooted": rooted,
+                "total": total,
+                "ratio": rooted / total if total else 0.0,
+            },
+        },
+        "objectives": {"counts": objective_counts, "ratios": objective_ratios},
+        "roots": {
+            "counts": root_counts,
+            "ratios": root_ratios,
+            "expansion_factor": expansion,
+        },
+    }
+
+
+def measure_verification_production(
+    connection: sqlite3.Connection, now: int
+) -> dict[str, Any]:
+    rows = objective_rows(connection)
+    baseline = measure_objective_population(
+        select_objective_window(
+            rows, VP_BASELINE_START_EXCLUSIVE, VP_BASELINE_END_INCLUSIVE
+        ),
+        {
+            "kind": "frozen_24h",
+            "start": VP_BASELINE_START_EXCLUSIVE,
+            "start_inclusive": False,
+            "end": VP_BASELINE_END_INCLUSIVE,
+            "end_inclusive": True,
+            "timezone": "Europe/Paris",
+        },
+    )
+    expected = {
+        "count": VP_BASELINE_COUNT,
+        "id_bytes": VP_BASELINE_ID_BYTES,
+        "sha256": VP_BASELINE_SHA256,
+    }
+    baseline["reference"] = {
+        "expected": expected,
+        "matches": baseline["population"] == expected,
+    }
+    if baseline["reference"]["matches"]:
+        baseline["state"] = "available"
+    else:
+        baseline["state"] = "unavailable"
+        baseline["reason"] = "frozen_population_mismatch"
+    rolling_start = now - 24 * 60 * 60
+    rolling = measure_objective_population(
+        select_objective_window(rows, rolling_start, now),
+        {
+            "kind": "rolling_24h",
+            "start": rolling_start,
+            "start_inclusive": False,
+            "end": now,
+            "end_inclusive": True,
+            "timezone": "UTC",
+        },
+    )
+    rolling["state"] = "available"
+    return {
+        "state": "available",
+        "version": 1,
+        "classifier_version": VP_CLASSIFIER_VERSION,
+        "as_of": now,
+        "target": None,
+        "origin_used": False,
+        "populations": {
+            "human_baseline_2026_08_27": baseline,
+            "rolling_24h": rolling,
+        },
+    }
+
+
+def read_maicie_read_only(
+    config_path: str, now: int
+) -> tuple[dict[str, Any] | None, str | None]:
     """Lit les index Maicie sur une copie : aucune commande `status` ici.
 
     `maicie status` réconcilie ses outboxes au démarrage. Une ronde ne doit ni
@@ -98,6 +364,17 @@ def read_maicie_read_only(config_path: str) -> tuple[dict[str, Any] | None, str 
                     "ORDER BY d.id"
                     , ATTESTED_OUTBOX_STATES
                 ).fetchall()
+                try:
+                    verification_production = measure_verification_production(
+                        connection, now
+                    )
+                except (
+                    TypeError,
+                    ValueError,
+                    json.JSONDecodeError,
+                    sqlite3.Error,
+                ) as error:
+                    verification_production = unavailable(str(error))
             finally:
                 connection.close()
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, sqlite3.Error) as error:
@@ -119,6 +396,7 @@ def read_maicie_read_only(config_path: str) -> tuple[dict[str, Any] | None, str 
             "count of objectives.state=a_evaluer ; not delegation a_evaluer rows"
         ),
         "active_participants": sorted(active),
+        "verification_production": verification_production,
     }, None
 
 
@@ -131,7 +409,7 @@ def report(options: argparse.Namespace) -> tuple[str, dict[str, Any]]:
     excluded = {item.strip() for item in options.exclude.split(",") if item.strip()}
     agents_raw, agents_error = run_json([options.bridget_bin, "agents", "--json"])
     requests_raw, requests_error = run_json([options.bridget_bin, "requests", "--all", "--json"])
-    maicie_raw, maicie_error = read_maicie_read_only(options.config)
+    maicie_raw, maicie_error = read_maicie_read_only(options.config, now)
     registry_raw, registry_error = run_text([options.maicie_bin, "registre", "list", "--config", options.config, "--attente"])
     result: dict[str, Any] = {"v": 1, "observed_at": now, "observed_at_iso": observed_at, "decision": "none", "delivery": "none"}
 
@@ -139,6 +417,7 @@ def report(options: argparse.Namespace) -> tuple[str, dict[str, Any]]:
     evaluate: list[dict[str, str]] = []
     if maicie_error:
         result["maicie"] = unavailable(maicie_error)
+        result["verification_production"] = unavailable(maicie_error)
     else:
         evaluate = maicie_raw["objectives_to_evaluate"]
         active = set(maicie_raw["active_participants"])
@@ -148,6 +427,7 @@ def report(options: argparse.Namespace) -> tuple[str, dict[str, Any]]:
             "objectives_to_evaluate_means": maicie_raw["objectives_to_evaluate_means"],
             "active_participants": sorted(active),
         }
+        result["verification_production"] = maicie_raw["verification_production"]
 
     if agents_error or not isinstance(agents_raw, list):
         result["agents"] = unavailable(agents_error or "annuaire Bridget invalide")
@@ -176,11 +456,22 @@ def report(options: argparse.Namespace) -> tuple[str, dict[str, Any]]:
         result["requests"] = {"state": "available", "open_count": len(requests_raw), "expired": expired}
     result["registry"] = unavailable(registry_error) if registry_error else {"state": "available", "view": registry_raw}
 
+    vp = result["verification_production"]
+    if vp["state"] == "available":
+        rolling_vp = vp["populations"]["rolling_24h"]
+        classified_vp = rolling_vp["coverage"]["classification"]
+        rooted_vp = rolling_vp["coverage"]["root"]
+        vp_summary = (
+            f"vp_classes={classified_vp['classified']}/{classified_vp['total']}, "
+            f"vp_racines={rooted_vp['rooted']}/{rooted_vp['total']}"
+        )
+    else:
+        vp_summary = "vp=unavailable"
     summary = (
         f"RONDE {observed_at} — agents={result['agents']['state']}, maicie={result['maicie']['state']}, "
         f"demandes={result['requests']['state']}, registre={result['registry']['state']}; "
         f"objectifs_a_evaluer={len(evaluate)} (objectifs.state=a_evaluer, pas les délégations), "
-        f"demandes_échues={len(result['requests'].get('expired', []))}. "
+        f"demandes_échues={len(result['requests'].get('expired', []))}, {vp_summary}. "
         f"Constat seulement : aucune décision ni aucun envoi."
     )
     return summary, result

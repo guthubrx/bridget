@@ -80,11 +80,16 @@ report_dir="${fixture_root}/reports"
 command_log="${fixture_root}/commands.log"
 output="$(RONDE_COMMAND_LOG="$command_log" "$system_python" "$ronde" --bridget-bin "$fake_bridget" --maicie-bin "$fake_maicie" --config "$config" --now 100 --report-dir "$report_dir")"
 grep -q 'Constat seulement : aucune décision ni aucun envoi.' <<<"$output"
+grep -q 'vp=unavailable' <<<"$output"
 json="$(tail -n 1 <<<"$output")"
 "$system_python" - "$json" <<'PY'
 import json, sys
 report = json.loads(sys.argv[1])
 assert report["decision"] == "none" and report["delivery"] == "none"
+# Cette fixture reproduit volontairement l'ancien schéma minimal sans
+# payload_json. La mesure V/P doit déclarer la source inobservable sans faire
+# tomber les autres constats de la ronde.
+assert report["verification_production"]["state"] == "unavailable"
 assert report["maicie"]["objectives_to_evaluate"] == [{"objective_id": "evaluate", "state": "a_evaluer"}]
 assert report["maicie"]["objectives_to_evaluate_means"] == (
     "count of objectives.state=a_evaluer ; not delegation a_evaluer rows"
@@ -137,6 +142,7 @@ degraded="$(RONDE_COMMAND_LOG="$command_log" "$system_python" "$ronde" --json --
 import json, sys
 report = json.loads(sys.argv[1])
 assert report["maicie"]["state"] == "unavailable"
+assert report["verification_production"]["state"] == "unavailable"
 assert report["agents"]["state"] == "available"
 assert report["agents"]["unassigned_connected"] is None
 assert report["decision"] == "none" and report["delivery"] == "none"

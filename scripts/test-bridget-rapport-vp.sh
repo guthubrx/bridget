@@ -57,6 +57,7 @@ assert measure["origin_used"] is False
 baseline = measure["populations"]["human_baseline_2026_08_27"]
 rolling = measure["populations"]["rolling_24h"]
 for population in (baseline, rolling):
+    assert population["state"] == "available"
     assert population["population"] == {
         "count": 169,
         "id_bytes": 6253,
@@ -81,10 +82,14 @@ for population in (baseline, rolling):
         "indeterminate": 164,
     }
     assert population["roots"]["counts"]["production"] == 1
-    assert population["roots"]["counts"]["verification"] == 1
+    assert population["roots"]["counts"]["verification"] == 1, (
+        "le découpage a changé la racine vérifiée: "
+        f"{population['roots']['counts']['verification']}"
+    )
     assert population["roots"]["expansion_factor"]["verification"] == 4.0
     assert population["objectives"]["ratios"]["verification_per_production"]["state"] == "unavailable"
     assert population["roots"]["ratios"]["verification_per_production"]["state"] == "unavailable"
+assert baseline["reference"]["matches"] is True
 
 entries = {entry["objective_id"]: entry for entry in baseline["manifest"]["entries"]}
 root = "lot:maicie-republish-before-migrate"
@@ -103,7 +108,10 @@ assert entries["17441d4f-244b-41dc-8c0f-a26110a55276"]["root_id"] == root
 # une même racine ne produisent qu'une racine vérifiée. Le mutant qui remplace
 # root_id par objective_id rendrait 4 ici et meurt après lecture réussie.
 assert baseline["objectives"]["counts"]["verification"] == 4
-assert baseline["roots"]["counts"]["verification"] == 1
+assert baseline["roots"]["counts"]["verification"] == 1, (
+    "le mutant objectif-comme-racine a survécu: "
+    f"{baseline['roots']['counts']['verification']} racines"
+)
 PY
 
 echo "rapport V/P réel : baseline, couverture et invariance de racine vérifiées"
