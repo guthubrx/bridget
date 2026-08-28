@@ -933,9 +933,24 @@ fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMes
             }
             Err(error) => {
                 let message_id = message.id.clone();
+                // Quatrième piège, absent du chantier et MESURÉ dans le schéma
+                // de codex-cli 0.150.1 : un tour de type `review` ou `compact`
+                // n'est PAS pilotable (`NonSteerableTurnKind`, erreur
+                // `activeTurnNotSteerable`). Réessayer indéfiniment boucherait
+                // la file jusqu'à la fin du tour. Le message repart donc en mode
+                // « queue » — il sera traité au tour suivant plutôt que perdu ni
+                // rejoué en boucle.
+                let refus = error.to_string();
+                let non_pilotable = refus.contains("activeTurnNotSteerable")
+                    || refus.contains("NotSteerable")
+                    || refus.contains("not steerable");
                 let (lock, wake) = &*worker.queue;
                 let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
-                state.steer.push_front(message);
+                if non_pilotable {
+                    state.messages.push_front(message);
+                } else {
+                    state.steer.push_front(message);
+                }
                 wake.notify_one();
                 drop(state);
                 // Pas de DeliveryRejected ici : le message n'est pas perdu, il
