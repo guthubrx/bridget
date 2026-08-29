@@ -266,20 +266,29 @@ Rien de ma propre initiative. Sur mandat explicite seulement :
 - ~~Faire intégrer `9c6f47d` puis `b04cd3a`~~ — **FAIT le 28/08 à 20:57**,
   `dda0843`. Les deux sont dans `main`, dans le bon ordre, et le contenu a été
   contrôlé après coup.
-- Faire **déployer**. Tant que ce n'est pas fait, les expéditeurs jetables
-  continuent de s'accumuler et le travail ne sert à rien. C'est le seul point où
-  le livrable est inerte, et il ne dépend pas de moi.
+- ~~Faire **déployer**~~ — **FAIT le 28/08 à 23:52:30**, redémarrage du daemon
+  sur un binaire de 23:41:16. Le livrable n'est plus inerte. Éprouvé par moi en
+  production, les trois cas, avec leurs codes de sortie réels :
+  `--from humain` → REJET usurpation, code 1 ; `--from <nom inconnu>` → REJET non
+  adressable, code 1, **motif distinct** ; sans `--from` → OK, code 0 et
+  attribution correcte au ledger. Les deux propriétés, celle de 060 et celle de
+  061, sont séparées dans le comportement et pas seulement dans le code.
 - Compteur de référence pour juger l'effet : **616 expéditeurs jetables hors
   ronde de vigilance**, et non les 728 bruts. La ronde du référent produisait
   elle-même 112 des 728, soit 15 % du défaut qu'elle sert à surveiller ; mesurée
   sur la série brute, une correction efficace aurait pu ressembler à un échec.
   Quelques unités des 616 viennent de mes propres sondes de diagnostic.
-- Test discriminant à utiliser APRÈS déploiement, celui-là est valide :
+- Test discriminant du déploiement — **exécuté le 28/08, les deux états ont été
+  observés** ; garde-le pour éprouver un futur déploiement :
   ```
   bridget send --from un-nom-jamais-connecte --to <soi> "sonde"
-  avant → OK code 0, ledger inscrit cli-send-<pid>
-  après → REJET « … non adressable », code 1
+  avant → OK code 0, ledger inscrit cli-send-<pid>        (mesuré à 15h41)
+  après → REJET « … non adressable », code 1              (mesuré à 23h55)
   ```
+  Ne teste JAMAIS avec `--as` : il est refusé par les deux binaires et ne
+  discrimine rien. Attention aussi au code de sortie — lis celui de `bridget`,
+  pas celui d'un `head` en aval dans un tube. Je m'y suis laissé prendre et j'ai
+  failli attester un code 0 sur un rejet.
 
 ## 5. CHEMINS ABSOLUS
 
@@ -359,11 +368,20 @@ Hérités de `rc7`, que je transmets sans les avoir tous éprouvés :
 
 ## 8. CE QUE JE NE SAIS PAS — déclaré, non caché
 
-- **Si je survivrai à un redémarrage du service.** Ma survie repose sur
-  `persistent=1`, drapeau jamais éprouvé. Si tu me lis, ou bien il a tenu, ou
-  bien tu n'es pas moi et ce fichier est tout ce qui reste.
-- Si `9c6f47d` a été intégré depuis. **Vérifier après `fetch`, ne pas déduire.**
-- Si le correctif a été déployé. Le tester avec `--from`, jamais avec `--as`.
+**Trois de ces ignorances ont été levées le 28/08 au soir. Je les laisse avec
+leur réponse plutôt que de les effacer : la trace du doute enseigne plus que la
+conclusion seule.**
+
+- ~~Si je survivrai à un redémarrage du service.~~ **LEVÉE, ET PAR L'ÉVÉNEMENT
+  LUI-MÊME.** Le daemon a redémarré à 23:52:30 et j'ai survécu : contexte intact,
+  travail intact, et mon domaine valait toujours `bridget` — j'ai passé le §0
+  avant tout le reste. La survie ne reposait pas sur `persistent=1` seul : le
+  respawn s'est fait avec `--resume`. Ce que le §0 donnait pour établi par
+  lecture de code et par un témoin unitaire est désormais **mesuré en
+  conditions réelles**.
+- ~~Si `9c6f47d` a été intégré depuis.~~ **LEVÉE** : oui, `dda0843`, 20:57.
+  La consigne reste bonne pour la suite — vérifier après `fetch`, ne pas déduire.
+- ~~Si le correctif a été déployé.~~ **LEVÉE** : oui, 23:52:30, et éprouvé (§4).
 - Le contenu de l'objectif `50060f62` tel qu'inscrit au greffe : je ne l'ai
   jamais lu, l'outil ne me le permettait pas.
 - Si les bancs d'intégration passent : je ne les ai pas lancés, délibérément.

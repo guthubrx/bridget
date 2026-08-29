@@ -128,6 +128,10 @@ Tout ce qui suit porte la commande qui l'a produit. Reproductible.
 
 **Relancer le daemon ne touche que le groupe 1** — douze processus, dont les dix agents en flux. Les tmux, le relais UI et les orphelins restent sur leurs versions. Avant tout déploiement, sache lequel des quatre tu bouges.
 
+> **APRÈS LE DÉPLOIEMENT DU 28/08 23h41 — TROIS VERSIONS, PLUS QUATRE.** `[MESURÉ par moi à 23h52, confirmé par le référent]` Binaire installé remplacé (mtime 23:41:16), **build-id servi `5e3968709472` — identique au caractère près à la tête de `main`**. C'est plus fort que « propre » : le daemon sert **exactement la tête publiée**, vérifiable par quiconque en deux commandes. Le relais UI a été relancé 3 s après l'installation et tourne désormais sur `/home/moi/.local/bin/bridget` : **le groupe 3 a fusionné dans le groupe 1**. Restent 21 processus sur le dépôt des tmux, 14 sur le binaire installé, et les 4 résidus.
+> **Les quatre résidus ont survécu au déploiement** — vérifiés vivants un par un après coup. Ce sont des `target/debug/deps`, donc des **résidus de test et non des versions du parc** ; ne dépendant d'aucun chemin, **aucun déploiement ne les emportera jamais**.
+> **ÉCRIT, SERVI, MESURÉ — trois états, pas deux.** `[formulation partagée avec bridget]` Un code intégré n'est pas un code en service ; **et un code en service n'est pas un code éprouvé en service**. Le lot d'interruption est servi depuis 23:52:30 ; aucun horodatage ne montre encore un agent interrompu sur la route réelle. Ne confonds jamais ces trois-là.
+
 **Les quatre processus sur binaire effacé, nommés sans être touchés** : PID 37332 (`revue/cartae0/…/bridget_daemon`, 19:11:43), PID 4082814 (`revue/rc7/…/bridget_daemon`, 18:15:16), PID 2162509 et 2164282 (`install_republish_before_migrate`, 01:14 et 01:15). **C'est littéralement la panne du matin** — un daemon tournant sur un binaire supprimé, `Command::exec` échouant sur un chemin disparu. Les nommer avant de les subir vaut mieux que de les découvrir ; les arrêter est une décision, pas une mesure.
 
 **`bridget-idle`** (lecture de `/home/moi/.local/bin/bridget-idle`, 44685 octets)
