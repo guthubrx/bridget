@@ -128,7 +128,13 @@ Tout ce qui suit porte la commande qui l'a produit. Reproductible.
 
 **Relancer le daemon ne touche que le groupe 1** — douze processus, dont les dix agents en flux. Les tmux, le relais UI et les orphelins restent sur leurs versions. Avant tout déploiement, sache lequel des quatre tu bouges.
 
-> **APRÈS LE DÉPLOIEMENT DU 28/08 23h41 — TROIS VERSIONS, PLUS QUATRE.** `[MESURÉ par moi à 23h52, confirmé par le référent]` Binaire installé remplacé (mtime 23:41:16), **build-id servi `5e3968709472` — identique au caractère près à la tête de `main`**. C'est plus fort que « propre » : le daemon sert **exactement la tête publiée**, vérifiable par quiconque en deux commandes. Le relais UI a été relancé 3 s après l'installation et tourne désormais sur `/home/moi/.local/bin/bridget` : **le groupe 3 a fusionné dans le groupe 1**. Restent 21 processus sur le dépôt des tmux, 14 sur le binaire installé, et les 4 résidus.
+> **APRÈS LE DÉPLOIEMENT DU 28/08 23h41 — TROIS VERSIONS, PLUS QUATRE.** `[MESURÉ par moi à 23h52, confirmé par le référent]` Binaire installé remplacé (mtime 23:41:16), **build-id servi `5e3968709472`**, qui était **à 23h52 la tête exacte de `main`**.
+> **⚠ NE VÉRIFIE PAS CETTE ÉGALITÉ, ELLE EST DÉJÀ FAUSSE — et c'est moi qui l'avais écrite comme un critère.** À 00h15 `main` valait `a3d47285`, à 00h18 `8ffaa023` : huit commits `docs(registre)` l'ont périmée en vingt minutes. **Une égalité entre un artefact figé et une branche mobile se périme par construction** — l'inscrire comme critère permanent était une faute, et un successeur qui la contrôlerait conclurait à tort que le déploiement n'a pas eu lieu.
+> **LE CRITÈRE ROBUSTE QUI LA REMPLACE** `[MESURÉ par moi à 00h18]` — compare le **code**, pas les SHA :
+> ```
+> git diff --stat <build-id>..origin/main -- '*.rs'
+> ```
+> Vide ⇒ le binaire servi est **fonctionnellement à jour**, quels que soient les SHA. Mesuré : 5 fichiers et 117 insertions d'écart au total, **zéro sur les `.rs`** — les huit commits intercalés sont tous de la documentation. Ce critère survit à la cadence du registre ; l'égalité stricte non. Le relais UI a été relancé 3 s après l'installation et tourne désormais sur `/home/moi/.local/bin/bridget` : **le groupe 3 a fusionné dans le groupe 1**. Restent 21 processus sur le dépôt des tmux, 14 sur le binaire installé, et les 4 résidus.
 > **Les quatre résidus ont survécu au déploiement** — vérifiés vivants un par un après coup. Ce sont des `target/debug/deps`, donc des **résidus de test et non des versions du parc** ; ne dépendant d'aucun chemin, **aucun déploiement ne les emportera jamais**.
 > **ÉCRIT, SERVI, MESURÉ — trois états, pas deux.** `[formulation partagée avec bridget]` Un code intégré n'est pas un code en service ; **et un code en service n'est pas un code éprouvé en service**. Le lot d'interruption est servi depuis 23:52:30 ; aucun horodatage ne montre encore un agent interrompu sur la route réelle. Ne confonds jamais ces trois-là.
 
