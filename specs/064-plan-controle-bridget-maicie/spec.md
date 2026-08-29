@@ -5,10 +5,10 @@
 
 Spec: 064-plan-controle-bridget-maicie
 Titre: Plan de contrôle Bridget et Maicie
-Statut: In progress - validation Cursor externe en attente
+Statut: Implemented in isolated worktree - activation production non realisee
 Priorité: P1
-Tâches: 88/89 (99%)
-Tests: 40/41 (98%)
+Tâches: 89/89 (100%)
+Tests: 41/41 (100%)
 
 Résumé:
 - Contexte: Bridget garantit durablement le transport et le parc, tandis que Maicie garantit les objectifs et délégations, mais l'exécution réelle d'un travail reste insuffisamment représentée entre ces deux vérités.
@@ -23,14 +23,14 @@ Fichiers:
 
 **Feature Branch**: `session-064-plan-controle-bridget-maicie`
 **Created**: 2026-08-29
-**Status**: In progress - validation Cursor externe en attente
+**Status**: Implemented in isolated worktree - activation production non realisee
 **Priority**: P1
 **Dependencies**: SPEC-003, SPEC-004, SPEC-009, SPEC-011, SPEC-012, SPEC-014, SPEC-015, SPEC-016, SPEC-023, SPEC-034, SPEC-046, SPEC-048, SPEC-049, SPEC-052, SPEC-063
 
 ## Etat de livraison - 2026-08-29
 
-- Les lots techniques et documentaires T001 a T069 puis T071 a T089 sont prouves dans le worktree isole.
-- T070 reste ouverte : la matrice Cursor est prouvee par ACP commun et fixture, mais aucun executable Cursor reel nest configure.
+- Les lots techniques et documentaires T001 a T089 sont prouves dans le worktree isole.
+- Cursor est atteste par son binaire reel via ACP commun ; aucun adaptateur Cursor specialise nest requis.
 - SPEC-063 est integree au niveau code et tests ; sa preuve de route reelle T011 attend une mise en service controlee.
 - Toutes les bascules de la SPEC-064 restent desactivees. Ce statut ne vaut ni release ni activation.
 

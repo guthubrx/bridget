@@ -192,6 +192,6 @@ CARGO_TARGET_DIR=/tmp/bridget-spec064-target-13 /home/moi/.cargo/bin/cargo test 
 ```
 
 Verdict : succes. Les scenarios A a H sont exerces par les tests de crate et
-les preuves US1 a US6. Cursor est couvert par le transport ACP commun et ses
-fixtures de contrat ; le demarrage dun executable Cursor externe nest pas
-realise et reste le gate T070.
+les preuves US1 a US6. Cursor a ete exerce avec son binaire reel via le
+transport ACP commun : session, prompt et `session/cancel` sont attestes dans
+`evidence/us5-providers.md`.

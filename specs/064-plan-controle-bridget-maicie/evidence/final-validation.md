@@ -36,9 +36,9 @@ pas ete interrompus et ne participent pas a ce verdict.
 ## Limites explicites
 
 Aucune release, activation de bascule, migration de service, redemarrage ou
-observation de trafic de production na ete execute. Le binaire Cursor reel
-nest pas configure dans cet environnement ; sa validation externe reste la
-tache T070.
+observation de trafic de production na ete execute. Le binaire Cursor reel est
+maintenant valide dans une session ACP isolee ; seule T011 de SPEC-063 reste
+externe au worktree.
 
 ## Analyse et convergence manuelles
 
@@ -53,9 +53,8 @@ sources listees par les taches.
 - aucun ecart necessitant une tache supplementaire na ete trouve.
 
 Verdict de convergence : CONVERGED pour le perimetre executable du worktree.
-La tache T070 reste explicitement ouverte car la validation requiert un
-executable Cursor externe absent. La tache T011 de SPEC-063 reste externe au
-worktree car elle requiert une route reelle apres mise en service.
+T070 est attestee par le binaire Cursor reel. La tache T011 de SPEC-063 reste
+externe au worktree car elle requiert une route reelle apres mise en service.
 
 ## Build release isole
 
