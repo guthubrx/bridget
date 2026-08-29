@@ -156,6 +156,7 @@ pub enum GuichetResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum GuichetNext {
     Claimed(GuichetClaim),
     Empty,

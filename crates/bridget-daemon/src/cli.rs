@@ -616,6 +616,7 @@ fn resolve_spawn_order(
         command_id,
         issued_at: now,
         deadline_at: now.saturating_add(parsed.timeout_secs),
+        ownership: None,
     };
     let bytes = format!("{}\n", encode(&order).map_err(|error| error.to_string())?).into_bytes();
     bridget_transport::fsutil::write_private_file_atomic(&path, &bytes).map_err(|error| {
@@ -4745,6 +4746,7 @@ mod hook_tests {
             command_id: "command-lost".to_string(),
             issued_at: 100,
             deadline_at: 110,
+            ownership: None,
         };
         for _ in 0..2 {
             assert!(matches!(
@@ -4930,7 +4932,10 @@ mod hook_tests {
                 .collect(),
             model_mismatch: None,
             disk_space: None,
+            provider: None,
             persistent: None,
+            execution: None,
+            agent_link: None,
         };
         let rendered = format_rate_limit(&agent);
         assert!(rendered.contains("5h 19% rst "), "{rendered}");
@@ -5712,7 +5717,10 @@ mod idempotency_projection_tests {
             rate_limits: vec![],
             model_mismatch: None,
             disk_space: None,
+            provider: None,
             persistent,
+            agent_link: None,
+            execution: None,
         };
         let rendered = render_who(
             &[
@@ -5778,7 +5786,10 @@ mod idempotency_projection_tests {
             rate_limits: vec![],
             model_mismatch: None,
             disk_space: None,
+            provider: None,
+            agent_link: None,
             persistent,
+            execution: None,
         };
 
         let atteste = serde_json::to_value(agent(Some(true))).unwrap();
@@ -5824,8 +5835,11 @@ mod idempotency_projection_tests {
             effort: None,
             rate_limits: vec![],
             model_mismatch: None,
+            agent_link: None,
             disk_space: None,
+            provider: None,
             persistent: None,
+            execution: None,
         };
         let mut acp = agent("acp-gere", Some(PresenceMode::Acp), None);
         acp.disk_space = Some(bridget_transport::protocol::DiskSpaceFact {
@@ -5888,9 +5902,12 @@ mod idempotency_projection_tests {
                 resets_at: Some(1_787_572_200),
                 used_percent: Some(19),
             }],
+            agent_link: None,
             model_mismatch: None,
             disk_space: None,
+            provider: None,
             persistent: None,
+            execution: None,
         };
         let rendered = format_rate_limit(&agent);
         assert!(rendered.starts_with("5h 19% rst "), "{rendered}");
@@ -5951,10 +5968,13 @@ mod idempotency_projection_tests {
             domain: None,
             model: Some("claude-opus-5".to_string()),
             effort: None,
+            agent_link: None,
             rate_limits: vec![],
             model_mismatch: None,
             disk_space: None,
+            provider: None,
             persistent: None,
+            execution: None,
         };
         assert_eq!(format_model(&agent), "claude-opus-5");
         agent.model_mismatch = Some(bridget_transport::protocol::ModelMismatchFact {

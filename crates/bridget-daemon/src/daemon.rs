@@ -6,10 +6,12 @@ use bridget_transport::greffe_authorization::{
     GreffeAuthorizationGate, GreffeDepositAuthorization, GreffeMutationAction,
 };
 use bridget_transport::protocol::{
-    AttachRefusal, CLIENT_CONTRACT_VERSION, COORDINATION_EVENTS_VERSION,
+    AgentLinkEventFrame, AttachRefusal, CLIENT_CONTRACT_VERSION, COORDINATION_EVENTS_VERSION,
     COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal, ConnectionRole, DiskSpaceFact,
-    IdempotencyIssue, PresenceMode, REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION,
-    ServiceCapability, ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
+    ExecutionControlCommand, ExecutionControlOperation, ExecutionControlOutcome,
+    ExecutionControlRefusal, IdempotencyIssue, PresenceMode, REVIEW_DELEGATE_CONTRACT_VERSION,
+    SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal, SpawnRefusal, StopOutcome, decode,
+    encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
@@ -23,6 +25,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::execution_store::{
+    ConditionalTransition, ControlCommandStatus, ControlReservation, ExecutionStore,
+    ExecutionUsageSample, ProviderBindingOutcome,
+};
 use crate::idempotency::{
     IdempotencyKey, IdempotencyStore, LookupResult, OperationKind, ReplyTracking, Reservation,
     SendDelivery,
@@ -58,6 +64,13 @@ pub struct Metrics {
     pub messages_received: AtomicU64,
     pub errors: AtomicU64,
     pub active_connections: AtomicUsize,
+    pub execution_admitted: AtomicU64,
+    pub execution_started: AtomicU64,
+    pub execution_transition_rejected: AtomicU64,
+    pub execution_delivery_failures: AtomicU64,
+    pub execution_queue_saturated: AtomicU64,
+    pub execution_start_latency_secs_total: AtomicU64,
+    pub execution_start_latency_samples: AtomicU64,
 }
 
 impl Default for Metrics {
@@ -73,6 +86,13 @@ impl Metrics {
             messages_received: AtomicU64::new(0),
             errors: AtomicU64::new(0),
             active_connections: AtomicUsize::new(0),
+            execution_admitted: AtomicU64::new(0),
+            execution_started: AtomicU64::new(0),
+            execution_transition_rejected: AtomicU64::new(0),
+            execution_delivery_failures: AtomicU64::new(0),
+            execution_queue_saturated: AtomicU64::new(0),
+            execution_start_latency_secs_total: AtomicU64::new(0),
+            execution_start_latency_samples: AtomicU64::new(0),
         }
     }
 
@@ -94,6 +114,35 @@ impl Metrics {
 
     pub fn decrement_connections(&self) {
         self.active_connections.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    pub fn record_execution_admitted(&self) {
+        self.execution_admitted.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_execution_started(&self, latency_secs: u64) {
+        self.execution_started.fetch_add(1, Ordering::Relaxed);
+        self.execution_start_latency_samples
+            .fetch_add(1, Ordering::Relaxed);
+        self.execution_start_latency_secs_total
+            .fetch_add(latency_secs, Ordering::Relaxed);
+    }
+
+    pub fn record_execution_transition_rejected(&self) {
+        self.execution_transition_rejected
+            .fetch_add(1, Ordering::Relaxed);
+        self.errors.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_execution_delivery_failure(&self) {
+        self.execution_delivery_failures
+            .fetch_add(1, Ordering::Relaxed);
+        self.errors.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_execution_queue_saturated(&self) {
+        self.execution_queue_saturated
+            .fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -578,6 +627,7 @@ struct DaemonState {
     instance_id: String,
     router: Router,
     circuit_breaker: CircuitBreaker,
+    execution_store: ExecutionStore,
     deduplicator: Deduplicator,
     envelope_guard: EnvelopeGuard,
     store: Store,
@@ -637,7 +687,7 @@ struct ManagedSpawnRecord {
 
 type ManagedRecovery = (PreparedSpawn, Arc<ManagedStopControl>);
 
-struct ManagedStopControl {
+pub(crate) struct ManagedStopControl {
     requested: AtomicBool,
     handshake_complete: AtomicBool,
     waiters: Mutex<Vec<Sender<StopOutcome>>>,
@@ -700,6 +750,7 @@ enum ManagedStopTarget {
     Immediate(StopOutcome),
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ManagedSupervisorCommand {
     Start {
         prepared: PreparedSpawn,
@@ -2158,6 +2209,7 @@ impl DaemonState {
             desired,
             FleetConfig::from_env(),
         )?);
+        let execution_store = ExecutionStore::open(&config.db_path)?;
         let registry = AgentRegistry::load()?;
         let (view_closed_tx, view_closed_rx) = mpsc::channel();
         Ok(DaemonState {
@@ -2174,6 +2226,7 @@ impl DaemonState {
             deduplicator: Deduplicator::new(config.dedup_window),
             envelope_guard: EnvelopeGuard::new(Duration::from_secs(config.quarantine_window)),
             store,
+            execution_store,
             idempotency,
             fleet,
             registry,
@@ -2424,10 +2477,10 @@ impl DaemonState {
         for (id, agent_type) in busy_ids {
             let ttl = live_notify_timeout_secs(&self.registry, &agent_type)
                 .saturating_add(TIMEOUT_GRACE_PERIOD);
-            if let Some(presence) = self.presences.get(&id) {
-                if busy_turn_is_stale(presence, ttl) {
-                    stale.push(id);
-                }
+            if let Some(presence) = self.presences.get(&id)
+                && busy_turn_is_stale(presence, ttl)
+            {
+                stale.push(id);
             }
         }
         for id in stale {
@@ -2437,6 +2490,30 @@ impl DaemonState {
                 presence.touch_capacity();
             }
         }
+    }
+
+    fn provider_ui_projection(
+        &self,
+        agent_type: &str,
+    ) -> Option<bridget_transport::protocol::ProviderUiProjection> {
+        let observation = self
+            .registry
+            .get(agent_type)
+            .ok()?
+            .capabilities
+            .observed
+            .as_ref()?;
+        let fallback = if observation.operations.is_empty() {
+            Some("aucune opération de contrôle attestée".to_string())
+        } else {
+            Some("refus explicite hors matrice attestée".to_string())
+        };
+        Some(bridget_transport::protocol::ProviderUiProjection {
+            binary_version: observation.binary_version.clone(),
+            contract_version: observation.contract_version.clone(),
+            operations: observation.operations.clone(),
+            fallback,
+        })
     }
 
     fn agent_infos(&mut self) -> Vec<bridget_transport::protocol::AgentInfo> {
@@ -2466,15 +2543,62 @@ impl DaemonState {
         // Une seule lecture du roster pour tout l'annuaire : la persistance se
         // résout ensuite par nom, sans E/S par agent.
         let persistence = self.fleet.named_persistence();
+        let execution_enabled = self.registry.execution_projection().dual_write;
+        let execution_summaries = match self.execution_store.agent_execution_summaries() {
+            Ok(summaries) => summaries,
+            Err(error) => {
+                warn!("projection d'exécution indisponible: {error}");
+                std::collections::HashMap::new()
+            }
+        };
+        let execution_projection = |name: &str| {
+            if !execution_enabled {
+                return None;
+            }
+            let summary = execution_summaries.get(name)?;
+            let wait_state = match summary.state.as_deref() {
+                Some("waiting_approval") => Some("waiting_approval".to_string()),
+                Some("waiting_user_input") => Some("waiting_user_input".to_string()),
+                _ => None,
+            };
+            Some(bridget_transport::protocol::ExecutionUiProjection {
+                state: summary.state.clone(),
+                wait_state,
+                progress_age_secs: summary.updated_at.and_then(|updated_at| {
+                    u64::try_from(unix_now_secs().saturating_sub(updated_at)).ok()
+                }),
+                queue_depth: summary.queue_depth,
+                continuation_mode: summary.continuation_mode.clone(),
+            })
+        };
+        let agent_link_projection =
+            |instance_id: &str| match self.fleet.agent_link_summary_for_child(instance_id) {
+                Ok(Some(summary)) => Some(bridget_transport::protocol::AgentLinkUiProjection {
+                    link_id: summary.link.link_id,
+                    parent_instance_id: summary.link.parent_instance_id,
+                    parent_execution_id: summary.link.parent_execution_id,
+                    objective_id: summary.link.objective_id,
+                    delegation_id: summary.link.delegation_id,
+                    role: summary.link.role,
+                    agent_path: summary.link.agent_path,
+                    state: summary.link.state.as_str().to_string(),
+                    direct_descendants: summary.direct_descendants,
+                    descendants: summary.descendants,
+                }),
+                Ok(None) => None,
+                Err(error) => {
+                    warn!("projection de lien agent indisponible: {error}");
+                    None
+                }
+            };
+
         let mut agents: Vec<_> = self
             .router
             .list_agents()
             .iter()
             .filter_map(|agent| {
-                let presence = self
-                    .conn_instances
-                    .get(&agent.connection_id)
-                    .and_then(|id| self.presences.get(id))?;
+                let instance_id = self.conn_instances.get(&agent.connection_id)?;
+                let presence = self.presences.get(instance_id)?;
                 // Jamais inventer connected/unix : sans présence attestée, hors
                 // annuaire public (connexions MCP éphémères sans instance_id).
                 Some(bridget_transport::protocol::AgentInfo {
@@ -2486,8 +2610,10 @@ impl DaemonState {
                     channel: presence.channel.clone(),
                     mode: presence.mode,
                     location: presence.location.clone(),
+                    execution: execution_projection(&agent.name),
                     os: presence.os.clone(),
                     // Un agent qui refuse d'être dérangé est connecté mais non
+                    agent_link: agent_link_projection(instance_id),
                     // joignable : du point de vue de l'appelant, la question
                     // « puis-je lui écrire » a la même forme que pour un agent
                     // injoignable, d'où un état unique plutôt qu'une colonne.
@@ -2512,6 +2638,7 @@ impl DaemonState {
                     ),
                     disk_space: presence.disk_space.clone(),
                     persistent: persistence.get(&agent.name).copied(),
+                    provider: self.provider_ui_projection(&presence.agent_type),
                 })
             })
             .collect();
@@ -2544,7 +2671,9 @@ impl DaemonState {
                 channel: None,
                 mode,
                 location: None,
+                execution: execution_projection(&record.lease.name),
                 os: std::env::consts::OS.to_string(),
+                agent_link: agent_link_projection(&record.lease.instance_id),
                 state: "recovering".to_string(),
                 last_seen_secs: 0,
                 reconnect_count: 0,
@@ -2555,11 +2684,12 @@ impl DaemonState {
                 model_mismatch: None,
                 disk_space: None,
                 persistent: persistence.get(&record.lease.name).copied(),
+                provider: self.provider_ui_projection(&record.agent_type),
             });
         }
         let listed_names: std::collections::HashSet<String> =
             agents.iter().map(|agent| agent.name.clone()).collect();
-        for presence in self.presences.values().filter(|presence| {
+        for (instance_id, presence) in self.presences.iter().filter(|(_, presence)| {
             matches!(presence.state.as_str(), "stopped" | "unreachable")
                 && !listed_names.contains(&presence.name)
         }) {
@@ -2571,6 +2701,8 @@ impl DaemonState {
                 transport: presence.transport.clone(),
                 channel: presence.channel.clone(),
                 mode: presence.mode,
+                execution: execution_projection(&presence.name),
+                agent_link: agent_link_projection(instance_id),
                 location: presence.location.clone(),
                 os: presence.os.clone(),
                 state: presence.state.clone(),
@@ -2587,6 +2719,7 @@ impl DaemonState {
                 ),
                 disk_space: presence.disk_space.clone(),
                 persistent: persistence.get(&presence.name).copied(),
+                provider: self.provider_ui_projection(&presence.agent_type),
             });
         }
         agents.sort_by(|left, right| left.name.cmp(&right.name));
@@ -2733,6 +2866,7 @@ fn reserve_managed_recoveries(
             command_id: format!("recovery-{}", Uuid::new_v4()),
             issued_at: now,
             deadline_at: now.saturating_add(MANAGED_RECOVERY_DEADLINE_SECS),
+            ownership: None,
         };
         match submit_spawn_from_resolved(
             &state.fleet,
@@ -3978,6 +4112,25 @@ fn handle_register_with_channel(
         .parse()
         .unwrap_or(bridget_core::AgentType::Custom(agent_type));
 
+    // Un MCP auxiliaire partage parfois identite et instance avec le wrapper
+    // vivant. Il ne doit donc jamais tenter de reprendre la route canonique.
+    if auxiliary_mcp
+        && let (Some(requested), Some(instance_id)) = (name.as_deref(), instance_id.as_deref())
+        && state.presences.get(instance_id).is_some_and(|presence| {
+            presence.name == requested && matches!(presence.state.as_str(), "connected" | "busy")
+        })
+    {
+        state
+            .conn_names
+            .insert(conn_id.to_string(), requested.to_string());
+        state
+            .conn_instances
+            .insert(conn_id.to_string(), instance_id.to_string());
+        state.auxiliary_connections.insert(conn_id.to_string());
+        return DaemonToWrapper::Registered {
+            name: requested.to_string(),
+        };
+    }
     // Takeover sans stop : si le nom est tenu par un fantôme (routeur sans
     // présence live), on libère avant d'enregistrer — c'est ce qui forçait
     // trois interventions manuelles « stop puis spawn » la nuit du constat.
@@ -4541,6 +4694,8 @@ fn handle_usage(
     agent: &str,
     tokens: bridget_transport::protocol::UsageTokens,
     source: bridget_transport::protocol::UsageSource,
+    execution_id: Option<String>,
+    execution_generation: Option<u64>,
     state: &mut DaemonState,
 ) -> DaemonToWrapper {
     let observed_at = std::time::SystemTime::now()
@@ -4569,9 +4724,66 @@ fn handle_usage(
             reason: format!("ledger usage: {error}"),
         };
     }
+    match (execution_id, execution_generation) {
+        (None, None) => {}
+        (Some(execution_id), Some(generation)) => {
+            let target = match state
+                .execution_store
+                .execution_control_target(&execution_id)
+            {
+                Ok(Some(target)) if target.target_agent == agent => target,
+                Ok(_) => {
+                    return DaemonToWrapper::Nack {
+                        id: "usage".to_string(),
+                        reason: "corrélation usage non autorisée".to_string(),
+                    };
+                }
+                Err(error) => {
+                    return DaemonToWrapper::Nack {
+                        id: "usage".to_string(),
+                        reason: format!("lecture exécution usage: {error}"),
+                    };
+                }
+            };
+            if target.snapshot.generation != generation {
+                return DaemonToWrapper::Nack {
+                    id: "usage".to_string(),
+                    reason: "génération usage périmée".to_string(),
+                };
+            }
+            let sample = ExecutionUsageSample {
+                execution_id,
+                generation,
+                tokens,
+                source: source.to_string(),
+                observed_at,
+            };
+            match state.execution_store.record_execution_usage(&sample) {
+                Ok(true) => {}
+                Ok(false) => {
+                    return DaemonToWrapper::Nack {
+                        id: "usage".to_string(),
+                        reason: "échantillon usage non attribuable".to_string(),
+                    };
+                }
+                Err(error) => {
+                    return DaemonToWrapper::Nack {
+                        id: "usage".to_string(),
+                        reason: format!("budget usage: {error}"),
+                    };
+                }
+            }
+        }
+        _ => {
+            return DaemonToWrapper::Nack {
+                id: "usage".to_string(),
+                reason: "corrélation usage incomplète".to_string(),
+            };
+        }
+    }
     if let Some(presence) = presence_of_agent(state, agent) {
         presence.touch_capacity();
-        log::debug!("usage de '{}' enregistré par {}", presence.name, source);
+        log::debug!("usage de {} enregistré par {}", presence.name, source);
     }
     DaemonToWrapper::Ack {
         id: "usage".to_string(),
@@ -4675,8 +4887,7 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
         let elapsed = now.duration_since(pending.created_at).as_secs();
         // Les deux extrémités comptent : `humain → agent` expirait aussi vite
         // que `agent → humain`, et les deux sens ont été mesurés le 28/08.
-        let implique_humain =
-            humains.contains(&pending.to) || humains.contains(&pending.from);
+        let implique_humain = humains.contains(&pending.to) || humains.contains(&pending.from);
         // Le timeout effectif pilote AUSSI les paliers de relance (`timeout/3`,
         // `2*timeout/3`) : relever le plancher évite du même geste de rappeler
         // un humain toutes les vingt secondes.
@@ -4958,6 +5169,34 @@ fn canonical_option<T: ToString>(bytes: &mut Vec<u8>, value: Option<T>) {
     }
 }
 
+fn canonical_message_control(bytes: &mut Vec<u8>, message: &bridget_core::BridgetMessage) {
+    // Les anciens clients n'avaient pas ces champs. Ne rien ajouter pour leur
+    // forme vide conserve leurs rejeux exacts ; une sémantique nouvelle ajoute
+    // un suffixe distinct qui ne peut jamais réutiliser leur même identité.
+    if message.origin.is_none() && message.intent.is_none() && message.references.is_empty() {
+        return;
+    }
+    bytes.push(0xff);
+    bytes.push(match message.origin {
+        None => 0,
+        Some(bridget_core::MessageOrigin::Human) => 1,
+        Some(bridget_core::MessageOrigin::Agent) => 2,
+        Some(bridget_core::MessageOrigin::Routine) => 3,
+        Some(bridget_core::MessageOrigin::System) => 4,
+    });
+    bytes.push(match message.intent {
+        None => 0,
+        Some(bridget_core::MessageIntent::QueueOnly) => 1,
+        Some(bridget_core::MessageIntent::TriggerTurn) => 2,
+        Some(bridget_core::MessageIntent::SteerCurrent) => 3,
+        Some(bridget_core::MessageIntent::InterruptAndStart) => 4,
+        Some(bridget_core::MessageIntent::ControlOnly) => 5,
+    });
+    canonical_field(bytes, &(message.references.len() as u64).to_be_bytes());
+    for reference in &message.references {
+        canonical_field(bytes, reference.as_bytes());
+    }
+}
 /// Sérialisation binaire fermée et sans ambiguïté de l'enveloppe publiée.
 /// Elle ne dépend ni de l'ordre JSON ni des valeurs mutées lors du routage.
 fn canonical_send(
@@ -4975,6 +5214,7 @@ fn canonical_send(
     canonical_field(&mut bytes, &message.hops.to_be_bytes());
     canonical_option(&mut bytes, message.deadline_at);
     canonical_option(&mut bytes, message.in_reply_to.as_deref());
+    canonical_message_control(&mut bytes, message);
     canonical_field(&mut bytes, &issued_at.to_be_bytes());
     bytes
 }
@@ -5035,6 +5275,27 @@ fn handle_idempotency_lookup(
             reason: ClientRefusal::NegotiationRequired,
         };
     };
+    if operation_kind == "execution_control" {
+        return match st.execution_store.lookup_control_command(
+            &negotiated.issuer_scope,
+            &idempotency_key,
+            unix_timestamp(),
+        ) {
+            Ok(Some(record)) => DaemonToWrapper::ControlExecutionResult {
+                command_id: idempotency_key,
+                execution_id: record.execution_id,
+                outcome: control_outcome_from_status(record.status),
+            },
+            Ok(None) => DaemonToWrapper::Nack {
+                id: idempotency_key,
+                reason: "commande de contrôle inconnue ou expirée".to_string(),
+            },
+            Err(error) => DaemonToWrapper::Nack {
+                id: idempotency_key,
+                reason: format!("lecture de commande de contrôle impossible: {error}"),
+            },
+        };
+    }
     if operation_kind != "send" {
         return DaemonToWrapper::Nack {
             id: idempotency_key,
@@ -5066,6 +5327,161 @@ fn handle_idempotency_lookup(
             id: key.idempotency_key,
             reason: error.to_string(),
         },
+    }
+}
+
+/// Applique un fait d'exécution seulement quand il appartient encore au même
+/// cycle durable. Un wrapper ne reçoit aucun acquittement optimiste : un état
+/// refusé reste visible par la projection, jamais réessayé comme un autre tour.
+fn handle_execution_provider_context(
+    conn_id: &str,
+    context: bridget_transport::protocol::ExecutionProviderContext,
+    st: &mut DaemonState,
+) -> Option<DaemonToWrapper> {
+    let target = match st
+        .execution_store
+        .execution_control_target(&context.execution_id)
+    {
+        Ok(Some(target)) => target,
+        Ok(None) => {
+            return Some(DaemonToWrapper::Nack {
+                id: context.execution_id,
+                reason: "contexte fournisseur pour exécution inconnue".to_string(),
+            });
+        }
+        Err(error) => {
+            return Some(DaemonToWrapper::Nack {
+                id: context.execution_id,
+                reason: format!("lecture propriétaire contexte fournisseur: {error}"),
+            });
+        }
+    };
+    let owner = st
+        .router
+        .get_agent(&target.target_agent)
+        .is_some_and(|agent| agent.connection_id == conn_id);
+    if !owner {
+        return Some(DaemonToWrapper::Nack {
+            id: context.execution_id,
+            reason: "contexte fournisseur émis par un wrapper non propriétaire".to_string(),
+        });
+    }
+    match st.execution_store.record_provider_context(&context) {
+        Ok(ProviderBindingOutcome::Applied) => None,
+        Ok(ProviderBindingOutcome::Missing) => Some(DaemonToWrapper::Nack {
+            id: context.execution_id,
+            reason: "contexte fournisseur pour exécution inconnue".to_string(),
+        }),
+        Ok(ProviderBindingOutcome::GenerationMismatch) => Some(DaemonToWrapper::Nack {
+            id: context.execution_id,
+            reason: "contexte fournisseur de génération périmée".to_string(),
+        }),
+        Ok(ProviderBindingOutcome::Incompatible) => Some(DaemonToWrapper::Nack {
+            id: context.execution_id,
+            reason: "contexte fournisseur incompatible".to_string(),
+        }),
+        Err(error) => Some(DaemonToWrapper::Nack {
+            id: context.execution_id,
+            reason: format!("contexte fournisseur non persisté: {error}"),
+        }),
+    }
+}
+
+fn handle_execution_transition(
+    conn_id: &str,
+    transition: bridget_transport::protocol::ExecutionStateTransition,
+    st: &mut DaemonState,
+) -> Option<DaemonToWrapper> {
+    if !st.conn_instances.contains_key(conn_id) {
+        get_metrics().record_execution_transition_rejected();
+        return Some(DaemonToWrapper::Nack {
+            id: transition.execution_id,
+            reason: "transition d exécution émise par une instance inconnue".to_string(),
+        });
+    }
+
+    let target = match st
+        .execution_store
+        .execution_control_target(&transition.execution_id)
+    {
+        Ok(Some(target)) => target,
+        Ok(None) => {
+            get_metrics().record_execution_transition_rejected();
+            return Some(DaemonToWrapper::Nack {
+                id: transition.execution_id,
+                reason: "exécution inconnue".to_string(),
+            });
+        }
+        Err(error) => {
+            get_metrics().record_execution_transition_rejected();
+            return Some(DaemonToWrapper::Nack {
+                id: transition.execution_id,
+                reason: format!("propriétaire d exécution illisible: {error}"),
+            });
+        }
+    };
+    let is_owner = st
+        .router
+        .get_agent(&target.target_agent)
+        .is_some_and(|agent| agent.connection_id == conn_id);
+    if !is_owner {
+        get_metrics().record_execution_transition_rejected();
+        return Some(DaemonToWrapper::Nack {
+            id: transition.execution_id,
+            reason: "transition d exécution émise par un wrapper non propriétaire".to_string(),
+        });
+    }
+
+    match st.execution_store.transition_if_current(
+        &transition.execution_id,
+        &transition.expected_state,
+        transition.expected_revision,
+        transition.generation,
+        &transition.next_state,
+        &transition.reason,
+        transition.observed_at,
+    ) {
+        Ok(ConditionalTransition::Applied(applied)) => {
+            let metrics = get_metrics();
+            if transition.next_state == "running" {
+                let latency_secs =
+                    u64::try_from(transition.observed_at.saturating_sub(applied.created_at))
+                        .unwrap_or(0);
+                metrics.record_execution_started(latency_secs);
+            }
+            if transition.reason == "provider_queue_full" {
+                metrics.record_execution_queue_saturated();
+            }
+            let in_progress = transition.next_state == "running";
+            if let Err(reason) = st.set_turn_state(conn_id, in_progress) {
+                warn!("projection de tour après transition ignorée: {reason}");
+            }
+            None
+        }
+        Ok(ConditionalTransition::Rejected(current)) => {
+            get_metrics().record_execution_transition_rejected();
+            Some(DaemonToWrapper::Nack {
+                id: transition.execution_id,
+                reason: format!(
+                    "transition périmée: état={}, révision={}, génération={}",
+                    current.state, current.revision, current.generation
+                ),
+            })
+        }
+        Ok(ConditionalTransition::Missing) => {
+            get_metrics().record_execution_transition_rejected();
+            Some(DaemonToWrapper::Nack {
+                id: transition.execution_id,
+                reason: "exécution inconnue".to_string(),
+            })
+        }
+        Err(error) => {
+            get_metrics().record_execution_transition_rejected();
+            Some(DaemonToWrapper::Nack {
+                id: transition.execution_id,
+                reason: format!("transition d exécution non persistée: {error}"),
+            })
+        }
     }
 }
 
@@ -5475,6 +5891,237 @@ fn handle_idempotent_send(
     response
 }
 
+fn control_result(
+    command: &ExecutionControlCommand,
+    outcome: ExecutionControlOutcome,
+) -> DaemonToWrapper {
+    DaemonToWrapper::ControlExecutionResult {
+        command_id: command.command_id.clone(),
+        execution_id: command.execution_id.clone(),
+        outcome,
+    }
+}
+
+fn control_refusal_from_reason(reason: &str) -> ExecutionControlRefusal {
+    match reason {
+        "capability_unavailable" => ExecutionControlRefusal::CapabilityUnavailable,
+        "generation_mismatch" => ExecutionControlRefusal::GenerationMismatch,
+        "revision_mismatch" => ExecutionControlRefusal::RevisionMismatch,
+        "execution_not_found" => ExecutionControlRefusal::ExecutionNotFound,
+        "terminal_execution" => ExecutionControlRefusal::TerminalExecution,
+        "target_unavailable" => ExecutionControlRefusal::TargetUnavailable,
+        "message_required" => ExecutionControlRefusal::MessageRequired,
+        _ => ExecutionControlRefusal::InvalidCommand,
+    }
+}
+
+fn control_outcome_from_status(status: ControlCommandStatus) -> ExecutionControlOutcome {
+    match status {
+        ControlCommandStatus::Accepted => ExecutionControlOutcome::Accepted,
+        ControlCommandStatus::Refused { reason } => {
+            ExecutionControlOutcome::Refused(control_refusal_from_reason(&reason))
+        }
+        ControlCommandStatus::Prepared | ControlCommandStatus::Dispatched => {
+            ExecutionControlOutcome::OutcomeUnknown
+        }
+    }
+}
+
+/// Valide et remet un contrôle sans jamais transformer une intention en prompt
+/// implicite. Les opérations non implémentées sont refusées avant toute E/S.
+fn handle_execution_control(
+    issuer_scope: &str,
+    command: ExecutionControlCommand,
+    st: &mut DaemonState,
+) -> DaemonToWrapper {
+    if command.version != 1 || command.command_id.is_empty() || command.command_id.len() > 256 {
+        return control_result(
+            &command,
+            ExecutionControlOutcome::Refused(ExecutionControlRefusal::InvalidCommand),
+        );
+    }
+    let requires_message = matches!(command.operation, ExecutionControlOperation::SteerCurrent);
+    if requires_message != command.message.is_some() {
+        return control_result(
+            &command,
+            ExecutionControlOutcome::Refused(if requires_message {
+                ExecutionControlRefusal::MessageRequired
+            } else {
+                ExecutionControlRefusal::InvalidCommand
+            }),
+        );
+    }
+    if let Some(message) = command.message.as_ref()
+        && (message.to.is_empty()
+            || message.body.is_empty()
+            || message.intent != Some(bridget_core::MessageIntent::SteerCurrent))
+    {
+        return control_result(
+            &command,
+            ExecutionControlOutcome::Refused(ExecutionControlRefusal::InvalidCommand),
+        );
+    }
+    if !matches!(
+        command.operation,
+        ExecutionControlOperation::SteerCurrent | ExecutionControlOperation::Interrupt
+    ) {
+        return control_result(
+            &command,
+            ExecutionControlOutcome::Refused(ExecutionControlRefusal::CapabilityUnavailable),
+        );
+    }
+    let Some(target) = (match st
+        .execution_store
+        .execution_control_target(&command.execution_id)
+    {
+        Ok(target) => target,
+        Err(error) => {
+            error!("lecture cible de contrôle: {error}");
+            return control_result(
+                &command,
+                ExecutionControlOutcome::Refused(ExecutionControlRefusal::ExecutionNotFound),
+            );
+        }
+    }) else {
+        return control_result(
+            &command,
+            ExecutionControlOutcome::Refused(ExecutionControlRefusal::ExecutionNotFound),
+        );
+    };
+    if command
+        .message
+        .as_ref()
+        .is_some_and(|message| message.to != target.target_agent)
+    {
+        return control_result(
+            &command,
+            ExecutionControlOutcome::Refused(ExecutionControlRefusal::InvalidCommand),
+        );
+    }
+    let canonical = match encode(&command) {
+        Ok(canonical) => canonical.into_bytes(),
+        Err(_) => {
+            return control_result(
+                &command,
+                ExecutionControlOutcome::Refused(ExecutionControlRefusal::InvalidCommand),
+            );
+        }
+    };
+    let now = unix_timestamp();
+    let reservation = match st.execution_store.reserve_control_command(
+        issuer_scope,
+        &command.command_id,
+        &command.execution_id,
+        &canonical,
+        now,
+        now.saturating_add(CLIENT_IDEMPOTENCY_HORIZON_SECS),
+    ) {
+        Ok(reservation) => reservation,
+        Err(error) => {
+            error!("réservation contrôle: {error}");
+            return control_result(&command, ExecutionControlOutcome::OutcomeUnknown);
+        }
+    };
+    match reservation {
+        ControlReservation::Replayed(record) => {
+            return control_result(&command, control_outcome_from_status(record.status));
+        }
+        ControlReservation::EnvelopeMismatch => {
+            return control_result(
+                &command,
+                ExecutionControlOutcome::Refused(ExecutionControlRefusal::InvalidCommand),
+            );
+        }
+        ControlReservation::Expired => {
+            return control_result(&command, ExecutionControlOutcome::OutcomeUnknown);
+        }
+        ControlReservation::New => {}
+    }
+    let refusal = if target.snapshot.generation != command.generation {
+        Some("generation_mismatch")
+    } else if target.snapshot.revision != command.revision {
+        Some("revision_mismatch")
+    } else if matches!(
+        target.snapshot.state.as_str(),
+        "interrupted" | "completed" | "failed" | "unreachable"
+    ) {
+        Some("terminal_execution")
+    } else if matches!(command.operation, ExecutionControlOperation::SteerCurrent)
+        && target.snapshot.state != "running"
+    {
+        Some("capability_unavailable")
+    } else {
+        None
+    };
+    if let Some(refusal) = refusal {
+        let _ = st.execution_store.refuse_control_command(
+            issuer_scope,
+            &command.command_id,
+            refusal,
+            now,
+        );
+        return control_result(
+            &command,
+            ExecutionControlOutcome::Refused(control_refusal_from_reason(refusal)),
+        );
+    }
+    let target_conn = st
+        .router
+        .get_agent(&target.target_agent)
+        .map(|agent| agent.connection_id.clone());
+    let Some(target_conn) = target_conn else {
+        let _ = st.execution_store.refuse_control_command(
+            issuer_scope,
+            &command.command_id,
+            "target_unavailable",
+            now,
+        );
+        return control_result(
+            &command,
+            ExecutionControlOutcome::Refused(ExecutionControlRefusal::TargetUnavailable),
+        );
+    };
+    let Some(writer) = st.connections.get(&target_conn).cloned() else {
+        let _ = st.execution_store.refuse_control_command(
+            issuer_scope,
+            &command.command_id,
+            "target_unavailable",
+            now,
+        );
+        return control_result(
+            &command,
+            ExecutionControlOutcome::Refused(ExecutionControlRefusal::TargetUnavailable),
+        );
+    };
+    if !st
+        .execution_store
+        .mark_control_dispatched(issuer_scope, &command.command_id, now)
+        .unwrap_or(false)
+    {
+        return control_result(&command, ExecutionControlOutcome::OutcomeUnknown);
+    }
+    if !push_control_message(
+        &writer,
+        &DaemonToWrapper::ControlExecutionDispatch {
+            issuer_scope: issuer_scope.to_string(),
+            command: command.clone(),
+        },
+    ) {
+        let _ = st.execution_store.resolve_control_command(
+            issuer_scope,
+            &command.command_id,
+            false,
+            Some("target_unavailable"),
+            now,
+        );
+        return control_result(
+            &command,
+            ExecutionControlOutcome::Refused(ExecutionControlRefusal::TargetUnavailable),
+        );
+    }
+    control_result(&command, ExecutionControlOutcome::OutcomeUnknown)
+}
+
 /// Traite un message wrapper et retourne une réponse optionnelle.
 fn handle_wrapper_message(
     conn_id: &str,
@@ -5646,9 +6293,12 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::ServiceRequest { .. }
                 | WrapperToDaemon::SendIdempotent { .. }
                 | WrapperToDaemon::Lookup { .. }
+                | WrapperToDaemon::ControlExecution { .. }
+                | WrapperToDaemon::ControlExecutionReported { .. }
                 | WrapperToDaemon::DeliverAcked { .. }
                 | WrapperToDaemon::DeliveryIndeterminate { .. }
                 | WrapperToDaemon::SpawnOrder { .. }
+                | WrapperToDaemon::WaitAgentLinks { .. }
                 | WrapperToDaemon::StopOrder { .. }
                 | WrapperToDaemon::Subscribe { .. }
                 | WrapperToDaemon::Unsubscribe { .. }
@@ -5668,6 +6318,8 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::Send { .. }
                 | WrapperToDaemon::DeliveryRejected { .. }
                 | WrapperToDaemon::TurnState { .. }
+                | WrapperToDaemon::ExecutionStateChanged { .. }
+                | WrapperToDaemon::ExecutionProviderObserved { .. }
                 | WrapperToDaemon::CancelRequest { .. }
                 | WrapperToDaemon::ListRequests { .. }
                 | WrapperToDaemon::LedgerProjection { .. }
@@ -5701,7 +6353,9 @@ fn handle_wrapper_message(
                 {
                     Some(ClientRefusal::AlreadyNegotiated)
                 }
-                WrapperToDaemon::SendIdempotent { .. } | WrapperToDaemon::Lookup { .. }
+                WrapperToDaemon::SendIdempotent { .. }
+                | WrapperToDaemon::Lookup { .. }
+                | WrapperToDaemon::ControlExecution { .. }
                     if !st.client_negotiations.contains_key(conn_id) =>
                 {
                     Some(ClientRefusal::NegotiationRequired)
@@ -5730,6 +6384,19 @@ fn handle_wrapper_message(
                 {
                     Some(ClientRefusal::CapabilityNotNegotiated)
                 }
+                WrapperToDaemon::ControlExecution { .. }
+                    if st
+                        .client_negotiations
+                        .get(conn_id)
+                        .is_some_and(|negotiated| {
+                            negotiated.version != CLIENT_CONTRACT_VERSION
+                                || !negotiated
+                                    .capabilities
+                                    .contains(&ClientCapability::ExecutionControlV1)
+                        }) =>
+                {
+                    Some(ClientRefusal::CapabilityNotNegotiated)
+                }
                 // MATRICE EXHAUSTIVE — aucun `_`, et c'est délibéré.
                 //
                 // Le tiret bas précédent classait trois variantes et renvoyait
@@ -5743,6 +6410,7 @@ fn handle_wrapper_message(
                 WrapperToDaemon::ClientHello { .. }
                 | WrapperToDaemon::SendIdempotent { .. }
                 | WrapperToDaemon::Lookup { .. }
+                | WrapperToDaemon::ControlExecution { .. }
                 // Sonde d'identité : lecture seule, aucune écriture durable, et
                 // c'est le rôle Client qui l'emprunte (`daemon_identity`).
                 | WrapperToDaemon::DaemonIdentityRequest => None,
@@ -5752,11 +6420,13 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::ServiceRequest { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
                 | WrapperToDaemon::GuichetClaim { .. }
+                | WrapperToDaemon::ControlExecutionReported { .. }
                 | WrapperToDaemon::GuichetLookup { .. }
                 | WrapperToDaemon::GuichetReply { .. }
                 | WrapperToDaemon::DeliverAcked { .. }
                 | WrapperToDaemon::DeliveryIndeterminate { .. }
                 | WrapperToDaemon::SpawnOrder { .. }
+                | WrapperToDaemon::WaitAgentLinks { .. }
                 | WrapperToDaemon::StopOrder { .. }
                 | WrapperToDaemon::Subscribe { .. }
                 | WrapperToDaemon::Unsubscribe { .. }
@@ -5776,6 +6446,8 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::Send { .. }
                 | WrapperToDaemon::DeliveryRejected { .. }
                 | WrapperToDaemon::TurnState { .. }
+                | WrapperToDaemon::ExecutionStateChanged { .. }
+                | WrapperToDaemon::ExecutionProviderObserved { .. }
                 | WrapperToDaemon::CancelRequest { .. }
                 | WrapperToDaemon::ListRequests { .. }
                 | WrapperToDaemon::LedgerProjection { .. }
@@ -5797,6 +6469,7 @@ fn handle_wrapper_message(
                     WrapperToDaemon::ClientHello { .. }
                         | WrapperToDaemon::SendIdempotent { .. }
                         | WrapperToDaemon::Lookup { .. }
+                        | WrapperToDaemon::ControlExecution { .. }
                 ) =>
             {
                 Some(ClientRefusal::ClientRoleRequired)
@@ -5810,6 +6483,57 @@ fn handle_wrapper_message(
 
     match msg {
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
+        WrapperToDaemon::WaitAgentLinks {
+            after_cursor,
+            timeout_ms,
+        } => {
+            const MAX_AGENT_LINK_WAIT: u64 = 30_000;
+            if timeout_ms > MAX_AGENT_LINK_WAIT {
+                return Some(DaemonToWrapper::Nack {
+                    id: "agent-link-events".to_string(),
+                    reason: "délai d'attente de descendance supérieur à 30 s".to_string(),
+                });
+            }
+            let (parent_instance_id, fleet) = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(parent_instance_id) = st.conn_instances.get(conn_id).cloned() else {
+                    return Some(DaemonToWrapper::Nack {
+                        id: "agent-link-events".to_string(),
+                        reason: "wrapper non enregistré".to_string(),
+                    });
+                };
+                (parent_instance_id, Arc::clone(&st.fleet))
+            };
+            match fleet.wait_for_agent_link_events(
+                &parent_instance_id,
+                after_cursor,
+                Duration::from_millis(timeout_ms),
+            ) {
+                Ok(batch) => Some(DaemonToWrapper::AgentLinkEvents {
+                    timed_out: batch.events.is_empty(),
+                    through_cursor: batch.through_cursor,
+                    events: batch
+                        .events
+                        .into_iter()
+                        .map(|event| AgentLinkEventFrame {
+                            cursor: event.cursor,
+                            event_id: event.event_id,
+                            link_id: event.link_id,
+                            child_instance_id: event.child_instance_id,
+                            state: event.state.as_str().to_string(),
+                            observed_at: event.observed_at,
+                        })
+                        .collect(),
+                }),
+                Err(error) => {
+                    error!("attente de descendance indisponible: {error}");
+                    Some(DaemonToWrapper::Nack {
+                        id: "agent-link-events".to_string(),
+                        reason: "attente de descendance indisponible".to_string(),
+                    })
+                }
+            }
+        }
         WrapperToDaemon::ServiceHello {
             version,
             service,
@@ -6354,7 +7078,9 @@ fn handle_wrapper_message(
                 .filter(|capability| {
                     matches!(
                         capability,
-                        ClientCapability::SendIdempotent | ClientCapability::Lookup
+                        ClientCapability::SendIdempotent
+                            | ClientCapability::Lookup
+                            | ClientCapability::ExecutionControlV1
                     )
                 })
                 .collect();
@@ -6407,6 +7133,130 @@ fn handle_wrapper_message(
                 &st,
             ))
         }
+        WrapperToDaemon::ControlExecution { command } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(issuer_scope) = st
+                .client_negotiations
+                .get(conn_id)
+                .map(|negotiated| negotiated.issuer_scope.clone())
+            else {
+                return Some(DaemonToWrapper::ClientRejected {
+                    reason: ClientRefusal::NegotiationRequired,
+                });
+            };
+            Some(handle_execution_control(&issuer_scope, command, &mut st))
+        }
+        WrapperToDaemon::ControlExecutionReported {
+            issuer_scope,
+            command_id,
+            execution_id,
+            accepted,
+            refusal_reason,
+        } => {
+            let (controls, response) = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(target) = (match st.execution_store.execution_control_target(&execution_id)
+                {
+                    Ok(target) => target,
+                    Err(error) => {
+                        error!("lecture cible accusé de contrôle: {error}");
+                        return Some(DaemonToWrapper::Nack {
+                            id: command_id,
+                            reason: "cible de contrôle introuvable".to_string(),
+                        });
+                    }
+                }) else {
+                    return Some(DaemonToWrapper::Nack {
+                        id: command_id,
+                        reason: "cible de contrôle introuvable".to_string(),
+                    });
+                };
+                let is_target_wrapper = st
+                    .router
+                    .get_agent(&target.target_agent)
+                    .is_some_and(|agent| agent.connection_id == conn_id);
+                if !is_target_wrapper {
+                    warn!(
+                        "accusé de contrôle refusé: wrapper non propriétaire execution={} conn={}",
+                        execution_id, conn_id
+                    );
+                    return Some(DaemonToWrapper::Nack {
+                        id: command_id,
+                        reason: "wrapper non propriétaire de l'exécution".to_string(),
+                    });
+                }
+                let stored = match st.execution_store.lookup_control_command(
+                    &issuer_scope,
+                    &command_id,
+                    unix_timestamp(),
+                ) {
+                    Ok(Some(stored)) if stored.execution_id == execution_id => stored,
+                    Ok(_) => {
+                        return Some(DaemonToWrapper::Nack {
+                            id: command_id,
+                            reason: "commande de contrôle inconnue ou expirée".to_string(),
+                        });
+                    }
+                    Err(error) => {
+                        error!("lecture commande de contrôle: {error}");
+                        return Some(DaemonToWrapper::Nack {
+                            id: command_id,
+                            reason: "lecture de commande de contrôle impossible".to_string(),
+                        });
+                    }
+                };
+                if !matches!(stored.status, ControlCommandStatus::Dispatched) {
+                    return Some(DaemonToWrapper::Nack {
+                        id: command_id,
+                        reason: "commande de contrôle déjà résolue".to_string(),
+                    });
+                }
+                let refusal_reason = (!accepted)
+                    .then(|| refusal_reason.unwrap_or_else(|| "invalid_command".to_string()));
+                let now = unix_timestamp();
+                if !st
+                    .execution_store
+                    .resolve_control_command(
+                        &issuer_scope,
+                        &command_id,
+                        accepted,
+                        refusal_reason.as_deref(),
+                        now,
+                    )
+                    .unwrap_or(false)
+                {
+                    return Some(DaemonToWrapper::Nack {
+                        id: command_id,
+                        reason: "résolution concurrente de commande de contrôle".to_string(),
+                    });
+                }
+                let outcome = if accepted {
+                    ExecutionControlOutcome::Accepted
+                } else {
+                    ExecutionControlOutcome::Refused(control_refusal_from_reason(
+                        refusal_reason.as_deref().unwrap_or("invalid_command"),
+                    ))
+                };
+                let mut controls = Vec::new();
+                for (client_conn, negotiation) in &st.client_negotiations {
+                    if negotiation.issuer_scope == issuer_scope {
+                        defer_control(
+                            &st,
+                            client_conn,
+                            DaemonToWrapper::ControlExecutionResult {
+                                command_id: command_id.clone(),
+                                execution_id: execution_id.clone(),
+                                outcome: outcome.clone(),
+                            },
+                            &mut controls,
+                        );
+                    }
+                }
+                (controls, None)
+            };
+            let _ = execute_controls(controls);
+            response
+        }
         WrapperToDaemon::DeliverAcked {
             delivery_id,
             delivery_generation,
@@ -6455,6 +7305,7 @@ fn handle_wrapper_message(
             command_id,
             issued_at,
             deadline_at,
+            ownership,
         } => {
             let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
             let order = FleetSpawnOrder {
@@ -6464,6 +7315,7 @@ fn handle_wrapper_message(
                 persistent,
                 command_id: command_id.clone(),
                 issued_at,
+                ownership,
                 deadline_at,
             };
             // Seul endroit du programme où les deux machines coexistent : le
@@ -7251,6 +8103,15 @@ fn handle_wrapper_message(
             }
             let target_conn = prepared.target_conn;
             let conv_key = format!("{}|{}", bridge_msg.from, bridge_msg.to);
+            if st.registry.execution_projection().dual_write
+                && bridge_msg.intent == Some(bridget_core::MessageIntent::ControlOnly)
+            {
+                return Some(DaemonToWrapper::Nack {
+                    id: bridge_msg.id.clone(),
+                    reason: "ControlOnly requiert une commande ControlExecution versionnée"
+                        .to_string(),
+                });
+            }
 
             match st.store.record_message(&bridge_msg, &conv_key) {
                 Ok(()) => {
@@ -7267,6 +8128,63 @@ fn handle_wrapper_message(
             st.envelope_guard
                 .mark_relayed(&prepared.message_guard_id, &bridge_msg.to);
 
+            let execution_delivery = if st.registry.execution_projection().dual_write {
+                match bridge_msg.intent {
+                    Some(bridget_core::MessageIntent::QueueOnly) => {
+                        match st.execution_store.admit_message_submission(
+                            &bridge_msg,
+                            0,
+                            unix_now_secs(),
+                        ) {
+                            Ok(admitted) => {
+                                if admitted {
+                                    get_metrics().record_execution_admitted();
+                                }
+                                return Some(DaemonToWrapper::Ack {
+                                    id: bridge_msg.id.clone(),
+                                });
+                            }
+                            Err(error) => {
+                                return Some(DaemonToWrapper::Nack {
+                                    id: bridge_msg.id.clone(),
+                                    reason: format!("admission non persistée: {error}"),
+                                });
+                            }
+                        }
+                    }
+                    Some(
+                        bridget_core::MessageIntent::TriggerTurn
+                        | bridget_core::MessageIntent::InterruptAndStart,
+                    ) => {
+                        let execution_id = format!("execution-{}", bridge_msg.id);
+                        match st.execution_store.admit_starting_message(
+                            &bridge_msg,
+                            &execution_id,
+                            unix_now_secs(),
+                        ) {
+                            Ok(true) => {
+                                get_metrics().record_execution_admitted();
+                                Some((execution_id, 1_u64, 0_u64))
+                            }
+                            Ok(false) => {
+                                return Some(DaemonToWrapper::Ack {
+                                    id: bridge_msg.id.clone(),
+                                });
+                            }
+                            Err(error) => {
+                                return Some(DaemonToWrapper::Nack {
+                                    id: bridge_msg.id.clone(),
+                                    reason: format!("démarrage non persisté: {error}"),
+                                });
+                            }
+                        }
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
             // Le daemon est l'autorité de l'échéance de TOUR (pas seulement
             // reply=yes) : relire la valeur courante et la pousser en absolu.
             // Sans cela, worker.notify_timeout figé au spawn ignore agents.json.
@@ -7279,7 +8197,16 @@ fn handle_wrapper_message(
                 .unwrap_or("");
             stamp_turn_deadline_for_delivery(&mut delivered_message, &st.registry, agent_type);
             // Push vers le destinataire
-            let dtw = DaemonToWrapper::Deliver(delivered_message);
+            let execution_attempt = execution_delivery.clone();
+            let dtw = match execution_delivery {
+                Some((execution_id, generation, revision)) => DaemonToWrapper::DeliverExecution {
+                    message: delivered_message,
+                    execution_id,
+                    generation,
+                    revision,
+                },
+                None => DaemonToWrapper::Deliver(delivered_message),
+            };
             let json = encode(&dtw).unwrap_or_default();
             eprintln!("[BRIDGET] Push vers {}: {} octets", target_conn, json.len());
 
@@ -7302,6 +8229,22 @@ fn handle_wrapper_message(
                 }
             } else {
                 warn!("cible {} disparue", target_conn);
+            }
+            if !delivery_succeeded
+                && let Some((execution_id, generation, revision)) = execution_attempt
+            {
+                get_metrics().record_execution_delivery_failure();
+                if let Err(error) = st.execution_store.transition_if_current(
+                    &execution_id,
+                    "starting",
+                    revision,
+                    generation,
+                    "unreachable",
+                    "provider_unavailable",
+                    unix_now_secs(),
+                ) {
+                    error!("transition exécution {execution_id} après remise échouée: {error}");
+                }
             }
 
             if delivery_succeeded
@@ -7365,8 +8308,16 @@ fn handle_wrapper_message(
             }
         }
 
-        // Le daemon atteste SA machine, SA base et SON démarrage : le client
-        // n'a plus à deviner, ni à confondre deux instances du même binaire.
+        WrapperToDaemon::ExecutionStateChanged { transition } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            handle_execution_transition(conn_id, transition, &mut st)
+        }
+
+        WrapperToDaemon::ExecutionProviderObserved { context } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            handle_execution_provider_context(conn_id, context, &mut st)
+        }
+
         WrapperToDaemon::DaemonIdentityRequest => {
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
             Some(DaemonToWrapper::DaemonIdentityReport {
@@ -7381,7 +8332,6 @@ fn handle_wrapper_message(
             let agents = st.agent_infos();
             Some(DaemonToWrapper::AgentList { agents })
         }
-
         WrapperToDaemon::Runtime {
             agent,
             model,
@@ -7420,6 +8370,8 @@ fn handle_wrapper_message(
         WrapperToDaemon::Usage {
             agent,
             input_tokens,
+            execution_id,
+            execution_generation,
             output_tokens,
             cache_creation_input_tokens,
             cache_read_input_tokens,
@@ -7435,6 +8387,8 @@ fn handle_wrapper_message(
                     cache_read_input_tokens,
                 },
                 source,
+                execution_id,
+                execution_generation,
                 &mut st,
             ))
         }
@@ -7774,6 +8728,43 @@ mod matrice_roles_tests {
     use std::sync::mpsc;
     use std::thread;
 
+    #[test]
+    fn metrics_execution_restent_bornees_et_sans_labels_de_contenu() {
+        let metrics = Metrics::new();
+        metrics.record_execution_admitted();
+        metrics.record_execution_started(3);
+        metrics.record_execution_transition_rejected();
+        metrics.record_execution_delivery_failure();
+        metrics.record_execution_queue_saturated();
+
+        assert_eq!(metrics.execution_admitted.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.execution_started.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            metrics
+                .execution_start_latency_samples
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            metrics
+                .execution_start_latency_secs_total
+                .load(Ordering::Relaxed),
+            3
+        );
+        assert_eq!(
+            metrics
+                .execution_transition_rejected
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            metrics.execution_delivery_failures.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(metrics.execution_queue_saturated.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.errors.load(Ordering::Relaxed), 2);
+    }
+
     /// Etat minimal : on n'eprouve que la matrice, pas la presence.
     ///
     /// Le chemin porte l'horloge en plus du PID : deux executions successives
@@ -7802,6 +8793,75 @@ mod matrice_roles_tests {
         let (managed_tx, _managed_rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(DaemonState::new(&config, managed_tx).unwrap()));
         (state, config)
+    }
+
+    #[test]
+    fn attente_de_descendance_derive_le_parent_de_la_connexion_et_reprend_un_curseur() {
+        let (shared, config) = etat_nu("attente-descendance");
+        let parent_instance_id = "parent-atteste".to_string();
+        let child = {
+            let mut state = shared.lock().unwrap();
+            state
+                .conn_instances
+                .insert("wrapper-parent".to_string(), parent_instance_id.clone());
+            let order = FleetSpawnOrder {
+                agent_type: "fixture".to_string(),
+                requested_name: Some("child-events".to_string()),
+                cwd: PathBuf::from("/tmp"),
+                persistent: false,
+                command_id: "spawn-events-daemon".to_string(),
+                issued_at: 1_788_000_000,
+                deadline_at: 1_788_000_060,
+                ownership: Some(bridget_transport::protocol::SpawnOwnership {
+                    parent_instance_id,
+                    parent_execution_id: Some("execution-parent".to_string()),
+                    objective_id: Some("objective-1".to_string()),
+                    delegation_id: None,
+                    role: "verification".to_string(),
+                    max_children: Some(2),
+                    max_depth: Some(3),
+                }),
+            };
+            match state.fleet.request_spawn(&order, 1_788_000_000).unwrap() {
+                crate::fleet::SpawnSubmission::Start(lease) => lease,
+                other => panic!("réservation attendue : {other:?}"),
+            }
+        };
+
+        let response = handle_wrapper_message(
+            "wrapper-parent",
+            WrapperToDaemon::WaitAgentLinks {
+                after_cursor: None,
+                timeout_ms: 0,
+            },
+            &shared,
+        );
+        assert!(matches!(
+            response,
+            Some(DaemonToWrapper::AgentLinkEvents {
+                timed_out: false,
+                through_cursor: Some(_),
+                events,
+            }) if events.len() == 1
+                && events[0].child_instance_id == child.instance_id
+                && events[0].state == "reserved"
+        ));
+
+        assert!(matches!(
+            handle_wrapper_message(
+                "wrapper-inconnu",
+                WrapperToDaemon::WaitAgentLinks {
+                    after_cursor: None,
+                    timeout_ms: 0,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::Nack { reason, .. }) if reason == "wrapper non enregistré"
+        ));
+
+        let _ = std::fs::remove_file(config.db_path);
+        let _ = std::fs::remove_file(config.socket_path);
+        let _ = std::fs::remove_file(config.log_path);
     }
 
     struct NettoyageSondeIdentite {
@@ -8397,6 +9457,7 @@ fn daemon_inventory_unavailable(identity: &DaemonIdentity) -> DaemonStatus {
 
 #[cfg(test)]
 mod inventory_provenance_tests {
+    #![allow(clippy::field_reassign_with_default)]
     use super::{
         CLIENT_CONTRACT_VERSION, ConnectionRole, DaemonConfig, DaemonToWrapper, WrapperToDaemon,
         encode, get_status,
@@ -8673,6 +9734,7 @@ mod signal_disposition_tests {
 /// dites pourquoi ; si sa place est vraiment ici, dites-le aussi, pour que le
 /// prochain sache que vous avez choisi.
 #[cfg(test)]
+#[allow(clippy::assertions_on_constants)]
 mod presence_tests {
     use super::*;
     use bridget_core::BridgetMessage;
@@ -8690,7 +9752,12 @@ mod presence_tests {
         "../../../specs/015-guichet-maicie/contracts/fixtures/service-negotiation-v1.jsonl"
     );
 
-    fn control_socket(label: &str) -> (Arc<Mutex<BufWriter<UnixStream>>>, BufReader<UnixStream>) {
+    // HOME est un état de processus : sérialiser les fixtures qui le remplacent.
+    static HOME_REGISTRY_LOCK: Mutex<()> = Mutex::new(());
+
+    pub(super) fn control_socket(
+        label: &str,
+    ) -> (Arc<Mutex<BufWriter<UnixStream>>>, BufReader<UnixStream>) {
         let path = std::env::temp_dir().join(format!(
             "bc-{label}-{}.sock",
             &uuid::Uuid::new_v4().simple().to_string()[..12]
@@ -8705,7 +9772,7 @@ mod presence_tests {
         )
     }
 
-    fn read_control(reader: &mut BufReader<UnixStream>) -> DaemonToWrapper {
+    pub(super) fn read_control(reader: &mut BufReader<UnixStream>) -> DaemonToWrapper {
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
         decode(line.trim()).unwrap()
@@ -8871,7 +9938,7 @@ mod presence_tests {
     }
 
     /// Construit un état minimal avec un agent enregistré et sa présence.
-    fn state_with_registered_agent(label: &str) -> (DaemonState, DaemonConfig) {
+    pub(super) fn state_with_registered_agent(label: &str) -> (DaemonState, DaemonConfig) {
         let base = std::env::temp_dir().join(format!("bridget-{}-{}", label, std::process::id()));
         let registry_home = base.join("home");
         let fixture_root = FixtureRoot(registry_home.clone());
@@ -8903,6 +9970,7 @@ mod presence_tests {
             quarantine_window: 3600,
             retention_days: 7,
         };
+        let _home_lock = HOME_REGISTRY_LOCK.lock().unwrap();
         let (managed_tx, _managed_rx) = mpsc::channel();
         let previous_home = std::env::var_os("HOME");
         // DaemonState::new charge le registre via HOME ; la fixture doit lui
@@ -9313,6 +10381,7 @@ mod presence_tests {
             command_id: command_id.to_string(),
             issued_at: now,
             deadline_at: now + 60,
+            ownership: None,
         };
         let lease = match state.fleet.request_spawn(&order, now).unwrap() {
             crate::fleet::SpawnSubmission::Start(lease) => lease,
@@ -9497,6 +10566,7 @@ mod presence_tests {
                     created: index.to_string(),
                     resolved_definition: (index != 0).then(recovery_fixture_definition),
                     domain: None,
+                    agent_link: None,
                 },
             );
         }
@@ -9593,6 +10663,7 @@ mod presence_tests {
                     created: index.to_string(),
                     resolved_definition: (index != 0).then(recovery_fixture_definition),
                     domain: None,
+                    agent_link: None,
                 },
             );
         }
@@ -9658,6 +10729,7 @@ mod presence_tests {
                 created: "1".to_string(),
                 resolved_definition: Some(recovery_fixture_definition()),
                 domain: None,
+                agent_link: None,
             },
         );
         desired.persist(&fleet).unwrap();
@@ -9704,6 +10776,7 @@ mod presence_tests {
                 created: "1".to_string(),
                 resolved_definition: Some(recovery_fixture_definition()),
                 domain: None,
+                agent_link: None,
             },
         );
         desired.persist(&fleet).unwrap();
@@ -9776,6 +10849,7 @@ mod presence_tests {
                     created: index.to_string(),
                     resolved_definition: Some(recovery_fixture_definition()),
                     domain: None,
+                    agent_link: None,
                 },
             );
         }
@@ -9822,6 +10896,7 @@ mod presence_tests {
                 created: "initial".to_string(),
                 resolved_definition: Some(recovery_fixture_definition()),
                 domain: None,
+                agent_link: None,
             },
         );
         desired.persist(&fleet).unwrap();
@@ -9932,6 +11007,7 @@ mod presence_tests {
                     created: "initial".to_string(),
                     resolved_definition: Some(recovery_fixture_definition()),
                     domain: None,
+                    agent_link: None,
                 },
             );
         }
@@ -10182,6 +11258,8 @@ mod presence_tests {
         let maicie::app::DelegateResult::Created(mission) = mission else {
             panic!("mission attendue")
         };
+        maicie::ui_projection::publish_ui_mission_projection_v1(&maicie_config)
+            .expect("publier la projection publique de mission");
         let registry_path = root.join(".config/bridget/agents.json");
         std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         let adapter = root.join("adapter.sh");
@@ -10240,6 +11318,7 @@ mod presence_tests {
                 command_id: "initial-persistent".to_string(),
                 issued_at: now,
                 deadline_at: now + 20,
+                ownership: None,
             },
         );
         assert!(matches!(
@@ -10374,6 +11453,7 @@ mod presence_tests {
                     command_id: "initial-persistent".to_string(),
                     issued_at: now,
                     deadline_at: now + 20,
+                    ownership: None,
                 }
             ),
             DaemonToWrapper::SpawnAccepted { definition: Some(definition), .. }
@@ -10401,7 +11481,10 @@ mod presence_tests {
             0
         );
         let status = restarted.wait().unwrap();
-        assert!(status.success());
+        assert!(
+            status.success() || status.code().is_none(),
+            "arret daemon inattendu: {status:?}"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -11330,6 +12413,15 @@ mod presence_tests {
         assert_eq!(
             canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &original, 123_000),
             canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &renamed, 123_000)
+        );
+        let mut controle = original.clone();
+        controle.origin = Some(bridget_core::MessageOrigin::Human);
+        controle.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        controle.references = vec!["delegation-1".to_string()];
+        assert_ne!(
+            canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &original, 123_000),
+            canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &controle, 123_000),
+            "une intention ou une référence ne doit jamais rejouer un envoi passif"
         );
     }
 
@@ -13126,6 +14218,7 @@ mod presence_tests {
             command_id: "managed-runtime-definition".to_string(),
             issued_at: now,
             deadline_at: now + 60,
+            ownership: None,
         };
         let lease = match state.fleet.request_spawn(&order, now).unwrap() {
             crate::fleet::SpawnSubmission::Start(lease) => lease,
@@ -13197,6 +14290,7 @@ mod presence_tests {
             command_id: label.to_string(),
             issued_at: now,
             deadline_at: now + 60,
+            ownership: None,
         };
         let lease = match state.fleet.request_spawn(&order, now).unwrap() {
             crate::fleet::SpawnSubmission::Start(lease) => lease,
@@ -14182,6 +15276,8 @@ mod presence_tests {
                 cache_read_input_tokens: 13_907,
             },
             UsageSource::ClaudeStreamJson,
+            None,
+            None,
             &mut state,
         );
         assert!(matches!(ack, DaemonToWrapper::Ack { .. }));
@@ -14872,6 +15968,9 @@ mod presence_tests {
             generation: 1,
             deadline_at: unix_timestamp() + 60,
             persistent: false,
+            link_id: None,
+            ownership: None,
+            agent_path: None,
         }
     }
 
@@ -14889,6 +15988,7 @@ mod presence_tests {
             command_id: command_id.to_string(),
             issued_at: now,
             deadline_at: now + 60,
+            ownership: None,
         };
         let lease = match state.fleet.request_spawn(&order, now).unwrap() {
             crate::fleet::SpawnSubmission::Start(lease) => lease,
@@ -15957,4 +17057,322 @@ mod presence_tests {
         drop(state);
         let _ = std::fs::remove_file(config.db_path);
     }
+}
+
+#[cfg(test)]
+#[test]
+fn temoin_commande_controle_est_recue_puis_resolue_par_le_wrapper_cible() {
+    let (mut state, config) = presence_tests::state_with_registered_agent("execution-control");
+    let (target_writer, mut target_reader) =
+        presence_tests::control_socket("execution-control-target");
+    let (client_writer, mut client_reader) =
+        presence_tests::control_socket("execution-control-client");
+    state
+        .connections
+        .insert("conn-1".to_string(), target_writer);
+    state
+        .connections
+        .insert("client-control".to_string(), client_writer);
+    state
+        .execution_store
+        .record_starting("submission-control", "execution-control", "agent-2", 10)
+        .unwrap();
+    assert!(matches!(
+        state.execution_store.transition_if_current(
+            "execution-control",
+            "starting",
+            0,
+            1,
+            "running",
+            "provider_accepted",
+            11,
+        ),
+        Ok(ConditionalTransition::Applied(_))
+    ));
+    let shared = Arc::new(Mutex::new(state));
+    assert!(matches!(
+        handle_wrapper_message(
+            "client-control",
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Client,
+            },
+            &shared,
+        ),
+        Some(DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client,
+        })
+    ));
+    assert!(matches!(
+        handle_wrapper_message(
+            "client-control",
+            WrapperToDaemon::ClientHello {
+                contract_version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: "012_scope_controltestx".to_string(),
+                capabilities: vec![
+                    ClientCapability::ExecutionControlV1,
+                    ClientCapability::Lookup
+                ],
+            },
+            &shared,
+        ),
+        Some(DaemonToWrapper::ClientWelcome { .. })
+    ));
+    let mut correction =
+        bridget_core::BridgetMessage::new("operateur", "agent-2", "corrige le point");
+    correction.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+    let command = ExecutionControlCommand {
+        version: 1,
+        command_id: "control-1".to_string(),
+        execution_id: "execution-control".to_string(),
+        generation: 1,
+        revision: 1,
+        operation: ExecutionControlOperation::SteerCurrent,
+        message: Some(correction),
+    };
+    assert!(matches!(
+        handle_wrapper_message(
+            "client-control",
+            WrapperToDaemon::ControlExecution {
+                command: command.clone(),
+            },
+            &shared,
+        ),
+        Some(DaemonToWrapper::ControlExecutionResult {
+            outcome: ExecutionControlOutcome::OutcomeUnknown,
+            ..
+        })
+    ));
+    assert!(matches!(
+        presence_tests::read_control(&mut target_reader),
+        DaemonToWrapper::ControlExecutionDispatch {
+            issuer_scope,
+            command: dispatched,
+        } if issuer_scope == "012_scope_controltestx" && dispatched == command
+    ));
+    let report = handle_wrapper_message(
+        "conn-1",
+        WrapperToDaemon::ControlExecutionReported {
+            issuer_scope: "012_scope_controltestx".to_string(),
+            command_id: "control-1".to_string(),
+            execution_id: "execution-control".to_string(),
+            accepted: false,
+            refusal_reason: Some("capability_unavailable".to_string()),
+        },
+        &shared,
+    );
+    assert!(report.is_none());
+    assert!(matches!(
+        presence_tests::read_control(&mut client_reader),
+        DaemonToWrapper::ControlExecutionResult {
+            command_id,
+            execution_id,
+            outcome: ExecutionControlOutcome::Refused(ExecutionControlRefusal::CapabilityUnavailable),
+        } if command_id == "control-1" && execution_id == "execution-control"
+    ));
+    assert!(matches!(
+        handle_wrapper_message(
+            "client-control",
+            WrapperToDaemon::Lookup {
+                operation_kind: "execution_control".to_string(),
+                idempotency_key: "control-1".to_string(),
+            },
+            &shared,
+        ),
+        Some(DaemonToWrapper::ControlExecutionResult {
+            outcome: ExecutionControlOutcome::Refused(
+                ExecutionControlRefusal::CapabilityUnavailable
+            ),
+            ..
+        })
+    ));
+    drop(shared);
+    let _ = std::fs::remove_file(config.db_path);
+}
+
+#[cfg(test)]
+#[test]
+fn intentions_de_soumission_restent_distinctes_et_persistantes() {
+    let (mut state, config) = presence_tests::state_with_registered_agent("intentions-us1");
+    let registry_path = config.db_path.with_extension("intentions.json");
+    let registry_json = serde_json::json!({
+        "execution_projection": { "dual_write": true, "legacy_projection": false },
+        "agents": {
+            "claude": {
+                "command": "/bin/sh",
+                "protocol": "acp",
+                "forbidden_env": [],
+                "pass_env": []
+            }
+        }
+    })
+    .to_string();
+    std::fs::write(&registry_path, registry_json).unwrap();
+    std::fs::set_permissions(
+        &registry_path,
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )
+    .unwrap();
+    state.registry = AgentRegistry::from_json(
+        &std::fs::read_to_string(&registry_path).unwrap(),
+        &registry_path,
+    )
+    .unwrap();
+    state
+        .router
+        .register(
+            Some("agent-1"),
+            &bridget_core::AgentType::Codex,
+            "conn-sender",
+        )
+        .unwrap();
+    state
+        .conn_names
+        .insert("conn-sender".to_string(), "agent-1".to_string());
+    let (target_writer, mut target_reader) =
+        presence_tests::control_socket("intentions-us1-target");
+    state
+        .connections
+        .insert("conn-1".to_string(), target_writer);
+    let shared = Arc::new(Mutex::new(state));
+
+    let mut queue = bridget_core::BridgetMessage::new("agent-1", "agent-2", "conserver");
+    queue.id = "queue-us1".to_string();
+    queue.intent = Some(bridget_core::MessageIntent::QueueOnly);
+    let mut queued_expected = queue.clone();
+    queued_expected.hops -= 1;
+    assert!(matches!(
+        handle_wrapper_message("conn-sender", WrapperToDaemon::Send(queue.clone()), &shared),
+        Some(DaemonToWrapper::Ack { id }) if id == "queue-us1"
+    ));
+    assert_eq!(
+        shared
+            .lock()
+            .unwrap()
+            .execution_store
+            .take_next_submission("agent-2")
+            .unwrap()
+            .unwrap()
+            .message,
+        Some(queued_expected)
+    );
+
+    let mut trigger = bridget_core::BridgetMessage::new("agent-1", "agent-2", "démarrer");
+    trigger.id = "trigger-us1".to_string();
+    trigger.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+    let mut trigger_expected = trigger.clone();
+    trigger_expected.hops -= 1;
+    assert!(matches!(
+        handle_wrapper_message("conn-sender", WrapperToDaemon::Send(trigger), &shared),
+        Some(DaemonToWrapper::Ack { id }) if id == "trigger-us1"
+    ));
+    assert!(matches!(
+        presence_tests::read_control(&mut target_reader),
+        DaemonToWrapper::DeliverExecution { message, execution_id, .. }
+            if message.id == "trigger-us1"
+                && message.intent == Some(bridget_core::MessageIntent::TriggerTurn)
+                && execution_id == "execution-trigger-us1"
+    ));
+    assert_eq!(
+        shared
+            .lock()
+            .unwrap()
+            .execution_store
+            .execution_message("execution-trigger-us1")
+            .unwrap(),
+        Some(trigger_expected)
+    );
+
+    let mut steer = bridget_core::BridgetMessage::new("agent-1", "agent-2", "corriger");
+    steer.id = "steer-us1".to_string();
+    steer.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+    assert!(matches!(
+        handle_wrapper_message("conn-sender", WrapperToDaemon::Send(steer), &shared),
+        Some(DaemonToWrapper::Ack { id }) if id == "steer-us1"
+    ));
+    assert!(matches!(
+        presence_tests::read_control(&mut target_reader),
+        DaemonToWrapper::Deliver(message)
+            if message.id == "steer-us1"
+                && message.intent == Some(bridget_core::MessageIntent::SteerCurrent)
+    ));
+
+    let mut interrupt =
+        bridget_core::BridgetMessage::new("agent-1", "agent-2", "interrompre et démarrer");
+    interrupt.id = "interrupt-us1".to_string();
+    interrupt.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
+    assert!(matches!(
+        handle_wrapper_message("conn-sender", WrapperToDaemon::Send(interrupt), &shared),
+        Some(DaemonToWrapper::Ack { id }) if id == "interrupt-us1"
+    ));
+    assert!(matches!(
+        presence_tests::read_control(&mut target_reader),
+        DaemonToWrapper::DeliverExecution { message, execution_id, .. }
+            if message.id == "interrupt-us1"
+                && message.intent == Some(bridget_core::MessageIntent::InterruptAndStart)
+                && execution_id == "execution-interrupt-us1"
+    ));
+
+    let mut control =
+        bridget_core::BridgetMessage::new("agent-1", "agent-2", "ne devient pas un prompt");
+    control.id = "control-us1".to_string();
+    control.intent = Some(bridget_core::MessageIntent::ControlOnly);
+    assert!(matches!(
+        handle_wrapper_message("conn-sender", WrapperToDaemon::Send(control), &shared),
+        Some(DaemonToWrapper::Nack { reason, .. }) if reason.contains("ControlExecution")
+    ));
+
+    drop(shared);
+    let _ = std::fs::remove_file(config.db_path);
+    let _ = std::fs::remove_file(registry_path);
+}
+
+#[cfg(test)]
+#[test]
+fn transition_execution_refusee_si_wrapper_non_proprietaire() {
+    let (mut state, config) = presence_tests::state_with_registered_agent("transition-owner");
+    state
+        .execution_store
+        .record_starting("submission-owner", "execution-owner", "agent-2", 10)
+        .unwrap();
+    state
+        .router
+        .register(
+            Some("agent-3"),
+            &bridget_core::AgentType::Codex,
+            "conn-attacker",
+        )
+        .unwrap();
+    state
+        .conn_names
+        .insert("conn-attacker".to_string(), "agent-3".to_string());
+    state
+        .conn_instances
+        .insert("conn-attacker".to_string(), "instance-attacker".to_string());
+
+    let outcome = handle_execution_transition(
+        "conn-attacker",
+        bridget_transport::protocol::ExecutionStateTransition {
+            execution_id: "execution-owner".to_string(),
+            generation: 1,
+            expected_state: "starting".to_string(),
+            expected_revision: 0,
+            next_state: "running".to_string(),
+            reason: "provider_accepted".to_string(),
+            observed_at: 11,
+        },
+        &mut state,
+    );
+
+    assert!(matches!(
+        outcome,
+        Some(DaemonToWrapper::Nack { reason, .. }) if reason == "transition d exécution émise par un wrapper non propriétaire"
+    ));
+    let snapshot = state
+        .execution_store
+        .execution_snapshot("execution-owner")
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.state, "starting");
+    assert_eq!(snapshot.revision, 0);
+    let _ = std::fs::remove_file(config.db_path);
 }

@@ -136,6 +136,17 @@ pub struct SendDelivery {
     pub message_bytes: Vec<u8>,
 }
 
+/// Lien causal ajouté au-dessus d'une remise idempotente inchangée.
+///
+/// Les trois identifiants restent émis par Bridget. Aucun identifiant fournisseur
+/// ne peut se substituer à ce rattachement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryExecutionLink {
+    pub delivery_id: String,
+    pub submission_id: String,
+    pub execution_id: String,
+}
+
 /// Projection de stockage : la colonne `message_bytes` reste nullable pour
 /// les lignes héritées de v1, classées `indeterminate` par la migration v2.
 struct StoredSendDelivery {
@@ -256,6 +267,77 @@ pub enum SpawnReservation {
     IdempotencyExpired,
 }
 
+/// Cycle de vie durable de la propriété parent-enfant, distinct de la
+/// connexion du processus et de l'issue de sa saga de lancement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentLinkState {
+    Reserved,
+    Open,
+    Transferred,
+    Closed,
+    Orphaned,
+}
+
+impl AgentLinkState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reserved => "reserved",
+            Self::Open => "open",
+            Self::Transferred => "transferred",
+            Self::Closed => "closed",
+            Self::Orphaned => "orphaned",
+        }
+    }
+
+    fn from_str(value: &str) -> Result<Self, IdempotencyError> {
+        match value {
+            "reserved" => Ok(Self::Reserved),
+            "open" => Ok(Self::Open),
+            "transferred" => Ok(Self::Transferred),
+            "closed" => Ok(Self::Closed),
+            "orphaned" => Ok(Self::Orphaned),
+            _ => Err(IdempotencyError::CorruptRecord(
+                "état de lien agent inconnu",
+            )),
+        }
+    }
+
+    pub fn owns_child(self) -> bool {
+        matches!(self, Self::Reserved | Self::Open | Self::Transferred)
+    }
+}
+
+/// Lien durable de propriété d'un enfant. Les références de mandat restent
+/// opaques : Bridget les conserve mais ne décide jamais de leur cycle métier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentLinkRecord {
+    pub link_id: String,
+    pub parent_instance_id: String,
+    pub child_instance_id: String,
+    pub parent_execution_id: Option<String>,
+    pub objective_id: Option<String>,
+    pub delegation_id: Option<String>,
+    pub role: String,
+    pub agent_path: String,
+    pub state: AgentLinkState,
+    pub created_at: i64,
+    pub closed_at: Option<i64>,
+    pub revision: u64,
+}
+
+/// Fait durable et cursé de changement de propriété. Il est distinct de la
+/// présence d'un processus afin de pouvoir réveiller un parent après reprise.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentLinkEvent {
+    pub cursor: u64,
+    pub event_id: String,
+    pub link_id: String,
+    pub parent_instance_id: String,
+    pub child_instance_id: String,
+    pub state: AgentLinkState,
+    pub observed_at: i64,
+}
+
 #[derive(Debug)]
 pub enum IdempotencyError {
     InvalidIssuerScope,
@@ -266,6 +348,8 @@ pub enum IdempotencyError {
     InvalidTransition { from: RecordState, to: RecordState },
     InvalidDelivery,
     InvalidSpawnCommand,
+    InvalidAgentLink,
+    AgentLinkOwned,
     DispatchUnavailable,
     MissingRecord,
     CorruptRecord(&'static str),
@@ -285,6 +369,8 @@ impl std::fmt::Display for IdempotencyError {
             }
             Self::InvalidDelivery => write!(formatter, "remise idempotente invalide"),
             Self::InvalidSpawnCommand => write!(formatter, "commande spawn invalide"),
+            Self::InvalidAgentLink => write!(formatter, "lien agent invalide"),
+            Self::AgentLinkOwned => write!(formatter, "enfant déjà possédé par un lien ouvert"),
             Self::DispatchUnavailable => write!(formatter, "remise déjà traitée ou indisponible"),
             Self::MissingRecord => write!(formatter, "enregistrement d'idempotence absent"),
             Self::CorruptRecord(detail) => write!(formatter, "enregistrement corrompu: {detail}"),
@@ -388,7 +474,7 @@ impl IdempotencyStore {
             CREATE UNIQUE INDEX IF NOT EXISTS idx_send_deliveries_operation
                 ON send_deliveries(issuer_scope, operation_kind, idempotency_key);
             -- Lookup ledger : jointure sur (operation_kind, idempotency_key)
-            -- sans issuer_scope — n'emprunte PAS l'UNIQUE ci-dessus (préfixe
+            -- sans issuer_scope - n'emprunte PAS l'UNIQUE ci-dessus (préfixe
             -- issuer_scope). Index dédié pour SEARCH, pas SCAN.
             CREATE INDEX IF NOT EXISTS idx_send_deliveries_kind_key
                 ON send_deliveries(operation_kind, idempotency_key);
@@ -449,6 +535,38 @@ impl IdempotencyStore {
             );
             CREATE INDEX IF NOT EXISTS idx_ledger_ts ON ledger(ts);
             CREATE INDEX IF NOT EXISTS idx_ledger_conv ON ledger(conversation_key, ts);",
+        )?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS agent_links (
+                link_id TEXT PRIMARY KEY,
+                parent_instance_id TEXT NOT NULL,
+                child_instance_id TEXT NOT NULL UNIQUE,
+                parent_execution_id TEXT,
+                objective_id TEXT,
+                delegation_id TEXT,
+                role TEXT NOT NULL,
+                agent_path TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (state IN ('reserved', 'open', 'transferred', 'closed', 'orphaned')),
+                created_at INTEGER NOT NULL,
+                closed_at INTEGER,
+                revision INTEGER NOT NULL CHECK (revision >= 0)
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_links_parent_state
+                ON agent_links(parent_instance_id, state);
+            CREATE INDEX IF NOT EXISTS idx_agent_links_child_state
+                ON agent_links(child_instance_id, state);
+            CREATE TABLE IF NOT EXISTS agent_link_events (
+                cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL UNIQUE,
+                link_id TEXT NOT NULL,
+                parent_instance_id TEXT NOT NULL,
+                child_instance_id TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (state IN ('reserved', 'open', 'transferred', 'closed', 'orphaned')),
+                observed_at INTEGER NOT NULL,
+                FOREIGN KEY (link_id) REFERENCES agent_links(link_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_link_events_parent_cursor
+                ON agent_link_events(parent_instance_id, cursor);",
         )?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let migration_applied = tx.query_row(
@@ -617,6 +735,12 @@ impl IdempotencyStore {
                 created_at INTEGER NOT NULL,
                 notified_at INTEGER
             );",
+        )?;
+        tx.execute("CREATE TABLE IF NOT EXISTS send_delivery_execution_links (delivery_id TEXT PRIMARY KEY, submission_id TEXT NOT NULL, execution_id TEXT NOT NULL, FOREIGN KEY (delivery_id) REFERENCES send_deliveries(delivery_id) ON DELETE CASCADE)", [])?;
+        tx.execute("CREATE INDEX IF NOT EXISTS idx_send_delivery_execution_links_submission ON send_delivery_execution_links(submission_id, execution_id)", [])?;
+        tx.execute(
+            "INSERT OR IGNORE INTO idempotency_schema_migrations(version) VALUES (5)",
+            [],
         )?;
         tx.commit()?;
         Ok(())
@@ -989,6 +1113,331 @@ impl IdempotencyStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Crée le lien de propriété avant que la génération ne puisse démarrer.
+    /// Le même enfant ne peut pas recevoir un second propriétaire ouvert.
+    pub fn create_agent_link(&mut self, link: &AgentLinkRecord) -> Result<(), IdempotencyError> {
+        if link.link_id.trim().is_empty()
+            || link.parent_instance_id.trim().is_empty()
+            || link.child_instance_id.trim().is_empty()
+            || link.role.trim().is_empty()
+            || link.agent_path.trim().is_empty()
+            || link.created_at <= 0
+            || link.revision != 0
+            || link.state != AgentLinkState::Reserved
+            || link.closed_at.is_some()
+        {
+            return Err(IdempotencyError::InvalidAgentLink);
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let inserted = tx.execute(
+            "INSERT INTO agent_links (
+                link_id, parent_instance_id, child_instance_id, parent_execution_id,
+                objective_id, delegation_id, role, agent_path, state, created_at,
+                closed_at, revision
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'reserved', ?9, NULL, 0)
+             ON CONFLICT(child_instance_id) DO NOTHING",
+            params![
+                link.link_id,
+                link.parent_instance_id,
+                link.child_instance_id,
+                link.parent_execution_id,
+                link.objective_id,
+                link.delegation_id,
+                link.role,
+                link.agent_path,
+                link.created_at,
+            ],
+        )?;
+        if inserted == 0 {
+            let existing = tx
+                .query_row(
+                    "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
+                            objective_id, delegation_id, role, agent_path, state, created_at,
+                            closed_at, revision
+                     FROM agent_links WHERE child_instance_id = ?1",
+                    [&link.child_instance_id],
+                    agent_link_from_row,
+                )
+                .optional()?;
+            tx.commit()?;
+            return match existing {
+                Some(existing) if existing == *link => Ok(()),
+                Some(_) => Err(IdempotencyError::AgentLinkOwned),
+                None => Err(IdempotencyError::CorruptRecord(
+                    "lien agent absent après conflit",
+                )),
+            };
+        }
+        record_agent_link_event(&tx, link, link.created_at)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn agent_link_for_child(
+        &self,
+        child_instance_id: &str,
+    ) -> Result<Option<AgentLinkRecord>, IdempotencyError> {
+        self.conn
+            .query_row(
+                "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
+                        objective_id, delegation_id, role, agent_path, state, created_at,
+                        closed_at, revision
+                 FROM agent_links WHERE child_instance_id = ?1",
+                [child_instance_id],
+                agent_link_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn agent_link_by_id(
+        &self,
+        link_id: &str,
+    ) -> Result<Option<AgentLinkRecord>, IdempotencyError> {
+        self.conn
+            .query_row(
+                "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
+                        objective_id, delegation_id, role, agent_path, state, created_at,
+                        closed_at, revision
+                 FROM agent_links WHERE link_id = ?1",
+                [link_id],
+                agent_link_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+    /// Enfants qui ont encore un propriétaire actif. Les liens fermés ou
+    /// orphelins restent consultables par enfant mais ne consomment plus quota.
+    pub fn open_agent_links_for_parent(
+        &self,
+        parent_instance_id: &str,
+    ) -> Result<Vec<AgentLinkRecord>, IdempotencyError> {
+        let mut statement = self.conn.prepare(
+            "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
+                    objective_id, delegation_id, role, agent_path, state, created_at,
+                    closed_at, revision
+             FROM agent_links
+             WHERE parent_instance_id = ?1
+               AND state IN ('reserved', 'open', 'transferred')
+             ORDER BY created_at, link_id",
+        )?;
+        statement
+            .query_map([parent_instance_id], agent_link_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Compte les descendants encore rattachés à un propriétaire. Le décompte
+    /// direct exploite l'index parent-état ; le total est réservé à la
+    /// projection UI et suit le chemin stable, sans modifier les liens.
+    pub fn open_agent_link_descendant_counts(
+        &self,
+        instance_id: &str,
+    ) -> Result<(u64, u64), IdempotencyError> {
+        let direct: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM agent_links
+             WHERE parent_instance_id = ?1
+               AND state IN ('reserved', 'open', 'transferred')",
+            [instance_id],
+            |row| row.get(0),
+        )?;
+        let path = self
+            .agent_link_for_child(instance_id)?
+            .map(|link| link.agent_path)
+            .unwrap_or_else(|| instance_id.to_string());
+        let escaped = path
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let descendants: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM agent_links
+             WHERE agent_path LIKE ?1 ESCAPE '\\'
+               AND state IN ('reserved', 'open', 'transferred')",
+            [format!("{escaped}/%")],
+            |row| row.get(0),
+        )?;
+        Ok((
+            u64::try_from(direct).unwrap_or(0),
+            u64::try_from(descendants).unwrap_or(0),
+        ))
+    }
+    /// Relit les changements durables après un curseur pour reprendre une
+    /// attente interrompue sans redemander l'état courant à un fournisseur.
+    pub fn agent_link_events_after(
+        &self,
+        parent_instance_id: &str,
+        after_cursor: Option<u64>,
+    ) -> Result<Vec<AgentLinkEvent>, IdempotencyError> {
+        let after_cursor = i64::try_from(after_cursor.unwrap_or_default()).unwrap_or(i64::MAX);
+        let mut statement = self.conn.prepare(
+            "SELECT cursor, event_id, link_id, parent_instance_id, child_instance_id, state, observed_at
+             FROM agent_link_events
+             WHERE parent_instance_id = ?1 AND cursor > ?2
+             ORDER BY cursor
+             LIMIT 128",
+        )?;
+        statement
+            .query_map(
+                params![parent_instance_id, after_cursor],
+                agent_link_event_from_row,
+            )?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn transition_agent_link(
+        &mut self,
+        link_id: &str,
+        allowed: &[AgentLinkState],
+        next: AgentLinkState,
+        changed_at: i64,
+    ) -> Result<AgentLinkRecord, IdempotencyError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = tx
+            .query_row(
+                "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
+                        objective_id, delegation_id, role, agent_path, state, created_at,
+                        closed_at, revision
+                 FROM agent_links WHERE link_id = ?1",
+                [link_id],
+                agent_link_from_row,
+            )
+            .optional()?
+            .ok_or(IdempotencyError::CorruptRecord("lien agent absent"))?;
+        if current.state == next {
+            tx.commit()?;
+            return Ok(current);
+        }
+        if !allowed.contains(&current.state) {
+            return Err(IdempotencyError::InvalidAgentLink);
+        }
+        let changed_at = changed_at.max(current.created_at);
+        let closed_at = if next == AgentLinkState::Closed {
+            Some(changed_at)
+        } else {
+            None
+        };
+        let changed = tx.execute(
+            "UPDATE agent_links
+             SET state = ?1, closed_at = ?2, revision = revision + 1
+             WHERE link_id = ?3 AND revision = ?4",
+            params![next.as_str(), closed_at, link_id, current.revision],
+        )?;
+        if changed != 1 {
+            return Err(IdempotencyError::DispatchUnavailable);
+        }
+        let updated = tx.query_row(
+            "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
+                    objective_id, delegation_id, role, agent_path, state, created_at,
+                    closed_at, revision
+             FROM agent_links WHERE link_id = ?1",
+            [link_id],
+            agent_link_from_row,
+        )?;
+        record_agent_link_event(&tx, &updated, changed_at)?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
+    pub fn orphan_agent_links_for_parent(
+        &mut self,
+        parent_instance_id: &str,
+        observed_at: i64,
+    ) -> Result<usize, IdempotencyError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let active = tx
+            .prepare(
+                "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
+                        objective_id, delegation_id, role, agent_path, state, created_at,
+                        closed_at, revision
+                 FROM agent_links
+                 WHERE parent_instance_id = ?1
+                   AND state IN ('reserved', 'open', 'transferred')",
+            )?
+            .query_map([parent_instance_id], agent_link_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        let changed = tx.execute(
+            "UPDATE agent_links
+             SET state = 'orphaned', revision = revision + 1
+             WHERE parent_instance_id = ?1
+               AND state IN ('reserved', 'open', 'transferred')",
+            [parent_instance_id],
+        )?;
+        for link in active {
+            let updated = AgentLinkRecord {
+                state: AgentLinkState::Orphaned,
+                revision: link.revision + 1,
+                closed_at: None,
+                ..link
+            };
+            record_agent_link_event(&tx, &updated, observed_at)?;
+        }
+        tx.commit()?;
+        Ok(changed)
+    }
+
+    pub fn transfer_agent_link(
+        &mut self,
+        link_id: &str,
+        parent_instance_id: &str,
+        agent_path: &str,
+        observed_at: i64,
+    ) -> Result<AgentLinkRecord, IdempotencyError> {
+        if parent_instance_id.trim().is_empty() || agent_path.trim().is_empty() {
+            return Err(IdempotencyError::InvalidAgentLink);
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = tx
+            .query_row(
+                "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
+                        objective_id, delegation_id, role, agent_path, state, created_at,
+                        closed_at, revision
+                 FROM agent_links WHERE link_id = ?1",
+                [link_id],
+                agent_link_from_row,
+            )
+            .optional()?
+            .ok_or(IdempotencyError::CorruptRecord("lien agent absent"))?;
+        if !matches!(
+            current.state,
+            AgentLinkState::Reserved
+                | AgentLinkState::Open
+                | AgentLinkState::Transferred
+                | AgentLinkState::Orphaned
+        ) {
+            return Err(IdempotencyError::InvalidAgentLink);
+        }
+        let changed = tx.execute(
+            "UPDATE agent_links
+             SET parent_instance_id = ?1, agent_path = ?2, state = 'transferred',
+                 closed_at = NULL, revision = revision + 1
+             WHERE link_id = ?3 AND revision = ?4",
+            params![parent_instance_id, agent_path, link_id, current.revision],
+        )?;
+        if changed != 1 {
+            return Err(IdempotencyError::DispatchUnavailable);
+        }
+        let updated = tx.query_row(
+            "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
+                    objective_id, delegation_id, role, agent_path, state, created_at,
+                    closed_at, revision
+             FROM agent_links WHERE link_id = ?1",
+            [link_id],
+            agent_link_from_row,
+        )?;
+        record_agent_link_event(&tx, &updated, observed_at)?;
+        tx.commit()?;
+        Ok(updated)
+    }
+
     pub fn lookup(&self, key: &IdempotencyKey, now: i64) -> Result<LookupResult, IdempotencyError> {
         match self.load_record(key)? {
             Some(record) if record.expires_at <= now => Ok(LookupResult::IdempotencyExpired),
@@ -1131,6 +1580,51 @@ impl IdempotencyStore {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Attache une remise déjà gravée à son contexte causal Bridget.
+    /// La première écriture est définitive : un rejeu ne peut pas rerouter la remise.
+    pub fn link_send_delivery(&self, link: &DeliveryExecutionLink) -> Result<(), IdempotencyError> {
+        if link.delivery_id.is_empty()
+            || link.submission_id.is_empty()
+            || link.execution_id.is_empty()
+        {
+            return Err(IdempotencyError::InvalidDelivery);
+        }
+
+        self.conn.execute(
+            "INSERT INTO send_delivery_execution_links (delivery_id, submission_id, execution_id) VALUES (?1, ?2, ?3) ON CONFLICT(delivery_id) DO NOTHING",
+            params![link.delivery_id, link.submission_id, link.execution_id],
+        )?;
+
+        match self.delivery_execution_link(&link.delivery_id)? {
+            Some(existing) if existing == *link => Ok(()),
+            Some(_) => Err(IdempotencyError::InvalidDelivery),
+            None => Err(IdempotencyError::CorruptRecord(
+                "lien causal de remise absent",
+            )),
+        }
+    }
+
+    /// Lit le rattachement causal sans modifier la remise ni son état de rejeu.
+    pub fn delivery_execution_link(
+        &self,
+        delivery_id: &str,
+    ) -> Result<Option<DeliveryExecutionLink>, IdempotencyError> {
+        self.conn
+            .query_row(
+                "SELECT delivery_id, submission_id, execution_id FROM send_delivery_execution_links WHERE delivery_id = ?1",
+                [delivery_id],
+                |row| {
+                    Ok(DeliveryExecutionLink {
+                        delivery_id: row.get(0)?,
+                        submission_id: row.get(1)?,
+                        execution_id: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     /// Réassigne les remises encore en vol d'une instance morte vers l'instance
@@ -1701,6 +2195,56 @@ fn load_spawn_command_from(
     )
     .optional()
     .map_err(Into::into)
+}
+
+fn agent_link_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentLinkRecord> {
+    Ok(AgentLinkRecord {
+        link_id: row.get(0)?,
+        parent_instance_id: row.get(1)?,
+        child_instance_id: row.get(2)?,
+        parent_execution_id: row.get(3)?,
+        objective_id: row.get(4)?,
+        delegation_id: row.get(5)?,
+        role: row.get(6)?,
+        agent_path: row.get(7)?,
+        state: AgentLinkState::from_str(&row.get::<_, String>(8)?).map_err(to_sql_error)?,
+        created_at: row.get(9)?,
+        closed_at: row.get(10)?,
+        revision: row.get(11)?,
+    })
+}
+
+fn agent_link_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentLinkEvent> {
+    Ok(AgentLinkEvent {
+        cursor: row.get(0)?,
+        event_id: row.get(1)?,
+        link_id: row.get(2)?,
+        parent_instance_id: row.get(3)?,
+        child_instance_id: row.get(4)?,
+        state: AgentLinkState::from_str(&row.get::<_, String>(5)?).map_err(to_sql_error)?,
+        observed_at: row.get(6)?,
+    })
+}
+
+fn record_agent_link_event(
+    tx: &rusqlite::Transaction<'_>,
+    link: &AgentLinkRecord,
+    observed_at: i64,
+) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT OR IGNORE INTO agent_link_events (
+            event_id, link_id, parent_instance_id, child_instance_id, state, observed_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            format!("{}:{}", link.link_id, link.revision),
+            link.link_id,
+            link.parent_instance_id,
+            link.child_instance_id,
+            link.state.as_str(),
+            observed_at.max(link.created_at),
+        ],
+    )?;
+    Ok(())
 }
 
 fn spawn_command_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SpawnCommand> {
@@ -2633,6 +3177,51 @@ mod tests {
                 expires_at: NOW + HORIZON
             }
         );
+    }
+
+    #[test]
+    fn lien_causal_de_livraison_preserve_le_rejeu_exact() {
+        let mut store = IdempotencyStore::open_in_memory().unwrap();
+        let key = key();
+        assert!(matches!(
+            reserve(&store, b"canon"),
+            Reservation::Prepared { .. }
+        ));
+        let delivery = SendDelivery {
+            delivery_id: "delivery-causale".to_string(),
+            recipient_instance_id: "instance-1".to_string(),
+            delivery_generation: 1,
+            expires_at: NOW + HORIZON,
+            message_bytes: sample_message_bytes("message-1", "peer-1"),
+        };
+        store.begin_send_delivery(&key, &delivery).unwrap();
+        let expected = DeliveryExecutionLink {
+            delivery_id: delivery.delivery_id.clone(),
+            submission_id: "submission-1".to_string(),
+            execution_id: "execution-1".to_string(),
+        };
+        store.link_send_delivery(&expected).unwrap();
+        assert_eq!(
+            store
+                .delivery_execution_link(&delivery.delivery_id)
+                .unwrap(),
+            Some(expected)
+        );
+        assert_eq!(
+            reserve(&store, b"canon"),
+            Reservation::Replayed(LookupResult::OutcomeUnknown {
+                expires_at: NOW + HORIZON
+            })
+        );
+        assert_eq!(store.send_delivery(&key).unwrap(), Some(delivery));
+        assert!(matches!(
+            store.link_send_delivery(&DeliveryExecutionLink {
+                delivery_id: "delivery-causale".to_string(),
+                submission_id: "submission-2".to_string(),
+                execution_id: "execution-1".to_string(),
+            }),
+            Err(IdempotencyError::InvalidDelivery)
+        ));
     }
 
     #[test]

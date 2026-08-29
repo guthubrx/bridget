@@ -95,7 +95,7 @@ fn write_native_registry(root: &Path, script: &str) {
                 "command": "sh",
                 "args": ["-c", script],
                 "protocol": "codex_app_server",
-                "permissions": "allow",
+                "permissions": "deny",
                 "queue_capacity": 4,
                 "notify_timeout_secs": 3,
                 "forbidden_env": [],

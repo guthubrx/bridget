@@ -18,7 +18,6 @@ path = "src/main.rs"
 [dependencies]
 bridget-core = { path = "../bridget-core" }
 bridget-transport = { path = "../bridget-transport" }
-maicie = { path = "../../plugins/maicie" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = "0.9"
@@ -35,3 +34,4 @@ unicode-width = "0.2"
 [dev-dependencies]
 bridget-core = { path = "../bridget-core" }
 bridget-transport = { path = "../bridget-transport", features = ["test-support"] }
+maicie = { path = "../../plugins/maicie" }

@@ -7,12 +7,12 @@
 
 use crate::journal::{JournalFailureSink, JournalLiveFeed, JournalWriter, with_turn_failed_kind};
 use crate::managed_session::{
-    ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource, ManagedSession,
-    ManagedSessionDescriptor, ManagedTerminal,
+    ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource,
+    ManagedProviderIdentity, ManagedSession, ManagedSessionDescriptor, ManagedTerminal,
 };
-use crate::protocol::PresenceMode;
+use crate::protocol::{PresenceMode, ProviderObservation, ProviderOperation};
 use crate::transport::{Transport, TransportError};
-use bridget_core::BridgetMessage;
+use bridget_core::{BridgetMessage, MessageIntent};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -67,6 +67,24 @@ pub struct CodexAppServerOptions {
     /// réglage refuse. Une demande `item/*/requestApproval` reçoit toujours
     /// une réponse JSON-RPC sans intervention humaine.
     pub permissions: String,
+    /// Baseline relevée avant lancement, absente pour un registre historique.
+    pub provider_observation: Option<ProviderObservation>,
+    /// Démarrage de fil demandé par Bridget après vérification de la baseline.
+    pub thread_bootstrap: CodexThreadBootstrap,
+}
+/// Choix de fil au démarrage, explicitement versionné dans les options du
+/// pilote afin qu'une reprise native ne puisse jamais être confondue avec une
+/// session fraîche.
+#[derive(Debug, Clone, Default)]
+pub enum CodexThreadBootstrap {
+    #[default]
+    Start,
+    Resume {
+        thread_id: String,
+    },
+    Fork {
+        thread_id: String,
+    },
 }
 
 #[derive(Debug)]
@@ -129,6 +147,7 @@ struct CodexTurnDetail {
     message_id: String,
     thread_id: String,
     turn_id: Option<String>,
+    provider_item_id: Option<String>,
     /// Nombre d'updates texte déjà journalisés (deltas ou repli
     /// `item/completed` agentMessage). Sert d'anti-doublon pour B.
     text_updates: usize,
@@ -193,7 +212,9 @@ pub struct CodexAppServerTransport {
     thread_id: String,
     child: Arc<Mutex<Child>>,
     observations: Arc<(Mutex<Observations>, Condvar)>,
+    active_detail: ActiveTurnDetail,
     journal: Journal,
+    provider_observation: Option<ProviderObservation>,
     reader_handle: Mutex<Option<thread::JoinHandle<()>>>,
     worker_handle: Mutex<Option<thread::JoinHandle<()>>>,
 }
@@ -221,6 +242,7 @@ impl CodexAppServerTransport {
             ));
         }
         let mut command = Command::new(&options.command);
+        validate_thread_bootstrap(&options.provider_observation, &options.thread_bootstrap)?;
         command
             .args(&options.args)
             .envs(environment.iter().cloned())
@@ -304,11 +326,9 @@ impl CodexAppServerTransport {
             write_notification(&writer, "initialized", json!({}))?;
             let cwd =
                 std::env::current_dir().map_err(|error| TransportError::Io(error.to_string()))?;
-            let mut thread_params = json!({ "cwd": cwd });
-            if let Some(model) = &options.model {
-                thread_params["model"] = Value::String(model.clone());
-            }
-            let thread = request(&writer, &waiters, &next_id, "thread/start", thread_params)?;
+            let (thread_method, thread_params) =
+                thread_bootstrap_request(&options.thread_bootstrap, &cwd, options.model.as_deref());
+            let thread = request(&writer, &waiters, &next_id, thread_method, thread_params)?;
             if let Some((model, effort)) = runtime_from_thread_start(&thread.value) {
                 push_source(
                     &observations,
@@ -376,11 +396,28 @@ impl CodexAppServerTransport {
             busy: busy.clone(),
             thread_id: thread_id.clone(),
             journal: journal.clone(),
-            active_detail,
+            active_detail: active_detail.clone(),
             pending_request,
             notify_timeout: Duration::from_secs(options.notify_timeout_secs),
         });
 
+        push_internal(
+            &observations,
+            ManagedEventKind::ProviderContextObserved {
+                identity: ManagedProviderIdentity {
+                    provider_kind: "codex".to_string(),
+                    provider_session_id: Some(format!("codex-app-server-{pid}")),
+                    provider_thread_id: Some(thread_id.clone()),
+                    active_turn_id: None,
+                    provider_item_id: None,
+                    capabilities_revision: options
+                        .provider_observation
+                        .as_ref()
+                        .map(|observation| observation.contract_version.clone()),
+                    provider_observation: options.provider_observation.clone(),
+                },
+            },
+        );
         Ok(Self {
             connection_id: format!("codex-app-server-{pid}"),
             alive,
@@ -391,7 +428,9 @@ impl CodexAppServerTransport {
             writer,
             thread_id,
             child,
+            provider_observation: options.provider_observation,
             observations,
+            active_detail,
             journal,
             reader_handle: Mutex::new(Some(reader_handle)),
             worker_handle: Mutex::new(Some(worker_handle)),
@@ -516,11 +555,19 @@ impl Transport for CodexAppServerTransport {
         }
         let (queue, wake) = &*self.queue;
         let mut queue = queue.lock().unwrap_or_else(|poison| poison.into_inner());
-        // Seul le message humain reçu pendant un tour encore pilotable entre
-        // dans ce tour. Tous les autres expéditeurs conservent le mode FIFO
-        // historique, y compris pendant un tour actif.
-        let steering = message.from == "humain" && queue.active.is_some() && queue.steering_open;
-        let saturated = if steering {
+        let steering_requested = message.intent == Some(MessageIntent::SteerCurrent);
+        let interrupt_requested = message.intent == Some(MessageIntent::InterruptAndStart);
+        // Le pilotage est une intention explicite. Sans tour pilotable, il est
+        // refusé au lieu de devenir silencieusement un nouveau prompt FIFO.
+        if steering_requested && (queue.active.is_none() || !queue.steering_open) {
+            drop(queue);
+            self.push_internal(ManagedEventKind::DeliveryRejected {
+                message_id: message.id.clone(),
+                reason: "pilotage Codex indisponible pour le tour courant".to_string(),
+            });
+            return Ok(());
+        }
+        let saturated = if steering_requested {
             queue.steer.len() >= self.queue_capacity
         } else {
             queue.messages.len() >= self.queue_capacity
@@ -533,12 +580,26 @@ impl Transport for CodexAppServerTransport {
             });
             return Ok(());
         }
-        if steering {
+        if steering_requested {
             queue.steer.push_back(message.clone());
         } else {
             queue.messages.push_back(message.clone());
         }
+        // La nouvelle demande reste FIFO, mais l'interruption vise seulement
+        // le tour actif capturé sous le même verrou.
+        let active_message_id = interrupt_requested
+            .then(|| {
+                queue
+                    .active
+                    .as_ref()
+                    .map(|active| active.message_id.clone())
+            })
+            .flatten();
         wake.notify_one();
+        drop(queue);
+        if let Some(active_message_id) = active_message_id {
+            let _ = self.cancel_delivery(&active_message_id, "interruption explicite");
+        }
         Ok(())
     }
 
@@ -560,6 +621,26 @@ impl ManagedSession for CodexAppServerTransport {
         }
     }
 
+    fn provider_identity(&self) -> Option<ManagedProviderIdentity> {
+        let active = self
+            .active_detail
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        Some(ManagedProviderIdentity {
+            provider_kind: "codex".to_string(),
+            provider_session_id: Some(self.connection_id.clone()),
+            provider_thread_id: Some(self.thread_id.clone()),
+            active_turn_id: active.as_ref().and_then(|detail| detail.turn_id.clone()),
+            provider_item_id: active
+                .as_ref()
+                .and_then(|detail| detail.provider_item_id.clone()),
+            capabilities_revision: self
+                .provider_observation
+                .as_ref()
+                .map(|observation| observation.contract_version.clone()),
+            provider_observation: self.provider_observation.clone(),
+        })
+    }
     fn process_id(&self) -> u32 {
         self.child
             .lock()
@@ -1181,6 +1262,25 @@ fn set_active_turn_id(active_detail: &ActiveTurnDetail, message_id: &str, turn_i
     }
 }
 
+fn observe_provider_item_id(active_detail: &ActiveTurnDetail, value: &Value) {
+    let Some(provider_item_id) = value
+        .pointer("/params/item/id")
+        .and_then(Value::as_str)
+        .filter(|item_id| !item_id.is_empty())
+    else {
+        return;
+    };
+    let mut active = active_detail
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if let Some(detail) = active
+        .as_mut()
+        .filter(|detail| source_matches_active_turn(detail, value))
+    {
+        detail.provider_item_id = Some(provider_item_id.to_string());
+    }
+}
+
 fn observe_steered_user_message_visibility(
     observations: &Arc<(Mutex<Observations>, Condvar)>,
     active_detail: &ActiveTurnDetail,
@@ -1519,6 +1619,59 @@ fn is_saturated(reason: &str) -> bool {
     reason == CODEX_SATURATED_REASON
 }
 
+fn bootstrap_operation(bootstrap: &CodexThreadBootstrap) -> Option<ProviderOperation> {
+    match bootstrap {
+        CodexThreadBootstrap::Start => None,
+        CodexThreadBootstrap::Resume { .. } => Some(ProviderOperation::Resume),
+        CodexThreadBootstrap::Fork { .. } => Some(ProviderOperation::Fork),
+    }
+}
+
+fn validate_thread_bootstrap(
+    observation: &Option<ProviderObservation>,
+    bootstrap: &CodexThreadBootstrap,
+) -> Result<(), TransportError> {
+    let Some(operation) = bootstrap_operation(bootstrap) else {
+        return Ok(());
+    };
+    if observation
+        .as_ref()
+        .is_some_and(|value| value.supports(operation))
+    {
+        return Ok(());
+    }
+    let requested = match operation {
+        ProviderOperation::Resume => "thread/resume",
+        ProviderOperation::Fork => "thread/fork",
+        _ => unreachable!("bootstrap limité à resume/fork"),
+    };
+    Err(TransportError::DeliveryFailed(format!(
+        "{requested} Codex refusé: capacité non attestée pour cette version"
+    )))
+}
+
+fn thread_bootstrap_request(
+    bootstrap: &CodexThreadBootstrap,
+    cwd: &Path,
+    model: Option<&str>,
+) -> (&'static str, Value) {
+    match bootstrap {
+        CodexThreadBootstrap::Start => {
+            let mut params = json!({ "cwd": cwd });
+            if let Some(model) = model {
+                params["model"] = Value::String(model.to_string());
+            }
+            ("thread/start", params)
+        }
+        CodexThreadBootstrap::Resume { thread_id } => {
+            ("thread/resume", json!({ "threadId": thread_id }))
+        }
+        CodexThreadBootstrap::Fork { thread_id } => {
+            ("thread/fork", json!({ "threadId": thread_id }))
+        }
+    }
+}
+
 fn request(
     writer: &Writer,
     waiters: &Waiters,
@@ -1785,6 +1938,7 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                 // Les outputDelta ne portent que la sortie — ce n'est pas le nom.
                 Some("item/started") => {
                     let item = value.pointer("/params/item").unwrap_or(&Value::Null);
+                    observe_provider_item_id(&active_detail, &value);
                     if item.get("type").and_then(Value::as_str) == Some("userMessage") {
                         observe_steered_user_message_visibility(
                             &observations,
@@ -2450,6 +2604,7 @@ mod tests {
                                 printf '%s\n' "{\"id\":$steer_id,\"result\":{}}"
                                 if [ "${BRIDGET_CODEX_STEER_CONSUME:-0}" = 1 ]; then
                                     steer_message_id=$(printf '%s' "$line" | sed 's/.*"clientUserMessageId":"\([^"]*\)".*/\1/')
+            thread_bootstrap: CodexThreadBootstrap::Start,
                                     provider_item_id="provider-item-$steer_message_id"
                                     printf '%s\n' "{\"method\":\"item/started\",\"params\":{\"threadId\":\"thread-native\",\"turnId\":\"turn-native\",\"startedAtMs\":1,\"item\":{\"id\":\"$provider_item_id\",\"clientId\":\"$steer_message_id\",\"type\":\"userMessage\",\"content\":[]}}}"
                                 fi
@@ -2463,6 +2618,8 @@ mod tests {
             ],
             queue_capacity: 2,
             notify_timeout_secs: 2,
+            provider_observation: None,
+            thread_bootstrap: Default::default(),
             model: Some("gpt-5.6-terra".to_string()),
             permissions: "allow".to_string(),
         }
@@ -2606,14 +2763,14 @@ mod tests {
                     "provider_request ne doit pas porter {forbidden:?}: {payload}"
                 );
             }
-            if entry["event"] == "error" {
-                if let Some(pending) = entry.pointer("/payload/pending_provider_request") {
-                    let pending = serde_json::to_string(pending).expect("pending sérialisable");
-                    assert!(
-                        !pending.contains(forbidden),
-                        "pending_provider_request ne doit pas porter {forbidden:?}: {pending}"
-                    );
-                }
+            if entry["event"] == "error"
+                && let Some(pending) = entry.pointer("/payload/pending_provider_request")
+            {
+                let pending = serde_json::to_string(pending).expect("pending sérialisable");
+                assert!(
+                    !pending.contains(forbidden),
+                    "pending_provider_request ne doit pas porter {forbidden:?}: {pending}"
+                );
             }
         }
     }
@@ -3316,7 +3473,8 @@ mod tests {
 
         let mut second = message("temoin-steer-2");
         second.id = "codex-steer-injecte".to_string();
-        second.from = "humain".to_string();
+        second.from = "superviseur".to_string();
+        second.intent = Some(MessageIntent::SteerCurrent);
         transport.deliver(&second).expect("livraison du second");
 
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -3400,6 +3558,7 @@ mod tests {
         let mut second = message("np-2");
         second.id = "codex-np-refuse".to_string();
         second.from = "humain".to_string();
+        second.intent = Some(MessageIntent::SteerCurrent);
         transport.deliver(&second).expect("livraison du second");
 
         // Le premier tour tombe sur son échéance (HOLD_TURN), puis le worker
@@ -3484,6 +3643,7 @@ mod tests {
         let mut humain = message("humain-prioritaire");
         humain.id = "codex-humain-prioritaire".to_string();
         humain.from = "humain".to_string();
+        humain.intent = Some(MessageIntent::SteerCurrent);
         humain.deadline_at = Some(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -3582,6 +3742,7 @@ mod tests {
         let mut humain = message("ack-sans-consommation-humain");
         humain.id = "codex-ack-sans-consommation-humain".to_string();
         humain.from = "humain".to_string();
+        humain.intent = Some(MessageIntent::SteerCurrent);
         humain.deadline_at = Some(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -3669,6 +3830,7 @@ mod tests {
         let mut humain = message("consomme-humain");
         humain.id = "codex-consomme-humain".to_string();
         humain.from = "humain".to_string();
+        humain.intent = Some(MessageIntent::SteerCurrent);
         humain.deadline_at = Some(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -3727,6 +3889,29 @@ mod tests {
                 "item": item,
             },
         })
+    }
+
+    #[test]
+    fn provider_item_id_est_observe_uniquement_sur_le_tour_actif() {
+        let active_detail = active_steer_turn_detail();
+        let event = user_message_started(Some("message-humain-001"), "turn-native");
+
+        observe_provider_item_id(&active_detail, &event);
+        let mut late = user_message_started(Some("message-humain-001"), "tour-tardif");
+        late["params"]["item"]["id"] = Value::String("provider-item-tardif".to_string());
+        observe_provider_item_id(&active_detail, &late);
+
+        let observed = active_detail
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        assert_eq!(
+            observed
+                .as_ref()
+                .expect("tour actif")
+                .provider_item_id
+                .as_deref(),
+            Some("provider-item-001")
+        );
     }
 
     #[test]
@@ -4609,5 +4794,45 @@ mod tests {
         let mute: Value =
             serde_json::from_str(r#"{"method":"modelRerouted","params":{}}"#).unwrap();
         assert!(served_model_from_codex(&mute).is_none());
+    }
+
+    #[test]
+    fn reprise_et_bifurcation_codex_emettent_la_requete_attestee_ou_refusent() {
+        let compatible = ProviderObservation {
+            binary_path: "/fixtures/codex".to_string(),
+            binary_version: "0.150.1".to_string(),
+            binary_digest: "0".repeat(64),
+            contract_version: "codex-app-server-fixture-v1".to_string(),
+            operations: vec![ProviderOperation::Resume, ProviderOperation::Fork],
+        };
+        let cwd = Path::new("/workspace");
+        let resume = CodexThreadBootstrap::Resume {
+            thread_id: "thread-parent".to_string(),
+        };
+        let fork = CodexThreadBootstrap::Fork {
+            thread_id: "thread-parent".to_string(),
+        };
+        assert!(validate_thread_bootstrap(&Some(compatible.clone()), &resume).is_ok());
+        assert!(validate_thread_bootstrap(&Some(compatible.clone()), &fork).is_ok());
+        assert_eq!(
+            thread_bootstrap_request(&resume, cwd, None),
+            ("thread/resume", json!({ "threadId": "thread-parent" }))
+        );
+        assert_eq!(
+            thread_bootstrap_request(&fork, cwd, None),
+            ("thread/fork", json!({ "threadId": "thread-parent" }))
+        );
+        assert!(matches!(
+            validate_thread_bootstrap(&None, &resume),
+            Err(TransportError::DeliveryFailed(reason)) if reason.contains("thread/resume")
+        ));
+        let fork_incompatible = ProviderObservation {
+            operations: vec![ProviderOperation::Resume],
+            ..compatible
+        };
+        assert!(matches!(
+            validate_thread_bootstrap(&Some(fork_incompatible), &fork),
+            Err(TransportError::DeliveryFailed(reason)) if reason.contains("thread/fork")
+        ));
     }
 }

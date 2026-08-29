@@ -773,7 +773,7 @@ fn sc002_rejeu_vers_suivi_traverse_la_rotation_sans_perte_ni_doublon() {
 
     harness.send_turn(0);
     wait_until(deadline, "suivi live absent après rotation", || {
-        final_fragments.load(Ordering::SeqCst) >= 1 + JOURNAL_EVENTS_PER_TURN
+        final_fragments.load(Ordering::SeqCst) > JOURNAL_EVENTS_PER_TURN
     });
     let seqs = final_sequences
         .lock()

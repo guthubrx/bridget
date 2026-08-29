@@ -532,10 +532,11 @@ fn authority_counts_from_entries(entries: &[CatalogueEntry]) -> AuthorityCounts 
         }
     }
     for entry in entries {
-        if let CatalogueEntry::Transition(t) = entry {
-            if t.trigger == TransitionTrigger::Rectified && adds.contains_key(&t.constat_id) {
-                rectifies += 1;
-            }
+        if let CatalogueEntry::Transition(t) = entry
+            && t.trigger == TransitionTrigger::Rectified
+            && adds.contains_key(&t.constat_id)
+        {
+            rectifies += 1;
         }
     }
     let requalifies = ouverts

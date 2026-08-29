@@ -18,15 +18,15 @@ use crate::domain::{
     EntreeReductionCoordination, EpisodeRelance, EtatActivationOutbox, EtatDecision,
     EtatDelegation, EtatEpisodeRelance, EtatGenerationDelegation, EtatNotificationOutbox,
     EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, EvenementCoordination,
-    FaitReassignation, FraicheurCoordination, GenerationDelegation, IssueGreffe, LienArbitrage,
-    LigneeDelegation, LotReassignation, MotifRefusDelegationLocale, MotifRefusGreffe,
-    NotificationOutbox, NotificationReassignation, ObjectifCoordonne, ObjectiveOpeningPermit,
-    OperationGuichet, OutboxDelegation, PolitiqueReassignation, QualificationDependance,
-    ReceptionGreffe, RecuCorrelation, ReductionCoordinationActive, ReductionOuvertureDelegation,
-    ReductionReassignation, SuiteObjective, TransitionCoordinationActive, TypeDecision,
-    TypeEffetDemandeSuivie, TypeEvenementAttendu, TypeFaitReassignation,
-    TypeNotificationReassignation, identifiant_deterministe, reduire_coordination,
-    reduire_ouverture_dependance, reduire_reassignation,
+    ExecutionProjection, FaitReassignation, FraicheurCoordination, GenerationDelegation,
+    IssueGreffe, LienArbitrage, LigneeDelegation, LotReassignation, MotifRefusDelegationLocale,
+    MotifRefusGreffe, NotificationOutbox, NotificationReassignation, ObjectifCoordonne,
+    ObjectiveOpeningPermit, OperationGuichet, OutboxDelegation, PolitiqueReassignation,
+    QualificationDependance, ReceptionGreffe, RecuCorrelation, ReductionCoordinationActive,
+    ReductionOuvertureDelegation, ReductionReassignation, SuiteObjective,
+    TransitionCoordinationActive, TypeDecision, TypeEffetDemandeSuivie, TypeEvenementAttendu,
+    TypeFaitReassignation, TypeNotificationReassignation, identifiant_deterministe,
+    reduire_coordination, reduire_ouverture_dependance, reduire_reassignation,
 };
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
@@ -52,7 +52,7 @@ use uuid::Uuid;
 
 /// Version courante du schéma SQLite. Les oracles de migration doivent lire
 /// cette constante — un littéral en dur meurt à chaque migration.
-pub const SCHEMA_VERSION: i64 = 20;
+pub const SCHEMA_VERSION: i64 = 21;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -1658,6 +1658,72 @@ impl MaicieStore {
         .collect()
     }
 
+    /// Enregistre seulement une copie de fait Bridget. Les curseurs anciens ne
+    /// réécrivent pas la dernière observation et aucun objectif n'est muté.
+    pub fn upsert_execution_projection(
+        &mut self,
+        projection: &ExecutionProjection,
+    ) -> Result<bool, StoreError> {
+        projection.verifier().map_err(StoreError::Domain)?;
+        let payload = serde_json::to_vec(projection).map_err(StoreError::Json)?;
+        let changed = self
+            .connection
+            .execute(
+                "INSERT INTO delegation_execution_projections(
+                     delegation_id, execution_id, payload_json, observation_cursor,
+                     source_generation, observed_at
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(delegation_id) DO UPDATE SET
+                     execution_id = excluded.execution_id,
+                     payload_json = excluded.payload_json,
+                     observation_cursor = excluded.observation_cursor,
+                     source_generation = excluded.source_generation,
+                     observed_at = excluded.observed_at
+                 WHERE excluded.source_generation > delegation_execution_projections.source_generation
+                    OR (excluded.source_generation = delegation_execution_projections.source_generation
+                        AND excluded.observation_cursor >= delegation_execution_projections.observation_cursor)",
+                params![
+                    projection.reference.delegation_id.to_string(),
+                    projection.reference.execution_id,
+                    payload,
+                    projection.observation_cursor,
+                    projection.source_generation,
+                    projection.observed_at,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        Ok(changed == 1)
+    }
+
+    /// Relit une observation opaque sans joindre l'état de mission propriétaire.
+    pub fn execution_projection_for_delegation(
+        &self,
+        delegation_id: Uuid,
+    ) -> Result<Option<ExecutionProjection>, StoreError> {
+        let payload = self
+            .connection
+            .query_row(
+                "SELECT payload_json FROM delegation_execution_projections WHERE delegation_id = ?1",
+                [delegation_id.to_string()],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        payload
+            .map(|bytes| {
+                let projection: ExecutionProjection =
+                    serde_json::from_slice(&bytes).map_err(StoreError::Json)?;
+                if projection.reference.delegation_id != delegation_id {
+                    return Err(StoreError::Corrupt(
+                        "projection et clé délégation divergentes",
+                    ));
+                }
+                projection.verifier().map_err(StoreError::Domain)?;
+                Ok(projection)
+            })
+            .transpose()
+    }
+
     /// Relit tous les verdicts de revue depuis les réponses terminales déjà
     /// persistées. Aucun cache ni colonne parallèle ne peut diverger des
     /// octets qui ont réellement quitté la greffe.
@@ -3214,6 +3280,7 @@ impl MaicieStore {
             let (id, state, payload) = row.map_err(StoreError::Sql)?;
             let delegation = serde_json::from_slice::<crate::domain::Delegation>(&payload)
                 .map_err(StoreError::Json)?;
+            delegation.verifier().map_err(StoreError::Domain)?;
             if delegation.id.to_string() != id
                 || delegation.objectif_id != objective_id
                 || delegation.etat != parse_delegation_state(&state)?
@@ -8169,6 +8236,28 @@ fn migrate_to_version(
         }
         verify_guichet_reception_shape_v20(&tx)?;
     }
+    // v21 : références opaques Bridget et dernière projection runtime par
+    // délégation. Aucun trigger ne touche objectifs ou décisions.
+    // Le garde de schéma lit ce seuil séparé pour prévenir les collisions de migrations.
+    #[allow(clippy::collapsible_if)]
+    if target_version >= 21 {
+        if current_version < 21 {
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS delegation_execution_projections (
+                 delegation_id TEXT PRIMARY KEY REFERENCES delegations(id),
+                 execution_id TEXT NOT NULL UNIQUE,
+                 payload_json BLOB NOT NULL,
+                 observation_cursor INTEGER NOT NULL CHECK(observation_cursor >= 0),
+                 source_generation INTEGER NOT NULL CHECK(source_generation >= 0),
+                 observed_at INTEGER NOT NULL CHECK(observed_at >= 0)
+             );
+             CREATE INDEX IF NOT EXISTS delegation_execution_projections_cursor_idx
+                 ON delegation_execution_projections(observation_cursor);",
+            )
+            .map_err(StoreError::Sql)?;
+        }
+    }
+
     for version in (current_version + 1)..=target_version {
         tx.execute(
             "INSERT OR IGNORE INTO schema_migrations(version, applied_at)\n\
@@ -9958,7 +10047,7 @@ mod migration_v20_tests {
         fs::set_permissions(&database, fs::Permissions::from_mode(0o600)).unwrap();
 
         let store = MaicieStore::open_with_migration_consent(&database, true).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 20);
+        assert_eq!(store.schema_version().unwrap(), 21);
         drop(store);
 
         let connection = Connection::open(&database).unwrap();

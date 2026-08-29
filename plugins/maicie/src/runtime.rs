@@ -8,7 +8,8 @@
 use crate::bridget_client::{
     AttachWindow, BridgetClient, BridgetClientError, Subscription, SubscriptionEvent,
 };
-use crate::domain::{EtatFlux, SourceSnapshot};
+use crate::domain::{EtatFlux, ExecutionProjection, ExecutionReference, SourceSnapshot};
+use crate::store::{MaicieStore, StoreError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fmt;
@@ -395,6 +396,82 @@ impl RuntimeSubscription {
         // `SnapshotCaughtUp`, peut établir une vue fraîche. Cette génération
         // conserve donc explicitement `Gap` jusqu'à sa fin.
         Ok(Some(RuntimeSignal::Observation(observation)))
+    }
+}
+
+/// Traduit un signal Bridget déjà corrélé par l'appelant en copie Maicie. La
+/// fonction ne touche ni objectif ni délégation : elle ne fait que rendre la
+/// fraîcheur, le curseur et l'état runtime observables dans le même contrat.
+pub fn execution_projection_from_signal(
+    reference: ExecutionReference,
+    signal: &RuntimeSignal,
+    observed_at: i64,
+    source_generation: u64,
+) -> Option<ExecutionProjection> {
+    let (runtime_state, waiting_reason, last_progress_at, observation_cursor, freshness) =
+        match signal {
+            RuntimeSignal::Observation(observation) => (
+                runtime_state_from_observation(observation),
+                None,
+                Some(observed_at),
+                observation.seq,
+                observation.stream_state,
+            ),
+            RuntimeSignal::Gap { to_seq, .. } => (
+                "unknown".to_string(),
+                Some("projection_gap".to_string()),
+                None,
+                *to_seq,
+                EtatFlux::Gap,
+            ),
+            RuntimeSignal::End { .. } => (
+                "unknown".to_string(),
+                Some("stream_ended".to_string()),
+                None,
+                0,
+                EtatFlux::Ended,
+            ),
+            RuntimeSignal::JournalReadError { .. } => (
+                "unknown".to_string(),
+                Some("journal_unavailable".to_string()),
+                None,
+                0,
+                EtatFlux::Unavailable,
+            ),
+            RuntimeSignal::SnapshotCaughtUp { .. } => return None,
+        };
+    Some(ExecutionProjection {
+        reference,
+        runtime_state,
+        waiting_reason,
+        last_progress_at,
+        observation_cursor,
+        freshness,
+        observed_at,
+        source_generation,
+    })
+}
+
+/// Consomme un signal Bridget déjà corrélé et persiste exclusivement la copie
+/// d'exécution. Une observation sans fait nouveau (`SnapshotCaughtUp`) reste un
+/// no-op explicite; aucune transition de délégation ou d'objectif n'est ici
+/// accessible.
+pub fn persist_execution_projection_from_signal(
+    store: &mut MaicieStore,
+    reference: ExecutionReference,
+    signal: &RuntimeSignal,
+    observed_at: i64,
+    source_generation: u64,
+) -> Result<Option<bool>, StoreError> {
+    execution_projection_from_signal(reference, signal, observed_at, source_generation)
+        .map(|projection| store.upsert_execution_projection(&projection))
+        .transpose()
+}
+fn runtime_state_from_observation(observation: &RuntimeObservation) -> String {
+    match observation.details.get("event").and_then(Value::as_str) {
+        Some("turn_end") => "completed".to_string(),
+        Some("error") => "failed".to_string(),
+        _ => "running".to_string(),
     }
 }
 

@@ -189,8 +189,8 @@ pub fn assess(samples: &[DiskSample], min_window_secs: i64, min_samples: usize) 
         // La platitude se juge sur la variation ABSOLUE : un volume qui se
         // libère vite n'est pas stable non plus. Ne regarder que la
         // consommation ferait passer une purge pour un plateau.
-        let rate = pair[0].free_bytes.abs_diff(pair[1].free_bytes) as f64 * 3600.0
-            / duration as f64;
+        let rate =
+            pair[0].free_bytes.abs_diff(pair[1].free_bytes) as f64 * 3600.0 / duration as f64;
         if rate < FLAT_RATE_BYTES_PER_HOUR {
             flat_secs += duration;
             stable_since_secs += duration;
@@ -419,7 +419,9 @@ mod tests {
             samples: count,
         } = trend
         else {
-            panic!("fenêtre de 3h24 avec 4 relevés : la pente doit être concluante, obtenu {trend:?}");
+            panic!(
+                "fenêtre de 3h24 avec 4 relevés : la pente doit être concluante, obtenu {trend:?}"
+            );
         };
         assert_eq!(window_secs, 12240);
         assert_eq!(count, 4);
@@ -666,7 +668,10 @@ mod tests {
         else {
             panic!("fenêtre suffisante");
         };
-        assert!(consumed_bytes_per_hour < 0.0, "la consommation est négative");
+        assert!(
+            consumed_bytes_per_hour < 0.0,
+            "la consommation est négative"
+        );
         assert!(
             trend.hours_to_exhaustion(90 * GIB_U).is_none(),
             "un disque qui se libère n'a pas d'échéance de saturation"
@@ -714,7 +719,10 @@ mod tests {
         // Chaque appel ne connaît QUE son propre relevé.
         let first = record_and_assess(&path, sample(base, 100.0));
         assert!(
-            matches!(first, Trend::Inconclusive(Inconclusive::NotEnoughSamples { .. })),
+            matches!(
+                first,
+                Trend::Inconclusive(Inconclusive::NotEnoughSamples { .. })
+            ),
             "un premier relevé isolé ne peut pas conclure, obtenu {first:?}"
         );
         let _ = record_and_assess(&path, sample(base + 3600, 90.0));
@@ -728,7 +736,10 @@ mod tests {
         else {
             panic!("trois relevés sur deux heures doivent conclure, obtenu {third:?}");
         };
-        assert_eq!(count, 3, "les relevés antérieurs doivent avoir été retrouvés");
+        assert_eq!(
+            count, 3,
+            "les relevés antérieurs doivent avoir été retrouvés"
+        );
         let gib_per_hour = consumed_bytes_per_hour / GIB;
         assert!(
             (gib_per_hour - 10.0).abs() < 0.1,

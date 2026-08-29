@@ -2653,6 +2653,8 @@ mod tests {
             notify_timeout_secs: 2,
             model: None,
             permissions: "allow".to_string(),
+            provider_observation: None,
+            thread_bootstrap: Default::default(),
         };
         let mut transport = CodexAppServerTransport::spawn(options).expect("pilote Codex");
         let (record, rendered) =
@@ -2679,6 +2681,7 @@ mod tests {
             notify_timeout_secs: 2,
             session_store_root: None,
             agent_name: None,
+            provider_observation: None,
         };
         let mut transport = ClaudeStreamJsonTransport::spawn(options).expect("pilote Claude");
         let (record, rendered) =
@@ -4399,9 +4402,7 @@ mod tests {
         let stamp = short_timestamp(Some("2026-08-26T18:30:00Z"));
         assert_eq!(
             rendered,
-            format!(
-                "{stamp} [outil] Read {{\"file_path\":\"/tmp/demo.toml\",\"limit\":1}}"
-            ),
+            format!("{stamp} [outil] Read {{\"file_path\":\"/tmp/demo.toml\",\"limit\":1}}"),
             "acte tool présent → visible dans attach ; reçu {rendered:?}"
         );
         assert!(
@@ -4638,7 +4639,10 @@ mod tests {
                 rate_limits: Default::default(),
                 model_mismatch: None,
                 disk_space: None,
+                provider: None,
                 persistent: None,
+                execution: None,
+                agent_link: None,
             };
         let attachable = attachable_agent_names(vec![
             agent("connected", "acp", Some(PresenceMode::Acp), "connected"),

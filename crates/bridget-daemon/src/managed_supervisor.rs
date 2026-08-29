@@ -16,6 +16,55 @@ use crate::daemon::{
 };
 use crate::fleet::FleetSupervisor;
 
+use crate::execution_store::{ContinuationReservation, ExecutionStore};
+use crate::fleet::{AutonomyBudgetPolicy, AutonomyRuntimeState, evaluate_autonomy_budget};
+use bridget_transport::protocol::ExecutionBudgetOutcome;
+
+/// Verdict de la garde de continuation. Une limite est une issue Bridget :
+/// elle ne modifie aucune délégation ni objectif Maicie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GovernedContinuation {
+    Reserved,
+    Budget(ExecutionBudgetOutcome),
+    Reservation(ContinuationReservation),
+    MissingFacts,
+}
+
+/// Point unique de réservation d une continuation gouvernée. Les faits sont
+/// relus dans la même passe de contrôle puis la réservation SQLite atomique
+/// refuse une course entre deux continuations ou un tour concurrent.
+#[allow(clippy::too_many_arguments)]
+pub fn reserve_governed_continuation(
+    store: &ExecutionStore,
+    policy: AutonomyBudgetPolicy,
+    runtime: AutonomyRuntimeState,
+    parent_execution_id: &str,
+    expected_generation: u64,
+    expected_revision: u64,
+    continuation_id: &str,
+    proof_idle_at: i64,
+    observed_at: i64,
+) -> rusqlite::Result<GovernedContinuation> {
+    let Some(facts) = store.execution_budget_facts(parent_execution_id, observed_at)? else {
+        return Ok(GovernedContinuation::MissingFacts);
+    };
+    if let Some(outcome) = evaluate_autonomy_budget(policy, &facts, runtime) {
+        return Ok(GovernedContinuation::Budget(outcome));
+    }
+    Ok(
+        match store.reserve_continuation_if_idle(
+            parent_execution_id,
+            expected_generation,
+            expected_revision,
+            continuation_id,
+            proof_idle_at,
+            observed_at,
+        )? {
+            ContinuationReservation::Reserved => GovernedContinuation::Reserved,
+            reservation => GovernedContinuation::Reservation(reservation),
+        },
+    )
+}
 /// Possède le `Sender` canonique et le `JoinHandle` du superviseur managed.
 ///
 /// Déclarer **après** les clones du sender (ex. `DaemonState`) pour que le Drop
@@ -42,6 +91,7 @@ impl ManagedSupervisorGuard {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn start_with_executable(
         fleet: Arc<FleetSupervisor>,
         config: &DaemonConfig,
@@ -56,7 +106,7 @@ impl ManagedSupervisorGuard {
             join: Some(join),
         }
     }
-
+    #[cfg(test)]
     pub(crate) fn sender(&self) -> &Sender<ManagedSupervisorCommand> {
         self.sender
             .as_ref()

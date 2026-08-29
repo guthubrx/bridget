@@ -242,18 +242,18 @@ fn process_non_mutating_guichet_claim(
 ) -> Result<GuichetProcessResult, GuichetError> {
     let stored = match &canonical.request {
         RequeteGuichet::DeliveryReport(report) => {
-            store.graft_delivery_report(claim, &canonical, report, response_message_id, now)
+            store.graft_delivery_report(claim, canonical, report, response_message_id, now)
         }
         RequeteGuichet::MissionStatus { .. } => process_mission_status_canonical(
             store,
             claim,
-            &canonical,
+            canonical,
             response_message_id,
             None,
             now,
         ),
         RequeteGuichet::DeadlineQuestion { .. } => {
-            process_deadline_question_canonical(store, claim, &canonical, response_message_id, now)
+            process_deadline_question_canonical(store, claim, canonical, response_message_id, now)
         }
         RequeteGuichet::Delegate(_)
         | RequeteGuichet::RegistreAdd(_)
@@ -268,7 +268,7 @@ fn process_non_mutating_guichet_claim(
                 return Err(guichet_store_error(error));
             };
             let stored = store
-                .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+                .persist_guichet_refusal(claim, canonical, response_message_id, now, reason)
                 .map_err(guichet_store_error)?;
             Ok(guichet_process_result(stored, Some(reason)))
         }

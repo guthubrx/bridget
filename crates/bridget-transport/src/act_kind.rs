@@ -262,8 +262,8 @@ mod tests {
     /// - `JOURNAL_ACT_KINDS` retiré de `module.exports` → échec fermé (node/require) ;
     /// - Set reconstruit hors du module chargé (autre fichier non requis) ;
     /// - Node absent du PATH de mesure.
-    /// Le parse source (marker `new Set([`) est volontairement abandonné : il
-    /// mourait sur un espace cosmétique et restait vert sur `.map` équivalent.
+    ///   Le parse source (marker `new Set([`) est volontairement abandonné : il
+    ///   mourait sur un espace cosmétique et restait vert sur `.map` équivalent.
     #[test]
     #[allow(non_snake_case)]
     fn TEMOIN_vocabulaire_vue_et_ecriture_ne_divergent_pas() {

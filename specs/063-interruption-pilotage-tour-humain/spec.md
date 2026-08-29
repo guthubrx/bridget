@@ -1,6 +1,6 @@
 # Session 063 — Interruption et pilotage d’un tour humain
 
-**Statut** : en cours  
+**Statut** : implémentation isolée terminée, preuve de route réelle post-mise en service en attente
 **Branche** : `session-063-interruption-pilotage-tour-humain`  
 **Base gelée** : `d5a362d613191747550460e79475328f3d72f418`
 

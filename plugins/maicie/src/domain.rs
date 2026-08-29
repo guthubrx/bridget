@@ -2160,6 +2160,41 @@ impl CoutMissionAgent {
     }
 }
 
+/// Limites de mission décidées par Maicie. Elles sont sérialisées avec la
+/// délégation mais ne déclenchent aucune action runtime : Bridget reçoit une
+/// politique technique distincte et ne peut pas clôturer la mission.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LimitesAutonomieDelegation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_duration_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_facturable_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_descendants: Option<u64>,
+}
+
+impl LimitesAutonomieDelegation {
+    pub fn is_empty(&self) -> bool {
+        self.max_duration_secs.is_none()
+            && self.max_facturable_tokens.is_none()
+            && self.max_descendants.is_none()
+    }
+
+    pub fn verifier(self) -> Result<(), DomainError> {
+        if [
+            self.max_duration_secs,
+            self.max_facturable_tokens,
+            self.max_descendants,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|limit| limit == 0)
+        {
+            return Err(DomainError::DonneeInvalide("limite autonomie invalide"));
+        }
+        Ok(())
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delegation {
     pub id: Uuid,
@@ -2177,6 +2212,10 @@ pub struct Delegation {
     pub review_target: Option<ReviewTarget>,
     pub participant: String,
     pub instruction: String,
+    /// Limites de mission enregistrées par Maicie. Elles restent sans effet
+    /// technique direct tant qu une décision explicite ne les transmet pas.
+    #[serde(default, skip_serializing_if = "LimitesAutonomieDelegation::is_empty")]
+    pub limites_autonomie: LimitesAutonomieDelegation,
     pub duree: ClasseDuree,
     pub etat: EtatDelegation,
     pub raison: String,
@@ -2204,6 +2243,7 @@ impl Delegation {
             objectif_id,
             constat_id: None,
             review_target: None,
+            limites_autonomie: LimitesAutonomieDelegation::default(),
             participant,
             instruction,
             duree,
@@ -2262,6 +2302,7 @@ impl Delegation {
         {
             return Err(DomainError::DonneeInvalide("délégation incomplète"));
         }
+        self.limites_autonomie.verifier()?;
         if let Some(constat_id) = &self.constat_id {
             validate_constat_id(constat_id)?;
         }
@@ -2273,6 +2314,20 @@ impl Delegation {
             return Err(DomainError::DonneeInvalide("cible de revue invalide"));
         }
         Ok(())
+    }
+
+    /// Associe des limites de mission avant persistance. Cette donnée reste
+    /// déclarative : aucune transition Bridget ou Maicie ne découle de cet appel.
+    pub fn avec_limites_autonomie(
+        mut self,
+        limites_autonomie: LimitesAutonomieDelegation,
+    ) -> Result<Self, DomainError> {
+        if self.etat != EtatDelegation::Creee {
+            return Err(DomainError::TransitionInterdite);
+        }
+        limites_autonomie.verifier()?;
+        self.limites_autonomie = limites_autonomie;
+        Ok(self)
     }
 
     /// Projette le fait durable sans inventer de lien pour une délégation
@@ -2462,6 +2517,79 @@ impl SnapshotTransport {
                 "corrélation de snapshot invalide",
             )),
         }
+    }
+}
+
+/// Lien opaque d'une délégation Maicie vers une exécution détenue par Bridget.
+/// Aucun champ ne permet à Maicie de piloter le processus référencé.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionReference {
+    pub delegation_id: Uuid,
+    pub submission_id: String,
+    pub execution_id: String,
+    pub agent_instance_id: String,
+    pub provider_kind: String,
+    pub provider_session_id: Option<String>,
+    pub provider_turn_id: Option<String>,
+    pub bound_at: i64,
+}
+
+impl ExecutionReference {
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        if [
+            &self.submission_id,
+            &self.execution_id,
+            &self.agent_instance_id,
+            &self.provider_kind,
+        ]
+        .iter()
+        .any(|value| value.trim().is_empty())
+        {
+            return Err(DomainError::DonneeInvalide(
+                "référence d'exécution incomplète",
+            ));
+        }
+        if self.bound_at < 0 {
+            return Err(DomainError::DonneeInvalide("date de liaison invalide"));
+        }
+        Ok(())
+    }
+}
+
+/// Copie factuelle d'un état Bridget. Sa persistance ou sa fraîcheur ne peut
+/// jamais déclencher seule une transition métier Maicie.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionProjection {
+    pub reference: ExecutionReference,
+    pub runtime_state: String,
+    pub waiting_reason: Option<String>,
+    pub last_progress_at: Option<i64>,
+    pub observation_cursor: u64,
+    pub freshness: EtatFlux,
+    pub observed_at: i64,
+    pub source_generation: u64,
+}
+
+impl ExecutionProjection {
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        self.reference.verifier()?;
+        if self.runtime_state.trim().is_empty() {
+            return Err(DomainError::DonneeInvalide("état runtime absent"));
+        }
+        if self.observed_at < self.reference.bound_at {
+            return Err(DomainError::DonneeInvalide(
+                "observation antérieure à la liaison",
+            ));
+        }
+        if self
+            .last_progress_at
+            .is_some_and(|value| value > self.observed_at)
+        {
+            return Err(DomainError::DonneeInvalide(
+                "progrès postérieur à l'observation",
+            ));
+        }
+        Ok(())
     }
 }
 

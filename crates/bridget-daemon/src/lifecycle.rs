@@ -14,6 +14,7 @@ use crate::registry::{
     validate_launch_capabilities,
 };
 use bridget_transport::{ResolvedAgentDefinition, SpawnRefusal};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
@@ -51,6 +52,47 @@ pub fn source_environment() -> SourceEnvironment {
     std::env::vars_os()
         .filter_map(|(name, value)| name.into_string().ok().map(|name| (name, value)))
         .collect()
+}
+
+fn validate_provider_observation(
+    agent_type: &str,
+    definition: &AgentDefinition,
+) -> Result<(), SpawnRefusal> {
+    let Some(observed) = definition.capabilities.observed.as_ref() else {
+        return Ok(());
+    };
+    let refusal = |capability: &str| SpawnRefusal::UnsupportedCapability {
+        agent_type: agent_type.to_string(),
+        model: "<non déclaré>".to_string(),
+        capability: capability.to_string(),
+    };
+    if observed.binary_path.trim().is_empty()
+        || !Path::new(&observed.binary_path).is_absolute()
+        || observed.binary_path != definition.command
+    {
+        return Err(refusal("source du binaire fournisseur observée"));
+    }
+    if observed.binary_version.trim().is_empty() {
+        return Err(refusal("version du binaire fournisseur observée"));
+    }
+    if observed.contract_version.trim().is_empty() {
+        return Err(refusal("version du contrat fournisseur observée"));
+    }
+    if observed.binary_digest.len() != 64
+        || !observed
+            .binary_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(refusal("empreinte du binaire fournisseur observé"));
+    }
+    let bytes = std::fs::read(&observed.binary_path)
+        .map_err(|_| refusal("binaire fournisseur observé lisible"))?;
+    let actual_digest = format!("{:x}", Sha256::digest(bytes));
+    if actual_digest != observed.binary_digest {
+        return Err(refusal("empreinte du binaire fournisseur observé"));
+    }
+    Ok(())
 }
 
 /// Les deux machines d'un ordre de lancement : celle dont le système de
@@ -108,6 +150,7 @@ pub fn submit_spawn(
     if !supervisor.knows_command(&order.command_id)
         && let Ok(definition) = registry.get(&order.agent_type)
         && let Err(reason) = validate_launch_capabilities(&order.agent_type, definition)
+            .and_then(|_| validate_provider_observation(&order.agent_type, definition))
     {
         return Ok(SpawnDecision::Rejected(reason));
     }
@@ -220,6 +263,7 @@ fn prepare_spawn_parts(
             registry: registry.source().display().to_string(),
         })?;
     validate_launch_capabilities(agent_type, definition)?;
+    validate_provider_observation(agent_type, definition)?;
     if let Some(variable) = forbidden_environment_variable(
         definition,
         allow_api_key_value(
@@ -532,6 +576,7 @@ mod tests {
             command_id: id.to_string(),
             issued_at: NOW,
             deadline_at: NOW + 10,
+            ownership: None,
         }
     }
 
@@ -652,6 +697,48 @@ mod tests {
     }
 
     #[test]
+    fn observation_fournisseur_incoherente_refuse_avant_reservation() {
+        let root = root("provider-observation-preflight");
+        fs::create_dir_all(&root).unwrap();
+        let supervisor = supervisor(&root, 1);
+        let registry = registry_with_capabilities(
+            &[],
+            serde_json::json!({
+                "execution_paths": ["acp"],
+                "models": {},
+                "observed": {
+                    "binary_path": "/bin/sh",
+                    "binary_version": "fixture-1",
+                    "binary_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contract_version": "acp-v1",
+                    "operations": []
+                }
+            }),
+        );
+        let order = order(&root, "command-provider-observation", "never-started");
+        let refusal = rejection(
+            submit_spawn(
+                &supervisor,
+                &registry,
+                &source(&root),
+                &order,
+                NOW,
+                false,
+                &hosts_fixture(),
+            )
+            .unwrap(),
+        );
+        assert!(matches!(
+            refusal,
+            SpawnRefusal::UnsupportedCapability { ref capability, .. }
+                if capability == "empreinte du binaire fournisseur observé"
+        ));
+        assert!(!supervisor.knows_command(&order.command_id));
+        assert_eq!(supervisor.active_count(), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn effort_non_declare_est_refuse_et_reprise_revalidee_sur_definition_figee() {
         let root = root("capability-effort");
         fs::create_dir_all(&root).unwrap();
@@ -682,6 +769,9 @@ mod tests {
                 generation: 1,
                 deadline_at: NOW + 10,
                 persistent: true,
+                link_id: None,
+                ownership: None,
+                agent_path: None,
             },
             agent_type: "fixture".to_string(),
             cwd: root.clone(),

@@ -983,6 +983,7 @@ fn fixture_with_body(
         objectif_id: objective.id,
         constat_id: None,
         review_target: None,
+        limites_autonomie: Default::default(),
         participant: "prospective".to_string(),
         instruction: body.clone(),
         duree: ClasseDuree::Normale,

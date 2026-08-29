@@ -69,16 +69,28 @@ pub struct AgentDefinition {
     pub capabilities: AdapterCapabilities,
 }
 
+/// Activation progressive du plan de contrôle, désactivée par défaut.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
+pub struct ExecutionProjectionConfig {
+    #[serde(default)]
+    pub dual_write: bool,
+    #[serde(default)]
+    pub legacy_projection: bool,
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct AgentRegistryFile {
     #[serde(default)]
     pub agents: BTreeMap<String, AgentDefinition>,
+    #[serde(default)]
+    pub execution_projection: ExecutionProjectionConfig,
 }
 
 #[derive(Debug, Clone)]
 pub struct AgentRegistry {
     agents: BTreeMap<String, AgentDefinition>,
     source: PathBuf,
+    execution_projection: ExecutionProjectionConfig,
 }
 
 fn default_protocol() -> String {
@@ -111,6 +123,7 @@ impl AgentRegistry {
 
     fn load_from_path(source: PathBuf) -> Result<Self, String> {
         let mut agents = default_agents()?;
+        let mut execution_projection = ExecutionProjectionConfig::default();
         match std::fs::symlink_metadata(&source) {
             Ok(_) => {
                 let content = read_private_registry(&source)?;
@@ -120,6 +133,8 @@ impl AgentRegistry {
                 let user: AgentRegistryFile = serde_json::from_str(&content)
                     .map_err(|err| format!("registre invalide {}: {err}", source.display()))?;
                 validate_registry(&user.agents, &source)?;
+                validate_execution_projection(&user.execution_projection, &source)?;
+                execution_projection = user.execution_projection;
                 agents.extend(user.agents);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -130,7 +145,11 @@ impl AgentRegistry {
                 ));
             }
         }
-        Ok(Self { agents, source })
+        Ok(Self {
+            agents,
+            source,
+            execution_projection,
+        })
     }
 
     pub fn from_json(content: &str, source: impl Into<PathBuf>) -> Result<Self, String> {
@@ -138,9 +157,15 @@ impl AgentRegistry {
         let user: AgentRegistryFile = serde_json::from_str(content)
             .map_err(|err| format!("registre invalide {}: {err}", source.display()))?;
         validate_registry(&user.agents, &source)?;
+        validate_execution_projection(&user.execution_projection, &source)?;
+        let execution_projection = user.execution_projection;
         let mut agents = default_agents()?;
         agents.extend(user.agents);
-        Ok(Self { agents, source })
+        Ok(Self {
+            agents,
+            source,
+            execution_projection,
+        })
     }
 
     pub fn get(&self, agent_type: &str) -> Result<&AgentDefinition, String> {
@@ -191,11 +216,20 @@ impl AgentRegistry {
         let source = PathBuf::from("<définition-figée>");
         let agents = BTreeMap::from([(agent_type.to_string(), definition)]);
         validate_registry(&agents, &source)?;
-        Ok(Self { agents, source })
+        Ok(Self {
+            agents,
+            source,
+            execution_projection: ExecutionProjectionConfig::default(),
+        })
     }
 
     pub fn source(&self) -> &Path {
         &self.source
+    }
+
+    /// Bascules de migration du plan de contrôle actuellement admises.
+    pub fn execution_projection(&self) -> &ExecutionProjectionConfig {
+        &self.execution_projection
     }
 
     /// Instantané ordonné des types effectivement chargés par le daemon.
@@ -736,6 +770,18 @@ fn validate_registry(
     Ok(())
 }
 
+fn validate_execution_projection(
+    projection: &ExecutionProjectionConfig,
+    source: &Path,
+) -> Result<(), String> {
+    if projection.legacy_projection && !projection.dual_write {
+        return Err(format!(
+            "registre invalide {}: legacy_projection exige dual_write",
+            source.display()
+        ));
+    }
+    Ok(())
+}
 fn validate_capabilities(
     name: &str,
     capabilities: &AdapterCapabilities,
@@ -875,6 +921,7 @@ fn native_claude_definition() -> Result<AgentDefinition, String> {
         capabilities: AdapterCapabilities {
             execution_paths: vec!["claude_stream_json".to_string()],
             models: BTreeMap::from([("claude-opus-5".to_string(), ModelCapabilities::default())]),
+            observed: None,
         },
     })
 }
@@ -937,6 +984,7 @@ fn native_codex_definition() -> AgentDefinition {
         },
         capabilities: AdapterCapabilities {
             execution_paths: vec!["codex_app_server".to_string()],
+            observed: None,
             models: BTreeMap::from([("gpt-5.6-terra".to_string(), ModelCapabilities::default())]),
         },
     }
@@ -963,6 +1011,7 @@ fn native_cursor_definition() -> AgentDefinition {
             acp_session: true,
         },
         capabilities: AdapterCapabilities {
+            observed: None,
             execution_paths: vec!["acp".to_string()],
             models: BTreeMap::from([("auto".to_string(), ModelCapabilities::default())]),
         },
@@ -1143,6 +1192,26 @@ mod tests {
         .unwrap();
         assert_eq!(registry.get("codex").unwrap().command, "custom");
         assert!(registry.get("codex").unwrap().forbidden_env.is_empty());
+    }
+
+    #[test]
+    fn bascules_de_projection_sont_inactives_et_compatibles_par_defaut() {
+        let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
+        assert!(!registry.execution_projection().dual_write);
+        assert!(!registry.execution_projection().legacy_projection);
+        let enabled = AgentRegistry::from_json(
+            "{\"execution_projection\":{\"dual_write\":true,\"legacy_projection\":true}}",
+            "/tmp/agents.json",
+        )
+        .unwrap();
+        assert!(enabled.execution_projection().dual_write);
+        assert!(enabled.execution_projection().legacy_projection);
+        let error = AgentRegistry::from_json(
+            "{\"execution_projection\":{\"legacy_projection\":true}}",
+            "/tmp/agents.json",
+        )
+        .unwrap_err();
+        assert!(error.contains("legacy_projection exige dual_write"));
     }
 
     #[test]

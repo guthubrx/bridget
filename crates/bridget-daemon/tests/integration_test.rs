@@ -258,6 +258,8 @@ mod tests {
             session: &str,
         ) -> (Self, PathBuf) {
             let marker = root.join("agent-name-file-path");
+            let stderr_log = std::fs::File::create(root.join("wrapper.stderr"))
+                .expect("journal stderr du wrapper");
             let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
             command
                 .args(["--", agent.to_str().expect("agent UTF-8"), session])
@@ -267,7 +269,7 @@ mod tests {
                 .env("BRIDGET_TEST_NAME_FILE_PATH", &marker)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null());
+                .stderr(Stdio::from(stderr_log));
             unsafe {
                 command.pre_exec(|| {
                     if libc::setpgid(0, 0) == -1 {

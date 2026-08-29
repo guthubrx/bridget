@@ -153,6 +153,7 @@ fn refus_de_lancement(socket: &Path, cwd: &Path) -> SpawnRefusal {
         command_id: "temoin-hotes-1".to_string(),
         issued_at: maintenant,
         deadline_at: maintenant + 10,
+        ownership: None,
     };
     writeln!(writer, "{}", encode(&ordre).expect("encodage")).expect("écriture");
     writer.flush().expect("flush");

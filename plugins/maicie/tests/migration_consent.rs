@@ -16,6 +16,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
+// Le DDL historique restauré ci-dessous correspond exactement à la v19.
+const HISTORICAL_SCHEMA_VERSION: i64 = 19;
+
 #[path = "support/historical_guichet_receptions.rs"]
 mod historical_guichet_receptions;
 
@@ -144,17 +147,17 @@ fn base_anterieure_sans_flag_refuse_parlant_sans_ecriture() {
     let connection = rusqlite::Connection::open(&database).unwrap();
     historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
     connection
-        .pragma_update(None, "user_version", SCHEMA_VERSION - 1)
+        .pragma_update(None, "user_version", HISTORICAL_SCHEMA_VERSION)
         .unwrap();
     drop(connection);
     let avant = schema_snapshot(&database);
-    assert_eq!(avant.user_version, SCHEMA_VERSION - 1);
+    assert_eq!(avant.user_version, HISTORICAL_SCHEMA_VERSION);
 
     let erreur = match MaicieStore::open(&database) {
         Ok(_) => panic!("ouverture sans consentement aurait dû refuser"),
         Err(error) => error,
     };
-    assert_migration_required(&erreur, SCHEMA_VERSION - 1);
+    assert_migration_required(&erreur, HISTORICAL_SCHEMA_VERSION);
     let apres = schema_snapshot(&database);
     assert_refusal_leaves_schema_untouched(&avant, &apres);
     fs::remove_dir_all(root).unwrap();
@@ -209,10 +212,13 @@ fn base_anterieure_avec_consentement_est_migree() {
     let connection = rusqlite::Connection::open(&database).unwrap();
     historical_guichet_receptions::rebuild_v19_guichet_receptions(&connection).unwrap();
     connection
-        .pragma_update(None, "user_version", SCHEMA_VERSION - 1)
+        .pragma_update(None, "user_version", HISTORICAL_SCHEMA_VERSION)
         .unwrap();
     drop(connection);
-    assert_eq!(schema_snapshot(&database).user_version, SCHEMA_VERSION - 1);
+    assert_eq!(
+        schema_snapshot(&database).user_version,
+        HISTORICAL_SCHEMA_VERSION
+    );
 
     let store =
         crate::historical_guichet_receptions::open_after_published_migration(&database).unwrap();
