@@ -117,10 +117,9 @@ struct Observations {
     events: VecDeque<ManagedEvent>,
     response_by_turn: HashMap<String, String>,
     terminal_by_turn: HashMap<String, ManagedTerminal>,
-    /// Une complétion `item/completed` de type `userMessage` est la seule
-    /// preuve protocolaire de consommation d’un `turn/steer`. La clé porte le
-    /// thread ET le tour afin qu’une sortie tardive ne solde jamais un autre
-    /// tour actif.
+    /// Un `item/started` de type `userMessage` dont le `clientId` est présent
+    /// prouve la visibilité d’un `turn/steer`. La clé porte le thread ET le tour
+    /// afin qu’une sortie tardive ne solde jamais un autre tour actif.
     consumed_steers_by_turn: HashMap<(String, String), HashSet<String>>,
 }
 
@@ -1182,13 +1181,13 @@ fn set_active_turn_id(active_detail: &ActiveTurnDetail, message_id: &str, turn_i
     }
 }
 
-fn observe_steered_user_message_completion(
+fn observe_steered_user_message_visibility(
     observations: &Arc<(Mutex<Observations>, Condvar)>,
     active_detail: &ActiveTurnDetail,
     value: &Value,
 ) {
     let Some(message_id) = value
-        .pointer("/params/item/id")
+        .pointer("/params/item/clientId")
         .and_then(Value::as_str)
         .filter(|message_id| !message_id.is_empty())
     else {
@@ -1741,17 +1740,6 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                 // sans flux partiel). `item/completed` type agentMessage.
                 Some("item/completed") => {
                     let item = value.pointer("/params/item");
-                    if item
-                        .and_then(|item| item.get("type"))
-                        .and_then(Value::as_str)
-                        == Some("userMessage")
-                    {
-                        observe_steered_user_message_completion(
-                            &observations,
-                            &active_detail,
-                            &value,
-                        );
-                    }
                     let is_agent = item
                         .and_then(|item| item.get("type"))
                         .and_then(Value::as_str)
@@ -1797,6 +1785,13 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                 // Les outputDelta ne portent que la sortie — ce n'est pas le nom.
                 Some("item/started") => {
                     let item = value.pointer("/params/item").unwrap_or(&Value::Null);
+                    if item.get("type").and_then(Value::as_str) == Some("userMessage") {
+                        observe_steered_user_message_visibility(
+                            &observations,
+                            &active_detail,
+                            &value,
+                        );
+                    }
                     if item.get("type").and_then(Value::as_str) == Some("commandExecution")
                         && let Some(command) = item
                             .get("command")
@@ -2455,7 +2450,8 @@ mod tests {
                                 printf '%s\n' "{\"id\":$steer_id,\"result\":{}}"
                                 if [ "${BRIDGET_CODEX_STEER_CONSUME:-0}" = 1 ]; then
                                     steer_message_id=$(printf '%s' "$line" | sed 's/.*"clientUserMessageId":"\([^"]*\)".*/\1/')
-                                    printf '%s\n' "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"thread-native\",\"turnId\":\"turn-native\",\"completedAtMs\":1,\"item\":{\"id\":\"$steer_message_id\",\"type\":\"userMessage\",\"text\":\"message humain consommé\"}}}"
+                                    provider_item_id="provider-item-$steer_message_id"
+                                    printf '%s\n' "{\"method\":\"item/started\",\"params\":{\"threadId\":\"thread-native\",\"turnId\":\"turn-native\",\"startedAtMs\":1,\"item\":{\"id\":\"$provider_item_id\",\"clientId\":\"$steer_message_id\",\"type\":\"userMessage\",\"content\":[]}}}"
                                 fi
                             fi ;;
                         *'"method":"turn/interrupt"'*)
@@ -3704,6 +3700,127 @@ mod tests {
             "la preuve userMessage corrélée devait déclencher PromptDispatched"
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    fn active_steer_turn_detail() -> ActiveTurnDetail {
+        Arc::new(Mutex::new(Some(CodexTurnDetail {
+            message_id: "tour-courant".to_string(),
+            thread_id: "thread-native".to_string(),
+            turn_id: Some("turn-native".to_string()),
+            ..Default::default()
+        })))
+    }
+
+    fn user_message_started(client_id: Option<&str>, turn_id: &str) -> Value {
+        let mut item = json!({
+            "id": "provider-item-001",
+            "type": "userMessage",
+            "content": [],
+        });
+        if let Some(client_id) = client_id {
+            item["clientId"] = Value::String(client_id.to_string());
+        }
+        json!({
+            "params": {
+                "threadId": "thread-native",
+                "turnId": turn_id,
+                "item": item,
+            },
+        })
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_J_codex_item_started_client_id_distingue_id_fournisseur() {
+        let observations = Arc::new((Mutex::new(Observations::default()), Condvar::new()));
+        let active_detail = active_steer_turn_detail();
+        let event = user_message_started(Some("message-humain-001"), "turn-native");
+
+        observe_steered_user_message_visibility(&observations, &active_detail, &event);
+
+        let mut observed = observations
+            .0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let consumed = observed
+            .consumed_steers_by_turn
+            .get(&("thread-native".to_string(), "turn-native".to_string()))
+            .expect("clientId visible pour le tour actif");
+        assert!(
+            consumed.contains("message-humain-001"),
+            "la corrélation doit utiliser clientId, pas l'identifiant interne"
+        );
+        assert!(
+            !consumed.contains("provider-item-001"),
+            "l'identifiant interne fournisseur ne doit jamais acquitter Bridget"
+        );
+        let mut accepted = vec![message("message-humain-001")];
+        let confirmed =
+            consume_accepted_steers(&mut observed, "thread-native", "turn-native", &mut accepted);
+        assert_eq!(confirmed.len(), 1, "une seule remise est attestée");
+        assert!(
+            accepted.is_empty(),
+            "aucune remise distincte ne doit rester"
+        );
+        assert!(
+            consume_accepted_steers(&mut observed, "thread-native", "turn-native", &mut accepted,)
+                .is_empty(),
+            "la même preuve ne peut pas produire un second acquittement"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_K_codex_item_started_refuse_mauvais_client_id_et_tour_tardif() {
+        let observations = Arc::new((Mutex::new(Observations::default()), Condvar::new()));
+        let active_detail = active_steer_turn_detail();
+        let wrong_id = user_message_started(Some("client-inconnu"), "turn-native");
+        observe_steered_user_message_visibility(&observations, &active_detail, &wrong_id);
+
+        let mut observed = observations
+            .0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut accepted = vec![message("message-humain-001")];
+        assert!(
+            consume_accepted_steers(&mut observed, "thread-native", "turn-native", &mut accepted,)
+                .is_empty(),
+            "un clientId inconnu ne doit pas produire d'acquittement"
+        );
+        drop(observed);
+
+        let late = user_message_started(Some("message-humain-001"), "tour-termine");
+        let late_observations = Arc::new((Mutex::new(Observations::default()), Condvar::new()));
+        observe_steered_user_message_visibility(&late_observations, &active_detail, &late);
+        assert!(
+            late_observations
+                .0
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .consumed_steers_by_turn
+                .is_empty(),
+            "un événement d'un autre tour ne doit laisser aucune preuve"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_L_codex_item_started_sans_client_id_ne_consomme_pas() {
+        let observations = Arc::new((Mutex::new(Observations::default()), Condvar::new()));
+        let active_detail = active_steer_turn_detail();
+        let event = user_message_started(None, "turn-native");
+
+        observe_steered_user_message_visibility(&observations, &active_detail, &event);
+
+        assert!(
+            observations
+                .0
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .consumed_steers_by_turn
+                .is_empty(),
+            "sans clientId il n'existe aucune preuve de consommation"
+        );
     }
 
     fn journal_echeance_fixture(label: &str) -> Vec<Value> {
