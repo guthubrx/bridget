@@ -33,12 +33,11 @@ Les builds ont ete diriges vers un repertoire cible distinct. Des processus de
 test plus anciens, deja bloques dans des repertoires cibles precedents, nont
 pas ete interrompus et ne participent pas a ce verdict.
 
-## Limites explicites
+## Limites de la validation isolee
 
-Aucune release, activation de bascule, migration de service, redemarrage ou
-observation de trafic de production na ete execute. Le binaire Cursor reel est
-maintenant valide dans une session ACP isolee ; seule T011 de SPEC-063 reste
-externe au worktree.
+La validation initiale etait volontairement isolee. Cursor reel a ete valide
+dans une session ACP isolee. La livraison qui a suivi a ete tracee separement,
+sans activer de transition metier Maicie a partir du runtime Bridget.
 
 ## Analyse et convergence manuelles
 
@@ -53,8 +52,8 @@ sources listees par les taches.
 - aucun ecart necessitant une tache supplementaire na ete trouve.
 
 Verdict de convergence : CONVERGED pour le perimetre executable du worktree.
-T070 est attestee par le binaire Cursor reel. La tache T011 de SPEC-063 reste
-externe au worktree car elle requiert une route reelle apres mise en service.
+T070 est attestee par le binaire Cursor reel. T011 de SPEC-063 est maintenant
+attestee par une route humaine reelle apres mise en service.
 
 ## Build release isole
 
@@ -64,4 +63,20 @@ CARGO_TARGET_DIR=/tmp/bridget-spec064-release-ada8ed5 /home/moi/.cargo/bin/cargo
 
 Verdict : succes. Les binaires produits uniquement dans `/tmp` sont
 `bridget` (12182488 octets) et `maicie` (8302312 octets). Aucun de ces binaires
-na ete copie, lie ou demarre comme composant de production.
+na ete copie, lie ou demarre comme composant de production. Cette construction
+isolee n a pas servi au deploiement final.
+
+## Livraison de production
+
+- Le commit `b9bd9f8` est integre a `main` et publie.
+- La route humaine SPEC-063 a ete observee sur l agent Codex d essai apres
+  livraison : voir `../../063-interruption-pilotage-tour-humain/evidence/production-route-20260829.md`.
+- Le binaire `bridget-daemon` produit depuis `main` a remplace le binaire actif
+  apres sauvegarde, puis le daemon et le relais UI ont ete redemarres
+  gracieusement le 2026-08-29 a partir de 19:37:42Z.
+- Le daemon a confirme le build `b9bd9f826b57`, le socket de production etait
+  joignable et 16 agents etaient reconnectes apres le redemarrage.
+- Aucune migration ni transition metier Maicie n a ete appliquee pendant cette
+  livraison.
+
+- Apres liberation des seuls repertoires temporaires de cette validation, la suite cargo test --workspace --quiet a ete rejouee integralement avec succes.

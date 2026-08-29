@@ -5,7 +5,7 @@
 
 Spec: 064-plan-controle-bridget-maicie
 Titre: Plan de contrôle Bridget et Maicie
-Statut: Implemented in isolated worktree - activation production non realisee
+Statut: Livree en production - route humaine reelle validee
 Priorité: P1
 Tâches: 89/89 (100%)
 Tests: 41/41 (100%)
@@ -23,16 +23,16 @@ Fichiers:
 
 **Feature Branch**: `session-064-plan-controle-bridget-maicie`
 **Created**: 2026-08-29
-**Status**: Implemented in isolated worktree - activation production non realisee
+**Status**: Livree en production - route humaine reelle validee
 **Priority**: P1
 **Dependencies**: SPEC-003, SPEC-004, SPEC-009, SPEC-011, SPEC-012, SPEC-014, SPEC-015, SPEC-016, SPEC-023, SPEC-034, SPEC-046, SPEC-048, SPEC-049, SPEC-052, SPEC-063
 
 ## Etat de livraison - 2026-08-29
 
-- Les lots techniques et documentaires T001 a T089 sont prouves dans le worktree isole.
+- Les lots techniques et documentaires T001 a T089 sont prouves, integres dans `main` et livres.
 - Cursor est atteste par son binaire reel via ACP commun ; aucun adaptateur Cursor specialise nest requis.
-- SPEC-063 est integree au niveau code et tests ; sa preuve de route reelle T011 attend une mise en service controlee.
-- Toutes les bascules de la SPEC-064 restent desactivees. Ce statut ne vaut ni release ni activation.
+- SPEC-063 est livree avec une preuve UI reelle sur Codex : le tour actif a pris fin avant son echeance naturelle apres le message humain.
+- Le daemon et le relais UI ont ete redemarres gracieusement. Les transitions metier Maicie restent separees du seul runtime Bridget.
 
 ## Contexte
 

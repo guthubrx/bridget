@@ -10,10 +10,9 @@
   corrélé à une consommation attestée.
 - Le déclenchement doit vivre dans les transports, non dans le daemon.
 
-## Preuve finale attendue
+## Preuve finale
 
-Un horodatage de route réelle montrant qu’un message humain pilote ou
-interrompt un tour actif après mise en service.
+La route réelle UI vers Codex est attestée dans `evidence/production-route-20260829.md` : travail actif, message humain remis, puis fin 56 secondes avant l'échéance naturelle.
 
 ## Remise Codex bornée - 2026-08-29
 
@@ -46,8 +45,7 @@ interrompt un tour actif après mise en service.
 - Le schéma généré par `codex app-server` expose `clientUserMessageId` et un
   `item/completed userMessage.id`, mais ne déclare pas formellement leur égalité.
   Le code reste conservateur : sans égalité exacte, il n'acquitte pas.
-- Aucun démon, relais ni agent actif n'a été redémarré. La route réelle et son
-  horodatage restent à produire après intégration contrôlée.
+- Cette limite décrivait la phase isolée. La mise en service et la route réelle sont désormais attestées par T011.
 - `cargo test -p bridget-daemon --test codex_native_test` échoue déjà sur
   `main` inchangé et sur le lot de départ : annuaire vide puis `AgentUnknown`.
   Ces deux échecs préexistants ne sont ni corrigés ni masqués par cette session.
@@ -71,8 +69,9 @@ Cette section fait foi pour les détails Codex précédents, qui décrivaient en
 - `cargo check -p bridget-transport` et `rustfmt --edition 2024 --check` sur les couloirs ACP et Claude ont réussi.
 - La preuve du vrai binaire Codex, de sa version et de ses schémas est conservée dans `evidence/client-id-consumption.md`.
 
-### Limites et suite
+### Limites résiduelles
 
-- Aucun daemon ou agent de production n'a été redémarré pendant ces validations.
-- L'horodatage de route réelle demandé par T011 reste volontairement absent : il exige une mise en service après validation finale. Il ne sera pas fabriqué à partir d'une fixture.
+- Le daemon et le relais UI ont été redémarrés gracieusement pendant la livraison. Les agents gérés ont été préservés et se sont reconnectés.
+- T011 observe Codex avec `turn/steer`, le chemin effectivement disponible. Le repli `turn/interrupt` reste couvert par les témoins, non par cette même route réelle.
+- Claude réel n'a pas pu compléter ce test à cause de sa limite hebdomadaire, explicitement distinguée de la preuve Codex.
 - Les changements restent limités aux transports et au pont existant `PromptDispatched` vers `DeliverAcked`.
