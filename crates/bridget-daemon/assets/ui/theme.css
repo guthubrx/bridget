@@ -1016,6 +1016,76 @@ body:has(.agent-pane-resizer[data-dragging="true"]) {
   margin-top: 0.45rem;
 }
 
+.round-card {
+  width: min(35rem, 88%);
+  justify-self: start;
+  padding: 0.9rem 1rem 0.8rem;
+  border-radius: var(--radius-medium);
+  background: var(--surface-raised);
+}
+
+.round-card__header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.round-card__copy {
+  min-width: 0;
+}
+
+.round-card__eyebrow {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  font-weight: 650;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.round-card__headline {
+  margin: 0.2rem 0 0;
+  color: var(--text-primary);
+  font-size: 0.91rem;
+  font-weight: 620;
+  line-height: 1.4;
+}
+
+.round-card__time {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.round-card__signal {
+  display: -webkit-box;
+  margin: 0.65rem 0 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.round-card__technical {
+  margin-top: 0.7rem;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.round-card__technical summary {
+  cursor: pointer;
+}
+
+.round-card__technical .message-body {
+  margin-top: 0.6rem;
+  color: var(--text-primary);
+}
+
 .work-detail {
   max-width: min(48rem, 90%);
   justify-self: start;

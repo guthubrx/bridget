@@ -678,6 +678,75 @@
         assert.deepEqual(messages.map((entry) => entry.deliveryId || entry.messageId), ["D1", "D2"]);
       });
 
+      test("ronde_de_vigilance_compacte_la_livraison_sans_dupliquer_sa_trace", () => {
+        const ronde = [
+          "RONDE DE VIGILANCE (7 min) - c est ton tour maintenant, tu es le referent.",
+          "",
+          "VERDICTS EN ATTENTE : traite-les.",
+          "",
+          "--- SIGNAL MECANIQUE DE LA RONDE ---",
+          "LOT SANS RECLAMANT : aucun volontaire.",
+          "FICHIERS DISPUTES : install_publish.rs (7).",
+        ].join("\n");
+        const events = [
+          {
+            kind: "peer_exchange",
+            agent: "bridget",
+            peer: "cli-send-1239134",
+            direction: "in",
+            count: 1,
+            delivery_ids: ["ronde-1"],
+            at: 10,
+          },
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 10,
+            record: {
+              message_id: "ronde-1",
+              session_id: "s-ronde",
+              seq: 1,
+              event: "turn_start",
+              payload: { body: ronde },
+            },
+          },
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 20,
+            record: {
+              message_id: "ronde-1",
+              session_id: "s-ronde",
+              seq: 2,
+              event: "turn_end",
+              payload: {},
+            },
+          },
+        ];
+        const timeline = api.projectTimeline(events);
+        const card = timeline.find((entry) => entry.kind === "round");
+        assert.ok(card, "la ronde doit avoir sa carte compacte");
+        assert.equal(card.interval, "7 min");
+        assert.equal(card.headline, "c est ton tour maintenant, tu es le referent.");
+        assert.match(card.signal, /LOT SANS RECLAMANT/);
+        assert.equal(
+          timeline.some((entry) => entry.kind === "peer_exchange"),
+          false,
+          "la trace de livraison de cette ronde ne doit pas répéter son corps",
+        );
+      });
+
+      test("ronde_de_vigilance_exige_les_deux_marqueurs_du_contrat", () => {
+        assert.equal(
+          api.vigilanceRoundInfo("RONDE DE VIGILANCE (7 min) - simple note"),
+          null,
+        );
+        assert.equal(
+          api.vigilanceRoundInfo("--- SIGNAL MECANIQUE DE LA RONDE ---\nseul"),
+          null,
+        );
+      });
+
       test("contrat_c3_assemble_actes_raisonnement_et_reponse", () => {
         const records = [
           { v: 1, seq: 1, ts: "2026-08-25T20:00:00Z", session_id: "s1", event: "turn_start", message_id: "m1", payload: {} },
@@ -2923,6 +2992,35 @@
     };
   }
 
+  function vigilanceRoundInfo(source) {
+    const body = text(source).trim();
+    const header = body.match(
+      /^RONDE DE VIGILANCE\s*\(([^)\n]+)\)\s*[\u2013\u2014-]\s*([^\n]+)/i,
+    );
+    const marker = /^---\s*SIGNAL MECANIQUE DE LA RONDE\s*---\s*$/im;
+    const markerMatch = marker.exec(body);
+    if (!header || !markerMatch || markerMatch.index === undefined) return null;
+    const signal = body
+      .slice(markerMatch.index + markerMatch[0].length)
+      .trim()
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 2)
+      .join(" ");
+    return {
+      interval: header[1].trim(),
+      headline: header[2].trim(),
+      signal,
+    };
+  }
+
+  function isOnlyVigilanceRoundExchange(entry, roundDeliveryIds) {
+    if (entry.kind !== "peer_exchange" || !Array.isArray(entry.delivery_ids)) return false;
+    return entry.delivery_ids.length > 0
+      && entry.delivery_ids.every((id) => roundDeliveryIds.has(id));
+  }
+
   function projectTimeline(events, options = {}) {
     const ordered = (Array.isArray(events) ? events : [])
       .map((event, index) => ({ ...event, __order: index }))
@@ -3052,10 +3150,21 @@
       }
     });
 
+    const roundDeliveryIds = new Set();
     turns.forEach((turn) => {
-      if (
-        turn.promptText
-      ) {
+      const round = vigilanceRoundInfo(turn.promptText);
+      if (round) {
+        roundDeliveryIds.add(turn.key);
+        projected.push({
+          kind: "round",
+          agent: turn.agent,
+          text: turn.promptText,
+          at: turn.promptAt || turn.startAt,
+          messageId: turn.key,
+          deliveryId: ledgerMessageIds.has(turn.key) ? turn.key : undefined,
+          ...round,
+        });
+      } else if (turn.promptText) {
         projected.push({
           kind: "message",
           role: "user",
@@ -3087,6 +3196,7 @@
     });
 
     return projected
+      .filter((entry) => !isOnlyVigilanceRoundExchange(entry, roundDeliveryIds))
       .sort((left, right) => (left.at || 0) - (right.at || 0) || left.__order - right.__order)
       .map(({ __order, ...entry }) => entry);
   }
@@ -3675,6 +3785,24 @@
       return wrapper;
     };
 
+    const renderRound = (entry) => {
+      const card = make("article", "round-card");
+      const header = make("header", "round-card__header");
+      const copy = make("div", "round-card__copy");
+      copy.append(make("p", "round-card__eyebrow", `Ronde de vigilance · ${entry.interval}`));
+      copy.append(make("p", "round-card__headline", entry.headline));
+      header.append(copy, make("time", "round-card__time", timestamp(entry.at)));
+      card.append(header);
+      if (entry.signal) {
+        card.append(make("p", "round-card__signal", entry.signal));
+      }
+      const details = make("details", "round-card__technical");
+      details.append(make("summary", "", "Voir la consigne technique"));
+      details.append(renderMessageMarkdown(document, entry.text));
+      card.append(details);
+      return card;
+    };
+
     const rememberEventBody = (event) => {
       if (event.kind !== "record") return null;
       return rememberJournalMessage(journalBodies, event.record);
@@ -3884,6 +4012,7 @@
           currentDay = entryDay;
         }
         if (entry.kind === "message") timeline.append(renderMessage(entry));
+        else if (entry.kind === "round") timeline.append(renderRound(entry));
         else if (entry.kind === "peer_exchange") timeline.append(renderPeer(entry));
         else if (entry.kind === "work") timeline.append(renderWork(entry));
         else if (entry.kind === "system") timeline.append(make("p", "system-event", entry.text));
@@ -4404,6 +4533,7 @@
     decideWatchThreadRender,
     acceptTimelineEvents,
     projectTimeline,
+    vigilanceRoundInfo,
     formatPermissionAct,
     JOURNAL_ACT_KINDS,
     peerLabel,
