@@ -14,10 +14,7 @@
     <div class="workspace" id="workspace">
       <aside class="agent-pane" aria-label="Agents Bridget">
         <header class="agent-pane__header">
-          <div>
-            <p class="eyebrow">Bridget</p>
-            <h1>Agents</h1>
-          </div>
+          <h1>Agents</h1>
           <span class="fleet-count" id="fleet-count" aria-live="polite">—</span>
         </header>
 
@@ -35,7 +32,7 @@
             autocomplete="off"
             spellcheck="true"
           >
-          <button type="submit">Chercher</button>
+          <span class="message-search__icon" aria-hidden="true">⌕</span>
         </form>
         <ol
           class="message-search-results"
@@ -105,12 +102,14 @@
           <span class="connection-indicator" id="connection-indicator">hors ligne</span>
         </header>
 
-        <p class="relay-banner" id="relay-banner" data-state="connecting">
-          Connexion au relais…
-        </p>
-        <p class="stopped-banner" id="stopped-banner" hidden>
-          Cet agent est arrêté ; envoyer un message le relance.
-        </p>
+        <div class="conversation-status" id="conversation-status">
+          <p class="relay-banner" id="relay-banner" data-state="connecting">
+            Connexion au relais…
+          </p>
+          <p class="stopped-banner" id="stopped-banner" hidden>
+            Cet agent est arrêté ; envoyer un message le relance.
+          </p>
+        </div>
 
         <div class="thread-shell" id="thread-shell">
           <main

@@ -566,6 +566,22 @@
         );
       });
 
+      test("panneau_agents_epure_et_composeur_reste_dans_la_grille", () => {
+        const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+        const css = fs.readFileSync(path.join(__dirname, "theme.css"), "utf8");
+        assert.doesNotMatch(html, /<p class="eyebrow">Bridget<\/p>/);
+        assert.doesNotMatch(html, /<button type="submit">Chercher<\/button>/);
+        assert.match(html, /class="message-search__icon"/);
+        assert.match(css, /\.source-state\[data-state="error"\]\s*\{\s*display: block;/);
+        assert.match(css, /\.agent-row\s*\{[\s\S]*?border-radius: 0\.7rem;/);
+        assert.match(html, /<div class="conversation-status" id="conversation-status">[\s\S]*id="relay-banner"[\s\S]*id="stopped-banner"/);
+        assert.match(css, /\.conversation\s*\{[\s\S]*?grid-template-rows: auto auto minmax\(0, 1fr\) auto;/);
+        assert.match(css, /\.conversation-status\s*\{\s*min-height: 0;\s*\}/);
+        assert.match(css, /--agent-pane-search-surface:\s*#252525/);
+        assert.match(css, /\.agent-pane \.agent-row__layout\s*\{[\s\S]*?grid-template-columns: 2\.5rem minmax\(0, 1fr\);[\s\S]*?gap: 0\.78rem;/);
+        assert.match(css, /\.agent-pane \.agent-row__excerpt\s*\{[\s\S]*?font-size: 0\.82rem;/);
+      });
+
       test("entree_envoie_et_maj_entree_insere_une_ligne", () => {
         assert.equal(api.shouldSubmitKey({ key: "Enter", shiftKey: false, isComposing: false }), true);
         assert.equal(api.shouldSubmitKey({ key: "Enter", shiftKey: true, isComposing: false }), false);
@@ -660,6 +676,135 @@
         ];
         const messages = api.projectTimeline(events).filter((entry) => entry.kind === "message");
         assert.deepEqual(messages.map((entry) => entry.deliveryId || entry.messageId), ["D1", "D2"]);
+      });
+
+      test("outcome_unknown_remplace_la_bulle_optimiste_par_le_message_durable", () => {
+        const events = [
+          {
+            kind: "message",
+            role: "user",
+            agent: "bridget",
+            text: "un seul envoi",
+            at: 10,
+            messageId: "message-9afa",
+            deliveryId: "message-9afa",
+            status: "injecté · en vol",
+          },
+          {
+            kind: "message",
+            role: "user",
+            agent: "bridget",
+            text: "un seul envoi",
+            at: 11,
+            messageId: "message-9afa",
+            deliveryId: "message-9afa",
+          },
+        ];
+        const messages = api.projectTimeline(events).filter((entry) => entry.kind === "message");
+        assert.equal(messages.length, 1);
+        assert.equal(messages[0].deliveryId, "message-9afa");
+        assert.equal(messages[0].status, undefined);
+        assert.equal(
+          api.uiMessageIdentity({ message_id: "message-9afa", delivery_id: "delivery-ccff" }),
+          "message-9afa",
+        );
+      });
+
+      test("turn_steer_sans_corps_ne_masque_pas_message_ledger", () => {
+        const events = [
+          { kind: "message", role: "user", agent: "bridget", text: "est ce que tu travailles encore ?", at: 10, deliveryId: "S1", messageId: "S1" },
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 11,
+            record: {
+              message_id: "S1",
+              session_id: "s",
+              seq: 1,
+              event: "turn_steer",
+              payload: { from: "humain", turn_id: "tour-1" },
+            },
+          },
+        ];
+        const messages = api.projectTimeline(events).filter((entry) => entry.kind === "message");
+        assert.equal(messages.length, 1);
+        assert.equal(messages[0].deliveryId, "S1");
+        assert.equal(messages[0].text, "est ce que tu travailles encore ?");
+      });
+
+      test("ronde_de_vigilance_compacte_la_livraison_sans_dupliquer_sa_trace", () => {
+        const ronde = [
+          "RONDE DE VIGILANCE (7 min) - c est ton tour maintenant, tu es le referent.",
+          "",
+          "VERDICTS EN ATTENTE : traite-les.",
+          "",
+          "--- SIGNAL MECANIQUE DE LA RONDE ---",
+          "LOT SANS RECLAMANT : aucun volontaire.",
+          "FICHIERS DISPUTES : install_publish.rs (7).",
+        ].join("\n");
+        const events = [
+          {
+            kind: "peer_exchange",
+            agent: "bridget",
+            peer: "cli-send-1239134",
+            direction: "in",
+            count: 1,
+            delivery_ids: ["ronde-1"],
+            at: 10,
+            vigilance_round: { body: ronde },
+          },
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 10,
+            record: {
+              message_id: "ronde-1",
+              session_id: "s-ronde",
+              seq: 1,
+              event: "turn_start",
+              payload: { body: ronde },
+            },
+          },
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 20,
+            record: {
+              message_id: "ronde-1",
+              session_id: "s-ronde",
+              seq: 2,
+              event: "turn_end",
+              payload: {},
+            },
+          },
+        ];
+        const timeline = api.projectTimeline(events);
+        const card = timeline.find((entry) => entry.kind === "round");
+        assert.ok(card, "la ronde doit avoir sa carte compacte");
+        assert.equal(card.interval, "7 min");
+        assert.equal(card.headline, "c est ton tour maintenant, tu es le referent.");
+        assert.match(card.signal, /LOT SANS RECLAMANT/);
+        assert.equal(
+          timeline.filter((entry) => entry.kind === "round").length,
+          1,
+          "registre et journal ne doivent produire qu’une seule carte",
+        );
+        assert.equal(
+          timeline.some((entry) => entry.kind === "peer_exchange"),
+          false,
+          "la trace de livraison de cette ronde ne doit pas répéter son corps",
+        );
+      });
+
+      test("ronde_de_vigilance_exige_les_deux_marqueurs_du_contrat", () => {
+        assert.equal(
+          api.vigilanceRoundInfo("RONDE DE VIGILANCE (7 min) - simple note"),
+          null,
+        );
+        assert.equal(
+          api.vigilanceRoundInfo("--- SIGNAL MECANIQUE DE LA RONDE ---\nseul"),
+          null,
+        );
       });
 
       test("contrat_c3_assemble_actes_raisonnement_et_reponse", () => {
@@ -1806,8 +1951,9 @@
         assert.equal(runtime.isStreamEnded(), true);
       });
 
-      // L9-5 — rendu pendant rattrapage via onJournal.decision du runtime.
-      test("rattrapage_autorise_le_rendu_des_records_avant_caught_up", () => {
+      // L9-5 - le rejeu accumule ses records sans reconstruire le fil à chaque
+      // fragment : le premier rendu complet attend SnapshotCaughtUp.
+      test("rattrapage_differe_le_rendu_des_records_jusqu_a_caught_up", () => {
         const FakeES = makeFakeEventSource();
         const decisions = [];
         const parts = fragmentParts(9, "LIVE");
@@ -1844,11 +1990,12 @@
             bytes: bytes.toString("base64"),
           },
         });
-        assert.equal(decisions.at(-1).render, true);
+        assert.equal(decisions.at(-1).render, false);
         assert.equal(decisions.at(-1).scrollMode, "replay");
         FakeES.instances[0].emitJournal({
           event: { type: "SnapshotCaughtUp", through_seq: 9 },
         });
+        assert.equal(decisions.at(-1).render, true);
         assert.equal(decisions.at(-1).replayingJournal, false);
       });
 
@@ -2320,6 +2467,15 @@
     };
   }
 
+  function uiMessageIdentity(payload) {
+    return text(
+      payload && payload.message_id,
+      payload && payload.messageId,
+      payload && payload.delivery_id,
+      payload && payload.deliveryId,
+    );
+  }
+
   function shouldSubmitKey(event) {
     return (
       event &&
@@ -2497,13 +2653,16 @@
     return event.type === "End";
   }
 
-  function decideWatchThreadRender({ replayingJournal, caughtUp, acceptedCount }) {
+  function decideWatchThreadRender({ replayingJournal, caughtUp }) {
     if (caughtUp) {
       return { render: true, scrollMode: "reset", replayingJournal: false };
     }
     if (replayingJournal) {
       return {
-        render: acceptedCount > 0,
+        // Le snapshot SSE a déjà rendu le fil humain. Pendant le rejeu, les
+        // fragments sont seulement accumulés : reconstruire 200 kB de DOM à
+        // chaque record rendait l'ouverture inutilisable sur une ronde dense.
+        render: false,
         scrollMode: "replay",
         replayingJournal: true,
       };
@@ -2648,7 +2807,6 @@
       const decision = decideWatchThreadRender({
         replayingJournal,
         caughtUp,
-        acceptedCount: accepted.length,
       });
       replayingJournal = decision.replayingJournal;
       const result = {
@@ -2907,13 +3065,55 @@
     };
   }
 
+  function vigilanceRoundInfo(source) {
+    const body = text(source).trim();
+    const header = body.match(
+      /^RONDE DE VIGILANCE\s*\(([^)\n]+)\)\s*[\u2013\u2014-]\s*([^\n]+)/i,
+    );
+    const marker = /^---\s*SIGNAL MECANIQUE DE LA RONDE\s*---\s*$/im;
+    const markerMatch = marker.exec(body);
+    if (!header || !markerMatch || markerMatch.index === undefined) return null;
+    const signal = body
+      .slice(markerMatch.index + markerMatch[0].length)
+      .trim()
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 2)
+      .join(" ");
+    return {
+      interval: header[1].trim(),
+      headline: header[2].trim(),
+      signal,
+    };
+  }
+
+  function isOnlyVigilanceRoundExchange(entry, roundDeliveryIds) {
+    if (entry.kind !== "peer_exchange" || !Array.isArray(entry.delivery_ids)) return false;
+    return entry.delivery_ids.length > 0
+      && entry.delivery_ids.every((id) => roundDeliveryIds.has(id));
+  }
+
   function projectTimeline(events, options = {}) {
     const ordered = (Array.isArray(events) ? events : [])
       .map((event, index) => ({ ...event, __order: index }))
       .sort((left, right) => (left.at || 0) - (right.at || 0) || left.__order - right.__order);
-    const ledgerMessageIds = new Set(
+    const journalRecordMessageIds = new Set(
       ordered
         .filter((entry) => entry.kind === "record" && entry.record && entry.record.message_id)
+        .map((entry) => entry.record.message_id),
+    );
+    // Un record seul ne suffit pas à remplacer la bulle ledger : turn_steer,
+    // par exemple, porte seulement l'identifiant et le pilote du tour.
+    const journalRenderedMessageIds = new Set(
+      ordered
+        .filter((entry) => entry.kind === "record" && entry.record && entry.record.message_id)
+        .filter((entry) => {
+          const record = entry.record || {};
+          const payload = record.payload && typeof record.payload === "object" ? record.payload : {};
+          return (record.event === "turn_start" || record.event === "prompt_dispatched")
+            && Boolean(text(payload.body));
+        })
         .map((entry) => entry.record.message_id),
     );
     const turns = new Map();
@@ -2950,7 +3150,26 @@
 
     ordered.forEach((entry) => {
       if (entry.kind !== "record") {
-        if (entry.kind === "message" && entry.deliveryId && ledgerMessageIds.has(entry.deliveryId)) {
+        const ledgerRound = entry.kind === "peer_exchange"
+          && entry.count === 1
+          && vigilanceRoundInfo(text(entry.vigilance_round && entry.vigilance_round.body));
+        if (ledgerRound) {
+          projected.push({
+            kind: "round",
+            agent: entry.agent,
+            text: text(entry.vigilance_round.body),
+            at: entry.at,
+            messageId: text(entry.delivery_ids && entry.delivery_ids[0]),
+            deliveryId: text(entry.delivery_ids && entry.delivery_ids[0]),
+            ...ledgerRound,
+          });
+          return;
+        }
+        if (
+          entry.kind === "message"
+          && entry.deliveryId
+          && journalRenderedMessageIds.has(entry.deliveryId)
+        ) {
           return;
         }
         projected.push(entry);
@@ -3036,10 +3255,21 @@
       }
     });
 
+    const roundDeliveryIds = new Set();
     turns.forEach((turn) => {
-      if (
-        turn.promptText
-      ) {
+      const round = vigilanceRoundInfo(turn.promptText);
+      if (round) {
+        roundDeliveryIds.add(turn.key);
+        projected.push({
+          kind: "round",
+          agent: turn.agent,
+          text: turn.promptText,
+          at: turn.promptAt || turn.startAt,
+          messageId: turn.key,
+          deliveryId: journalRecordMessageIds.has(turn.key) ? turn.key : undefined,
+          ...round,
+        });
+      } else if (turn.promptText) {
         projected.push({
           kind: "message",
           role: "user",
@@ -3047,7 +3277,7 @@
           text: turn.promptText,
           at: turn.promptAt || turn.startAt,
           messageId: turn.key,
-          deliveryId: ledgerMessageIds.has(turn.key) ? turn.key : undefined,
+          deliveryId: journalRecordMessageIds.has(turn.key) ? turn.key : undefined,
         });
       }
       if (turn.textParts.length > 0) {
@@ -3070,7 +3300,29 @@
       });
     });
 
+    const renderedRounds = new Set();
+    const durableUserMessageIds = new Set(
+      projected
+        .filter((entry) => entry.kind === "message" && entry.role === "user" && !entry.status)
+        .map((entry) => uiMessageIdentity(entry))
+        .filter(Boolean),
+    );
     return projected
+      .filter((entry) => !isOnlyVigilanceRoundExchange(entry, roundDeliveryIds))
+      .filter((entry) => {
+        if (
+          entry.kind === "message"
+          && entry.role === "user"
+          && entry.status
+          && durableUserMessageIds.has(uiMessageIdentity(entry))
+        ) {
+          return false;
+        }
+        if (entry.kind !== "round" || !entry.deliveryId) return true;
+        if (renderedRounds.has(entry.deliveryId)) return false;
+        renderedRounds.add(entry.deliveryId);
+        return true;
+      })
       .sort((left, right) => (left.at || 0) - (right.at || 0) || left.__order - right.__order)
       .map(({ __order, ...entry }) => entry);
   }
@@ -3659,6 +3911,24 @@
       return wrapper;
     };
 
+    const renderRound = (entry) => {
+      const card = make("article", "round-card");
+      const header = make("header", "round-card__header");
+      const copy = make("div", "round-card__copy");
+      copy.append(make("p", "round-card__eyebrow", `Ronde de vigilance · ${entry.interval}`));
+      copy.append(make("p", "round-card__headline", entry.headline));
+      header.append(copy, make("time", "round-card__time", timestamp(entry.at)));
+      card.append(header);
+      if (entry.signal) {
+        card.append(make("p", "round-card__signal", `Constats : ${entry.signal}`));
+      }
+      const details = make("details", "round-card__technical");
+      details.append(make("summary", "", "Voir la consigne technique"));
+      details.append(renderMessageMarkdown(document, entry.text));
+      card.append(details);
+      return card;
+    };
+
     const rememberEventBody = (event) => {
       if (event.kind !== "record") return null;
       return rememberJournalMessage(journalBodies, event.record);
@@ -3868,6 +4138,7 @@
           currentDay = entryDay;
         }
         if (entry.kind === "message") timeline.append(renderMessage(entry));
+        else if (entry.kind === "round") timeline.append(renderRound(entry));
         else if (entry.kind === "peer_exchange") timeline.append(renderPeer(entry));
         else if (entry.kind === "work") timeline.append(renderWork(entry));
         else if (entry.kind === "system") timeline.append(make("p", "system-event", entry.text));
@@ -3991,23 +4262,6 @@
       historyConnections.clear();
     };
 
-    const requestScopedSnapshot = (agent, generation) => {
-      void fetchScopedSnapshot((url) => windowRef.fetch(url), token, agent)
-        .then((scoped) => {
-          if (generation !== sourceGeneration || state.selectedAgent !== scoped.agent) return;
-          const peerState = applySnapshotPayload(scoped.snapshot, scoped.agent);
-          if (peerState === "computed") {
-            nodes.sourceState.textContent = "Flotte et traces synchronisées.";
-            nodes.sourceState.dataset.state = "ready";
-          }
-        })
-        .catch(() => {
-          if (generation !== sourceGeneration || state.selectedAgent !== agent) return;
-          nodes.sourceState.textContent = `Instantané ciblé indisponible pour ${agent} ; flux maintenu.`;
-          nodes.sourceState.dataset.state = "error";
-        });
-    };
-
     const watchRuntime = createWatchRuntime({
       token,
       resumeSeq: watchResumeSeq,
@@ -4046,7 +4300,6 @@
       const opened = watchRuntime.open(agent);
       source = opened.source;
       sourceGeneration = opened.generation;
-      requestScopedSnapshot(agent, opened.generation);
       source.addEventListener("snapshot", (message) => {
         if (opened.generation !== sourceGeneration) return;
         try {
@@ -4152,6 +4405,7 @@
         });
         const payload = await response.json();
         if (!response.ok) throw new Error(text(payload.code, `http_${response.status}`));
+        const messageId = uiMessageIdentity(payload);
         applyIncoming({
           kind: "message",
           role: "user",
@@ -4159,7 +4413,8 @@
           text: body,
           at: epochSeconds(payload.issued_at) || Date.now() / 1000,
           status: "injecté · en vol",
-          deliveryId: payload.delivery_id || null,
+          messageId: messageId || null,
+          deliveryId: messageId || null,
         });
         const current = createDraft(
           nodes.draft.value,
@@ -4351,6 +4606,7 @@
     applyWatchEvent,
     appendTimelineBatch,
     explicitSend,
+    uiMessageIdentity,
     shouldSubmitKey,
     completeExplicitSend,
     shouldMarkRead,
@@ -4388,6 +4644,7 @@
     decideWatchThreadRender,
     acceptTimelineEvents,
     projectTimeline,
+    vigilanceRoundInfo,
     formatPermissionAct,
     JOURNAL_ACT_KINDS,
     peerLabel,

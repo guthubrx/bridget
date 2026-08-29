@@ -562,6 +562,16 @@ struct UiPeerExchangeV1 {
     direction: UiPeerDirectionV1,
     count: usize,
     delivery_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vigilance_round: Option<UiVigilanceRoundV1>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct UiVigilanceRoundV1 {
+    interval: String,
+    headline: String,
+    signal: String,
+    body: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -611,6 +621,9 @@ struct UiSearchResponseV1 {
 #[derive(Debug, Serialize)]
 struct UiSendAcceptedV1 {
     version: u8,
+    /// Identité stable de la bulle UI et de l'entrée durable du ledger.
+    /// Elle diffère du `delivery_id` lorsque le daemon retourne OutcomeUnknown.
+    message_id: String,
     delivery_id: String,
     issued_at: i64,
     status: &'static str,
@@ -952,6 +965,7 @@ fn send_ui_message(
             ..
         } => Ok(UiSendAcceptedV1 {
             version: UI_VERSION,
+            message_id: message_id.clone(),
             delivery_id,
             issued_at,
             status: "in_flight",
@@ -961,6 +975,7 @@ fn send_ui_message(
             ..
         } => Ok(UiSendAcceptedV1 {
             version: UI_VERSION,
+            message_id: message_id.clone(),
             delivery_id: message_id,
             issued_at,
             status: "in_flight",
@@ -1215,6 +1230,42 @@ fn excerpt(body: &str) -> String {
     excerpt
 }
 
+/// Projection UI d'une ronde connue. Le registre est la source qui porte le
+/// corps complet, même quand la fenêtre de journal a déjà dépassé son début.
+fn vigilance_round_projection(message: &LedgerMessage) -> Option<UiVigilanceRoundV1> {
+    let header = message.body.lines().next()?.trim();
+    let remainder = header.strip_prefix("RONDE DE VIGILANCE (")?;
+    let (interval, headline) = remainder.split_once(')')?;
+    let headline = headline
+        .trim_start_matches(|character: char| {
+            character.is_whitespace() || matches!(character, '-' | '\u{2013}' | '\u{2014}')
+        })
+        .trim();
+    if interval.trim().is_empty() || headline.is_empty() {
+        return None;
+    }
+    let marker = "--- SIGNAL MECANIQUE DE LA RONDE ---";
+    let marker_index = message
+        .body
+        .lines()
+        .position(|line| line.trim() == marker)?;
+    let signal = message
+        .body
+        .lines()
+        .skip(marker_index + 1)
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(UiVigilanceRoundV1 {
+        interval: interval.trim().to_string(),
+        headline: headline.to_string(),
+        signal,
+        body: message.body.clone(),
+    })
+}
+
 fn aggregate_peer_exchanges(
     focus_agent: &str,
     messages: &[LedgerMessage],
@@ -1234,6 +1285,7 @@ fn aggregate_peer_exchanges(
             }
             continue;
         };
+        let round = vigilance_round_projection(message);
         if current
             .as_ref()
             .is_some_and(|exchange| exchange.peer == peer)
@@ -1244,6 +1296,9 @@ fn aggregate_peer_exchanges(
             }
             exchange.count += 1;
             exchange.delivery_ids.push(message.id.clone());
+            if exchange.vigilance_round.is_none() {
+                exchange.vigilance_round = round;
+            }
             continue;
         }
         if let Some(exchange) = current.replace(UiPeerExchangeV1 {
@@ -1254,6 +1309,7 @@ fn aggregate_peer_exchanges(
             direction,
             count: 1,
             delivery_ids: vec![message.id.clone()],
+            vigilance_round: round,
         }) {
             exchanges.push(exchange);
         }
@@ -2067,6 +2123,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn acceptation_ui_expose_message_id_distinct_de_la_remise() {
+        let accepted = UiSendAcceptedV1 {
+            version: UI_VERSION,
+            message_id: "message-9afa".to_string(),
+            delivery_id: "delivery-ccff".to_string(),
+            issued_at: 42,
+            status: "in_flight",
+        };
+
+        let json = serde_json::to_value(accepted).unwrap();
+        assert_eq!(json["message_id"], "message-9afa");
+        assert_eq!(json["delivery_id"], "delivery-ccff");
+    }
+
     fn capture_ui_registration_channel(
         attested_channel: Option<&str>,
     ) -> (Option<String>, ChannelReport) {
@@ -2528,6 +2599,37 @@ mod tests {
         let encoded = serde_json::to_value(&exchanges[0]).unwrap();
         assert_eq!(encoded["count"], 1);
         assert_eq!(encoded["delivery_ids"], serde_json::json!(["premier"]));
+    }
+
+    #[test]
+    fn ronde_du_registre_porte_constats_et_corps_pour_la_page_ui() {
+        let message = LedgerMessage {
+            id: "ronde-1".to_string(),
+            ts: 100,
+            sender: "cli-send-1239134".to_string(),
+            target: "bridget".to_string(),
+            body: [
+                "RONDE DE VIGILANCE (7 min) \u{2014} c est ton tour maintenant.",
+                "",
+                "--- SIGNAL MECANIQUE DE LA RONDE ---",
+                "LOT SANS RECLAMANT : aucun volontaire.",
+                "FICHIERS DISPUTES : install_publish.rs (7).",
+            ]
+            .join("\n"),
+            delivery_status: None,
+        };
+        let exchanges = aggregate_peer_exchanges("bridget", &[message]);
+        let round = exchanges[0]
+            .vigilance_round
+            .as_ref()
+            .expect("une ronde du registre doit porter sa projection UI");
+        assert_eq!(round.interval, "7 min");
+        assert_eq!(round.headline, "c est ton tour maintenant.");
+        assert_eq!(
+            round.signal,
+            "LOT SANS RECLAMANT : aucun volontaire. FICHIERS DISPUTES : install_publish.rs (7)."
+        );
+        assert!(round.body.starts_with("RONDE DE VIGILANCE"));
     }
 
     #[test]
