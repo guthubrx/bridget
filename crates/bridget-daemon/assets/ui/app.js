@@ -654,7 +654,22 @@
           .map((name) => fs.readFileSync(path.join(__dirname, name), "utf8"))
           .join("\n");
         assert.doesNotMatch(files, new RegExp("\\bre\\u00e7u(?:e|es|s)?\\b", "i"));
-        assert.match(files, /injecté · en vol/);
+        assert.match(files, /envoi accepté · remise en cours/);
+      });
+
+      test("historique_long_et_erreur_fournisseur_restent_lisibles", () => {
+        assert.equal(api.localDayKey(0), "unknown");
+        assert.equal(api.shouldCollapseMessage("court"), false);
+        assert.equal(api.shouldCollapseMessage("x".repeat(api.MESSAGE_COLLAPSE_THRESHOLD + 1)), true);
+        assert.match(api.messagePreview("a ".repeat(400)), /…$/);
+        assert.equal(
+          api.turnFailureLabel({ terminal_kind: "turn_failed", reason: "api_error" }),
+          "Le fournisseur a refusé ce tour.",
+        );
+        assert.equal(
+          api.turnFailureLabel({ terminal_kind: "turn_failed", reason: "interrupted" }),
+          "Tour interrompu.",
+        );
       });
 
       test("fil_humain_referent_entrant_apparait_dans_le_timeline", () => {
@@ -728,7 +743,7 @@
             at: 10,
             messageId: "message-9afa",
             deliveryId: "message-9afa",
-            status: "injecté · en vol",
+            status: "envoi accepté · remise en cours",
           },
           {
             kind: "message",
@@ -1456,7 +1471,7 @@
       function loadMarkdownEngines() {
         const jsdomCandidates = [
           path.join(__dirname, ".test-tools", "node_modules", "jsdom"),
-          "/Users/moi/.cache/bridget/ui-md-test-tools/node_modules/jsdom",
+          path.join(process.env.HOME || "", ".cache", "bridget", "ui-md-test-tools", "node_modules", "jsdom"),
         ];
         let JSDOM;
         for (const candidate of jsdomCandidates) {
@@ -2065,6 +2080,7 @@
   "use strict";
 
   const BOTTOM_THRESHOLD_PX = 2;
+  const MESSAGE_COLLAPSE_THRESHOLD = 1400;
   const AGENT_PANE_WIDTH_STORAGE_KEY = "bridget.ui.agent-pane-width.v1";
   const AGENT_PANE_MIN_WIDTH_PX = 224;
   const AGENT_PANE_MAX_WIDTH_PX = 560;
@@ -2328,6 +2344,7 @@
   }
 
   function localDayKey(at, timeZone) {
+    if (!(Number(at) > 0)) return "unknown";
     const date = new Date((at || 0) * 1000);
     if (Number.isNaN(date.getTime())) return "unknown";
     const parts = Object.fromEntries(
@@ -2337,6 +2354,28 @@
         .map((part) => [part.type, part.value]),
     );
     return `${parts.year}-${parts.month}-${parts.day}`;
+  }
+
+  function shouldCollapseMessage(value, threshold = MESSAGE_COLLAPSE_THRESHOLD) {
+    return String(value || "").trim().length > threshold;
+  }
+
+  function messagePreview(value, limit = 360) {
+    const compact = String(value || "").replace(/\s+/g, " ").trim();
+    if (compact.length <= limit) return compact;
+    return `${compact.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
+  }
+
+  function turnFailureLabel(payload) {
+    if (!payload || payload.terminal_kind !== "turn_failed") {
+      return "Anomalie de protocole signalée.";
+    }
+    const reason = text(payload.reason).toLowerCase();
+    if (reason === "api_error") return "Le fournisseur a refusé ce tour.";
+    if (["cancelled", "aborted", "interrupted"].includes(reason)) {
+      return "Tour interrompu.";
+    }
+    return "Le tour s’est terminé en erreur.";
   }
 
   function journalMessageFact(record) {
@@ -2801,7 +2840,7 @@
     return event.type === "End";
   }
 
-  function decideWatchThreadRender({ replayingJournal, caughtUp }) {
+  function decideWatchThreadRender({ replayingJournal, caughtUp, acceptedCount = 0 }) {
     if (caughtUp) {
       return { render: true, scrollMode: "reset", replayingJournal: false };
     }
@@ -2955,6 +2994,7 @@
       const decision = decideWatchThreadRender({
         replayingJournal,
         caughtUp,
+        acceptedCount: accepted.length,
       });
       replayingJournal = decision.replayingJournal;
       const result = {
@@ -3398,7 +3438,7 @@
           kind: "system",
           agent: entry.agent,
           at: entry.at,
-          text: payload.terminal_kind === "turn_failed" ? "Tour interrompu." : "Anomalie de protocole signalée.",
+          text: turnFailureLabel(payload),
         });
       }
     });
@@ -3714,6 +3754,7 @@
       month: "long",
     });
     let state = createUiState({ selectedAgent: requestedAgent });
+    const pendingUiMessages = new Map();
     let source = null;
     let sourceGeneration = 0;
     let replayingJournal = true;
@@ -4053,10 +4094,27 @@
       nodes.send.disabled = !agent || nodes.draft.value.trim().length === 0;
     };
 
+    const appendMessageContent = (bubble, entry) => {
+      if (!shouldCollapseMessage(entry.text)) {
+        bubble.append(renderMessageMarkdown(document, entry.text));
+        return;
+      }
+      bubble.append(make("p", "message-preview", messagePreview(entry.text)));
+      const details = make("details", "message-expanded");
+      details.append(make("summary", "", "Afficher le message complet"));
+      let expanded = false;
+      details.addEventListener("toggle", () => {
+        if (!details.open || expanded) return;
+        details.append(renderMessageMarkdown(document, entry.text));
+        expanded = true;
+      });
+      bubble.append(details);
+    };
+
     const renderMessage = (entry) => {
       const wrapper = make("article", `message message--${entry.role === "user" ? "user" : "agent"}`);
       const bubble = make("div", "bubble");
-      bubble.append(renderMessageMarkdown(document, entry.text));
+      appendMessageContent(bubble, entry);
       const meta = make("span", "message-meta", timestamp(entry.at));
       if (entry.status) meta.textContent += ` · ${entry.status}`;
       bubble.append(meta);
@@ -4327,6 +4385,13 @@
     const ingestThreadMessage = (payload, agentName) => {
       const deliveryId = text(payload && payload.delivery_id);
       if (!deliveryId) return false;
+      const pendingTarget = pendingUiMessages.get(deliveryId);
+      if (pendingTarget) {
+        pendingUiMessages.delete(deliveryId);
+        if (pendingTarget === state.selectedAgent) {
+          nodes.sendState.textContent = "injecté";
+        }
+      }
       const key = `${agentName}:${deliveryId}`;
       if (seenThreadMessages.has(key)) return false;
       seenThreadMessages.add(key);
@@ -4429,6 +4494,16 @@
         const accepted = processed.accepted.filter((event) => {
           if (event.kind !== "record") return true;
           rememberEventBody(event);
+          const record = event.record || {};
+          if (["turn_start", "prompt_dispatched"].includes(record.event)) {
+            const pendingTarget = pendingUiMessages.get(record.message_id);
+            if (pendingTarget) {
+              pendingUiMessages.delete(record.message_id);
+              if (pendingTarget === state.selectedAgent) {
+                nodes.sendState.textContent = "injecté";
+              }
+            }
+          }
           return true;
         });
         state = appendTimelineBatch(state, accepted);
@@ -4507,7 +4582,7 @@
             applyIncoming({
               kind: "system",
               agent,
-              at: 0,
+              at: null,
               text: "Il reste des messages plus anciens.",
             });
           }
@@ -4565,10 +4640,20 @@
           agent: target,
           text: body,
           at: epochSeconds(payload.issued_at) || Date.now() / 1000,
-          status: "injecté · en vol",
+          status: "envoi accepté · remise en cours",
           messageId: messageId || null,
           deliveryId: messageId || null,
         });
+        const injectionAlreadyObserved = (state.timelines[target] || []).some((entry) => {
+          if (entry.kind === "message") {
+            return !entry.status && uiMessageIdentity(entry) === messageId;
+          }
+          return entry.kind === "record"
+            && entry.record
+            && ["turn_start", "prompt_dispatched"].includes(entry.record.event)
+            && entry.record.message_id === messageId;
+        });
+
         const current = createDraft(
           nodes.draft.value,
           nodes.draft.selectionStart,
@@ -4585,7 +4670,12 @@
             selectionEnd: completed.selectionEnd,
           });
         }
-        nodes.sendState.textContent = "injecté · en vol";
+        if (injectionAlreadyObserved) {
+          nodes.sendState.textContent = "injecté";
+        } else {
+          pendingUiMessages.set(messageId, target);
+          nodes.sendState.textContent = "envoi accepté · remise en cours";
+        }
       } catch (error) {
         const labels = {
           invalid_body: "message invalide",
@@ -4740,6 +4830,10 @@
   }
 
   return Object.freeze({
+    MESSAGE_COLLAPSE_THRESHOLD,
+    shouldCollapseMessage,
+    messagePreview,
+    turnFailureLabel,
     BOTTOM_THRESHOLD_PX,
     agentPaneWidthBounds,
     clampAgentPaneWidth,

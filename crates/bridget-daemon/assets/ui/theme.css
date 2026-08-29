@@ -967,6 +967,30 @@ body:has(.agent-pane-resizer[data-dragging="true"]) {
   font-size: 0.68rem;
 }
 
+.message-preview {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.message-expanded {
+  margin-top: 0.7rem;
+}
+
+.message-expanded summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  list-style: none;
+}
+
+.message-expanded summary::-webkit-details-marker {
+  display: none;
+}
+
+.message-expanded[open] > :not(summary) {
+  margin-top: 0.85rem;
+}
+
 .date-separator,
 .system-event,
 .trace-wrap {
