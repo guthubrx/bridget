@@ -678,6 +678,38 @@
         assert.deepEqual(messages.map((entry) => entry.deliveryId || entry.messageId), ["D1", "D2"]);
       });
 
+      test("outcome_unknown_remplace_la_bulle_optimiste_par_le_message_durable", () => {
+        const events = [
+          {
+            kind: "message",
+            role: "user",
+            agent: "bridget",
+            text: "un seul envoi",
+            at: 10,
+            messageId: "message-9afa",
+            deliveryId: "message-9afa",
+            status: "injecté · en vol",
+          },
+          {
+            kind: "message",
+            role: "user",
+            agent: "bridget",
+            text: "un seul envoi",
+            at: 11,
+            messageId: "message-9afa",
+            deliveryId: "message-9afa",
+          },
+        ];
+        const messages = api.projectTimeline(events).filter((entry) => entry.kind === "message");
+        assert.equal(messages.length, 1);
+        assert.equal(messages[0].deliveryId, "message-9afa");
+        assert.equal(messages[0].status, undefined);
+        assert.equal(
+          api.uiMessageIdentity({ message_id: "message-9afa", delivery_id: "delivery-ccff" }),
+          "message-9afa",
+        );
+      });
+
       test("turn_steer_sans_corps_ne_masque_pas_message_ledger", () => {
         const events = [
           { kind: "message", role: "user", agent: "bridget", text: "est ce que tu travailles encore ?", at: 10, deliveryId: "S1", messageId: "S1" },
@@ -2435,6 +2467,15 @@
     };
   }
 
+  function uiMessageIdentity(payload) {
+    return text(
+      payload && payload.message_id,
+      payload && payload.messageId,
+      payload && payload.delivery_id,
+      payload && payload.deliveryId,
+    );
+  }
+
   function shouldSubmitKey(event) {
     return (
       event &&
@@ -3260,9 +3301,23 @@
     });
 
     const renderedRounds = new Set();
+    const durableUserMessageIds = new Set(
+      projected
+        .filter((entry) => entry.kind === "message" && entry.role === "user" && !entry.status)
+        .map((entry) => uiMessageIdentity(entry))
+        .filter(Boolean),
+    );
     return projected
       .filter((entry) => !isOnlyVigilanceRoundExchange(entry, roundDeliveryIds))
       .filter((entry) => {
+        if (
+          entry.kind === "message"
+          && entry.role === "user"
+          && entry.status
+          && durableUserMessageIds.has(uiMessageIdentity(entry))
+        ) {
+          return false;
+        }
         if (entry.kind !== "round" || !entry.deliveryId) return true;
         if (renderedRounds.has(entry.deliveryId)) return false;
         renderedRounds.add(entry.deliveryId);
@@ -4350,6 +4405,7 @@
         });
         const payload = await response.json();
         if (!response.ok) throw new Error(text(payload.code, `http_${response.status}`));
+        const messageId = uiMessageIdentity(payload);
         applyIncoming({
           kind: "message",
           role: "user",
@@ -4357,7 +4413,8 @@
           text: body,
           at: epochSeconds(payload.issued_at) || Date.now() / 1000,
           status: "injecté · en vol",
-          deliveryId: payload.delivery_id || null,
+          messageId: messageId || null,
+          deliveryId: messageId || null,
         });
         const current = createDraft(
           nodes.draft.value,
@@ -4549,6 +4606,7 @@
     applyWatchEvent,
     appendTimelineBatch,
     explicitSend,
+    uiMessageIdentity,
     shouldSubmitKey,
     completeExplicitSend,
     shouldMarkRead,

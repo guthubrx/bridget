@@ -621,6 +621,9 @@ struct UiSearchResponseV1 {
 #[derive(Debug, Serialize)]
 struct UiSendAcceptedV1 {
     version: u8,
+    /// Identité stable de la bulle UI et de l'entrée durable du ledger.
+    /// Elle diffère du `delivery_id` lorsque le daemon retourne OutcomeUnknown.
+    message_id: String,
     delivery_id: String,
     issued_at: i64,
     status: &'static str,
@@ -962,6 +965,7 @@ fn send_ui_message(
             ..
         } => Ok(UiSendAcceptedV1 {
             version: UI_VERSION,
+            message_id: message_id.clone(),
             delivery_id,
             issued_at,
             status: "in_flight",
@@ -971,6 +975,7 @@ fn send_ui_message(
             ..
         } => Ok(UiSendAcceptedV1 {
             version: UI_VERSION,
+            message_id: message_id.clone(),
             delivery_id: message_id,
             issued_at,
             status: "in_flight",
@@ -2116,6 +2121,21 @@ mod tests {
             body: format!("{sender} vers {target}"),
             delivery_status: None,
         }
+    }
+
+    #[test]
+    fn acceptation_ui_expose_message_id_distinct_de_la_remise() {
+        let accepted = UiSendAcceptedV1 {
+            version: UI_VERSION,
+            message_id: "message-9afa".to_string(),
+            delivery_id: "delivery-ccff".to_string(),
+            issued_at: 42,
+            status: "in_flight",
+        };
+
+        let json = serde_json::to_value(accepted).unwrap();
+        assert_eq!(json["message_id"], "message-9afa");
+        assert_eq!(json["delivery_id"], "delivery-ccff");
     }
 
     fn capture_ui_registration_channel(
