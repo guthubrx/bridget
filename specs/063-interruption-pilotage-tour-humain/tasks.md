@@ -13,8 +13,8 @@
 
 ## Phase 3 — Interrompre proprement [US1]
 
-- [ ] T006 [P] [US1] Modifier `crates/bridget-transport/src/acp.rs` pour interrompre seulement un tour actif lors de l’arrivée d’un message humain, en conservant la FIFO et le règlement des permissions.
-- [ ] T007 [P] [US1] Modifier `crates/bridget-transport/src/claude_stream_json.rs` pour déclencher la trame existante seulement après une remise humaine admissible, sans perdre ce message.
+- [x] T006 [P] [US1] Modifier `crates/bridget-transport/src/acp.rs` pour interrompre seulement un tour actif lors de l’arrivée d’un message humain, en conservant la FIFO et le règlement des permissions.
+- [x] T007 [P] [US1] Modifier `crates/bridget-transport/src/claude_stream_json.rs` pour déclencher la trame existante seulement après une remise humaine admissible, sans perdre ce message.
 
 ## Phase 4 — Piloter et acquitter Codex [US2]
 
@@ -23,7 +23,7 @@
 ## Phase 5 — Intégration [US3]
 
 - [x] T009 [US3] Vérifier `crates/bridget-daemon/src/wrapper.rs` : le pont existant relie déjà `PromptDispatched` à `DeliverAcked` et classe un reçu `Seen` non attesté en `DeliveryIndeterminate` sans seconde injection.
-- [ ] T010 Mettre à jour `specs/063-interruption-pilotage-tour-humain/implementation.md` avec les preuves, limites et SHAs livrés.
+- [x] T010 Mettre à jour `specs/063-interruption-pilotage-tour-humain/implementation.md` avec les preuves, limites et SHAs livrés.
 - [ ] T011 Compiler/formater les couloirs touchés, intégrer les lots et produire l’horodatage minimal de route réelle après mise en service.
 
 ## Dépendances

@@ -12,11 +12,29 @@ use std::sync::Mutex;
 
 /// Schéma écrit par ce binaire. Le schéma 1 (sans `domain`, ou avec `domain`
 /// posé par le premier lot D20) reste lisible.
-pub const FLEET_SCHEMA_VERSION: u64 = 2;
+pub const FLEET_SCHEMA_VERSION: u64 = 3;
 pub const FLEET_SCHEMA_MIN: u64 = 1;
 
 fn schema_lisible(version: u64) -> bool {
     (FLEET_SCHEMA_MIN..=FLEET_SCHEMA_VERSION).contains(&version)
+}
+
+/// Références opaques qui relient un équipier persistant à son parent.
+/// Les limites restent la politique du lanceur ; elles ne deviennent pas des
+/// faits durables dans `fleet.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesiredAgentLink {
+    pub link_id: String,
+    pub parent_instance_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_id: Option<String>,
+    pub role: String,
+    pub agent_path: String,
 }
 
 /// Entrée persistante d'un équipier que le daemon doit maintenir.
@@ -36,6 +54,9 @@ pub struct DesiredEquipier {
     /// Domaine du protocole, persisté pour recomposer l'équipe après crash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
+    /// Parent, mandat et rôle issus du lien durable Bridget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_link: Option<DesiredAgentLink>,
 }
 
 /// Contenu versionné de `fleet.json`.
@@ -340,6 +361,13 @@ fn validate_fleet(path: &Path, fleet: &DesiredFleet) -> Result<(), DesiredStateE
             Some("génération nulle")
         } else if equipier.created.trim().is_empty() {
             Some("date de création vide")
+        } else if equipier.agent_link.as_ref().is_some_and(|link| {
+            link.link_id.trim().is_empty()
+                || link.parent_instance_id.trim().is_empty()
+                || link.role.trim().is_empty()
+                || link.agent_path.trim().is_empty()
+        }) {
+            Some("lien agent incomplet")
         } else {
             None
         };
@@ -384,6 +412,7 @@ mod tests {
             created: "2026-08-22T20:14:00Z".to_string(),
             resolved_definition: None,
             domain: None,
+            agent_link: None,
         }
     }
 
@@ -534,6 +563,30 @@ mod tests {
     }
 
     #[test]
+    fn lien_agent_optionnel_survit_au_roundtrip_fleet() {
+        let root = test_root("agent-link");
+        let path = root.join("fleet.json");
+        let store = DesiredStateStore::at_path(&path);
+        let mut entry = equipier("command-link", 1);
+        entry.agent_link = Some(DesiredAgentLink {
+            link_id: "link-1".to_string(),
+            parent_instance_id: "instance-parent".to_string(),
+            parent_execution_id: Some("execution-parent".to_string()),
+            objective_id: Some("objective-1".to_string()),
+            delegation_id: Some("delegation-1".to_string()),
+            role: "verification".to_string(),
+            agent_path: "instance-parent/instance-child".to_string(),
+        });
+        store.upsert("child".to_string(), entry).unwrap();
+        let loaded = store.load().unwrap();
+        let link = loaded.equipiers["child"].agent_link.as_ref().unwrap();
+        assert_eq!(loaded.schema, FLEET_SCHEMA_VERSION);
+        assert_eq!(link.parent_instance_id, "instance-parent");
+        assert_eq!(link.delegation_id.as_deref(), Some("delegation-1"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn fleet_json_schema_1_sans_domain_se_relit() {
         let root = test_root("ancien");
         let path = root.join("fleet.json");
@@ -562,7 +615,10 @@ mod tests {
             .set_domain("codex-1", Some("bridget"))
             .unwrap();
         let rewritten = fs::read_to_string(&path).unwrap();
-        assert!(rewritten.contains("\"schema\": 2"), "{rewritten}");
+        assert!(
+            rewritten.contains(&format!("\"schema\": {FLEET_SCHEMA_VERSION}")),
+            "{rewritten}"
+        );
         assert!(rewritten.contains("\"domain\": \"bridget\""), "{rewritten}");
         fs::remove_dir_all(root).unwrap();
     }
@@ -620,12 +676,12 @@ mod tests {
         let root = test_root("version");
         let path = root.join("fleet.json");
         fs::create_dir_all(&root).unwrap();
-        fs::write(&path, r#"{"schema":3,"equipiers":{}}"#).unwrap();
+        fs::write(&path, r#"{"schema":4,"equipiers":{}}"#).unwrap();
         let error = DesiredStateStore::at_path(&path).load().unwrap_err();
 
         assert!(matches!(
             error,
-            DesiredStateError::UnsupportedSchema { found: Some(3), .. }
+            DesiredStateError::UnsupportedSchema { found: Some(4), .. }
         ));
         assert!(error.to_string().contains(path.to_str().unwrap()));
         fs::write(&path, r#"{"equipiers":{}}"#).unwrap();

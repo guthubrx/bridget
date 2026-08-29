@@ -132,8 +132,116 @@ pub const COORDINATION_STREAM_VERSION: u16 = 2;
 pub enum ClientCapability {
     SendIdempotent,
     Lookup,
+    ExecutionControlV1,
 }
 
+/// Commande neutre et versionnée du plan de contrôle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionControlOperation {
+    QueueOnly,
+    TriggerTurn,
+    SteerCurrent,
+    Interrupt,
+    PauseQueue,
+    ResumeQueue,
+    CancelQueued,
+}
+
+/// Commande de contrôle rejouable, toujours corrélée à une exécution Bridget.
+///
+/// Le message est présent uniquement pour une opération qui injecte du texte
+/// dans un tour fournisseur. Les opérations sans prompt le laissent absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionControlCommand {
+    pub version: u16,
+    pub command_id: String,
+    pub execution_id: String,
+    pub generation: u64,
+    pub revision: u64,
+    pub operation: ExecutionControlOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<BridgetMessage>,
+}
+
+/// Refus fermé : une commande absente de la négociation ne devient jamais un
+/// best effort fondé sur le nom du fournisseur.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionControlRefusal {
+    CapabilityNotNegotiated,
+    CapabilityUnavailable,
+    GenerationMismatch,
+    RevisionMismatch,
+    ExecutionNotFound,
+    TerminalExecution,
+    InvalidCommand,
+    TargetUnavailable,
+    MessageRequired,
+}
+
+/// Issue publique immédiate d'une commande de contrôle.
+///
+/// `OutcomeUnknown` indique la remise au wrapper sans résultat connu. `Accepted`
+/// ou `Refused` ne sont publiés qu'après son accusé durable. L'issue fournisseur
+/// reste une transition d'exécution corrélée, pas une promesse.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionControlOutcome {
+    Accepted,
+    Refused(ExecutionControlRefusal),
+    OutcomeUnknown,
+}
+
+/// Issue technique d une politique d autonomie. Ces états ne portent aucune
+/// décision de mission : ils expliquent uniquement pourquoi Bridget ne crée
+/// pas de tour supplémentaire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionBudgetOutcome {
+    Paused,
+    Blocked,
+    UsageLimit,
+    BudgetLimit,
+    Terminated,
+}
+
+/// Transition runtime corrélée à une exécution Bridget.
+///
+/// Les identifiants fournisseur restent hors de cette trame : le wrapper ne
+/// rapporte que le fait déjà normalisé par son adaptateur et le daemon vérifie
+/// état, révision et génération avant toute écriture durable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionStateTransition {
+    pub execution_id: String,
+    pub generation: u64,
+    pub expected_state: String,
+    pub expected_revision: u64,
+    pub next_state: String,
+    pub reason: String,
+    pub observed_at: i64,
+}
+
+/// Référence fournisseur attestée, attachée à une exécution Bridget précise.
+///
+/// Elle est distincte d'une transition d'état : le daemon vérifie le propriétaire
+/// et la génération avant de la persister et ne l'emploie jamais pour déduire
+/// une décision métier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionProviderContext {
+    pub execution_id: String,
+    pub generation: u64,
+    pub provider_kind: String,
+    pub execution_path: String,
+    pub observation: ProviderObservation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_turn_id: Option<String>,
+    pub observed_at: i64,
+}
 /// Capacité explicitement négociée par un service local.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -767,12 +875,45 @@ mod base64_bytes {
     }
 }
 
+/// Contexte de propriété transmis avec une création d'équipier. Bridget le
+/// persiste comme un fait runtime sans en déduire de transition métier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpawnOwnership {
+    pub parent_instance_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_id: Option<String>,
+    pub role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_children: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_depth: Option<usize>,
+}
+
+/// Événement cursé de la descendance d'un wrapper. Le parent est déduit de la
+/// connexion qui interroge et n'est donc jamais choisi par son pair.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentLinkEventFrame {
+    pub cursor: u64,
+    pub event_id: String,
+    pub link_id: String,
+    pub child_instance_id: String,
+    pub state: String,
+    pub observed_at: i64,
+}
+
 /// Messages envoyés par le wrapper vers le daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum WrapperToDaemon {
     /// Négocie un rôle avant l'usage d'une connexion persistante.
-    RoleHandshake { role: ConnectionRole },
+    RoleHandshake {
+        role: ConnectionRole,
+    },
     /// Négocie le contrat client public, uniquement après RoleAccepted(Client).
     ClientHello {
         contract_version: u16,
@@ -856,6 +997,21 @@ pub enum WrapperToDaemon {
         operation_kind: String,
         idempotency_key: String,
     },
+    /// Commande de contrôle corrélée réservée aux clients ayant négocié
+    /// `execution_control_v1`.
+    ControlExecution {
+        command: ExecutionControlCommand,
+    },
+    /// Le wrapper a traité l'ordre de contrôle. Il ne rapporte pas l'issue du
+    /// fournisseur, qui reste publiée comme transition d'exécution.
+    ControlExecutionReported {
+        issuer_scope: String,
+        command_id: String,
+        execution_id: String,
+        accepted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refusal_reason: Option<String>,
+    },
     /// Accusé durable de remise envoyé exclusivement par un wrapper.
     DeliverAcked {
         delivery_id: String,
@@ -867,8 +1023,17 @@ pub enum WrapperToDaemon {
         delivery_generation: u64,
     },
     /// Ordre idempotent de lancement d'un équipier supervisé.
+    /// Attend un changement de descendance du wrapper connecté. Le curseur
+    /// permet une reprise exacte après déconnexion ; le délai est borné daemon.
+    WaitAgentLinks {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after_cursor: Option<u64>,
+        timeout_ms: u64,
+    },
     SpawnOrder {
         agent_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ownership: Option<SpawnOwnership>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         cwd: String,
@@ -878,13 +1043,23 @@ pub enum WrapperToDaemon {
         deadline_at: i64,
     },
     /// Ordre corrélé d'arrêt d'un équipier supervisé.
-    StopOrder { name: String, command_id: String },
+    StopOrder {
+        name: String,
+        command_id: String,
+    },
     /// Ouvrir un abonnement à la vue d'un équipier.
-    Subscribe { agent: String, window: AttachWindow },
+    Subscribe {
+        agent: String,
+        window: AttachWindow,
+    },
     /// Fermer un abonnement sans fermer la connexion attach.
-    Unsubscribe { subscription_id: String },
+    Unsubscribe {
+        subscription_id: String,
+    },
     /// Confirmation du wrapper : le daemon peut alors l'annoncer à la vue.
-    Subscribed { subscription_id: String },
+    Subscribed {
+        subscription_id: String,
+    },
     /// Fragment binaire d'une ligne JSONL versionnée.
     JournalFragment {
         subscription_id: String,
@@ -990,20 +1165,42 @@ pub enum WrapperToDaemon {
     /// Fait d'espace disque relevé par le wrapper juste après son
     /// enregistrement. Informatif uniquement : le daemon le projette dans
     /// l'annuaire sans l'utiliser pour accepter, refuser ou arrêter un agent.
-    DiskSpace { fact: DiskSpaceFact },
+    DiskSpace {
+        fact: DiskSpaceFact,
+    },
     /// Le pilote a ouvert son journal append-only pour cette connexion. Ce
     /// signal distinct du Register évite de déduire attach du mode ACP.
     JournalReady,
+    /// Fait fournisseur corrélé à une exécution. Les versions anciennes ne
+    /// l'émettent pas, ce qui laisse le contexte explicitement absent.
+    ExecutionProviderObserved {
+        context: ExecutionProviderContext,
+    },
     /// Se désenregistrer.
     Unregister,
     /// Renommer un agent déjà enregistré.
-    Rename { current_name: String, name: String },
+    Rename {
+        current_name: String,
+        name: String,
+    },
     /// Envoyer un message à un autre agent.
     Send(BridgetMessage),
     /// Refus terminal asynchrone d'une livraison déjà acquittée par le daemon.
-    DeliveryRejected { id: String, reason: String },
+    DeliveryRejected {
+        id: String,
+        reason: String,
+    },
     /// Transition dédiée du tour ACP, distincte de l'observation `Runtime`.
-    TurnState { in_progress: bool },
+    /// Fait runtime corrélé émis par un wrapper managed.
+    ///
+    /// Le daemon applique cette transition par comparaison état-révision-
+    /// génération et ignore donc une sortie tardive ou mal corrélée.
+    ExecutionStateChanged {
+        transition: ExecutionStateTransition,
+    },
+    TurnState {
+        in_progress: bool,
+    },
     /// Annuler une demande suivie appartenant à l'agent courant.
     CancelRequest {
         id: String,
@@ -1011,10 +1208,16 @@ pub enum WrapperToDaemon {
         reason: Option<String>,
     },
     /// Lister les demandes suivies de l'agent courant.
-    ListRequests { sender: String, limit: u16 },
+    ListRequests {
+        sender: String,
+        limit: u16,
+    },
     /// Projeter le ledger détenu par le daemon, pour un client fédéré qui ne
     /// possède pas sa base SQLite locale.
-    LedgerProjection { scope: LedgerScope, limit: u16 },
+    LedgerProjection {
+        scope: LedgerScope,
+        limit: u16,
+    },
     /// Signal de vie (périodique).
     Heartbeat,
     /// Demander la liste des agents connectés.
@@ -1049,7 +1252,10 @@ pub enum WrapperToDaemon {
     /// ajoutée. L'absence de ce message n'autorise aucun verdict d'écart.
     /// Le daemon compare au modèle épinglé et n'en tire aucune décision
     /// automatique — affichage et journal seulement.
-    ServedModel { agent: String, model: String },
+    ServedModel {
+        agent: String,
+        model: String,
+    },
     /// Rapporter un fait de limite attesté par le pilote d'un agent.
     ///
     /// L'absence de ce message ne permet aucune déduction : une limite inconnue
@@ -1075,13 +1281,19 @@ pub enum WrapperToDaemon {
     Usage {
         agent: String,
         input_tokens: u64,
+        /// Corrélation facultative vers l exécution qui a produit l échantillon.
+        /// Sans elle, le fait reste consultable par agent mais ne peut pas
+        /// alimenter un budget d autonomie.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution_generation: Option<u64>,
         output_tokens: u64,
         cache_creation_input_tokens: u64,
         cache_read_input_tokens: u64,
         source: UsageSource,
     },
     /// Agréger les échantillons d'usage d'un agent dans une fenêtre fermée.
-    ///
     /// Réponse : `UsageWindowResult`. Aucun échantillon → `aggregate: None`
     /// (inconnu), jamais un agrégat à zéro inventé.
     UsageWindow {
@@ -1240,6 +1452,10 @@ pub struct AdapterCapabilities {
     pub execution_paths: Vec<String>,
     #[serde(default)]
     pub models: BTreeMap<String, ModelCapabilities>,
+    /// Faits de fournisseur relevés avant activation. Leur absence garde la
+    /// compatibilité de registre mais interdit toute opération qui les exige.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed: Option<ProviderObservation>,
 }
 
 impl Default for AdapterCapabilities {
@@ -1250,8 +1466,52 @@ impl Default for AdapterCapabilities {
         Self {
             execution_paths: vec!["acp".to_string()],
             models: BTreeMap::new(),
+            observed: None,
         }
     }
+}
+
+/// Opération effectivement attestée par une version fournisseur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderOperation {
+    Interrupt,
+    Steer,
+    Resume,
+    Fork,
+    Approval,
+}
+
+/// Baseline versionnée, sans environnement ni contenu utilisateur.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderObservation {
+    pub binary_path: String,
+    pub binary_version: String,
+    pub binary_digest: String,
+    pub contract_version: String,
+    #[serde(default)]
+    pub operations: Vec<ProviderOperation>,
+}
+impl ProviderObservation {
+    /// Une capacité absente ou refusée reste indisponible. Cette vérification
+    /// commune évite que chaque superviseur interprète la baseline autrement.
+    pub fn supports(&self, operation: ProviderOperation) -> bool {
+        self.operations.contains(&operation)
+    }
+}
+
+/// Vue publique réduite d'une baseline fournisseur. Les chemins et empreintes
+/// restent dans le registre de lancement: l'UI ne reçoit que la version, le
+/// contrat et les opérations effectivement attestées.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderUiProjection {
+    pub binary_version: String,
+    pub contract_version: String,
+    #[serde(default)]
+    pub operations: Vec<ProviderOperation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
 }
 
 /// Capacités opaques déclarées pour un modèle précis, sans substitution.
@@ -1415,6 +1675,27 @@ pub enum DaemonToWrapper {
         idempotency_key: String,
         issue: IdempotencyIssue,
     },
+    /// Issue immédiate de la validation Bridget d'une commande de contrôle.
+    ControlExecutionResult {
+        command_id: String,
+        execution_id: String,
+        outcome: ExecutionControlOutcome,
+    },
+    /// Ordre à destination du wrapper qui porte l'exécution ciblée.
+    /// Delta de descendance du wrapper demandeur, lu ou réveillé à partir du
+    /// journal durable. Une réponse vide indique uniquement le timeout borné.
+    AgentLinkEvents {
+        events: Vec<AgentLinkEventFrame>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        through_cursor: Option<u64>,
+        timed_out: bool,
+    },
+    ///
+    /// Cette trame ne franchit jamais la frontière client publique.
+    ControlExecutionDispatch {
+        issuer_scope: String,
+        command: ExecutionControlCommand,
+    },
     /// Succès d'un spawn, émis seulement après le `Register` réel.
     SpawnAccepted {
         command_id: String,
@@ -1508,6 +1789,17 @@ pub enum DaemonToWrapper {
     Renamed { old_name: String, name: String },
     /// Livrer un message à l'agent.
     Deliver(BridgetMessage),
+    /// Livrer un travail dont l'exécution durable a déjà été admise.
+    ///
+    /// Les wrappers historiques continuent de recevoir Deliver. Cette
+    /// variante n'est utilisée qu'après activation explicite de la double
+    /// écriture du plan de contrôle.
+    DeliverExecution {
+        message: BridgetMessage,
+        execution_id: String,
+        generation: u64,
+        revision: u64,
+    },
     /// Retirer un message de la file du transport, sans l'injecter.
     CancelDelivery { id: String, reason: String },
     /// Acquittement d'un envoi.
@@ -1732,6 +2024,17 @@ pub struct AgentInfo {
     /// « indéterminable » d'un daemon trop ancien pour publier le champ.
     #[serde(default)]
     pub persistent: Option<bool>,
+    /// Baseline fournisseur réduite, absente tant qu'elle n'est pas attestée.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderUiProjection>,
+    /// Projection durable de l'exécution en cours, absente tant que la bascule
+    /// de double écriture n'est pas activée pour l'agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ExecutionUiProjection>,
+    /// Relation durable entre cet agent, son parent et son mandat. Absente pour
+    /// les agents qui ne proviennent pas d'un spawn propriétaire Bridget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_link: Option<AgentLinkUiProjection>,
 }
 
 /// Forme fil de lecture : accepte l'ancien champ mono-fenêtre `rate_limit`
@@ -1767,11 +2070,17 @@ struct AgentInfoWire {
     #[serde(default)]
     rate_limit: Option<RateLimitFact>,
     #[serde(default)]
+    agent_link: Option<AgentLinkUiProjection>,
+    #[serde(default)]
     model_mismatch: Option<ModelMismatchFact>,
+    #[serde(default)]
+    execution: Option<ExecutionUiProjection>,
     #[serde(default)]
     disk_space: Option<DiskSpaceFact>,
     #[serde(default)]
     persistent: Option<bool>,
+    #[serde(default)]
+    provider: Option<ProviderUiProjection>,
 }
 
 impl From<AgentInfoWire> for AgentInfo {
@@ -1794,15 +2103,56 @@ impl From<AgentInfoWire> for AgentInfo {
             state: wire.state,
             last_seen_secs: wire.last_seen_secs,
             reconnect_count: wire.reconnect_count,
+            execution: wire.execution,
             domain: wire.domain,
+            agent_link: wire.agent_link,
             model: wire.model,
             effort: wire.effort,
             rate_limits,
             model_mismatch: wire.model_mismatch,
             disk_space: wire.disk_space,
             persistent: wire.persistent,
+            provider: wire.provider,
         }
     }
+}
+/// Vue compacte d'une exécution durable pour l'annuaire public.
+/// Les absences restent des absences attestées : aucune activité fournisseur ne
+/// se déduit de la seule présence réseau.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionUiProjection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_age_secs: Option<u64>,
+    #[serde(default)]
+    pub queue_depth: u64,
+    /// Mode native, forked ou reconstructed, absent sans ascendance attestée.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation_mode: Option<String>,
+}
+
+/// Projection publique d'un lien d'agent. Elle rend visibles l'ascendance et
+/// le mandat sans déduire un état métier depuis la présence du processus.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentLinkUiProjection {
+    pub link_id: String,
+    pub parent_instance_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_id: Option<String>,
+    pub role: String,
+    pub agent_path: String,
+    pub state: String,
+    /// Descendants directs dont le lien propriétaire reste ouvert.
+    pub direct_descendants: u64,
+    /// Descendants ouverts à toute profondeur, sans inférer de coût ou d'état.
+    pub descendants: u64,
 }
 
 /// Fait de limite exposé dans l'annuaire. Les chaînes fournisseur restent
@@ -2363,6 +2713,8 @@ mod tests {
         let sample = WrapperToDaemon::Usage {
             agent: "claude-1".to_string(),
             input_tokens: 2,
+            execution_id: Some("execution-1".to_string()),
+            execution_generation: Some(1),
             output_tokens: 175,
             cache_creation_input_tokens: 40_804,
             cache_read_input_tokens: 13_907,
@@ -2375,12 +2727,14 @@ mod tests {
             decode(&encoded).unwrap(),
             WrapperToDaemon::Usage {
                 input_tokens: 2,
+                execution_id: Some(execution_id),
+                execution_generation: Some(1),
                 output_tokens: 175,
                 cache_creation_input_tokens: 40_804,
                 cache_read_input_tokens: 13_907,
                 source: UsageSource::ClaudeStreamJson,
                 ..
-            }
+            } if execution_id == "execution-1"
         ));
 
         let window = WrapperToDaemon::UsageWindow {
@@ -3034,6 +3388,15 @@ mod tests {
     fn lifecycle_messages_roundtrip_and_stay_outside_attach() {
         let spawn = WrapperToDaemon::SpawnOrder {
             agent_type: "codex".to_string(),
+            ownership: Some(SpawnOwnership {
+                parent_instance_id: "instance-parent".to_string(),
+                parent_execution_id: Some("execution-parent".to_string()),
+                objective_id: Some("objective-1".to_string()),
+                delegation_id: Some("delegation-1".to_string()),
+                role: "verification".to_string(),
+                max_children: Some(3),
+                max_depth: Some(2),
+            }),
             name: Some("codex-1".to_string()),
             cwd: "/tmp".to_string(),
             persistent: true,
@@ -3047,13 +3410,52 @@ mod tests {
                 agent_type,
                 name: Some(name),
                 command_id,
+                ownership: Some(ownership),
                 ..
-            } if agent_type == "codex" && name == "codex-1" && command_id == "command-1"
+            } if agent_type == "codex"
+                && name == "codex-1"
+                && command_id == "command-1"
+                && ownership.parent_instance_id == "instance-parent"
         ));
         assert_eq!(
             spawn.attach_refusal(),
             Some(AttachRefusal::MessageOutsideAttachRole)
         );
+        let wait = WrapperToDaemon::WaitAgentLinks {
+            after_cursor: Some(41),
+            timeout_ms: 3_000,
+        };
+        assert!(matches!(
+            decode(&encode(&wait).unwrap()).unwrap(),
+            WrapperToDaemon::WaitAgentLinks {
+                after_cursor: Some(41),
+                timeout_ms: 3_000,
+            }
+        ));
+        assert_eq!(
+            wait.attach_refusal(),
+            Some(AttachRefusal::MessageOutsideAttachRole)
+        );
+        let events = DaemonToWrapper::AgentLinkEvents {
+            events: vec![AgentLinkEventFrame {
+                cursor: 42,
+                event_id: "link-1:2".to_string(),
+                link_id: "link-1".to_string(),
+                child_instance_id: "child-1".to_string(),
+                state: "orphaned".to_string(),
+                observed_at: 1_788_000_000,
+            }],
+            through_cursor: Some(42),
+            timed_out: false,
+        };
+        assert!(matches!(
+            decode(&encode(&events).unwrap()).unwrap(),
+            DaemonToWrapper::AgentLinkEvents {
+                through_cursor: Some(42),
+                timed_out: false,
+                events,
+            } if events.len() == 1 && events[0].state == "orphaned"
+        ));
         let rejection = DaemonToWrapper::SpawnRejected {
             command_id: "command-1".to_string(),
             reason: SpawnRefusal::BillingGuard {
@@ -3268,6 +3670,7 @@ mod tests {
                             efforts: vec!["high".to_string()],
                         },
                     )]),
+                    observed: None,
                 },
                 digest: "a".repeat(64),
             }),
@@ -3462,5 +3865,34 @@ mod tests {
         assert_eq!(LedgerDeliveryStatus::Indetermine.label_fr(), "indéterminé");
         assert_eq!(LedgerDeliveryStatus::Orphelin.label_fr(), "orphelin");
         assert_eq!(LedgerDeliveryStatus::from_phase("autre"), None);
+    }
+    #[test]
+    fn execution_control_contract_roundtrip_et_version_explicit() {
+        let mut message = BridgetMessage::new("humain", "agent-fixture", "corrige ce point");
+        message.id = "message-steer-fixture".to_string();
+        message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        let command = ExecutionControlCommand {
+            version: 1,
+            command_id: "control-fixture".to_string(),
+            execution_id: "execution-fixture".to_string(),
+            generation: 7,
+            revision: 3,
+            operation: ExecutionControlOperation::SteerCurrent,
+            message: Some(message),
+        };
+        let wire = encode(&command).unwrap();
+        let decoded: ExecutionControlCommand = decode(&wire).unwrap();
+        assert_eq!(decoded, command);
+        assert!(wire.contains("\"version\":1"));
+    }
+
+    #[test]
+    fn execution_control_refusal_reste_ferme_sur_le_fil() {
+        let refusal = ExecutionControlRefusal::CapabilityUnavailable;
+        assert_eq!(
+            serde_json::to_string(&refusal).unwrap(),
+            "\"capability_unavailable\""
+        );
+        assert!(serde_json::from_str::<ExecutionControlRefusal>("\"unknown\"").is_err());
     }
 }

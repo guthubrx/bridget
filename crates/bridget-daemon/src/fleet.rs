@@ -4,16 +4,38 @@
 //! 012 reste l'unique autorité pour réserver, comparer et rejouer une clé ;
 //! `fleet.rs` ne fait aucun lookup idempotent parallèle.
 
-use crate::desired_state::{DesiredEquipier, DesiredFleet, DesiredStateError, DesiredStateStore};
+use crate::desired_state::{
+    DesiredAgentLink, DesiredEquipier, DesiredFleet, DesiredStateError, DesiredStateStore,
+};
+pub use crate::idempotency::{AgentLinkEvent, AgentLinkRecord as AgentLink, AgentLinkState};
 use crate::idempotency::{
     IdempotencyError, IdempotencyKey, IdempotencyStore, OperationKind, SpawnCommand,
     SpawnCommandIssue, SpawnCommandState, SpawnReservation,
 };
+
+/// Vue de propriété calculée depuis le lien durable et ses index. Elle ne
+/// porte aucun coût et n'induit aucune transition de mission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentLinkSummary {
+    pub link: AgentLink,
+    pub direct_descendants: u64,
+    pub descendants: u64,
+}
+
+/// Résultat borné de l'attente d'un parent, rejouable depuis le dernier curseur.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentLinkEventBatch {
+    pub events: Vec<AgentLinkEvent>,
+    pub through_cursor: Option<u64>,
+}
+
+use crate::execution_store::ExecutionBudgetFacts;
 use crate::recovery_trace::{
     NamedRosterEntry, NamedRosterStore, RecoveryLossEntry, persist_report, report_path,
     resolved_domain, roster_path,
 };
-use bridget_transport::ResolvedAgentDefinition;
+pub use bridget_transport::protocol::SpawnOwnership;
+use bridget_transport::{ResolvedAgentDefinition, protocol::ExecutionBudgetOutcome};
 use log::warn;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
@@ -22,7 +44,7 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Variable d'environnement qui fixe le quota de flotte gérée au démarrage.
 pub const FLEET_QUOTA_ENV: &str = "BRIDGET_FLEET_QUOTA";
@@ -47,6 +69,59 @@ impl Default for FleetConfig {
             issued_at_tolerance_secs: 30,
         }
     }
+}
+
+/// Bornes explicites de continuation. Elles sont définies près des quotas de
+/// flotte existants afin de conserver une seule politique technique Bridget.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AutonomyBudgetPolicy {
+    pub max_duration_secs: Option<u64>,
+    pub max_facturable_tokens: Option<u64>,
+    pub max_descendants: Option<u64>,
+}
+
+/// Précondition observée avant d évaluer une continuation. Une pause ou une
+/// terminaison ne se confond jamais avec une limite de consommation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutonomyRuntimeState {
+    Ready,
+    Paused,
+    Terminated,
+}
+
+/// Évalue les bornes dans un ordre fixe et documenté. L absence d usage
+/// attesté ne devient jamais une limite d usage par défaut.
+pub fn evaluate_autonomy_budget(
+    policy: AutonomyBudgetPolicy,
+    facts: &ExecutionBudgetFacts,
+    runtime: AutonomyRuntimeState,
+) -> Option<ExecutionBudgetOutcome> {
+    match runtime {
+        AutonomyRuntimeState::Paused => return Some(ExecutionBudgetOutcome::Paused),
+        AutonomyRuntimeState::Terminated => return Some(ExecutionBudgetOutcome::Terminated),
+        AutonomyRuntimeState::Ready => {}
+    }
+    if policy
+        .max_descendants
+        .is_some_and(|limit| facts.descendants >= limit)
+    {
+        return Some(ExecutionBudgetOutcome::Blocked);
+    }
+    if policy
+        .max_duration_secs
+        .is_some_and(|limit| facts.duration_secs >= limit)
+    {
+        return Some(ExecutionBudgetOutcome::BudgetLimit);
+    }
+    if policy.max_facturable_tokens.is_some_and(|limit| {
+        facts
+            .usage
+            .as_ref()
+            .is_some_and(|usage| usage.facturable_tokens >= limit)
+    }) {
+        return Some(ExecutionBudgetOutcome::UsageLimit);
+    }
+    None
 }
 
 impl FleetConfig {
@@ -152,7 +227,6 @@ pub fn resume_quota_refusal_message(agent: &str, quota: usize) -> String {
 fn suggested_fleet_quota(quota: usize) -> usize {
     quota.saturating_add(8).max(DEFAULT_FLEET_QUOTA)
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpawnOrder {
     pub agent_type: String,
@@ -162,6 +236,7 @@ pub struct SpawnOrder {
     pub command_id: String,
     pub issued_at: i64,
     pub deadline_at: i64,
+    pub ownership: Option<SpawnOwnership>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,6 +247,9 @@ pub struct SpawnLease {
     pub generation: u64,
     pub deadline_at: i64,
     pub persistent: bool,
+    pub link_id: Option<String>,
+    pub ownership: Option<SpawnOwnership>,
+    pub agent_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,6 +273,7 @@ pub struct RecoveryCandidate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum SpawnSubmission {
     Start(SpawnLease),
     Await(SpawnWaiter),
@@ -213,6 +292,7 @@ pub enum FleetError {
     },
     StaleGeneration,
     DeadlineElapsed,
+    Ownership(&'static str),
     Idempotency(IdempotencyError),
     DesiredState(DesiredStateError),
     Observation(io::Error),
@@ -232,6 +312,7 @@ impl fmt::Display for FleetError {
             ),
             Self::StaleGeneration => write!(formatter, "génération de spawn obsolète"),
             Self::DeadlineElapsed => write!(formatter, "délai absolu du spawn dépassé"),
+            Self::Ownership(reason) => write!(formatter, "propriété agent invalide: {reason}"),
             Self::Idempotency(source) => write!(formatter, "socle idempotent: {source}"),
             Self::DesiredState(source) => write!(formatter, "état désiré: {source}"),
             Self::Observation(source) => write!(formatter, "observation de frontière: {source}"),
@@ -248,7 +329,8 @@ impl std::error::Error for FleetError {
             Self::InvalidOrder(_)
             | Self::InvalidTransition { .. }
             | Self::StaleGeneration
-            | Self::DeadlineElapsed => None,
+            | Self::DeadlineElapsed
+            | Self::Ownership(_) => None,
         }
     }
 }
@@ -277,8 +359,10 @@ struct ActiveSpawn {
     cwd: PathBuf,
     state: SpawnCommandState,
     resolved_definition: Option<ResolvedAgentDefinition>,
+    link_id: Option<String>,
+    ownership: Option<SpawnOwnership>,
+    agent_path: Option<String>,
 }
-
 struct FleetInner {
     idempotency: IdempotencyStore,
     supervisor_scope: String,
@@ -292,6 +376,7 @@ pub struct FleetSupervisor {
     inner: Mutex<FleetInner>,
     terminal_changed: Condvar,
     desired: DesiredStateStore,
+    agent_link_changed: Condvar,
     roster: NamedRosterStore,
     config: FleetConfig,
 }
@@ -322,6 +407,7 @@ impl FleetSupervisor {
         recover_commands(&mut inner, &desired_fleet)?;
         let roster = NamedRosterStore::at_path(roster_path(desired.path()));
         Ok(Self {
+            agent_link_changed: Condvar::new(),
             inner: Mutex::new(inner),
             terminal_changed: Condvar::new(),
             desired,
@@ -468,6 +554,146 @@ impl FleetSupervisor {
         self.desired.set_domain(name, domain)?;
         Ok(())
     }
+    pub fn agent_link_for_child(
+        &self,
+        child_instance_id: &str,
+    ) -> Result<Option<AgentLink>, FleetError> {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        inner
+            .idempotency
+            .agent_link_for_child(child_instance_id)
+            .map_err(Into::into)
+    }
+
+    pub fn agent_link_summary_for_child(
+        &self,
+        child_instance_id: &str,
+    ) -> Result<Option<AgentLinkSummary>, FleetError> {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let Some(link) = inner.idempotency.agent_link_for_child(child_instance_id)? else {
+            return Ok(None);
+        };
+        let (direct_descendants, descendants) = inner
+            .idempotency
+            .open_agent_link_descendant_counts(child_instance_id)?;
+        Ok(Some(AgentLinkSummary {
+            link,
+            direct_descendants,
+            descendants,
+        }))
+    }
+
+    pub fn agent_links_for_parent(
+        &self,
+        parent_instance_id: &str,
+    ) -> Result<Vec<AgentLink>, FleetError> {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        inner
+            .idempotency
+            .open_agent_links_for_parent(parent_instance_id)
+            .map_err(Into::into)
+    }
+    /// Attend un changement durable de descendance sans polling. Une reprise
+    /// peut fournir le dernier curseur reçu afin de relire uniquement le delta.
+    pub fn wait_for_agent_link_events(
+        &self,
+        parent_instance_id: &str,
+        after_cursor: Option<u64>,
+        timeout: Duration,
+    ) -> Result<AgentLinkEventBatch, FleetError> {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let events = inner
+            .idempotency
+            .agent_link_events_after(parent_instance_id, after_cursor)?;
+        if !events.is_empty() {
+            return Ok(AgentLinkEventBatch {
+                through_cursor: events.last().map(|event| event.cursor),
+                events,
+            });
+        }
+        let (inner, _) = self
+            .agent_link_changed
+            .wait_timeout_while(inner, timeout, |state| {
+                state
+                    .idempotency
+                    .agent_link_events_after(parent_instance_id, after_cursor)
+                    .map(|events| events.is_empty())
+                    .unwrap_or(false)
+            })
+            .unwrap_or_else(|poison| poison.into_inner());
+        let events = inner
+            .idempotency
+            .agent_link_events_after(parent_instance_id, after_cursor)?;
+        Ok(AgentLinkEventBatch {
+            through_cursor: events.last().map(|event| event.cursor),
+            events,
+        })
+    }
+
+    pub fn orphan_agent_links_for_parent(
+        &self,
+        parent_instance_id: &str,
+        now: i64,
+    ) -> Result<usize, FleetError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let changed = inner
+            .idempotency
+            .orphan_agent_links_for_parent(parent_instance_id, now)?;
+        drop(inner);
+        if changed > 0 {
+            self.agent_link_changed.notify_all();
+        }
+        Ok(changed)
+    }
+
+    pub fn transfer_agent_link(
+        &self,
+        link_id: &str,
+        new_parent_instance_id: &str,
+        now: i64,
+    ) -> Result<AgentLink, FleetError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let current = inner
+            .idempotency
+            .agent_link_by_id(link_id)?
+            .ok_or(FleetError::Ownership("lien de transfert introuvable"))?;
+        let parent_path = inner
+            .idempotency
+            .agent_link_for_child(new_parent_instance_id)?
+            .map(|link| link.agent_path)
+            .unwrap_or_else(|| new_parent_instance_id.to_string());
+        if new_parent_instance_id == current.child_instance_id
+            || agent_path_contains(&parent_path, &current.child_instance_id)
+        {
+            return Err(FleetError::Ownership("cycle d'ascendance"));
+        }
+        let path = format!("{}/{}", parent_path, current.child_instance_id);
+        let transferred =
+            inner
+                .idempotency
+                .transfer_agent_link(link_id, new_parent_instance_id, &path, now)?;
+        drop(inner);
+        self.agent_link_changed.notify_all();
+        Ok(transferred)
+    }
 
     /// Réserve une clé puis applique, sous le même verrou métier, les gardes
     /// mutables de nom et de quota. Une clé rejouée ne traverse jamais ces
@@ -534,12 +760,48 @@ impl FleetSupervisor {
                     let detail = quota_exceeded_detail(self.config.quota);
                     return terminal_refusal(&mut inner, &key, &command, "quota_exceeded", &detail);
                 }
-                inner.idempotency.advance_spawn(
+                let link =
+                    match reserve_agent_link(&mut inner, &command, order.ownership.as_ref(), now) {
+                        Ok(link) => link,
+                        Err(FleetError::Ownership("quota enfants atteint")) => {
+                            return terminal_refusal(
+                                &mut inner,
+                                &key,
+                                &command,
+                                "children_quota_exceeded",
+                                "nombre maximal d'enfants atteint",
+                            );
+                        }
+                        Err(FleetError::Ownership("profondeur maximale atteinte")) => {
+                            return terminal_refusal(
+                                &mut inner,
+                                &key,
+                                &command,
+                                "depth_exceeded",
+                                "profondeur maximale atteinte",
+                            );
+                        }
+                        Err(error) => return Err(error),
+                    };
+                if let Err(error) = inner.idempotency.advance_spawn(
                     &key,
                     command.generation,
                     SpawnCommandState::Requested,
                     SpawnCommandState::Reserved,
-                )?;
+                ) {
+                    if let Some(link) = &link {
+                        let _ = inner.idempotency.transition_agent_link(
+                            &link.link_id,
+                            &[AgentLinkState::Reserved],
+                            AgentLinkState::Closed,
+                            now,
+                        );
+                    }
+                    return Err(error.into());
+                }
+                if link.is_some() {
+                    self.agent_link_changed.notify_all();
+                }
                 let active = ActiveSpawn {
                     command_id: command.command_id.clone(),
                     name: command.name.clone(),
@@ -552,6 +814,9 @@ impl FleetSupervisor {
                     agent_type: order.agent_type.clone(),
                     cwd: order.cwd.clone(),
                     state: SpawnCommandState::Reserved,
+                    link_id: link.as_ref().map(|link| link.link_id.clone()),
+                    ownership: order.ownership.clone(),
+                    agent_path: link.as_ref().map(|link| link.agent_path.clone()),
                     resolved_definition: command.resolved_definition,
                 };
                 inner
@@ -603,6 +868,7 @@ impl FleetSupervisor {
         let active = active_for_lease(&inner, lease)?.clone();
         if now >= active.deadline_at {
             expire_locked(&mut inner, &self.desired, &self.roster, &active)?;
+            self.agent_link_changed.notify_all();
             self.terminal_changed.notify_all();
             return Err(FleetError::DeadlineElapsed);
         }
@@ -661,6 +927,7 @@ impl FleetSupervisor {
         }
         if now >= active.deadline_at {
             expire_locked(&mut inner, &self.desired, &self.roster, &active)?;
+            self.agent_link_changed.notify_all();
             self.terminal_changed.notify_all();
             return Err(FleetError::DeadlineElapsed);
         }
@@ -680,6 +947,7 @@ impl FleetSupervisor {
                     command_id: active.command_id.clone(),
                     generation: active.generation,
                     created: now.to_string(),
+                    agent_link: desired_agent_link(&active),
                     resolved_definition: active.resolved_definition.clone(),
                     domain: resolved_domain(None, &active.cwd),
                 },
@@ -694,6 +962,14 @@ impl FleetSupervisor {
             },
         );
         after_fleet().map_err(FleetError::Observation)?;
+        if let Some(link_id) = &active.link_id {
+            inner.idempotency.transition_agent_link(
+                link_id,
+                &[AgentLinkState::Reserved, AgentLinkState::Transferred],
+                AgentLinkState::Open,
+                now,
+            )?;
+        }
         let issue = SpawnCommandIssue::Connected {
             name: active.name.clone(),
             generation: active.generation,
@@ -705,6 +981,7 @@ impl FleetSupervisor {
             .idempotency
             .finish_spawn(&key, active.generation, &issue)?;
         complete_locked(&mut inner, &active, issue.clone());
+        self.agent_link_changed.notify_all();
         self.terminal_changed.notify_all();
         Ok(issue)
     }
@@ -746,6 +1023,7 @@ impl FleetSupervisor {
             if active.generation != lease.generation || active.name != lease.name {
                 return Err(FleetError::StaleGeneration);
             }
+            close_agent_link(&mut inner, &active, unix_now())?;
             if active.persistent {
                 self.desired.remove(&active.name)?;
             }
@@ -758,6 +1036,7 @@ impl FleetSupervisor {
                 .idempotency
                 .finish_spawn(&key, active.generation, &issue)?;
             complete_locked(&mut inner, &active, issue);
+            self.agent_link_changed.notify_all();
             self.terminal_changed.notify_all();
             return Ok(());
         }
@@ -779,6 +1058,20 @@ impl FleetSupervisor {
             self.desired.remove(&lease.name)?;
         }
         self.roster.forget(&lease.name);
+        if let Some(link_id) = &lease.link_id {
+            inner.idempotency.transition_agent_link(
+                link_id,
+                &[
+                    AgentLinkState::Reserved,
+                    AgentLinkState::Open,
+                    AgentLinkState::Transferred,
+                    AgentLinkState::Orphaned,
+                ],
+                AgentLinkState::Closed,
+                unix_now(),
+            )?;
+        }
+        self.agent_link_changed.notify_all();
         Ok(())
     }
 
@@ -796,11 +1089,13 @@ impl FleetSupervisor {
             self.desired.remove(&active.name)?;
         }
         self.roster.forget(&active.name);
+        close_agent_link(&mut inner, &active, unix_now())?;
         let key = spawn_key(&inner, &active.command_id)?;
         inner
             .idempotency
             .finish_spawn(&key, active.generation, &issue)?;
         complete_locked(&mut inner, &active, issue.clone());
+        self.agent_link_changed.notify_all();
         self.terminal_changed.notify_all();
         Ok(issue)
     }
@@ -822,6 +1117,7 @@ impl FleetSupervisor {
             return Ok(false);
         }
         expire_locked(&mut inner, &self.desired, &self.roster, &active)?;
+        self.agent_link_changed.notify_all();
         self.terminal_changed.notify_all();
         Ok(true)
     }
@@ -880,6 +1176,15 @@ fn recover_commands(inner: &mut FleetInner, desired: &DesiredFleet) -> Result<()
                     generation: command.generation,
                     deadline_at: command.deadline_at,
                     persistent: true,
+                    link_id: equipier
+                        .agent_link
+                        .as_ref()
+                        .map(|link| link.link_id.clone()),
+                    ownership: ownership_from_desired(equipier),
+                    agent_path: equipier
+                        .agent_link
+                        .as_ref()
+                        .map(|link| link.agent_path.clone()),
                     agent_type: equipier.agent_type.clone(),
                     cwd: equipier.cwd.clone(),
                     state: SpawnCommandState::Starting,
@@ -928,9 +1233,100 @@ fn validate_order(order: &SpawnOrder) -> Result<(), FleetError> {
     {
         return Err(FleetError::InvalidOrder("nom explicite vide"));
     }
+    if let Some(ownership) = &order.ownership
+        && (ownership.parent_instance_id.trim().is_empty() || ownership.role.trim().is_empty())
+    {
+        return Err(FleetError::InvalidOrder("propriété parent ou rôle vide"));
+    }
     Ok(())
 }
 
+fn reserve_agent_link(
+    inner: &mut FleetInner,
+    command: &SpawnCommand,
+    ownership: Option<&SpawnOwnership>,
+    now: i64,
+) -> Result<Option<AgentLink>, FleetError> {
+    let Some(ownership) = ownership else {
+        return Ok(None);
+    };
+    let current_children = inner
+        .idempotency
+        .open_agent_links_for_parent(&ownership.parent_instance_id)?;
+    if ownership
+        .max_children
+        .is_some_and(|limit| current_children.len() >= limit)
+    {
+        return Err(FleetError::Ownership("quota enfants atteint"));
+    }
+    let parent_path = inner
+        .idempotency
+        .agent_link_for_child(&ownership.parent_instance_id)?
+        .map(|link| link.agent_path)
+        .unwrap_or_else(|| ownership.parent_instance_id.clone());
+    let child_depth = parent_path.split('/').count();
+    if ownership.max_depth.is_some_and(|limit| child_depth > limit) {
+        return Err(FleetError::Ownership("profondeur maximale atteinte"));
+    }
+    let child_instance_id = command
+        .instance_id
+        .clone()
+        .ok_or(IdempotencyError::CorruptRecord(
+            "instance spawn en vol absente",
+        ))?;
+    let link = AgentLink {
+        link_id: uuid::Uuid::new_v4().to_string(),
+        parent_instance_id: ownership.parent_instance_id.clone(),
+        child_instance_id: child_instance_id.clone(),
+        parent_execution_id: ownership.parent_execution_id.clone(),
+        objective_id: ownership.objective_id.clone(),
+        delegation_id: ownership.delegation_id.clone(),
+        role: ownership.role.clone(),
+        agent_path: format!("{parent_path}/{child_instance_id}"),
+        state: AgentLinkState::Reserved,
+        created_at: now,
+        closed_at: None,
+        revision: 0,
+    };
+    inner.idempotency.create_agent_link(&link)?;
+    Ok(Some(link))
+}
+
+fn desired_agent_link(active: &ActiveSpawn) -> Option<DesiredAgentLink> {
+    let (Some(link_id), Some(ownership), Some(agent_path)) = (
+        active.link_id.as_ref(),
+        active.ownership.as_ref(),
+        active.agent_path.as_ref(),
+    ) else {
+        return None;
+    };
+    Some(DesiredAgentLink {
+        link_id: link_id.clone(),
+        parent_instance_id: ownership.parent_instance_id.clone(),
+        parent_execution_id: ownership.parent_execution_id.clone(),
+        objective_id: ownership.objective_id.clone(),
+        delegation_id: ownership.delegation_id.clone(),
+        role: ownership.role.clone(),
+        agent_path: agent_path.clone(),
+    })
+}
+
+fn agent_path_contains(path: &str, instance_id: &str) -> bool {
+    path.split('/').any(|segment| segment == instance_id)
+}
+
+fn ownership_from_desired(equipier: &DesiredEquipier) -> Option<SpawnOwnership> {
+    let link = equipier.agent_link.as_ref()?;
+    Some(SpawnOwnership {
+        parent_instance_id: link.parent_instance_id.clone(),
+        parent_execution_id: link.parent_execution_id.clone(),
+        objective_id: link.objective_id.clone(),
+        delegation_id: link.delegation_id.clone(),
+        role: link.role.clone(),
+        max_children: None,
+        max_depth: None,
+    })
+}
 #[derive(Serialize)]
 struct CanonicalSpawnOrder<'a> {
     command_id: &'a str,
@@ -940,6 +1336,8 @@ struct CanonicalSpawnOrder<'a> {
     persistent: bool,
     issued_at: i64,
     deadline_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ownership: Option<&'a SpawnOwnership>,
 }
 
 fn canonical_order(order: &SpawnOrder) -> Result<Vec<u8>, FleetError> {
@@ -953,6 +1351,7 @@ fn canonical_order(order: &SpawnOrder) -> Result<Vec<u8>, FleetError> {
         requested_name: &order.requested_name,
         cwd,
         persistent: order.persistent,
+        ownership: order.ownership.as_ref(),
         issued_at: order.issued_at,
         deadline_at: order.deadline_at,
     })
@@ -985,6 +1384,9 @@ fn lease_from(active: &ActiveSpawn) -> SpawnLease {
         generation: active.generation,
         deadline_at: active.deadline_at,
         persistent: active.persistent,
+        link_id: active.link_id.clone(),
+        ownership: active.ownership.clone(),
+        agent_path: active.agent_path.clone(),
     }
 }
 
@@ -1042,6 +1444,33 @@ fn complete_locked(inner: &mut FleetInner, active: &ActiveSpawn, issue: SpawnCom
     }
     inner.completed.insert(active.command_id.clone(), issue);
 }
+fn close_agent_link(
+    inner: &mut FleetInner,
+    active: &ActiveSpawn,
+    changed_at: i64,
+) -> Result<(), FleetError> {
+    if let Some(link_id) = &active.link_id {
+        inner.idempotency.transition_agent_link(
+            link_id,
+            &[
+                AgentLinkState::Reserved,
+                AgentLinkState::Open,
+                AgentLinkState::Transferred,
+                AgentLinkState::Orphaned,
+            ],
+            AgentLinkState::Closed,
+            changed_at,
+        )?;
+    }
+    Ok(())
+}
+
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
+}
 
 fn expire_locked(
     inner: &mut FleetInner,
@@ -1053,6 +1482,7 @@ fn expire_locked(
         desired.remove(&active.name)?;
     }
     roster.forget(&active.name);
+    close_agent_link(inner, active, unix_now())?;
     let issue = SpawnCommandIssue::Cancelled {
         reason: "spawn_timeout".to_string(),
     };
@@ -1118,6 +1548,7 @@ mod tests {
             command_id: command_id.to_string(),
             issued_at: NOW,
             deadline_at: NOW + 60,
+            ownership: None,
         }
     }
 
@@ -1230,6 +1661,7 @@ mod tests {
                         created: NOW.to_string(),
                         resolved_definition: Some(resolved_test_definition()),
                         domain: None,
+                        agent_link: None,
                     },
                 )
                 .unwrap();
@@ -1638,6 +2070,9 @@ mod tests {
                         generation: waiter.generation,
                         deadline_at: waiter.deadline_at,
                         persistent: true,
+                        link_id: None,
+                        ownership: None,
+                        agent_path: None,
                     };
                     let connected = reopened
                         .register_connected(&lease, &lease.instance_id, NOW + 3)

@@ -1,7 +1,10 @@
 //! Couture de la garde déclarative : aucun processus ni ordre durable ne doit
 //! naître lorsqu'une capacité de lancement n'est pas déclarée.
 
-use bridget_transport::protocol::{decode, encode};
+use bridget_core::{BridgetMessage, MessageIntent};
+use bridget_transport::protocol::{
+    ExecutionProviderContext, ProviderObservation, ProviderOperation, decode, encode,
+};
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -74,9 +77,17 @@ impl Peer {
     }
 
     fn register(&mut self) {
+        self.register_with_name(None);
+    }
+
+    fn register_as(&mut self, name: &str) {
+        self.register_with_name(Some(name.to_string()));
+    }
+
+    fn register_with_name(&mut self, name: Option<String>) {
         self.send(&WrapperToDaemon::Register {
             agent_type: "capability-test".to_string(),
-            name: None,
+            name,
             host: None,
             transport: None,
             channel: None.into(),
@@ -123,6 +134,7 @@ fn write_registry(root: &Path, marker: &Path, supports_requested_model: bool) {
         serde_json::json!({"gpt-5.5": {"efforts": ["high"]}})
     };
     let registry = serde_json::json!({
+        "execution_projection": {"dual_write": true, "legacy_projection": true},
         "agents": {
             "fixture": {
                 "command": adapter,
@@ -141,6 +153,7 @@ fn write_registry(root: &Path, marker: &Path, supports_requested_model: bool) {
 
 fn write_missing_command_registry(root: &Path) {
     let registry = serde_json::json!({
+        "execution_projection": {"dual_write": true, "legacy_projection": true},
         "agents": {
             "fixture": {
                 "command": "/definitely/missing/bridget-native-pilot",
@@ -173,6 +186,7 @@ fn spawn_order(command_id: &str) -> WrapperToDaemon {
         command_id: command_id.to_string(),
         issued_at: now,
         deadline_at: now + 20,
+        ownership: None,
     }
 }
 
@@ -264,6 +278,106 @@ fn commande_native_absente_est_refusee_sans_residu_puis_reparable_au_meme_id() {
         "le même command_id doit rester lançable après correction du registre"
     );
     drop(peer);
+    drop(daemon);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn contexte_fournisseur_refuse_le_non_proprietaire_la_generation_et_le_binding_incoherents() {
+    let root = root();
+    let marker = root.join("adapter-ran");
+    write_registry(&root, &marker, true);
+    let daemon = DaemonProcess::start(&root);
+    let socket = socket_path(&root);
+    let mut owner = Peer::connect(&socket);
+    owner.register_as("agent-owner");
+    let mut intrus = Peer::connect(&socket);
+    intrus.register_as("agent-intrus");
+    let mut source = Peer::connect(&socket);
+    source.register_as("agent-source");
+
+    let mut trigger = BridgetMessage::new("maicie", "agent-owner", "démarrer");
+    trigger.id = "provider-context-trigger".to_string();
+    trigger.intent = Some(MessageIntent::TriggerTurn);
+    source.send(&WrapperToDaemon::Send(trigger));
+    let submission_ack = source.receive();
+    assert!(
+        matches!(submission_ack, DaemonToWrapper::Ack { .. }),
+        "accusé de déclenchement inattendu: {submission_ack:?}"
+    );
+    let execution_id = loop {
+        match owner.receive() {
+            DaemonToWrapper::Deliver(message) if message.id == "provider-context-trigger" => {}
+            DaemonToWrapper::DeliverExecution {
+                execution_id,
+                generation,
+                revision,
+                ..
+            } => {
+                assert_eq!(generation, 1);
+                assert_eq!(revision, 0);
+                break execution_id;
+            }
+            other => panic!("livraison d'exécution attendue, reçu {other:?}"),
+        }
+    };
+    let observed_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let context = ExecutionProviderContext {
+        execution_id: execution_id.clone(),
+        generation: 1,
+        provider_kind: "cursor".to_string(),
+        execution_path: "acp".to_string(),
+        observation: ProviderObservation {
+            binary_path: "/fixture/cursor-agent".to_string(),
+            binary_version: "fixture-1".to_string(),
+            binary_digest: "a".repeat(64),
+            contract_version: "acp-v1".to_string(),
+            operations: vec![ProviderOperation::Interrupt],
+        },
+        provider_session_id: Some("session-owner".to_string()),
+        provider_thread_id: Some("thread-owner".to_string()),
+        provider_turn_id: Some("turn-owner".to_string()),
+        observed_at,
+    };
+    owner.send(&WrapperToDaemon::ExecutionProviderObserved {
+        context: context.clone(),
+    });
+
+    intrus.send(&WrapperToDaemon::ExecutionProviderObserved {
+        context: context.clone(),
+    });
+    assert!(matches!(
+        intrus.receive(),
+        DaemonToWrapper::Nack { reason, .. }
+            if reason == "contexte fournisseur émis par un wrapper non propriétaire"
+    ));
+
+    let mut stale = context.clone();
+    stale.generation = 2;
+    owner.send(&WrapperToDaemon::ExecutionProviderObserved { context: stale });
+    assert!(matches!(
+        owner.receive(),
+        DaemonToWrapper::Nack { reason, .. }
+            if reason == "contexte fournisseur de génération périmée"
+    ));
+
+    let mut incompatible = context;
+    incompatible.provider_thread_id = Some("thread-autre".to_string());
+    owner.send(&WrapperToDaemon::ExecutionProviderObserved {
+        context: incompatible,
+    });
+    assert!(matches!(
+        owner.receive(),
+        DaemonToWrapper::Nack { reason, .. }
+            if reason == "contexte fournisseur incompatible"
+    ));
+    drop(source);
+
+    drop(intrus);
+    drop(owner);
     drop(daemon);
     std::fs::remove_dir_all(root).unwrap();
 }

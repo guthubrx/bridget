@@ -4,6 +4,9 @@
 //! des connexions ordinaires vers les projections publiques (`ListAgents`,
 //! `LedgerProjection`, Attach) puis les traduit en HTTP/SSE loopback.
 
+use crate::mission_projection::{
+    MissionProjectionV1, read_public_mission_projection_v1, retain_living_objectives,
+};
 use bridget_core::BridgetMessage;
 use bridget_transport::journal::valid_events;
 use bridget_transport::protocol::{
@@ -11,9 +14,6 @@ use bridget_transport::protocol::{
     LedgerMessage, LedgerScope, PresenceMode, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
-use maicie::ui_projection::{
-    UiMissionProjectionV1, read_ui_mission_projection_v1, retain_living_objectives,
-};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -452,7 +452,10 @@ impl UiRelay {
         // toute réponse qui lui est destinée est rejetée « agent introuvable ».
         // L'échec n'empêche pas de servir : le sens humain -> agent doit tenir
         // même si l'inscription échoue.
-        if let Err(error) = self.runtime.ensure_human_presence(&self.config.daemon_socket) {
+        if let Err(error) = self
+            .runtime
+            .ensure_human_presence(&self.config.daemon_socket)
+        {
             eprintln!("relais UI: inscription de l'humain à l'annuaire impossible: {error}");
         }
 
@@ -516,6 +519,7 @@ pub fn run(daemon_socket: PathBuf, maicie_config: PathBuf) -> Result<(), UiError
 struct UiSnapshotV1 {
     version: u8,
     agents: Vec<UiAgentRowV1>,
+    alert_thresholds: UiAlertThresholdsV1,
     #[serde(skip_serializing_if = "Option::is_none")]
     peer_exchanges: Option<Vec<UiPeerExchangeV1>>,
     /// Bulles utilisateur↔agent focal — corps issus du ledger (pas du journal).
@@ -523,9 +527,58 @@ struct UiSnapshotV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     thread_messages: Option<Vec<UiThreadMessageV1>>,
     open_requests: Vec<bridget_transport::protocol::RequestInfo>,
-    missions: UiMissionProjectionV1,
+    missions: MissionProjectionV1,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     recovery_losses: Vec<UiRecoveryLossV1>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub struct UiAlertThresholdsV1 {
+    pub stale_message_secs: u64,
+    pub stalled_turn_secs: u64,
+    pub stalled_approval_secs: u64,
+    pub saturated_queue_depth: u64,
+}
+
+impl Default for UiAlertThresholdsV1 {
+    fn default() -> Self {
+        Self {
+            stale_message_secs: 15 * 60,
+            stalled_turn_secs: 5 * 60,
+            stalled_approval_secs: 5 * 60,
+            saturated_queue_depth: 10,
+        }
+    }
+}
+
+/// Alertes déduites exclusivement de faits de projection bornés. Les noms sont
+/// des codes stables, sans identité, corps de message ni cardinalité dynamique.
+pub fn execution_alerts(
+    turn_state: Option<&str>,
+    wait_state: Option<&str>,
+    progress_age_secs: Option<u64>,
+    queue_depth: u64,
+    message_age_secs: Option<u64>,
+) -> Vec<String> {
+    let thresholds = UiAlertThresholdsV1::default();
+    let mut alerts = Vec::new();
+    if message_age_secs.is_some_and(|age| age >= thresholds.stale_message_secs) {
+        alerts.push("stale_message".to_string());
+    }
+    if turn_state == Some("running")
+        && progress_age_secs.is_some_and(|age| age >= thresholds.stalled_turn_secs)
+    {
+        alerts.push("stalled_turn".to_string());
+    }
+    if wait_state == Some("waiting_approval")
+        && progress_age_secs.is_some_and(|age| age >= thresholds.stalled_approval_secs)
+    {
+        alerts.push("stalled_approval".to_string());
+    }
+    if queue_depth >= thresholds.saturated_queue_depth {
+        alerts.push("queue_saturated".to_string());
+    }
+    alerts
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -581,6 +634,26 @@ struct UiAgentRowV1 {
     agent_type: String,
     host: String,
     state: &'static str,
+    /// État de connexion public, distinct de l'exécution durable.
+    connection_state: &'static str,
+    /// Âge de la dernière capacité fournisseur attestée, jamais inventée.
+    provider_age_secs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    turn_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wait_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    progress_age_secs: Option<u64>,
+    queue_depth: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    continuation_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_link: Option<bridget_transport::protocol::AgentLinkUiProjection>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    alerts: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<bridget_transport::protocol::ProviderUiProjection>,
+
     last_message_at: Option<i64>,
     last_excerpt: Option<String>,
     unread: usize,
@@ -795,14 +868,16 @@ fn post_ui_message(
     runtime: &UiRelayRuntime,
     body: &[u8],
 ) -> Result<UiSendAcceptedV1, (u16, &'static str, String)> {
-    let request: UiSendRequestV1 =
-        serde_json::from_slice(body).map_err(|_| (400, "invalid_body", "corps JSON invalide".to_string()))?;
+    let request: UiSendRequestV1 = serde_json::from_slice(body)
+        .map_err(|_| (400, "invalid_body", "corps JSON invalide".to_string()))?;
     if request.version != UI_VERSION || request.body.trim().is_empty() {
         return Err((400, "invalid_body", "corps de message invalide".to_string()));
     }
-    validate_agent(&request.to).map_err(|_| (404, "unknown_recipient", "destinataire inconnu".to_string()))?;
+    validate_agent(&request.to)
+        .map_err(|_| (404, "unknown_recipient", "destinataire inconnu".to_string()))?;
 
-    let agents = read_agent_list(&config.daemon_socket).map_err(|error| (503, "daemon_unavailable", error.to_string()))?;
+    let agents = read_agent_list(&config.daemon_socket)
+        .map_err(|error| (503, "daemon_unavailable", error.to_string()))?;
     validate_ui_recipient(&agents, &request.to)
         .map_err(|(status, code)| (status, code, "destinataire indisponible".to_string()))?;
     // Ré-assurée à chaque envoi, que la réponse soit attendue ou non : c'est
@@ -1104,6 +1179,7 @@ fn select_recent_turns(
     (from_seq, has_more)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn older_page_from_turns(
     turns: &[ProjectedTurn],
     current_from: u64,
@@ -1149,7 +1225,7 @@ fn resolve_ui_journal_window_in(
 }
 
 /// Remontée manuelle indicative (pages de tours, pas de séquences brutes).
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)]
 fn older_journal_page_from_seq(current_from_seq: u64) -> u64 {
     current_from_seq.saturating_sub(UI_JOURNAL_OLDER_PAGE_TURNS as u64)
 }
@@ -1170,14 +1246,15 @@ fn read_snapshot(
     // Chemin productif missions page : filtre vivants — un mutant qui retire
     // cet appel dans read_snapshot doit tuer le témoin
     // `chemin_productif_snapshot_emprunte_retain_living_objectives`.
-    let missions = retain_living_objectives(
-        read_ui_mission_projection_v1(&config.maicie_config)
-            .map_err(|error| UiError::Configuration(error.to_string()))?,
-    );
+    let missions = read_public_mission_projection_v1(&config.maicie_config)
+        .map_err(|error| UiError::Configuration(error.to_string()))?
+        .map(retain_living_objectives)
+        .unwrap_or_else(MissionProjectionV1::empty);
     let recovery_losses = read_recovery_losses(&config.daemon_socket);
     Ok(UiSnapshotV1 {
         version: UI_VERSION,
         agents,
+        alert_thresholds: UiAlertThresholdsV1::default(),
         peer_exchanges,
         thread_messages,
         open_requests: facts.open_requests,
@@ -1197,11 +1274,45 @@ fn compose_agent_rows(
                 .iter()
                 .filter(|message| message.sender == agent.name || message.target == agent.name)
                 .max_by(|left, right| (left.ts, &left.id).cmp(&(right.ts, &right.id)));
+            let connection_state = public_agent_state(&agent.state);
+            let (turn_state, wait_state, progress_age_secs, queue_depth, continuation_mode) = agent
+                .execution
+                .as_ref()
+                .map(|execution| {
+                    (
+                        execution.state.clone(),
+                        execution.wait_state.clone(),
+                        execution.progress_age_secs,
+                        execution.queue_depth,
+                        execution.continuation_mode.clone(),
+                    )
+                })
+                .unwrap_or((None, None, None, 0, None));
+            let message_age_secs =
+                last.and_then(|message| u64::try_from(now_secs().saturating_sub(message.ts)).ok());
+            let alerts = execution_alerts(
+                turn_state.as_deref(),
+                wait_state.as_deref(),
+                progress_age_secs,
+                queue_depth,
+                message_age_secs,
+            );
+
             UiAgentRowV1 {
                 name: agent.name.clone(),
                 agent_type: agent.agent_type,
                 host: agent.host,
-                state: public_agent_state(&agent.state),
+                state: connection_state,
+                connection_state,
+                provider_age_secs: agent.last_seen_secs,
+                turn_state,
+                wait_state,
+                agent_link: agent.agent_link,
+                provider: agent.provider,
+                progress_age_secs,
+                queue_depth,
+                continuation_mode,
+                alerts,
                 last_message_at: last.map(|message| message.ts),
                 last_excerpt: last.map(|message| excerpt(&message.body)),
                 unread: messages
@@ -1701,16 +1812,12 @@ fn stream_sse_journal(
             },
         )?;
         events += 1;
-        if let Some(config) = snapshot_config {
-            if last_thread_poll.elapsed() >= UI_THREAD_LEDGER_POLL {
-                let _ = push_live_thread_messages(
-                    http,
-                    &config.daemon_socket,
-                    agent,
-                    &mut seen_thread_ids,
-                );
-                last_thread_poll = Instant::now();
-            }
+        if let Some(config) = snapshot_config
+            && last_thread_poll.elapsed() >= UI_THREAD_LEDGER_POLL
+        {
+            let _ =
+                push_live_thread_messages(http, &config.daemon_socket, agent, &mut seen_thread_ids);
+            last_thread_poll = Instant::now();
         }
         if matches!(event, DaemonToWrapper::End { .. }) {
             if snapshot_config.is_some() {
@@ -2199,7 +2306,10 @@ mod tests {
 
     #[test]
     fn refus_presence_humaine_remonte_le_code_reel() {
-        let socket_path = std::env::temp_dir().join(format!("bridget-ui-presence-{}.sock", uuid::Uuid::new_v4().simple()));
+        let socket_path = std::env::temp_dir().join(format!(
+            "bridget-ui-presence-{}.sock",
+            uuid::Uuid::new_v4().simple()
+        ));
         let listener = UnixListener::bind(&socket_path).unwrap();
         let server = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
@@ -2207,8 +2317,19 @@ mod tests {
             let mut writer = BufWriter::new(stream);
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
-            assert!(matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(), WrapperToDaemon::ListAgents));
-            writeln!(writer, "{}", encode(&DaemonToWrapper::AgentList { agents: vec![agent_info("rc1", "idle")] }).unwrap()).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::ListAgents
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::AgentList {
+                    agents: vec![agent_info("rc1", "idle")]
+                })
+                .unwrap()
+            )
+            .unwrap();
             writer.flush().unwrap();
 
             let (stream, _) = listener.accept().unwrap();
@@ -2216,13 +2337,35 @@ mod tests {
             let mut writer = BufWriter::new(stream);
             line.clear();
             reader.read_line(&mut line).unwrap();
-            assert!(matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(), WrapperToDaemon::Register { .. }));
-            writeln!(writer, "{}", encode(&DaemonToWrapper::AttachRejected { subscription_id: None, reason: bridget_transport::protocol::AttachRefusal::JournalUnavailable, mode: None, location: None }).unwrap()).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::Register { .. }
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::AttachRejected {
+                    subscription_id: None,
+                    reason: bridget_transport::protocol::AttachRefusal::JournalUnavailable,
+                    mode: None,
+                    location: None
+                })
+                .unwrap()
+            )
+            .unwrap();
             writer.flush().unwrap();
         });
-        let config = UiRelayConfig { daemon_socket: socket_path.clone(), maicie_config: PathBuf::new(), bind: "127.0.0.1:0".parse().unwrap(), token: "test".to_string() };
+        let config = UiRelayConfig {
+            daemon_socket: socket_path.clone(),
+            maicie_config: PathBuf::new(),
+            bind: "127.0.0.1:0".parse().unwrap(),
+            token: "test".to_string(),
+        };
         let runtime = UiRelayRuntime::new(None);
-        let body = serde_json::to_vec(&serde_json::json!({"version": UI_VERSION, "to": "rc1", "body": "ping", "reply": true})).unwrap();
+        let body = serde_json::to_vec(
+            &serde_json::json!({"version": UI_VERSION, "to": "rc1", "body": "ping", "reply": true}),
+        )
+        .unwrap();
         let error = post_ui_message(&config, &runtime, &body).unwrap_err();
         assert_eq!(error.1, "human_sender_unregistered");
         assert!(error.2.contains("présence UI humaine refusée"));
@@ -2284,7 +2427,9 @@ mod tests {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 let trame = decode::<WrapperToDaemon>(line.trim()).unwrap();
-                inscriptions.send(matches!(trame, WrapperToDaemon::Register { .. })).unwrap();
+                inscriptions
+                    .send(matches!(trame, WrapperToDaemon::Register { .. }))
+                    .unwrap();
                 writeln!(
                     writer,
                     "{}",
@@ -2404,7 +2549,10 @@ mod tests {
         // Register parte quand même. Remettre la condition sur reply fait
         // recevoir au serveur autre chose qu'un Register : l'assertion du
         // thread serveur tombe et le témoin meurt.
-        let socket_path = std::env::temp_dir().join(format!("bridget-ui-presence-sans-reply-{}.sock", uuid::Uuid::new_v4().simple()));
+        let socket_path = std::env::temp_dir().join(format!(
+            "bridget-ui-presence-sans-reply-{}.sock",
+            uuid::Uuid::new_v4().simple()
+        ));
         let listener = UnixListener::bind(&socket_path).unwrap();
         let server = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
@@ -2412,8 +2560,19 @@ mod tests {
             let mut writer = BufWriter::new(stream);
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
-            assert!(matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(), WrapperToDaemon::ListAgents));
-            writeln!(writer, "{}", encode(&DaemonToWrapper::AgentList { agents: vec![agent_info("rc1", "idle")] }).unwrap()).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::ListAgents
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::AgentList {
+                    agents: vec![agent_info("rc1", "idle")]
+                })
+                .unwrap()
+            )
+            .unwrap();
             writer.flush().unwrap();
 
             // Connexion d'inscription : c'est elle qui n'existait pas.
@@ -2427,7 +2586,18 @@ mod tests {
                 matches!(inscription, WrapperToDaemon::Register { .. }),
                 "sans réponse attendue, l'inscription de l'humain doit tout de même être tentée ; reçu {inscription:?}"
             );
-            writeln!(writer, "{}", encode(&DaemonToWrapper::AttachRejected { subscription_id: None, reason: bridget_transport::protocol::AttachRefusal::JournalUnavailable, mode: None, location: None }).unwrap()).unwrap();
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::AttachRejected {
+                    subscription_id: None,
+                    reason: bridget_transport::protocol::AttachRefusal::JournalUnavailable,
+                    mode: None,
+                    location: None
+                })
+                .unwrap()
+            )
+            .unwrap();
             writer.flush().unwrap();
 
             // L'envoi doit être tenté malgré le refus d'inscription.
@@ -2435,9 +2605,17 @@ mod tests {
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             line.clear();
             reader.read_line(&mut line).unwrap();
-            assert!(matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(), WrapperToDaemon::RoleHandshake { .. }));
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::RoleHandshake { .. }
+            ));
         });
-        let config = UiRelayConfig { daemon_socket: socket_path.clone(), maicie_config: PathBuf::new(), bind: "127.0.0.1:0".parse().unwrap(), token: "test".to_string() };
+        let config = UiRelayConfig {
+            daemon_socket: socket_path.clone(),
+            maicie_config: PathBuf::new(),
+            bind: "127.0.0.1:0".parse().unwrap(),
+            token: "test".to_string(),
+        };
         let runtime = UiRelayRuntime::new(None);
         let body = serde_json::to_vec(&serde_json::json!({"version": UI_VERSION, "to": "rc1", "body": "ping", "reply": false})).unwrap();
         let error = post_ui_message(&config, &runtime, &body).unwrap_err();
@@ -3151,8 +3329,8 @@ mod tests {
         let source = include_str!("ui.rs");
         let read_body = function_body(source, "fn read_snapshot(");
         assert!(
-            read_body.contains("retain_living_objectives("),
-            "read_snapshot doit appeler retain_living_objectives — sinon le mégaoctet clos revient et la page se fige"
+            read_body.contains("retain_living_objectives"),
+            "read_snapshot doit appeler retain_living_objectives sinon le megaoctet clos revient et page se fige"
         );
         assert!(
             read_body.contains("missions"),
@@ -3563,5 +3741,57 @@ mod tests {
             write_body.contains("304"),
             "write_asset doit savoir répondre 304"
         );
+    }
+
+    #[test]
+    fn projection_ui_distingue_connexion_vitalite_tour_attente_file_et_propriete() {
+        let mut active = agent_info("active", "busy");
+        active.last_seen_secs = 5;
+        active.execution = Some(bridget_transport::protocol::ExecutionUiProjection {
+            state: Some("running".to_string()),
+            wait_state: None,
+            progress_age_secs: Some(3),
+            queue_depth: 2,
+            continuation_mode: Some("reconstructed".to_string()),
+        });
+        active.agent_link = Some(bridget_transport::protocol::AgentLinkUiProjection {
+            link_id: "link-active".to_string(),
+            parent_instance_id: "parent-instance".to_string(),
+            parent_execution_id: Some("execution-parent".to_string()),
+            objective_id: Some("objective-1".to_string()),
+            delegation_id: Some("delegation-1".to_string()),
+            role: "verification".to_string(),
+            agent_path: "parent-instance/active-instance".to_string(),
+            state: "open".to_string(),
+            direct_descendants: 1,
+            descendants: 2,
+        });
+        let mut waiting = agent_info("waiting", "connected");
+        waiting.execution = Some(bridget_transport::protocol::ExecutionUiProjection {
+            state: Some("waiting_approval".to_string()),
+            wait_state: Some("waiting_approval".to_string()),
+            progress_age_secs: Some(9),
+            continuation_mode: None,
+            queue_depth: 0,
+        });
+        let rows = compose_agent_rows(vec![active, waiting], &[]);
+        let active = rows.iter().find(|row| row.name == "active").unwrap();
+        assert_eq!(active.connection_state, "busy");
+        assert_eq!(active.provider_age_secs, 5);
+        assert_eq!(active.turn_state.as_deref(), Some("running"));
+        assert_eq!(active.continuation_mode.as_deref(), Some("reconstructed"));
+        assert_eq!(active.progress_age_secs, Some(3));
+        assert_eq!(active.queue_depth, 2);
+        assert!(matches!(
+            active.agent_link.as_ref(),
+            Some(link) if link.parent_instance_id == "parent-instance"
+                && link.objective_id.as_deref() == Some("objective-1")
+                && link.direct_descendants == 1
+                && link.descendants == 2
+        ));
+        let waiting = rows.iter().find(|row| row.name == "waiting").unwrap();
+        assert_eq!(waiting.connection_state, "alive");
+        assert_eq!(waiting.turn_state.as_deref(), Some("waiting_approval"));
+        assert_eq!(waiting.wait_state.as_deref(), Some("waiting_approval"));
     }
 }

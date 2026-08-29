@@ -49,6 +49,7 @@ use maicie::store::{
     CompteursRefusDelegationLocale, MaicieStore, ObjectiveSnapshot, ResourceRangeReservation,
     SchemaPreflight, StoreError,
 };
+use maicie::ui_projection::{UiProjectionError, publish_ui_mission_projection_v1};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -67,10 +68,7 @@ const EXIT_BRIDGET: u8 = 4;
 const EXIT_DELEGATE: u8 = 5;
 const EXIT_STORE: u8 = 6;
 const MAX_STATUS_RUNTIME_OBSERVATIONS: usize = 256;
-use maicie::{
-    LOCALITY_GUARD_ISSUER_SCOPE, MIN_ISSUER_SCOPE_LEN, ROUTINES_ISSUER_SCOPE, STATUS_ISSUER_SCOPE,
-    USAGE_ISSUER_SCOPE,
-};
+use maicie::{LOCALITY_GUARD_ISSUER_SCOPE, ROUTINES_ISSUER_SCOPE, STATUS_ISSUER_SCOPE};
 
 fn main() -> ExitCode {
     match run(env::args().skip(1).collect()) {
@@ -88,7 +86,8 @@ fn main() -> ExitCode {
 fn run(arguments: Vec<String>) -> Result<String, CliError> {
     let (migrate, rest) = peel_migrate_flag(&arguments)?;
     let command = parse_command(&rest)?;
-    match command {
+    let projection_config = mission_projection_config(&command);
+    let result = match command {
         Command::Delegate(delegate_args) => run_delegate(delegate_args, migrate),
         Command::Status(status_args) => run_status(status_args, migrate),
         Command::Objective(objective_args) => run_objective(objective_args, migrate),
@@ -110,6 +109,28 @@ fn run(arguments: Vec<String>) -> Result<String, CliError> {
             }
             run_migrate(migrate_args)
         }
+    };
+    if result.is_ok()
+        && let Some(config_path) = projection_config
+    {
+        publish_ui_mission_projection_v1(config_path).map_err(CliError::Projection)?;
+    }
+    result
+}
+
+/// Chaque commande Maicie qui a atteint une issue réussie rafraîchit le même
+/// contrat public atomique. Cette publication n'ajoute aucune boucle résidente.
+fn mission_projection_config(command: &Command) -> Option<PathBuf> {
+    match command {
+        Command::Delegate(arguments) => Some(arguments.config.clone()),
+        Command::Status(arguments) => Some(arguments.config.clone()),
+        Command::Objective(arguments) => Some(arguments.config.clone()),
+        Command::Profile(arguments) => Some(arguments.config.clone()),
+        Command::Registre(arguments) => Some(arguments.config.clone()),
+        Command::Plage(arguments) => Some(arguments.config.clone()),
+        Command::Routine(arguments) => Some(arguments.config.clone()),
+        Command::Migrate(arguments) => Some(arguments.config.clone()),
+        Command::Preflight(_) => None,
     }
 }
 
@@ -356,9 +377,7 @@ fn capture_reason(error: &BridgetClientError) -> String {
         BridgetClientError::Timeout { .. } => "budget_capture_epuise".to_string(),
         BridgetClientError::ClientRejected { .. }
         | BridgetClientError::VersionUnsupported { .. }
-        | BridgetClientError::CapabilityMissing { .. } => {
-            "negociation_daemon_refusee".to_string()
-        }
+        | BridgetClientError::CapabilityMissing { .. } => "negociation_daemon_refusee".to_string(),
         BridgetClientError::Closed | BridgetClientError::ConnectionUnusable => {
             "liaison_bridget_fermee".to_string()
         }
@@ -3426,6 +3445,7 @@ enum CliError {
     ProfileActivation(ProfileActivationError),
     Routine(RoutineError),
     InstallPublish(InstallPublishError),
+    Projection(UiProjectionError),
 }
 
 impl CliError {
@@ -3452,7 +3472,7 @@ impl CliError {
             | Self::TargetEligibilityDivergence(_) => EXIT_DELEGATE,
             Self::Objective(_) => EXIT_DELEGATE,
             Self::Profile(_) | Self::ProfileActivation(_) | Self::Routine(_) => EXIT_DELEGATE,
-            Self::InstallPublish(_) => EXIT_STORE,
+            Self::InstallPublish(_) | Self::Projection(_) => EXIT_STORE,
         }
     }
 
@@ -3490,6 +3510,7 @@ impl CliError {
             Self::Routine(RoutineError::NotFound(_)) => "routine_not_found",
             Self::Routine(_) => "routine_invalid",
             Self::InstallPublish(_) => "install_publish",
+            Self::Projection(_) => "mission_projection",
         }
     }
 
@@ -3506,6 +3527,7 @@ impl fmt::Display for CliError {
             Self::Catalogue(error) => error.fmt(formatter),
             Self::CatalogueReconcile(error) => error.fmt(formatter),
             Self::Bridget(error) => error.fmt(formatter),
+            Self::Projection(error) => error.fmt(formatter),
             Self::DaemonStoreLocality(detail) => write!(formatter, "écriture refusée : {detail}"),
             Self::Delegate(error) => error.fmt(formatter),
             Self::TargetUnknownBridget(target) => write!(
@@ -3564,9 +3586,8 @@ impl fmt::Display for CliError {
 mod tests {
     use super::{
         CliError, Command, DelegateError, DelegateOutput, MigrateArgs, PlageAction, PlageArgs,
-        RegistreAction, RegistreArgs, SchemaPreflightOutput, candidates_from,
+        RegistreAction, RegistreArgs, SchemaPreflightOutput, candidates_from, capture_reason,
         daemon_identity_failure_detail, daemon_store_is_local, delegate_error_for_cli,
-        capture_reason,
         format_routine_approval_screen, open_store_with_reconciliation, parse_command,
         peel_migrate_flag, routine_approval_preflight, run, run_migrate, run_plage, run_registre,
         sanitize_terminal,

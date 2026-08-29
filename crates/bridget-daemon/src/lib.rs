@@ -7,6 +7,10 @@ pub mod daemon;
 pub mod desired_state;
 pub mod disk_hygiene;
 pub mod disk_trend;
+pub mod execution_store;
+pub use execution_store::{
+    ConditionalTransition, ExecutionSnapshot, ExecutionStore, QueuedSubmission,
+};
 pub mod fleet;
 pub mod greffe_policy_refresh;
 pub mod idempotency;
@@ -15,8 +19,10 @@ pub mod lifecycle;
 pub mod managed_process;
 mod managed_supervisor;
 pub mod managers;
+pub use managed_supervisor::{GovernedContinuation, reserve_governed_continuation};
 pub mod mcp;
 pub mod mcp_identity;
+pub mod mission_projection;
 pub mod reaper;
 pub mod receipt_store;
 pub mod recovery_trace;

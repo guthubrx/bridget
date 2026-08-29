@@ -6,19 +6,23 @@ use bridget_transport::journal::{
     IncrementalJournalReader, JournalLiveFeed, JournalReadItem, JournalSourceIdentity,
     JournalWindowError, JournalWriter, current_host_date, resolve_window,
 };
-use bridget_transport::protocol::{DiskSpaceFact, PresenceMode, decode, encode};
+use bridget_transport::protocol::{
+    DiskSpaceFact, ExecutionControlCommand, ExecutionControlOperation, ExecutionProviderContext,
+    PresenceMode, ProviderOperation, decode, encode,
+};
 use bridget_transport::{
     AcpOptions, AcpTransport, AttachRefusal, AttachWindow, ChannelReport, ClaudeStreamJsonOptions,
     ClaudeStreamJsonTransport, CodexAppServerOptions, CodexAppServerTransport, DaemonToWrapper,
     MAX_ATTACH_FRAGMENT_BYTES, MAX_ATTACH_SERIALIZED_FRAME_BYTES, ManagedEvent, ManagedEventKind,
-    ManagedSession, ManagedSessionDescriptor, ManagedTerminal, TmuxTransport, Transport,
-    WrapperToDaemon,
+    ManagedProviderIdentity, ManagedSession, ManagedSessionDescriptor, ManagedTerminal,
+    TmuxTransport, Transport, WrapperToDaemon,
 };
 use log::{debug, error, info, warn};
-use maicie::review_continuity::{
-    ReviewContinuityObservation, ReviewContinuityState, observe_delegation_review,
+
+use crate::mission_projection::{
+    MissionDelegationV1, MissionObjectiveV1, MissionReviewV1, read_public_mission_projection_v1,
 };
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::net::UnixStream;
@@ -134,7 +138,7 @@ fn managed_resume_context(
                         "Instruction : {}",
                         resume_card_external_text(&mission.instruction)
                     ),
-                    render_resume_review(&mission.review_continuity),
+                    render_resume_review(&mission.review),
                 ]),
                 ResumeStance::Waiting { mission, reason } => {
                     // Exhaustif sur ResumeWaitReason — pas de catch-all header.
@@ -175,7 +179,7 @@ fn managed_resume_context(
                             "Instruction d'origine (NE PAS RELANCER) : {}",
                             resume_card_external_text(&mission.instruction)
                         ),
-                        render_resume_review(&mission.review_continuity),
+                        render_resume_review(&mission.review),
                     ]);
                 }
                 ResumeStance::Absent => lines.push(format!(
@@ -230,7 +234,6 @@ fn managed_resume_context(
     lines.push(managed_resume_consigne(&resume_stance).to_string());
     lines.join("\n")
 }
-
 struct ResumeMission {
     objective_id: String,
     delegation_id: String,
@@ -239,35 +242,22 @@ struct ResumeMission {
     delegation_state: String,
     local_delivery: String,
     instruction: String,
-    review_continuity: ReviewContinuityObservation,
+    review: Option<MissionReviewV1>,
 }
 
-fn render_resume_review(observation: &ReviewContinuityObservation) -> String {
-    let target = resume_card_external_text(observation.target_ref.as_deref().unwrap_or("absente"));
-    let reviewed =
-        resume_card_external_text(observation.reviewed_head.as_deref().unwrap_or("absent"));
-    let observed =
-        resume_card_external_text(observation.observed_head.as_deref().unwrap_or("absente"));
-    match observation.state {
-        ReviewContinuityState::TargetAbsent => {
-            "Suivi du verdict : inobservable (cible Git typée absente).".to_string()
-        }
-        ReviewContinuityState::VerdictAbsent => {
-            format!("Suivi du verdict : en attente de dépôt typé pour {target}@{reviewed}.")
-        }
-        ReviewContinuityState::StillAncestor => format!(
-            "Suivi du verdict : objet jugé {reviewed} toujours ancêtre de {target}@{observed}."
+fn render_resume_review(review: &Option<MissionReviewV1>) -> String {
+    let Some(review) = review else {
+        return "Suivi du verdict : inobservable (cible Git typée absente de la projection publique)."
+            .to_string();
+    };
+    let target = resume_card_external_text(&review.target_ref);
+    let reviewed = resume_card_external_text(&review.reviewed_head);
+    match review.verdict.as_deref() {
+        Some(verdict) => format!(
+            "Suivi du verdict publié : verdict={}; cible={target}; sha_jugé={reviewed}.",
+            resume_card_external_text(verdict)
         ),
-        ReviewContinuityState::Rewritten => format!(
-            "ALERTE VERDICT RÉÉCRIT : objet jugé {reviewed} non ancêtre de {target}@{observed}."
-        ),
-        ReviewContinuityState::Unobservable => format!(
-            "Suivi du verdict : inobservable ({}), cible={target}, sha_jugé={reviewed}.",
-            observation
-                .reason
-                .map(|reason| reason.as_str())
-                .unwrap_or("motif_absent")
-        ),
+        None => format!("Suivi du verdict : en attente de dépôt typé pour {target}@{reviewed}."),
     }
 }
 
@@ -409,77 +399,50 @@ fn is_protected_principal_checkout(path: &Path) -> bool {
     canonical_path == canonical_primary
 }
 
-fn resume_mission_actionable(
-    objective: &maicie::domain::EtatObjectif,
-    delegation: &maicie::domain::EtatDelegation,
-) -> bool {
-    use maicie::domain::{EtatDelegation, EtatObjectif};
-    // `EnAttentePrerequis` n'est PAS exécutable (domain.rs : aucune outbox
-    // tant que les prérequis --depends-on ne sont pas clos). Actionable =
-    // uniquement une délégation `Creee` sur objectif ouvert/en coordination.
-    matches!(
-        objective,
-        EtatObjectif::Ouvert | EtatObjectif::EnCoordination
-    ) && matches!(delegation, EtatDelegation::Creee)
+fn resume_mission_actionable(objective: &str, delegation: &str) -> bool {
+    // `en_attente_prerequis` n'est PAS exécutable. La frontière publique
+    // conserve les libellés fermés publiés par Maicie, sans importer ses types.
+    matches!(objective, "ouvert" | "en_coordination") && delegation == "creee"
 }
 
-/// Classe le couple (objectif, délégation) en motif d'attente, ou `None` si
-/// actionnable / hors surface d'attente.
-///
-/// Matchs **exhaustifs** sur `EtatObjectif` et `EtatDelegation` : une variante
-/// neuve casse la compilation ici — pas de liste `matches!` muette.
-fn resume_wait_reason(
-    objective: &maicie::domain::EtatObjectif,
-    delegation: &maicie::domain::EtatDelegation,
-) -> Option<ResumeWaitReason> {
-    use maicie::domain::{EtatDelegation, EtatObjectif};
+/// Classe les libellés publiés. Une valeur inconnue est volontairement
+/// inactionnable : Bridget ne déduit jamais une transition métier nouvelle.
+fn resume_wait_reason(objective: &str, delegation: &str) -> Option<ResumeWaitReason> {
     if resume_mission_actionable(objective, delegation) {
         return None;
     }
-    // Priorité clos : même si la délégation est Annulee/Terminee, le message
-    // « mission close » prime (mandat explicite).
     Some(match objective {
-        EtatObjectif::Clos => ResumeWaitReason::MandatExpliciteApresClos,
-        EtatObjectif::AEvaluer | EtatObjectif::Synthetise => match delegation {
-            EtatDelegation::Annulee => ResumeWaitReason::AucunLevierApresAnnulation,
-            EtatDelegation::EnAttentePrerequis => ResumeWaitReason::ClotureDesPrerequis,
-            EtatDelegation::Terminee => ResumeWaitReason::MandatExpliciteApresTerminaison,
-            EtatDelegation::SoldeeParCloture => ResumeWaitReason::MandatExpliciteApresSolde,
-            // Levier : évaluation / synthèse d'objectif encore en cours.
-            EtatDelegation::Creee | EtatDelegation::AEvaluer => ResumeWaitReason::SuiteDuGreffe,
+        "clos" => ResumeWaitReason::MandatExpliciteApresClos,
+        "a_evaluer" | "synthetise" => match delegation {
+            "annulee" => ResumeWaitReason::AucunLevierApresAnnulation,
+            "en_attente_prerequis" => ResumeWaitReason::ClotureDesPrerequis,
+            "terminee" => ResumeWaitReason::MandatExpliciteApresTerminaison,
+            "soldee_par_cloture" => ResumeWaitReason::MandatExpliciteApresSolde,
+            "creee" | "a_evaluer" => ResumeWaitReason::SuiteDuGreffe,
+            _ => return None,
         },
-        EtatObjectif::Ouvert | EtatObjectif::EnCoordination => match delegation {
-            EtatDelegation::EnAttentePrerequis => ResumeWaitReason::ClotureDesPrerequis,
-            EtatDelegation::Annulee => ResumeWaitReason::AucunLevierApresAnnulation,
-            EtatDelegation::Terminee => ResumeWaitReason::MandatExpliciteApresTerminaison,
-            EtatDelegation::SoldeeParCloture => ResumeWaitReason::MandatExpliciteApresSolde,
-            EtatDelegation::AEvaluer => ResumeWaitReason::SuiteDuGreffe,
-            // Actionnable déjà exclu ci-dessus ; rester exhaustif pour le compilateur.
-            EtatDelegation::Creee => ResumeWaitReason::SuiteDuGreffe,
+        "ouvert" | "en_coordination" => match delegation {
+            "en_attente_prerequis" => ResumeWaitReason::ClotureDesPrerequis,
+            "annulee" => ResumeWaitReason::AucunLevierApresAnnulation,
+            "terminee" => ResumeWaitReason::MandatExpliciteApresTerminaison,
+            "soldee_par_cloture" => ResumeWaitReason::MandatExpliciteApresSolde,
+            "a_evaluer" | "creee" => ResumeWaitReason::SuiteDuGreffe,
+            _ => return None,
         },
+        _ => return None,
     })
 }
 
 fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, String> {
     let config = home.join(".config/maicie/config.json");
-    if !config.is_file() {
-        return Err(format!(
-            "configuration Maicie absente: {}",
-            config.display()
-        ));
-    }
-    let review_repository = maicie::config::MaicieConfig::load(&config)
+    let projection = read_public_mission_projection_v1(&config)
         .map_err(|error| error.to_string())?
-        .review_project
-        .map(|project| project.repository_root);
-    let projection = maicie::ui_projection::read_ui_mission_projection_v1(&config)
-        .map_err(|error| error.to_string())?;
-    let ranking = |item: &maicie::ui_projection::UiObjectiveProjection,
-                   delegation: &maicie::domain::Delegation| {
+        .ok_or_else(|| format!("projection de mission absente: {}", config.display()))?;
+    let ranking = |item: &MissionObjectiveV1, delegation: &MissionDelegationV1| {
         (
-            item.objective.mis_a_jour_at,
-            item.objective.cree_at,
-            delegation.id,
+            item.updated_at,
+            item.created_at,
+            delegation.delegation_id.clone(),
         )
     };
     let for_agent: Vec<_> = projection
@@ -494,62 +457,47 @@ fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, Stri
     let actionable = for_agent
         .iter()
         .copied()
-        .filter(|(item, delegation)| {
-            resume_mission_actionable(&item.objective.etat, &delegation.etat)
-        })
+        .filter(|(item, delegation)| resume_mission_actionable(&item.state, &delegation.state))
         .max_by_key(|(item, delegation)| ranking(item, delegation));
     let candidate = actionable.or_else(|| {
-        // Surface d'attente : tout couple que `resume_wait_reason` classifie
-        // (exhaustif côté états — pas une liste littérale à maintenir).
         for_agent
             .iter()
             .copied()
             .filter(|(item, delegation)| {
-                resume_wait_reason(&item.objective.etat, &delegation.etat).is_some()
+                resume_wait_reason(&item.state, &delegation.state).is_some()
             })
             .max_by_key(|(item, delegation)| ranking(item, delegation))
     });
     let Some((item, delegation)) = candidate else {
-        return Ok(ResumeStance::Absent);
+        return if for_agent.is_empty() {
+            Ok(ResumeStance::Absent)
+        } else {
+            Err("état de mission public inconnu: attente sans reprise inventée".to_string())
+        };
     };
-    let delivery = item
-        .local_deliveries
-        .iter()
-        .find(|delivery| delivery.delegation_id == delegation.id);
     let mission = ResumeMission {
-        objective_id: item.objective.id.to_string(),
-        delegation_id: delegation.id.to_string(),
-        message_id: delivery
-            .map(|delivery| delivery.message_id.to_string())
+        objective_id: item.objective_id.clone(),
+        delegation_id: delegation.delegation_id.clone(),
+        message_id: delegation
+            .message_id
+            .clone()
             .unwrap_or_else(|| "inconnu (aucune remise locale corrélée)".to_string()),
-        objective_state: resume_fact_label(&item.objective.etat),
-        delegation_state: resume_fact_label(&delegation.etat),
-        local_delivery: delivery
-            .map(|delivery| resume_fact_label(&delivery.state))
+        objective_state: item.state.clone(),
+        delegation_state: delegation.state.clone(),
+        local_delivery: delegation
+            .local_delivery_state
+            .clone()
             .unwrap_or_else(|| "inconnue".to_string()),
         instruction: delegation.instruction.clone(),
-        review_continuity: observe_delegation_review(
-            review_repository.as_deref(),
-            delegation,
-            item.review_verdicts
-                .iter()
-                .find(|verdict| verdict.delegation_id == delegation.id),
-        ),
+        review: delegation.review.clone(),
     };
-    if resume_mission_actionable(&item.objective.etat, &delegation.etat) {
+    if resume_mission_actionable(&item.state, &delegation.state) {
         Ok(ResumeStance::Actionable(mission))
     } else {
-        let reason = resume_wait_reason(&item.objective.etat, &delegation.etat)
-            .expect("candidat d'attente sans motif — bug de filtre");
+        let reason = resume_wait_reason(&item.state, &delegation.state)
+            .expect("candidat d'attente sans motif - bug de filtre");
         Ok(ResumeStance::Waiting { mission, reason })
     }
-}
-
-fn resume_fact_label<T: serde::Serialize>(value: &T) -> String {
-    serde_json::to_string(value)
-        .unwrap_or_else(|_| "inconnu".to_string())
-        .trim_matches('"')
-        .to_string()
 }
 
 struct ResumeWorktree {
@@ -2997,7 +2945,6 @@ fn launch_acp(
 
 /// Point d'entrée du wrapper supervisé. Le FD `managed-status` est fermé
 /// uniquement après Register, transport ACP, journal et relais initialisés.
-
 fn spawn_managed_session_transport(
     definition: &crate::registry::AgentDefinition,
     native_args: &[String],
@@ -3015,6 +2962,7 @@ fn spawn_managed_session_transport(
                 queue_capacity: definition.queue_capacity,
                 permissions: definition.permissions.clone(),
                 notify_timeout_secs: definition.notify_timeout_secs,
+                provider_observation: definition.capabilities.observed.clone(),
             };
             if inherit_stderr {
                 Ok(Box::new(
@@ -3038,6 +2986,7 @@ fn spawn_managed_session_transport(
                 args: native_args.to_vec(),
                 queue_capacity: definition.queue_capacity,
                 notify_timeout_secs: definition.notify_timeout_secs,
+                provider_observation: definition.capabilities.observed.clone(),
                 // Même arbre que le journal d'agent : survit à la mort du
                 // managed-wrapper et au redémarrage du daemon (lot cursor2).
                 session_store_root: Some(home.join(".cache/bridget/sessions")),
@@ -3067,6 +3016,8 @@ fn spawn_managed_session_transport(
                 notify_timeout_secs: definition.notify_timeout_secs,
                 model: codex_model_from_args(&definition.args),
                 permissions: definition.permissions.clone(),
+                provider_observation: definition.capabilities.observed.clone(),
+                thread_bootstrap: Default::default(),
             };
             let environment = string_environment(mcp_environment);
             if inherit_stderr {
@@ -3279,6 +3230,7 @@ fn launch_acp_with_status(
     };
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
     let mut idempotent_deliveries = IdempotentDeliveryTracker::open(home, &instance_id)?;
+    let mut execution_bindings = HashMap::new();
     std::fs::write(&name_state_path, &my_name)?;
     let marker_directory = socket.parent().unwrap().join("agent-pids");
     let adapter_pid = transport.process_id();
@@ -3342,8 +3294,13 @@ fn launch_acp_with_status(
             consecutive_fast_failures = 0;
         }
         let events = transport.drain_events();
-        let journal_failed =
-            forward_managed_events(&writer, &my_name, events, &mut idempotent_deliveries);
+        let journal_failed = forward_managed_events(
+            &writer,
+            &my_name,
+            events,
+            &mut idempotent_deliveries,
+            &mut execution_bindings,
+        );
         if journal_failed {
             transport.stop();
             break;
@@ -3387,6 +3344,47 @@ fn launch_acp_with_status(
                         );
                     }
                 }
+                Ok(DaemonToWrapper::DeliverExecution {
+                    message,
+                    execution_id,
+                    generation,
+                    revision,
+                }) => {
+                    let message_id = message.id.clone();
+                    execution_bindings.insert(
+                        message_id.clone(),
+                        ManagedExecutionBinding {
+                            execution_id,
+                            generation,
+                            state: "starting".to_string(),
+                            provider_kind: agent_type.to_string(),
+                            execution_path: definition.protocol.clone(),
+                            revision,
+                            approval_requests: 0,
+                            last_approval_request: None,
+                        },
+                    );
+                    if let Some(identity) = transport.provider_identity() {
+                        publish_provider_context(&writer, &execution_bindings, &identity);
+                    }
+                    if let Err(error) = transport.deliver(&message) {
+                        idempotent_deliveries.historic_injection_failed(&message_id);
+                        publish_execution_transition(
+                            &writer,
+                            &mut execution_bindings,
+                            &message_id,
+                            "failed",
+                            "provider_unavailable",
+                        );
+                        send_wrapper_message(
+                            &writer,
+                            WrapperToDaemon::DeliveryRejected {
+                                id: message_id,
+                                reason: error.to_string(),
+                            },
+                        );
+                    }
+                }
                 Ok(DaemonToWrapper::DeliverIdempotent {
                     delivery_id,
                     recipient_instance_id,
@@ -3425,6 +3423,18 @@ fn launch_acp_with_status(
                         }
                     }
                 },
+                Ok(DaemonToWrapper::ControlExecutionDispatch {
+                    issuer_scope,
+                    command,
+                }) => {
+                    apply_execution_control(
+                        &writer,
+                        transport.as_mut(),
+                        &mut execution_bindings,
+                        issuer_scope,
+                        command,
+                    );
+                }
                 Ok(DaemonToWrapper::CancelDelivery { id, reason }) => {
                     transport.cancel_delivery(&id, &reason);
                 }
@@ -3494,16 +3504,22 @@ fn launch_acp_with_status(
             }
         }
         if !transport.is_alive() {
+            let terminal_events = transport.drain_events();
+            let terminal_journal_failed = forward_managed_events(
+                &writer,
+                &my_name,
+                terminal_events,
+                &mut idempotent_deliveries,
+                &mut execution_bindings,
+            );
+            if terminal_journal_failed {
+                transport.stop();
+                break;
+            }
             let persistent_relaunch = std::env::var_os("BRIDGET_MANAGED_PERSISTENT").is_some();
             if !persistent_relaunch {
                 break;
             }
-            let _ = forward_managed_events(
-                &writer,
-                &my_name,
-                transport.drain_events(),
-                &mut idempotent_deliveries,
-            );
             transport.stop();
             let max_relaunch: u32 = std::env::var("BRIDGET_PROVIDER_RELAUNCH_MAX")
                 .ok()
@@ -3633,6 +3649,7 @@ fn launch_acp_with_status(
         &my_name,
         transport.drain_events(),
         &mut idempotent_deliveries,
+        &mut execution_bindings,
     );
     send_wrapper_message(&writer, WrapperToDaemon::TurnState { in_progress: false });
     send_wrapper_message(&writer, WrapperToDaemon::Unregister);
@@ -3782,14 +3799,13 @@ fn strip_claude_permission_bypass(args: &mut Vec<String>) {
             index += 1;
             continue;
         }
-        if args[index] == "--permission-mode" {
-            if index + 1 < args.len()
-                && (args[index + 1] == "bypassPermissions"
-                    || args[index + 1].contains("bypassPermissions"))
-            {
-                index += 2;
-                continue;
-            }
+        if args[index] == "--permission-mode"
+            && index + 1 < args.len()
+            && (args[index + 1] == "bypassPermissions"
+                || args[index + 1].contains("bypassPermissions"))
+        {
+            index += 2;
+            continue;
         }
         if args[index] == "bypassPermissions" || args[index].contains("bypassPermissions") {
             index += 1;
@@ -4063,11 +4079,310 @@ fn reconnect_managed_session(
     None
 }
 
+/// Corrélation locale entre une remise admise par Bridget et les événements du
+/// fournisseur. Le message demeure la clé de bord : aucun identifiant interne
+/// du fournisseur ne peut solder une autre exécution.
+#[derive(Debug, Clone)]
+struct ManagedExecutionBinding {
+    execution_id: String,
+    provider_kind: String,
+    execution_path: String,
+    generation: u64,
+    state: String,
+    revision: u64,
+    approval_requests: u8,
+    last_approval_request: Option<String>,
+}
+
+/// L usage ne reçoit une ascendance que si le wrapper ne porte qu un seul
+/// tour vivant. Plusieurs bindings rendent l attribution ambiguë : le fait
+/// reste visible par agent, mais ne peut pas consommer un budget d exécution.
+fn usage_execution_identity(
+    bindings: &HashMap<String, ManagedExecutionBinding>,
+) -> (Option<String>, Option<u64>) {
+    if bindings.len() != 1 {
+        return (None, None);
+    }
+    let binding = bindings.values().next().expect("binding unique");
+    (Some(binding.execution_id.clone()), Some(binding.generation))
+}
+/// Publie uniquement une identité fournisseur réellement observée, corrélée aux
+/// exécutions vivantes. L'absence de baseline reste une absence durable : elle
+/// n'est jamais remplacée par une capacité déduite du type d'agent.
+fn publish_provider_context(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    bindings: &HashMap<String, ManagedExecutionBinding>,
+    identity: &ManagedProviderIdentity,
+) {
+    let Some(observation) = identity.provider_observation.clone() else {
+        return;
+    };
+    for binding in bindings.values() {
+        send_wrapper_message(
+            writer,
+            WrapperToDaemon::ExecutionProviderObserved {
+                context: ExecutionProviderContext {
+                    execution_id: binding.execution_id.clone(),
+                    generation: binding.generation,
+                    provider_kind: binding.provider_kind.clone(),
+                    execution_path: binding.execution_path.clone(),
+                    observation: observation.clone(),
+                    provider_session_id: identity.provider_session_id.clone(),
+                    provider_thread_id: identity.provider_thread_id.clone(),
+                    provider_turn_id: identity.active_turn_id.clone(),
+                    observed_at: unix_now_secs(),
+                },
+            },
+        );
+    }
+}
+
+fn publish_execution_transition(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    message_id: &str,
+    next_state: &str,
+    reason: &str,
+) {
+    let Some(binding) = bindings.get_mut(message_id) else {
+        return;
+    };
+    if binding.state == next_state {
+        return;
+    }
+    let transition = bridget_transport::protocol::ExecutionStateTransition {
+        execution_id: binding.execution_id.clone(),
+        generation: binding.generation,
+        expected_state: binding.state.clone(),
+        expected_revision: binding.revision,
+        next_state: next_state.to_string(),
+        reason: reason.to_string(),
+        observed_at: unix_now_secs(),
+    };
+    send_wrapper_message(
+        writer,
+        WrapperToDaemon::ExecutionStateChanged { transition },
+    );
+    binding.state = next_state.to_string();
+    binding.revision = binding.revision.saturating_add(1);
+    if matches!(
+        next_state,
+        "interrupted" | "completed" | "failed" | "unreachable"
+    ) {
+        bindings.remove(message_id);
+    }
+}
+
+fn report_execution_control(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    issuer_scope: String,
+    command: &ExecutionControlCommand,
+    accepted: bool,
+    refusal_reason: Option<String>,
+) {
+    send_wrapper_message(
+        writer,
+        WrapperToDaemon::ControlExecutionReported {
+            issuer_scope,
+            command_id: command.command_id.clone(),
+            execution_id: command.execution_id.clone(),
+            accepted,
+            refusal_reason,
+        },
+    );
+}
+
+/// Exécute seulement les contrôles explicitement supportés par la session.
+/// Une correction sans capacité native est refusée ici, jamais placée dans la
+/// FIFO comme un nouveau prompt.
+fn apply_execution_control(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    transport: &mut dyn ManagedSession,
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    issuer_scope: String,
+    command: ExecutionControlCommand,
+) {
+    let binding = bindings.iter().find_map(|(message_id, binding)| {
+        (binding.execution_id == command.execution_id)
+            .then(|| (message_id.clone(), binding.clone()))
+    });
+    let Some((message_id, binding)) = binding else {
+        return report_execution_control(
+            writer,
+            issuer_scope,
+            &command,
+            false,
+            Some("execution_not_found".to_string()),
+        );
+    };
+    if binding.generation != command.generation {
+        return report_execution_control(
+            writer,
+            issuer_scope,
+            &command,
+            false,
+            Some("generation_mismatch".to_string()),
+        );
+    }
+    if binding.revision != command.revision {
+        return report_execution_control(
+            writer,
+            issuer_scope,
+            &command,
+            false,
+            Some("revision_mismatch".to_string()),
+        );
+    }
+    let required_operation = match command.operation {
+        ExecutionControlOperation::SteerCurrent => ProviderOperation::Steer,
+        ExecutionControlOperation::Interrupt => ProviderOperation::Interrupt,
+        ExecutionControlOperation::QueueOnly
+        | ExecutionControlOperation::TriggerTurn
+        | ExecutionControlOperation::PauseQueue
+        | ExecutionControlOperation::ResumeQueue
+        | ExecutionControlOperation::CancelQueued => {
+            return report_execution_control(
+                writer,
+                issuer_scope,
+                &command,
+                false,
+                Some("capability_unavailable".to_string()),
+            );
+        }
+    };
+    if !transport.supports_operation(required_operation) {
+        return report_execution_control(
+            writer,
+            issuer_scope,
+            &command,
+            false,
+            Some("capability_unavailable".to_string()),
+        );
+    }
+    match command.operation {
+        ExecutionControlOperation::SteerCurrent => {
+            let Some(message) = command.message.as_ref() else {
+                return report_execution_control(
+                    writer,
+                    issuer_scope,
+                    &command,
+                    false,
+                    Some("message_required".to_string()),
+                );
+            };
+            match transport.deliver(message) {
+                Ok(()) => report_execution_control(writer, issuer_scope, &command, true, None),
+                Err(_) => report_execution_control(
+                    writer,
+                    issuer_scope,
+                    &command,
+                    false,
+                    Some("target_unavailable".to_string()),
+                ),
+            }
+        }
+        ExecutionControlOperation::Interrupt => {
+            if transport.cancel_delivery(&message_id, "interruption explicite") {
+                publish_execution_transition(
+                    writer,
+                    bindings,
+                    &message_id,
+                    "interrupting",
+                    "interrupt_requested",
+                );
+                report_execution_control(writer, issuer_scope, &command, true, None);
+            } else {
+                report_execution_control(
+                    writer,
+                    issuer_scope,
+                    &command,
+                    false,
+                    Some("target_unavailable".to_string()),
+                );
+            }
+        }
+        ExecutionControlOperation::QueueOnly
+        | ExecutionControlOperation::TriggerTurn
+        | ExecutionControlOperation::PauseQueue
+        | ExecutionControlOperation::ResumeQueue
+        | ExecutionControlOperation::CancelQueued => report_execution_control(
+            writer,
+            issuer_scope,
+            &command,
+            false,
+            Some("capability_unavailable".to_string()),
+        ),
+    }
+}
+
+fn publish_single_wait(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    next_state: &str,
+    reason: &str,
+) {
+    let message_ids: Vec<String> = bindings
+        .iter()
+        .filter(|(_, binding)| binding.state == "running")
+        .map(|(message_id, _)| message_id.clone())
+        .collect();
+    if message_ids.len() == 1 {
+        publish_execution_transition(writer, bindings, &message_ids[0], next_state, reason);
+    }
+}
+
+const MAX_APPROVAL_REQUESTS_PER_EXECUTION: u8 = 3;
+
+/// Corrèle et borne les demandes d'autorisation tant que le même tour reste
+/// actif. Bridget ne choisit jamais à la place de l'humain : au-delà du seuil,
+/// elle publie une issue durable que le contrôleur peut reprendre.
+fn publish_approval_wait(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    request_id: &str,
+) {
+    let message_ids: Vec<String> = bindings
+        .iter()
+        .filter(|(_, binding)| matches!(binding.state.as_str(), "running" | "waiting_approval"))
+        .map(|(message_id, _)| message_id.clone())
+        .collect();
+    if message_ids.len() != 1 {
+        return;
+    }
+    let message_id = &message_ids[0];
+    let loop_detected = {
+        let binding = bindings
+            .get_mut(message_id)
+            .expect("identifiant sélectionné depuis les bindings");
+        binding.approval_requests = binding.approval_requests.saturating_add(1);
+        binding.last_approval_request = Some(request_id.to_string());
+        binding.approval_requests > MAX_APPROVAL_REQUESTS_PER_EXECUTION
+    };
+    if loop_detected {
+        publish_execution_transition(
+            writer,
+            bindings,
+            message_id,
+            "failed",
+            "approval_loop_detected",
+        );
+    } else {
+        publish_execution_transition(
+            writer,
+            bindings,
+            message_id,
+            "waiting_approval",
+            "permission_required",
+        );
+    }
+}
+
 fn forward_managed_events(
     writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
     my_name: &str,
     events: Vec<ManagedEvent>,
     idempotent_deliveries: &mut IdempotentDeliveryTracker,
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
 ) -> bool {
     let mut journal_failed = false;
     for event in events {
@@ -4086,15 +4401,42 @@ fn forward_managed_events(
             raw.len()
         );
         match kind {
-            ManagedEventKind::TurnStarted { .. } => {
-                send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: true })
+            ManagedEventKind::TurnStarted { message_id } => {
+                if !bindings.is_empty() && !bindings.contains_key(&message_id) {
+                    warn!("événement de tour ignoré: message hors exécution active");
+                    continue;
+                }
+                if let Some(binding) = bindings.get_mut(&message_id) {
+                    binding.approval_requests = 0;
+                    binding.last_approval_request = None;
+                }
+                send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: true });
+                publish_execution_transition(
+                    writer,
+                    bindings,
+                    &message_id,
+                    "running",
+                    "provider_accepted",
+                );
             }
             ManagedEventKind::TurnFinished {
                 message,
                 response,
                 terminal,
             } => {
+                let message_id = message.id.clone();
+                if !bindings.is_empty() && !bindings.contains_key(&message_id) {
+                    warn!("terminal fournisseur ignoré: message hors exécution active");
+                    continue;
+                }
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
+                let (next_state, reason) = match &terminal {
+                    ManagedTerminal::Completed => ("completed", "completed"),
+                    ManagedTerminal::Cancelled => ("interrupted", "interrupted"),
+                    ManagedTerminal::Failed { .. } => ("failed", "provider_failed"),
+                };
+                publish_execution_transition(writer, bindings, &message_id, next_state, reason);
+
                 match terminal {
                     ManagedTerminal::Completed if message.reply && !response.is_empty() => {
                         let mut reply =
@@ -4129,7 +4471,23 @@ fn forward_managed_events(
                 }
             }
             ManagedEventKind::DeliveryRejected { message_id, reason } => {
+                if !bindings.is_empty() && !bindings.contains_key(&message_id) {
+                    warn!("refus fournisseur ignoré: message hors exécution active");
+                    continue;
+                }
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
+                let execution_reason = if reason.ends_with("pleine") {
+                    "provider_queue_full"
+                } else {
+                    "provider_failed"
+                };
+                publish_execution_transition(
+                    writer,
+                    bindings,
+                    &message_id,
+                    "failed",
+                    execution_reason,
+                );
                 if let Some(report) = idempotent_deliveries.injection_rejected(&message_id) {
                     send_wrapper_message(writer, report);
                 }
@@ -4224,6 +4582,8 @@ fn forward_managed_events(
                         agent: my_name.to_string(),
                         input_tokens,
                         output_tokens,
+                        execution_id: usage_execution_identity(bindings).0,
+                        execution_generation: usage_execution_identity(bindings).1,
                         cache_creation_input_tokens,
                         cache_read_input_tokens,
                         source: bridget_transport::protocol::UsageSource::ClaudeStreamJson,
@@ -4234,6 +4594,20 @@ fn forward_managed_events(
                     warn!("fait d'usage ignoré : source ACP/Codex non autorisée pour L4")
                 }
             },
+            ManagedEventKind::Waiting { state } => match state {
+                bridget_transport::ManagedWaitState::Approval { request_id } => {
+                    publish_approval_wait(writer, bindings, &request_id)
+                }
+                bridget_transport::ManagedWaitState::UserInput { .. } => publish_single_wait(
+                    writer,
+                    bindings,
+                    "waiting_user_input",
+                    "user_input_required",
+                ),
+            },
+            ManagedEventKind::ProviderContextObserved { identity } => {
+                publish_provider_context(writer, bindings, &identity)
+            }
             ManagedEventKind::Update { .. } | ManagedEventKind::Error { .. } => {}
         }
     }
@@ -4262,11 +4636,11 @@ mod prompt_tests {
         codex_resume_bootstrap, interactive_bridget_prompt, is_protected_principal_checkout,
         managed_resume_context, prepare_codex_agent_args, render_resume_review,
     };
+    use crate::mission_projection::MissionReviewV1;
     use bridget_transport::protocol::ReviewTarget;
     use maicie::app::{DelegateRequest, DelegationCandidate, close, delegate};
     use maicie::config::DurationClasses;
     use maicie::domain::ClasseDuree;
-    use maicie::review_continuity::{ReviewContinuityObservation, ReviewContinuityState};
     use maicie::store::MaicieStore;
     use std::fs;
     use std::path::PathBuf;
@@ -4450,6 +4824,11 @@ mod prompt_tests {
         .unwrap();
     }
 
+    fn publish_resume_projection(home: &std::path::Path) {
+        let config = home.join(".config/maicie/config.json");
+        maicie::ui_projection::publish_ui_mission_projection_v1(&config).unwrap();
+    }
+
     fn create_active_mission(
         database: &std::path::Path,
         participant: &str,
@@ -4609,6 +4988,7 @@ mod prompt_tests {
         let mission = create_review_mission(&database, "resurrected");
         init_worktree(&worktree);
 
+        publish_resume_projection(&home);
         let context = managed_resume_context(
             &home,
             &worktree,
@@ -4661,20 +5041,15 @@ mod prompt_tests {
     #[test]
     fn carte_de_reprise_nomme_la_reecriture_du_sha_juge() {
         let judged = "1".repeat(40);
-        let observed = "2".repeat(40);
-        let rendered = render_resume_review(&ReviewContinuityObservation {
-            delegation_id: uuid::Uuid::new_v4(),
-            state: ReviewContinuityState::Rewritten,
-            target_ref: Some("origin/session-047".to_string()),
-            reviewed_head: Some(judged.clone()),
-            observed_head: Some(observed.clone()),
-            verdict: None,
-            reason: None,
-        });
+        let rendered = render_resume_review(&Some(MissionReviewV1 {
+            target_ref: "origin/session-047".to_string(),
+            reviewed_head: judged.clone(),
+            verdict: Some("approved".to_string()),
+        }));
         assert_eq!(
             rendered,
             format!(
-                "ALERTE VERDICT RÉÉCRIT : objet jugé {judged} non ancêtre de origin/session-047@{observed}."
+                "Suivi du verdict publié : verdict=approved; cible=origin/session-047; sha_jugé={judged}."
             )
         );
     }
@@ -4687,6 +5062,7 @@ mod prompt_tests {
         write_maicie_config(&home, &root.join("maicie.sqlite3"));
         init_worktree(&worktree);
 
+        publish_resume_projection(&home);
         let context = managed_resume_context(
             &home,
             &worktree,
@@ -4824,6 +5200,7 @@ mod prompt_tests {
         };
         drop(store);
 
+        publish_resume_projection(&home);
         let context = managed_resume_context(
             &home,
             &worktree,
@@ -4913,6 +5290,7 @@ mod prompt_tests {
         }
         init_worktree(&worktree);
 
+        publish_resume_projection(&home);
         let context = managed_resume_context(
             &home,
             &worktree,
@@ -4950,6 +5328,7 @@ mod prompt_tests {
         let mission = create_waiting_prereq_mission(&database, "agent-prereq");
         init_worktree(&worktree);
 
+        publish_resume_projection(&home);
         let context = managed_resume_context(
             &home,
             &worktree,
@@ -4998,6 +5377,7 @@ mod prompt_tests {
         force_delegation_annulee(&database, mission.delegation_id);
         init_worktree(&worktree);
 
+        publish_resume_projection(&home);
         let context = managed_resume_context(
             &home,
             &worktree,
@@ -5056,6 +5436,7 @@ mod prompt_tests {
         );
         init_worktree(&worktree);
 
+        publish_resume_projection(&home);
         let context = managed_resume_context(
             &home,
             &worktree,
@@ -5407,7 +5788,8 @@ mod reconnect_tests {
             &writer,
             "claude-1",
             vec![event],
-            &mut tracker
+            &mut tracker,
+            &mut HashMap::new(),
         ));
         let mut line = String::new();
         BufReader::new(reader_stream).read_line(&mut line).unwrap();
@@ -5444,7 +5826,8 @@ mod reconnect_tests {
             &writer,
             "claude-1",
             vec![event],
-            &mut tracker
+            &mut tracker,
+            &mut HashMap::new(),
         ));
         let mut line = String::new();
         BufReader::new(reader_stream).read_line(&mut line).unwrap();
@@ -5478,7 +5861,8 @@ mod reconnect_tests {
             &writer,
             "claude-1",
             vec![event],
-            &mut tracker
+            &mut tracker,
+            &mut HashMap::new(),
         ));
         let mut line = String::new();
         BufReader::new(reader_stream).read_line(&mut line).unwrap();
@@ -5488,6 +5872,8 @@ mod reconnect_tests {
                 agent,
                 input_tokens: 2,
                 output_tokens: 175,
+                execution_id: None,
+                execution_generation: None,
                 cache_creation_input_tokens: 40_804,
                 cache_read_input_tokens: 13_907,
                 source: bridget_transport::protocol::UsageSource::ClaudeStreamJson,
@@ -6344,6 +6730,7 @@ mod reconnect_tests {
             capabilities: bridget_transport::AdapterCapabilities {
                 execution_paths: vec!["acp".to_string()],
                 models: std::collections::BTreeMap::new(),
+                observed: None,
             },
         }
     }
@@ -7374,5 +7761,204 @@ mod reconnect_tests {
         assert!(second >= Duration::from_millis(1600));
         assert!(sixth <= RECONNECT_MAX_DELAY);
         assert!(later <= RECONNECT_MAX_DELAY);
+    }
+
+    #[test]
+    fn transition_execution_ignore_un_message_inconnu_et_evenement_tardif() {
+        let root = mcp_test_root("execution-correlation");
+        std::fs::create_dir_all(&root).unwrap();
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        reader_stream
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(writer_stream))));
+        let mut bindings = HashMap::new();
+        bindings.insert(
+            "message-active".to_string(),
+            ManagedExecutionBinding {
+                execution_id: "execution-active".to_string(),
+                generation: 3,
+                provider_kind: "fixture".to_string(),
+                execution_path: "fixture".to_string(),
+                state: "starting".to_string(),
+                approval_requests: 0,
+                last_approval_request: None,
+                revision: 0,
+            },
+        );
+
+        publish_execution_transition(
+            &writer,
+            &mut bindings,
+            "message-obsolete",
+            "running",
+            "late",
+        );
+
+        let mut reader = BufReader::new(reader_stream);
+        let mut line = String::new();
+        let error = reader.read_line(&mut line).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ));
+        assert_eq!(bindings["message-active"].state, "starting");
+
+        publish_execution_transition(
+            &writer,
+            &mut bindings,
+            "message-active",
+            "running",
+            "provider_accepted",
+        );
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode(line.trim_end()).unwrap(),
+            WrapperToDaemon::ExecutionStateChanged { transition }
+                if transition.execution_id == "execution-active"
+                    && transition.expected_state == "starting"
+                    && transition.expected_revision == 0
+                    && transition.next_state == "running"
+        ));
+        assert_eq!(bindings["message-active"].revision, 1);
+
+        line.clear();
+        publish_execution_transition(
+            &writer,
+            &mut bindings,
+            "message-active",
+            "running",
+            "duplicate",
+        );
+        let duplicate = reader.read_line(&mut line).unwrap_err();
+        assert!(matches!(
+            duplicate.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ));
+
+        line.clear();
+        publish_execution_transition(
+            &writer,
+            &mut bindings,
+            "message-active",
+            "completed",
+            "completed",
+        );
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode(line.trim_end()).unwrap(),
+            WrapperToDaemon::ExecutionStateChanged { transition }
+                if transition.expected_state == "running"
+                    && transition.expected_revision == 1
+                    && transition.next_state == "completed"
+        ));
+        assert!(!bindings.contains_key("message-active"));
+
+        line.clear();
+        publish_execution_transition(&writer, &mut bindings, "message-active", "failed", "late");
+        let late = reader.read_line(&mut line).unwrap_err();
+        assert!(matches!(
+            late.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn evenement_terminal_tardif_n_emet_ni_etat_ni_reponse() {
+        let root = mcp_test_root("terminal-tardif");
+        std::fs::create_dir_all(&root).unwrap();
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        reader_stream
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(writer_stream))));
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "terminal-tardif").unwrap();
+        let mut bindings = HashMap::from([(
+            "message-active".to_string(),
+            ManagedExecutionBinding {
+                execution_id: "execution-active".to_string(),
+                provider_kind: "fixture".to_string(),
+                execution_path: "fixture".to_string(),
+                generation: 3,
+                state: "running".to_string(),
+                approval_requests: 0,
+                last_approval_request: None,
+                revision: 1,
+            },
+        )]);
+        let mut obsolete = bridget_core::BridgetMessage::new("humain", "agent", "message ancien");
+        obsolete.id = "message-obsolete".to_string();
+
+        assert!(!forward_managed_events(
+            &writer,
+            "agent",
+            vec![ManagedEvent::internal(
+                bridget_transport::ManagedEventSource::Acp,
+                b"terminal tardif".to_vec(),
+                ManagedEventKind::TurnFinished {
+                    message: obsolete,
+                    response: "réponse qui ne doit jamais repartir".to_string(),
+                    terminal: ManagedTerminal::Completed,
+                },
+            )],
+            &mut tracker,
+            &mut bindings,
+        ));
+
+        assert_eq!(bindings["message-active"].state, "running");
+        assert_eq!(bindings["message-active"].revision, 1);
+        let mut reader = BufReader::new(reader_stream);
+        let mut line = String::new();
+        let error = reader.read_line(&mut line).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn boucles_d_autorisation_sont_bornees_par_une_issue_machine() {
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(writer_stream))));
+        let mut bindings = HashMap::from([(
+            "message-active".to_string(),
+            ManagedExecutionBinding {
+                execution_id: "execution-active".to_string(),
+                provider_kind: "fixture".to_string(),
+                execution_path: "fixture".to_string(),
+                generation: 3,
+                state: "running".to_string(),
+                revision: 1,
+                approval_requests: 0,
+                last_approval_request: None,
+            },
+        )]);
+
+        for request_id in ["approval-1", "approval-2", "approval-3", "approval-4"] {
+            publish_approval_wait(&writer, &mut bindings, request_id);
+        }
+
+        let mut reader = BufReader::new(reader_stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode(line.trim_end()).unwrap(),
+            WrapperToDaemon::ExecutionStateChanged { transition }
+                if transition.next_state == "waiting_approval"
+                    && transition.reason == "permission_required"
+        ));
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode(line.trim_end()).unwrap(),
+            WrapperToDaemon::ExecutionStateChanged { transition }
+                if transition.next_state == "failed"
+                    && transition.reason == "approval_loop_detected"
+                    && transition.expected_state == "waiting_approval"
+                    && transition.expected_revision == 2
+        ));
+        assert!(!bindings.contains_key("message-active"));
     }
 }

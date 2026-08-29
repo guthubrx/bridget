@@ -5,7 +5,8 @@ use bridget_daemon::ui::{UiRelay, UiRelayConfig};
 use bridget_transport::protocol::{LedgerScope, PresenceMode, decode, encode};
 use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -60,6 +61,22 @@ struct UiProcess {
 
 impl UiProcess {
     fn start(home: &Path, environment_channel: Option<&str>) -> Self {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("port UI éphémère");
+        let port = listener.local_addr().expect("adresse UI éphémère").port();
+        let endpoint = home.join(".cache/bridget/ui-endpoint.json");
+        std::fs::create_dir_all(endpoint.parent().expect("parent endpoint UI")).unwrap();
+        std::fs::write(
+            &endpoint,
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "port": port,
+                "token": uuid::Uuid::new_v4().simple().to_string(),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&endpoint, std::fs::Permissions::from_mode(0o600)).unwrap();
+        drop(listener);
         let maicie_config = write_maicie_config(home);
         let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
         command
@@ -1034,6 +1051,114 @@ fn watch_pousse_thread_message_sortant_apres_ouverture() {
         !live.contains("\"state\":\"reconnecting\""),
         "une reconnexion ne compte pas comme chemin vivant: {live}"
     );
+
+    drop(daemon);
+    std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
+fn relais_ui_expose_separement_connexion_vitalite_tour_attente_et_file() {
+    let root = root("execution-projection");
+    let config_directory = root.join(".config/bridget");
+    std::fs::create_dir_all(&config_directory).unwrap();
+    let registry_path = config_directory.join("agents.json");
+    std::fs::write(
+        &registry_path,
+        r#"{"execution_projection":{"dual_write":true,"legacy_projection":true}}"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    std::fs::set_permissions(&registry_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let daemon = DaemonProcess::start(&root);
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let mut sender = LiveAgent::connect(&socket, "maicie");
+    let mut agent = LiveAgent::connect(&socket, "agent-execution");
+
+    let mut queued = BridgetMessage::new("maicie", "agent-execution", "à conserver");
+    queued.id = "queue-execution".to_string();
+    queued.intent = Some(bridget_core::MessageIntent::QueueOnly);
+    sender.send(&WrapperToDaemon::Send(queued));
+    assert!(matches!(sender.read(), DaemonToWrapper::Ack { .. }));
+
+    let mut started = BridgetMessage::new("maicie", "agent-execution", "à démarrer");
+    started.id = "turn-execution".to_string();
+    started.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+    sender.send(&WrapperToDaemon::Send(started));
+    assert!(matches!(sender.read(), DaemonToWrapper::Ack { .. }));
+    assert!(matches!(
+        agent.read(),
+        DaemonToWrapper::DeliverExecution {
+            ref execution_id,
+            generation: 1,
+            revision: 0,
+            ..
+        } if execution_id == "execution-turn-execution"
+    ));
+    let observed_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .try_into()
+        .unwrap();
+    agent.send(&WrapperToDaemon::ExecutionStateChanged {
+        transition: bridget_transport::protocol::ExecutionStateTransition {
+            execution_id: "execution-turn-execution".to_string(),
+            generation: 1,
+            expected_state: "starting".to_string(),
+            expected_revision: 0,
+            next_state: "running".to_string(),
+            reason: "provider_accepted".to_string(),
+            observed_at,
+        },
+    });
+
+    let config = UiRelayConfig {
+        daemon_socket: socket,
+        maicie_config: write_maicie_config(&root),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-execution".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let response = read_response(request(address, "/v1/snapshot?token=jeton-execution"));
+    let payload = response_json(&response);
+    let row = payload["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "agent-execution")
+        .expect("projection de l'agent");
+    assert_eq!(row["connection_state"], "busy");
+    assert!(row["provider_age_secs"].as_u64().is_some());
+    assert_eq!(row["turn_state"], "running");
+    assert!(row.get("wait_state").is_none());
+    assert!(row["progress_age_secs"].as_u64().is_some(), "row={row}");
+    assert_eq!(row["queue_depth"], 1);
+
+    agent.send(&WrapperToDaemon::ExecutionStateChanged {
+        transition: bridget_transport::protocol::ExecutionStateTransition {
+            execution_id: "execution-turn-execution".to_string(),
+            generation: 1,
+            expected_state: "running".to_string(),
+            expected_revision: 1,
+            next_state: "waiting_approval".to_string(),
+            reason: "permission_required".to_string(),
+            observed_at,
+        },
+    });
+    let response = read_response(request(address, "/v1/snapshot?token=jeton-execution"));
+    let payload = response_json(&response);
+    let row = payload["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "agent-execution")
+        .expect("projection après attente");
+    assert_eq!(row["connection_state"], "alive");
+    assert_eq!(row["turn_state"], "waiting_approval");
+    assert_eq!(row["wait_state"], "waiting_approval");
+    assert_eq!(row["queue_depth"], 1);
 
     drop(daemon);
     std::fs::remove_dir_all(root).unwrap();

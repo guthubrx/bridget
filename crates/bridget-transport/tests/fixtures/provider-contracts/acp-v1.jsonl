@@ -1,0 +1,6 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientInfo":{"name":"bridget","version":"fixture"}}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}
+{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/workspace"}}
+{"jsonrpc":"2.0","id":2,"result":{"sessionId":"session-fixture"}}
+{"jsonrpc":"2.0","method":"session/request_permission","params":{"sessionId":"session-fixture","options":[]}}
+{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"session-fixture"}}

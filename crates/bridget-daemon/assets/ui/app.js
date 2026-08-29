@@ -89,6 +89,46 @@
         assert.equal(api.formatAgentRelativeTime(1_000_000 - 8 * 86_400, 1_000_000), "la semaine dernière");
       });
 
+      test("propriete_agent_reste_visible_sans_alourdir_la_carte", () => {
+        const agent = api.normalizeAgentRow({
+          name: "enfant",
+          type: "codex",
+          host: "cartae",
+          state: "alive",
+          connection_state: "alive",
+          provider_age_secs: 5,
+          agent_link: {
+            link_id: "link-1",
+            parent_instance_id: "parent-1",
+            parent_execution_id: "execution-1",
+            objective_id: "objectif-1",
+            delegation_id: "delegation-1",
+            role: "verification",
+            agent_path: "parent-1/enfant-1",
+            state: "open",
+            direct_descendants: 1,
+            descendants: 2,
+          },
+        });
+        assert.equal(agent.agent_link.parent_instance_id, "parent-1");
+        assert.match(api.ownershipSummary(agent), /parent parent-1/);
+        assert.match(api.ownershipSummary(agent), /objectif objectif-1/);
+        assert.match(api.agentHeaderMeta(agent), /2 descendants/);
+        assert.equal(api.normalizeAgentRow({ agent_link: { role: "vide" } }).agent_link, null);
+      });
+
+      test("continuite_reconstruite_reste_explicitement_distincte_du_natif", () => {
+        const reconstructed = api.normalizeAgentRow({
+          continuation_mode: "reconstructed",
+        });
+        assert.equal(reconstructed.continuation_mode, "reconstructed");
+        assert.match(api.executionSummary(reconstructed), /continuité reconstructed/);
+        assert.equal(
+          api.normalizeAgentRow({ continuation_mode: "future_native" }).continuation_mode,
+          null,
+        );
+      });
+
       test("focus_conserve_sous_rafale", () => {
         let state = api.createUiState({
           draft: api.createDraft("travail", 3, 6, true),
@@ -2378,19 +2418,127 @@
     return `${agent || "unscoped"}:${identity}`;
   }
 
+  function normalizeAgentLink(link) {
+    if (!link || typeof link !== "object") return null;
+    const required = ["link_id", "parent_instance_id", "role", "agent_path", "state"];
+    if (required.some((key) => typeof link[key] !== "string" || !link[key].trim())) return null;
+    const optional = (key) => typeof link[key] === "string" && link[key].trim() ? link[key] : null;
+    const count = (key) => Number.isInteger(link[key]) && link[key] >= 0 ? link[key] : 0;
+    return {
+      link_id: link.link_id,
+      parent_instance_id: link.parent_instance_id,
+      parent_execution_id: optional("parent_execution_id"),
+      objective_id: optional("objective_id"),
+      delegation_id: optional("delegation_id"),
+      role: link.role,
+      agent_path: link.agent_path,
+      state: link.state,
+      direct_descendants: count("direct_descendants"),
+      descendants: count("descendants"),
+    };
+  }
+
+  function normalizeProvider(provider) {
+    if (!provider || typeof provider !== "object") return null;
+    if (typeof provider.binary_version !== "string" || !provider.binary_version.trim()) return null;
+    if (typeof provider.contract_version !== "string" || !provider.contract_version.trim()) return null;
+    const operations = Array.isArray(provider.operations)
+      ? provider.operations.filter((operation) => typeof operation === "string" && operation.trim())
+      : [];
+    return {
+      binary_version: provider.binary_version,
+      contract_version: provider.contract_version,
+      operations,
+      fallback: typeof provider.fallback === "string" && provider.fallback.trim()
+        ? provider.fallback
+        : null,
+    };
+  }
+
   function normalizeAgentRow(agent) {
     return {
       name: text(agent && agent.name, "agent inconnu"),
       type: text(agent && agent.type, "type inconnu"),
       host: text(agent && agent.host, "machine inconnue"),
       state: text(agent && agent.state, "unknown"),
+      connection_state: text(agent && agent.connection_state, text(agent && agent.state, "unknown")),
+      provider_age_secs: Number.isInteger(agent && agent.provider_age_secs) && agent.provider_age_secs >= 0
+        ? agent.provider_age_secs
+        : null,
+      turn_state: typeof (agent && agent.turn_state) === "string" ? agent.turn_state : null,
+      wait_state: typeof (agent && agent.wait_state) === "string" ? agent.wait_state : null,
+      progress_age_secs: Number.isInteger(agent && agent.progress_age_secs) && agent.progress_age_secs >= 0
+        ? agent.progress_age_secs
+        : null,
+      queue_depth: Number.isInteger(agent && agent.queue_depth) && agent.queue_depth >= 0
+        ? agent.queue_depth
+        : 0,
+      continuation_mode: ["native", "forked", "reconstructed"].includes(agent && agent.continuation_mode)
+        ? agent.continuation_mode
+        : null,
+      agent_link: normalizeAgentLink(agent && agent.agent_link),
+      provider: normalizeProvider(agent && agent.provider),
       last_message_at: Number.isFinite(agent && agent.last_message_at)
         ? Number(agent.last_message_at)
         : null,
       last_excerpt:
         typeof (agent && agent.last_excerpt) === "string" ? agent.last_excerpt : null,
       unread: Number.isInteger(agent && agent.unread) && agent.unread > 0 ? agent.unread : 0,
+      alerts: Array.isArray(agent && agent.alerts)
+        ? agent.alerts.filter((alert) => ["stale_message", "stalled_turn", "stalled_approval", "queue_saturated"].includes(alert))
+        : [],
     };
+  }
+
+  function executionSummary(agent) {
+    const parts = [];
+    if (agent.turn_state) parts.push("tour " + agent.turn_state);
+    if (agent.wait_state) parts.push("attente " + agent.wait_state);
+    if (agent.alerts.length > 0) parts.push("alerte " + agent.alerts.join(", "));
+    if (agent.continuation_mode) parts.push("continuité " + agent.continuation_mode);
+    if (agent.queue_depth > 0) parts.push("file " + agent.queue_depth);
+    if (agent.progress_age_secs !== null) parts.push("progrès il y a " + formatDuration(agent.progress_age_secs * 1000));
+    return parts.join(" · ");
+  }
+
+  function providerSummary(agent) {
+    const provider = agent && agent.provider;
+    if (!provider) return "fournisseur non attesté";
+    const operations = provider.operations.length > 0
+      ? `opérations ${provider.operations.join(", ")}`
+      : "aucune opération attestée";
+    return [`fournisseur ${provider.binary_version}`, `contrat ${provider.contract_version}`, operations, provider.fallback]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  function ownershipSummary(agent) {
+    const link = agent && agent.agent_link;
+    if (!link) return "";
+    const parts = [
+      `parent ${link.parent_instance_id}`,
+      `rôle ${link.role}`,
+      `lien ${link.state}`,
+    ];
+    if (link.parent_execution_id) parts.push(`exécution ${link.parent_execution_id}`);
+    if (link.objective_id) parts.push(`objectif ${link.objective_id}`);
+    if (link.delegation_id) parts.push(`délégation ${link.delegation_id}`);
+    if (link.descendants > 0) {
+      parts.push(`${link.descendants} descendant${link.descendants > 1 ? "s" : ""}`);
+    }
+    return parts.join(" · ");
+  }
+
+  function agentHeaderMeta(agent) {
+    const details = executionSummary(agent);
+    const provider = agent.provider_age_secs === null
+      ? "capacité fournisseur non observée"
+      : `capacité vue il y a ${formatDuration(agent.provider_age_secs * 1000)}`;
+    const ownership = ownershipSummary(agent);
+    const providerContract = providerSummary(agent);
+    return [agent.connection_state, agent.host, provider, providerContract, details, ownership]
+      .filter(Boolean)
+      .join(" · ");
   }
 
   function normalizeAgents(agents) {
@@ -3820,6 +3968,7 @@
       button.type = "button";
       button.dataset.agent = agent.name;
       button.setAttribute("aria-current", String(agent.name === state.selectedAgent));
+      button.title = agentHeaderMeta(agent);
 
       const layout = make("span", "agent-row__layout");
       const avatar = createAgentAvatar(
@@ -3846,6 +3995,10 @@
       if (recency) topEnd.append(make("time", "agent-row__recency", recency));
       top.append(topEnd);
       content.append(top);
+      const execution = executionSummary(agent);
+      if (execution) {
+        content.append(make("p", "agent-row__execution", execution));
+      }
 
       const excerpt = agentCardExcerpt(agent.name, agent.last_excerpt);
       if (excerpt) {
@@ -3874,7 +4027,7 @@
       const agent = state.agents.find((entry) => entry.name === state.selectedAgent);
       nodes.selectedAgent.textContent = agent ? agent.name : "Aucun agent";
       nodes.selectedMeta.textContent = agent
-        ? `${agent.state} · ${agent.host}`
+        ? agentHeaderMeta(agent)
         : "Sélectionnez un agent dans la liste.";
       nodes.selectedAgentAvatar.replaceChildren();
       nodes.selectedAgentAvatar.disabled = !agent;
@@ -4620,7 +4773,11 @@
     peerExchangeProjection,
     peerExchangeKey,
     normalizeAgentRow,
+    normalizeAgentLink,
+    ownershipSummary,
     normalizeAgents,
+    executionSummary,
+    agentHeaderMeta,
     formatLocalTime,
     localDayKey,
     journalMessageFact,

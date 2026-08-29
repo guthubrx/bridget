@@ -10,12 +10,12 @@ use crate::claude_provider_session::{
 };
 use crate::journal::{JournalFailureSink, JournalLiveFeed, JournalWriter, with_turn_failed_kind};
 use crate::managed_session::{
-    ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource, ManagedSession,
-    ManagedSessionDescriptor, ManagedTerminal,
+    ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource,
+    ManagedProviderIdentity, ManagedSession, ManagedSessionDescriptor, ManagedTerminal,
 };
-use crate::protocol::PresenceMode;
+use crate::protocol::{PresenceMode, ProviderObservation};
 use crate::transport::{Transport, TransportError};
-use bridget_core::BridgetMessage;
+use bridget_core::{BridgetMessage, MessageIntent};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
@@ -55,6 +55,8 @@ pub struct ClaudeStreamJsonOptions {
     /// Racine durable `~/.cache/bridget/sessions` (même arbre que le journal).
     /// Survit à la mort du wrapper et au redémarrage du daemon.
     pub session_store_root: Option<PathBuf>,
+    /// Baseline relevée avant lancement, absente pour un registre historique.
+    pub provider_observation: Option<ProviderObservation>,
     /// Nom d'agent sous lequel lire/écrire `claude_provider_session`.
     pub agent_name: Option<String>,
 }
@@ -88,6 +90,7 @@ pub struct ClaudeStreamJsonTransport {
     queue_capacity: usize,
     writer: Writer,
     child: Arc<Mutex<Child>>,
+    provider_observation: Option<ProviderObservation>,
     events: Arc<Mutex<VecDeque<ManagedEvent>>>,
     journal: Journal,
     session_store: SessionStoreHandle,
@@ -179,6 +182,23 @@ impl ClaudeStreamJsonTransport {
             busy.clone(),
             Duration::from_secs(options.notify_timeout_secs),
         );
+        push_internal(
+            &events,
+            ManagedEventKind::ProviderContextObserved {
+                identity: ManagedProviderIdentity {
+                    provider_kind: "claude".to_string(),
+                    provider_session_id: None,
+                    provider_thread_id: None,
+                    active_turn_id: None,
+                    provider_item_id: None,
+                    capabilities_revision: options
+                        .provider_observation
+                        .as_ref()
+                        .map(|observation| observation.contract_version.clone()),
+                    provider_observation: options.provider_observation.clone(),
+                },
+            },
+        );
         Ok(Self {
             connection_id: format!("claude-stream-json-{pid}"),
             alive,
@@ -187,6 +207,7 @@ impl ClaudeStreamJsonTransport {
             queue,
             queue_capacity: options.queue_capacity,
             writer,
+            provider_observation: options.provider_observation,
             child,
             events,
             journal,
@@ -269,6 +290,14 @@ impl Transport for ClaudeStreamJsonTransport {
         }
         let (lock, wake) = &*self.queue;
         let mut queue = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+        if message.intent == Some(MessageIntent::SteerCurrent) {
+            drop(queue);
+            self.push_internal(ManagedEventKind::DeliveryRejected {
+                message_id: message.id.clone(),
+                reason: "pilotage Claude indisponible".to_string(),
+            });
+            return Ok(());
+        }
         if queue.closed || queue.messages.len() >= self.queue_capacity {
             drop(queue);
             self.push_internal(ManagedEventKind::DeliveryRejected {
@@ -278,7 +307,23 @@ impl Transport for ClaudeStreamJsonTransport {
             return Ok(());
         }
         queue.messages.push_back(message.clone());
-        wake.notify_one();
+        // InterruptAndStart reste FIFO et ne cible que le tour actif capturé.
+        let active_message_id = (message.intent == Some(MessageIntent::InterruptAndStart)
+            && queue.pending_interrupt.is_none())
+        .then(|| {
+            queue
+                .active
+                .as_ref()
+                .map(|active| active.message_id.clone())
+        })
+        .flatten();
+        if let Some(active_message_id) = active_message_id {
+            drop(queue);
+            wake.notify_one();
+            let _ = self.cancel_delivery(&active_message_id, "interruption explicite");
+        } else {
+            wake.notify_one();
+        }
         Ok(())
     }
 
@@ -298,6 +343,27 @@ impl ManagedSession for ClaudeStreamJsonTransport {
             mode: PresenceMode::Cli,
             location: None,
         }
+    }
+
+    fn provider_identity(&self) -> Option<ManagedProviderIdentity> {
+        let session_id = self
+            .session_store
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_ref()
+            .and_then(ProviderSessionStore::load);
+        Some(ManagedProviderIdentity {
+            provider_kind: "claude".to_string(),
+            provider_session_id: session_id,
+            provider_thread_id: None,
+            active_turn_id: None,
+            provider_item_id: None,
+            capabilities_revision: self
+                .provider_observation
+                .as_ref()
+                .map(|observation| observation.contract_version.clone()),
+            provider_observation: self.provider_observation.clone(),
+        })
     }
 
     fn process_id(&self) -> u32 {
@@ -574,14 +640,13 @@ fn bootstrap_resume_in_reader(
                         failure.named_message(),
                     );
                 }
-                if let Some(session_id) = session_id_from_system_init(&value) {
-                    if let Some(store) = session_store
+                if let Some(session_id) = session_id_from_system_init(&value)
+                    && let Some(store) = session_store
                         .lock()
                         .unwrap_or_else(|poison| poison.into_inner())
                         .as_ref()
-                    {
-                        let _ = store.store(&session_id);
-                    }
+                {
+                    let _ = store.store(&session_id);
                 }
             }
             (reader.into_inner(), vec![trimmed])
@@ -609,6 +674,7 @@ fn spawn_claude_command(
             args: args.to_vec(),
             queue_capacity: 1,
             notify_timeout_secs: 1,
+            provider_observation: None,
             session_store_root: None,
             agent_name: None,
         },
@@ -816,6 +882,7 @@ fn interrupt_terminal_reason(reason: &str) -> bool {
     matches!(reason, "aborted_tools" | "aborted_streaming")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_reader(
     stdout: ChildStdout,
     prefetch: Vec<String>,
@@ -833,11 +900,11 @@ fn spawn_reader(
         } else {
             (stdout, prefetch)
         };
-        let mut lines = prefetch
+        let lines = prefetch
             .into_iter()
             .map(Ok)
             .chain(BufReader::new(stdout).lines());
-        while let Some(line) = lines.next() {
+        for line in lines {
             let Ok(line) = line else { break };
             let raw = line.as_bytes().to_vec();
             let value = match serde_json::from_str::<Value>(&line) {
@@ -861,6 +928,21 @@ fn spawn_reader(
                 {
                     let _ = store.store(&session_id);
                 }
+                push_source(
+                    &events,
+                    raw.clone(),
+                    ManagedEventKind::ProviderContextObserved {
+                        identity: ManagedProviderIdentity {
+                            provider_kind: "claude".to_string(),
+                            provider_session_id: Some(session_id),
+                            provider_thread_id: None,
+                            active_turn_id: None,
+                            provider_item_id: None,
+                            capabilities_revision: None,
+                            provider_observation: None,
+                        },
+                    },
+                );
             }
             let kind = value
                 .get("type")
@@ -909,10 +991,12 @@ fn spawn_reader(
                 // l'accusé portant le `request_id` émis solde l'interruption.
                 // Un accusé étranger est ignoré plutôt que d'éteindre une
                 // interruption qui n'est pas la sienne.
-                if let Some(acked) = value.pointer("/response/request_id").and_then(Value::as_str) {
+                if let Some(acked) = value
+                    .pointer("/response/request_id")
+                    .and_then(Value::as_str)
+                {
                     let matched = {
-                        let mut state =
-                            queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                        let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
                         if state.pending_interrupt.as_deref() == Some(acked) {
                             state.pending_interrupt = None;
                             true
@@ -1343,6 +1427,7 @@ mod tests {
             ],
             queue_capacity: 2,
             notify_timeout_secs: 2,
+            provider_observation: None,
             session_store_root: None,
             agent_name: None,
         }
@@ -1829,6 +1914,71 @@ mod tests {
     ///
     /// Le faux fournisseur répond ici exactement les formes mesurées.
     #[test]
+    fn message_humain_actif_interrompt_claude_et_declenche_la_remise() {
+        let mut slow = options();
+        slow.args[1] = concat!(
+            "while IFS= read -r line; do case \"$line\" in ",
+            "*control_request*) ",
+            "rid=$(printf '%s' \"$line\" | sed 's/.*\"request_id\":\"\\([^\"]*\\)\".*/\\1/'); ",
+            "printf '{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",",
+            "\"request_id\":\"%s\",\"response\":{\"still_queued\":[]}}}\\n' \"$rid\"; ",
+            "printf '{\"type\":\"result\",\"is_error\":true,",
+            "\"terminal_reason\":\"aborted_tools\"}\\n';; ",
+            "*) : ;; esac; done"
+        )
+        .to_string();
+        let mut transport = ClaudeStreamJsonTransport::spawn(slow).unwrap();
+        transport.deliver(&message("claude-actif")).unwrap();
+        let start_deadline = Instant::now() + Duration::from_secs(2);
+        while !transport.is_busy() && Instant::now() < start_deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            transport.is_busy(),
+            "le tour Claude initial doit être actif"
+        );
+
+        let mut human = message("claude-humain");
+        human.from = "superviseur".to_string();
+        human.intent = Some(MessageIntent::InterruptAndStart);
+        transport.deliver(&human).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut interrupted = false;
+        let mut human_dispatched = false;
+        while Instant::now() < deadline {
+            for event in transport.drain_events() {
+                interrupted |= matches!(
+                    event.kind,
+                    ManagedEventKind::TurnFinished {
+                        ref message,
+                        terminal: ManagedTerminal::Cancelled,
+                        ..
+                    } if message.id == "claude-actif"
+                );
+                human_dispatched |= matches!(
+                    event.kind,
+                    ManagedEventKind::PromptDispatched { ref message_id }
+                        if message_id == "claude-humain"
+                );
+            }
+            if interrupted && human_dispatched {
+                assert!(
+                    transport.is_alive(),
+                    "Claude doit rester utilisable après interruption"
+                );
+                transport.stop();
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        transport.stop();
+        panic!(
+            "le message humain devait interrompre le tour actif puis être remis, interruption={interrupted}, remis={human_dispatched}"
+        );
+    }
+
+    #[test]
     fn interruption_active_coupe_le_tour_sans_tuer_l_agent_claude() {
         let mut slow = options();
         slow.args[1] = concat!(
@@ -2203,6 +2353,7 @@ done
             args: Vec::new(),
             queue_capacity: 2,
             notify_timeout_secs: 2,
+            provider_observation: None,
             session_store_root: Some(root.clone()),
             agent_name: Some("agent-x".to_string()),
         };
@@ -2294,6 +2445,7 @@ exit 0
             args: Vec::new(),
             queue_capacity: 2,
             notify_timeout_secs: 2,
+            provider_observation: None,
             session_store_root: Some(root.clone()),
             agent_name: Some("agent-neuf".to_string()),
         };
@@ -2309,6 +2461,7 @@ exit 0
             args: Vec::new(),
             queue_capacity: 2,
             notify_timeout_secs: 2,
+            provider_observation: None,
             session_store_root: Some(root.clone()),
             agent_name: Some("agent-lent".to_string()),
         };
