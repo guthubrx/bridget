@@ -26,6 +26,19 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Un pilotage humain ne doit pas rester suspendu derrière un RPC silencieux.
+/// Cette borne ne constitue pas une preuve de remise : elle laisse ensuite la
+/// FIFO reprendre le message ou déclenche l'interruption de repli.
+const STEER_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+/// Référence t3code : les interruptions de tours enfants sont bornées à trois
+/// secondes. Bridget n'a pas de sous-arbre Codex à parcourir, mais la requête
+/// du tour actif ne doit pas, elle non plus, retenir un humain indéfiniment.
+const INTERRUPT_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+/// Après l'accusé (ou le silence) de `turn/interrupt`, le terminal du tour
+/// ancien dispose encore d'une courte fenêtre. Au-delà, son état ne doit plus
+/// immobiliser la file humaine : la remise devient explicitement rejetée,
+/// jamais `dispatching` éternel.
+const INTERRUPT_TERMINAL_TIMEOUT: Duration = Duration::from_secs(10);
 const RATE_LIMIT_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const TURN_POLL: Duration = Duration::from_millis(25);
 const SATURATION_RETRIES: u32 = 4;
@@ -820,6 +833,7 @@ fn wait_for_turn(
         .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds))
         .unwrap_or_else(|| started + worker.notify_timeout);
     let mut interrupted = false;
+    let mut interrupt_terminal_deadline = None;
     let mut steering_allowed = true;
     // Un accusé `turn/steer` ne prouve jamais la remise. Chaque message reste
     // dans `accepted_pending` jusqu’à sa complétion `userMessage` corrélée.
@@ -845,6 +859,41 @@ fn wait_for_turn(
         }
         if !interrupted && steering_allowed {
             steering_allowed = steer_into_turn(worker, turn_id, &mut accepted_pending);
+        }
+        // La notification de consommation peut arriver pendant la réponse
+        // JSON-RPC de `turn/steer`. La traiter avant l'échéance évite
+        // d'interrompre un tour dont la remise humaine est déjà attestée.
+        let consumed = {
+            let (lock, _) = &*worker.observations;
+            let mut observed = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+            consume_accepted_steers(
+                &mut observed,
+                &worker.thread_id,
+                turn_id,
+                &mut accepted_pending,
+            )
+        };
+        confirm_consumed_steers(worker, turn_id, consumed);
+        let now = SystemTime::now();
+        // Un tour ancien peut être long, mais sa propre échéance ne doit pas
+        // devenir celle d'un humain arrivé par `turn/steer`. Tant qu'aucune
+        // complétion userMessage corrélée ne l'atteste, on bascule sur le
+        // repli `turn/interrupt` à l'échéance de CE message humain.
+        if !interrupted
+            && earliest_unconfirmed_steer_deadline(&worker.queue, &accepted_pending)
+                .is_some_and(|steer_deadline| now >= steer_deadline)
+        {
+            interrupted = true;
+            let _ = request_with_timeout(
+                &worker.writer,
+                &worker.waiters,
+                &worker.next_id,
+                "turn/interrupt",
+                json!({ "threadId": worker.thread_id, "turnId": turn_id }),
+                INTERRUPT_REQUEST_TIMEOUT,
+            );
+            requeue_unconfirmed(&worker.queue, &mut accepted_pending);
+            interrupt_terminal_deadline = Some(now + INTERRUPT_TERMINAL_TIMEOUT);
         }
         let (lock, wake) = &*worker.observations;
         let mut observed = lock.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -879,14 +928,23 @@ fn wait_for_turn(
             };
         }
         let now = SystemTime::now();
-        if now >= deadline {
+        let terminal_deadline = interrupt_terminal_deadline
+            .map(|interrupt_deadline| interrupt_deadline.min(deadline))
+            .unwrap_or(deadline);
+        if now >= terminal_deadline {
             requeue_unconfirmed(&worker.queue, &mut accepted_pending);
             return ManagedEventKind::DeliveryRejected {
                 message_id: message.id.clone(),
-                reason: "échéance Codex dépassée".to_string(),
+                reason: if interrupt_terminal_deadline
+                    .is_some_and(|interrupt_deadline| now >= interrupt_deadline)
+                {
+                    "interruption Codex sans terminal après pilotage humain non attesté".to_string()
+                } else {
+                    "échéance Codex dépassée".to_string()
+                },
             };
         }
-        let remaining = deadline.duration_since(now).unwrap_or(TURN_POLL);
+        let remaining = terminal_deadline.duration_since(now).unwrap_or(TURN_POLL);
         let wait = remaining.min(TURN_POLL);
         let observed = lock.lock().unwrap_or_else(|poison| poison.into_inner());
         let (next, _) = wake
@@ -894,6 +952,27 @@ fn wait_for_turn(
             .unwrap_or_else(|poison| poison.into_inner());
         drop(next);
     }
+}
+
+/// Échéance la plus proche des messages humains qui ne sont pas encore
+/// attestés. Les messages dans `accepted` ont reçu un accusé `turn/steer`,
+/// ceux de `QueueState::steer` ne l'ont même pas reçu : les deux doivent être
+/// protégés par la même borne et restituer leur ordre FIFO au repli.
+fn earliest_unconfirmed_steer_deadline(
+    queue: &Arc<(Mutex<QueueState>, Condvar)>,
+    accepted: &[BridgetMessage],
+) -> Option<SystemTime> {
+    let (lock, _) = &**queue;
+    let state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+    accepted
+        .iter()
+        .chain(state.steer.iter())
+        .filter_map(|message| {
+            message
+                .deadline_at
+                .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds))
+        })
+        .min()
 }
 
 fn consume_accepted_steers(
@@ -986,7 +1065,7 @@ fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMes
         let Some(message) = next else {
             return true;
         };
-        let outcome = request(
+        let outcome = request_with_timeout(
             &worker.writer,
             &worker.waiters,
             &worker.next_id,
@@ -997,6 +1076,7 @@ fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMes
                 "clientUserMessageId": message.id,
                 "input": [{ "type": "text", "text": message.body }],
             }),
+            STEER_REQUEST_TIMEOUT,
         );
         match outcome {
             Ok(_) => {
@@ -2373,8 +2453,15 @@ mod tests {
                                 printf '%s\n' "{\"id\":$steer_id,\"error\":{\"code\":-32600,\"message\":\"cannot steer a review turn\",\"data\":{\"message\":\"cannot steer a review turn\",\"codexErrorInfo\":{\"activeTurnNotSteerable\":{\"turnKind\":\"review\"}}}}}"
                             else
                                 printf '%s\n' "{\"id\":$steer_id,\"result\":{}}"
+                                if [ "${BRIDGET_CODEX_STEER_CONSUME:-0}" = 1 ]; then
+                                    steer_message_id=$(printf '%s' "$line" | sed 's/.*"clientUserMessageId":"\([^"]*\)".*/\1/')
+                                    printf '%s\n' "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"thread-native\",\"turnId\":\"turn-native\",\"completedAtMs\":1,\"item\":{\"id\":\"$steer_message_id\",\"type\":\"userMessage\",\"text\":\"message humain consommé\"}}}"
+                                fi
                             fi ;;
-                        *'"method":"turn/interrupt"'*) printf '%s\n' '{"id":6,"result":{}}'; printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"interrupted","items":[]}}}' ;;
+                        *'"method":"turn/interrupt"'*)
+                            interrupt_id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
+                            printf '%s\n' "{\"id\":$interrupt_id,\"result\":{}}"
+                            printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"interrupted","items":[]}}}' ;;
                     esac
                 done"#.to_string(),
             ],
@@ -2575,10 +2662,7 @@ mod tests {
                     "BRIDGET_CODEX_REQUEST_VARIANT".to_string(),
                     variant.to_string(),
                 ),
-                (
-                    "BRIDGET_CODEX_HOLD_TURN".to_string(),
-                    "1".to_string(),
-                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
             ],
             false,
         )
@@ -2854,10 +2938,7 @@ mod tests {
                     "BRIDGET_CODEX_REQUEST_APPROVAL".to_string(),
                     "1".to_string(),
                 ),
-                (
-                    "BRIDGET_CODEX_HOLD_TURN".to_string(),
-                    "1".to_string(),
-                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
             ],
             false,
         )
@@ -2930,10 +3011,7 @@ mod tests {
                     "BRIDGET_CODEX_REQUEST_APPROVAL".to_string(),
                     "1".to_string(),
                 ),
-                (
-                    "BRIDGET_CODEX_HOLD_TURN".to_string(),
-                    "1".to_string(),
-                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
             ],
             false,
         )
@@ -3335,8 +3413,7 @@ mod tests {
         while Instant::now() < deadline {
             let contenu = fs::read_to_string(&trace).unwrap_or_default();
             let repris = contenu.lines().any(|ligne| {
-                ligne.contains("\"method\":\"turn/start\"")
-                    && ligne.contains("codex-np-refuse")
+                ligne.contains("\"method\":\"turn/start\"") && ligne.contains("codex-np-refuse")
             });
             if repris {
                 deux_turn_start = true;
@@ -3356,6 +3433,275 @@ mod tests {
             "un tour non pilotable doit rendre le message à la file : \
              aucun second turn/start observé, le message est resté bloqué en \
              pilotage; trace={contenu}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Un accusé `turn/steer` sans `item/completed userMessage` n'est pas une
+    /// remise. Le délai du message humain doit donc interrompre le tour ancien
+    /// bloqué, restituer ce message en tête de FIFO, puis laisser le système
+    /// démarrer son tour AVANT tout message système arrivé entre-temps.
+    ///
+    /// Sans ce repli, le délai suivi est celui du tour ancien (60 s ici) : la
+    /// remise humaine reste `dispatching` jusqu'à cette échéance étrangère.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_G_codex_steer_sans_consommation_interrompt_et_priorise_l_humain() {
+        let root = root("temoin-steer-sans-consommation");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 60;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
+                (
+                    "BRIDGET_CODEX_REQUEST_APPROVAL".to_string(),
+                    "1".to_string(),
+                ),
+            ],
+            false,
+        )
+        .expect("session native steering non consommé");
+
+        let mut ancien = message("ancien-bloque");
+        ancien.id = "codex-ancien-bloque".to_string();
+        transport
+            .deliver(&ancien)
+            .expect("livraison du tour ancien");
+
+        let attente = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < attente {
+            if fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("\"method\":\"turn/start\"")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        let mut humain = message("humain-prioritaire");
+        humain.id = "codex-humain-prioritaire".to_string();
+        humain.from = "humain".to_string();
+        humain.deadline_at = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("horloge")
+                .as_secs()
+                + 1,
+        );
+        transport.deliver(&humain).expect("livraison humaine");
+
+        let mut systeme = message("systeme-apres-humain");
+        systeme.id = "codex-systeme-apres-humain".to_string();
+        transport.deliver(&systeme).expect("livraison système");
+
+        let deadline = Instant::now() + Duration::from_secs(6);
+        let mut humain_repris = false;
+        while Instant::now() < deadline {
+            let contenu = fs::read_to_string(&trace).unwrap_or_default();
+            humain_repris = contenu.lines().any(|ligne| {
+                ligne.contains("\"method\":\"turn/start\"")
+                    && ligne.contains("codex-humain-prioritaire")
+            });
+            if humain_repris {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        transport.stop();
+
+        let contenu = fs::read_to_string(&trace).unwrap_or_default();
+        let position_humain = contenu
+            .find("codex-humain-prioritaire")
+            .expect("turn/start humain attendu");
+        let position_systeme = contenu.find("codex-systeme-apres-humain");
+        assert!(
+            contenu.contains("\"method\":\"turn/steer\""),
+            "le message humain devait d'abord tenter turn/steer; trace={contenu}"
+        );
+        assert!(
+            contenu.contains("\"decision\":\"accept\""),
+            "la demande d'autorisation du tour ancien devait être soldée avant le repli; trace={contenu}"
+        );
+        assert!(
+            contenu.contains("\"method\":\"turn/interrupt\""),
+            "le steering non consommé devait interrompre le tour ancien; trace={contenu}"
+        );
+        assert!(
+            humain_repris,
+            "le message humain non consommé devait repartir en tête avant 60 s; trace={contenu}"
+        );
+        assert!(
+            position_systeme.is_none_or(|position| position_humain < position),
+            "un message système ne doit pas doubler l'humain restitué; trace={contenu}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Un résultat JSON-RPC `turn/steer` ne solde jamais une remise humaine.
+    /// Le faux serveur garde le tour ouvert et n'émet pas `userMessage` :
+    /// aucun `PromptDispatched` humain ne doit sortir avant preuve contraire.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_H_codex_steer_ack_sans_consommation_ne_solde_pas_la_remise() {
+        let root = root("temoin-steer-ack-sans-consommation");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 8;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
+            ],
+            false,
+        )
+        .expect("session native ack sans consommation");
+
+        let mut ancien = message("ack-sans-consommation-ancien");
+        ancien.id = "codex-ack-sans-consommation-ancien".to_string();
+        transport
+            .deliver(&ancien)
+            .expect("livraison du tour ancien");
+        let attente = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < attente {
+            if fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("\"method\":\"turn/start\"")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        let mut humain = message("ack-sans-consommation-humain");
+        humain.id = "codex-ack-sans-consommation-humain".to_string();
+        humain.from = "humain".to_string();
+        humain.deadline_at = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("horloge")
+                .as_secs()
+                + 30,
+        );
+        transport.deliver(&humain).expect("livraison humaine");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut steer_observe = false;
+        let mut prompt_humain = false;
+        while Instant::now() < deadline {
+            let contenu = fs::read_to_string(&trace).unwrap_or_default();
+            steer_observe |= contenu.contains("\"method\":\"turn/steer\"");
+            for event in transport.drain_events() {
+                prompt_humain |= matches!(
+                    event.kind,
+                    ManagedEventKind::PromptDispatched { ref message_id }
+                        if message_id == "codex-ack-sans-consommation-humain"
+                );
+            }
+            if steer_observe {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        thread::sleep(Duration::from_millis(100));
+        for event in transport.drain_events() {
+            prompt_humain |= matches!(
+                event.kind,
+                ManagedEventKind::PromptDispatched { ref message_id }
+                    if message_id == "codex-ack-sans-consommation-humain"
+            );
+        }
+        transport.stop();
+
+        assert!(steer_observe, "turn/steer attendu");
+        assert!(
+            !prompt_humain,
+            "un accusé turn/steer sans item/completed userMessage ne doit pas acquitter la remise"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// La même remise est acquittée dès que le flux natif atteste exactement le
+    /// `clientUserMessageId` dans un `item/completed userMessage` du tour actif.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_I_codex_user_message_corrige_acquitte_la_remise_humaine() {
+        let root = root("temoin-steer-consomme");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 8;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
+                ("BRIDGET_CODEX_STEER_CONSUME".to_string(), "1".to_string()),
+            ],
+            false,
+        )
+        .expect("session native steering consommé");
+
+        let mut ancien = message("consomme-ancien");
+        ancien.id = "codex-consomme-ancien".to_string();
+        transport
+            .deliver(&ancien)
+            .expect("livraison du tour ancien");
+        let attente = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < attente {
+            if fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("\"method\":\"turn/start\"")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        let mut humain = message("consomme-humain");
+        humain.id = "codex-consomme-humain".to_string();
+        humain.from = "humain".to_string();
+        humain.deadline_at = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("horloge")
+                .as_secs()
+                + 30,
+        );
+        transport.deliver(&humain).expect("livraison humaine");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut prompt_humain = false;
+        while Instant::now() < deadline {
+            for event in transport.drain_events() {
+                prompt_humain |= matches!(
+                    event.kind,
+                    ManagedEventKind::PromptDispatched { ref message_id }
+                        if message_id == "codex-consomme-humain"
+                );
+            }
+            if prompt_humain {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        transport.stop();
+
+        assert!(
+            prompt_humain,
+            "la preuve userMessage corrélée devait déclencher PromptDispatched"
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -3472,9 +3818,7 @@ mod tests {
         let (present, _outbound) = journal_detail_fixture("temoin-tool-command", true);
         let commands: Vec<_> = present
             .iter()
-            .filter(|event| {
-                event["event"] == "update" && event["payload"]["kind"] == "command"
-            })
+            .filter(|event| event["event"] == "update" && event["payload"]["kind"] == "command")
             .collect();
         assert_eq!(
             commands.len(),
@@ -3633,8 +3977,11 @@ mod tests {
         );
         assert_eq!(deny_payload["decision"], "decline");
         assert!(
-            approval_response(&json!({ "method": "item/commandExecution/requestApproval" }), "allow")
-                .is_none(),
+            approval_response(
+                &json!({ "method": "item/commandExecution/requestApproval" }),
+                "allow"
+            )
+            .is_none(),
             "sans id: aucune réponse inventée"
         );
     }

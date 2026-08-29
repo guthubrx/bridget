@@ -9,7 +9,7 @@
 ## Phase 2 — Fondations
 
 - [x] T004 Vérifier dans `crates/bridget-transport/src/claude_stream_json.rs` que la trame existante reste réutilisée, sans la réimplémenter.
-- [ ] T005 Définir dans `crates/bridget-transport/src/codex_app_server.rs` le passage de l’acceptation de steering à la confirmation de remise.
+- [x] T005 Définir dans `crates/bridget-transport/src/codex_app_server.rs` le passage de l’acceptation de steering à la confirmation de remise.
 
 ## Phase 3 — Interrompre proprement [US1]
 
@@ -18,11 +18,11 @@
 
 ## Phase 4 — Piloter et acquitter Codex [US2]
 
-- [ ] T008 [US2] Modifier `crates/bridget-transport/src/codex_app_server.rs` afin que le steering humain conserve l’ordre après rejet/interruption et n’acquitte qu’après consommation attestée.
+- [x] T008 [US2] Modifier `crates/bridget-transport/src/codex_app_server.rs` afin que le steering humain conserve l’ordre après rejet/interruption et n’acquitte qu’après consommation attestée.
 
 ## Phase 5 — Intégration [US3]
 
-- [ ] T009 [US3] Vérifier `crates/bridget-daemon/src/wrapper.rs` et ajuster uniquement si la confirmation de remise attestée exige un pont commun.
+- [x] T009 [US3] Vérifier `crates/bridget-daemon/src/wrapper.rs` : le pont existant relie déjà `PromptDispatched` à `DeliverAcked` et classe un reçu `Seen` non attesté en `DeliveryIndeterminate` sans seconde injection.
 - [ ] T010 Mettre à jour `specs/063-interruption-pilotage-tour-humain/implementation.md` avec les preuves, limites et SHAs livrés.
 - [ ] T011 Compiler/formater les couloirs touchés, intégrer les lots et produire l’horodatage minimal de route réelle après mise en service.
 
