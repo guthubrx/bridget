@@ -24,7 +24,7 @@
 
 - [x] T009 [US3] Vérifier `crates/bridget-daemon/src/wrapper.rs` : le pont existant relie déjà `PromptDispatched` à `DeliverAcked` et classe un reçu `Seen` non attesté en `DeliveryIndeterminate` sans seconde injection.
 - [x] T010 Mettre à jour `specs/063-interruption-pilotage-tour-humain/implementation.md` avec les preuves, limites et SHAs livrés.
-- [ ] T011 Compiler/formater les couloirs touchés, intégrer les lots et produire l’horodatage minimal de route réelle après mise en service.
+- [x] T011 Compiler/formater les couloirs touchés, intégrer les lots et produire l’horodatage minimal de route réelle après mise en service. Preuve: `evidence/production-route-20260829.md`.
 
 ## Dépendances
 
