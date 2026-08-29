@@ -7,7 +7,7 @@
 use crate::mission_projection::{
     MissionProjectionV1, read_public_mission_projection_v1, retain_living_objectives,
 };
-use bridget_core::BridgetMessage;
+use bridget_core::{BridgetMessage, MessageOrigin};
 use bridget_transport::journal::valid_events;
 use bridget_transport::protocol::{
     AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
@@ -1021,6 +1021,7 @@ fn send_ui_message(
     let issued_at = now_secs();
     let mut message = BridgetMessage::new(UI_SENDER, request.to, request.body);
     message.reply = request.reply;
+    message.origin = Some(MessageOrigin::Human);
     let message_id = message.id.clone();
     send_daemon(
         &mut writer,

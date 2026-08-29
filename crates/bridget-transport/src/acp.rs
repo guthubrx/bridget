@@ -8,7 +8,7 @@ use crate::managed_session::{
 };
 use crate::protocol::{PresenceMode, ProviderObservation};
 use crate::transport::{Transport, TransportError};
-use bridget_core::{BridgetMessage, MessageIntent};
+use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -622,7 +622,9 @@ impl Transport for AcpTransport {
                 });
             return Ok(());
         }
-        let active_message_id = if msg.intent == Some(MessageIntent::InterruptAndStart) {
+        let active_message_id = if msg.intent == Some(MessageIntent::InterruptAndStart)
+            || msg.origin == Some(MessageOrigin::Human)
+        {
             enqueue_and_capture_active_message_id(&self.queue, self.queue_capacity, msg.clone())
         } else if enqueue(&self.queue, self.queue_capacity, msg.clone()) {
             Some(None)
@@ -3374,7 +3376,7 @@ echo '{"jsonrpc":"2.0","id":5,"result":{"stopReason":"end_turn"}}'
 
         let mut human = message("acp-humain");
         human.from = "superviseur".to_string();
-        human.intent = Some(MessageIntent::InterruptAndStart);
+        human.origin = Some(MessageOrigin::Human);
         transport.deliver(&human).unwrap();
         transport.deliver(&message("acp-systeme")).unwrap();
 
