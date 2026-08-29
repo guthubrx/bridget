@@ -15,7 +15,7 @@ use crate::transport::{Transport, TransportError};
 use bridget_core::BridgetMessage;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -70,6 +70,10 @@ struct QueueState {
     /// (attendre la fin du tour), celle-là le mode « steer ».
     steer: VecDeque<BridgetMessage>,
     active: Option<ActiveTurn>,
+    /// Ferme atomiquement le couloir de pilotage dès qu’un tour est annulé
+    /// ou non pilotable. Les messages suivants rejoignent alors `messages`,
+    /// derrière les messages à restituer, au lieu de pouvoir les doubler.
+    steering_open: bool,
     closed: bool,
 }
 
@@ -100,6 +104,11 @@ struct Observations {
     events: VecDeque<ManagedEvent>,
     response_by_turn: HashMap<String, String>,
     terminal_by_turn: HashMap<String, ManagedTerminal>,
+    /// Une complétion `item/completed` de type `userMessage` est la seule
+    /// preuve protocolaire de consommation d’un `turn/steer`. La clé porte le
+    /// thread ET le tour afin qu’une sortie tardive ne solde jamais un autre
+    /// tour actif.
+    consumed_steers_by_turn: HashMap<(String, String), HashSet<String>>,
 }
 
 // Les deltas restent provisoires : seul le worker atteste leur présence au terminal.
@@ -238,6 +247,7 @@ impl CodexAppServerTransport {
                 messages: VecDeque::new(),
                 steer: VecDeque::new(),
                 active: None,
+                steering_open: false,
                 closed: false,
             }),
             Condvar::new(),
@@ -494,10 +504,10 @@ impl Transport for CodexAppServerTransport {
         }
         let (queue, wake) = &*self.queue;
         let mut queue = queue.lock().unwrap_or_else(|poison| poison.into_inner());
-        // Un tour est en cours : le message est PILOTÉ dans ce tour plutôt que
-        // d'attendre sa fin (`turn/steer`). C'est le défaut d'openclaw ; le mode
-        // « queue » reste le comportement quand aucun tour n'est actif.
-        let steering = queue.active.is_some();
+        // Seul le message humain reçu pendant un tour encore pilotable entre
+        // dans ce tour. Tous les autres expéditeurs conservent le mode FIFO
+        // historique, y compris pendant un tour actif.
+        let steering = message.from == "humain" && queue.active.is_some() && queue.steering_open;
         let saturated = if steering {
             queue.steer.len() >= self.queue_capacity
         } else {
@@ -573,6 +583,7 @@ impl ManagedSession for CodexAppServerTransport {
             .filter(|active| active.message_id == message_id)
         {
             let _ = active.cancel.send(reason.to_string());
+            queue.steering_open = false;
             return true;
         }
         let Some(position) = queue
@@ -639,6 +650,7 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                     message_id: message.id.clone(),
                     cancel: sender,
                 });
+                queue.steering_open = true;
                 (message, receiver)
             };
             if !worker.alive.load(Ordering::SeqCst) {
@@ -808,15 +820,13 @@ fn wait_for_turn(
         .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds))
         .unwrap_or_else(|| started + worker.notify_timeout);
     let mut interrupted = false;
-    // Piège 1 (openclaw, attempt-steering.ts:180-181) : l'acceptation n'est pas
-    // la remise. Codex accuse `turn/steer` sans garantir la consommation, et une
-    // interruption efface les entrées acceptées non consommées. On garde donc
-    // chaque message piloté NON SOLDÉ ici, et on le rend à la file principale si
-    // le tour est interrompu — plutôt que de le perdre en silence.
+    let mut steering_allowed = true;
+    // Un accusé `turn/steer` ne prouve jamais la remise. Chaque message reste
+    // dans `accepted_pending` jusqu’à sa complétion `userMessage` corrélée.
     let mut accepted_pending: Vec<BridgetMessage> = Vec::new();
     loop {
         if !worker.alive.load(Ordering::SeqCst) {
-            requeue_pending(&worker.queue, &mut accepted_pending);
+            requeue_unconfirmed(&worker.queue, &mut accepted_pending);
             return ManagedEventKind::DeliveryRejected {
                 message_id: message.id.clone(),
                 reason: "stdout Codex fermé pendant le tour".to_string(),
@@ -831,27 +841,46 @@ fn wait_for_turn(
                 "turn/interrupt",
                 json!({ "threadId": worker.thread_id, "turnId": turn_id }),
             );
-            requeue_pending(&worker.queue, &mut accepted_pending);
+            requeue_unconfirmed(&worker.queue, &mut accepted_pending);
         }
-        if !interrupted {
-            steer_into_turn(worker, turn_id, &mut accepted_pending);
+        if !interrupted && steering_allowed {
+            steering_allowed = steer_into_turn(worker, turn_id, &mut accepted_pending);
         }
         let (lock, wake) = &*worker.observations;
         let mut observed = lock.lock().unwrap_or_else(|poison| poison.into_inner());
-        if let Some(terminal) = observed.terminal_by_turn.remove(turn_id) {
-            let response = observed
+        let consumed = consume_accepted_steers(
+            &mut observed,
+            &worker.thread_id,
+            turn_id,
+            &mut accepted_pending,
+        );
+        let terminal = observed.terminal_by_turn.remove(turn_id);
+        let response = terminal.as_ref().map(|_| {
+            observed
                 .response_by_turn
                 .remove(turn_id)
-                .unwrap_or_default();
+                .unwrap_or_default()
+        });
+        if terminal.is_some() {
+            observed
+                .consumed_steers_by_turn
+                .remove(&(worker.thread_id.clone(), turn_id.to_string()));
+        }
+        drop(observed);
+        confirm_consumed_steers(worker, turn_id, consumed);
+        if let Some(terminal) = terminal {
+            // Même un terminal `completed` ne solde pas un pilotage sans
+            // complétion corrélée : la restitution FIFO est donc obligatoire.
+            requeue_unconfirmed(&worker.queue, &mut accepted_pending);
             return ManagedEventKind::TurnFinished {
                 message: message.clone(),
-                response,
+                response: response.unwrap_or_default(),
                 terminal,
             };
         }
         let now = SystemTime::now();
         if now >= deadline {
-            requeue_pending(&worker.queue, &mut accepted_pending);
+            requeue_unconfirmed(&worker.queue, &mut accepted_pending);
             return ManagedEventKind::DeliveryRejected {
                 message_id: message.id.clone(),
                 reason: "échéance Codex dépassée".to_string(),
@@ -859,6 +888,7 @@ fn wait_for_turn(
         }
         let remaining = deadline.duration_since(now).unwrap_or(TURN_POLL);
         let wait = remaining.min(TURN_POLL);
+        let observed = lock.lock().unwrap_or_else(|poison| poison.into_inner());
         let (next, _) = wake
             .wait_timeout(observed, wait)
             .unwrap_or_else(|poison| poison.into_inner());
@@ -866,19 +896,68 @@ fn wait_for_turn(
     }
 }
 
-/// Rend à la file principale les messages acceptés par `turn/steer` mais dont
-/// la consommation n'a jamais été confirmée. Ils repassent EN TÊTE et dans leur
-/// ordre d'origine : un message piloté puis perdu doit être rejoué avant les
-/// messages plus récents, jamais après.
-fn requeue_pending(
+fn consume_accepted_steers(
+    observed: &mut Observations,
+    thread_id: &str,
+    turn_id: &str,
+    accepted: &mut Vec<BridgetMessage>,
+) -> Vec<BridgetMessage> {
+    let key = (thread_id.to_string(), turn_id.to_string());
+    let Some(mut consumed) = observed.consumed_steers_by_turn.remove(&key) else {
+        return Vec::new();
+    };
+    let mut confirmed = Vec::new();
+    let mut remaining = Vec::with_capacity(accepted.len());
+    for message in std::mem::take(accepted) {
+        if consumed.remove(&message.id) {
+            confirmed.push(message);
+        } else {
+            remaining.push(message);
+        }
+    }
+    *accepted = remaining;
+    if !consumed.is_empty() {
+        observed.consumed_steers_by_turn.insert(key, consumed);
+    }
+    confirmed
+}
+
+fn confirm_consumed_steers(worker: &Worker, turn_id: &str, consumed: Vec<BridgetMessage>) {
+    for message in consumed {
+        push_internal(
+            &worker.observations,
+            ManagedEventKind::PromptDispatched {
+                message_id: message.id.clone(),
+            },
+        );
+        record_or_terminal(
+            &worker.journal,
+            &worker.observations,
+            "prompt_dispatched",
+            Some(&message.id),
+            json!({
+                "from": &message.from,
+                "body": &message.body,
+                "turn_id": turn_id,
+                "via": "turn/steer",
+            }),
+        );
+    }
+}
+
+/// Restitue en tête de FIFO les messages humains non attestés. Les accusés
+/// précèdent ceux jamais acceptés, et tous précèdent la file déjà en attente.
+fn requeue_unconfirmed(
     queue: &Arc<(Mutex<QueueState>, Condvar)>,
     pending: &mut Vec<BridgetMessage>,
 ) {
-    if pending.is_empty() {
-        return;
-    }
     let (lock, wake) = &**queue;
     let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+    state.steering_open = false;
+    let steered: Vec<_> = state.steer.drain(..).collect();
+    for message in steered.into_iter().rev() {
+        state.messages.push_front(message);
+    }
     for message in pending.drain(..).rev() {
         state.messages.push_front(message);
     }
@@ -888,16 +967,16 @@ fn requeue_pending(
 /// Injecte dans le tour ACTIF les messages en attente de pilotage.
 ///
 /// Trois contraintes tenues ici, documentées par openclaw :
-/// - le délai d'attente est borné (`request`, REQUEST_TIMEOUT) : `turn/steer`
-///   n'est qu'un accusé et rien ne garantit une réponse. Sans borne, l'appelant
-///   ne se débloquerait qu'à la fermeture du client et bloquerait TOUS les
+/// - le délai d’attente est borné (`request`, REQUEST_TIMEOUT) : `turn/steer`
+///   n’est qu’un accusé et rien ne garantit une réponse. Sans borne, l’appelant
+///   ne se débloquerait qu’à la fermeture du client et bloquerait TOUS les
 ///   pilotages suivants derrière lui (attempt-steering.ts:184-187) ;
 /// - `expectedTurnId` porte le tour actif — jamais un identifiant retourné pour
 ///   un tour mis en file (t3code, CodexSessionRuntime.ts:1853) ;
-/// - en cas de rejet, le message est remis EN TÊTE et le drainage s'arrête pour
-///   ce passage : le suivant ne doit pas doubler celui qui vient d'échouer
+/// - en cas de rejet, le message est remis EN TÊTE et le drainage s’arrête pour
+///   ce passage : le suivant ne doit pas doubler celui qui vient d’échouer
 ///   (attempt-steering.ts:218-219).
-fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMessage>) {
+fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMessage>) -> bool {
     loop {
         let next = {
             let (lock, _) = &*worker.queue;
@@ -905,7 +984,7 @@ fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMes
             state.steer.pop_front()
         };
         let Some(message) = next else {
-            return;
+            return true;
         };
         let outcome = request(
             &worker.writer,
@@ -933,30 +1012,20 @@ fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMes
             }
             Err(error) => {
                 let message_id = message.id.clone();
-                // Quatrième piège, absent du chantier et MESURÉ dans le schéma
-                // de codex-cli 0.150.1 : un tour de type `review` ou `compact`
-                // n'est PAS pilotable (`NonSteerableTurnKind`, erreur
-                // `activeTurnNotSteerable`). Réessayer indéfiniment boucherait
-                // la file jusqu'à la fin du tour. Le message repart donc en mode
-                // « queue » — il sera traité au tour suivant plutôt que perdu ni
-                // rejoué en boucle.
-                // Le marqueur est pose par provider_error_reason a partir du
-                // champ structure du protocole. On NE cherche PAS le message du
-                // fournisseur : il n'est jamais remonte, remplace par une
-                // empreinte — mesure du 28/08, banc /tmp/steer-reel-28aout.
                 let non_pilotable = error.to_string().contains("tour non pilotable");
                 let (lock, wake) = &*worker.queue;
                 let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+                // Le message reste ici jusqu’au repli atomique : déplacer un
+                // refus non pilotable dans `messages` ferait doubler les
+                // messages acceptés antérieurs au prochain tour.
+                state.steer.push_front(message);
                 if non_pilotable {
-                    state.messages.push_front(message);
-                } else {
-                    state.steer.push_front(message);
+                    state.steering_open = false;
                 }
                 wake.notify_one();
                 drop(state);
-                // Pas de DeliveryRejected ici : le message n'est pas perdu, il
-                // reste en tête pour le passage suivant. On journalise le refus
-                // sans mentir sur son sort.
+                // Pas de DeliveryRejected ici : le message reste récupérable
+                // et en tête de son ordre d’arrivée.
                 record_or_terminal(
                     &worker.journal,
                     &worker.observations,
@@ -964,18 +1033,24 @@ fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMes
                     Some(&message_id),
                     json!({ "reason": error.to_string(), "turn_id": turn_id }),
                 );
-                return;
+                return !non_pilotable;
             }
         }
     }
 }
 
 fn clear_active(queue: &Arc<(Mutex<QueueState>, Condvar)>) {
-    queue
-        .0
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .active = None;
+    let (lock, wake) = &**queue;
+    let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+    state.steering_open = false;
+    // `turn/start` peut échouer avant `wait_for_turn`. Dans ce chemin, aucun
+    // repli précédent n’a vidé `steer` : le restituer évite une perte humaine.
+    let steered: Vec<_> = state.steer.drain(..).collect();
+    for message in steered.into_iter().rev() {
+        state.messages.push_front(message);
+    }
+    state.active = None;
+    wake.notify_one();
 }
 
 fn record(
@@ -1025,6 +1100,45 @@ fn set_active_turn_id(active_detail: &ActiveTurnDetail, message_id: &str, turn_i
     {
         detail.turn_id = Some(turn_id.to_string());
     }
+}
+
+fn observe_steered_user_message_completion(
+    observations: &Arc<(Mutex<Observations>, Condvar)>,
+    active_detail: &ActiveTurnDetail,
+    value: &Value,
+) {
+    let Some(message_id) = value
+        .pointer("/params/item/id")
+        .and_then(Value::as_str)
+        .filter(|message_id| !message_id.is_empty())
+    else {
+        return;
+    };
+    let active = active_detail
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let Some(detail) = active.as_ref() else {
+        return;
+    };
+    let Some(turn_id) = detail.turn_id.as_deref() else {
+        return;
+    };
+    if value.pointer("/params/threadId").and_then(Value::as_str) != Some(detail.thread_id.as_str())
+        || value.pointer("/params/turnId").and_then(Value::as_str) != Some(turn_id)
+    {
+        return;
+    }
+    let key = (detail.thread_id.clone(), turn_id.to_string());
+    drop(active);
+    observations
+        .0
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .consumed_steers_by_turn
+        .entry(key)
+        .or_default()
+        .insert(message_id.to_string());
+    observations.1.notify_all();
 }
 
 fn record_active_act(
@@ -1547,6 +1661,17 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                 // sans flux partiel). `item/completed` type agentMessage.
                 Some("item/completed") => {
                     let item = value.pointer("/params/item");
+                    if item
+                        .and_then(|item| item.get("type"))
+                        .and_then(Value::as_str)
+                        == Some("userMessage")
+                    {
+                        observe_steered_user_message_completion(
+                            &observations,
+                            &active_detail,
+                            &value,
+                        );
+                    }
                     let is_agent = item
                         .and_then(|item| item.get("type"))
                         .and_then(Value::as_str)
@@ -3117,6 +3242,7 @@ mod tests {
 
         let mut second = message("temoin-steer-2");
         second.id = "codex-steer-injecte".to_string();
+        second.from = "humain".to_string();
         transport.deliver(&second).expect("livraison du second");
 
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -3199,6 +3325,7 @@ mod tests {
 
         let mut second = message("np-2");
         second.id = "codex-np-refuse".to_string();
+        second.from = "humain".to_string();
         transport.deliver(&second).expect("livraison du second");
 
         // Le premier tour tombe sur son échéance (HOLD_TURN), puis le worker
