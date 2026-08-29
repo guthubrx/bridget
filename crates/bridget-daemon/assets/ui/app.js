@@ -697,6 +697,7 @@
             count: 1,
             delivery_ids: ["ronde-1"],
             at: 10,
+            vigilance_round: { body: ronde },
           },
           {
             kind: "record",
@@ -729,6 +730,11 @@
         assert.equal(card.interval, "7 min");
         assert.equal(card.headline, "c est ton tour maintenant, tu es le referent.");
         assert.match(card.signal, /LOT SANS RECLAMANT/);
+        assert.equal(
+          timeline.filter((entry) => entry.kind === "round").length,
+          1,
+          "registre et journal ne doivent produire qu’une seule carte",
+        );
         assert.equal(
           timeline.some((entry) => entry.kind === "peer_exchange"),
           false,
@@ -1891,8 +1897,9 @@
         assert.equal(runtime.isStreamEnded(), true);
       });
 
-      // L9-5 — rendu pendant rattrapage via onJournal.decision du runtime.
-      test("rattrapage_autorise_le_rendu_des_records_avant_caught_up", () => {
+      // L9-5 - le rejeu accumule ses records sans reconstruire le fil à chaque
+      // fragment : le premier rendu complet attend SnapshotCaughtUp.
+      test("rattrapage_differe_le_rendu_des_records_jusqu_a_caught_up", () => {
         const FakeES = makeFakeEventSource();
         const decisions = [];
         const parts = fragmentParts(9, "LIVE");
@@ -1929,11 +1936,12 @@
             bytes: bytes.toString("base64"),
           },
         });
-        assert.equal(decisions.at(-1).render, true);
+        assert.equal(decisions.at(-1).render, false);
         assert.equal(decisions.at(-1).scrollMode, "replay");
         FakeES.instances[0].emitJournal({
           event: { type: "SnapshotCaughtUp", through_seq: 9 },
         });
+        assert.equal(decisions.at(-1).render, true);
         assert.equal(decisions.at(-1).replayingJournal, false);
       });
 
@@ -2582,13 +2590,16 @@
     return event.type === "End";
   }
 
-  function decideWatchThreadRender({ replayingJournal, caughtUp, acceptedCount }) {
+  function decideWatchThreadRender({ replayingJournal, caughtUp }) {
     if (caughtUp) {
       return { render: true, scrollMode: "reset", replayingJournal: false };
     }
     if (replayingJournal) {
       return {
-        render: acceptedCount > 0,
+        // Le snapshot SSE a déjà rendu le fil humain. Pendant le rejeu, les
+        // fragments sont seulement accumulés : reconstruire 200 kB de DOM à
+        // chaque record rendait l'ouverture inutilisable sur une ronde dense.
+        render: false,
         scrollMode: "replay",
         replayingJournal: true,
       };
@@ -2733,7 +2744,6 @@
       const decision = decideWatchThreadRender({
         replayingJournal,
         caughtUp,
-        acceptedCount: accepted.length,
       });
       replayingJournal = decision.replayingJournal;
       const result = {
@@ -3064,6 +3074,21 @@
 
     ordered.forEach((entry) => {
       if (entry.kind !== "record") {
+        const ledgerRound = entry.kind === "peer_exchange"
+          && entry.count === 1
+          && vigilanceRoundInfo(text(entry.vigilance_round && entry.vigilance_round.body));
+        if (ledgerRound) {
+          projected.push({
+            kind: "round",
+            agent: entry.agent,
+            text: text(entry.vigilance_round.body),
+            at: entry.at,
+            messageId: text(entry.delivery_ids && entry.delivery_ids[0]),
+            deliveryId: text(entry.delivery_ids && entry.delivery_ids[0]),
+            ...ledgerRound,
+          });
+          return;
+        }
         if (entry.kind === "message" && entry.deliveryId && ledgerMessageIds.has(entry.deliveryId)) {
           return;
         }
@@ -3195,8 +3220,15 @@
       });
     });
 
+    const renderedRounds = new Set();
     return projected
       .filter((entry) => !isOnlyVigilanceRoundExchange(entry, roundDeliveryIds))
+      .filter((entry) => {
+        if (entry.kind !== "round" || !entry.deliveryId) return true;
+        if (renderedRounds.has(entry.deliveryId)) return false;
+        renderedRounds.add(entry.deliveryId);
+        return true;
+      })
       .sort((left, right) => (left.at || 0) - (right.at || 0) || left.__order - right.__order)
       .map(({ __order, ...entry }) => entry);
   }
@@ -3794,7 +3826,7 @@
       header.append(copy, make("time", "round-card__time", timestamp(entry.at)));
       card.append(header);
       if (entry.signal) {
-        card.append(make("p", "round-card__signal", entry.signal));
+        card.append(make("p", "round-card__signal", `Constats : ${entry.signal}`));
       }
       const details = make("details", "round-card__technical");
       details.append(make("summary", "", "Voir la consigne technique"));
@@ -4136,23 +4168,6 @@
       historyConnections.clear();
     };
 
-    const requestScopedSnapshot = (agent, generation) => {
-      void fetchScopedSnapshot((url) => windowRef.fetch(url), token, agent)
-        .then((scoped) => {
-          if (generation !== sourceGeneration || state.selectedAgent !== scoped.agent) return;
-          const peerState = applySnapshotPayload(scoped.snapshot, scoped.agent);
-          if (peerState === "computed") {
-            nodes.sourceState.textContent = "Flotte et traces synchronisées.";
-            nodes.sourceState.dataset.state = "ready";
-          }
-        })
-        .catch(() => {
-          if (generation !== sourceGeneration || state.selectedAgent !== agent) return;
-          nodes.sourceState.textContent = `Instantané ciblé indisponible pour ${agent} ; flux maintenu.`;
-          nodes.sourceState.dataset.state = "error";
-        });
-    };
-
     const watchRuntime = createWatchRuntime({
       token,
       resumeSeq: watchResumeSeq,
@@ -4191,7 +4206,6 @@
       const opened = watchRuntime.open(agent);
       source = opened.source;
       sourceGeneration = opened.generation;
-      requestScopedSnapshot(agent, opened.generation);
       source.addEventListener("snapshot", (message) => {
         if (opened.generation !== sourceGeneration) return;
         try {
