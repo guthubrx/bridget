@@ -134,7 +134,16 @@ Tout ce qui suit porte la commande qui l'a produit. Reproductible.
 > ```
 > git diff --stat <build-id>..origin/main -- '*.rs'
 > ```
-> Vide ⇒ le binaire servi est **fonctionnellement à jour**, quels que soient les SHA. Mesuré : 5 fichiers et 117 insertions d'écart au total, **zéro sur les `.rs`** — les huit commits intercalés sont tous de la documentation. Ce critère survit à la cadence du registre ; l'égalité stricte non. Le relais UI a été relancé 3 s après l'installation et tourne désormais sur `/home/moi/.local/bin/bridget` : **le groupe 3 a fusionné dans le groupe 1**. Restent 21 processus sur le dépôt des tmux, 14 sur le binaire installé, et les 4 résidus.
+> Vide ⇒ le binaire servi est **fonctionnellement à jour**, quels que soient les SHA. Mesuré : 5 fichiers et 117 insertions d'écart au total, **zéro sur les `.rs`** — les huit commits intercalés sont tous de la documentation. Ce critère survit à la cadence du registre ; l'égalité stricte non.
+>
+> **IL FAUT LES DEUX SENS, ET AUCUN NE SUFFIT SEUL.** `[synthèse du référent, 29/08 00h36]`
+> | sens | commande | question à laquelle il répond | angle mort |
+> |---|---|---|---|
+> | commit → binaire *(rc1-flux)* | `git merge-base --is-ancestor <commit> <build-id>` | « ce que je crois en service y est-il ? » | ne voit pas un lot **publié après** le build |
+> | binaire → `main` *(le mien)* | `git diff --stat <build-id>..origin/main -- '*.rs'` | « ce qui est publié manque-t-il au service ? » | ne dit pas **quel** commit tourne |
+> Ensemble ils ferment la question : *rien ne manque au binaire, et ce que je nomme y est.*
+>
+> **POURQUOI CES CRITÈRES SONT NÉCESSAIRES ICI, chiffré** `[TENU DE bridget]` : sur `main`, **323 commits le 28/08, dont 274 sans aucun `.rs` (85 %)**, et 218 de registre et de cartes. La péremption n'est pas le bruit de fond du dépôt, **c'est l'écriture de documentation**. Même cause que la cible de revue périmée en 96 s : deux mécanismes qui supposent immobile une branche que la consignation fait bouger. *Remède proposé par jc1-flux et porté à l'humain : séparer les deux dépôts — le seul qui supprime la cause sans toucher une ligne de code.* Le relais UI a été relancé 3 s après l'installation et tourne désormais sur `/home/moi/.local/bin/bridget` : **le groupe 3 a fusionné dans le groupe 1**. Restent 21 processus sur le dépôt des tmux, 14 sur le binaire installé, et les 4 résidus.
 > **Les quatre résidus ont survécu au déploiement** — vérifiés vivants un par un après coup. Ce sont des `target/debug/deps`, donc des **résidus de test et non des versions du parc** ; ne dépendant d'aucun chemin, **aucun déploiement ne les emportera jamais**.
 > **ÉCRIT, SERVI, MESURÉ — trois états, pas deux.** `[formulation partagée avec bridget]` Un code intégré n'est pas un code en service ; **et un code en service n'est pas un code éprouvé en service**. Le lot d'interruption est servi depuis 23:52:30 ; aucun horodatage ne montre encore un agent interrompu sur la route réelle. Ne confonds jamais ces trois-là.
 
