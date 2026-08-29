@@ -18,8 +18,7 @@
   --agent-pane-resizer-width: 0.5rem;
   --detail-panel-width: 22rem;
   font-family:
-    Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text",
-    "Segoe UI", sans-serif;
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -1255,4 +1254,100 @@ code {
   .agent-avatar[data-visual-state="busy"] .agent-avatar__face::after {
     animation: none;
   }
+}
+
+.agent-pane {
+  --agent-pane-search-surface: #252525;
+  --agent-pane-selected-surface: #2c2c2c;
+  --agent-pane-hover-surface: #1d1d1d;
+  --agent-pane-secondary: #a6a6a6;
+  padding: 0.9rem 0.65rem 1.15rem;
+  background: #101010;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+}
+
+.agent-pane__header {
+  padding: 0.1rem 0.1rem 0.75rem;
+}
+
+.agent-pane h1 {
+  font-size: 0.95rem;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.agent-pane .fleet-count {
+  border-radius: 0.5rem;
+  background: var(--agent-pane-search-surface);
+  color: var(--agent-pane-secondary);
+  font-size: 0.74rem;
+}
+
+.agent-pane .message-search {
+  padding: 0 0.1rem 0.7rem;
+}
+
+.agent-pane .message-search input {
+  padding: 0.56rem 0.72rem 0.56rem 2.1rem;
+  background: var(--agent-pane-search-surface);
+  font-size: 0.87rem;
+}
+
+.agent-pane .message-search__icon {
+  left: 0.65rem;
+  color: var(--agent-pane-secondary);
+  font-size: 1.08rem;
+}
+
+.agent-pane .agent-list {
+  gap: 0.22rem;
+}
+
+.agent-pane .agent-row {
+  padding: 0.56rem 0.48rem;
+  border-radius: 0.6rem;
+}
+
+.agent-pane .agent-row:hover {
+  background: var(--agent-pane-hover-surface);
+}
+
+.agent-pane .agent-row[aria-current="true"] {
+  background: var(--agent-pane-selected-surface);
+}
+
+.agent-pane .agent-row__top {
+  gap: 0.72rem;
+}
+
+.agent-pane .agent-row__layout {
+  grid-template-columns: 2.5rem minmax(0, 1fr);
+  gap: 0.78rem;
+}
+
+.agent-pane .agent-avatar--card {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+.agent-pane .agent-row__name {
+  font-size: 1rem;
+  font-weight: 640;
+  letter-spacing: -0.01em;
+}
+
+.agent-pane .agent-row__host,
+.agent-pane .agent-row__recency {
+  color: var(--agent-pane-secondary);
+  font-size: 0.76rem;
+}
+
+.agent-pane .agent-row__excerpt {
+  margin-top: 0.14rem !important;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.agent-pane .agent-row__tooltip {
+  left: 3.8rem;
 }

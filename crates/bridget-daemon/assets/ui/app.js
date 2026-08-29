@@ -577,6 +577,9 @@
         assert.match(html, /<div class="conversation-status" id="conversation-status">[\s\S]*id="relay-banner"[\s\S]*id="stopped-banner"/);
         assert.match(css, /\.conversation\s*\{[\s\S]*?grid-template-rows: auto auto minmax\(0, 1fr\) auto;/);
         assert.match(css, /\.conversation-status\s*\{\s*min-height: 0;\s*\}/);
+        assert.match(css, /--agent-pane-search-surface:\s*#252525/);
+        assert.match(css, /\.agent-pane \.agent-row__layout\s*\{[\s\S]*?grid-template-columns: 2\.5rem minmax\(0, 1fr\);[\s\S]*?gap: 0\.78rem;/);
+        assert.match(css, /\.agent-pane \.agent-row__excerpt\s*\{[\s\S]*?font-size: 0\.82rem;/);
       });
 
       test("entree_envoie_et_maj_entree_insere_une_ligne", () => {
