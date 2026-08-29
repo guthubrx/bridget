@@ -566,6 +566,19 @@
         );
       });
 
+      test("panneau_agents_epure_et_composeur_reste_dans_la_grille", () => {
+        const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+        const css = fs.readFileSync(path.join(__dirname, "theme.css"), "utf8");
+        assert.doesNotMatch(html, /<p class="eyebrow">Bridget<\/p>/);
+        assert.doesNotMatch(html, /<button type="submit">Chercher<\/button>/);
+        assert.match(html, /class="message-search__icon"/);
+        assert.match(css, /\.source-state\[data-state="error"\]\s*\{\s*display: block;/);
+        assert.match(css, /\.agent-row\s*\{[\s\S]*?border-radius: 0\.7rem;/);
+        assert.match(html, /<div class="conversation-status" id="conversation-status">[\s\S]*id="relay-banner"[\s\S]*id="stopped-banner"/);
+        assert.match(css, /\.conversation\s*\{[\s\S]*?grid-template-rows: auto auto minmax\(0, 1fr\) auto;/);
+        assert.match(css, /\.conversation-status\s*\{\s*min-height: 0;\s*\}/);
+      });
+
       test("entree_envoie_et_maj_entree_insere_une_ligne", () => {
         assert.equal(api.shouldSubmitKey({ key: "Enter", shiftKey: false, isComposing: false }), true);
         assert.equal(api.shouldSubmitKey({ key: "Enter", shiftKey: true, isComposing: false }), false);
