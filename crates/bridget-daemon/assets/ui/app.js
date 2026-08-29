@@ -678,6 +678,28 @@
         assert.deepEqual(messages.map((entry) => entry.deliveryId || entry.messageId), ["D1", "D2"]);
       });
 
+      test("turn_steer_sans_corps_ne_masque_pas_message_ledger", () => {
+        const events = [
+          { kind: "message", role: "user", agent: "bridget", text: "est ce que tu travailles encore ?", at: 10, deliveryId: "S1", messageId: "S1" },
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 11,
+            record: {
+              message_id: "S1",
+              session_id: "s",
+              seq: 1,
+              event: "turn_steer",
+              payload: { from: "humain", turn_id: "tour-1" },
+            },
+          },
+        ];
+        const messages = api.projectTimeline(events).filter((entry) => entry.kind === "message");
+        assert.equal(messages.length, 1);
+        assert.equal(messages[0].deliveryId, "S1");
+        assert.equal(messages[0].text, "est ce que tu travailles encore ?");
+      });
+
       test("ronde_de_vigilance_compacte_la_livraison_sans_dupliquer_sa_trace", () => {
         const ronde = [
           "RONDE DE VIGILANCE (7 min) - c est ton tour maintenant, tu es le referent.",
@@ -3035,9 +3057,22 @@
     const ordered = (Array.isArray(events) ? events : [])
       .map((event, index) => ({ ...event, __order: index }))
       .sort((left, right) => (left.at || 0) - (right.at || 0) || left.__order - right.__order);
-    const ledgerMessageIds = new Set(
+    const journalRecordMessageIds = new Set(
       ordered
         .filter((entry) => entry.kind === "record" && entry.record && entry.record.message_id)
+        .map((entry) => entry.record.message_id),
+    );
+    // Un record seul ne suffit pas à remplacer la bulle ledger : turn_steer,
+    // par exemple, porte seulement l'identifiant et le pilote du tour.
+    const journalRenderedMessageIds = new Set(
+      ordered
+        .filter((entry) => entry.kind === "record" && entry.record && entry.record.message_id)
+        .filter((entry) => {
+          const record = entry.record || {};
+          const payload = record.payload && typeof record.payload === "object" ? record.payload : {};
+          return (record.event === "turn_start" || record.event === "prompt_dispatched")
+            && Boolean(text(payload.body));
+        })
         .map((entry) => entry.record.message_id),
     );
     const turns = new Map();
@@ -3089,7 +3124,11 @@
           });
           return;
         }
-        if (entry.kind === "message" && entry.deliveryId && ledgerMessageIds.has(entry.deliveryId)) {
+        if (
+          entry.kind === "message"
+          && entry.deliveryId
+          && journalRenderedMessageIds.has(entry.deliveryId)
+        ) {
           return;
         }
         projected.push(entry);
@@ -3186,7 +3225,7 @@
           text: turn.promptText,
           at: turn.promptAt || turn.startAt,
           messageId: turn.key,
-          deliveryId: ledgerMessageIds.has(turn.key) ? turn.key : undefined,
+          deliveryId: journalRecordMessageIds.has(turn.key) ? turn.key : undefined,
           ...round,
         });
       } else if (turn.promptText) {
@@ -3197,7 +3236,7 @@
           text: turn.promptText,
           at: turn.promptAt || turn.startAt,
           messageId: turn.key,
-          deliveryId: ledgerMessageIds.has(turn.key) ? turn.key : undefined,
+          deliveryId: journalRecordMessageIds.has(turn.key) ? turn.key : undefined,
         });
       }
       if (turn.textParts.length > 0) {
