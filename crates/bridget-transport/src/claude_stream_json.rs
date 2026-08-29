@@ -15,7 +15,7 @@ use crate::managed_session::{
 };
 use crate::protocol::{PresenceMode, ProviderObservation};
 use crate::transport::{Transport, TransportError};
-use bridget_core::{BridgetMessage, MessageIntent};
+use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
@@ -307,8 +307,10 @@ impl Transport for ClaudeStreamJsonTransport {
             return Ok(());
         }
         queue.messages.push_back(message.clone());
-        // InterruptAndStart reste FIFO et ne cible que le tour actif capturé.
-        let active_message_id = (message.intent == Some(MessageIntent::InterruptAndStart)
+        // Le relais UI marque l'origine humaine sans choisir le protocole.
+        // Claude conserve la FIFO et ne cible que le tour actif capturé.
+        let active_message_id = ((message.intent == Some(MessageIntent::InterruptAndStart)
+            || message.origin == Some(MessageOrigin::Human))
             && queue.pending_interrupt.is_none())
         .then(|| {
             queue
@@ -1940,7 +1942,7 @@ mod tests {
 
         let mut human = message("claude-humain");
         human.from = "superviseur".to_string();
-        human.intent = Some(MessageIntent::InterruptAndStart);
+        human.origin = Some(MessageOrigin::Human);
         transport.deliver(&human).unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(3);

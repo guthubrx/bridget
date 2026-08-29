@@ -12,7 +12,7 @@ use crate::managed_session::{
 };
 use crate::protocol::{PresenceMode, ProviderObservation, ProviderOperation};
 use crate::transport::{Transport, TransportError};
-use bridget_core::{BridgetMessage, MessageIntent};
+use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -555,10 +555,14 @@ impl Transport for CodexAppServerTransport {
         }
         let (queue, wake) = &*self.queue;
         let mut queue = queue.lock().unwrap_or_else(|poison| poison.into_inner());
-        let steering_requested = message.intent == Some(MessageIntent::SteerCurrent);
-        let interrupt_requested = message.intent == Some(MessageIntent::InterruptAndStart);
-        // Le pilotage est une intention explicite. Sans tour pilotable, il est
-        // refusé au lieu de devenir silencieusement un nouveau prompt FIFO.
+        let human_message = message.origin == Some(MessageOrigin::Human);
+        let has_active_turn = queue.active.is_some();
+        let steering_requested = message.intent == Some(MessageIntent::SteerCurrent)
+            || (human_message && has_active_turn && queue.steering_open);
+        let interrupt_requested = message.intent == Some(MessageIntent::InterruptAndStart)
+            || (human_message && has_active_turn && !queue.steering_open);
+        // Le contrôle explicite reste strict ; un message humain ne pilote que
+        // si Codex expose un tour actif ouvert au steering.
         if steering_requested && (queue.active.is_none() || !queue.steering_open) {
             drop(queue);
             self.push_internal(ManagedEventKind::DeliveryRejected {
@@ -3643,7 +3647,7 @@ mod tests {
         let mut humain = message("humain-prioritaire");
         humain.id = "codex-humain-prioritaire".to_string();
         humain.from = "humain".to_string();
-        humain.intent = Some(MessageIntent::SteerCurrent);
+        humain.origin = Some(MessageOrigin::Human);
         humain.deadline_at = Some(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
