@@ -176,12 +176,12 @@
         );
       });
 
-      test("spec_073_fiche_identite_est_volontaire_accessible_et_compacte", () => {
+      test("spec_073_077_menu_identite_est_volontaire_accessible_et_compact", () => {
         const source = fs.readFileSync(__filename, "utf8");
         const css = fs.readFileSync(path.join(__dirname, "theme.css"), "utf8");
-        assert.match(source, /identityCard\.setAttribute\("role", "dialog"\)/);
-        assert.match(source, /actions\.setAttribute\("aria-haspopup", "dialog"\)/);
-        assert.match(source, /actions\.setAttribute\("aria-controls", identityCard\.id\)/);
+        assert.match(source, /identityCard\.setAttribute\("role", "menu"\)/);
+        assert.match(source, /actions\.setAttribute\("aria-haspopup", "menu"\)/);
+        assert.match(source, /actions\.setAttribute\([\s\S]*?"aria-controls"/);
         assert.match(source, /actions\.setAttribute\("aria-expanded", "false"\)/);
         assert.match(source, /documentRef\.body\.append\(identityCard\)/);
         assert.doesNotMatch(source, /addEventListener\("mouseenter", \(\) => openIdentityCard/);
@@ -300,6 +300,120 @@
           api.agentLifecycleFeedback("decommission", true, { outcome: "decommissioned" }).message,
           /historique est conservé/,
         );
+      });
+
+      test("spec_077_preferences_locales_sont_versionnees_bornees_et_tolerantes", () => {
+        assert.deepEqual(api.normalizeAgentSidebarPreferences(null), {
+          version: 1,
+          pinned: [],
+          hidden: [],
+          readThrough: {},
+        });
+        assert.deepEqual(api.normalizeAgentSidebarPreferences({
+          version: 1,
+          pinned: ["alpha", "alpha", "", 4, " beta "],
+          hidden: ["cache", "cache"],
+          readThrough: { alpha: 12, beta: -1, gamma: Infinity, cache: 9 },
+        }), {
+          version: 1,
+          pinned: ["alpha", "beta"],
+          hidden: ["cache"],
+          readThrough: { alpha: 12, cache: 9 },
+        });
+        assert.deepEqual(
+          api.normalizeAgentSidebarPreferences({ version: 2, pinned: ["alpha"] }),
+          { version: 1, pinned: [], hidden: [], readThrough: {} },
+        );
+        assert.equal(
+          api.normalizeAgentSidebarPreferences({
+            version: 1,
+            pinned: Array.from({ length: 520 }, (_, index) => `agent-${index}`),
+          }).pinned.length,
+          500,
+        );
+
+        const corrupt = { getItem: () => "{", setItem: () => { throw new Error("refus"); } };
+        assert.deepEqual(api.readAgentSidebarPreferences(corrupt), {
+          version: 1,
+          pinned: [],
+          hidden: [],
+          readThrough: {},
+        });
+        assert.doesNotThrow(() => api.writeAgentSidebarPreferences(corrupt, {
+          version: 1,
+          pinned: ["alpha"],
+          hidden: [],
+          readThrough: {},
+        }));
+      });
+
+      test("spec_077_projection_epinglage_masquage_et_compteur_restant_honnetes", () => {
+        const projection = api.agentSidebarProjection([
+          { name: "beta", state: "connected" },
+          { name: "alpha", state: "busy" },
+          { name: "stop", state: "stopped" },
+          { name: "cache", state: "connected" },
+        ], {
+          version: 1,
+          pinned: ["alpha", "stop"],
+          hidden: ["cache"],
+          readThrough: {},
+        });
+        assert.deepEqual(projection.active.map((agent) => agent.name), ["alpha", "beta"]);
+        assert.deepEqual(projection.stopped.map((agent) => agent.name), ["stop"]);
+        assert.deepEqual(projection.hidden.map((agent) => agent.name), ["cache"]);
+        assert.equal(projection.activeTotal, 3);
+      });
+
+      test("spec_077_matrice_unique_expose_toutes_les_actions_et_raisons", () => {
+        const running = { name: "alpha", state: "connected", persistent: true, unread: 2 };
+        const items = api.agentContextMenuItems(running, {
+          version: 1,
+          pinned: [],
+          hidden: [],
+          readThrough: {},
+        });
+        assert.deepEqual(items.map((item) => item.key), [
+          "open", "pin", "read", "hide", "stop", "relaunch", "decommission",
+        ]);
+        assert.equal(items.find((item) => item.key === "stop").enabled, true);
+        assert.equal(items.find((item) => item.key === "relaunch").enabled, false);
+        assert.match(items.find((item) => item.key === "relaunch").reason, /déjà actif/);
+        assert.equal(items.find((item) => item.key === "decommission").danger, true);
+
+        const local = api.agentContextMenuItems(
+          { ...running, unread: 0 },
+          { version: 1, pinned: ["alpha"], hidden: ["alpha"], readThrough: {} },
+        );
+        assert.equal(local.find((item) => item.key === "pin").label, "Désépingler");
+        assert.equal(local.find((item) => item.key === "hide").label, "Afficher dans la barre");
+        assert.equal(local.find((item) => item.key === "read").enabled, false);
+
+        const unmanaged = api.agentContextMenuItems(
+          { name: "externe", state: "connected", persistent: null },
+          { version: 1, pinned: [], hidden: [], readThrough: {} },
+        );
+        for (const key of ["stop", "relaunch", "decommission"]) {
+          const action = unmanaged.find((item) => item.key === key);
+          assert.equal(action.enabled, false);
+          assert.match(action.reason, /pas géré par Bridget/);
+        }
+      });
+
+      test("spec_077_trois_declencheurs_partagent_un_menu_et_un_repartiteur", () => {
+        const source = fs.readFileSync(__filename, "utf8");
+        const index = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+        assert.match(source, /shell\.addEventListener\("contextmenu"/);
+        assert.match(source, /event\.key === "ContextMenu"/);
+        assert.match(source, /event\.shiftKey && event\.key === "F10"/);
+        assert.match(source, /runAgentContextMenuAction/);
+        assert.match(source, /setAttribute\("role", "menuitem"\)/);
+        assert.match(source, /setAttribute\("aria-disabled"/);
+        assert.match(source, /event\.key === "ArrowDown"/);
+        assert.match(source, /event\.key === "Home"/);
+        assert.match(source, /canFocus\(identityCardFocusTarget\).*identityCardFocusTarget\.focus\(\)/);
+        assert.match(index, /id="hidden-agents"/);
+        assert.match(index, /id="hidden-agent-list"/);
       });
 
       test("spec_073_ouverture_locale_reste_sous_150_ms_sans_reseau", () => {
@@ -2779,6 +2893,8 @@
   const AGENT_PANE_MAX_WIDTH_PX = 560;
   const MIN_CONVERSATION_WIDTH_PX = 360;
   const AGENT_APPEARANCE_STORAGE_KEY = "bridget.ui.agent-appearance.v1";
+  const AGENT_SIDEBAR_PREFERENCES_STORAGE_KEY = "bridget.ui.agent-sidebar-preferences.v1";
+  const AGENT_SIDEBAR_PREFERENCES_LIMIT = 500;
   const IDENTITY_CARD_GAP_PX = 12;
   const IDENTITY_CARD_VIEWPORT_MARGIN_PX = 12;
   const MANAGED_FLUX_TRANSPORTS = Object.freeze(new Set([
@@ -3146,6 +3262,163 @@
       code: "agent_unavailable",
       reason: "L’action de cycle de vie est inconnue.",
     };
+  }
+
+  function emptyAgentSidebarPreferences() {
+    return { version: 1, pinned: [], hidden: [], readThrough: {} };
+  }
+
+  // Complexité: O(p + h + r), chaque collection locale est bornée à 500 entrées.
+  function normalizeAgentSidebarPreferences(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value) || value.version !== 1) {
+      return emptyAgentSidebarPreferences();
+    }
+    const normalizeNames = (entries) => {
+      if (!Array.isArray(entries)) return [];
+      const names = [];
+      const seen = new Set();
+      for (const entry of entries) {
+        if (typeof entry !== "string") continue;
+        const name = entry.trim();
+        if (!name || name.length > 256 || seen.has(name)) continue;
+        seen.add(name);
+        names.push(name);
+        if (names.length >= AGENT_SIDEBAR_PREFERENCES_LIMIT) break;
+      }
+      return names;
+    };
+    const readThrough = {};
+    if (
+      value.readThrough
+      && typeof value.readThrough === "object"
+      && !Array.isArray(value.readThrough)
+    ) {
+      let count = 0;
+      for (const [rawName, rawTimestamp] of Object.entries(value.readThrough)) {
+        const name = String(rawName).trim();
+        const timestamp = Number(rawTimestamp);
+        if (
+          !name
+          || name.length > 256
+          || !Number.isFinite(timestamp)
+          || timestamp <= 0
+          || Object.hasOwn(readThrough, name)
+        ) continue;
+        readThrough[name] = timestamp;
+        count += 1;
+        if (count >= AGENT_SIDEBAR_PREFERENCES_LIMIT) break;
+      }
+    }
+    return {
+      version: 1,
+      pinned: normalizeNames(value.pinned),
+      hidden: normalizeNames(value.hidden),
+      readThrough,
+    };
+  }
+
+  function readAgentSidebarPreferences(storage) {
+    try {
+      const raw = storage && storage.getItem(AGENT_SIDEBAR_PREFERENCES_STORAGE_KEY);
+      return normalizeAgentSidebarPreferences(raw ? JSON.parse(raw) : null);
+    } catch (_error) {
+      return emptyAgentSidebarPreferences();
+    }
+  }
+
+  function writeAgentSidebarPreferences(storage, value) {
+    const normalized = normalizeAgentSidebarPreferences(value);
+    try {
+      storage && storage.setItem(
+        AGENT_SIDEBAR_PREFERENCES_STORAGE_KEY,
+        JSON.stringify(normalized),
+      );
+    } catch (_error) {
+      // Les préférences restent valables pour l'onglet courant.
+    }
+    return normalized;
+  }
+
+  // Complexité: O(n log n), due au tri stable des groupes d'agents.
+  function agentSidebarProjection(agents, preferences) {
+    const normalizedPreferences = normalizeAgentSidebarPreferences(preferences);
+    const pinned = new Set(normalizedPreferences.pinned);
+    const hiddenNames = new Set(normalizedPreferences.hidden);
+    const withStableOrder = (entries) => entries
+      .map((agent, index) => ({ agent, index }))
+      .sort((left, right) => {
+        const pinDifference = Number(pinned.has(right.agent.name))
+          - Number(pinned.has(left.agent.name));
+        return pinDifference || left.index - right.index;
+      })
+      .map((entry) => entry.agent);
+    const source = Array.isArray(agents) ? agents : [];
+    const visible = source.filter((agent) => !hiddenNames.has(agent.name));
+    return {
+      active: withStableOrder(visible.filter((agent) => !isInactiveAgent(agent))),
+      stopped: withStableOrder(visible.filter(isInactiveAgent)),
+      hidden: withStableOrder(source.filter((agent) => hiddenNames.has(agent.name))),
+      activeTotal: source.filter((agent) => !isInactiveAgent(agent)).length,
+    };
+  }
+
+  // Complexité: O(1), la matrice contient toujours sept actions.
+  function agentContextMenuItems(agent, preferences) {
+    const normalized = normalizeAgentRow(agent);
+    const normalizedPreferences = normalizeAgentSidebarPreferences(preferences);
+    const pinned = normalizedPreferences.pinned.includes(normalized.name);
+    const hidden = normalizedPreferences.hidden.includes(normalized.name);
+    const lifecycle = ["stop", "relaunch", "decommission"].map((key) => {
+      const eligibility = agentLifecycleEligibility(normalized, key);
+      const labels = {
+        stop: "Arrêter",
+        relaunch: "Relancer",
+        decommission: "Décommissionner",
+      };
+      return {
+        key,
+        label: labels[key],
+        group: "lifecycle",
+        enabled: eligibility.eligible,
+        reason: eligibility.reason,
+        danger: key === "decommission",
+      };
+    });
+    return [
+      {
+        key: "open",
+        label: "Ouvrir la conversation",
+        group: "navigation",
+        enabled: true,
+        reason: "",
+        danger: false,
+      },
+      {
+        key: "pin",
+        label: pinned ? "Désépingler" : "Épingler",
+        group: "organization",
+        enabled: true,
+        reason: "",
+        danger: false,
+      },
+      {
+        key: "read",
+        label: "Marquer comme lu",
+        group: "organization",
+        enabled: normalized.unread > 0,
+        reason: normalized.unread > 0 ? "" : "Aucun message non lu.",
+        danger: false,
+      },
+      {
+        key: "hide",
+        label: hidden ? "Afficher dans la barre" : "Masquer de la barre",
+        group: "organization",
+        enabled: true,
+        reason: "",
+        danger: false,
+      },
+      ...lifecycle,
+    ];
   }
 
   function agentHasActiveTurn(agent) {
@@ -5155,6 +5428,9 @@
     agentList: "agent-list",
     stoppedAgentList: "stopped-agent-list",
     stoppedAgents: "stopped-agents",
+    hiddenAgentList: "hidden-agent-list",
+    hiddenAgents: "hidden-agents",
+    hiddenCount: "hidden-count",
     stoppedCount: "stopped-count",
     fleetCount: "fleet-count",
     sourceState: "source-state",
@@ -5248,7 +5524,14 @@
     const attestedGaps = new Set();
     const watchResumeSeq = new Map();
     const drafts = new Map();
-    const readThrough = new Map();
+    let agentSidebarPreferences = (() => {
+      try {
+        return readAgentSidebarPreferences(windowRef.localStorage);
+      } catch (_error) {
+        return emptyAgentSidebarPreferences();
+      }
+    })();
+    const readThrough = new Map(Object.entries(agentSidebarPreferences.readThrough));
     const dateFormatter = new Intl.DateTimeFormat("fr-FR", {
       weekday: "long",
       day: "numeric",
@@ -5365,7 +5648,9 @@
       : null;
     let identityCardTrigger = null;
     let identityCardAgentName = null;
+    let identityCardAnchorRect = null;
     let identityCardFocusTarget = null;
+    let identityCardMenuControls = [];
     let stopConfirmationAgent = null;
     let stopConfirmationAction = null;
     let stopConfirmationReturnFocus = null;
@@ -5375,9 +5660,9 @@
     if (identityCard) {
       identityCard.id = "agent-identity-card";
       identityCard.hidden = true;
-      identityCard.setAttribute("role", "dialog");
-      identityCard.setAttribute("aria-modal", "false");
+      identityCard.setAttribute("role", "menu");
       identityCard.setAttribute("aria-labelledby", "agent-identity-card-title");
+      identityCard.setAttribute("aria-orientation", "vertical");
       identityCard.setAttribute("aria-hidden", "true");
       identityCard.tabIndex = -1;
       documentRef.body.append(identityCard);
@@ -5416,7 +5701,9 @@
       }
       identityCardTrigger = null;
       identityCardAgentName = null;
+      identityCardAnchorRect = null;
       identityCardFocusTarget = null;
+      identityCardMenuControls = [];
       if (identityCard) {
         identityCard.hidden = true;
         identityCard.setAttribute("aria-hidden", "true");
@@ -5432,28 +5719,57 @@
       );
     };
 
+    const runAgentContextMenuAction = (agent, item, control) => {
+      if (!item || !item.enabled) return;
+      if (["stop", "relaunch", "decommission"].includes(item.key)) {
+        openStopConfirmation(agent, item.key, control);
+        return;
+      }
+      if (item.key === "open") {
+        closeIdentityCard(false);
+        selectAgent(agent.name);
+        return;
+      }
+      if (item.key === "pin") {
+        setAgentSidebarPreference("pinned", agent.name, item.label === "Épingler");
+        return;
+      }
+      if (item.key === "hide") {
+        setAgentSidebarPreference("hidden", agent.name, item.label === "Masquer de la barre");
+        return;
+      }
+      if (item.key === "read") {
+        const normalized = normalizeAgentRow(agent);
+        if (normalized.last_message_at > 0) {
+          readThrough.set(agent.name, normalized.last_message_at);
+        }
+        state = {
+          ...state,
+          agents: state.agents.map((entry) => (
+            entry.name === agent.name ? { ...entry, unread: 0 } : entry
+          )),
+        };
+        persistAgentSidebarPreferences();
+        lastAgentsRenderSignature = null;
+        renderAgents();
+      }
+    };
+
     const renderIdentityCard = (agent) => {
       if (!identityCard) return;
       const data = identityCardData(agent);
+      identityCardMenuControls = [];
+      identityCardFocusTarget = null;
+
       const heading = make("div", "agent-identity-card__heading");
       const agentBlock = make("div", "agent-identity-card__agent");
       const agentName = make("strong", "agent-identity-card__name", data.name);
       agentName.id = "agent-identity-card-title";
-      agentBlock.append(
-        agentName,
-        make("span", "agent-identity-card__presence", data.presence),
-      );
+      agentBlock.append(agentName, make("span", "agent-identity-card__presence", data.presence));
       agentBlock.dataset.state = data.state;
       const mode = make("span", "agent-identity-card__mode", data.mode.label);
       mode.dataset.mode = data.mode.key;
-      const closeButton = make("button", "agent-identity-card__close", "Fermer");
-      closeButton.type = "button";
-      closeButton.setAttribute("aria-label", `Fermer la fiche de ${data.name}`);
-      closeButton.addEventListener("click", () => closeIdentityCard(true));
-      const headingActions = make("div", "agent-identity-card__heading-actions");
-      headingActions.append(mode, closeButton);
-      heading.append(agentBlock, headingActions);
-      identityCardFocusTarget = closeButton;
+      heading.append(agentBlock, mode);
 
       const runtime = make("div", "agent-identity-card__runtime");
       const mark = data.runtime.logo
@@ -5472,77 +5788,81 @@
       runtime.append(mark, brand);
 
       const facts = make("dl", "agent-identity-card__facts");
-      appendIdentityFact(facts, "Activité", data.activity);
-      appendIdentityFact(facts, "Transport", data.transport);
+      if (data.activity !== "Activité inconnue") appendIdentityFact(facts, "Activité", data.activity);
+      if (data.transport !== "Non attesté") appendIdentityFact(facts, "Transport", data.transport);
       appendIdentityFact(facts, "Modèle", data.model);
       appendIdentityFact(facts, "Effort", data.effort);
 
-      const children = [heading, runtime, facts];
-      if (data.excerpt) {
-        const excerpt = make("p", "agent-identity-card__excerpt", data.excerpt);
-        excerpt.setAttribute("aria-label", `Dernier message : ${data.excerpt}`);
-        children.push(excerpt);
-      }
-      const actionArea = make("div", "agent-identity-card__actions");
+      const actions = make("div", "agent-identity-card__actions");
       const submitting = stopInFlight && stopInFlight.name === agent.name;
-      const managed = agentLifecycleEligibility(agent, "decommission");
-      const actionButtons = make("div", "agent-identity-card__action-buttons");
-      const lifecycleState = normalizeAgentRow(agent).state.trim().toLowerCase();
-      const stopped = lifecycleState === "stopped";
-      const active = ["connected", "busy", "dnd", "alive", "idle"].includes(lifecycleState);
-      const availableActions = stopped
-        ? [
-          { key: "relaunch", label: "Relancer" },
-          { key: "decommission", label: "Décommissionner" },
-        ]
-        : active ? [
-          { key: "stop", label: "Arrêter" },
-          { key: "decommission", label: "Décommissionner" },
-        ] : [];
-      for (const action of availableActions) {
-        const eligibility = agentLifecycleEligibility(agent, action.key);
+      let currentGroup = null;
+      let groupNode = null;
+      for (const item of agentContextMenuItems(agent, agentSidebarPreferences)) {
+        if (item.group !== currentGroup) {
+          if (groupNode) actions.append(groupNode);
+          if (currentGroup) {
+            const separator = make("div", "agent-identity-card__separator");
+            separator.setAttribute("role", "separator");
+            actions.append(separator);
+          }
+          currentGroup = item.group;
+          groupNode = make("div", "agent-identity-card__group");
+          groupNode.setAttribute("role", "none");
+        }
+        const enabled = item.enabled && !submitting;
+        const reason = submitting && item.group === "lifecycle"
+          ? "Une opération de cycle de vie est en cours."
+          : item.reason;
         const button = make(
           "button",
-          `agent-identity-card__lifecycle agent-identity-card__lifecycle--${action.key}`,
-          submitting && stopInFlight.action === action.key ? `${action.label}…` : action.label,
+          `agent-identity-card__item${item.danger ? " agent-identity-card__item--danger" : ""}`,
         );
         button.type = "button";
-        button.disabled = !eligibility.eligible || submitting;
-        if (eligibility.eligible) {
-          button.addEventListener("click", () => openStopConfirmation(agent, action.key, button));
+        button.dataset.action = item.key;
+        button.setAttribute("role", "menuitem");
+        button.setAttribute("aria-disabled", String(!enabled));
+        button.setAttribute("aria-label", reason ? `${item.label}. ${reason}` : item.label);
+        if (reason) button.title = reason;
+        button.append(make("span", "agent-identity-card__item-label", item.label));
+        if (reason && !enabled) {
+          button.append(make("span", "agent-identity-card__item-reason", reason));
         }
-        actionButtons.append(button);
+        button.addEventListener("click", () => {
+          if (button.getAttribute("aria-disabled") === "true") return;
+          runAgentContextMenuAction(agent, item, button);
+        });
+        groupNode.append(button);
+        identityCardMenuControls.push(button);
+        if (!identityCardFocusTarget && enabled) identityCardFocusTarget = button;
       }
-      actionArea.append(actionButtons);
-      if (!managed.eligible) {
-        actionArea.append(make("p", "agent-identity-card__action-note", managed.reason));
-      } else {
-        actionArea.append(make(
-          "p",
-          "agent-identity-card__action-note",
-          stopped
-            ? "La relance conserve son identité et son historique. Le décommissionnement le retire de la flotte."
-            : "L’arrêt le garde dans la flotte. Le décommissionnement le retire. L’historique est toujours conservé.",
-        ));
-      }
+      if (groupNode) actions.append(groupNode);
+
+      const children = [heading, runtime];
+      const factCount = facts.childNodes
+        ? facts.childNodes.length
+        : facts.children ? facts.children.length : 0;
+      if (factCount > 0) children.push(facts);
+      children.push(actions);
       if (stopResult && stopResult.name === agent.name) {
         const feedback = make("p", "agent-identity-card__stop-result", stopResult.message);
         feedback.dataset.tone = stopResult.tone;
         feedback.setAttribute("role", stopResult.tone === "error" ? "alert" : "status");
-        actionArea.append(feedback);
+        children.push(feedback);
       }
-      children.push(actionArea);
       identityCard.replaceChildren(...children);
     };
 
     const positionIdentityCard = () => {
       if (!identityCard || !identityCardTrigger || identityCard.hidden) return;
-      if (
-        typeof identityCard.getBoundingClientRect !== "function"
-        || typeof identityCardTrigger.getBoundingClientRect !== "function"
-      ) return;
+      if (typeof identityCard.getBoundingClientRect !== "function") return;
+      const triggerRect = identityCardAnchorRect || (
+        typeof identityCardTrigger.getBoundingClientRect === "function"
+          ? identityCardTrigger.getBoundingClientRect()
+          : null
+      );
+      if (!triggerRect) return;
       const position = identityCardPosition(
-        identityCardTrigger.getBoundingClientRect(),
+        triggerRect,
         identityCard.getBoundingClientRect(),
         { width: windowRef.innerWidth, height: windowRef.innerHeight },
       );
@@ -5551,13 +5871,14 @@
       identityCard.dataset.side = position.side;
     };
 
-    const openIdentityCard = (agent, button, moveFocus = true) => {
+    const openIdentityCard = (agent, button, moveFocus = true, anchorRect = null) => {
       if (!identityCard) return;
       if (identityCardTrigger && identityCardTrigger !== button) {
         identityCardTrigger.setAttribute("aria-expanded", "false");
       }
       identityCardTrigger = button;
       identityCardAgentName = agent.name;
+      identityCardAnchorRect = anchorRect;
       renderIdentityCard(agent);
       identityCard.hidden = false;
       identityCard.setAttribute("aria-hidden", "false");
@@ -5565,7 +5886,6 @@
       positionIdentityCard();
       if (moveFocus && canFocus(identityCardFocusTarget)) identityCardFocusTarget.focus();
     };
-
     const openStopConfirmation = (agent, action, returnFocus) => {
       if (!stopConfirmation || stopInFlight) return;
       stopConfirmationAgent = agent;
@@ -5668,7 +5988,7 @@
         if (identityCardAgentName === agent.name) {
           renderIdentityCard(latest);
           positionIdentityCard();
-          if (canFocus(identityCard)) identityCard.focus();
+          if (canFocus(identityCardFocusTarget)) identityCardFocusTarget.focus();
         }
       }
     };
@@ -5711,16 +6031,47 @@
         }
         return;
       }
-      if (event.key === "Escape" && identityCard && !identityCard.hidden) {
+      if (!identityCard || identityCard.hidden) return;
+      if (event.key === "Tab") {
+        closeIdentityCard(true);
+        return;
+      }
+      if (event.key === "Escape") {
         event.preventDefault();
         closeIdentityCard(true);
+        return;
       }
+      if (
+        (event.key === "Enter" || event.key === " ")
+        && documentRef.activeElement
+        && documentRef.activeElement.getAttribute
+        && documentRef.activeElement.getAttribute("aria-disabled") === "true"
+      ) {
+        event.preventDefault();
+        return;
+      }
+      const navigationKeys = ["ArrowDown", "ArrowUp", "Home", "End"];
+      if (!navigationKeys.includes(event.key) || identityCardMenuControls.length === 0) return;
+      event.preventDefault();
+      const current = identityCardMenuControls.indexOf(documentRef.activeElement);
+      let target = 0;
+      if (event.key === "Home") {
+        target = 0;
+      } else if (event.key === "End") {
+        target = identityCardMenuControls.length - 1;
+      } else if (event.key === "ArrowDown") {
+        target = current < 0 ? 0 : (current + 1) % identityCardMenuControls.length;
+      } else if (event.key === "ArrowUp") {
+        target = current < 0
+          ? identityCardMenuControls.length - 1
+          : (current - 1 + identityCardMenuControls.length) % identityCardMenuControls.length;
+      }
+      identityCardMenuControls[target].focus();
     };
     if (typeof documentRef.addEventListener === "function") {
       documentRef.addEventListener("pointerdown", handleIdentityPointerDown);
       documentRef.addEventListener("keydown", handleIdentityKeydown);
     }
-
     const timestamp = (at) => {
       return formatLocalTime(at);
     };
@@ -5806,6 +6157,36 @@
     })();
     let appearancePickerAgent = null;
     let lastAgentsRenderSignature = null;
+    const agentSidebarStorage = () => {
+      try {
+        return windowRef.localStorage;
+      } catch (_error) {
+        return null;
+      }
+    };
+    const persistAgentSidebarPreferences = () => {
+      agentSidebarPreferences = writeAgentSidebarPreferences(
+        agentSidebarStorage(),
+        {
+          ...agentSidebarPreferences,
+          readThrough: Object.fromEntries(readThrough),
+        },
+      );
+    };
+    const setAgentSidebarPreference = (key, name, enabled) => {
+      const names = new Set(agentSidebarPreferences[key]);
+      if (enabled) names.add(name);
+      else names.delete(name);
+      agentSidebarPreferences = normalizeAgentSidebarPreferences({
+        ...agentSidebarPreferences,
+        [key]: [...names],
+        readThrough: Object.fromEntries(readThrough),
+      });
+      persistAgentSidebarPreferences();
+      lastAgentsRenderSignature = null;
+      renderAgents();
+    };
+
 
     const colorForAgent = (name) => agentAvatarColor(name, agentAppearances);
     const shapeForAgent = (name) => agentAvatarShape(name, agentAppearances);
@@ -5875,6 +6256,7 @@
 
     const renderAgentButton = (agent) => {
       const shell = make("div", "agent-row-shell");
+      shell.dataset.pinned = String(agentSidebarPreferences.pinned.includes(agent.name));
       const button = make("button", "agent-row");
       button.type = "button";
       button.dataset.agent = agent.name;
@@ -5907,27 +6289,21 @@
       top.append(topEnd);
       content.append(top);
       const execution = executionSummary(agent);
-      if (execution) {
-        content.append(make("p", "agent-row__execution", execution));
-      }
-
+      if (execution) content.append(make("p", "agent-row__execution", execution));
       const excerpt = agentCardExcerpt(agent.name, agent.last_excerpt);
-      if (excerpt) {
-        content.append(make("p", "agent-row__excerpt", excerpt));
-      }
+      if (excerpt) content.append(make("p", "agent-row__excerpt", excerpt));
       layout.append(content);
       button.append(layout);
       button.addEventListener("click", () => selectAgent(agent.name));
 
       const actions = make("button", "agent-row__actions", "⋯");
       actions.type = "button";
-      actions.setAttribute("aria-label", `Ouvrir la fiche et les actions de ${agent.name}`);
-      actions.setAttribute("aria-haspopup", "dialog");
-      if (identityCard) {
-        actions.setAttribute("aria-controls", identityCard.id);
-      } else {
-        actions.setAttribute("aria-controls", "agent-identity-card");
-      }
+      actions.setAttribute("aria-label", `Ouvrir le menu de ${agent.name}`);
+      actions.setAttribute("aria-haspopup", "menu");
+      actions.setAttribute(
+        "aria-controls",
+        identityCard ? identityCard.id : "agent-identity-card",
+      );
       actions.setAttribute("aria-expanded", "false");
       actions.addEventListener("click", (event) => {
         event.preventDefault();
@@ -5938,6 +6314,35 @@
         }
         openIdentityCard(agent, actions, true);
       });
+      button.addEventListener("keydown", (event) => {
+        const opensContextMenu = event.key === "ContextMenu"
+          || (event.shiftKey && event.key === "F10");
+        if (!opensContextMenu) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const anchor = typeof shell.getBoundingClientRect === "function"
+          ? shell.getBoundingClientRect()
+          : null;
+        openIdentityCard(agent, actions, true, anchor);
+      });
+      shell.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const hasPointer = Number.isFinite(event.clientX)
+          && Number.isFinite(event.clientY)
+          && (event.clientX !== 0 || event.clientY !== 0);
+        const anchor = hasPointer
+          ? {
+            left: event.clientX,
+            right: event.clientX,
+            top: event.clientY,
+            bottom: event.clientY,
+          }
+          : typeof shell.getBoundingClientRect === "function"
+            ? shell.getBoundingClientRect()
+            : null;
+        openIdentityCard(agent, actions, true, anchor);
+      });
       shell.append(button, actions);
       shell.identityActionButton = actions;
       return shell;
@@ -5945,9 +6350,11 @@
 
     const renderAgents = () => {
       const openedName = identityCardAgentName;
+      const openedAnchorRect = identityCardAnchorRect;
       const renderSignature = JSON.stringify([
         state.selectedAgent,
         agentAppearances,
+        agentSidebarPreferences,
         agentRosterSignature(state.agents),
       ]);
       if (renderSignature === lastAgentsRenderSignature) return false;
@@ -5957,30 +6364,43 @@
       const previousScrollTop = agentPane && Number.isFinite(agentPane.scrollTop)
         ? agentPane.scrollTop
         : null;
-      const active = state.agents.filter((agent) => !isInactiveAgent(agent));
-      const stopped = state.agents.filter(isInactiveAgent);
-      const activeRows = active.map((agent) => ({ agent, node: renderAgentButton(agent) }));
-      const stoppedRows = stopped.map((agent) => ({ agent, node: renderAgentButton(agent) }));
+      const projection = agentSidebarProjection(state.agents, agentSidebarPreferences);
+      const activeRows = projection.active.map(
+        (agent) => ({ agent, node: renderAgentButton(agent) }),
+      );
+      const stoppedRows = projection.stopped.map(
+        (agent) => ({ agent, node: renderAgentButton(agent) }),
+      );
+      const hiddenRows = projection.hidden.map(
+        (agent) => ({ agent, node: renderAgentButton(agent) }),
+      );
       nodes.agentList.replaceChildren(...activeRows.map((entry) => entry.node));
       nodes.stoppedAgentList.replaceChildren(...stoppedRows.map((entry) => entry.node));
-      nodes.stoppedCount.textContent = String(stopped.length);
-      nodes.stoppedAgents.hidden = stopped.length === 0;
-      nodes.fleetCount.textContent = String(active.length);
+      nodes.hiddenAgentList.replaceChildren(...hiddenRows.map((entry) => entry.node));
+      nodes.stoppedCount.textContent = String(projection.stopped.length);
+      nodes.stoppedAgents.hidden = projection.stopped.length === 0;
+      nodes.hiddenCount.textContent = String(projection.hidden.length);
+      nodes.hiddenAgents.hidden = projection.hidden.length === 0;
+      nodes.fleetCount.textContent = String(projection.activeTotal);
       if (openedName) {
-        const opened = [...activeRows, ...stoppedRows].find(
+        const opened = [...activeRows, ...stoppedRows, ...hiddenRows].find(
           (entry) => entry.agent.name === openedName,
         );
         if (opened) {
-          openIdentityCard(opened.agent, opened.node.identityActionButton, false);
+          openIdentityCard(
+            opened.agent,
+            opened.node.identityActionButton,
+            false,
+            openedAnchorRect,
+          );
         } else {
           closeIdentityCard(false);
         }
       }
-      if (previousScrollTop !== null) agentPane.scrollTop = previousScrollTop;
+      if (previousScrollTop !== null && agentPane) agentPane.scrollTop = previousScrollTop;
       lastAgentsRenderSignature = renderSignature;
       return true;
     };
-
     const renderHeader = () => {
       const agent = state.agents.find((entry) => entry.name === state.selectedAgent);
       nodes.selectedAgent.textContent = agent ? agent.name : "Aucun agent";
@@ -6246,6 +6666,7 @@
       const agent = state.agents.find((entry) => entry.name === agentName);
       if (!agent || agent.unread === 0) return;
       if (agent.last_message_at) readThrough.set(agentName, agent.last_message_at);
+      persistAgentSidebarPreferences();
       state = {
         ...state,
         agents: state.agents.map((entry) =>
@@ -7081,6 +7502,11 @@
     executionModeIdentity,
     identityCardData,
     identityCardPosition,
+    normalizeAgentSidebarPreferences,
+    readAgentSidebarPreferences,
+    writeAgentSidebarPreferences,
+    agentSidebarProjection,
+    agentContextMenuItems,
     agentStopEligibility,
     agentLifecycleEligibility,
     agentHasActiveTurn,
