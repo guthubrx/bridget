@@ -75,3 +75,7 @@
 - [x] T016 - Reprojeter les séquences texte, actions, texte dans le fil tout
   en gardant le dernier lot vivant sous le compositeur. Preuve : témoin Node
   sur une séquence complète, sans duplication ; commandes en lignes séparées.
+
+- [x] T017 - Ne compter dans la pastille que les nouvelles bulles texte de
+  l’agent, jamais les actes du flux vivant. Preuve : témoin Node couvrant
+  commande seule, texte initial, fragment continu et reprise après outil.

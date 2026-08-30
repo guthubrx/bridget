@@ -166,3 +166,14 @@ première trace réelle.
   Les détails passent sur leur propre ligne pour laisser respirer le texte.
 - En fin de tour, les actes sont visibles dans leur position chronologique ; le
   résumé de durée ne les répète plus.
+
+## Correctif de pastille de nouveaux messages - 30 août 2026
+
+- La pastille interne compte uniquement l'ouverture d'une nouvelle bulle de
+  texte écrite par un agent pendant que le lecteur est hors du bas du fil.
+- Les commandes, appels d'outil, autorisations, raisonnements, mises à jour de
+  transport et événements système restent rendus dans le flux vivant, mais
+  n'incrémentent jamais cette pastille.
+- Des fragments texte consécutifs dans la même bulle n'ajoutent pas de faux
+  « nouveaux messages ». Un texte qui reprend après un acte ouvre une nouvelle
+  bulle et est compté une fois.
