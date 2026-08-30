@@ -1749,6 +1749,17 @@ fn read_snapshot(
     })
 }
 
+/// Un agent arrêté ne peut plus alimenter Attach, mais cela ne rend pas le
+/// relais indisponible. Le snapshot du daemon est la source de vérité pour
+/// distinguer ce cas d'une vraie déconnexion du daemon.
+fn focused_agent_is_stopped(config: &UiRelayConfig, agent: &str) -> Result<bool, UiError> {
+    let snapshot = read_snapshot(config, Some(agent))?;
+    Ok(snapshot
+        .agents
+        .iter()
+        .any(|candidate| candidate.name == agent && candidate.state == "stopped"))
+}
+
 fn compose_agent_rows(
     agents: Vec<bridget_transport::protocol::AgentInfo>,
     messages: &[LedgerMessage],
@@ -2162,7 +2173,11 @@ fn stream_sse_journal(
     http.flush()?;
     let mut session = match open_attach_session(socket_path, agent, window.clone()) {
         Ok(session) => session,
-        Err(error) if snapshot_config.is_some() => {
+        Err(_error) if snapshot_config.is_some() => {
+            let config = snapshot_config.expect("snapshot config vérifiée par la garde");
+            if focused_agent_is_stopped(config, agent)? {
+                return stream_sse_thread_watch_after_headers(http, config, agent);
+            }
             write_relay_state(http, "lost", now_secs())?;
             let _ = http.shutdown(Shutdown::Both);
             return Ok(());
@@ -2324,7 +2339,10 @@ fn stream_sse_journal(
             last_thread_poll = Instant::now();
         }
         if matches!(event, DaemonToWrapper::End { .. }) {
-            if snapshot_config.is_some() {
+            if let Some(config) = snapshot_config {
+                if focused_agent_is_stopped(config, agent)? {
+                    return stream_sse_thread_watch_after_headers(http, config, agent);
+                }
                 write_relay_state(http, "lost", now_secs())?;
             }
             break;
@@ -2447,12 +2465,23 @@ fn stream_sse_thread_watch(
     config: &UiRelayConfig,
     agent: &str,
 ) -> Result<(), UiError> {
-    let snapshot = read_snapshot(config, Some(agent))?;
     write!(
         http,
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
     )?;
     http.flush()?;
+    stream_sse_thread_watch_after_headers(http, config, agent)
+}
+
+/// Continue un `/v1/watch` dont les en-têtes SSE sont déjà envoyés. Ce chemin
+/// sert aussi lorsqu'un agent arrêté ferme Attach : l'état arrêté appartient à
+/// l'agent, pas au transport entre Bridget Desktop et le relais.
+fn stream_sse_thread_watch_after_headers(
+    http: &mut TcpStream,
+    config: &UiRelayConfig,
+    agent: &str,
+) -> Result<(), UiError> {
+    let snapshot = read_snapshot(config, Some(agent))?;
     write_relay_state(http, "connected", now_secs())?;
     let mut seen_thread_ids = HashSet::new();
     seed_thread_message_ids(&snapshot, &mut seen_thread_ids);
@@ -3919,7 +3948,12 @@ mod tests {
             serve_body.contains("stream_sse_thread_watch(stream, config, agent)"),
             "un interlocuteur sans journal ne doit pas tenter Attach"
         );
-        let watch_body = function_body(source, "fn stream_sse_thread_watch(");
+        let header_body = function_body(source, "fn stream_sse_thread_watch(");
+        assert!(
+            header_body.contains("stream_sse_thread_watch_after_headers(http, config, agent)"),
+            "le watch humain doit rejoindre le flux vivant après ses en-têtes SSE"
+        );
+        let watch_body = function_body(source, "fn stream_sse_thread_watch_after_headers(");
         assert!(
             watch_body.contains("push_live_thread_messages("),
             "le watch humain doit diffuser les nouveaux messages"
@@ -3927,6 +3961,32 @@ mod tests {
         assert!(
             watch_body.contains(": keepalive\\n\\n"),
             "le watch humain doit rester ouvert entre deux messages"
+        );
+    }
+
+    #[test]
+    fn watch_agent_arrete_preserve_la_connexion_au_relais() {
+        let source = include_str!("ui.rs");
+        let journal_body = function_body(source, "fn stream_sse_journal(");
+        assert!(
+            journal_body.contains("focused_agent_is_stopped(config, agent)?"),
+            "un arrêt d'agent doit être distingué d'une perte du relais"
+        );
+        assert!(
+            journal_body
+                .matches("stream_sse_thread_watch_after_headers(http, config, agent)")
+                .count()
+                >= 2,
+            "le refus d'Attach et End doivent tous deux garder le flux vivant"
+        );
+        let fallback_body = function_body(source, "fn stream_sse_thread_watch_after_headers(");
+        assert!(
+            fallback_body.contains("write_relay_state(http, \"connected\", now_secs())"),
+            "le flux passif doit confirmer que le relais reste joignable"
+        );
+        assert!(
+            fallback_body.contains(": keepalive\\n\\n"),
+            "le flux passif doit rester ouvert"
         );
     }
 
