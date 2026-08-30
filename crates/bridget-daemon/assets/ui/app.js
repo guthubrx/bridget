@@ -2385,6 +2385,12 @@
     return "Le tour s’est terminé en erreur.";
   }
 
+  function providerRequestRejectedLabel(payload) {
+    const code = text(payload && payload.code, "unsupported_provider_request");
+    const reference = text(payload && payload.reference, "référence absente");
+    return `Opération Codex non prise en charge. Code : ${code}. Référence : ${reference}. Le fournisseur a reçu un refus explicite.`;
+  }
+
   function journalMessageFact(record) {
     if (!record || !["turn_start", "prompt_dispatched"].includes(record.event)) {
       return null;
@@ -3306,8 +3312,7 @@
         .filter((entry) => {
           const record = entry.record || {};
           const payload = record.payload && typeof record.payload === "object" ? record.payload : {};
-          return (record.event === "turn_start" || record.event === "prompt_dispatched")
-            && Boolean(text(payload.body));
+          return record.event === "prompt_dispatched" && Boolean(text(payload.body));
         })
         .map((entry) => entry.record.message_id),
     );
@@ -3446,6 +3451,15 @@
           agent: entry.agent,
           at: entry.at,
           text: turnFailureLabel(payload),
+        });
+        return;
+      }
+      if (record.event === "provider_request_rejected") {
+        projected.push({
+          kind: "system",
+          agent: entry.agent,
+          at: entry.at,
+          text: providerRequestRejectedLabel(payload),
         });
       }
     });
@@ -4502,7 +4516,7 @@
           if (event.kind !== "record") return true;
           rememberEventBody(event);
           const record = event.record || {};
-          if (["turn_start", "prompt_dispatched"].includes(record.event)) {
+          if (record.event === "prompt_dispatched") {
             const pendingTarget = pendingUiMessages.get(record.message_id);
             if (pendingTarget) {
               pendingUiMessages.delete(record.message_id);
@@ -4657,7 +4671,7 @@
           }
           return entry.kind === "record"
             && entry.record
-            && ["turn_start", "prompt_dispatched"].includes(entry.record.event)
+            && entry.record.event === "prompt_dispatched"
             && entry.record.message_id === messageId;
         });
 

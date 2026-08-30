@@ -1555,6 +1555,33 @@ fn approval_response(value: &Value, permissions: &str) -> Option<(Value, Value)>
     ))
 }
 
+/// Refuse une requête fournisseur inconnue sans reproduire son corps dans les
+/// diagnostics. Le fournisseur reçoit une erreur JSON-RPC exploitable et
+/// l'interface un code stable avec une référence pseudonymisée.
+fn unsupported_provider_request_response(value: &Value) -> Option<(Value, Value)> {
+    let id = value.get("id")?;
+    let method = value.get("method").and_then(Value::as_str)?;
+    let reference = project_provider_method(method);
+    Some((
+        json!({
+            "id": id,
+            "error": {
+                "code": -32601,
+                "message": "unsupported provider request",
+                "data": {
+                    "code": "unsupported_provider_request",
+                    "reference": reference,
+                }
+            }
+        }),
+        json!({
+            "provider": "codex",
+            "code": "unsupported_provider_request",
+            "reference": project_provider_method(method),
+        }),
+    ))
+}
+
 fn codex_journal_payload(event: &str, payload: Value) -> Value {
     // Dans ce pilote, `error` est exclusivement l'issue terminale du worker.
     // La passerelle porte le code ici afin que les enrichissements de payload
@@ -2147,6 +2174,42 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                 }
                 Some(other) => {
                     let method = project_provider_method(other);
+                    // Une trame avec `id` est une requête JSON-RPC. La traiter
+                    // comme une simple notification laisse Codex attendre pour
+                    // toujours. La réponse négative est volontairement sans
+                    // corps fournisseur : le journal garde seulement un code
+                    // stable et l'empreinte déjà publique de la méthode.
+                    if value.get("id").is_some() {
+                        if let Some((reply, payload)) =
+                            unsupported_provider_request_response(&value)
+                        {
+                            let message_id = queue
+                                .0
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner())
+                                .active
+                                .as_ref()
+                                .map(|active| active.message_id.clone());
+                            record_or_terminal(
+                                &journal,
+                                &observations,
+                                "provider_request_rejected",
+                                message_id.as_deref(),
+                                payload,
+                            );
+                            if let Err(error) = write_value(&writer, reply) {
+                                push_source(
+                                    &observations,
+                                    raw.clone(),
+                                    ManagedEventKind::Error {
+                                        detail: format!(
+                                            "réponse à la requête Codex non prise en charge impossible: {error}"
+                                        ),
+                                    },
+                                );
+                            }
+                        }
+                    }
                     push_source(
                         &observations,
                         raw,
@@ -2319,7 +2382,32 @@ mod tests {
             FIXTURE_SEQ.fetch_add(1, AtomicOrdering::Relaxed)
         ));
         fs::create_dir_all(&root).expect("racine temporaire");
+
         root
+    }
+
+    #[test]
+    fn requete_fournisseur_inconnue_recoit_un_refus_json_rpc_redacte() {
+        let sentinel = "SENTINELLE-METHODE-INCONNUE";
+        let (reply, diagnostic) = unsupported_provider_request_response(&json!({
+            "id": "dynamic-tool-42",
+            "method": sentinel,
+            "params": { "secret": "ne-pas-publier" },
+        }))
+        .expect("réponse aux requêtes avec id");
+        assert_eq!(reply["id"], "dynamic-tool-42");
+        assert_eq!(reply["error"]["code"], -32601);
+        assert_eq!(
+            reply["error"]["data"]["code"],
+            "unsupported_provider_request"
+        );
+        assert_eq!(diagnostic["code"], "unsupported_provider_request");
+        let serialized =
+            serde_json::to_string(&json!({ "reply": reply, "diagnostic": diagnostic }))
+                .expect("diagnostic sérialisable");
+        assert!(!serialized.contains(sentinel));
+        assert!(!serialized.contains("ne-pas-publier"));
+        assert!(serialized.contains("sha256:"));
     }
 
     #[test]

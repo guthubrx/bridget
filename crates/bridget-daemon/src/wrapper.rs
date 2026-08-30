@@ -549,12 +549,12 @@ fn interactive_bridget_prompt(name: &str, mcp_enabled: bool) -> String {
 
 /// Amorçage ajouté au prompt d'une reprise Codex.
 ///
-/// Codex diffère les outils MCP hors de sa liste d'outils principale. Une
-/// reprise restaure l'historique, mais pas la décision d'avoir recherché ces
-/// outils dans `ALL_TOOLS` : l'instruction doit donc être rejouée explicitement.
+/// Les appels MCP dynamiques ne sont pas supportés par `functions.exec` dans
+/// les sessions app-server gérées. Le binaire Bridget reste disponible dans le
+/// `PATH` du wrapper et évite ainsi qu'un tour attende une réponse impossible.
 fn codex_resume_bootstrap(name: &str) -> String {
     format!(
-        "Tu reprends la session de l'agent Bridget \"{name}\". Les outils MCP Bridget peuvent être différés. Cherche mcp__bridget__* dans ALL_TOOLS via functions.exec, puis appelle tools.mcp__bridget__bridget_send avec in_reply_to pour répondre aux demandes reply=yes. Utilise le shell bridget seulement si cette recherche ne rend aucun outil."
+        "Tu reprends la session de l'agent Bridget \"{name}\". Utilise uniquement le binaire `bridget` disponible dans PATH pour envoyer, consulter ou répondre aux messages Bridget. N'essaie pas de rechercher ni d'appeler `mcp__bridget__*` via `functions.exec` ou `ALL_TOOLS` : ce mécanisme n'est pas disponible dans cette session app-server."
     )
 }
 
@@ -3730,11 +3730,11 @@ fn apply_managed_mcp(
             ]);
             Ok(Some(config))
         }
-        ("codex_app_server", "codex") => {
-            args.insert(0, "-c".to_string());
-            args.insert(1, codex_mcp_override(&interactive_mcp_server_entry()?)?);
-            Ok(None)
-        }
+        // Codex app-server géré tourne dans le mode exec de Codex. Les outils
+        // MCP dynamiques y sont visibles mais ne peuvent pas être invoqués,
+        // ce qui laissait le tour en attente sans réponse. Le CLI Bridget est
+        // déjà placé dans PATH par managed_adapter_environment.
+        ("codex_app_server", "codex") => Ok(None),
         _ => Ok(None),
     }
 }
@@ -5562,15 +5562,14 @@ mod prompt_tests {
             prepared.last().unwrap(),
             &codex_resume_bootstrap("prospective")
         );
-        assert!(prepared.last().unwrap().contains("ALL_TOOLS"));
-        assert!(prepared.last().unwrap().contains("mcp__bridget__*"));
+        assert!(prepared.last().unwrap().contains("binaire `bridget`"));
+        assert!(prepared.last().unwrap().contains("N'essaie pas"));
         assert!(
-            prepared
+            !prepared
                 .last()
                 .unwrap()
                 .contains("tools.mcp__bridget__bridget_send")
         );
-        assert!(prepared.last().unwrap().contains("shell bridget"));
     }
 
     #[test]
@@ -6085,10 +6084,6 @@ mod reconnect_tests {
         let before = user_config_snapshot(&root);
         let server = interactive_mcp_server_entry().unwrap();
 
-        let override_ = codex_mcp_override(&server).unwrap();
-        assert!(override_.contains("mcp_servers.bridget"));
-        assert!(override_.contains("env={HOME="));
-        assert_eq!(server["env"]["HOME"], std::env::var("HOME").unwrap());
         let config =
             claude_mcp_config_in(&root.join(".cache/bridget"), &server, "fixture").unwrap();
         assert!(config.path().exists());
@@ -6192,13 +6187,7 @@ mod reconnect_tests {
             .unwrap()
             .is_none()
         );
-        assert_eq!(codex_args[0], "-c");
-        assert!(
-            codex_args[1].starts_with("mcp_servers.bridget="),
-            "{}",
-            codex_args[1]
-        );
-        assert_eq!(codex_args[2], "app-server");
+        assert_eq!(codex_args, vec!["app-server".to_string()]);
 
         let mut none_args = Vec::new();
         assert!(

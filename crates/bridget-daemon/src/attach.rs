@@ -1889,6 +1889,10 @@ fn render_journal_event(bytes: &[u8], agent: &str) -> String {
             ),
             provider_request_summary(payload),
         ),
+        "provider_request_rejected" => (
+            "[interaction refusée]".to_string(),
+            provider_request_rejected_summary(payload),
+        ),
         "turn_end" => ("[fin]".to_string(), turn_end_summary(payload)),
         "error" => ("[erreur]".to_string(), error_summary(payload)),
         // Laissé volontairement brut : tout autre `event` (et tout `update` dont
@@ -1977,11 +1981,26 @@ fn provider_request_id(value: Option<&serde_json::Value>) -> String {
     }
 }
 
+fn provider_request_rejected_summary(payload: &serde_json::Value) -> String {
+    let code = payload
+        .get("code")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unsupported_provider_request");
+    let reference = payload
+        .get("reference")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("référence absente");
+    format!(
+        "opération fournisseur non prise en charge ({code}, référence {reference}) ; le fournisseur a reçu un refus explicite"
+    )
+}
+
 fn error_summary(payload: &serde_json::Value) -> String {
     let reason = payload
         .get("reason")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("erreur sans motif");
+
     match payload.get("pending_provider_request") {
         Some(pending) if pending.is_object() => format!(
             "{reason} — interaction pendante : {}",

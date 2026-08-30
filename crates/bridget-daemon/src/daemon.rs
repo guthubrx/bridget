@@ -59,6 +59,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use uuid::Uuid;
 
 // Métriques du daemon (M-005)
+/// Une interaction humaine non marquée reply doit tout de même obtenir une
+/// issue rapide : sinon un steer peut rester muet pendant 45 minutes.
+const HUMAN_STEER_TIMEOUT_SECS: u64 = 30;
 pub struct Metrics {
     pub messages_sent: AtomicU64,
     pub messages_received: AtomicU64,
@@ -5130,7 +5133,11 @@ fn stamp_turn_deadline_for_delivery(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let timeout_secs = live_notify_timeout_secs(registry, agent_type);
+    let timeout_secs = if message.origin == Some(bridget_core::MessageOrigin::Human) {
+        HUMAN_STEER_TIMEOUT_SECS
+    } else {
+        live_notify_timeout_secs(registry, agent_type)
+    };
     message.deadline_at = Some(now.saturating_add(timeout_secs));
     info!(
         "échéance de tour posée: to={} type={} timeout_secs={} deadline_at={}",
@@ -12399,6 +12406,28 @@ mod presence_tests {
         );
 
         let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn message_humain_sans_reply_recoit_une_echeance_de_steer_bornee() {
+        let registry = AgentRegistry::from_json("{}", "/tmp/agents-temoin-humain-deadline.json")
+            .expect("registre natif");
+        let mut message = idempotent_message("message humain sans reply");
+        message.reply = false;
+        message.origin = Some(bridget_core::MessageOrigin::Human);
+        let before = unix_now_secs() as u64;
+        stamp_turn_deadline_for_delivery(&mut message, &registry, "codex");
+        let after = unix_now_secs() as u64;
+        let timeout = message
+            .deadline_at
+            .expect("échéance humaine")
+            .saturating_sub(before);
+        assert!(
+            timeout >= HUMAN_STEER_TIMEOUT_SECS.saturating_sub(1)
+                && timeout
+                    <= HUMAN_STEER_TIMEOUT_SECS.saturating_add(after.saturating_sub(before) + 1),
+            "échéance humaine attendue ≈ {HUMAN_STEER_TIMEOUT_SECS}s, reçue {timeout}s"
+        );
     }
 
     #[test]
