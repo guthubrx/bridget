@@ -11,10 +11,25 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// Schéma écrit par ce binaire. Le schéma 1 (sans `domain`, ou avec `domain`
-/// posé par le premier lot D20) reste lisible.
-pub const FLEET_SCHEMA_VERSION: u64 = 3;
+/// Schéma écrit par ce binaire. Les schémas 1 à 3 décrivaient uniquement des
+/// agents persistants à reprendre. Le schéma 4 devient l'inventaire durable du
+/// cycle de vie de tous les agents gérés.
+pub const FLEET_SCHEMA_VERSION: u64 = 4;
 pub const FLEET_SCHEMA_MIN: u64 = 1;
+
+fn default_persistent() -> bool {
+    true
+}
+
+/// État désiré du processus, indépendant de sa politique de reprise au boot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DesiredLifecycleState {
+    #[default]
+    Running,
+    Stopped,
+    Decommissioned,
+}
 
 fn schema_lisible(version: u64) -> bool {
     (FLEET_SCHEMA_MIN..=FLEET_SCHEMA_VERSION).contains(&version)
@@ -40,7 +55,7 @@ pub struct DesiredAgentLink {
     pub agent_path: String,
 }
 
-/// Entrée persistante d'un équipier que le daemon doit maintenir.
+/// Entrée durable d'un équipier dont le daemon possède le cycle de vie.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DesiredEquipier {
@@ -50,6 +65,14 @@ pub struct DesiredEquipier {
     pub command_id: String,
     pub generation: u64,
     pub created: String,
+    /// Reprise automatique d'une entrée `running` au démarrage du daemon.
+    /// Les anciens schémas ne contenaient que des agents persistants.
+    #[serde(default = "default_persistent")]
+    pub persistent: bool,
+    /// Une entrée arrêtée reste visible et relançable. Une entrée
+    /// décommissionnée est cachée et réserve son nom.
+    #[serde(default)]
+    pub lifecycle_state: DesiredLifecycleState,
     /// Définition runtime figée lors de la connexion initiale. `None` ne sert
     /// qu'à lire les anciens fichiers : leur reprise est refusée fail-closed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -261,6 +284,81 @@ impl DesiredStateStore {
         Ok(removed)
     }
 
+    /// Applique une transition explicite de cycle de vie et retourne l'entrée
+    /// mise à jour. L'absence n'est jamais transformée en création implicite.
+    pub fn set_lifecycle_state(
+        &self,
+        name: &str,
+        lifecycle_state: DesiredLifecycleState,
+    ) -> Result<Option<DesiredEquipier>, DesiredStateError> {
+        let _transition = self
+            .transition_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut fleet = self.load_unlocked()?;
+        let Some(entry) = fleet.equipiers.get_mut(name) else {
+            return Ok(None);
+        };
+        if entry.lifecycle_state != lifecycle_state {
+            entry.lifecycle_state = lifecycle_state;
+            let updated = entry.clone();
+            self.persist_unlocked(&fleet)?;
+            return Ok(Some(updated));
+        }
+        Ok(Some(entry.clone()))
+    }
+
+    /// Marque une génération arrêtée uniquement si elle possède encore
+    /// l'entrée. Une relance échouée ne peut ainsi effacer l'ancienne
+    /// définition `stopped` qu'elle tentait de remplacer.
+    pub fn mark_stopped_if_generation(
+        &self,
+        name: &str,
+        command_id: &str,
+        generation: u64,
+    ) -> Result<bool, DesiredStateError> {
+        let _transition = self
+            .transition_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut fleet = self.load_unlocked()?;
+        let Some(entry) = fleet.equipiers.get_mut(name) else {
+            return Ok(false);
+        };
+        if entry.command_id != command_id
+            || entry.generation != generation
+            || entry.lifecycle_state == DesiredLifecycleState::Decommissioned
+        {
+            return Ok(false);
+        }
+        if entry.lifecycle_state != DesiredLifecycleState::Stopped {
+            entry.lifecycle_state = DesiredLifecycleState::Stopped;
+            self.persist_unlocked(&fleet)?;
+        }
+        Ok(true)
+    }
+
+    /// Les agents non persistants ne sont pas repris après un redémarrage,
+    /// mais leur identité logique demeure consultable comme arrêtée.
+    pub fn stop_non_persistent_running(&self) -> Result<Vec<String>, DesiredStateError> {
+        let _transition = self
+            .transition_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut fleet = self.load_unlocked()?;
+        let mut changed = Vec::new();
+        for (name, entry) in &mut fleet.equipiers {
+            if !entry.persistent && entry.lifecycle_state == DesiredLifecycleState::Running {
+                entry.lifecycle_state = DesiredLifecycleState::Stopped;
+                changed.push(name.clone());
+            }
+        }
+        if !changed.is_empty() {
+            self.persist_unlocked(&fleet)?;
+        }
+        Ok(changed)
+    }
+
     /// Met à jour le domain d'une entrée existante sous le même verrou que
     /// `upsert`/`remove`. Un load+persist disjoint écraserait les insertions
     /// concurrentes.
@@ -416,6 +514,8 @@ mod tests {
             command_id: command_id.to_string(),
             generation,
             created: "2026-08-22T20:14:00Z".to_string(),
+            persistent: true,
+            lifecycle_state: DesiredLifecycleState::Running,
             resolved_definition: None,
             domain: None,
             project: None,
@@ -570,6 +670,104 @@ mod tests {
     }
 
     #[test]
+    fn schema_ancien_devient_running_persistent_par_defaut() {
+        let root = test_root("schema-legacy-lifecycle");
+        let path = root.join("fleet.json");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            &path,
+            r#"{
+  "schema": 3,
+  "equipiers": {
+    "ancien": {
+      "type": "codex",
+      "cwd": "/tmp/projet",
+      "command_id": "legacy-command",
+      "generation": 7,
+      "created": "2026-08-22T20:14:00Z"
+    }
+  }
+}"#,
+        )
+        .unwrap();
+        let entry = DesiredStateStore::at_path(&path)
+            .load()
+            .unwrap()
+            .equipiers
+            .remove("ancien")
+            .unwrap();
+        assert!(entry.persistent);
+        assert_eq!(entry.lifecycle_state, DesiredLifecycleState::Running);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn transitions_de_cycle_de_vie_sont_atomiques_et_bornees() {
+        let root = test_root("lifecycle");
+        let path = root.join("fleet.json");
+        let store = DesiredStateStore::at_path(&path);
+        let entry = equipier("command-lifecycle", 8);
+        store.upsert("agent".to_string(), entry).unwrap();
+
+        assert!(
+            store
+                .mark_stopped_if_generation("agent", "command-lifecycle", 8)
+                .unwrap()
+        );
+        assert_eq!(
+            store.load().unwrap().equipiers["agent"].lifecycle_state,
+            DesiredLifecycleState::Stopped
+        );
+        assert!(
+            !store
+                .mark_stopped_if_generation("agent", "autre-command", 8)
+                .unwrap()
+        );
+        let retired = store
+            .set_lifecycle_state("agent", DesiredLifecycleState::Decommissioned)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            retired.lifecycle_state,
+            DesiredLifecycleState::Decommissioned
+        );
+        assert!(
+            !store
+                .mark_stopped_if_generation("agent", "command-lifecycle", 8)
+                .unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn redemarrage_arrete_uniquement_les_non_persistants_running() {
+        let root = test_root("non-persistent");
+        let path = root.join("fleet.json");
+        let store = DesiredStateStore::at_path(&path);
+        let mut ephemeral = equipier("ephemeral", 1);
+        ephemeral.persistent = false;
+        store.upsert("ephemeral".to_string(), ephemeral).unwrap();
+        let mut persistent = equipier("persistent", 2);
+        persistent.persistent = true;
+        store.upsert("persistent".to_string(), persistent).unwrap();
+
+        assert_eq!(
+            store.stop_non_persistent_running().unwrap(),
+            vec!["ephemeral".to_string()]
+        );
+        let fleet = store.load().unwrap();
+        assert_eq!(
+            fleet.equipiers["ephemeral"].lifecycle_state,
+            DesiredLifecycleState::Stopped
+        );
+        assert_eq!(
+            fleet.equipiers["persistent"].lifecycle_state,
+            DesiredLifecycleState::Running
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn lien_agent_optionnel_survit_au_roundtrip_fleet() {
         let root = test_root("agent-link");
         let path = root.join("fleet.json");
@@ -684,12 +882,12 @@ mod tests {
         let root = test_root("version");
         let path = root.join("fleet.json");
         fs::create_dir_all(&root).unwrap();
-        fs::write(&path, r#"{"schema":4,"equipiers":{}}"#).unwrap();
+        fs::write(&path, r#"{"schema":5,"equipiers":{}}"#).unwrap();
         let error = DesiredStateStore::at_path(&path).load().unwrap_err();
 
         assert!(matches!(
             error,
-            DesiredStateError::UnsupportedSchema { found: Some(4), .. }
+            DesiredStateError::UnsupportedSchema { found: Some(5), .. }
         ));
         assert!(error.to_string().contains(path.to_str().unwrap()));
         fs::write(&path, r#"{"equipiers":{}}"#).unwrap();

@@ -6,15 +6,16 @@ use bridget_transport::greffe_authorization::{
     GreffeAuthorizationGate, GreffeDepositAuthorization, GreffeMutationAction,
 };
 use bridget_transport::protocol::{
-    AgentLinkEventFrame, AttachRefusal, CLIENT_CONTRACT_VERSION, COORDINATION_EVENTS_VERSION,
-    COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal, ConnectionRole,
-    DelegatedRuntimeEventFrame, DiskSpaceFact, ExecutionControlCommand, ExecutionControlOperation,
-    ExecutionControlOutcome, ExecutionControlRefusal, IdempotencyIssue,
-    PROJECT_REGISTRY_CONTRACT_VERSION, PresenceMode, ProjectAdminOperation, ProjectAdminOutcome,
-    ProjectAdminRequest, ProjectBackend, ProjectBindOutcome, ProjectBindRequest, ProjectBindStatus,
-    ProjectBindingProjection, ProjectBindingStatus, ProjectRegistryRefusal,
-    REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal,
-    SpawnRefusal, StopOutcome, decode, encode,
+    AdoptStoppedOutcome, AgentLinkEventFrame, AttachRefusal, CLIENT_CONTRACT_VERSION,
+    COORDINATION_EVENTS_VERSION, COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal,
+    ConnectionRole, DecommissionOutcome, DelegatedRuntimeEventFrame, DiskSpaceFact,
+    ExecutionControlCommand, ExecutionControlOperation, ExecutionControlOutcome,
+    ExecutionControlRefusal, IdempotencyIssue, PROJECT_REGISTRY_CONTRACT_VERSION, PresenceMode,
+    ProjectAdminOperation, ProjectAdminOutcome, ProjectAdminRequest, ProjectBackend,
+    ProjectBindOutcome, ProjectBindRequest, ProjectBindStatus, ProjectBindingProjection,
+    ProjectBindingStatus, ProjectRegistryRefusal, REVIEW_DELEGATE_CONTRACT_VERSION,
+    RelaunchOutcome, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal, SpawnRefusal,
+    StopOutcome, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
@@ -43,11 +44,13 @@ use crate::store::{
     GuichetReplyInput, GuichetResult, MAX_GUICHET_FRAME_BYTES, Store, StoreError,
 };
 use crate::{
-    desired_state::DesiredStateStore,
-    fleet::{FleetConfig, FleetSupervisor, SpawnLease, SpawnOrder as FleetSpawnOrder},
+    desired_state::{DesiredLifecycleState, DesiredStateStore},
+    fleet::{
+        AdoptStoppedResult, FleetConfig, FleetSupervisor, SpawnLease, SpawnOrder as FleetSpawnOrder,
+    },
     lifecycle::{
         PreparedSpawn, SourceEnvironment, SpawnDecision, prepare_recovery, source_environment,
-        submit_spawn_for_project, submit_spawn_from_resolved,
+        submit_relaunch_from_resolved, submit_spawn_for_project, submit_spawn_from_resolved,
     },
     managed_process::{
         ManagedIdentity, ManagedLaunch, ManagedMarkerStore, ManagedStatus, ManagedStderrStore,
@@ -652,6 +655,13 @@ struct DaemonState {
     managed_tx: Sender<ManagedSupervisorCommand>,
     marker_store: ManagedMarkerStore,
     managed_spawns: HashMap<String, ManagedSpawnRecord>,
+    /// Demandeurs d'une nouvelle génération qui attendent un résultat de
+    /// relance, distinct du résultat public d'un spawn neuf.
+    relaunch_requesters: HashMap<String, Vec<String>>,
+    /// Noms dont le décommissionnement a franchi les gardes mais attend
+    /// encore l'arrêt supervisé. Cette réservation ferme la course avec une
+    /// relance concurrente avant l'écriture de la tombstone.
+    decommissioning_names: HashSet<String>,
     managed_by_instance: HashMap<String, String>,
     managed_terminal_instances: HashSet<String>,
     connections: HashMap<String, Arc<Mutex<BufWriter<UnixStream>>>>,
@@ -2054,6 +2064,10 @@ fn drain_managed_events(
                     conn_id,
                     definition,
                 } => {
+                    let relaunch_requesters = st
+                        .relaunch_requesters
+                        .remove(&lease.command_id)
+                        .unwrap_or_default();
                     if let Some(record) = st.managed_spawns.get_mut(&lease.command_id) {
                         record.wrapper_conn = Some(conn_id);
                         let requesters = std::mem::take(&mut record.requester_conns);
@@ -2070,6 +2084,20 @@ fn drain_managed_events(
                             );
                         }
                     }
+                    for requester in relaunch_requesters {
+                        defer_control(
+                            &st,
+                            &requester,
+                            DaemonToWrapper::RelaunchResult {
+                                command_id: lease.command_id.clone(),
+                                outcome: RelaunchOutcome::Started {
+                                    name: lease.name.clone(),
+                                    generation: lease.generation,
+                                },
+                            },
+                            &mut controls,
+                        );
+                    }
                     finish_recovery_command(&mut st, &lease.command_id);
                 }
                 ManagedSupervisorEvent::Failed {
@@ -2078,6 +2106,10 @@ fn drain_managed_events(
                     reason,
                     conn_id,
                 } => {
+                    let relaunch_requesters = st
+                        .relaunch_requesters
+                        .remove(&lease.command_id)
+                        .unwrap_or_default();
                     let refusal = match kind.as_str() {
                         "command_missing" => SpawnRefusal::CommandMissing {
                             command: reason.clone(),
@@ -2121,6 +2153,20 @@ fn drain_managed_events(
                             presence.touch_capacity();
                         }
                     }
+                    let _ = st.fleet.mark_stopped(&lease.name);
+                    for requester in relaunch_requesters {
+                        defer_control(
+                            &st,
+                            &requester,
+                            DaemonToWrapper::RelaunchResult {
+                                command_id: lease.command_id.clone(),
+                                outcome: RelaunchOutcome::Rejected {
+                                    reason: refusal.clone(),
+                                },
+                            },
+                            &mut controls,
+                        );
+                    }
                     finish_recovery_command(&mut st, &lease.command_id);
                 }
                 ManagedSupervisorEvent::Exited {
@@ -2128,6 +2174,11 @@ fn drain_managed_events(
                     conn_id,
                     reason,
                 } => {
+                    let relaunch_requesters = st
+                        .relaunch_requesters
+                        .remove(&lease.command_id)
+                        .unwrap_or_default();
+                    let _ = st.fleet.mark_stopped(&lease.name);
                     let record = st.managed_spawns.remove(&lease.command_id);
                     st.managed_by_instance.remove(&lease.instance_id);
                     st.managed_terminal_instances
@@ -2167,6 +2218,21 @@ fn drain_managed_events(
                         presence.state = "stopped".to_string();
                         presence.touch_capacity();
                     }
+                    for requester in relaunch_requesters {
+                        defer_control(
+                            &st,
+                            &requester,
+                            DaemonToWrapper::RelaunchResult {
+                                command_id: lease.command_id.clone(),
+                                outcome: RelaunchOutcome::Rejected {
+                                    reason: SpawnRefusal::NegotiationFailed {
+                                        detail: reason.clone(),
+                                    },
+                                },
+                            },
+                            &mut controls,
+                        );
+                    }
                     finish_recovery_command(&mut st, &lease.command_id);
                 }
                 ManagedSupervisorEvent::Stopped {
@@ -2175,6 +2241,10 @@ fn drain_managed_events(
                     outcome,
                     completion,
                 } => {
+                    let relaunch_requesters = st
+                        .relaunch_requesters
+                        .remove(&lease.command_id)
+                        .unwrap_or_default();
                     let record = st.managed_spawns.remove(&lease.command_id);
                     st.managed_by_instance.remove(&lease.instance_id);
                     st.managed_terminal_instances
@@ -2224,6 +2294,21 @@ fn drain_managed_events(
                         presence.state = "stopped".to_string();
                         presence.touch_capacity();
                     }
+                    for requester in relaunch_requesters {
+                        defer_control(
+                            &st,
+                            &requester,
+                            DaemonToWrapper::RelaunchResult {
+                                command_id: lease.command_id.clone(),
+                                outcome: RelaunchOutcome::Rejected {
+                                    reason: SpawnRefusal::NegotiationFailed {
+                                        detail: "relance annulée par arrêt".to_string(),
+                                    },
+                                },
+                            },
+                            &mut controls,
+                        );
+                    }
                     finish_recovery_command(&mut st, &lease.command_id);
                     stop_completion = Some((completion, outcome));
                 }
@@ -2236,6 +2321,23 @@ fn drain_managed_events(
                         "arrêt incomplet de l'équipier géré {} génération {} : groupe toujours supervisé",
                         lease.name, lease.generation
                     );
+                    let relaunch_requesters = st
+                        .relaunch_requesters
+                        .remove(&lease.command_id)
+                        .unwrap_or_default();
+                    for requester in relaunch_requesters {
+                        defer_control(
+                            &st,
+                            &requester,
+                            DaemonToWrapper::RelaunchResult {
+                                command_id: lease.command_id.clone(),
+                                outcome: RelaunchOutcome::Timeout {
+                                    state: "groupe encore supervisé".to_string(),
+                                },
+                            },
+                            &mut controls,
+                        );
+                    }
                     stop_completion = Some((completion, outcome));
                 }
             }
@@ -2309,6 +2411,8 @@ impl DaemonState {
                     .join("managed"),
             ),
             managed_spawns: HashMap::new(),
+            relaunch_requesters: HashMap::new(),
+            decommissioning_names: HashSet::new(),
             managed_by_instance: HashMap::new(),
             managed_terminal_instances: HashSet::new(),
             connections: HashMap::new(),
@@ -2715,7 +2819,10 @@ impl DaemonState {
         let live_names: std::collections::HashSet<String> =
             agents.iter().map(|agent| agent.name.clone()).collect();
         for record in self.managed_spawns.values().filter(|record| {
-            self.recovery_commands.contains(&record.lease.command_id)
+            (self.recovery_commands.contains(&record.lease.command_id)
+                || self
+                    .relaunch_requesters
+                    .contains_key(&record.lease.command_id))
                 && !live_names.contains(&record.lease.name)
         }) {
             let managed_definition = self
@@ -2732,6 +2839,11 @@ impl DaemonState {
                 .as_ref()
                 .map(definition_presence_fields)
                 .unwrap_or_else(|| ("unknown".to_string(), None));
+            let lifecycle_state = if self.recovery_commands.contains(&record.lease.command_id) {
+                "recovering"
+            } else {
+                "relaunching"
+            };
             agents.push(bridget_transport::protocol::AgentInfo {
                 name: record.lease.name.clone(),
                 agent_type: record.agent_type.clone(),
@@ -2744,7 +2856,7 @@ impl DaemonState {
                 execution: execution_projection(&record.lease.name),
                 os: std::env::consts::OS.to_string(),
                 agent_link: agent_link_projection(&record.lease.instance_id),
-                state: "recovering".to_string(),
+                state: lifecycle_state.to_string(),
                 last_seen_secs: 0,
                 reconnect_count: 0,
                 domain: self.fleet.desired_domain(&record.lease.name),
@@ -2791,6 +2903,49 @@ impl DaemonState {
                 persistent: persistence.get(&presence.name).copied(),
                 provider: self.provider_ui_projection(&presence.agent_type),
             });
+        }
+        let listed_names: HashSet<String> = agents.iter().map(|agent| agent.name.clone()).collect();
+        if let Ok(desired) = self.fleet.desired_fleet() {
+            for (name, entry) in desired.equipiers.into_iter().filter(|(name, entry)| {
+                entry.lifecycle_state == DesiredLifecycleState::Stopped
+                    && !listed_names.contains(name)
+            }) {
+                let (model, effort) = entry
+                    .resolved_definition
+                    .as_ref()
+                    .and_then(definition_runtime)
+                    .map(|(model, effort)| (Some(model), effort))
+                    .unwrap_or((None, None));
+                let (transport, mode) = entry
+                    .resolved_definition
+                    .as_ref()
+                    .map(definition_presence_fields)
+                    .unwrap_or_else(|| ("unknown".to_string(), None));
+                agents.push(bridget_transport::protocol::AgentInfo {
+                    name: name.clone(),
+                    agent_type: entry.agent_type.clone(),
+                    connection_id: String::new(),
+                    host: self.host.clone(),
+                    transport,
+                    channel: None,
+                    mode,
+                    location: None,
+                    execution: execution_projection(&name),
+                    agent_link: None,
+                    os: std::env::consts::OS.to_string(),
+                    state: "stopped".to_string(),
+                    last_seen_secs: 0,
+                    reconnect_count: 0,
+                    domain: entry.domain,
+                    model,
+                    effort,
+                    rate_limits: Vec::new(),
+                    model_mismatch: None,
+                    disk_space: None,
+                    persistent: Some(entry.persistent),
+                    provider: self.provider_ui_projection(&entry.agent_type),
+                });
+            }
         }
         agents.sort_by(|left, right| left.name.cmp(&right.name));
         agents
@@ -2869,13 +3024,6 @@ fn reserve_managed_recoveries(
 ) -> Result<Vec<ManagedRecovery>, Box<dyn std::error::Error>> {
     state.recovering = true;
     let mut absents = Vec::new();
-    for (name, _) in state.fleet.drain_non_persistent_named() {
-        absents.push(RecoveryLossEntry {
-            name,
-            reason: REASON_NON_PERSISTENT.to_string(),
-            detail: Some("spawn sans --persistent".to_string()),
-        });
-    }
     let roster_persistents = state.fleet.persistent_named();
     let candidates = state.fleet.recovery_candidates();
     let in_flight_names = candidates
@@ -2884,6 +3032,16 @@ fn reserve_managed_recoveries(
         .collect::<HashSet<_>>();
     let desired = state.fleet.desired_fleet()?;
     let mut prepared = Vec::new();
+
+    for (name, _) in state.fleet.drain_legacy_non_persistent_named()? {
+        absents.push(RecoveryLossEntry {
+            name,
+            reason: REASON_NON_PERSISTENT.to_string(),
+            detail: Some(
+                "ancien agent nommé non persistant absent du registre durable".to_string(),
+            ),
+        });
+    }
 
     for candidate in candidates {
         if candidate.lease.deadline_at <= now {
@@ -2918,6 +3076,9 @@ fn reserve_managed_recoveries(
         if in_flight_names.contains(&name) {
             continue;
         }
+        if equipier.lifecycle_state != DesiredLifecycleState::Running || !equipier.persistent {
+            continue;
+        }
         let Some(resolved_definition) = equipier.resolved_definition else {
             warn!("reprise de {name} refusée: définition figée absente");
             absents.push(RecoveryLossEntry {
@@ -2925,14 +3086,14 @@ fn reserve_managed_recoveries(
                 reason: REASON_FROZEN_DEFINITION.to_string(),
                 detail: Some("définition figée absente".to_string()),
             });
-            state.fleet.remove_desired(&name)?;
+            state.fleet.mark_stopped(&name)?;
             continue;
         };
         let order = FleetSpawnOrder {
             agent_type: equipier.agent_type,
             requested_name: Some(name.clone()),
             cwd: equipier.cwd,
-            persistent: true,
+            persistent: equipier.persistent,
             command_id: format!("recovery-{}", Uuid::new_v4()),
             issued_at: now,
             deadline_at: now.saturating_add(MANAGED_RECOVERY_DEADLINE_SECS),
@@ -2970,7 +3131,7 @@ fn reserve_managed_recoveries(
                         detail: Some(format!("{reason:?}")),
                     });
                 }
-                state.fleet.remove_desired(&name)?;
+                state.fleet.mark_stopped(&name)?;
             }
             SpawnDecision::EnvelopeMismatch => {
                 warn!("reprise de {name} refusée: enveloppe divergente");
@@ -2979,7 +3140,7 @@ fn reserve_managed_recoveries(
                     reason: REASON_RECOVERY_FAILED.to_string(),
                     detail: Some("enveloppe divergente".to_string()),
                 });
-                state.fleet.remove_desired(&name)?;
+                state.fleet.mark_stopped(&name)?;
             }
             SpawnDecision::Await(_) | SpawnDecision::Accepted { .. } => {
                 warn!("reprise de {name} rattachée à un état inattendu");
@@ -2988,7 +3149,7 @@ fn reserve_managed_recoveries(
                     reason: REASON_RECOVERY_FAILED.to_string(),
                     detail: Some("état de reprise inattendu".to_string()),
                 });
-                state.fleet.remove_desired(&name)?;
+                state.fleet.mark_stopped(&name)?;
             }
         }
     }
@@ -6302,6 +6463,111 @@ fn handle_execution_control(
     control_result(&command, ExecutionControlOutcome::OutcomeUnknown)
 }
 
+fn prepare_managed_stop(state: &Arc<Mutex<DaemonState>>, name: &str) -> ManagedStopTarget {
+    let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+    let record = st
+        .managed_spawns
+        .values()
+        .find(|spawn| spawn.lease.name == name);
+    match record {
+        Some(record) => {
+            let lease = record.lease.clone();
+            let completion = Arc::clone(&record.stop);
+            let wrapper = record
+                .wrapper_conn
+                .as_ref()
+                .and_then(|conn_id| st.connections.get(conn_id))
+                .cloned();
+            if !completion.is_requested()
+                && let Err(error) = st.fleet.invalidate_for_stop(&lease)
+            {
+                ManagedStopTarget::Immediate(StopOutcome::Timeout {
+                    state: error.to_string(),
+                })
+            } else {
+                st.managed_terminal_instances
+                    .insert(lease.instance_id.clone());
+                if wrapper.is_none() {
+                    completion.mark_handshake_complete();
+                }
+                ManagedStopTarget::Supervised {
+                    receiver: completion.request(),
+                    completion,
+                    wrapper,
+                }
+            }
+        }
+        None => {
+            let desired = st.fleet.desired_entry(name).ok().flatten();
+            if desired
+                .as_ref()
+                .is_some_and(|entry| entry.lifecycle_state == DesiredLifecycleState::Stopped)
+            {
+                return ManagedStopTarget::Immediate(StopOutcome::Stopped);
+            }
+            if desired
+                .as_ref()
+                .is_some_and(|entry| entry.lifecycle_state == DesiredLifecycleState::Decommissioned)
+            {
+                return ManagedStopTarget::Immediate(StopOutcome::NotFound);
+            }
+            if desired.is_some() {
+                let _ = st.fleet.mark_stopped(name);
+            }
+            ManagedStopTarget::Marker {
+                store: st.marker_store.clone(),
+                fallback: if st.router.get_agent(name).is_some() {
+                    StopOutcome::NotManaged
+                } else if desired.is_some() {
+                    StopOutcome::Stopped
+                } else {
+                    StopOutcome::NotFound
+                },
+            }
+        }
+    }
+}
+
+fn await_managed_stop(target: ManagedStopTarget, name: &str) -> StopOutcome {
+    match target {
+        ManagedStopTarget::Supervised {
+            receiver,
+            completion,
+            wrapper,
+        } => {
+            if let Some(writer) = wrapper {
+                let _ = push_control_message(&writer, &DaemonToWrapper::Disconnect);
+            }
+            completion.mark_handshake_complete();
+            receiver
+                .recv_timeout(MANAGED_STOP_REPLY_TIMEOUT)
+                .unwrap_or(StopOutcome::Timeout {
+                    state: "superviseur sans issue dans le délai".to_string(),
+                })
+        }
+        ManagedStopTarget::Marker { store, fallback } => {
+            match store.stop_current_group(name, MANAGED_STOP_FORCED_GRACE, MANAGED_STOP_POLL) {
+                Ok(Some(ManagedStopResult::Stopped)) => StopOutcome::Stopped,
+                Ok(Some(ManagedStopResult::StoppedForced { survivors_killed })) => {
+                    StopOutcome::StoppedForced { survivors_killed }
+                }
+                Ok(Some(ManagedStopResult::Timeout)) => StopOutcome::Timeout {
+                    state: "groupe du marqueur encore vivant".to_string(),
+                },
+                Ok(None) => fallback,
+                Err(error) => StopOutcome::Timeout {
+                    state: error.to_string(),
+                },
+            }
+        }
+        ManagedStopTarget::Immediate(outcome) => outcome,
+    }
+}
+
+fn prune_agent_presence(state: &mut DaemonState, name: &str) {
+    state.presences.retain(|_, presence| presence.name != name);
+}
+
 /// Traite un message wrapper et retourne une réponse optionnelle.
 fn handle_wrapper_message(
     conn_id: &str,
@@ -6502,6 +6768,9 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::SpawnOrder { .. }
                 | WrapperToDaemon::WaitAgentLinks { .. }
                 | WrapperToDaemon::StopOrder { .. }
+                | WrapperToDaemon::RelaunchOrder { .. }
+                | WrapperToDaemon::DecommissionOrder { .. }
+                | WrapperToDaemon::AdoptStoppedOrder { .. }
                 | WrapperToDaemon::Subscribe { .. }
                 | WrapperToDaemon::Unsubscribe { .. }
                 | WrapperToDaemon::Subscribed { .. }
@@ -6634,6 +6903,9 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::SpawnOrder { .. }
                 | WrapperToDaemon::WaitAgentLinks { .. }
                 | WrapperToDaemon::StopOrder { .. }
+                | WrapperToDaemon::RelaunchOrder { .. }
+                | WrapperToDaemon::DecommissionOrder { .. }
+                | WrapperToDaemon::AdoptStoppedOrder { .. }
                 | WrapperToDaemon::Subscribe { .. }
                 | WrapperToDaemon::Unsubscribe { .. }
                 | WrapperToDaemon::Subscribed { .. }
@@ -7981,86 +8253,350 @@ fn handle_wrapper_message(
             }
         }
         WrapperToDaemon::StopOrder { name, command_id } => {
-            let target = {
+            info!("cycle_vie action=stop phase=request name={name} command_id={command_id}");
+            let outcome = await_managed_stop(prepare_managed_stop(state, &name), &name);
+            info!(
+                "cycle_vie action=stop phase=result name={name} command_id={command_id} outcome={outcome:?}"
+            );
+            Some(DaemonToWrapper::StopResult {
+                command_id,
+                outcome,
+            })
+        }
+        WrapperToDaemon::RelaunchOrder { name, command_id } => {
+            info!("cycle_vie action=relaunch phase=request name={name} command_id={command_id}");
+            let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+            if st.decommissioning_names.contains(&name) {
+                return Some(DaemonToWrapper::RelaunchResult {
+                    command_id,
+                    outcome: RelaunchOutcome::NotRelaunchable {
+                        reason: "décommissionnement en cours".to_string(),
+                    },
+                });
+            }
+            let active_command = st
+                .managed_spawns
+                .values()
+                .find(|spawn| spawn.lease.name == name)
+                .map(|spawn| spawn.lease.command_id.clone());
+            if active_command
+                .as_deref()
+                .is_some_and(|active| active != command_id)
+                || st.router.get_agent(&name).is_some()
+            {
+                return Some(DaemonToWrapper::RelaunchResult {
+                    command_id,
+                    outcome: RelaunchOutcome::AlreadyRunning,
+                });
+            }
+            let Some(entry) = st.fleet.desired_entry(&name).ok().flatten() else {
+                return Some(DaemonToWrapper::RelaunchResult {
+                    command_id,
+                    outcome: if st.router.get_agent(&name).is_some() {
+                        RelaunchOutcome::NotManaged
+                    } else {
+                        RelaunchOutcome::NotFound
+                    },
+                });
+            };
+            match entry.lifecycle_state {
+                DesiredLifecycleState::Running => {
+                    return Some(DaemonToWrapper::RelaunchResult {
+                        command_id: command_id.clone(),
+                        outcome: if entry.command_id == command_id {
+                            RelaunchOutcome::Started {
+                                name,
+                                generation: entry.generation,
+                            }
+                        } else {
+                            RelaunchOutcome::AlreadyRunning
+                        },
+                    });
+                }
+                DesiredLifecycleState::Decommissioned => {
+                    return Some(DaemonToWrapper::RelaunchResult {
+                        command_id,
+                        outcome: RelaunchOutcome::NotRelaunchable {
+                            reason: "agent décommissionné".to_string(),
+                        },
+                    });
+                }
+                DesiredLifecycleState::Stopped => {}
+            }
+            let Some(resolved_definition) = entry.resolved_definition.as_ref() else {
+                return Some(DaemonToWrapper::RelaunchResult {
+                    command_id,
+                    outcome: RelaunchOutcome::NotRelaunchable {
+                        reason: "définition runtime figée absente".to_string(),
+                    },
+                });
+            };
+            let project_root = if let Some(project) = entry.project.as_ref() {
+                match st.store.project_binding(&project.project_id) {
+                    Ok(Some(binding))
+                        if binding.state == crate::store::ProjectBindingState::Active
+                            && binding.generation == project.binding_generation =>
+                    {
+                        Some(PathBuf::from(binding.canonical_root))
+                    }
+                    Ok(_) | Err(_) => {
+                        return Some(DaemonToWrapper::RelaunchResult {
+                            command_id,
+                            outcome: RelaunchOutcome::Rejected {
+                                reason: SpawnRefusal::ProjectCwdMismatch {
+                                    project_id: project.project_id.clone(),
+                                },
+                            },
+                        });
+                    }
+                }
+            } else {
+                None
+            };
+            let now = unix_timestamp();
+            let order = FleetSpawnOrder {
+                agent_type: entry.agent_type.clone(),
+                requested_name: Some(name.clone()),
+                cwd: entry.cwd.clone(),
+                persistent: entry.persistent,
+                project: entry.project.clone(),
+                command_id: command_id.clone(),
+                issued_at: now,
+                deadline_at: now.saturating_add(MANAGED_RECOVERY_DEADLINE_SECS),
+                ownership: None,
+            };
+            let decision = submit_relaunch_from_resolved(
+                &st.fleet,
+                &st.source_env,
+                &order,
+                now,
+                resolved_definition,
+                &crate::lifecycle::SpawnHosts::local(),
+                project_root.as_deref(),
+            );
+            match decision {
+                Ok(SpawnDecision::Ready(prepared)) => {
+                    let stop = Arc::new(ManagedStopControl::new());
+                    st.managed_by_instance.insert(
+                        prepared.lease.instance_id.clone(),
+                        prepared.lease.command_id.clone(),
+                    );
+                    st.relaunch_requesters
+                        .entry(prepared.lease.command_id.clone())
+                        .or_default()
+                        .push(conn_id.to_string());
+                    st.managed_spawns.insert(
+                        prepared.lease.command_id.clone(),
+                        ManagedSpawnRecord {
+                            lease: prepared.lease.clone(),
+                            agent_type: prepared.agent_type.clone(),
+                            requester_conns: Vec::new(),
+                            wrapper_conn: None,
+                            stop: Arc::clone(&stop),
+                        },
+                    );
+                    if st
+                        .managed_tx
+                        .send(ManagedSupervisorCommand::Start {
+                            prepared: prepared.clone(),
+                            stop,
+                        })
+                        .is_err()
+                    {
+                        let _ = st.fleet.fail(
+                            &prepared.lease,
+                            "negotiation_failed",
+                            "superviseur de processus indisponible",
+                        );
+                        st.relaunch_requesters.remove(&prepared.lease.command_id);
+                        st.managed_spawns.remove(&prepared.lease.command_id);
+                        st.managed_by_instance.remove(&prepared.lease.instance_id);
+                        return Some(DaemonToWrapper::RelaunchResult {
+                            command_id,
+                            outcome: RelaunchOutcome::Rejected {
+                                reason: SpawnRefusal::NegotiationFailed {
+                                    detail: "superviseur de processus indisponible".to_string(),
+                                },
+                            },
+                        });
+                    }
+                    None
+                }
+                Ok(SpawnDecision::Await(waiter)) => {
+                    let requesters = st.relaunch_requesters.entry(waiter.command_id).or_default();
+                    if !requesters.iter().any(|requester| requester == conn_id) {
+                        requesters.push(conn_id.to_string());
+                    }
+                    None
+                }
+                Ok(SpawnDecision::Accepted { name, .. }) => {
+                    let generation = st
+                        .fleet
+                        .desired_entry(&name)
+                        .ok()
+                        .flatten()
+                        .map(|entry| entry.generation)
+                        .unwrap_or_default();
+                    Some(DaemonToWrapper::RelaunchResult {
+                        command_id,
+                        outcome: RelaunchOutcome::Started { name, generation },
+                    })
+                }
+                Ok(SpawnDecision::Rejected(reason)) => Some(DaemonToWrapper::RelaunchResult {
+                    command_id,
+                    outcome: RelaunchOutcome::Rejected { reason },
+                }),
+                Ok(SpawnDecision::EnvelopeMismatch) => Some(DaemonToWrapper::RelaunchResult {
+                    command_id,
+                    outcome: RelaunchOutcome::NotRelaunchable {
+                        reason: "command_id rejoué avec une enveloppe différente".to_string(),
+                    },
+                }),
+                Err(error) => Some(DaemonToWrapper::RelaunchResult {
+                    command_id,
+                    outcome: RelaunchOutcome::Rejected {
+                        reason: SpawnRefusal::NegotiationFailed {
+                            detail: error.to_string(),
+                        },
+                    },
+                }),
+            }
+        }
+        WrapperToDaemon::DecommissionOrder { name, command_id } => {
+            info!(
+                "cycle_vie action=decommission phase=request name={name} command_id={command_id}"
+            );
+            let (entry, launch_in_flight) = {
                 let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
-                let record = st
+                let Some(entry) = st.fleet.desired_entry(&name).ok().flatten() else {
+                    return Some(DaemonToWrapper::DecommissionResult {
+                        command_id,
+                        outcome: if st.router.get_agent(&name).is_some() {
+                            DecommissionOutcome::NotManaged
+                        } else {
+                            DecommissionOutcome::NotFound
+                        },
+                    });
+                };
+                if entry.lifecycle_state == DesiredLifecycleState::Decommissioned {
+                    return Some(DaemonToWrapper::DecommissionResult {
+                        command_id,
+                        outcome: DecommissionOutcome::AlreadyDecommissioned,
+                    });
+                }
+                if !st.decommissioning_names.insert(name.clone()) {
+                    return Some(DaemonToWrapper::DecommissionResult {
+                        command_id,
+                        outcome: DecommissionOutcome::Timeout {
+                            state: "décommissionnement déjà en cours".to_string(),
+                        },
+                    });
+                }
+                let launch_in_flight = st
                     .managed_spawns
                     .values()
-                    .find(|spawn| spawn.lease.name == name);
-                match record {
-                    Some(record) => {
-                        let lease = record.lease.clone();
-                        let completion = Arc::clone(&record.stop);
-                        let wrapper = record
-                            .wrapper_conn
-                            .as_ref()
-                            .and_then(|conn_id| st.connections.get(conn_id))
-                            .cloned();
-                        if !completion.is_requested()
-                            && let Err(error) = st.fleet.invalidate_for_stop(&lease)
-                        {
-                            ManagedStopTarget::Immediate(StopOutcome::Timeout {
-                                state: error.to_string(),
-                            })
-                        } else {
-                            st.managed_terminal_instances
-                                .insert(lease.instance_id.clone());
-                            if wrapper.is_none() {
-                                completion.mark_handshake_complete();
-                            }
-                            ManagedStopTarget::Supervised {
-                                receiver: completion.request(),
-                                completion,
-                                wrapper,
-                            }
+                    .any(|spawn| spawn.lease.name == name);
+                (entry, launch_in_flight)
+            };
+            let stop_outcome =
+                if entry.lifecycle_state == DesiredLifecycleState::Running || launch_in_flight {
+                    await_managed_stop(prepare_managed_stop(state, &name), &name)
+                } else {
+                    StopOutcome::Stopped
+                };
+            let outcome = match stop_outcome {
+                StopOutcome::Stopped => {
+                    let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                    let outcome = match st.fleet.decommission(&name) {
+                        Ok(true) => {
+                            prune_agent_presence(&mut st, &name);
+                            DecommissionOutcome::Decommissioned
                         }
-                    }
-                    None => ManagedStopTarget::Marker {
-                        store: st.marker_store.clone(),
-                        fallback: if st.router.get_agent(&name).is_some() {
-                            StopOutcome::NotManaged
-                        } else {
-                            StopOutcome::NotFound
+                        Ok(false) => DecommissionOutcome::NotFound,
+                        Err(error) => DecommissionOutcome::Timeout {
+                            state: error.to_string(),
                         },
-                    },
+                    };
+                    st.decommissioning_names.remove(&name);
+                    outcome
+                }
+                StopOutcome::StoppedForced { survivors_killed } => {
+                    let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                    let outcome = match st.fleet.decommission(&name) {
+                        Ok(true) => {
+                            prune_agent_presence(&mut st, &name);
+                            DecommissionOutcome::DecommissionedForced { survivors_killed }
+                        }
+                        Ok(false) => DecommissionOutcome::NotFound,
+                        Err(error) => DecommissionOutcome::Timeout {
+                            state: error.to_string(),
+                        },
+                    };
+                    st.decommissioning_names.remove(&name);
+                    outcome
+                }
+                StopOutcome::NotManaged => {
+                    state
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .decommissioning_names
+                        .remove(&name);
+                    DecommissionOutcome::NotManaged
+                }
+                StopOutcome::NotFound => {
+                    state
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .decommissioning_names
+                        .remove(&name);
+                    DecommissionOutcome::NotFound
+                }
+                StopOutcome::Timeout { state: stop_state } => {
+                    state
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .decommissioning_names
+                        .remove(&name);
+                    DecommissionOutcome::Timeout { state: stop_state }
                 }
             };
-            let outcome = match target {
-                ManagedStopTarget::Supervised {
-                    receiver,
-                    completion,
-                    wrapper,
-                } => {
-                    if let Some(writer) = wrapper {
-                        let _ = push_control_message(&writer, &DaemonToWrapper::Disconnect);
+            info!(
+                "cycle_vie action=decommission phase=result name={name} command_id={command_id} outcome={outcome:?}"
+            );
+            Some(DaemonToWrapper::DecommissionResult {
+                command_id,
+                outcome,
+            })
+        }
+        WrapperToDaemon::AdoptStoppedOrder { name, command_id } => {
+            info!(
+                "cycle_vie action=adopt_stopped phase=request name={name} command_id={command_id}"
+            );
+            let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+            let visible = st
+                .agent_infos()
+                .into_iter()
+                .find(|agent| agent.name == name);
+            let outcome = match visible {
+                Some(agent) if agent.persistent.is_some() => AdoptStoppedOutcome::AlreadyManaged,
+                Some(agent) if agent.state != "stopped" => AdoptStoppedOutcome::NotStopped,
+                Some(_) | None => match st.fleet.adopt_stopped(&name, unix_timestamp()) {
+                    Ok(AdoptStoppedResult::Adopted { generation }) => {
+                        AdoptStoppedOutcome::Adopted { generation }
                     }
-                    completion.mark_handshake_complete();
-                    receiver.recv_timeout(MANAGED_STOP_REPLY_TIMEOUT).unwrap_or(
-                        StopOutcome::Timeout {
-                            state: "superviseur sans issue dans le délai".to_string(),
-                        },
-                    )
-                }
-                ManagedStopTarget::Marker { store, fallback } => match store.stop_current_group(
-                    &name,
-                    MANAGED_STOP_FORCED_GRACE,
-                    MANAGED_STOP_POLL,
-                ) {
-                    Ok(Some(ManagedStopResult::Stopped)) => StopOutcome::Stopped,
-                    Ok(Some(ManagedStopResult::StoppedForced { survivors_killed })) => {
-                        StopOutcome::StoppedForced { survivors_killed }
+                    Ok(AdoptStoppedResult::AlreadyManaged) => AdoptStoppedOutcome::AlreadyManaged,
+                    Ok(AdoptStoppedResult::NoManagedHistory) => {
+                        AdoptStoppedOutcome::NoManagedHistory
                     }
-                    Ok(Some(ManagedStopResult::Timeout)) => StopOutcome::Timeout {
-                        state: "groupe du marqueur encore vivant".to_string(),
-                    },
-                    Ok(None) => fallback,
-                    Err(error) => StopOutcome::Timeout {
-                        state: error.to_string(),
+                    Err(error) => AdoptStoppedOutcome::IncompleteHistory {
+                        reason: error.to_string(),
                     },
                 },
-                ManagedStopTarget::Immediate(outcome) => outcome,
             };
-            Some(DaemonToWrapper::StopResult {
+            info!(
+                "cycle_vie action=adopt_stopped phase=result name={name} command_id={command_id} outcome={outcome:?}"
+            );
+            Some(DaemonToWrapper::AdoptStoppedResult {
                 command_id,
                 outcome,
             })
@@ -11315,6 +11851,8 @@ mod presence_tests {
                     command_id: format!("ancien-{index}"),
                     generation: index + 1,
                     created: index.to_string(),
+                    persistent: true,
+                    lifecycle_state: DesiredLifecycleState::Running,
                     resolved_definition: (index != 0).then(recovery_fixture_definition),
                     domain: None,
                     project: None,
@@ -11329,11 +11867,14 @@ mod presence_tests {
         let recoveries = reserve_managed_recoveries(&mut reopened, unix_timestamp()).unwrap();
         assert_eq!(recoveries.len(), reopened.fleet.quota());
         let remaining = reopened.fleet.desired_fleet().unwrap();
-        assert_eq!(remaining.equipiers.len(), reopened.fleet.quota());
-        assert!(!remaining.equipiers.contains_key("agent-00"));
-        // agent-03 et agent-04 refusés pour quota (message complet oraclé côté fleet).
-        assert!(!remaining.equipiers.contains_key("agent-03"));
-        assert!(!remaining.equipiers.contains_key("agent-04"));
+        assert_eq!(remaining.equipiers.len(), 5);
+        for name in ["agent-00", "agent-03", "agent-04"] {
+            assert_eq!(
+                remaining.equipiers[name].lifecycle_state,
+                DesiredLifecycleState::Stopped,
+                "une reprise refusée reste visible et ne sera pas retentée au boot"
+            );
+        }
         let report = crate::recovery_trace::load_report(&reopened.fleet.recovery_losses_path())
             .unwrap()
             .expect("trace des absents attendue");
@@ -11413,6 +11954,8 @@ mod presence_tests {
                     command_id: format!("ancien-{index}"),
                     generation: index + 1,
                     created: index.to_string(),
+                    persistent: true,
+                    lifecycle_state: DesiredLifecycleState::Running,
                     resolved_definition: (index != 0).then(recovery_fixture_definition),
                     domain: None,
                     project: None,
@@ -11480,6 +12023,8 @@ mod presence_tests {
                 command_id: "ancien-ok".to_string(),
                 generation: 1,
                 created: "1".to_string(),
+                persistent: true,
+                lifecycle_state: DesiredLifecycleState::Running,
                 resolved_definition: Some(recovery_fixture_definition()),
                 domain: None,
                 project: None,
@@ -11528,6 +12073,8 @@ mod presence_tests {
                 command_id: "ancien-ok".to_string(),
                 generation: 1,
                 created: "1".to_string(),
+                persistent: true,
+                lifecycle_state: DesiredLifecycleState::Running,
                 resolved_definition: Some(recovery_fixture_definition()),
                 domain: None,
                 project: None,
@@ -11602,6 +12149,8 @@ mod presence_tests {
                     command_id: format!("ancien-{index}"),
                     generation: index + 1,
                     created: index.to_string(),
+                    persistent: true,
+                    lifecycle_state: DesiredLifecycleState::Running,
                     resolved_definition: Some(recovery_fixture_definition()),
                     domain: None,
                     project: None,
@@ -11650,6 +12199,8 @@ mod presence_tests {
                 command_id: "ancien-alpha".to_string(),
                 generation: 1,
                 created: "initial".to_string(),
+                persistent: true,
+                lifecycle_state: DesiredLifecycleState::Running,
                 resolved_definition: Some(recovery_fixture_definition()),
                 domain: None,
                 project: None,
@@ -11726,13 +12277,14 @@ mod presence_tests {
         drain_managed_events(&shared, &event_rx);
 
         let state = shared.lock().unwrap();
-        assert!(
-            !state
+        assert_eq!(
+            state
                 .fleet
-                .desired_fleet()
+                .desired_entry("alpha")
                 .unwrap()
-                .equipiers
-                .contains_key("alpha")
+                .expect("la reprise échouée reste gérée")
+                .lifecycle_state,
+            DesiredLifecycleState::Stopped
         );
         assert!(!state.recovering);
         assert_eq!(
@@ -11762,6 +12314,8 @@ mod presence_tests {
                     command_id: format!("ancien-{name}"),
                     generation: 1,
                     created: "initial".to_string(),
+                    persistent: true,
+                    lifecycle_state: DesiredLifecycleState::Running,
                     resolved_definition: Some(recovery_fixture_definition()),
                     domain: None,
                     project: None,
@@ -11883,13 +12437,14 @@ mod presence_tests {
             })
         ));
         let state = shared.lock().unwrap();
-        assert!(
-            !state
+        assert_eq!(
+            state
                 .fleet
-                .desired_fleet()
+                .desired_entry("beta")
                 .unwrap()
-                .equipiers
-                .contains_key("beta")
+                .expect("beta reste géré après son arrêt")
+                .lifecycle_state,
+            DesiredLifecycleState::Stopped
         );
         assert!(!state.recovery_commands.contains(&beta_command));
         assert!(state.recovering, "alpha reste encore en reprise");
@@ -15127,6 +15682,25 @@ mod presence_tests {
     }
 
     #[test]
+    fn relance_en_cours_reste_visible_sans_actions_concurrentes() {
+        let (mut state, config) = state_with_registered_agent("relaunching-annuaire");
+        let lease = install_gere_acp_pour_reconnexion(&mut state, "relaunching-annuaire");
+        state
+            .relaunch_requesters
+            .insert(lease.command_id.clone(), vec!["requester".to_string()]);
+
+        let agent = state
+            .agent_infos()
+            .into_iter()
+            .find(|agent| agent.name == lease.name)
+            .expect("la relance en cours doit rester visible");
+        assert_eq!(agent.state, "relaunching");
+
+        drop(state);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
     fn gere_acp_reconnecte_sans_champs_wrapper_tient_mode_et_domaine() {
         let (mut state, config) = state_with_registered_agent("managed-reconnect-hostile");
         state.router.unregister_by_conn("conn-1");
@@ -16916,6 +17490,45 @@ mod presence_tests {
                 outcome: StopOutcome::NotManaged,
             }) if command_id == "stop-terminal"
         ));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn relance_est_refusee_tant_que_le_decommissionnement_possede_le_nom() {
+        let (mut state, config) = state_with_registered_agent("decommission-relaunch-race");
+        let (lease, _) = install_managed_test_spawn(&mut state, "spawn-before-decommission", true);
+        state.fleet.invalidate_for_stop(&lease).unwrap();
+        state.managed_spawns.clear();
+        state.managed_by_instance.clear();
+        state.decommissioning_names.insert(lease.name.clone());
+        let shared = Arc::new(Mutex::new(state));
+
+        assert!(matches!(
+            handle_wrapper_message(
+                "control",
+                WrapperToDaemon::RelaunchOrder {
+                    name: lease.name.clone(),
+                    command_id: "relaunch-during-decommission".to_string(),
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RelaunchResult {
+                command_id,
+                outcome: RelaunchOutcome::NotRelaunchable { reason },
+            }) if command_id == "relaunch-during-decommission"
+                && reason == "décommissionnement en cours"
+        ));
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .fleet
+                .desired_entry(&lease.name)
+                .unwrap()
+                .unwrap()
+                .lifecycle_state,
+            DesiredLifecycleState::Stopped
+        );
         let _ = std::fs::remove_file(config.db_path);
     }
 

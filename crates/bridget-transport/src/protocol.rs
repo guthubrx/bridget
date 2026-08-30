@@ -913,6 +913,43 @@ pub enum StopOutcome {
     Timeout { state: String },
 }
 
+/// Résultat fermé d'une relance du même agent logique.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RelaunchOutcome {
+    Started { name: String, generation: u64 },
+    AlreadyRunning,
+    NotManaged,
+    NotFound,
+    NotRelaunchable { reason: String },
+    Rejected { reason: SpawnRefusal },
+    Timeout { state: String },
+}
+
+/// Résultat fermé du retrait d'un agent de la flotte visible.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DecommissionOutcome {
+    Decommissioned,
+    DecommissionedForced { survivors_killed: usize },
+    AlreadyDecommissioned,
+    NotManaged,
+    NotFound,
+    Timeout { state: String },
+}
+
+/// Résultat fermé de l'import explicite d'un ancien agent arrêté dans le
+/// registre durable du cycle de vie.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AdoptStoppedOutcome {
+    Adopted { generation: u64 },
+    AlreadyManaged,
+    NotStopped,
+    NoManagedHistory,
+    IncompleteHistory { reason: String },
+}
+
 /// Issue calculée d'une opération client idempotente. `OutcomeUnknown` est
 /// informatif : il impose un `Lookup` ou le rejeu strict de la même enveloppe,
 /// jamais une nouvelle émission avec une nouvelle clé.
@@ -1292,6 +1329,21 @@ pub enum WrapperToDaemon {
     },
     /// Ordre corrélé d'arrêt d'un équipier supervisé.
     StopOrder {
+        name: String,
+        command_id: String,
+    },
+    /// Relance corrélée d'un agent géré durablement arrêté.
+    RelaunchOrder {
+        name: String,
+        command_id: String,
+    },
+    /// Retrait corrélé de la flotte visible, sans purge d'historique.
+    DecommissionOrder {
+        name: String,
+        command_id: String,
+    },
+    /// Migration explicite d'un agent historique arrêté vers le registre v4.
+    AdoptStoppedOrder {
         name: String,
         command_id: String,
     },
@@ -1973,6 +2025,21 @@ pub enum DaemonToWrapper {
     StopResult {
         command_id: String,
         outcome: StopOutcome,
+    },
+    /// Issue synchrone d'une relance, émise après connexion réelle.
+    RelaunchResult {
+        command_id: String,
+        outcome: RelaunchOutcome,
+    },
+    /// Issue synchrone d'un décommissionnement.
+    DecommissionResult {
+        command_id: String,
+        outcome: DecommissionOutcome,
+    },
+    /// Issue synchrone de l'adoption d'un agent historique arrêté.
+    AdoptStoppedResult {
+        command_id: String,
+        outcome: AdoptStoppedOutcome,
     },
     /// Remise aval réservée au wrapper destinataire.
     DeliverIdempotent {
@@ -3758,6 +3825,46 @@ mod tests {
                 outcome: StopOutcome::StoppedForced {
                     survivors_killed: 2
                 },
+                ..
+            }
+        ));
+        let relaunch = DaemonToWrapper::RelaunchResult {
+            command_id: "relaunch-1".to_string(),
+            outcome: RelaunchOutcome::Started {
+                name: "codex-1".to_string(),
+                generation: 12,
+            },
+        };
+        assert!(matches!(
+            decode(&encode(&relaunch).unwrap()).unwrap(),
+            DaemonToWrapper::RelaunchResult {
+                outcome: RelaunchOutcome::Started { generation: 12, .. },
+                ..
+            }
+        ));
+        let decommission = DaemonToWrapper::DecommissionResult {
+            command_id: "decommission-1".to_string(),
+            outcome: DecommissionOutcome::DecommissionedForced {
+                survivors_killed: 3,
+            },
+        };
+        assert!(matches!(
+            decode(&encode(&decommission).unwrap()).unwrap(),
+            DaemonToWrapper::DecommissionResult {
+                outcome: DecommissionOutcome::DecommissionedForced {
+                    survivors_killed: 3
+                },
+                ..
+            }
+        ));
+        let adoption = DaemonToWrapper::AdoptStoppedResult {
+            command_id: "adopt-1".to_string(),
+            outcome: AdoptStoppedOutcome::Adopted { generation: 7 },
+        };
+        assert!(matches!(
+            decode(&encode(&adoption).unwrap()).unwrap(),
+            DaemonToWrapper::AdoptStoppedResult {
+                outcome: AdoptStoppedOutcome::Adopted { generation: 7 },
                 ..
             }
         ));

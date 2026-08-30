@@ -7,8 +7,9 @@
 use bridget_transport::ResolvedAgentDefinition;
 use bridget_transport::protocol::{DelegatedRuntimeEventKind, ProjectReference};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const MIN_ISSUER_SCOPE_LEN: usize = 22;
 const MAX_ISSUER_SCOPE_LEN: usize = 128;
@@ -257,6 +258,30 @@ pub struct SpawnCommand {
     pub expires_at: i64,
     pub issue: Option<SpawnCommandIssue>,
     pub resolved_definition: Option<ResolvedAgentDefinition>,
+}
+
+/// Preuve durable minimale permettant d'adopter explicitement un agent
+/// historique arrêté. Elle ne peut provenir que d'une saga de spawn ayant
+/// atteint l'état `connected` dans ce store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalManagedSpawn {
+    pub agent_type: String,
+    pub cwd: PathBuf,
+    pub command_id: String,
+    pub generation: u64,
+    pub persistent: bool,
+    pub project: Option<ProjectReference>,
+    pub resolved_definition: ResolvedAgentDefinition,
+}
+
+#[derive(Debug, Deserialize)]
+struct HistoricalCanonicalSpawnOrder {
+    command_id: String,
+    agent_type: String,
+    cwd: String,
+    persistent: bool,
+    #[serde(default)]
+    project: Option<ProjectReference>,
 }
 
 /// Résultat atomique de la réservation socle + saga.
@@ -1184,6 +1209,72 @@ impl IdempotencyStore {
         )?;
         let rows = statement.query_map(params![issuer_scope], spawn_command_from_row)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Retrouve la dernière génération réellement connectée pour un nom,
+    /// indépendamment du superviseur qui l'avait lancée. Le canon original
+    /// fournit le cwd, le type et le projet ; la définition résolue prouve que
+    /// le runtime avait été figé. Une ligne incomplète est refusée.
+    pub fn latest_connected_spawn_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<HistoricalManagedSpawn>, IdempotencyError> {
+        if name.trim().is_empty() {
+            return Err(IdempotencyError::InvalidSpawnCommand);
+        }
+        let mut statement = self.conn.prepare(
+            "SELECT sc.command_id, sc.name, sc.generation, sc.persistent, sc.state,
+                    sc.instance_id, sc.deadline_at, sc.expires_at,
+                    sc.issue_kind, sc.issue_category, sc.issue_reason,
+                    sc.resolved_definition_json, ir.canonical_bytes
+             FROM spawn_commands sc
+             JOIN idempotency_records ir
+               ON ir.issuer_scope = sc.issuer_scope
+              AND ir.operation_kind = sc.operation_kind
+              AND ir.idempotency_key = sc.command_id
+             WHERE sc.operation_kind = 'spawn'
+               AND sc.name = ?1
+               AND sc.state = 'connected'
+               AND sc.issue_kind = 'connected'
+             ORDER BY sc.generation DESC, sc.command_id DESC
+             LIMIT 1",
+        )?;
+        let found = statement
+            .query_row(params![name], |row| {
+                let command = spawn_command_from_row(row)?;
+                let canonical_bytes: Vec<u8> = row.get(12)?;
+                Ok((command, canonical_bytes))
+            })
+            .optional()?;
+        let Some((command, canonical_bytes)) = found else {
+            return Ok(None);
+        };
+        let canonical: HistoricalCanonicalSpawnOrder = serde_json::from_slice(&canonical_bytes)
+            .map_err(|_| IdempotencyError::CorruptRecord("canon historique du spawn invalide"))?;
+        if canonical.command_id != command.command_id
+            || canonical.agent_type.trim().is_empty()
+            || canonical.cwd.trim().is_empty()
+            || canonical.persistent != command.persistent
+        {
+            return Err(IdempotencyError::CorruptRecord(
+                "canon historique du spawn incohérent",
+            ));
+        }
+        let resolved_definition =
+            command
+                .resolved_definition
+                .ok_or(IdempotencyError::CorruptRecord(
+                    "définition historique du spawn absente",
+                ))?;
+        Ok(Some(HistoricalManagedSpawn {
+            agent_type: canonical.agent_type,
+            cwd: PathBuf::from(canonical.cwd),
+            command_id: command.command_id,
+            generation: command.generation,
+            persistent: command.persistent,
+            project: canonical.project,
+            resolved_definition,
+        }))
     }
 
     /// Crée le lien de propriété avant que la génération ne puisse démarrer.

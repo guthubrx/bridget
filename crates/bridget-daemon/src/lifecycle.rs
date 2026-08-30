@@ -152,6 +152,33 @@ pub fn submit_spawn_for_project(
     hosts: &SpawnHosts,
     canonical_project_root: Option<&Path>,
 ) -> Result<SpawnDecision, FleetError> {
+    submit_spawn_for_project_with_policy(
+        supervisor,
+        registry,
+        source,
+        order,
+        now,
+        recovering,
+        hosts,
+        canonical_project_root,
+        false,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn submit_spawn_for_project_with_policy(
+    supervisor: &FleetSupervisor,
+    registry: &AgentRegistry,
+    source: &SourceEnvironment,
+    order: &SpawnOrder,
+    now: i64,
+    recovering: bool,
+    hosts: &SpawnHosts,
+    canonical_project_root: Option<&Path>,
+    relaunch: bool,
+    recovery: bool,
+) -> Result<SpawnDecision, FleetError> {
     if let Some(project) = order.project.as_ref() {
         let matches_root = canonical_project_root
             .is_some_and(|root| project_cwd_belongs_to_binding(&order.cwd, root));
@@ -197,7 +224,14 @@ pub fn submit_spawn_for_project(
             registry: registry.source().display().to_string(),
         }));
     }
-    match supervisor.request_spawn(order, now)? {
+    let submission = if relaunch {
+        supervisor.request_relaunch(order, now)?
+    } else if recovery {
+        supervisor.request_recovery(order, now)?
+    } else {
+        supervisor.request_spawn(order, now)?
+    };
+    match submission {
         SpawnSubmission::Start(lease) => {
             let prepared = match prepare_spawn(registry, source, order, lease.clone(), hosts) {
                 Ok(prepared) => prepared,
@@ -272,7 +306,37 @@ pub fn submit_spawn_from_resolved(
 ) -> Result<SpawnDecision, FleetError> {
     let registry = AgentRegistry::from_resolved(&order.agent_type, resolved)
         .map_err(|_| FleetError::InvalidOrder("définition figée de reprise invalide"))?;
-    submit_spawn(supervisor, &registry, source, order, now, false, hosts)
+    submit_spawn_for_project_with_policy(
+        supervisor, &registry, source, order, now, false, hosts, None, false, true,
+    )
+}
+
+/// Relance explicite d'une entrée arrêtée à partir de sa définition figée. Le
+/// chemin de préparation reste identique au spawn, mais la réservation admet
+/// uniquement le nom stopped déjà présent dans l'inventaire.
+pub fn submit_relaunch_from_resolved(
+    supervisor: &FleetSupervisor,
+    source: &SourceEnvironment,
+    order: &SpawnOrder,
+    now: i64,
+    resolved: &ResolvedAgentDefinition,
+    hosts: &SpawnHosts,
+    canonical_project_root: Option<&Path>,
+) -> Result<SpawnDecision, FleetError> {
+    let registry = AgentRegistry::from_resolved(&order.agent_type, resolved)
+        .map_err(|_| FleetError::InvalidOrder("définition figée de relance invalide"))?;
+    submit_spawn_for_project_with_policy(
+        supervisor,
+        &registry,
+        source,
+        order,
+        now,
+        false,
+        hosts,
+        canonical_project_root,
+        true,
+        false,
+    )
 }
 
 fn prepare_spawn(

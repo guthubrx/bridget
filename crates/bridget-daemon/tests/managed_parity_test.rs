@@ -1416,7 +1416,7 @@ fn spawn_managed(control: &mut Peer, root: &Path, name: &str, command_id: &str, 
     ));
 }
 
-fn wait_named_agents(socket: &Path, expected: &[String], absent: &[String]) {
+fn wait_named_agents(socket: &Path, expected: &[String], stopped: &[String]) {
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut control = Peer::register(socket, "persistence-observer");
     loop {
@@ -1430,15 +1430,17 @@ fn wait_named_agents(socket: &Path, expected: &[String], absent: &[String]) {
                 .iter()
                 .any(|agent| agent.name == *name && agent.state == "connected")
         });
-        let excluded = absent
-            .iter()
-            .all(|name| agents.iter().all(|agent| agent.name != *name));
-        if ready && excluded {
+        let stopped_visible = stopped.iter().all(|name| {
+            agents
+                .iter()
+                .any(|agent| agent.name == *name && agent.state == "stopped")
+        });
+        if ready && stopped_visible {
             return;
         }
         assert!(
             Instant::now() < deadline,
-            "annuaire persistant incomplet: attendu={expected:?}, absent={absent:?}, reçu={agents:?}"
+            "annuaire persistant incomplet: attendu={expected:?}, arrêtés={stopped:?}, reçu={agents:?}"
         );
         thread::sleep(Duration::from_millis(25));
     }

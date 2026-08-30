@@ -710,6 +710,8 @@ struct UiStopAcceptedV1 {
     outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     survivors_killed: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generation: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -795,7 +797,11 @@ fn serve_connection(
     runtime: &UiRelayRuntime,
 ) -> Result<(), UiError> {
     let request = read_request(stream)?;
-    if matches!(request.path.as_str(), "/v1/send" | "/v1/agents/stop") && request.method != "POST" {
+    if matches!(
+        request.path.as_str(),
+        "/v1/send" | "/v1/agents/stop" | "/v1/agents/relaunch" | "/v1/agents/decommission"
+    ) && request.method != "POST"
+    {
         return write_text(stream, 405, "méthode non autorisée");
     }
     if request.method != "GET" && request.method != "POST" {
@@ -870,6 +876,30 @@ fn serve_connection(
             ),
         },
         ("POST", "/v1/agents/stop") => match post_ui_stop(config, &request.body) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("POST", "/v1/agents/relaunch") => match post_ui_relaunch(config, &request.body) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("POST", "/v1/agents/decommission") => match post_ui_decommission(config, &request.body) {
             Ok(response) => write_json(stream, 200, &response),
             Err((status, code, message)) => write_json(
                 stream,
@@ -971,11 +1001,15 @@ fn post_ui_message(
 type UiStopError = (u16, &'static str, String);
 
 fn parse_ui_stop_request(body: &[u8]) -> Result<UiStopRequestV1, UiStopError> {
+    parse_ui_lifecycle_request(body, "arrêt")
+}
+
+fn parse_ui_lifecycle_request(body: &[u8], action: &str) -> Result<UiStopRequestV1, UiStopError> {
     let request: UiStopRequestV1 = serde_json::from_slice(body).map_err(|_| {
         (
             400,
             "invalid_request",
-            "Demande de décommissionnement invalide.".to_string(),
+            format!("Demande de {action} invalide."),
         )
     })?;
     let command_id_valid = !request.command_id.is_empty()
@@ -986,7 +1020,7 @@ fn parse_ui_stop_request(body: &[u8]) -> Result<UiStopRequestV1, UiStopError> {
         return Err((
             400,
             "invalid_request",
-            "Demande de décommissionnement invalide.".to_string(),
+            format!("Demande de {action} invalide."),
         ));
     }
     Ok(request)
@@ -999,13 +1033,50 @@ fn validate_ui_stop_target(
     let Some(agent) = agents.iter().find(|agent| agent.name == name) else {
         return Err((404, "agent_not_found"));
     };
-    if agent.state == "stopped" {
-        return Err((409, "agent_stopped"));
-    }
     if agent.persistent.is_none() {
         return Err((409, "agent_not_managed"));
     }
-    Ok(())
+    match agent.state.as_str() {
+        "connected" | "busy" | "dnd" | "alive" | "idle" => Ok(()),
+        "stopped" => Err((409, "agent_stopped")),
+        "recovering" | "relaunching" => Err((409, "lifecycle_in_progress")),
+        _ => Err((409, "agent_unavailable")),
+    }
+}
+
+fn validate_ui_relaunch_target(
+    agents: &[bridget_transport::protocol::AgentInfo],
+    name: &str,
+) -> Result<(), (u16, &'static str)> {
+    let Some(agent) = agents.iter().find(|agent| agent.name == name) else {
+        return Err((404, "agent_not_found"));
+    };
+    if agent.persistent.is_none() {
+        return Err((409, "agent_not_managed"));
+    }
+    match agent.state.as_str() {
+        "stopped" => Ok(()),
+        "connected" | "busy" | "dnd" | "alive" | "idle" => Err((409, "agent_already_running")),
+        "recovering" | "relaunching" => Err((409, "lifecycle_in_progress")),
+        _ => Err((409, "agent_unavailable")),
+    }
+}
+
+fn validate_ui_decommission_target(
+    agents: &[bridget_transport::protocol::AgentInfo],
+    name: &str,
+) -> Result<(), (u16, &'static str)> {
+    let Some(agent) = agents.iter().find(|agent| agent.name == name) else {
+        return Err((404, "agent_not_found"));
+    };
+    if agent.persistent.is_none() {
+        return Err((409, "agent_not_managed"));
+    }
+    match agent.state.as_str() {
+        "connected" | "busy" | "dnd" | "alive" | "idle" | "stopped" => Ok(()),
+        "recovering" | "relaunching" => Err((409, "lifecycle_in_progress")),
+        _ => Err((409, "agent_unavailable")),
+    }
 }
 
 fn map_ui_stop_outcome(
@@ -1020,6 +1091,7 @@ fn map_ui_stop_outcome(
             command_id: request.command_id.clone(),
             outcome: "stopped",
             survivors_killed: None,
+            generation: None,
         }),
         StopOutcome::StoppedForced { survivors_killed } => Ok(UiStopAcceptedV1 {
             version: UI_VERSION,
@@ -1027,6 +1099,7 @@ fn map_ui_stop_outcome(
             command_id: request.command_id.clone(),
             outcome: "stopped_forced",
             survivors_killed: Some(survivors_killed),
+            generation: None,
         }),
         StopOutcome::NotManaged => Err((
             409,
@@ -1085,6 +1158,8 @@ fn post_ui_stop(config: &UiRelayConfig, body: &[u8]) -> Result<UiStopAcceptedV1,
         let message = match code {
             "agent_not_managed" => "Cet agent n'est pas géré par Bridget.",
             "agent_stopped" => "Cet agent est déjà arrêté.",
+            "lifecycle_in_progress" => "Une opération de cycle de vie est déjà en cours.",
+            "agent_unavailable" => "L’état de cet agent ne permet pas une action de cycle de vie.",
             _ => "Cet agent est introuvable.",
         };
         (status, code, message.to_string())
@@ -1097,6 +1172,208 @@ fn post_ui_stop(config: &UiRelayConfig, body: &[u8]) -> Result<UiStopAcceptedV1,
         )
     })?;
     map_ui_stop_outcome(&request, outcome)
+}
+
+fn map_ui_relaunch_outcome(
+    request: &UiStopRequestV1,
+    outcome: bridget_transport::protocol::RelaunchOutcome,
+) -> Result<UiStopAcceptedV1, UiStopError> {
+    use bridget_transport::protocol::RelaunchOutcome;
+    match outcome {
+        RelaunchOutcome::Started { generation, .. } => Ok(UiStopAcceptedV1 {
+            version: UI_VERSION,
+            name: request.name.clone(),
+            command_id: request.command_id.clone(),
+            outcome: "started",
+            survivors_killed: None,
+            generation: Some(generation),
+        }),
+        RelaunchOutcome::AlreadyRunning => Err((
+            409,
+            "agent_already_running",
+            "Cet agent est déjà actif.".to_string(),
+        )),
+        RelaunchOutcome::NotManaged => Err((
+            409,
+            "agent_not_managed",
+            "Cet agent n'est pas géré par Bridget.".to_string(),
+        )),
+        RelaunchOutcome::NotFound => Err((
+            404,
+            "agent_not_found",
+            "Cet agent est introuvable.".to_string(),
+        )),
+        RelaunchOutcome::NotRelaunchable { reason } => Err((
+            409,
+            "agent_not_relaunchable",
+            format!("Cet agent ne peut pas être relancé : {reason}"),
+        )),
+        RelaunchOutcome::Rejected { reason } => Err((
+            409,
+            "relaunch_rejected",
+            format!("La relance a été refusée : {reason:?}"),
+        )),
+        RelaunchOutcome::Timeout { .. } => Err((
+            504,
+            "lifecycle_timeout",
+            "Le daemon n'a pas confirmé la relance dans le délai.".to_string(),
+        )),
+    }
+}
+
+fn send_ui_relaunch(
+    socket_path: &Path,
+    request: &UiStopRequestV1,
+) -> Result<bridget_transport::protocol::RelaunchOutcome, UiError> {
+    let stream = UnixStream::connect(socket_path)?;
+    let read_stream = stream.try_clone()?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::RelaunchOrder {
+            name: request.name.clone(),
+            command_id: request.command_id.clone(),
+        },
+    )?;
+    match read_daemon(&mut reader)? {
+        DaemonToWrapper::RelaunchResult {
+            command_id,
+            outcome,
+        } if command_id == request.command_id => Ok(outcome),
+        response => Err(UiError::Protocol(format!(
+            "RelaunchResult corrélé attendu, reçu {response:?}"
+        ))),
+    }
+}
+
+fn post_ui_relaunch(config: &UiRelayConfig, body: &[u8]) -> Result<UiStopAcceptedV1, UiStopError> {
+    let request = parse_ui_lifecycle_request(body, "relance")?;
+    let agents = read_agent_list(&config.daemon_socket).map_err(|_| {
+        (
+            503,
+            "daemon_unavailable",
+            "Le daemon Bridget est indisponible.".to_string(),
+        )
+    })?;
+    validate_ui_relaunch_target(&agents, &request.name).map_err(|(status, code)| {
+        let message = match code {
+            "agent_not_managed" => "Cet agent n'est pas géré par Bridget.",
+            "agent_already_running" => "Cet agent est déjà actif.",
+            "lifecycle_in_progress" => "Une opération de cycle de vie est déjà en cours.",
+            "agent_unavailable" => "L’état de cet agent ne permet pas une action de cycle de vie.",
+            _ => "Cet agent est introuvable.",
+        };
+        (status, code, message.to_string())
+    })?;
+    let outcome = send_ui_relaunch(&config.daemon_socket, &request).map_err(|_| {
+        (
+            503,
+            "daemon_unavailable",
+            "Le daemon Bridget est indisponible.".to_string(),
+        )
+    })?;
+    map_ui_relaunch_outcome(&request, outcome)
+}
+
+fn map_ui_decommission_outcome(
+    request: &UiStopRequestV1,
+    outcome: bridget_transport::protocol::DecommissionOutcome,
+) -> Result<UiStopAcceptedV1, UiStopError> {
+    use bridget_transport::protocol::DecommissionOutcome;
+    match outcome {
+        DecommissionOutcome::Decommissioned => Ok(UiStopAcceptedV1 {
+            version: UI_VERSION,
+            name: request.name.clone(),
+            command_id: request.command_id.clone(),
+            outcome: "decommissioned",
+            survivors_killed: None,
+            generation: None,
+        }),
+        DecommissionOutcome::DecommissionedForced { survivors_killed } => Ok(UiStopAcceptedV1 {
+            version: UI_VERSION,
+            name: request.name.clone(),
+            command_id: request.command_id.clone(),
+            outcome: "decommissioned_forced",
+            survivors_killed: Some(survivors_killed),
+            generation: None,
+        }),
+        DecommissionOutcome::AlreadyDecommissioned => Err((
+            409,
+            "agent_already_decommissioned",
+            "Cet agent est déjà décommissionné.".to_string(),
+        )),
+        DecommissionOutcome::NotManaged => Err((
+            409,
+            "agent_not_managed",
+            "Cet agent n'est pas géré par Bridget.".to_string(),
+        )),
+        DecommissionOutcome::NotFound => Err((
+            404,
+            "agent_not_found",
+            "Cet agent est introuvable.".to_string(),
+        )),
+        DecommissionOutcome::Timeout { .. } => Err((
+            504,
+            "lifecycle_timeout",
+            "Le daemon n'a pas confirmé le décommissionnement dans le délai.".to_string(),
+        )),
+    }
+}
+
+fn send_ui_decommission(
+    socket_path: &Path,
+    request: &UiStopRequestV1,
+) -> Result<bridget_transport::protocol::DecommissionOutcome, UiError> {
+    let stream = UnixStream::connect(socket_path)?;
+    let read_stream = stream.try_clone()?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::DecommissionOrder {
+            name: request.name.clone(),
+            command_id: request.command_id.clone(),
+        },
+    )?;
+    match read_daemon(&mut reader)? {
+        DaemonToWrapper::DecommissionResult {
+            command_id,
+            outcome,
+        } if command_id == request.command_id => Ok(outcome),
+        response => Err(UiError::Protocol(format!(
+            "DecommissionResult corrélé attendu, reçu {response:?}"
+        ))),
+    }
+}
+
+fn post_ui_decommission(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiStopAcceptedV1, UiStopError> {
+    let request = parse_ui_lifecycle_request(body, "décommissionnement")?;
+    let agents = read_agent_list(&config.daemon_socket).map_err(|_| {
+        (
+            503,
+            "daemon_unavailable",
+            "Le daemon Bridget est indisponible.".to_string(),
+        )
+    })?;
+    validate_ui_decommission_target(&agents, &request.name).map_err(|(status, code)| {
+        let message = match code {
+            "agent_not_managed" => "Cet agent n'est pas géré par Bridget.",
+            _ => "Cet agent est introuvable.",
+        };
+        (status, code, message.to_string())
+    })?;
+    let outcome = send_ui_decommission(&config.daemon_socket, &request).map_err(|_| {
+        (
+            503,
+            "daemon_unavailable",
+            "Le daemon Bridget est indisponible.".to_string(),
+        )
+    })?;
+    map_ui_decommission_outcome(&request, outcome)
 }
 
 fn post_ui_search(
@@ -3052,6 +3329,86 @@ mod tests {
             let error = map_ui_stop_outcome(&request, outcome).unwrap_err();
             assert_eq!((error.0, error.1), (status, code));
         }
+    }
+
+    #[test]
+    fn spec_075_gardes_relaunch_et_decommission_suivent_l_etat_durable() {
+        let mut active = agent_info("active", "connected");
+        active.persistent = Some(true);
+        let mut stopped = agent_info("stopped", "stopped");
+        stopped.persistent = Some(false);
+        let external = agent_info("external", "stopped");
+        let mut recovering = agent_info("recovering", "recovering");
+        recovering.persistent = Some(true);
+        let agents = vec![active, stopped, external, recovering];
+
+        assert_eq!(
+            validate_ui_relaunch_target(&agents, "active"),
+            Err((409, "agent_already_running"))
+        );
+        assert_eq!(validate_ui_relaunch_target(&agents, "stopped"), Ok(()));
+        assert_eq!(
+            validate_ui_relaunch_target(&agents, "external"),
+            Err((409, "agent_not_managed"))
+        );
+        assert_eq!(validate_ui_decommission_target(&agents, "active"), Ok(()));
+        assert_eq!(validate_ui_decommission_target(&agents, "stopped"), Ok(()));
+        for guard in [
+            validate_ui_stop_target(&agents, "recovering"),
+            validate_ui_relaunch_target(&agents, "recovering"),
+            validate_ui_decommission_target(&agents, "recovering"),
+        ] {
+            assert_eq!(guard, Err((409, "lifecycle_in_progress")));
+        }
+    }
+
+    #[test]
+    fn spec_075_mapping_relaunch_et_decommission_reste_ferme() {
+        let request = UiStopRequestV1 {
+            version: UI_VERSION,
+            name: "managed".to_string(),
+            command_id: "lifecycle-ui-123".to_string(),
+        };
+        let relaunched = map_ui_relaunch_outcome(
+            &request,
+            bridget_transport::protocol::RelaunchOutcome::Started {
+                name: "managed".to_string(),
+                generation: 9,
+            },
+        )
+        .unwrap();
+        assert_eq!(relaunched.outcome, "started");
+        assert_eq!(relaunched.generation, Some(9));
+        assert_eq!(
+            map_ui_relaunch_outcome(
+                &request,
+                bridget_transport::protocol::RelaunchOutcome::AlreadyRunning,
+            )
+            .unwrap_err()
+            .1,
+            "agent_already_running"
+        );
+
+        let decommissioned = map_ui_decommission_outcome(
+            &request,
+            bridget_transport::protocol::DecommissionOutcome::DecommissionedForced {
+                survivors_killed: 2,
+            },
+        )
+        .unwrap();
+        assert_eq!(decommissioned.outcome, "decommissioned_forced");
+        assert_eq!(decommissioned.survivors_killed, Some(2));
+        assert_eq!(
+            map_ui_decommission_outcome(
+                &request,
+                bridget_transport::protocol::DecommissionOutcome::Timeout {
+                    state: "vivant".to_string(),
+                },
+            )
+            .unwrap_err()
+            .1,
+            "lifecycle_timeout"
+        );
     }
 
     #[test]
