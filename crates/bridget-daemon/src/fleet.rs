@@ -7,7 +7,10 @@
 use crate::desired_state::{
     DesiredAgentLink, DesiredEquipier, DesiredFleet, DesiredStateError, DesiredStateStore,
 };
-pub use crate::idempotency::{AgentLinkEvent, AgentLinkRecord as AgentLink, AgentLinkState};
+pub use crate::idempotency::{
+    AgentLinkEvent, AgentLinkRecord as AgentLink, AgentLinkState, DelegatedRuntimeEventInput,
+    DelegatedRuntimeEventRecord,
+};
 use crate::idempotency::{
     IdempotencyError, IdempotencyKey, IdempotencyStore, OperationKind, SpawnCommand,
     SpawnCommandIssue, SpawnCommandState, SpawnReservation,
@@ -565,6 +568,54 @@ impl FleetSupervisor {
         inner
             .idempotency
             .agent_link_for_child(child_instance_id)
+            .map_err(Into::into)
+    }
+
+    /// Persiste un fait runtime en déduisant le parent du lien enfant durable.
+    /// Aucun champ de parent ne traverse cette façade.
+    pub fn record_delegated_runtime_event(
+        &self,
+        input: DelegatedRuntimeEventInput,
+    ) -> Result<DelegatedRuntimeEventRecord, FleetError> {
+        let event = {
+            let mut inner = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            inner.idempotency.record_delegated_runtime_event(input)?
+        };
+        self.agent_link_changed.notify_all();
+        Ok(event)
+    }
+
+    /// Relit les faits runtime non accusés sans balayer les équipiers.
+    pub fn delegated_runtime_events_for_parent(
+        &self,
+        parent_instance_id: &str,
+    ) -> Result<Vec<DelegatedRuntimeEventRecord>, FleetError> {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        inner
+            .idempotency
+            .delegated_runtime_events_for_parent(parent_instance_id)
+            .map_err(Into::into)
+    }
+
+    /// Accuse le fait au nom du parent attesté par le daemon.
+    pub fn acknowledge_delegated_runtime_event(
+        &self,
+        event_id: &str,
+        parent_instance_id: &str,
+    ) -> Result<bool, FleetError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        inner
+            .idempotency
+            .acknowledge_delegated_runtime_event(event_id, parent_instance_id)
             .map_err(Into::into)
     }
 

@@ -1558,10 +1558,11 @@ fn approval_response(value: &Value, permissions: &str) -> Option<(Value, Value)>
 /// Refuse une requête fournisseur inconnue sans reproduire son corps dans les
 /// diagnostics. Le fournisseur reçoit une erreur JSON-RPC exploitable et
 /// l'interface un code stable avec une référence pseudonymisée.
-fn unsupported_provider_request_response(value: &Value) -> Option<(Value, Value)> {
+fn unsupported_provider_request_response(value: &Value) -> Option<(Value, Value, String)> {
     let id = value.get("id")?;
     let method = value.get("method").and_then(Value::as_str)?;
     let reference = project_provider_method(method);
+    let delegated_reference = provider_fingerprint(b"delegated-runtime", method.as_bytes());
     Some((
         json!({
             "id": id,
@@ -1579,6 +1580,7 @@ fn unsupported_provider_request_response(value: &Value) -> Option<(Value, Value)
             "code": "unsupported_provider_request",
             "reference": project_provider_method(method),
         }),
+        delegated_reference,
     ))
 }
 
@@ -2180,7 +2182,7 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                     // corps fournisseur : le journal garde seulement un code
                     // stable et l'empreinte déjà publique de la méthode.
                     if value.get("id").is_some() {
-                        if let Some((reply, payload)) =
+                        if let Some((reply, payload, delegated_reference)) =
                             unsupported_provider_request_response(&value)
                         {
                             let message_id = queue
@@ -2205,6 +2207,15 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                                         detail: format!(
                                             "réponse à la requête Codex non prise en charge impossible: {error}"
                                         ),
+                                    },
+                                );
+                            } else {
+                                push_source(
+                                    &observations,
+                                    raw.clone(),
+                                    ManagedEventKind::Diagnostic {
+                                        code: "unsupported_provider_request".to_string(),
+                                        reference: delegated_reference,
                                     },
                                 );
                             }
@@ -2389,12 +2400,13 @@ mod tests {
     #[test]
     fn requete_fournisseur_inconnue_recoit_un_refus_json_rpc_redacte() {
         let sentinel = "SENTINELLE-METHODE-INCONNUE";
-        let (reply, diagnostic) = unsupported_provider_request_response(&json!({
-            "id": "dynamic-tool-42",
-            "method": sentinel,
-            "params": { "secret": "ne-pas-publier" },
-        }))
-        .expect("réponse aux requêtes avec id");
+        let (reply, diagnostic, delegated_reference) =
+            unsupported_provider_request_response(&json!({
+                "id": "dynamic-tool-42",
+                "method": sentinel,
+                "params": { "secret": "ne-pas-publier" },
+            }))
+            .expect("réponse aux requêtes avec id");
         assert_eq!(reply["id"], "dynamic-tool-42");
         assert_eq!(reply["error"]["code"], -32601);
         assert_eq!(
@@ -2408,6 +2420,10 @@ mod tests {
         assert!(!serialized.contains(sentinel));
         assert!(!serialized.contains("ne-pas-publier"));
         assert!(serialized.contains("sha256:"));
+        assert!(delegated_reference.starts_with("sha256:"));
+        assert_ne!(delegated_reference, sentinel);
+        assert!(!delegated_reference.contains("commandExecution"));
+        assert!(!delegated_reference.contains("ne-pas-publier"));
     }
 
     #[test]

@@ -906,6 +906,46 @@ pub struct AgentLinkEventFrame {
     pub observed_at: i64,
 }
 
+/// Catégorie fermée d'un fait runtime d'enfant destiné à son coordinateur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegatedRuntimeEventKind {
+    Warning,
+    Failed,
+}
+
+impl DelegatedRuntimeEventKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Warning => "warning",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "warning" => Some(Self::Warning),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// Projection durable, redacted et cursée d'un incident runtime délégué.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegatedRuntimeEventFrame {
+    pub cursor: u64,
+    pub event_id: String,
+    pub link_id: String,
+    pub child_instance_id: String,
+    pub child_execution_id: String,
+    pub kind: DelegatedRuntimeEventKind,
+    pub code: String,
+    pub reference: String,
+    pub observed_at: i64,
+}
+
 /// Messages envoyés par le wrapper vers le daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -1029,6 +1069,20 @@ pub enum WrapperToDaemon {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         after_cursor: Option<u64>,
         timeout_ms: u64,
+    },
+    /// Fait runtime redacted émis par l'enfant. Le daemon déduit le lien et
+    /// le parent depuis la connexion, jamais depuis cette trame.
+    #[serde(rename = "delegated_runtime_event")]
+    DelegatedRuntimeEvent {
+        execution_id: String,
+        kind: DelegatedRuntimeEventKind,
+        code: String,
+        reference: String,
+    },
+    /// Accusé de la remise observée par le wrapper parent.
+    #[serde(rename = "delegated_runtime_event_acknowledged")]
+    DelegatedRuntimeEventAcknowledged {
+        event_id: String,
     },
     SpawnOrder {
         agent_type: String,
@@ -1690,6 +1744,9 @@ pub enum DaemonToWrapper {
         through_cursor: Option<u64>,
         timed_out: bool,
     },
+    /// Fait runtime durable à convertir en notification système non intrusive.
+    #[serde(rename = "delegated_runtime_event")]
+    DelegatedRuntimeEvent { event: DelegatedRuntimeEventFrame },
     ///
     /// Cette trame ne franchit jamais la frontière client publique.
     ControlExecutionDispatch {
@@ -3894,5 +3951,60 @@ mod tests {
             "\"capability_unavailable\""
         );
         assert!(serde_json::from_str::<ExecutionControlRefusal>("\"unknown\"").is_err());
+    }
+    #[test]
+    fn spec_068_trames_incident_deleguees_sont_fermees_et_redacted() {
+        let emitted = WrapperToDaemon::DelegatedRuntimeEvent {
+            execution_id: "execution-child-42".to_string(),
+            kind: DelegatedRuntimeEventKind::Warning,
+            code: "unsupported_provider_request".to_string(),
+            reference: "sha256:ab12".to_string(),
+        };
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encode(&emitted).unwrap()).unwrap(),
+            WrapperToDaemon::DelegatedRuntimeEvent {
+                execution_id,
+                kind: DelegatedRuntimeEventKind::Warning,
+                code,
+                reference,
+            } if execution_id == "execution-child-42"
+                && code == "unsupported_provider_request"
+                && reference == "sha256:ab12"
+        ));
+
+        let delivery = DaemonToWrapper::DelegatedRuntimeEvent {
+            event: DelegatedRuntimeEventFrame {
+                cursor: 7,
+                event_id: "runtime-link-1-execution-child-42-warning".to_string(),
+                link_id: "link-1".to_string(),
+                child_instance_id: "instance-child".to_string(),
+                child_execution_id: "execution-child-42".to_string(),
+                kind: DelegatedRuntimeEventKind::Warning,
+                code: "unsupported_provider_request".to_string(),
+                reference: "sha256:ab12".to_string(),
+                observed_at: 1_788_000_000,
+            },
+        };
+        let wire = encode(&delivery).unwrap();
+        assert!(matches!(
+            decode::<DaemonToWrapper>(&wire).unwrap(),
+            DaemonToWrapper::DelegatedRuntimeEvent { event }
+                if event.cursor == 7
+                    && event.kind == DelegatedRuntimeEventKind::Warning
+                    && event.code == "unsupported_provider_request"
+                    && event.reference == "sha256:ab12"
+        ));
+        assert!(!wire.contains("params"));
+        assert!(!wire.contains("secret"));
+
+        let acknowledgement = WrapperToDaemon::DelegatedRuntimeEventAcknowledged {
+            event_id: "runtime-link-1-execution-child-42-warning".to_string(),
+        };
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encode(&acknowledgement).unwrap()).unwrap(),
+            WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id }
+                if event_id == "runtime-link-1-execution-child-42-warning"
+        ));
+        assert!(serde_json::from_str::<DelegatedRuntimeEventKind>("\"other\"").is_err());
     }
 }

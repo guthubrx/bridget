@@ -157,6 +157,13 @@ pub enum ManagedEventKind {
     Update {
         detail: String,
     },
+    /// Incident récupérable projeté par un adaptateur. Il ne transporte ni
+    /// corps fournisseur ni argument d'outil: seuls un code stable et une
+    /// référence pseudonymisée franchissent la frontière commune.
+    Diagnostic {
+        code: String,
+        reference: String,
+    },
     Error {
         detail: String,
     },

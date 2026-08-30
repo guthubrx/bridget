@@ -7,8 +7,9 @@ use bridget_transport::journal::{
     JournalWindowError, JournalWriter, current_host_date, resolve_window,
 };
 use bridget_transport::protocol::{
-    DiskSpaceFact, ExecutionControlCommand, ExecutionControlOperation, ExecutionProviderContext,
-    PresenceMode, ProviderOperation, decode, encode,
+    DelegatedRuntimeEventFrame, DelegatedRuntimeEventKind, DiskSpaceFact, ExecutionControlCommand,
+    ExecutionControlOperation, ExecutionProviderContext, PresenceMode, ProviderOperation, decode,
+    encode,
 };
 use bridget_transport::{
     AcpOptions, AcpTransport, AttachRefusal, AttachWindow, ChannelReport, ClaudeStreamJsonOptions,
@@ -18,6 +19,7 @@ use bridget_transport::{
     TmuxTransport, Transport, WrapperToDaemon,
 };
 use log::{debug, error, info, warn};
+use sha2::{Digest, Sha256};
 
 use crate::mission_projection::{
     MissionDelegationV1, MissionObjectiveV1, MissionReviewV1, read_public_mission_projection_v1,
@@ -680,6 +682,7 @@ struct PendingIdempotentDelivery {
 enum PendingAcpDispatch {
     Historic,
     Idempotent(PendingIdempotentDelivery),
+    DelegatedRuntime { event_id: String },
 }
 
 /// Raccorde l'observable ACP au reçu durable : aucun accusé n'est émis avant
@@ -758,6 +761,9 @@ impl IdempotentDeliveryTracker {
 
     fn prompt_dispatched(&mut self, message_id: &str, now: i64) -> Option<WrapperToDaemon> {
         let pending = self.take_pending_by_message(message_id)?;
+        if let PendingAcpDispatch::DelegatedRuntime { event_id } = pending {
+            return Some(WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id });
+        }
         let PendingAcpDispatch::Idempotent(pending) = pending else {
             return None;
         };
@@ -824,6 +830,13 @@ impl IdempotentDeliveryTracker {
             .entry(message_id.to_string())
             .or_default()
             .push_back(PendingAcpDispatch::Historic);
+    }
+
+    fn record_delegated_runtime(&mut self, message_id: &str, event_id: String) {
+        self.pending
+            .entry(message_id.to_string())
+            .or_default()
+            .push_back(PendingAcpDispatch::DelegatedRuntime { event_id });
     }
 
     fn historic_injection_failed(&mut self, message_id: &str) {
@@ -2017,6 +2030,28 @@ pub fn launch(
                         send_wrapper_message(&writer_for_listener, report);
                     }
                 }
+                DaemonToWrapper::DelegatedRuntimeEvent { event } => {
+                    let message = delegated_runtime_message(&event, &my_name_for_thread);
+                    let injected = match transport.as_mut() {
+                        Some(transport) => {
+                            record_interactive_turn(journal.as_ref(), &message);
+                            transport
+                                .deliver(&message)
+                                .map_err(|error| error.to_string())
+                        }
+                        None => Err("aucun pane tmux pour l'incident délégué".to_string()),
+                    };
+                    match injected {
+                        Ok(()) => send_wrapper_message(
+                            &writer_for_listener,
+                            WrapperToDaemon::DelegatedRuntimeEventAcknowledged {
+                                event_id: event.event_id,
+                            },
+                        ),
+                        Err(error) => warn!("remise de l'incident délégué différée: {error}"),
+                    }
+                }
+
                 DaemonToWrapper::Subscribe {
                     subscription_id,
                     window,
@@ -3423,6 +3458,14 @@ fn launch_acp_with_status(
                         }
                     }
                 },
+                Ok(DaemonToWrapper::DelegatedRuntimeEvent { event }) => {
+                    let message = delegated_runtime_message(&event, &my_name);
+                    idempotent_deliveries.record_delegated_runtime(&message.id, event.event_id);
+                    if let Err(error) = transport.deliver(&message) {
+                        let _ = idempotent_deliveries.injection_rejected(&message.id);
+                        warn!("remise de l'incident délégué différée: {error}");
+                    }
+                }
                 Ok(DaemonToWrapper::ControlExecutionDispatch {
                     issuer_scope,
                     command,
@@ -4376,6 +4419,76 @@ fn publish_approval_wait(
         );
     }
 }
+fn delegated_runtime_terminal_reference(execution_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"bridget/delegated-runtime-terminal/v1\0");
+    hasher.update(execution_id.as_bytes());
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn publish_delegated_runtime_for_message(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    bindings: &HashMap<String, ManagedExecutionBinding>,
+    message_id: &str,
+    kind: DelegatedRuntimeEventKind,
+    code: &str,
+    reference: String,
+) {
+    let Some(binding) = bindings.get(message_id) else {
+        return;
+    };
+    send_wrapper_message(
+        writer,
+        WrapperToDaemon::DelegatedRuntimeEvent {
+            execution_id: binding.execution_id.clone(),
+            kind,
+            code: code.to_string(),
+            reference,
+        },
+    );
+}
+
+fn publish_delegated_runtime_warning(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    bindings: &HashMap<String, ManagedExecutionBinding>,
+    code: String,
+    reference: String,
+) {
+    let running: Vec<&ManagedExecutionBinding> = bindings
+        .values()
+        .filter(|binding| binding.state == "running")
+        .collect();
+    if running.len() == 1 {
+        send_wrapper_message(
+            writer,
+            WrapperToDaemon::DelegatedRuntimeEvent {
+                execution_id: running[0].execution_id.clone(),
+                kind: DelegatedRuntimeEventKind::Warning,
+                code,
+                reference,
+            },
+        );
+    }
+}
+fn delegated_runtime_message(
+    event: &DelegatedRuntimeEventFrame,
+    recipient: &str,
+) -> bridget_core::BridgetMessage {
+    let kind = match event.kind {
+        DelegatedRuntimeEventKind::Warning => "avertissement récupérable",
+        DelegatedRuntimeEventKind::Failed => "échec terminal",
+    };
+    let body = format!(
+        "Incident délégué: enfant={} issue={kind} code={} référence={}.",
+        event.child_instance_id, event.code, event.reference,
+    );
+    let mut message = bridget_core::BridgetMessage::new("bridget", recipient, body);
+    message.id = format!("delegated-runtime-{}", event.event_id);
+    message.origin = Some(bridget_core::MessageOrigin::System);
+    message.intent = Some(bridget_core::MessageIntent::QueueOnly);
+    message.reply = false;
+    message
+}
 
 fn forward_managed_events(
     writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
@@ -4430,13 +4543,28 @@ fn forward_managed_events(
                     continue;
                 }
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
+
+                if matches!(&terminal, ManagedTerminal::Failed { .. }) {
+                    publish_delegated_runtime_for_message(
+                        writer,
+                        bindings,
+                        &message_id,
+                        DelegatedRuntimeEventKind::Failed,
+                        "provider_failed",
+                        delegated_runtime_terminal_reference(
+                            bindings
+                                .get(&message_id)
+                                .map(|binding| binding.execution_id.as_str())
+                                .unwrap_or_default(),
+                        ),
+                    );
+                }
                 let (next_state, reason) = match &terminal {
                     ManagedTerminal::Completed => ("completed", "completed"),
                     ManagedTerminal::Cancelled => ("interrupted", "interrupted"),
                     ManagedTerminal::Failed { .. } => ("failed", "provider_failed"),
                 };
                 publish_execution_transition(writer, bindings, &message_id, next_state, reason);
-
                 match terminal {
                     ManagedTerminal::Completed if message.reply && !response.is_empty() => {
                         let mut reply =
@@ -4477,6 +4605,20 @@ fn forward_managed_events(
                 }
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
                 let execution_reason = if reason.ends_with("pleine") {
+                    publish_delegated_runtime_for_message(
+                        writer,
+                        bindings,
+                        &message_id,
+                        DelegatedRuntimeEventKind::Failed,
+                        "provider_failed",
+                        delegated_runtime_terminal_reference(
+                            bindings
+                                .get(&message_id)
+                                .map(|binding| binding.execution_id.as_str())
+                                .unwrap_or_default(),
+                        ),
+                    );
+
                     "provider_queue_full"
                 } else {
                     "provider_failed"
@@ -4609,6 +4751,9 @@ fn forward_managed_events(
                 publish_provider_context(writer, bindings, &identity)
             }
             ManagedEventKind::Update { .. } | ManagedEventKind::Error { .. } => {}
+            ManagedEventKind::Diagnostic { code, reference } => {
+                publish_delegated_runtime_warning(writer, bindings, code, reference);
+            }
         }
     }
     journal_failed
@@ -5646,6 +5791,167 @@ fn journal_failure_requires_shutdown(events: &[ManagedEvent]) -> bool {
     events
         .iter()
         .any(|event| matches!(event.kind, ManagedEventKind::JournalFailed { .. }))
+}
+
+#[cfg(test)]
+mod delegated_runtime_tests {
+    use super::*;
+
+    #[test]
+    fn spec_068_notification_deleguee_est_systeme_ordonnee_et_accusee_apres_injection() {
+        let event = DelegatedRuntimeEventFrame {
+            cursor: 7,
+            event_id: "event-7".to_string(),
+            link_id: "link-7".to_string(),
+            child_instance_id: "enfant-7".to_string(),
+            child_execution_id: "execution-7".to_string(),
+            kind: DelegatedRuntimeEventKind::Warning,
+            code: "unsupported_provider_request".to_string(),
+            reference: format!("sha256:{}", "a".repeat(64)),
+            observed_at: 1_700_000_000,
+        };
+        let message = delegated_runtime_message(&event, "parent-7");
+        assert_eq!(message.from, "bridget");
+        assert_eq!(message.to, "parent-7");
+        assert_eq!(message.origin, Some(bridget_core::MessageOrigin::System));
+        assert_eq!(message.intent, Some(bridget_core::MessageIntent::QueueOnly));
+        assert!(!message.reply);
+        assert!(!message.body.contains("params"));
+
+        let root = std::env::temp_dir().join(format!("bridget-spec-068-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "parent-7").unwrap();
+        tracker.record_delegated_runtime(&message.id, event.event_id.clone());
+        assert!(matches!(
+            tracker.prompt_dispatched(&message.id, 1_700_000_001),
+            Some(WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id }) if event_id == "event-7"
+        ));
+        assert!(
+            tracker
+                .prompt_dispatched(&message.id, 1_700_000_002)
+                .is_none()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec_068_diagnostic_codex_est_remonte_sans_octets_fournisseur() {
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        reader_stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(writer_stream))));
+        let root =
+            std::env::temp_dir().join(format!("bridget-spec-068-forward-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "child-1").unwrap();
+        let mut bindings = HashMap::new();
+        bindings.insert(
+            "message-1".to_string(),
+            ManagedExecutionBinding {
+                execution_id: "execution-1".to_string(),
+                generation: 1,
+                revision: 0,
+                state: "running".to_string(),
+                provider_kind: "codex".to_string(),
+                execution_path: "codex_app_server".to_string(),
+                approval_requests: 0,
+                last_approval_request: None,
+            },
+        );
+        let reference = format!("sha256:{}", "b".repeat(64));
+        assert!(!forward_managed_events(
+            &writer,
+            "child-1",
+            vec![ManagedEvent::internal(
+                bridget_transport::ManagedEventSource::CodexAppServer,
+                b"params=secret-ne-pas-remonter".to_vec(),
+                ManagedEventKind::Diagnostic {
+                    code: "unsupported_provider_request".to_string(),
+                    reference: reference.clone(),
+                },
+            )],
+            &mut tracker,
+            &mut bindings
+        ));
+        let mut line = String::new();
+        BufReader::new(reader_stream).read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode(line.trim()).unwrap(),
+            WrapperToDaemon::DelegatedRuntimeEvent { execution_id, kind: DelegatedRuntimeEventKind::Warning, code, reference: observed }
+                if execution_id == "execution-1" && code == "unsupported_provider_request" && observed == reference
+        ));
+        assert!(!line.contains("secret-ne-pas-remonter"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec_068_terminal_enfant_est_failed_distinct_et_redacted() {
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        reader_stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(writer_stream))));
+        let root =
+            std::env::temp_dir().join(format!("bridget-spec-068-failed-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "child-2").unwrap();
+        let mut bindings = HashMap::new();
+        bindings.insert(
+            "message-2".to_string(),
+            ManagedExecutionBinding {
+                execution_id: "execution-2".to_string(),
+                generation: 1,
+                revision: 0,
+                state: "running".to_string(),
+                provider_kind: "codex".to_string(),
+                execution_path: "codex_app_server".to_string(),
+                approval_requests: 0,
+                last_approval_request: None,
+            },
+        );
+        let mut message = bridget_core::BridgetMessage::new("humain", "child-2", "travaille");
+        message.id = "message-2".to_string();
+        assert!(!forward_managed_events(
+            &writer,
+            "child-2",
+            vec![ManagedEvent::internal(
+                bridget_transport::ManagedEventSource::CodexAppServer,
+                b"detail=secret-ne-pas-remonter".to_vec(),
+                ManagedEventKind::TurnFinished {
+                    message,
+                    response: String::new(),
+                    terminal: ManagedTerminal::Failed {
+                        detail: "secret-ne-pas-remonter".to_string()
+                    },
+                },
+            )],
+            &mut tracker,
+            &mut bindings
+        ));
+        let mut reader = BufReader::new(reader_stream);
+        let mut failures = Vec::new();
+        for _ in 0..4 {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if let WrapperToDaemon::DelegatedRuntimeEvent {
+                kind,
+                code,
+                reference,
+                ..
+            } = decode(line.trim()).unwrap()
+            {
+                failures.push((kind, code, reference));
+                assert!(!line.contains("secret-ne-pas-remonter"));
+            }
+        }
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].0, DelegatedRuntimeEventKind::Failed);
+        assert_eq!(failures[0].1, "provider_failed");
+        assert!(failures[0].2.starts_with("sha256:"));
+        assert!(!bindings.contains_key("message-2"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(test)]

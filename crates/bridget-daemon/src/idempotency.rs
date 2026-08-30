@@ -5,7 +5,9 @@
 //! public d'une opération idempotente.
 
 use bridget_transport::ResolvedAgentDefinition;
+use bridget_transport::protocol::DelegatedRuntimeEventKind;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
 const MIN_ISSUER_SCOPE_LEN: usize = 22;
@@ -338,6 +340,33 @@ pub struct AgentLinkEvent {
     pub observed_at: i64,
 }
 
+/// Entrée redacted d'un fait runtime observé chez un enfant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DelegatedRuntimeEventInput {
+    pub child_instance_id: String,
+    pub child_execution_id: String,
+    pub kind: DelegatedRuntimeEventKind,
+    pub code: String,
+    pub reference: String,
+    pub observed_at: i64,
+}
+
+/// Fait runtime délégué durable. Le parent provient exclusivement du lien.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DelegatedRuntimeEventRecord {
+    pub cursor: u64,
+    pub event_id: String,
+    pub link_id: String,
+    pub parent_instance_id: String,
+    pub child_instance_id: String,
+    pub child_execution_id: String,
+    pub kind: DelegatedRuntimeEventKind,
+    pub code: String,
+    pub reference: String,
+    pub observed_at: i64,
+    pub acknowledged_at: Option<i64>,
+}
+
 #[derive(Debug)]
 pub enum IdempotencyError {
     InvalidIssuerScope,
@@ -348,6 +377,7 @@ pub enum IdempotencyError {
     InvalidTransition { from: RecordState, to: RecordState },
     InvalidDelivery,
     InvalidSpawnCommand,
+    InvalidDelegatedRuntimeEvent,
     InvalidAgentLink,
     AgentLinkOwned,
     DispatchUnavailable,
@@ -370,6 +400,9 @@ impl std::fmt::Display for IdempotencyError {
             Self::InvalidDelivery => write!(formatter, "remise idempotente invalide"),
             Self::InvalidSpawnCommand => write!(formatter, "commande spawn invalide"),
             Self::InvalidAgentLink => write!(formatter, "lien agent invalide"),
+            Self::InvalidDelegatedRuntimeEvent => {
+                write!(formatter, "fait runtime délégué invalide")
+            }
             Self::AgentLinkOwned => write!(formatter, "enfant déjà possédé par un lien ouvert"),
             Self::DispatchUnavailable => write!(formatter, "remise déjà traitée ou indisponible"),
             Self::MissingRecord => write!(formatter, "enregistrement d'idempotence absent"),
@@ -566,7 +599,23 @@ impl IdempotencyStore {
                 FOREIGN KEY (link_id) REFERENCES agent_links(link_id)
             );
             CREATE INDEX IF NOT EXISTS idx_agent_link_events_parent_cursor
-                ON agent_link_events(parent_instance_id, cursor);",
+                ON agent_link_events(parent_instance_id, cursor);
+            CREATE TABLE IF NOT EXISTS delegated_runtime_events (
+                cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL UNIQUE,
+                link_id TEXT NOT NULL,
+                parent_instance_id TEXT NOT NULL,
+                child_instance_id TEXT NOT NULL,
+                child_execution_id TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('warning', 'failed')),
+                code TEXT NOT NULL,
+                reference TEXT NOT NULL,
+                observed_at INTEGER NOT NULL,
+                acknowledged_at INTEGER,
+                FOREIGN KEY (link_id) REFERENCES agent_links(link_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_delegated_runtime_events_parent_pending_cursor
+                ON delegated_runtime_events(parent_instance_id, acknowledged_at, cursor);",
         )?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let migration_applied = tx.query_row(
@@ -1285,6 +1334,121 @@ impl IdempotencyStore {
             )?
             .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into)
+    }
+    /// Persiste un fait runtime corrélé à un enfant déjà lié. L'identifiant est
+    /// déterministe sur les seuls champs redacted afin que le rejeu ne duplique
+    /// jamais le même diagnostic ou le même terminal.
+    pub fn record_delegated_runtime_event(
+        &mut self,
+        input: DelegatedRuntimeEventInput,
+    ) -> Result<DelegatedRuntimeEventRecord, IdempotencyError> {
+        validate_delegated_runtime_event_input(&input)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let link = tx
+            .query_row(
+                "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
+                        objective_id, delegation_id, role, agent_path, state, created_at,
+                        closed_at, revision
+                 FROM agent_links WHERE child_instance_id = ?1",
+                [&input.child_instance_id],
+                agent_link_from_row,
+            )
+            .optional()?
+            .ok_or(IdempotencyError::InvalidDelegatedRuntimeEvent)?;
+        let event_id = delegated_runtime_event_id(&link, &input);
+        tx.execute(
+            "INSERT INTO delegated_runtime_events (
+                event_id, link_id, parent_instance_id, child_instance_id,
+                child_execution_id, kind, code, reference, observed_at, acknowledged_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)
+             ON CONFLICT(event_id) DO NOTHING",
+            params![
+                &event_id,
+                &link.link_id,
+                &link.parent_instance_id,
+                &link.child_instance_id,
+                &input.child_execution_id,
+                input.kind.as_str(),
+                &input.code,
+                &input.reference,
+                input.observed_at,
+            ],
+        )?;
+        let event = tx.query_row(
+            "SELECT cursor, event_id, link_id, parent_instance_id, child_instance_id,
+                    child_execution_id, kind, code, reference, observed_at, acknowledged_at
+             FROM delegated_runtime_events WHERE event_id = ?1",
+            [&event_id],
+            delegated_runtime_event_from_row,
+        )?;
+        tx.commit()?;
+        Ok(event)
+    }
+
+    /// Relit dans l'ordre les faits qui n'ont pas encore franchi une frontière
+    /// observable du transport du parent.
+    pub fn delegated_runtime_events_for_parent(
+        &self,
+        parent_instance_id: &str,
+    ) -> Result<Vec<DelegatedRuntimeEventRecord>, IdempotencyError> {
+        let mut statement = self.conn.prepare(
+            "SELECT cursor, event_id, link_id, parent_instance_id, child_instance_id,
+                    child_execution_id, kind, code, reference, observed_at, acknowledged_at
+             FROM delegated_runtime_events
+             WHERE parent_instance_id = ?1 AND acknowledged_at IS NULL
+             ORDER BY cursor
+             LIMIT 128",
+        )?;
+        statement
+            .query_map([parent_instance_id], delegated_runtime_event_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Accuse un fait seulement si le wrapper qui parle est son parent attesté.
+    /// Un accusé répétitif du même parent est idempotent; toute autre identité
+    /// est un refus sans écriture.
+    pub fn acknowledge_delegated_runtime_event(
+        &mut self,
+        event_id: &str,
+        parent_instance_id: &str,
+    ) -> Result<bool, IdempotencyError> {
+        if event_id.trim().is_empty() || parent_instance_id.trim().is_empty() {
+            return Err(IdempotencyError::InvalidDelegatedRuntimeEvent);
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (recorded_parent, acknowledged_at): (String, Option<i64>) = tx
+            .query_row(
+                "SELECT parent_instance_id, acknowledged_at
+                 FROM delegated_runtime_events WHERE event_id = ?1",
+                [event_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(IdempotencyError::InvalidDelegatedRuntimeEvent)?;
+        if recorded_parent != parent_instance_id {
+            return Err(IdempotencyError::InvalidDelegatedRuntimeEvent);
+        }
+        if acknowledged_at.is_some() {
+            tx.commit()?;
+            return Ok(false);
+        }
+        let acknowledged_at = unix_now_secs();
+        let changed = tx.execute(
+            "UPDATE delegated_runtime_events
+             SET acknowledged_at = ?1
+             WHERE event_id = ?2 AND parent_instance_id = ?3 AND acknowledged_at IS NULL",
+            params![acknowledged_at, event_id, parent_instance_id],
+        )?;
+        if changed != 1 {
+            return Err(IdempotencyError::DispatchUnavailable);
+        }
+        tx.commit()?;
+        Ok(true)
     }
 
     pub fn transition_agent_link(
@@ -2245,6 +2409,78 @@ fn record_agent_link_event(
         ],
     )?;
     Ok(())
+}
+
+fn delegated_runtime_event_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<DelegatedRuntimeEventRecord> {
+    let kind = row.get::<_, String>(6)?;
+    Ok(DelegatedRuntimeEventRecord {
+        cursor: row.get(0)?,
+        event_id: row.get(1)?,
+        link_id: row.get(2)?,
+        parent_instance_id: row.get(3)?,
+        child_instance_id: row.get(4)?,
+        child_execution_id: row.get(5)?,
+        kind: DelegatedRuntimeEventKind::from_str(&kind)
+            .ok_or_else(|| to_sql_error(IdempotencyError::InvalidDelegatedRuntimeEvent))?,
+        code: row.get(7)?,
+        reference: row.get(8)?,
+        observed_at: row.get(9)?,
+        acknowledged_at: row.get(10)?,
+    })
+}
+
+fn validate_delegated_runtime_event_input(
+    input: &DelegatedRuntimeEventInput,
+) -> Result<(), IdempotencyError> {
+    let token = |value: &str, limit: usize| {
+        !value.is_empty()
+            && value.len() <= limit
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    };
+    let reference = input.reference.strip_prefix("sha256:").unwrap_or_default();
+    if !token(&input.child_instance_id, 256)
+        || !token(&input.child_execution_id, 256)
+        || !token(&input.code, 128)
+        || reference.len() != 64
+        || !reference.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || input.observed_at <= 0
+    {
+        return Err(IdempotencyError::InvalidDelegatedRuntimeEvent);
+    }
+    Ok(())
+}
+
+fn delegated_runtime_event_id(
+    link: &AgentLinkRecord,
+    input: &DelegatedRuntimeEventInput,
+) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"bridget/delegated-runtime-event/v1\0");
+    let kind = input.kind.as_str();
+    let parts: [&[u8]; 5] = [
+        link.link_id.as_bytes(),
+        input.child_execution_id.as_bytes(),
+        kind.as_bytes(),
+        input.code.as_bytes(),
+        input.reference.as_bytes(),
+    ];
+    for part in parts {
+        digest.update((part.len() as u64).to_be_bytes());
+        digest.update(part);
+    }
+    format!("delegated-runtime:{:x}", digest.finalize())
+}
+
+fn unix_now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .min(i64::MAX as u64) as i64
 }
 
 fn spawn_command_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SpawnCommand> {
@@ -4249,5 +4485,96 @@ mod tests {
             1
         );
         let _ = std::fs::remove_file(db_path);
+    }
+    #[test]
+    fn spec_068_faits_runtime_delegues_restent_ordonnes_et_accuses() {
+        let mut store = IdempotencyStore::open_in_memory().unwrap();
+        store
+            .create_agent_link(&AgentLinkRecord {
+                link_id: "link-068".to_string(),
+                parent_instance_id: "instance-parent".to_string(),
+                child_instance_id: "instance-child".to_string(),
+                parent_execution_id: Some("execution-parent".to_string()),
+                objective_id: Some("objective-068".to_string()),
+                delegation_id: Some("delegation-068".to_string()),
+                role: "worker".to_string(),
+                agent_path: "parent/child".to_string(),
+                state: AgentLinkState::Reserved,
+                created_at: NOW,
+                closed_at: None,
+                revision: 0,
+            })
+            .unwrap();
+
+        let warning_reference = format!("sha256:{}", "a".repeat(64));
+        let failed_reference = format!("sha256:{}", "b".repeat(64));
+
+        let warning = store
+            .record_delegated_runtime_event(DelegatedRuntimeEventInput {
+                child_instance_id: "instance-child".to_string(),
+                child_execution_id: "execution-child".to_string(),
+                kind: DelegatedRuntimeEventKind::Warning,
+                code: "unsupported_provider_request".to_string(),
+                reference: warning_reference.clone(),
+                observed_at: NOW + 1,
+            })
+            .unwrap();
+        let failed = store
+            .record_delegated_runtime_event(DelegatedRuntimeEventInput {
+                child_instance_id: "instance-child".to_string(),
+                child_execution_id: "execution-child".to_string(),
+                kind: DelegatedRuntimeEventKind::Failed,
+                code: "provider_failed".to_string(),
+                reference: failed_reference.clone(),
+                observed_at: NOW + 2,
+            })
+            .unwrap();
+        assert_eq!(
+            store
+                .record_delegated_runtime_event(DelegatedRuntimeEventInput {
+                    child_instance_id: "instance-child".to_string(),
+                    child_execution_id: "execution-child".to_string(),
+                    kind: DelegatedRuntimeEventKind::Warning,
+                    code: "unsupported_provider_request".to_string(),
+                    reference: warning_reference,
+                    observed_at: NOW + 99,
+                })
+                .unwrap()
+                .event_id,
+            warning.event_id
+        );
+        let pending = store
+            .delegated_runtime_events_for_parent("instance-parent")
+            .unwrap();
+        assert_eq!(
+            pending
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![warning.event_id.as_str(), failed.event_id.as_str()]
+        );
+        assert!(matches!(
+            store.acknowledge_delegated_runtime_event(&warning.event_id, "other-parent"),
+            Err(IdempotencyError::InvalidDelegatedRuntimeEvent)
+        ));
+        assert!(
+            store
+                .acknowledge_delegated_runtime_event(&warning.event_id, "instance-parent")
+                .unwrap()
+        );
+        assert!(
+            !store
+                .acknowledge_delegated_runtime_event(&warning.event_id, "instance-parent")
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .delegated_runtime_events_for_parent("instance-parent")
+                .unwrap()
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![failed.event_id.as_str()]
+        );
     }
 }

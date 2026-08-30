@@ -7,11 +7,11 @@ use bridget_transport::greffe_authorization::{
 };
 use bridget_transport::protocol::{
     AgentLinkEventFrame, AttachRefusal, CLIENT_CONTRACT_VERSION, COORDINATION_EVENTS_VERSION,
-    COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal, ConnectionRole, DiskSpaceFact,
-    ExecutionControlCommand, ExecutionControlOperation, ExecutionControlOutcome,
-    ExecutionControlRefusal, IdempotencyIssue, PresenceMode, REVIEW_DELEGATE_CONTRACT_VERSION,
-    SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal, SpawnRefusal, StopOutcome, decode,
-    encode,
+    COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal, ConnectionRole,
+    DelegatedRuntimeEventFrame, DiskSpaceFact, ExecutionControlCommand, ExecutionControlOperation,
+    ExecutionControlOutcome, ExecutionControlRefusal, IdempotencyIssue, PresenceMode,
+    REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal,
+    SpawnRefusal, StopOutcome, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
@@ -30,8 +30,8 @@ use crate::execution_store::{
     ExecutionUsageSample, ProviderBindingOutcome,
 };
 use crate::idempotency::{
-    IdempotencyKey, IdempotencyStore, LookupResult, OperationKind, ReplyTracking, Reservation,
-    SendDelivery,
+    DelegatedRuntimeEventInput, IdempotencyKey, IdempotencyStore, LookupResult, OperationKind,
+    ReplyTracking, Reservation, SendDelivery,
 };
 use crate::managed_supervisor::ManagedSupervisorGuard;
 use crate::store::{
@@ -1236,6 +1236,51 @@ fn push_control_message(
         let _ = writer.get_ref().shutdown(std::net::Shutdown::Both);
     }
     written
+}
+fn delegated_runtime_frame(
+    event: crate::idempotency::DelegatedRuntimeEventRecord,
+) -> DelegatedRuntimeEventFrame {
+    DelegatedRuntimeEventFrame {
+        cursor: event.cursor,
+        event_id: event.event_id,
+        link_id: event.link_id,
+        child_instance_id: event.child_instance_id,
+        child_execution_id: event.child_execution_id,
+        kind: event.kind,
+        code: event.code,
+        reference: event.reference,
+        observed_at: event.observed_at,
+    }
+}
+
+fn replay_delegated_runtime_events_for_connection(state: &Arc<Mutex<DaemonState>>, conn_id: &str) {
+    let (parent_instance_id, writer, fleet) = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(parent_instance_id) = st.conn_instances.get(conn_id).cloned() else {
+            return;
+        };
+        let Some(writer) = st.connections.get(conn_id).cloned() else {
+            return;
+        };
+        (parent_instance_id, writer, Arc::clone(&st.fleet))
+    };
+    let events = match fleet.delegated_runtime_events_for_parent(&parent_instance_id) {
+        Ok(events) => events,
+        Err(error) => {
+            warn!("rejeu des incidents délégués impossible: {error}");
+            return;
+        }
+    };
+    for event in events {
+        if !push_control_message(
+            &writer,
+            &DaemonToWrapper::DelegatedRuntimeEvent {
+                event: delegated_runtime_frame(event),
+            },
+        ) {
+            break;
+        }
+    }
 }
 
 struct DeferredControl {
@@ -3521,6 +3566,7 @@ fn handle_connection(
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .flush_pending_orphan_emitter_notices();
+                replay_delegated_runtime_events_for_connection(&state, &conn_id);
             }
         }
         Ok(())
@@ -6302,6 +6348,8 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::Lookup { .. }
                 | WrapperToDaemon::ControlExecution { .. }
                 | WrapperToDaemon::ControlExecutionReported { .. }
+                | WrapperToDaemon::DelegatedRuntimeEvent { .. }
+                | WrapperToDaemon::DelegatedRuntimeEventAcknowledged { .. }
                 | WrapperToDaemon::DeliverAcked { .. }
                 | WrapperToDaemon::DeliveryIndeterminate { .. }
                 | WrapperToDaemon::SpawnOrder { .. }
@@ -6428,6 +6476,8 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::GuichetClaimNext { .. }
                 | WrapperToDaemon::GuichetClaim { .. }
                 | WrapperToDaemon::ControlExecutionReported { .. }
+                | WrapperToDaemon::DelegatedRuntimeEvent { .. }
+                | WrapperToDaemon::DelegatedRuntimeEventAcknowledged { .. }
                 | WrapperToDaemon::GuichetLookup { .. }
                 | WrapperToDaemon::GuichetReply { .. }
                 | WrapperToDaemon::DeliverAcked { .. }
@@ -6490,6 +6540,91 @@ fn handle_wrapper_message(
 
     match msg {
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
+        WrapperToDaemon::DelegatedRuntimeEvent {
+            execution_id,
+            kind,
+            code,
+            reference,
+        } => {
+            let (child_instance_id, fleet) = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(child_instance_id) = st.conn_instances.get(conn_id).cloned() else {
+                    return Some(DaemonToWrapper::Nack {
+                        id: "delegated-runtime-event".to_string(),
+                        reason: "wrapper non enregistré".to_string(),
+                    });
+                };
+                (child_instance_id, Arc::clone(&st.fleet))
+            };
+            let event = match fleet.record_delegated_runtime_event(DelegatedRuntimeEventInput {
+                child_instance_id,
+                child_execution_id: execution_id,
+                kind,
+                code,
+                reference,
+                observed_at: unix_now_secs(),
+            }) {
+                Ok(event) => event,
+                Err(error) => {
+                    warn!("fait runtime délégué ignoré: {error}");
+                    return Some(DaemonToWrapper::Nack {
+                        id: "delegated-runtime-event".to_string(),
+                        reason: "fait runtime délégué invalide".to_string(),
+                    });
+                }
+            };
+            let parent_writer = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                st.conn_instances
+                    .iter()
+                    .find(|(candidate_conn, candidate_instance)| {
+                        **candidate_instance == event.parent_instance_id
+                            && !st.auxiliary_connections.contains(*candidate_conn)
+                    })
+                    .and_then(|(candidate_conn, _)| st.connections.get(candidate_conn))
+                    .cloned()
+            };
+            if let Some(writer) = parent_writer
+                && !push_control_message(
+                    &writer,
+                    &DaemonToWrapper::DelegatedRuntimeEvent {
+                        event: DelegatedRuntimeEventFrame {
+                            cursor: event.cursor,
+                            event_id: event.event_id,
+                            link_id: event.link_id,
+                            child_instance_id: event.child_instance_id,
+                            child_execution_id: event.child_execution_id,
+                            kind: event.kind,
+                            code: event.code,
+                            reference: event.reference,
+                            observed_at: event.observed_at,
+                        },
+                    },
+                )
+            {
+                warn!("remise du fait runtime délégué différée: parent inaccessible");
+            }
+            None
+        }
+        WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id } => {
+            let (parent_instance_id, fleet) = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(parent_instance_id) = st.conn_instances.get(conn_id).cloned() else {
+                    return Some(DaemonToWrapper::Nack {
+                        id: event_id,
+                        reason: "wrapper non enregistré".to_string(),
+                    });
+                };
+                (parent_instance_id, Arc::clone(&st.fleet))
+            };
+            match fleet.acknowledge_delegated_runtime_event(&event_id, &parent_instance_id) {
+                Ok(_) => Some(DaemonToWrapper::Ack { id: event_id }),
+                Err(_) => Some(DaemonToWrapper::Nack {
+                    id: event_id,
+                    reason: "accusé runtime délégué refusé".to_string(),
+                }),
+            }
+        }
         WrapperToDaemon::WaitAgentLinks {
             after_cursor,
             timeout_ms,
@@ -17403,5 +17538,244 @@ fn transition_execution_refusee_si_wrapper_non_proprietaire() {
         .unwrap();
     assert_eq!(snapshot.state, "starting");
     assert_eq!(snapshot.revision, 0);
+    let _ = std::fs::remove_file(config.db_path);
+}
+
+#[cfg(test)]
+#[test]
+fn spec_068_daemon_persiste_remet_et_accuse_l_incident_delegue_au_seul_parent() {
+    use crate::idempotency::{AgentLinkRecord, AgentLinkState};
+
+    let (mut state, config) = presence_tests::state_with_registered_agent("spec-068-delegated");
+    state
+        .idempotency
+        .create_agent_link(&AgentLinkRecord {
+            link_id: "link-068".to_string(),
+            parent_instance_id: "instance-parent".to_string(),
+            child_instance_id: "instance-1".to_string(),
+            parent_execution_id: Some("parent-execution".to_string()),
+            objective_id: None,
+            delegation_id: None,
+            role: "worker".to_string(),
+            agent_path: "instance-parent/instance-1".to_string(),
+            state: AgentLinkState::Reserved,
+            created_at: 1_700_000_000,
+            closed_at: None,
+            revision: 0,
+        })
+        .unwrap();
+    let (writer_stream, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    state.connections.insert(
+        "conn-parent".to_string(),
+        Arc::new(Mutex::new(BufWriter::new(writer_stream))),
+    );
+    state
+        .conn_instances
+        .insert("conn-parent".to_string(), "instance-parent".to_string());
+    state
+        .conn_instances
+        .insert("conn-foreign".to_string(), "instance-foreign".to_string());
+    let shared = Arc::new(Mutex::new(state));
+    let reference = format!("sha256:{}", "c".repeat(64));
+    assert!(
+        handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::DelegatedRuntimeEvent {
+                execution_id: "child-execution".to_string(),
+                kind: bridget_transport::protocol::DelegatedRuntimeEventKind::Warning,
+                code: "unsupported_provider_request".to_string(),
+                reference: reference.clone(),
+            },
+            &shared
+        )
+        .is_none()
+    );
+
+    let mut line = String::new();
+    BufReader::new(peer).read_line(&mut line).unwrap();
+    let event_id = match decode(line.trim()).unwrap() {
+        DaemonToWrapper::DelegatedRuntimeEvent { event } => {
+            assert_eq!(event.child_instance_id, "instance-1");
+            assert_eq!(
+                event.kind,
+                bridget_transport::protocol::DelegatedRuntimeEventKind::Warning
+            );
+            assert_eq!(event.reference, reference);
+            assert!(!line.contains("params"));
+            event.event_id
+        }
+        other => panic!("événement délégué attendu, reçu {other:?}"),
+    };
+    assert!(matches!(
+        handle_wrapper_message(
+            "conn-foreign",
+            WrapperToDaemon::DelegatedRuntimeEventAcknowledged {
+                event_id: event_id.clone()
+            },
+            &shared
+        ),
+        Some(DaemonToWrapper::Nack { .. })
+    ));
+    assert!(matches!(
+        handle_wrapper_message(
+            "conn-parent",
+            WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id },
+            &shared
+        ),
+        Some(DaemonToWrapper::Ack { .. })
+    ));
+    assert!(
+        shared
+            .lock()
+            .unwrap()
+            .fleet
+            .delegated_runtime_events_for_parent("instance-parent")
+            .unwrap()
+            .is_empty()
+    );
+    drop(shared);
+    let _ = std::fs::remove_file(config.db_path);
+}
+
+#[cfg(test)]
+#[test]
+fn spec_068_register_rejoue_apres_registered_les_incidents_delegues_en_ordre() {
+    use crate::idempotency::{AgentLinkRecord, AgentLinkState, DelegatedRuntimeEventInput};
+    use bridget_transport::protocol::DelegatedRuntimeEventKind;
+
+    let (mut state, config) = presence_tests::state_with_registered_agent("spec-068-replay");
+    state.conn_counter = 1;
+    state
+        .idempotency
+        .create_agent_link(&AgentLinkRecord {
+            link_id: "link-068-replay".to_string(),
+            parent_instance_id: "instance-parent".to_string(),
+            child_instance_id: "instance-1".to_string(),
+            parent_execution_id: None,
+            objective_id: None,
+            delegation_id: None,
+            role: "worker".to_string(),
+            agent_path: "instance-parent/instance-1".to_string(),
+            state: AgentLinkState::Reserved,
+            created_at: 1_700_000_000,
+            closed_at: None,
+            revision: 0,
+        })
+        .unwrap();
+    for (code, reference) in [
+        (
+            "unsupported_provider_request",
+            format!("sha256:{}", "d".repeat(64)),
+        ),
+        ("provider_failed", format!("sha256:{}", "e".repeat(64))),
+    ] {
+        state
+            .fleet
+            .record_delegated_runtime_event(DelegatedRuntimeEventInput {
+                child_instance_id: "instance-1".to_string(),
+                child_execution_id: "child-execution".to_string(),
+                kind: if code == "provider_failed" {
+                    DelegatedRuntimeEventKind::Failed
+                } else {
+                    DelegatedRuntimeEventKind::Warning
+                },
+                code: code.to_string(),
+                reference,
+                observed_at: 1_700_000_001,
+            })
+            .unwrap();
+    }
+    let shared = Arc::new(Mutex::new(state));
+    let listener = UnixListener::bind(&config.socket_path).unwrap();
+    let server_state = Arc::clone(&shared);
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        handle_connection(stream, server_state).unwrap();
+    });
+    let stream = UnixStream::connect(&config.socket_path).unwrap();
+    let read_stream = stream.try_clone().unwrap();
+    read_stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    let mut writer = BufWriter::new(stream);
+    let register = WrapperToDaemon::Register {
+        agent_type: "claude".to_string(),
+        name: Some("parent-068".to_string()),
+        host: Some("test".to_string()),
+        transport: Some("acp".to_string()),
+        channel: ChannelReport::Known("unix".to_string()),
+        mode: Some(PresenceMode::Acp),
+        location: None,
+        os: Some("Linux".to_string()),
+        instance_id: Some("instance-parent".to_string()),
+        domain: None,
+        turn_in_progress: false,
+        journal_available: Some(true),
+    };
+    writeln!(writer, "{}", encode(&register).unwrap()).unwrap();
+    writer.flush().unwrap();
+    let mut reader = BufReader::new(read_stream);
+    let mut first = String::new();
+    reader.read_line(&mut first).unwrap();
+    assert!(matches!(
+        decode(first.trim()).unwrap(),
+        DaemonToWrapper::Registered { .. }
+    ));
+    let mut codes = Vec::new();
+    for _ in 0..2 {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        match decode(line.trim()).unwrap() {
+            DaemonToWrapper::DelegatedRuntimeEvent { event } => {
+                codes.push((event.cursor, event.code))
+            }
+            other => panic!("rejeu runtime attendu, reçu {other:?}"),
+        }
+    }
+    assert_eq!(
+        codes
+            .iter()
+            .map(|(_, code)| code.as_str())
+            .collect::<Vec<_>>(),
+        vec!["unsupported_provider_request", "provider_failed"]
+    );
+    assert!(codes[0].0 < codes[1].0);
+    drop(reader);
+    drop(writer);
+    server.join().unwrap();
+    drop(shared);
+    let _ = std::fs::remove_file(config.socket_path);
+    let _ = std::fs::remove_file(config.db_path);
+}
+
+#[cfg(test)]
+#[test]
+fn spec_068_enfant_sans_lien_ne_notifie_aucun_coordinateur() {
+    let (state, config) = presence_tests::state_with_registered_agent("spec-068-no-link");
+    let shared = Arc::new(Mutex::new(state));
+    assert!(matches!(
+        handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::DelegatedRuntimeEvent {
+                execution_id: "orphan-execution".to_string(),
+                kind: bridget_transport::protocol::DelegatedRuntimeEventKind::Warning,
+                code: "unsupported_provider_request".to_string(),
+                reference: format!("sha256:{}", "f".repeat(64)),
+            },
+            &shared
+        ),
+        Some(DaemonToWrapper::Nack { .. })
+    ));
+    assert!(
+        shared
+            .lock()
+            .unwrap()
+            .fleet
+            .delegated_runtime_events_for_parent("instance-1")
+            .unwrap()
+            .is_empty()
+    );
+    drop(shared);
     let _ = std::fs::remove_file(config.db_path);
 }
