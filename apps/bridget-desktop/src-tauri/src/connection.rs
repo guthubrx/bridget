@@ -423,6 +423,7 @@ mod tests {
         ConnectionProfile::Local {
             id: "local".into(),
             label: "Ce Mac".into(),
+            host: "127.0.0.1".into(),
             relay_port: 17888,
             capabilities: vec![ProfileCapability::Ui],
         }

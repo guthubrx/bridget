@@ -72,8 +72,8 @@ US5 ne crée pas de navigateur: elle prouve que la frontière future reste docum
 **Critère indépendant** : un profil local joignable devient `connected` sans enfant SSH; un port absent signale une erreur relais, pas une erreur SSH.
 
 - [x] T029 [US4] Ajouter dans `apps/bridget-desktop/src-tauri/src/connection.rs` les tests de connexion locale et de séparation d'erreurs `relay_unavailable` versus `ssh_unavailable`.
-- [x] T030 [US4] Implémenter dans `apps/bridget-desktop/src-tauri/src/connection.rs` le chemin local direct et son contrôle HTTP, sans découverte SSH ni création de tunnel.
-- [x] T031 [US4] Mettre à jour `apps/bridget-desktop/ui/app.js` et `apps/bridget-desktop/ui/theme.css` pour présenter clairement le type local et l'état du relais local.
+- [x] T030 [US4] Implémenter dans `apps/bridget-desktop/src-tauri/src/connection.rs` le chemin de relais direct et son contrôle HTTP, sans découverte SSH ni création de tunnel.
+- [x] T031 [US4] Mettre à jour `apps/bridget-desktop/ui/app.js` et `apps/bridget-desktop/ui/theme.css` pour présenter clairement le type de relais direct et son état.
 
 ## Phase 7 - User Story 5 - Préserver la future capacité navigateur (P3 documentaire)
 
@@ -91,6 +91,7 @@ US5 ne crée pas de navigateur: elle prouve que la frontière future reste docum
 - [ ] T036 Exécuter les scénarios opérateur de `specs/074-bridget-desktop/quickstart.md` avec cartae.app et un faux serveur, mesurer un ajout distant sans secret en moins de trois minutes, vérifier tout le parcours clavier, puis consigner commandes, résultats et éléments macOS vérifiés dans `specs/074-bridget-desktop/evidence/validation.md`.
 - [x] T037 Construire sur macOS avec `cargo build --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml --release` puis `cargo tauri build --config apps/bridget-desktop/src-tauri/tauri.conf.json`, consigner le chemin du paquet ou l'obstacle environnemental vérifiable dans `specs/074-bridget-desktop/evidence/macos-package.md`.
 - [x] T038 Mettre à jour `specs/074-bridget-desktop/spec.md`, `specs/074-bridget-desktop/quickstart.md` et `specs/074-bridget-desktop/implementation.md` avec les preuves réelles, les limites résiduelles et le statut exact de la SPEC.
+- [x] T039 Correctif d'acceptation : activer explicitement l'API globale Tauri requise par la coque statique, renommer le profil local en relais Bridget direct avec hôte loopback et port, demander son jeton uniquement pour la connexion en mémoire, et réaligner l'habillage sur `crates/bridget-daemon/assets/ui/theme.css`.
 
 ## Ordre d'implémentation
 

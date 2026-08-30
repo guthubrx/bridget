@@ -88,6 +88,14 @@
 - Qualité : `cargo test -p bridget-daemon` a terminé avec 676 tests passants et 7 ignorés. La suite Desktop termine avec 30 tests passants.
 - Paquet : Bridget Desktop 0.1.0 a été compilé sur macOS, signé ad hoc et installé dans `/Users/moi/Applications/Bridget Desktop 0.1.0.app`. Les détails et la limite Gatekeeper sont dans `evidence/macos-package.md`.
 
+### T039 - Correctif d'acceptation du client macOS
+
+- Statut : Complété.
+- Cause : la coque HTML lit volontairement `window.__TAURI__.core.invoke`, mais la configuration Tauri n'activait pas `app.withGlobalTauri`. Dans l'application native, elle se croyait donc ouverte dans un navigateur.
+- Correctif : `withGlobalTauri` est activé explicitement. Le type visible « Relais Bridget direct » accepte `127.0.0.1:port` ou `localhost:port` pour un tunnel déjà existant. Son jeton est demandé à la connexion, reste en mémoire dans la session et n'entre jamais dans le profil persistant.
+- Présentation : le client réutilise désormais la feuille de style fondatrice de l'UI Bridget, complétée par une coque Desktop compacte plutôt qu'une identité visuelle indépendante.
+- Vérification : 30 tests Desktop passent, le build macOS et la vérification de signature ad hoc passent avant installation.
+
 ## Etat final
 
 L'implémentation est terminée et les preuves automatisées sont présentes. Il reste seulement la validation graphique manuelle d'acceptation listée dans `quickstart.md` avant de déclarer la SPEC entièrement acceptée par l'opérateur.

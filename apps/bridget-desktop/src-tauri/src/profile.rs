@@ -24,6 +24,8 @@ pub enum ConnectionProfile {
     Local {
         id: String,
         label: String,
+        #[serde(default = "default_loopback_host")]
+        host: String,
         relay_port: u16,
         #[serde(default)]
         capabilities: Vec<ProfileCapability>,
@@ -208,7 +210,9 @@ impl ConnectionProfile {
             Self::Ssh {
                 user, host, port, ..
             } => format!("SSH {user}@{host}:{port}"),
-            Self::Local { relay_port, .. } => format!("local 127.0.0.1:{relay_port}"),
+            Self::Local {
+                host, relay_port, ..
+            } => format!("direct {host}:{relay_port}"),
         }
     }
 
@@ -233,7 +237,10 @@ impl ConnectionProfile {
                     validate_host_fingerprint(fingerprint)?;
                 }
             }
-            Self::Local { relay_port, .. } => {
+            Self::Local {
+                host, relay_port, ..
+            } => {
+                validate_direct_host(host)?;
                 validate_port(*relay_port, "Le port du relais local")?;
             }
         }
@@ -256,6 +263,7 @@ pub enum ProfileDraft {
     },
     Local {
         label: String,
+        host: String,
         relay_port: u16,
     },
 }
@@ -280,9 +288,14 @@ impl ProfileDraft {
                 host_fingerprint: None,
                 capabilities: vec![ProfileCapability::Ui],
             },
-            Self::Local { label, relay_port } => ConnectionProfile::Local {
+            Self::Local {
+                label,
+                host,
+                relay_port,
+            } => ConnectionProfile::Local {
                 id,
                 label,
+                host,
                 relay_port,
                 capabilities: vec![ProfileCapability::Ui],
             },
@@ -331,6 +344,21 @@ fn validate_host(value: &str) -> Result<(), ProfileValidationError> {
         ));
     }
     Ok(())
+}
+
+fn default_loopback_host() -> String {
+    "127.0.0.1".into()
+}
+
+fn validate_direct_host(value: &str) -> Result<(), ProfileValidationError> {
+    validate_host(value)?;
+    if matches!(value, "127.0.0.1" | "localhost") {
+        Ok(())
+    } else {
+        Err(ProfileValidationError::new(
+            "Un relais Bridget direct doit être joint par 127.0.0.1 ou localhost. Ouvrez d'abord un tunnel si le daemon est distant.",
+        ))
+    }
 }
 
 fn validate_port(value: u16, label: &str) -> Result<(), ProfileValidationError> {
@@ -408,16 +436,17 @@ mod tests {
     }
 
     #[test]
-    fn les_champs_ssh_sont_refuses_dans_un_profil_local_par_le_modele() {
+    fn un_relais_direct_n_emporte_ni_identite_ssh_ni_empreinte() {
         let local = ConnectionProfile::Local {
             id: "poste".into(),
             label: "Ce Mac".into(),
+            host: "127.0.0.1".into(),
             relay_port: 17888,
             capabilities: vec![ProfileCapability::Ui],
         };
         local.validate().expect("profil local valide");
         let json = serde_json::to_string(&local).expect("sérialisation");
-        assert!(!json.contains("host"));
+        assert!(json.contains("127.0.0.1"));
         assert!(!json.contains("identity"));
         assert!(!json.contains("fingerprint"));
     }
@@ -433,6 +462,7 @@ mod tests {
         let dangerous = ConnectionProfile::Local {
             id: "danger".into(),
             label: "-----BEGIN PRIVATE KEY-----".into(),
+            host: "127.0.0.1".into(),
             relay_port: 17888,
             capabilities: vec![ProfileCapability::Ui],
         };
@@ -450,10 +480,11 @@ mod tests {
     }
 
     #[test]
-    fn le_brouillon_rejette_un_champ_ssh_dans_un_profil_local() {
+    fn le_brouillon_rejette_un_hote_direct_non_boucle_locale() {
         let result = serde_json::from_str::<super::ProfileDraft>(
-            r#"{"kind":"local","label":"Ce Mac","relay_port":17888,"host":"interdit"}"#,
+            r#"{"kind":"local","label":"Ce Mac","host":"cartae.app","relay_port":17888}"#,
         );
-        assert!(result.is_err());
+        let profile = result.expect("brouillon fermé").into_profile("direct");
+        assert!(profile.validate().is_err());
     }
 }

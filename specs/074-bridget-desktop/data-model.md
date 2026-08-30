@@ -14,7 +14,7 @@
 
 Invariants :
 
-- Un profil `local` n'a ni hôte SSH, ni compte, ni empreinte, ni identité.
+- Un profil de relais direct n'a ni compte SSH, ni empreinte, ni identité. Il contient un hôte loopback explicite (`127.0.0.1` ou `localhost`) et un port.
 - Un profil `ssh` a un hôte, un port valide, un compte et une identité gérée par le système ou explicitement référencée.
 - Aucun profil ne contient un mot de passe, le contenu d'une clé, un jeton UI, un cookie ou un corps de message.
 - Un changement d'empreinte est une rupture de confiance et bloque la session jusqu'à décision explicite.
@@ -26,7 +26,7 @@ Invariants :
 | `profile_id` | origine propriétaire de la session |
 | `state` | état public de connexion |
 | `endpoint` | port et jeton éphémères, mémoire seulement |
-| `tunnel_handle` | enfant SSH, absent pour le local |
+| `tunnel_handle` | enfant SSH, absent pour le relais direct |
 | `last_error` | erreur redacted et catégorisée |
 | `retry_count` | nombre borné de tentatives visibles |
 
@@ -35,7 +35,7 @@ Invariants :
 Transitions interdites :
 
 - `connected` ne peut pas être atteint depuis un simple processus SSH vivant : le relais doit répondre.
-- Une session locale ne passe jamais par `connecting_ssh`.
+- Une session de relais direct ne passe jamais par `connecting_ssh`.
 - Une session fermée n'émet plus de notification ni de message de l'origine concernée.
 
 ## Panneau

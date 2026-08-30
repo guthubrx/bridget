@@ -8,7 +8,8 @@ Le paquet a été produit sur le Mac Apple Silicon avec Rustup stable et Cargo :
 
 ```text
 /Users/moi/.cargo/bin/cargo test --manifest-path <copie-de-validation>/bridget-desktop/src-tauri/Cargo.toml
-/Users/moi/.cargo/bin/cargo tauri build --config tauri.conf.json
+/Users/moi/.cargo/bin/cargo tauri build --bundles app
+/Users/moi/.cargo/bin/cargo tauri bundle --bundles app --no-sign
 ```
 
 Les 30 tests macOS ont réussi avant le bundle. Le bundle `.app` mesure environ 12 Mio.
@@ -20,7 +21,9 @@ Les 30 tests macOS ont réussi avant le bundle. Le bundle `.app` mesure environ 
 - Identifiant : `app.cartae.bridget-desktop`.
 - Version : `0.1.0`.
 - Signature : ad hoc locale, validée par `codesign --verify --deep --strict`.
-- SHA-256 du binaire : `53a75952ee746c37a51b20303e0bbf59d14bed6727a9df9b7c96c59ec4f30492`.
+- SHA-256 du binaire, après correctif d'acceptation : `9e62f537f3d630f7203abe5c2c9ff185859cca960b976cb7e02f8b25620a5925`.
+
+Le paquet a été reconstruit après l'activation explicite de `app.withGlobalTauri`, puis signé ad hoc et contrôlé avant copie dans le répertoire Applications.
 
 ## Limite de distribution
 

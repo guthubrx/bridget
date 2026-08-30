@@ -305,6 +305,7 @@ pub fn run() {
         app: tauri::AppHandle,
         state: State<'_, DesktopState>,
         profile_id: String,
+        relay_token: Option<String>,
     ) -> Result<ConnectionStatus, String> {
         let profile = state
             .profiles
@@ -317,7 +318,16 @@ pub fn run() {
             .ok_or_else(|| "Profil introuvable.".to_owned())?;
         close_panel_for_profile(&app, &state, &profile_id)?;
         if profile.is_local() {
-            let endpoint = discover_local_endpoint().map_err(as_message)?;
+            let relay_port = match &profile {
+                ConnectionProfile::Local { relay_port, .. } => *relay_port,
+                ConnectionProfile::Ssh { .. } => unreachable!(),
+            };
+            let endpoint = match relay_token {
+                Some(token) => {
+                    crate::profile::RelayEndpoint::new(relay_port, token).map_err(as_message)?
+                }
+                None => discover_local_endpoint().map_err(as_message)?,
+            };
             let mut probe = HttpRelayProbe;
             let session = connect_local(&profile, endpoint, &mut probe).map_err(as_message)?;
             let status = ConnectionStatus::from_session(&session);

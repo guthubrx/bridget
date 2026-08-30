@@ -1,5 +1,5 @@
 const elements = {
-  add: document.querySelector("#add-profile"), dialog: document.querySelector("#profile-dialog"), close: document.querySelector("#close-dialog"), cancel: document.querySelector("#cancel-profile"), form: document.querySelector("#profile-form"), list: document.querySelector("#profiles-list"), empty: document.querySelector("#empty-state"), status: document.querySelector("#app-status"), connectionStatus: document.querySelector("#connection-status"), showProfiles: document.querySelector("#show-profiles"), activePanels: document.querySelector("#active-panels"), loadError: document.querySelector("#load-error"), formError: document.querySelector("#form-error"), title: document.querySelector("#profile-dialog-title"), id: document.querySelector("#profile-id"), kind: document.querySelector("#profile-kind"), label: document.querySelector("#profile-label"), host: document.querySelector("#profile-host"), port: document.querySelector("#profile-port"), user: document.querySelector("#profile-user"), sshFields: document.querySelector("#ssh-fields"), localPortField: document.querySelector("#local-port-field"), localPort: document.querySelector("#profile-local-port"), identityFileField: document.querySelector("#identity-file-field"), identityFile: document.querySelector("#profile-identity-file"),
+  add: document.querySelector("#add-profile"), dialog: document.querySelector("#profile-dialog"), close: document.querySelector("#close-dialog"), cancel: document.querySelector("#cancel-profile"), form: document.querySelector("#profile-form"), list: document.querySelector("#profiles-list"), empty: document.querySelector("#empty-state"), status: document.querySelector("#app-status"), connectionStatus: document.querySelector("#connection-status"), showProfiles: document.querySelector("#show-profiles"), activePanels: document.querySelector("#active-panels"), loadError: document.querySelector("#load-error"), formError: document.querySelector("#form-error"), title: document.querySelector("#profile-dialog-title"), id: document.querySelector("#profile-id"), kind: document.querySelector("#profile-kind"), label: document.querySelector("#profile-label"), host: document.querySelector("#profile-host"), port: document.querySelector("#profile-port"), user: document.querySelector("#profile-user"), sshFields: document.querySelector("#ssh-fields"), directFields: document.querySelector("#direct-fields"), directHost: document.querySelector("#profile-direct-host"), directPort: document.querySelector("#profile-direct-port"), directTokenDialog: document.querySelector("#direct-token-dialog"), directTokenForm: document.querySelector("#direct-token-form"), directToken: document.querySelector("#direct-token"), cancelDirectToken: document.querySelector("#cancel-direct-token"), identityFileField: document.querySelector("#identity-file-field"), identityFile: document.querySelector("#profile-identity-file"),
 };
 let profiles = [];
 const connectionStates = new Map();
@@ -9,7 +9,7 @@ function announce(message) { elements.status.textContent = message; }
 function visibleError(target, error) { target.textContent = error instanceof Error ? error.message : String(error); target.hidden = false; }
 function clearError(target) { target.textContent = ""; target.hidden = true; }
 function escapeHtml(value) { const element = document.createElement("span"); element.textContent = value; return element.innerHTML; }
-function profileOrigin(profile) { return profile.kind === "ssh" ? `SSH ${profile.user}@${profile.host}:${profile.port}` : `Local 127.0.0.1:${profile.relay_port}`; }
+function profileOrigin(profile) { return profile.kind === "ssh" ? `SSH ${profile.user}@${profile.host}:${profile.port}` : `Direct ${profile.host}:${profile.relay_port}`; }
 function profileConnection(profile) { return connectionStates.get(profile.id)?.state ?? "disconnected"; }
 function connectionDescription(profile) { const state = profileConnection(profile); if (state === "connected") return "Relais vérifié"; if (state === "reconnecting") return "Reconnexion du tunnel"; if (state === "failed") return "Tunnel interrompu - réessayez explicitement"; if (state === "checking_relay") return "Vérification du relais"; return "Non connecté"; }
 function renderActivePanels() {
@@ -17,7 +17,7 @@ function renderActivePanels() {
   for (const profileId of openPanelProfiles) {
     const profile = profiles.find((candidate) => candidate.id === profileId); if (!profile) continue;
     const badge = document.createElement("span"); badge.className = "active-panel-origin";
-    badge.textContent = `${profile.label} - ${profile.kind === "ssh" ? "SSH" : "local"}`;
+    badge.textContent = `${profile.label} - ${profile.kind === "ssh" ? "SSH" : "direct"}`;
     elements.activePanels.append(badge);
   }
 }
@@ -27,17 +27,17 @@ function renderProfiles() {
     const item = document.createElement("li"); item.className = "profile-card";
     const connected = profileConnection(profile) === "connected";
     const action = connected ? `<button type="button" data-action="open" data-profile-id="${escapeHtml(profile.id)}">Ouvrir le relais</button><button type="button" class="secondary" data-action="disconnect" data-profile-id="${escapeHtml(profile.id)}">Déconnecter</button>` : `<button type="button" data-action="connect" data-profile-id="${escapeHtml(profile.id)}">${profileConnection(profile) === "failed" ? "Réessayer" : "Connecter"}</button>`;
-    item.innerHTML = `<div><p class="profile-kind">${profile.kind === "ssh" ? "SSH" : "LOCAL"}</p><h3>${escapeHtml(profile.label)}</h3><p class="profile-origin">${escapeHtml(profileOrigin(profile))}</p><p class="connection-badge" data-state="${escapeHtml(profileConnection(profile))}">${escapeHtml(connectionDescription(profile))}</p></div><div class="profile-actions">${action}<button type="button" class="secondary" data-action="edit" data-profile-id="${escapeHtml(profile.id)}">Modifier</button><button type="button" class="danger" data-action="delete" data-profile-id="${escapeHtml(profile.id)}">Retirer</button></div>`;
+    item.innerHTML = `<div><p class="profile-kind">${profile.kind === "ssh" ? "SSH" : "DIRECT"}</p><h3>${escapeHtml(profile.label)}</h3><p class="profile-origin">${escapeHtml(profileOrigin(profile))}</p><p class="connection-badge" data-state="${escapeHtml(profileConnection(profile))}">${escapeHtml(connectionDescription(profile))}</p></div><div class="profile-actions">${action}<button type="button" class="secondary" data-action="edit" data-profile-id="${escapeHtml(profile.id)}">Modifier</button><button type="button" class="danger" data-action="delete" data-profile-id="${escapeHtml(profile.id)}">Retirer</button></div>`;
     elements.list.append(item);
   }
 }
 async function refreshProfiles() { clearError(elements.loadError); try { profiles = await invoke("profiles_list"); renderProfiles(); announce(`${profiles.length} profil${profiles.length > 1 ? "s" : ""} chargé${profiles.length > 1 ? "s" : ""}.`); } catch (error) { visibleError(elements.loadError, error); } }
 function selectedIdentitySource() { return document.querySelector("input[name='identity-source']:checked")?.value; }
-function syncFormKind() { const ssh = elements.kind.value === "ssh"; elements.sshFields.hidden = !ssh; elements.localPortField.hidden = ssh; elements.host.required = ssh; elements.user.required = ssh; elements.port.required = ssh; const file = selectedIdentitySource() === "file"; elements.identityFileField.hidden = !ssh || !file; elements.identityFile.required = ssh && file; }
-function resetForm(profile = null) { elements.form.reset(); elements.id.value = profile?.id ?? ""; elements.title.textContent = profile ? "Modifier un serveur" : "Ajouter un serveur"; elements.kind.value = profile?.kind ?? "ssh"; elements.label.value = profile?.label ?? ""; elements.host.value = profile?.host ?? ""; elements.port.value = profile?.port ?? 22; elements.user.value = profile?.user ?? ""; elements.localPort.value = profile?.relay_port ?? 17888; const source = profile?.identity?.source ?? "agent"; document.querySelector(`input[name='identity-source'][value='${source}']`).checked = true; elements.identityFile.value = profile?.identity?.path ?? ""; syncFormKind(); clearError(elements.formError); }
+function syncFormKind() { const ssh = elements.kind.value === "ssh"; elements.sshFields.hidden = !ssh; elements.directFields.hidden = ssh; elements.host.required = ssh; elements.user.required = ssh; elements.port.required = ssh; elements.directHost.required = !ssh; elements.directPort.required = !ssh; const file = selectedIdentitySource() === "file"; elements.identityFileField.hidden = !ssh || !file; elements.identityFile.required = ssh && file; }
+function resetForm(profile = null) { elements.form.reset(); elements.id.value = profile?.id ?? ""; elements.title.textContent = profile ? "Modifier un serveur" : "Ajouter un serveur"; elements.kind.value = profile?.kind ?? "ssh"; elements.label.value = profile?.label ?? ""; elements.host.value = profile?.host ?? ""; elements.port.value = profile?.port ?? 22; elements.user.value = profile?.user ?? ""; elements.directHost.value = profile?.host ?? "127.0.0.1"; elements.directPort.value = profile?.relay_port ?? 17888; const source = profile?.identity?.source ?? "agent"; document.querySelector(`input[name='identity-source'][value='${source}']`).checked = true; elements.identityFile.value = profile?.identity?.path ?? ""; syncFormKind(); clearError(elements.formError); }
 function openProfileDialog(profile = null) { resetForm(profile); elements.dialog.showModal(); window.requestAnimationFrame(() => elements.label.focus()); }
 function closeProfileDialog() { elements.dialog.close(); }
-function makeDraft() { if (elements.kind.value === "local") return { kind: "local", label: elements.label.value.trim(), relay_port: Number(elements.localPort.value) }; const identity = selectedIdentitySource() === "file" ? { source: "file", path: elements.identityFile.value.trim() } : { source: "agent" }; return { kind: "ssh", label: elements.label.value.trim(), host: elements.host.value.trim(), port: Number(elements.port.value), user: elements.user.value.trim(), identity }; }
+function makeDraft() { if (elements.kind.value === "local") return { kind: "local", label: elements.label.value.trim(), host: elements.directHost.value.trim(), relay_port: Number(elements.directPort.value) }; const identity = selectedIdentitySource() === "file" ? { source: "file", path: elements.identityFile.value.trim() } : { source: "agent" }; return { kind: "ssh", label: elements.label.value.trim(), host: elements.host.value.trim(), port: Number(elements.port.value), user: elements.user.value.trim(), identity }; }
 async function saveProfile(event) { event.preventDefault(); clearError(elements.formError); if (!elements.form.reportValidity()) return; try { await invoke("profile_save", { profile_id: elements.id.value || null, draft: makeDraft() }); closeProfileDialog(); await refreshProfiles(); announce("Profil enregistré."); } catch (error) { visibleError(elements.formError, error); } }
 async function deleteProfile(profile) { if (!window.confirm(`Retirer le profil « ${profile.label} » ? Cette action ferme sa future connexion éventuelle.`)) return; try { await invoke("profile_delete", { profile_id: profile.id, confirmed: true }); await refreshProfiles(); announce(`Profil ${profile.label} retiré.`); } catch (error) { visibleError(elements.loadError, error); } }
 async function verifyHostIdentity(profile) {
@@ -57,12 +57,25 @@ async function openPanel(profile) {
   document.body.classList.add("panel-view"); elements.showProfiles.hidden = false; renderActivePanels();
   setConnectionMessage(`${profile.label} est affiché dans un panneau local isolé.`);
 }
+function requestDirectToken() {
+  elements.directToken.value = "";
+  elements.directTokenDialog.showModal();
+  return new Promise((resolve) => {
+    const finish = (value) => { elements.directTokenDialog.close(); resolve(value); };
+    elements.directTokenForm.onsubmit = (event) => { event.preventDefault(); if (elements.directTokenForm.reportValidity()) finish(elements.directToken.value); };
+    elements.cancelDirectToken.onclick = () => finish(null);
+    elements.directTokenDialog.oncancel = () => finish(null);
+    window.requestAnimationFrame(() => elements.directToken.focus());
+  });
+}
 async function connectProfile(profile) {
   clearError(elements.loadError);
   try {
     setConnectionMessage(`Vérification de ${profile.label}…`);
     await verifyHostIdentity(profile);
-    const status = await invoke("connection_open", { profile_id: profile.id });
+    const relayToken = profile.kind === "local" ? await requestDirectToken() : null;
+    if (profile.kind === "local" && !relayToken) { setConnectionMessage(`Connexion à ${profile.label} annulée.`); return; }
+    const status = await invoke("connection_open", { profile_id: profile.id, relay_token: relayToken });
     connectionStates.set(profile.id, status);
     renderProfiles();
     await openPanel(profile);

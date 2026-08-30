@@ -16,6 +16,7 @@ fn une_session_fermee_ne_redevient_pas_active_et_l_autre_reste_intacte() {
     let profile = ConnectionProfile::Local {
         id: "first".into(),
         label: "Premier".into(),
+        host: "127.0.0.1".into(),
         relay_port: 17888,
         capabilities: vec![ProfileCapability::Ui],
     };
