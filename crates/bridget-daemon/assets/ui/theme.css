@@ -732,40 +732,155 @@ body:has(.agent-pane-resizer[data-dragging="true"]) {
   white-space: nowrap;
 }
 
-.agent-row__tooltip {
-  position: absolute;
-  z-index: 8;
-  top: calc(100% + 0.3rem);
-  left: 3.55rem;
-  width: min(25rem, calc(100vw - 2.2rem));
-  max-height: 10rem;
-  padding: 0.65rem 0.72rem;
+.agent-identity-card {
+  position: fixed;
+  z-index: 30;
+  width: min(21.5rem, calc(100vw - 1.5rem));
+  max-width: 22.5rem;
+  max-height: calc(100dvh - 1.5rem);
+  padding: 0.9rem 0.95rem;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-width: none;
-  border-radius: var(--radius-medium);
-  background: var(--surface-hover);
+  border-radius: 1rem;
+  background: #242424;
   color: var(--text-primary);
-  font-size: 0.78rem;
-  line-height: 1.48;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-0.2rem);
-  visibility: hidden;
-  transition: opacity 120ms ease, transform 120ms ease, visibility 0s linear 120ms;
+  font-size: 0.8rem;
+  line-height: 1.35;
 }
 
-.agent-row__tooltip::-webkit-scrollbar {
-  width: 0;
-  height: 0;
+.agent-identity-card__heading,
+.agent-identity-card__runtime {
+  display: flex;
+  align-items: center;
 }
 
-.agent-row:hover .agent-row__tooltip,
-.agent-row:focus-visible .agent-row__tooltip {
-  opacity: 1;
-  transform: translateY(0);
-  visibility: visible;
-  transition-delay: 0s;
+.agent-identity-card__heading {
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.agent-identity-card__agent,
+.agent-identity-card__brand {
+  display: grid;
+  min-width: 0;
+}
+
+.agent-identity-card__name,
+.agent-identity-card__product {
+  overflow: hidden;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-identity-card__name {
+  font-size: 0.94rem;
+}
+
+.agent-identity-card__presence,
+.agent-identity-card__publisher,
+.agent-identity-card__label {
+  color: var(--text-secondary);
+}
+
+.agent-identity-card__presence::before {
+  display: inline-block;
+  width: 0.42rem;
+  height: 0.42rem;
+  margin-right: 0.35rem;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  content: "";
+  vertical-align: 0.05rem;
+}
+
+.agent-identity-card__agent[data-state="busy"] .agent-identity-card__presence::before {
+  background: var(--activity-pending);
+}
+
+.agent-identity-card__agent[data-state="connected"] .agent-identity-card__presence::before {
+  background: var(--activity-success);
+}
+
+.agent-identity-card__agent[data-state="stopped"] .agent-identity-card__presence::before,
+.agent-identity-card__agent[data-state="unreachable"] .agent-identity-card__presence::before {
+  background: var(--activity-error);
+}
+
+.agent-identity-card__mode {
+  flex: 0 0 auto;
+  padding: 0.26rem 0.48rem;
+  border-radius: 99px;
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+  font-weight: 760;
+  letter-spacing: 0.055em;
+}
+
+.agent-identity-card__mode[data-mode="flux"] {
+  background: color-mix(in srgb, var(--accent) 20%, var(--surface-raised));
+  color: #b9cdff;
+}
+
+.agent-identity-card__mode[data-mode="tmux"] {
+  color: var(--text-primary);
+}
+
+.agent-identity-card__runtime {
+  gap: 0.7rem;
+  margin-top: 0.85rem;
+}
+
+.agent-identity-card__logo,
+.agent-identity-card__unknown-mark {
+  flex: 0 0 auto;
+  width: 1.75rem;
+  height: 1.75rem;
+}
+
+.agent-identity-card__logo {
+  display: block;
+  object-fit: contain;
+}
+
+.agent-identity-card__unknown-mark {
+  color: var(--text-secondary);
+  font-size: 1.35rem;
+  line-height: 1.75rem;
+  text-align: center;
+}
+
+.agent-identity-card__product {
+  font-size: 0.9rem;
+}
+
+.agent-identity-card__facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.28rem 0.8rem;
+  margin: 0.85rem 0 0;
+}
+
+.agent-identity-card__label,
+.agent-identity-card__value {
+  margin: 0;
+}
+
+.agent-identity-card__value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-identity-card__excerpt {
+  display: -webkit-box;
+  margin: 0.8rem 0 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.42;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .stopped-agents {
@@ -1713,8 +1828,4 @@ code {
   margin-top: 0.14rem !important;
   font-size: 0.82rem;
   line-height: 1.35;
-}
-
-.agent-pane .agent-row__tooltip {
-  left: 3.8rem;
 }

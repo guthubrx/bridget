@@ -89,6 +89,93 @@
         assert.equal(api.formatAgentRelativeTime(1_000_000 - 8 * 86_400, 1_000_000), "la semaine dernière");
       });
 
+      test("identite_runtime_repose_sur_les_faits_et_jamais_sur_le_nom", () => {
+        const cursor = api.normalizeAgentRow({
+          name: "agent-claude-flux",
+          type: "cursor",
+          transport: "acp",
+          mode: "acp",
+          model: "claude-opus-5",
+          effort: "high",
+        });
+        assert.deepEqual(api.runtimeIdentity(cursor.type), {
+          key: "cursor",
+          product: "Cursor",
+          publisher: "Anysphere",
+          logo: "/providers/cursor.svg",
+        });
+        assert.equal(api.executionModeIdentity(cursor.mode, cursor.transport).label, "FLUX");
+        assert.equal(cursor.model, "claude-opus-5");
+        assert.equal(cursor.effort, "high");
+        assert.deepEqual(api.identityCardData(cursor, 10_000), {
+          name: "agent-claude-flux",
+          presence: "État inconnu",
+          state: "unknown",
+          runtime: api.runtimeIdentity("cursor"),
+          mode: api.executionModeIdentity("acp", "acp"),
+          transport: "acp",
+          model: "claude-opus-5",
+          effort: "high",
+          activity: "Activité inconnue",
+          excerpt: "",
+        });
+
+        const namedFlux = api.normalizeAgentRow({ name: "faux-flux", type: "custom" });
+        assert.equal(api.runtimeIdentity(namedFlux.type).key, "unknown");
+        assert.equal(api.executionModeIdentity(namedFlux.mode, namedFlux.transport).key, "unknown");
+      });
+
+      test("catalogue_runtime_et_mode_couvrent_la_matrice_attestee", () => {
+        assert.equal(api.runtimeIdentity("codex-terra").product, "Codex");
+        assert.equal(api.runtimeIdentity("claude-native").publisher, "Anthropic");
+        assert.equal(api.runtimeIdentity("gemini-cli").publisher, "Google");
+        assert.equal(api.runtimeIdentity("future-runtime").logo, null);
+        assert.equal(api.executionModeIdentity("tmux", "unix").label, "TMUX");
+        assert.equal(api.executionModeIdentity("acp", "acp").label, "FLUX");
+        assert.equal(api.executionModeIdentity("cli", "codex_app_server").label, "FLUX");
+        assert.equal(api.executionModeIdentity("cli", "claude_stream_json").label, "FLUX");
+        assert.equal(api.executionModeIdentity("cli", "unix").label, "MODE INCONNU");
+        assert.equal(api.executionModeIdentity(null, "codex_app_server").label, "MODE INCONNU");
+      });
+
+      test("position_fiche_identite_reste_dans_la_fenetre", () => {
+        assert.deepEqual(
+          api.identityCardPosition(
+            { left: 20, right: 300, top: 40, bottom: 100 },
+            { width: 320, height: 240 },
+            { width: 1280, height: 720 },
+          ),
+          { left: 312, top: 40, side: "right" },
+        );
+        assert.deepEqual(
+          api.identityCardPosition(
+            { left: 900, right: 1180, top: 620, bottom: 680 },
+            { width: 320, height: 240 },
+            { width: 1200, height: 700 },
+          ),
+          { left: 568, top: 440, side: "left" },
+        );
+      });
+
+      test("fiche_identite_est_globale_accessible_et_compacte", () => {
+        const source = fs.readFileSync(__filename, "utf8");
+        const css = fs.readFileSync(path.join(__dirname, "theme.css"), "utf8");
+        assert.match(source, /identityCard\.setAttribute\("role", "tooltip"\)/);
+        assert.match(source, /button\.setAttribute\("aria-describedby", identityCard\.id\)/);
+        assert.match(source, /event\.key !== "Escape"/);
+        assert.match(source, /documentRef\.body\.append\(identityCard\)/);
+        assert.match(source, /identityCard\.addEventListener\("mouseenter", clearIdentityCardClose\)/);
+        assert.match(source, /identityCard\.addEventListener\("mouseleave", scheduleIdentityCardClose\)/);
+        assert.match(source, /windowRef\.addEventListener\("resize", closeIdentityCardForViewportChange\)/);
+        assert.match(source, /windowRef\.addEventListener\("scroll", closeIdentityCardForViewportChange, true\)/);
+        assert.match(source, /const renderAgents = \(\) => \{\s*closeIdentityCard\(\)/);
+        const productive = source.slice(source.lastIndexOf("function createBridgetUi()"));
+        assert.doesNotMatch(productive, /agent-row__tooltip/);
+        assert.match(css, /\.agent-identity-card\s*\{[\s\S]*?max-width:\s*22\.5rem;/);
+        assert.match(css, /\.agent-identity-card__excerpt\s*\{[\s\S]*?-webkit-line-clamp:\s*2;/);
+        assert.doesNotMatch(css, /\.agent-row__tooltip/);
+      });
+
       test("propriete_agent_reste_visible_sans_alourdir_la_carte", () => {
         const agent = api.normalizeAgentRow({
           name: "enfant",
@@ -2476,6 +2563,12 @@
   const AGENT_PANE_MAX_WIDTH_PX = 560;
   const MIN_CONVERSATION_WIDTH_PX = 360;
   const AGENT_APPEARANCE_STORAGE_KEY = "bridget.ui.agent-appearance.v1";
+  const IDENTITY_CARD_GAP_PX = 12;
+  const IDENTITY_CARD_VIEWPORT_MARGIN_PX = 12;
+  const MANAGED_FLUX_TRANSPORTS = Object.freeze(new Set([
+    "codex_app_server",
+    "claude_stream_json",
+  ]));
   const AGENT_AVATAR_COLORS = Object.freeze([
     "#3f7fe0",
     "#4bafa0",
@@ -2500,6 +2593,39 @@
     pebble: "Galet",
   });
   const LOCAL_FORMATTERS = new Map();
+
+  const RUNTIME_CATALOG = Object.freeze({
+    codex: Object.freeze({
+      key: "codex",
+      product: "Codex",
+      publisher: "OpenAI",
+      logo: "/providers/openai.svg",
+    }),
+    claude: Object.freeze({
+      key: "claude",
+      product: "Claude Code",
+      publisher: "Anthropic",
+      logo: "/providers/claude.svg",
+    }),
+    cursor: Object.freeze({
+      key: "cursor",
+      product: "Cursor",
+      publisher: "Anysphere",
+      logo: "/providers/cursor.svg",
+    }),
+    gemini: Object.freeze({
+      key: "gemini",
+      product: "Gemini CLI",
+      publisher: "Google",
+      logo: "/providers/gemini.svg",
+    }),
+    unknown: Object.freeze({
+      key: "unknown",
+      product: "Inconnu",
+      publisher: "Éditeur inconnu",
+      logo: null,
+    }),
+  });
 
   function agentPaneWidthBounds(viewportWidth) {
     const viewport = Number(viewportWidth);
@@ -2624,6 +2750,97 @@
       day: "numeric",
       month: "short",
     }).format(date)}`;
+  }
+
+  function runtimeIdentity(agentType) {
+    const normalized = String(agentType || "").trim().toLowerCase();
+    if (normalized === "codex" || normalized.startsWith("codex-")) {
+      return { ...RUNTIME_CATALOG.codex };
+    }
+    if (normalized === "claude" || normalized === "claude-native") {
+      return { ...RUNTIME_CATALOG.claude };
+    }
+    if (normalized === "cursor") return { ...RUNTIME_CATALOG.cursor };
+    if (normalized === "gemini" || normalized === "gemini-cli") {
+      return { ...RUNTIME_CATALOG.gemini };
+    }
+    return { ...RUNTIME_CATALOG.unknown };
+  }
+
+  function executionModeIdentity(mode, transport) {
+    const normalizedMode = String(mode || "").trim().toLowerCase();
+    const normalizedTransport = String(transport || "").trim().toLowerCase();
+    if (normalizedMode === "tmux") {
+      return { key: "tmux", label: "TMUX", detail: "Session interactive" };
+    }
+    if (
+      normalizedMode === "acp"
+      || (normalizedMode === "cli" && MANAGED_FLUX_TRANSPORTS.has(normalizedTransport))
+    ) {
+      return { key: "flux", label: "FLUX", detail: "Session gérée" };
+    }
+    return { key: "unknown", label: "MODE INCONNU", detail: "Mode non attesté" };
+  }
+
+  function agentPresenceLabel(state) {
+    const visualState = agentVisualState(state);
+    const labels = {
+      busy: "En cours",
+      connected: "Connecté",
+      stopped: "Arrêté",
+      unreachable: "Injoignable",
+      unknown: "État inconnu",
+    };
+    return labels[visualState];
+  }
+
+  function identityCardData(agent, now = Date.now() / 1000) {
+    const normalized = normalizeAgentRow(agent);
+    const relativeActivity = formatAgentRelativeTime(normalized.last_message_at, now);
+    const providerActivity = normalized.provider_age_secs === null
+      ? "Activité inconnue"
+      : `Capacité vue il y a ${formatDuration(normalized.provider_age_secs * 1000)}`;
+    return {
+      name: normalized.name,
+      presence: agentPresenceLabel(normalized.connection_state),
+      state: agentVisualState(normalized.connection_state),
+      runtime: runtimeIdentity(normalized.type),
+      mode: executionModeIdentity(normalized.mode, normalized.transport),
+      transport: normalized.transport || "Non attesté",
+      model: normalized.model,
+      effort: normalized.effort,
+      activity: relativeActivity || providerActivity,
+      excerpt: agentCardExcerpt(normalized.name, normalized.last_excerpt),
+    };
+  }
+
+  function identityCardPosition(triggerRect, cardRect, viewport) {
+    const width = Math.max(0, Number(cardRect && cardRect.width) || 0);
+    const height = Math.max(0, Number(cardRect && cardRect.height) || 0);
+    const viewportWidth = Math.max(0, Number(viewport && viewport.width) || 0);
+    const viewportHeight = Math.max(0, Number(viewport && viewport.height) || 0);
+    const rightCandidate = Number(triggerRect && triggerRect.right) + IDENTITY_CARD_GAP_PX;
+    const leftCandidate = Number(triggerRect && triggerRect.left) - IDENTITY_CARD_GAP_PX - width;
+    const fitsRight = rightCandidate + width <= viewportWidth - IDENTITY_CARD_VIEWPORT_MARGIN_PX;
+    const side = fitsRight ? "right" : "left";
+    const rawLeft = fitsRight ? rightCandidate : leftCandidate;
+    const left = Math.round(Math.max(
+      IDENTITY_CARD_VIEWPORT_MARGIN_PX,
+      Math.min(rawLeft, viewportWidth - width - IDENTITY_CARD_VIEWPORT_MARGIN_PX),
+    ));
+    const rawTop = Math.min(
+      Number(triggerRect && triggerRect.top) || 0,
+      (Number(triggerRect && triggerRect.bottom) || 0) - height,
+    );
+    const preferredTop = (Number(triggerRect && triggerRect.top) || 0) + height
+      <= viewportHeight - IDENTITY_CARD_VIEWPORT_MARGIN_PX
+      ? Number(triggerRect && triggerRect.top) || 0
+      : rawTop;
+    const top = Math.round(Math.max(
+      IDENTITY_CARD_VIEWPORT_MARGIN_PX,
+      Math.min(preferredTop, viewportHeight - height - IDENTITY_CARD_VIEWPORT_MARGIN_PX),
+    ));
+    return { left, top, side };
   }
 
   function createDraft(value = "", selectionStart = 0, selectionEnd = 0, focused = false) {
@@ -2983,10 +3200,23 @@
   }
 
   function normalizeAgentRow(agent) {
+    const mode = typeof (agent && agent.mode) === "string"
+      ? agent.mode.trim().toLowerCase()
+      : "";
     return {
       name: text(agent && agent.name, "agent inconnu"),
       type: text(agent && agent.type, "type inconnu"),
       host: text(agent && agent.host, "machine inconnue"),
+      transport: typeof (agent && agent.transport) === "string" && agent.transport.trim()
+        ? agent.transport.trim()
+        : null,
+      mode: ["tmux", "acp", "cli"].includes(mode) ? mode : null,
+      model: typeof (agent && agent.model) === "string" && agent.model.trim()
+        ? agent.model.trim()
+        : null,
+      effort: typeof (agent && agent.effort) === "string" && agent.effort.trim()
+        ? agent.effort.trim()
+        : null,
       state: text(agent && agent.state, "unknown"),
       connection_state: text(agent && agent.connection_state, text(agent && agent.state, "unknown")),
       provider_age_secs: Number.isInteger(agent && agent.provider_age_secs) && agent.provider_age_secs >= 0
@@ -4629,6 +4859,132 @@
       return node;
     };
 
+    const identityCard = documentRef.body ? make("div", "agent-identity-card") : null;
+    let identityCardTrigger = null;
+    let identityCardCloseTimer = null;
+    if (identityCard) {
+      identityCard.id = "agent-identity-card";
+      identityCard.hidden = true;
+      identityCard.setAttribute("role", "tooltip");
+      identityCard.setAttribute("aria-hidden", "true");
+      documentRef.body.append(identityCard);
+    }
+
+    const clearIdentityCardClose = () => {
+      if (!identityCardCloseTimer) return;
+      windowRef.clearTimeout(identityCardCloseTimer);
+      identityCardCloseTimer = null;
+    };
+
+    const closeIdentityCard = () => {
+      clearIdentityCardClose();
+      if (identityCardTrigger && typeof identityCardTrigger.removeAttribute === "function") {
+        identityCardTrigger.removeAttribute("aria-describedby");
+      }
+      identityCardTrigger = null;
+      if (!identityCard) return;
+      identityCard.hidden = true;
+      identityCard.setAttribute("aria-hidden", "true");
+    };
+
+    const scheduleIdentityCardClose = () => {
+      clearIdentityCardClose();
+      identityCardCloseTimer = windowRef.setTimeout(closeIdentityCard, 140);
+    };
+
+    const appendIdentityFact = (list, label, value) => {
+      if (!value) return;
+      list.append(
+        make("dt", "agent-identity-card__label", label),
+        make("dd", "agent-identity-card__value", value),
+      );
+    };
+
+    const renderIdentityCard = (agent) => {
+      if (!identityCard) return;
+      const data = identityCardData(agent);
+      const heading = make("div", "agent-identity-card__heading");
+      const agentBlock = make("div", "agent-identity-card__agent");
+      agentBlock.append(
+        make("strong", "agent-identity-card__name", data.name),
+        make("span", "agent-identity-card__presence", data.presence),
+      );
+      agentBlock.dataset.state = data.state;
+      const mode = make("span", "agent-identity-card__mode", data.mode.label);
+      mode.dataset.mode = data.mode.key;
+      heading.append(agentBlock, mode);
+
+      const runtime = make("div", "agent-identity-card__runtime");
+      const mark = data.runtime.logo
+        ? make("img", "agent-identity-card__logo")
+        : make("span", "agent-identity-card__unknown-mark", "?");
+      if (data.runtime.logo) {
+        mark.src = data.runtime.logo;
+        mark.alt = "";
+      }
+      mark.setAttribute("aria-hidden", "true");
+      const brand = make("span", "agent-identity-card__brand");
+      brand.append(
+        make("strong", "agent-identity-card__product", data.runtime.product),
+        make("span", "agent-identity-card__publisher", data.runtime.publisher),
+      );
+      runtime.append(mark, brand);
+
+      const facts = make("dl", "agent-identity-card__facts");
+      appendIdentityFact(facts, "Activité", data.activity);
+      appendIdentityFact(facts, "Transport", data.transport);
+      appendIdentityFact(facts, "Modèle", data.model);
+      appendIdentityFact(facts, "Effort", data.effort);
+
+      const children = [heading, runtime, facts];
+      if (data.excerpt) {
+        const excerpt = make("p", "agent-identity-card__excerpt", data.excerpt);
+        excerpt.setAttribute("aria-label", `Dernier message : ${data.excerpt}`);
+        children.push(excerpt);
+      }
+      identityCard.replaceChildren(...children);
+    };
+
+    const positionIdentityCard = () => {
+      if (!identityCard || !identityCardTrigger || identityCard.hidden) return;
+      if (
+        typeof identityCard.getBoundingClientRect !== "function"
+        || typeof identityCardTrigger.getBoundingClientRect !== "function"
+      ) return;
+      const position = identityCardPosition(
+        identityCardTrigger.getBoundingClientRect(),
+        identityCard.getBoundingClientRect(),
+        { width: windowRef.innerWidth, height: windowRef.innerHeight },
+      );
+      identityCard.style.left = `${position.left}px`;
+      identityCard.style.top = `${position.top}px`;
+      identityCard.dataset.side = position.side;
+    };
+
+    const openIdentityCard = (agent, button) => {
+      if (!identityCard) return;
+      clearIdentityCardClose();
+      if (identityCardTrigger && identityCardTrigger !== button) {
+        identityCardTrigger.removeAttribute("aria-describedby");
+      }
+      identityCardTrigger = button;
+      renderIdentityCard(agent);
+      identityCard.hidden = false;
+      identityCard.setAttribute("aria-hidden", "false");
+      button.setAttribute("aria-describedby", identityCard.id);
+      positionIdentityCard();
+    };
+
+    const closeIdentityCardForViewportChange = () => closeIdentityCard();
+    if (identityCard) {
+      identityCard.addEventListener("mouseenter", clearIdentityCardClose);
+      identityCard.addEventListener("mouseleave", scheduleIdentityCardClose);
+      if (typeof windowRef.addEventListener === "function") {
+        windowRef.addEventListener("resize", closeIdentityCardForViewportChange);
+        windowRef.addEventListener("scroll", closeIdentityCardForViewportChange, true);
+      }
+    }
+
     const timestamp = (at) => {
       return formatLocalTime(at);
     };
@@ -4820,17 +5176,25 @@
       const excerpt = agentCardExcerpt(agent.name, agent.last_excerpt);
       if (excerpt) {
         content.append(make("p", "agent-row__excerpt", excerpt));
-        const tooltip = make("span", "agent-row__tooltip", excerpt);
-        tooltip.setAttribute("aria-hidden", "true");
-        button.append(tooltip);
       }
       layout.append(content);
       button.append(layout);
+      button.addEventListener("mouseenter", () => openIdentityCard(agent, button));
+      button.addEventListener("mouseleave", scheduleIdentityCardClose);
+      button.addEventListener("focus", () => openIdentityCard(agent, button));
+      button.addEventListener("blur", scheduleIdentityCardClose);
+      button.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        closeIdentityCard();
+      });
       button.addEventListener("click", () => selectAgent(agent.name));
       return button;
     };
 
     const renderAgents = () => {
+      closeIdentityCard();
       const active = state.agents.filter((agent) => agent.state !== "stopped");
       const stopped = state.agents.filter((agent) => agent.state === "stopped");
       nodes.agentList.replaceChildren(...active.map(renderAgentButton));
@@ -5438,6 +5802,12 @@
     };
 
     const closeAll = () => {
+      closeIdentityCard();
+      if (identityCard && typeof windowRef.removeEventListener === "function") {
+        windowRef.removeEventListener("resize", closeIdentityCardForViewportChange);
+        windowRef.removeEventListener("scroll", closeIdentityCardForViewportChange, true);
+      }
+      if (identityCard && typeof identityCard.remove === "function") identityCard.remove();
       closeWatch();
       historyConnections.forEach((history) => history.close());
       historyConnections.clear();
@@ -5868,6 +6238,10 @@
     agentCardExcerpt,
     shouldShowAgentHost,
     formatAgentRelativeTime,
+    runtimeIdentity,
+    executionModeIdentity,
+    identityCardData,
+    identityCardPosition,
     agentVisualState,
     createAgentAvatar,
     createDraft,

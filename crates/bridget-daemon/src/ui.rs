@@ -66,6 +66,10 @@ const UI_SCRIPT: &[u8] = include_bytes!("../assets/ui/app.js");
 const UI_THEME: &[u8] = include_bytes!("../assets/ui/theme.css");
 const UI_MARKED: &[u8] = include_bytes!("../assets/ui/vendor/marked.min.js");
 const UI_PURIFY: &[u8] = include_bytes!("../assets/ui/vendor/purify.min.js");
+const UI_PROVIDER_OPENAI: &[u8] = include_bytes!("../assets/ui/providers/openai.svg");
+const UI_PROVIDER_CLAUDE: &[u8] = include_bytes!("../assets/ui/providers/claude.svg");
+const UI_PROVIDER_CURSOR: &[u8] = include_bytes!("../assets/ui/providers/cursor.svg");
+const UI_PROVIDER_GEMINI: &[u8] = include_bytes!("../assets/ui/providers/gemini.svg");
 
 #[derive(Debug, Clone)]
 pub struct UiRelayConfig {
@@ -633,6 +637,13 @@ struct UiAgentRowV1 {
     #[serde(rename = "type")]
     agent_type: String,
     host: String,
+    transport: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<PresenceMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<String>,
     state: &'static str,
     /// État de connexion public, distinct de l'exécution durable.
     connection_state: &'static str,
@@ -786,6 +797,18 @@ fn serve_connection(
                     UI_PURIFY,
                     if_none_match,
                 );
+            }
+            "/providers/openai.svg" => {
+                return write_asset(stream, "image/svg+xml", UI_PROVIDER_OPENAI, if_none_match);
+            }
+            "/providers/claude.svg" => {
+                return write_asset(stream, "image/svg+xml", UI_PROVIDER_CLAUDE, if_none_match);
+            }
+            "/providers/cursor.svg" => {
+                return write_asset(stream, "image/svg+xml", UI_PROVIDER_CURSOR, if_none_match);
+            }
+            "/providers/gemini.svg" => {
+                return write_asset(stream, "image/svg+xml", UI_PROVIDER_GEMINI, if_none_match);
             }
             _ => {}
         }
@@ -1303,6 +1326,10 @@ fn compose_agent_rows(
                 name: agent.name.clone(),
                 agent_type: agent.agent_type,
                 host: agent.host,
+                transport: agent.transport,
+                mode: agent.mode,
+                model: agent.model,
+                effort: agent.effort,
                 state: connection_state,
                 connection_state,
                 provider_age_secs: agent.last_seen_secs,
@@ -3723,6 +3750,10 @@ mod tests {
             "\"/theme.css\"",
             "\"/vendor/marked.min.js\"",
             "\"/vendor/purify.min.js\"",
+            "\"/providers/openai.svg\"",
+            "\"/providers/claude.svg\"",
+            "\"/providers/cursor.svg\"",
+            "\"/providers/gemini.svg\"",
         ] {
             assert!(
                 serve_body.contains(path),
@@ -3748,6 +3779,10 @@ mod tests {
     fn projection_ui_distingue_connexion_vitalite_tour_attente_file_et_propriete() {
         let mut active = agent_info("active", "busy");
         active.last_seen_secs = 5;
+        active.transport = "codex_app_server".to_string();
+        active.mode = Some(PresenceMode::Cli);
+        active.model = Some("gpt-5.6-terra".to_string());
+        active.effort = Some("xhigh".to_string());
         active.execution = Some(bridget_transport::protocol::ExecutionUiProjection {
             state: Some("running".to_string()),
             wait_state: None,
@@ -3779,6 +3814,10 @@ mod tests {
         let active = rows.iter().find(|row| row.name == "active").unwrap();
         assert_eq!(active.connection_state, "busy");
         assert_eq!(active.provider_age_secs, 5);
+        assert_eq!(active.transport, "codex_app_server");
+        assert_eq!(active.mode, Some(PresenceMode::Cli));
+        assert_eq!(active.model.as_deref(), Some("gpt-5.6-terra"));
+        assert_eq!(active.effort.as_deref(), Some("xhigh"));
         assert_eq!(active.turn_state.as_deref(), Some("running"));
         assert_eq!(active.continuation_mode.as_deref(), Some("reconstructed"));
         assert_eq!(active.progress_age_secs, Some(3));
@@ -3794,5 +3833,50 @@ mod tests {
         assert_eq!(waiting.connection_state, "alive");
         assert_eq!(waiting.turn_state.as_deref(), Some("waiting_approval"));
         assert_eq!(waiting.wait_state.as_deref(), Some("waiting_approval"));
+        assert_eq!(waiting.transport, "unix");
+        assert_eq!(waiting.mode, None);
+        assert_eq!(waiting.model, None);
+        assert_eq!(waiting.effort, None);
+    }
+
+    #[test]
+    fn logos_runtime_sont_servis_comme_assets_svg_revalides() {
+        for (path, expected) in [
+            ("/providers/openai.svg", UI_PROVIDER_OPENAI),
+            ("/providers/claude.svg", UI_PROVIDER_CLAUDE),
+            ("/providers/cursor.svg", UI_PROVIDER_CURSOR),
+            ("/providers/gemini.svg", UI_PROVIDER_GEMINI),
+        ] {
+            let (relay, address) = spawn_asset_relay();
+            let worker = thread::spawn(move || {
+                relay.serve_one().unwrap();
+                relay.serve_one().unwrap();
+            });
+            let (status, raw) = get_asset(address, path, None);
+            assert_eq!(status, 200, "{path}: {raw}");
+            assert_eq!(
+                header_value(&raw, "Content-Type").as_deref(),
+                Some("image/svg+xml")
+            );
+            assert_eq!(
+                header_value(&raw, "ETag").as_deref(),
+                Some(asset_etag(expected).as_str())
+            );
+            assert!(
+                header_value(&raw, "Cache-Control")
+                    .as_deref()
+                    .is_some_and(|value| value.split(',').any(|item| item.trim() == "no-cache")),
+                "{path} doit être revalidé"
+            );
+            assert_eq!(
+                raw.split("\r\n\r\n").nth(1).unwrap_or("").as_bytes(),
+                expected
+            );
+            let etag = header_value(&raw, "ETag").unwrap();
+            let (status, revalidated) = get_asset(address, path, Some(&etag));
+            worker.join().unwrap();
+            assert_eq!(status, 304, "{path}: {revalidated}");
+            assert_eq!(revalidated.split("\r\n\r\n").nth(1).unwrap_or("x"), "");
+        }
     }
 }
