@@ -287,9 +287,6 @@ pub fn connect_remote<T: RemoteTransport, P: RelayProbe>(
     transport: &mut T,
     probe: &mut P,
 ) -> Result<ConnectionSession, ConnectionError> {
-    if profile.is_local() {
-        return Err(ConnectionError::SshUnavailable);
-    }
     let mut session = ConnectionSession::disconnected(profile.id());
     if matches!(
         profile,
@@ -310,28 +307,6 @@ pub fn connect_remote<T: RemoteTransport, P: RelayProbe>(
         transport.close();
         return Err(error);
     }
-    session.set_endpoint(endpoint);
-    let _ = transition(&mut session, ConnectionState::Connected);
-    Ok(session)
-}
-
-pub fn connect_local<P: RelayProbe>(
-    profile: &crate::profile::ConnectionProfile,
-    endpoint: RelayEndpoint,
-    probe: &mut P,
-) -> Result<ConnectionSession, ConnectionError> {
-    let relay_port = match profile {
-        crate::profile::ConnectionProfile::Local { relay_port, .. } => *relay_port,
-        crate::profile::ConnectionProfile::Ssh { .. } => {
-            return Err(ConnectionError::SshUnavailable);
-        }
-    };
-    if endpoint.port != relay_port {
-        return Err(ConnectionError::RelayUnavailable);
-    }
-    let mut session = ConnectionSession::disconnected(profile.id());
-    let _ = transition(&mut session, ConnectionState::CheckingRelay);
-    probe.check(relay_port, &endpoint)?;
     session.set_endpoint(endpoint);
     let _ = transition(&mut session, ConnectionState::Connected);
     Ok(session)
@@ -363,19 +338,6 @@ pub fn parse_endpoint_document(body: &[u8]) -> Result<RelayEndpoint, ConnectionE
     RelayEndpoint::new(document.port, document.token).map_err(|_| ConnectionError::EndpointInvalid)
 }
 
-/// Le profil local ne lit pas l'état brut du daemon : il réutilise le même
-/// contrat CLI versionné que le tunnel distant, sans créer de processus SSH.
-pub fn discover_local_endpoint() -> Result<RelayEndpoint, ConnectionError> {
-    let output = std::process::Command::new("bridget")
-        .args(["ui", "endpoint", "--json"])
-        .output()
-        .map_err(|_| ConnectionError::RelayUnavailable)?;
-    if !output.status.success() {
-        return Err(ConnectionError::RelayUnavailable);
-    }
-    parse_endpoint_document(&output.stdout)
-}
-
 pub fn relay_url(local_port: u16, endpoint: &RelayEndpoint) -> String {
     format!(
         "http://127.0.0.1:{local_port}/?token={}",
@@ -398,8 +360,8 @@ fn percent_encode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectionError, RelayProbe, RemoteTransport, connect_local, connect_remote,
-        mark_tunnel_lost, parse_endpoint_document, transition,
+        ConnectionError, RelayProbe, RemoteTransport, connect_remote, mark_tunnel_lost,
+        parse_endpoint_document, transition,
     };
     use crate::profile::{
         ConnectionProfile, ConnectionSession, ConnectionState, ProfileCapability, RelayEndpoint,
@@ -416,15 +378,6 @@ mod tests {
             user: "moi".into(),
             identity: SshIdentityRef::Agent,
             host_fingerprint: approved.then(|| "SHA256:abcdefghijklmnopqrstuvwxyz123456".into()),
-            capabilities: vec![ProfileCapability::Ui],
-        }
-    }
-    fn local_profile() -> ConnectionProfile {
-        ConnectionProfile::Local {
-            id: "local".into(),
-            label: "Ce Mac".into(),
-            host: "127.0.0.1".into(),
-            relay_port: 17888,
             capabilities: vec![ProfileCapability::Ui],
         }
     }
@@ -502,22 +455,6 @@ mod tests {
         ));
         assert!(transport.opened.get());
         assert!(transport.closed.get());
-    }
-
-    #[test]
-    fn chemin_local_ne_ouvre_pas_ssh_et_distingue_le_relais() {
-        let endpoint = RelayEndpoint::new(17888, "fixture-token".into()).unwrap();
-        let mut probe = FakeProbe { result: Ok(()) };
-        let session =
-            connect_local(&local_profile(), endpoint.clone(), &mut probe).expect("local connecté");
-        assert_eq!(session.state, ConnectionState::Connected);
-        let mut probe = FakeProbe {
-            result: Err(ConnectionError::RelayUnavailable),
-        };
-        assert!(matches!(
-            connect_local(&local_profile(), endpoint, &mut probe),
-            Err(ConnectionError::RelayUnavailable)
-        ));
     }
 
     #[test]

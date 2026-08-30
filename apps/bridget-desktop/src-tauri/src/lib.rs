@@ -16,8 +16,8 @@ pub mod ssh;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     use crate::connection::{
-        ConnectionStatus, HttpRelayProbe, RemoteTransport, SshRemoteTransport, connect_local,
-        connect_remote, discover_local_endpoint, mark_tunnel_lost, relay_url,
+        ConnectionStatus, HttpRelayProbe, RemoteTransport, SshRemoteTransport, connect_remote,
+        mark_tunnel_lost, relay_url,
     };
     use crate::host_identity::{
         HostIdentityStatus, HostIdentityTicket, SystemHostKeyCommandRunner, approve_host_identity,
@@ -305,7 +305,6 @@ pub fn run() {
         app: tauri::AppHandle,
         state: State<'_, DesktopState>,
         profile_id: String,
-        relay_token: Option<String>,
     ) -> Result<ConnectionStatus, String> {
         let profile = state
             .profiles
@@ -317,34 +316,6 @@ pub fn run() {
             .find(|candidate| candidate.id() == profile_id)
             .ok_or_else(|| "Profil introuvable.".to_owned())?;
         close_panel_for_profile(&app, &state, &profile_id)?;
-        if profile.is_local() {
-            let relay_port = match &profile {
-                ConnectionProfile::Local { relay_port, .. } => *relay_port,
-                ConnectionProfile::Ssh { .. } => unreachable!(),
-            };
-            let endpoint = match relay_token {
-                Some(token) => {
-                    crate::profile::RelayEndpoint::new(relay_port, token).map_err(as_message)?
-                }
-                None => discover_local_endpoint().map_err(as_message)?,
-            };
-            let mut probe = HttpRelayProbe;
-            let session = connect_local(&profile, endpoint, &mut probe).map_err(as_message)?;
-            let status = ConnectionStatus::from_session(&session);
-            state.sessions.lock().map_err(as_message)?.insert(
-                profile_id,
-                ActiveConnection {
-                    session,
-                    transport: None,
-                    local_port: match profile {
-                        ConnectionProfile::Local { relay_port, .. } => relay_port,
-                        ConnectionProfile::Ssh { .. } => unreachable!(),
-                    },
-                },
-            );
-            publish_connection_state(&app, &status);
-            return Ok(status);
-        }
         if let Some(previous) = state
             .sessions
             .lock()

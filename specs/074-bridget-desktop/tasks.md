@@ -6,7 +6,7 @@
 
 ## Dépendances
 
-`Fondations` -> `US1 distant` -> `US2 états` -> `US3 deux panneaux` -> `US4 endpoint existant` -> `Qualité et paquet macOS`.
+`Fondations` -> `US1 distant` -> `US2 états` -> `US3 deux panneaux` -> `US4 tunnels possédés` -> `Qualité et paquet macOS`.
 
 US5 ne crée pas de navigateur: elle prouve que la frontière future reste documentée et non simulée par une abstraction prématurée.
 
@@ -20,7 +20,7 @@ US5 ne crée pas de navigateur: elle prouve que la frontière future reste docum
 
 ## Phase 2 - Fondations bloquantes
 
-- [x] T006 Écrire dans `apps/bridget-desktop/src-tauri/src/profile.rs` les tests de sérialisation et validation des profils `ssh` et `local`: aucun mot de passe, contenu de clé, jeton ou champ SSH n'est admis dans un profil local.
+- [x] T006 Écrire dans `apps/bridget-desktop/src-tauri/src/profile.rs` les tests de sérialisation et validation des profils `ssh`: aucun mot de passe, contenu de clé ou jeton n'est admis.
 - [x] T007 Implémenter dans `apps/bridget-desktop/src-tauri/src/profile.rs` les modèles versionnés de profil, session et état définis dans `specs/074-bridget-desktop/data-model.md`, avec une validation explicite des ports, hôtes, comptes et références d'identité.
 - [x] T008 Écrire dans `apps/bridget-desktop/src-tauri/src/profile_store.rs` les tests de migration depuis un fichier absent ou ancien, de persistance atomique en droits restrictifs et de refus d'une donnée secrète sentinelle.
 - [x] T009 Implémenter dans `apps/bridget-desktop/src-tauri/src/profile_store.rs` le stockage local non secret, versionné et atomique des profils, sous le répertoire de données applicatif, sans modifier les fichiers SSH globaux.
@@ -65,15 +65,15 @@ US5 ne crée pas de navigateur: elle prouve que la frontière future reste docum
 - [x] T027 [US3] Ajouter dans `apps/bridget-desktop/ui/index.html`, `apps/bridget-desktop/ui/app.js` et `apps/bridget-desktop/ui/theme.css` les onglets de profils et le mode deux panneaux, avec un nom d'origine toujours visible et une séparation de notifications par profil.
 - [x] T028 [US3] Ajouter dans `apps/bridget-desktop/src-tauri/tests/two_panels.rs` un test d'intégration de deux sessions factices: fermeture ou reconnexion du premier panneau sans impact sur le second.
 
-## Phase 6 - User Story 4 - Utiliser un endpoint Bridget existant sans SSH (P2)
+## Phase 6 - User Story 4 - Posséder le tunnel de session (P2)
 
-**Objectif** : sélectionner un endpoint loopback déjà accessible qui rejoint un relais sans ouvrir de tunnel, et explique précisément son absence.
+**Objectif** : retirer le parcours d'endpoint manuel, écarter les anciens profils directs et faire posséder chaque tunnel par Bridget Desktop pendant sa session.
 
-**Critère indépendant** : un endpoint joignable devient `connected` sans enfant SSH; un port absent signale une erreur relais, pas une erreur SSH.
+**Critère indépendant** : un profil approuvé redémarre dans un tunnel SSH créé par Bridget Desktop, le jeton est récupéré de façon transparente et aucun formulaire ne demande un port de relais ou un jeton.
 
-- [x] T029 [US4] Ajouter dans `apps/bridget-desktop/src-tauri/src/connection.rs` les tests de connexion locale et de séparation d'erreurs `relay_unavailable` versus `ssh_unavailable`.
-- [x] T030 [US4] Implémenter dans `apps/bridget-desktop/src-tauri/src/connection.rs` le chemin de relais direct et son contrôle HTTP, sans découverte SSH ni création de tunnel.
-- [x] T031 [US4] Mettre à jour `apps/bridget-desktop/ui/app.js` et `apps/bridget-desktop/ui/theme.css` pour présenter clairement le type d'endpoint existant et son état.
+- [x] T029 [US4] Conserver l'historique des premiers tests de relais direct, remplacés par le mode SSH géré.
+- [x] T030 [US4] Conserver l'historique du chemin de relais direct, retiré du code produit par T041.
+- [x] T031 [US4] Conserver l'historique de son formulaire, retiré du parcours opérateur par T041.
 
 ## Phase 7 - User Story 5 - Préserver la future capacité navigateur (P3 documentaire)
 
@@ -93,6 +93,7 @@ US5 ne crée pas de navigateur: elle prouve que la frontière future reste docum
 - [x] T038 Mettre à jour `specs/074-bridget-desktop/spec.md`, `specs/074-bridget-desktop/quickstart.md` et `specs/074-bridget-desktop/implementation.md` avec les preuves réelles, les limites résiduelles et le statut exact de la SPEC.
 - [x] T039 Correctif d'acceptation : activer explicitement l'API globale Tauri requise par la coque statique, renommer le profil local en relais Bridget direct avec hôte loopback et port, demander son jeton uniquement pour la connexion en mémoire, et réaligner l'habillage sur `crates/bridget-daemon/assets/ui/theme.css`.
 - [x] T040 Correctif d'acceptation : présenter l'accès comme un endpoint déjà accessible ou un tunnel SSH géré, accepter tout port loopback valide, ne jamais tenter de classifier le tunnel préexistant et expliquer le trajet dans le formulaire et les états.
+- [x] T041 Correctif d'industrialisation : ne conserver que les profils SSH gérés, migrer en écartant les anciens endpoints manuels, retirer toute demande de jeton, restaurer automatiquement les profils approuvés au lancement et mettre à jour la documentation opérateur.
 
 ## Ordre d'implémentation
 

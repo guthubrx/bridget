@@ -21,15 +21,6 @@ pub enum ConnectionProfile {
         #[serde(default)]
         capabilities: Vec<ProfileCapability>,
     },
-    Local {
-        id: String,
-        label: String,
-        #[serde(default = "default_loopback_host")]
-        host: String,
-        relay_port: u16,
-        #[serde(default)]
-        capabilities: Vec<ProfileCapability>,
-    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -166,23 +157,19 @@ impl std::error::Error for ProfileValidationError {}
 impl ConnectionProfile {
     pub fn id(&self) -> &str {
         match self {
-            Self::Ssh { id, .. } | Self::Local { id, .. } => id,
+            Self::Ssh { id, .. } => id,
         }
     }
 
     pub fn label(&self) -> &str {
         match self {
-            Self::Ssh { label, .. } | Self::Local { label, .. } => label,
+            Self::Ssh { label, .. } => label,
         }
-    }
-
-    pub fn is_local(&self) -> bool {
-        matches!(self, Self::Local { .. })
     }
 
     pub fn capabilities(&self) -> &[ProfileCapability] {
         match self {
-            Self::Ssh { capabilities, .. } | Self::Local { capabilities, .. } => capabilities,
+            Self::Ssh { capabilities, .. } => capabilities,
         }
     }
 
@@ -198,9 +185,6 @@ impl ConnectionProfile {
                 *host_fingerprint = Some(fingerprint);
                 Ok(())
             }
-            Self::Local { .. } => Err(ProfileValidationError::new(
-                "Un relais local n'a pas d'identité SSH à approuver.",
-            )),
         }
     }
 
@@ -210,9 +194,6 @@ impl ConnectionProfile {
             Self::Ssh {
                 user, host, port, ..
             } => format!("SSH {user}@{host}:{port}"),
-            Self::Local {
-                host, relay_port, ..
-            } => format!("direct {host}:{relay_port}"),
         }
     }
 
@@ -237,12 +218,6 @@ impl ConnectionProfile {
                     validate_host_fingerprint(fingerprint)?;
                 }
             }
-            Self::Local {
-                host, relay_port, ..
-            } => {
-                validate_direct_host(host)?;
-                validate_port(*relay_port, "Le port du relais local")?;
-            }
         }
 
         Ok(())
@@ -260,11 +235,6 @@ pub enum ProfileDraft {
         port: u16,
         user: String,
         identity: SshIdentityRef,
-    },
-    Local {
-        label: String,
-        host: String,
-        relay_port: u16,
     },
 }
 
@@ -286,17 +256,6 @@ impl ProfileDraft {
                 user,
                 identity,
                 host_fingerprint: None,
-                capabilities: vec![ProfileCapability::Ui],
-            },
-            Self::Local {
-                label,
-                host,
-                relay_port,
-            } => ConnectionProfile::Local {
-                id,
-                label,
-                host,
-                relay_port,
                 capabilities: vec![ProfileCapability::Ui],
             },
         }
@@ -344,21 +303,6 @@ fn validate_host(value: &str) -> Result<(), ProfileValidationError> {
         ));
     }
     Ok(())
-}
-
-fn default_loopback_host() -> String {
-    "127.0.0.1".into()
-}
-
-fn validate_direct_host(value: &str) -> Result<(), ProfileValidationError> {
-    validate_host(value)?;
-    if matches!(value, "127.0.0.1" | "localhost") {
-        Ok(())
-    } else {
-        Err(ProfileValidationError::new(
-            "Un relais Bridget direct doit être joint par 127.0.0.1 ou localhost. Ouvrez d'abord un tunnel si le daemon est distant.",
-        ))
-    }
 }
 
 fn validate_port(value: u16, label: &str) -> Result<(), ProfileValidationError> {
@@ -436,36 +380,23 @@ mod tests {
     }
 
     #[test]
-    fn un_relais_direct_n_emporte_ni_identite_ssh_ni_empreinte() {
-        let local = ConnectionProfile::Local {
-            id: "poste".into(),
-            label: "Ce Mac".into(),
-            host: "127.0.0.1".into(),
-            relay_port: 17888,
-            capabilities: vec![ProfileCapability::Ui],
-        };
-        local.validate().expect("profil local valide");
-        let json = serde_json::to_string(&local).expect("sérialisation");
-        assert!(json.contains("127.0.0.1"));
-        assert!(!json.contains("identity"));
-        assert!(!json.contains("fingerprint"));
+    fn seul_un_profil_ssh_est_admis_dans_le_mode_gere() {
+        let direct = serde_json::from_str::<super::ProfileDraft>(
+            r#"{"kind":"local","label":"Ce Mac","host":"127.0.0.1","relay_port":17888}"#,
+        );
+        assert!(direct.is_err());
     }
 
     #[test]
     fn un_hote_ambigu_et_une_etiquette_de_cle_sont_refuses() {
         let mut profile = ssh_profile();
-        if let ConnectionProfile::Ssh { host, .. } = &mut profile {
-            *host = "-oProxyCommand=evil".into();
-        }
+        let ConnectionProfile::Ssh { host, .. } = &mut profile;
+        *host = "-oProxyCommand=evil".into();
         assert!(profile.validate().is_err());
 
-        let dangerous = ConnectionProfile::Local {
-            id: "danger".into(),
-            label: "-----BEGIN PRIVATE KEY-----".into(),
-            host: "127.0.0.1".into(),
-            relay_port: 17888,
-            capabilities: vec![ProfileCapability::Ui],
-        };
+        let mut dangerous = ssh_profile();
+        let ConnectionProfile::Ssh { label, .. } = &mut dangerous;
+        *label = "-----BEGIN PRIVATE KEY-----".into();
         assert!(dangerous.validate().is_err());
     }
 
@@ -480,11 +411,10 @@ mod tests {
     }
 
     #[test]
-    fn le_brouillon_rejette_un_hote_direct_non_boucle_locale() {
+    fn le_brouillon_refuse_une_variante_d_acces_non_geree() {
         let result = serde_json::from_str::<super::ProfileDraft>(
             r#"{"kind":"local","label":"Ce Mac","host":"cartae.app","relay_port":17888}"#,
         );
-        let profile = result.expect("brouillon fermé").into_profile("direct");
-        assert!(profile.validate().is_err());
+        assert!(result.is_err());
     }
 }

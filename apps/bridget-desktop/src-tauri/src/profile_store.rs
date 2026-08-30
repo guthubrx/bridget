@@ -1,6 +1,8 @@
 //! Persistance atomique et versionnée des profils Bridget Desktop.
 
-use crate::profile::{ConnectionProfile, ProfileValidationError};
+use crate::profile::{
+    ConnectionProfile, ProfileCapability, ProfileValidationError, SshIdentityRef,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
@@ -9,7 +11,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-const CURRENT_FORMAT_VERSION: u8 = 1;
+const CURRENT_FORMAT_VERSION: u8 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoadedProfiles {
@@ -97,15 +99,21 @@ impl ProfileStore {
         let (profiles, migrated_from_v0) = match root.get("version") {
             Some(serde_json::Value::Number(number)) => {
                 let version = number.as_u64().ok_or(ProfileStoreError::InvalidRoot)?;
-                if version != u64::from(CURRENT_FORMAT_VERSION) {
-                    return Err(ProfileStoreError::UnsupportedVersion(version));
+                match version {
+                    2 => {
+                        let current: StoredProfilesV2 = serde_json::from_value(value)?;
+                        (current.profiles, false)
+                    }
+                    1 => {
+                        let legacy: StoredProfilesV1 = serde_json::from_value(value)?;
+                        (legacy.into_managed_profiles(), true)
+                    }
+                    _ => return Err(ProfileStoreError::UnsupportedVersion(version)),
                 }
-                let current: StoredProfilesV1 = serde_json::from_value(value)?;
-                (current.profiles, false)
             }
             None => {
                 let legacy: StoredProfilesV0 = serde_json::from_value(value)?;
-                (legacy.profiles, true)
+                (legacy.into_managed_profiles(), true)
             }
             _ => return Err(ProfileStoreError::InvalidRoot),
         };
@@ -128,7 +136,7 @@ impl ProfileStore {
         fs::create_dir_all(parent)?;
         set_private_directory_permissions(parent)?;
 
-        let document = StoredProfilesV1 {
+        let document = StoredProfilesV2 {
             version: CURRENT_FORMAT_VERSION,
             profiles: profiles.to_vec(),
         };
@@ -167,14 +175,102 @@ impl ProfileStore {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct StoredProfilesV1 {
+struct StoredProfilesV2 {
     version: u8,
     profiles: Vec<ConnectionProfile>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
+struct StoredProfilesV1 {
+    #[serde(rename = "version")]
+    _version: u8,
+    profiles: Vec<LegacyConnectionProfile>,
+}
+
+impl StoredProfilesV1 {
+    fn into_managed_profiles(self) -> Vec<ConnectionProfile> {
+        self.profiles
+            .into_iter()
+            .filter_map(LegacyConnectionProfile::into_managed_profile)
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
 struct StoredProfilesV0 {
-    profiles: Vec<ConnectionProfile>,
+    profiles: Vec<LegacyConnectionProfile>,
+}
+
+impl StoredProfilesV0 {
+    fn into_managed_profiles(self) -> Vec<ConnectionProfile> {
+        self.profiles
+            .into_iter()
+            .filter_map(LegacyConnectionProfile::into_managed_profile)
+            .collect()
+    }
+}
+
+/// Les profils `local` de la première itération ne sont jamais réexposés : ils
+/// n'ont pas de tunnel possédé par Desktop et demandaient un jeton manuel.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum LegacyConnectionProfile {
+    Ssh {
+        id: String,
+        label: String,
+        host: String,
+        port: u16,
+        user: String,
+        identity: SshIdentityRef,
+        host_fingerprint: Option<String>,
+        #[serde(default)]
+        capabilities: Vec<ProfileCapability>,
+    },
+    Local {
+        id: String,
+        label: String,
+        #[serde(default)]
+        host: String,
+        relay_port: u16,
+        #[serde(default)]
+        capabilities: Vec<ProfileCapability>,
+    },
+}
+
+impl LegacyConnectionProfile {
+    fn into_managed_profile(self) -> Option<ConnectionProfile> {
+        match self {
+            Self::Ssh {
+                id,
+                label,
+                host,
+                port,
+                user,
+                identity,
+                host_fingerprint,
+                capabilities,
+            } => Some(ConnectionProfile::Ssh {
+                id,
+                label,
+                host,
+                port,
+                user,
+                identity,
+                host_fingerprint,
+                capabilities,
+            }),
+            Self::Local {
+                id,
+                label,
+                host,
+                relay_port,
+                capabilities,
+            } => {
+                let _ = (id, label, host, relay_port, capabilities);
+                None
+            }
+        }
+    }
 }
 
 fn validate_profiles(profiles: &[ConnectionProfile]) -> Result<(), ProfileStoreError> {
@@ -240,7 +336,7 @@ mod tests {
         store.save(&[profile()]).expect("écriture");
 
         let content = fs::read_to_string(store.path()).expect("lecture brute");
-        assert!(content.contains("\"version\": 1"));
+        assert!(content.contains("\"version\": 2"));
         assert!(!content.contains("PRIVATE KEY"));
         assert!(!content.contains("BEGIN OPENSSH"));
         let loaded = store.load().expect("relecture");
@@ -263,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn version_sans_numero_est_migree_et_version_inconnue_est_refusee() {
+    fn les_profils_anciens_sont_migres_et_les_endpoints_manuels_ecartes() {
         let directory = test_directory();
         let path = directory.join("profiles.json");
         fs::write(
@@ -276,6 +372,15 @@ mod tests {
         .expect("fixture v0");
         let store = ProfileStore::new(&path);
         assert!(store.load().expect("migration").migrated_from_v0);
+
+        fs::write(
+            &path,
+            r#"{"version":1,"profiles":[{"kind":"local","id":"ancien","label":"Ancien tunnel","host":"127.0.0.1","relay_port":17893,"capabilities":["ui"]}]}"#,
+        )
+        .expect("fixture endpoint manuel v1");
+        let migrated = store.load().expect("migration v1");
+        assert!(migrated.migrated_from_v0);
+        assert!(migrated.profiles.is_empty());
 
         fs::write(&path, "{\"version\": 99, \"profiles\": []}").expect("fixture inconnue");
         assert!(matches!(

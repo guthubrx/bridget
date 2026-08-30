@@ -6,16 +6,16 @@
 |---|---|---:|---:|
 | `id` | identifiant stable local | non | oui |
 | `label` | nom lisible choisi par l'opérateur | non | oui |
-| `kind` | `ssh` ou `local` | non | oui |
-| `host`, `port`, `user` | cible SSH pour le type `ssh` | non | oui |
+| `kind` | `ssh` | non | oui |
+| `host`, `port`, `user` | cible SSH | non | oui |
 | `identity_ref` | référence à une identité déjà disponible sur le Mac | non, jamais le contenu de clé | oui |
 | `host_fingerprint` | identité SSH approuvée | non | oui après approbation |
 | `capabilities` | UI actuelle, navigateur futur | non | oui |
 
 Invariants :
 
-- Un profil de relais direct n'a ni compte SSH, ni empreinte, ni identité. Il contient un hôte loopback explicite (`127.0.0.1` ou `localhost`) et un port.
-- Un profil `ssh` a un hôte, un port valide, un compte et une identité gérée par le système ou explicitement référencée.
+- Un profil a un hôte, un port valide, un compte et une identité SSH gérée par le système ou explicitement référencée.
+- Les anciens profils de relais direct sont écartés lors de la migration ; le client ne conserve pas leur port ni ne demande leur jeton.
 - Aucun profil ne contient un mot de passe, le contenu d'une clé, un jeton UI, un cookie ou un corps de message.
 - Un changement d'empreinte est une rupture de confiance et bloque la session jusqu'à décision explicite.
 
@@ -26,7 +26,7 @@ Invariants :
 | `profile_id` | origine propriétaire de la session |
 | `state` | état public de connexion |
 | `endpoint` | port et jeton éphémères, mémoire seulement |
-| `tunnel_handle` | enfant SSH, absent pour le relais direct |
+| `tunnel_handle` | enfant SSH possédé par la session |
 | `last_error` | erreur redacted et catégorisée |
 | `retry_count` | nombre borné de tentatives visibles |
 
@@ -35,7 +35,7 @@ Invariants :
 Transitions interdites :
 
 - `connected` ne peut pas être atteint depuis un simple processus SSH vivant : le relais doit répondre.
-- Une session de relais direct ne passe jamais par `connecting_ssh`.
+- Une session ne devient active qu'après la découverte SSH, l'ouverture du tunnel et la réponse HTTP authentifiée du relais.
 - Une session fermée n'émet plus de notification ni de message de l'origine concernée.
 
 ## Panneau

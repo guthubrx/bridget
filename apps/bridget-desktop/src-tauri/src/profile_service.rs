@@ -42,7 +42,11 @@ impl ProfileService {
     }
 
     pub fn list(&self) -> Result<Vec<ConnectionProfile>, ProfileServiceError> {
-        Ok(self.store.load()?.profiles)
+        let loaded = self.store.load()?;
+        if loaded.migrated_from_v0 {
+            self.store.save(&loaded.profiles)?;
+        }
+        Ok(loaded.profiles)
     }
 
     pub fn save(
@@ -125,17 +129,6 @@ fn preserve_trust_if_target_is_unchanged(
                 *new_fingerprint = old_fingerprint.clone();
             }
         }
-        (
-            ConnectionProfile::Local {
-                capabilities: old_capabilities,
-                ..
-            },
-            ConnectionProfile::Local {
-                capabilities: new_capabilities,
-                ..
-            },
-        ) => *new_capabilities = old_capabilities.clone(),
-        _ => {}
     }
     replacement
 }
@@ -180,14 +173,10 @@ mod tests {
             .save(Some(&id), ssh_draft("autre.cartae.app"))
             .expect("édition");
         assert_eq!(updated.id(), id);
-        if let crate::profile::ConnectionProfile::Ssh {
+        let crate::profile::ConnectionProfile::Ssh {
             host_fingerprint, ..
-        } = updated
-        {
-            assert!(host_fingerprint.is_none());
-        } else {
-            panic!("profil SSH attendu");
-        }
+        } = updated;
+        assert!(host_fingerprint.is_none());
         assert_eq!(service.list().expect("liste").len(), 1);
         fs::remove_dir_all(directory).expect("nettoyage exact du test");
     }

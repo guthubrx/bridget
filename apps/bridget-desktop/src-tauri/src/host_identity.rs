@@ -79,7 +79,6 @@ pub enum HostIdentityError {
     InvalidScan,
     InvalidFingerprint,
     TicketMismatch,
-    NotSshProfile,
 }
 
 impl std::fmt::Display for HostIdentityError {
@@ -97,7 +96,6 @@ impl std::fmt::Display for HostIdentityError {
             Self::TicketMismatch => {
                 formatter.write_str("Le ticket d'approbation ne correspond plus au profil.")
             }
-            Self::NotSshProfile => formatter.write_str("Un relais local n'a pas de clé hôte SSH."),
         }
     }
 }
@@ -123,7 +121,6 @@ pub fn check_host_identity(
             host_fingerprint,
             ..
         } => (id, host, *port, host_fingerprint.as_deref()),
-        ConnectionProfile::Local { .. } => return Err(HostIdentityError::NotSshProfile),
     };
 
     let scan = runner.run(
@@ -175,7 +172,7 @@ pub fn approve_host_identity(
     ticket: HostIdentityTicket,
     application_known_hosts: &Path,
 ) -> Result<(), HostIdentityError> {
-    if profile.id() != ticket.profile_id || profile.is_local() {
+    if profile.id() != ticket.profile_id {
         return Err(HostIdentityError::TicketMismatch);
     }
     profile.set_host_fingerprint(ticket.fingerprint.clone())?;

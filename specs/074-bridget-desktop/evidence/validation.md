@@ -38,3 +38,15 @@ Le paquet macOS est compilé et signé ad hoc, mais l'ouverture graphique manuel
 ## Smoke macOS
 
 L'application installée a été ouverte en arrière-plan sur le Mac, son binaire `bridget-desktop` a été observé vivant, puis cette instance de test a été fermée proprement. Ce smoke prouve le lancement du paquet mais ne remplace pas le parcours visuel opérateur ci-dessus.
+
+## T041 - Tunnel SSH possédé
+
+- `/home/moi/.cargo/bin/cargo fmt --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml -- --check` : succès.
+- `node --check apps/bridget-desktop/ui/app.js` : succès.
+- `git diff --check` : succès.
+- `/home/moi/.cargo/bin/cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml` : succès, 30 tests Desktop.
+- `/home/moi/.cargo/bin/cargo test -p bridget-daemon endpoint_ui_exige_un_contrat_json_ferme --lib` : succès, contrat serveur vérifié.
+- Vérification réelle depuis le Mac : la commande SSH constante `PATH="$HOME/.local/bin:$PATH"; exec bridget ui endpoint --json` résout Bridget et le JSON de l'endpoint est valide sans journaliser ni afficher le jeton. Le daemon est actif, PID `122945`, démarré le `2026-08-30 15:50:08 UTC`.
+- `/Users/moi/.cargo/bin/cargo tauri build --bundles app` : succès. Paquet produit : `/tmp/bridget-desktop-managed-ssh-package.khBcgR/source/src-tauri/target/release/bundle/macos/Bridget Desktop.app`.
+
+Le parcours graphique final reste une acceptation opérateur : à la première connexion, confirmer l'empreinte SSH de cartae.app. Après cette confirmation, le profil se reconnecte automatiquement à chaque lancement de Bridget Desktop et le jeton reste transparent.

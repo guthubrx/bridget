@@ -103,6 +103,14 @@
 - Présentation : le formulaire commence par ce choix de trajet. Un endpoint accepte `127.0.0.1` ou `localhost` avec son port effectif. Le trajet SSH demande seulement le serveur SSH, son port, le compte et l'identité déjà présente sur le Mac.
 - Vérification : syntaxe JavaScript, validation des profils loopback et suite Desktop complète avant reconstruction macOS.
 
+## T041 - Tunnel SSH possédé et jeton transparent
+
+- Statut : Complété.
+- Modèle : un profil ne mémorise désormais que la destination SSH, le compte et une référence d'identité déjà présente sur le Mac. Bridget Desktop ouvre son propre forward loopback au début de sa session et le ferme avec elle. Aucun endpoint direct, port de relais ou jeton n'est demandé à l'opérateur.
+- Migration : le stockage passe à la version 2. Les anciens profils SSH sont conservés. Les anciens profils d'endpoint direct sont écartés de façon atomique car ils ne peuvent pas devenir un tunnel possédé sans coordonnées SSH.
+- Secret : la commande distante constante prépare uniquement `~/.local/bin` dans le `PATH`, puis exécute `bridget ui endpoint --json`. Elle est contrôlée par le client natif, ne reçoit aucune donnée de la WebView et le jeton reste seulement dans la session mémoire.
+- Vérification : 30 tests Desktop, contrôle de format Rust, contrôle de syntaxe JavaScript, contrôle de diff, contrat réel du daemon actif sur cartae.app et paquet macOS signé ad hoc ont tous réussi.
+
 ## Etat final
 
 L'implémentation est terminée et les preuves automatisées sont présentes. Il reste seulement la validation graphique manuelle d'acceptation listée dans `quickstart.md` avant de déclarer la SPEC entièrement acceptée par l'opérateur.

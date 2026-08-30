@@ -7,7 +7,12 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
-pub const REMOTE_ENDPOINT_COMMAND: &str = "bridget ui endpoint --json";
+/// Le client SSH non interactif ne reçoit pas nécessairement le PATH de la
+/// session terminal. Cette chaîne reste entièrement constante : elle ajoute
+/// seulement l'emplacement d'installation utilisateur standard avant
+/// d'exécuter la commande Bridget fermée.
+pub const REMOTE_ENDPOINT_COMMAND: &str =
+    "PATH=\"$HOME/.local/bin:$PATH\"; exec bridget ui endpoint --json";
 
 #[derive(Debug)]
 pub struct SshInvocation {
@@ -70,7 +75,6 @@ impl OwnedTunnel {
 pub enum SshError {
     InvalidProfile(ProfileValidationError),
     Io(io::Error),
-    NotSshProfile,
 }
 
 impl std::fmt::Display for SshError {
@@ -78,7 +82,6 @@ impl std::fmt::Display for SshError {
         match self {
             Self::InvalidProfile(error) => error.fmt(formatter),
             Self::Io(error) => write!(formatter, "SSH indisponible : {error}"),
-            Self::NotSshProfile => formatter.write_str("Ce profil n'utilise pas SSH."),
         }
     }
 }
@@ -134,7 +137,6 @@ fn base_arguments(
     profile.validate()?;
     let (port, identity) = match profile {
         ConnectionProfile::Ssh { port, identity, .. } => (*port, identity),
-        ConnectionProfile::Local { .. } => return Err(SshError::NotSshProfile),
     };
     let known_hosts = known_hosts.to_str().ok_or_else(|| {
         SshError::Io(io::Error::new(
@@ -173,7 +175,6 @@ fn base_arguments(
 fn ssh_target(profile: &ConnectionProfile) -> Result<String, SshError> {
     match profile {
         ConnectionProfile::Ssh { user, host, .. } => Ok(format!("{user}@{host}")),
-        ConnectionProfile::Local { .. } => Err(SshError::NotSshProfile),
     }
 }
 
@@ -260,14 +261,14 @@ mod tests {
         let args = as_strings(invocation.args());
         assert_eq!(args.last(), Some(&REMOTE_ENDPOINT_COMMAND.to_owned()));
         assert!(!args.iter().any(|argument| argument == "/bin/sh"));
+        assert!(REMOTE_ENDPOINT_COMMAND.contains("$HOME/.local/bin"));
     }
 
     #[test]
     fn un_hote_qui_pourrait_devenir_une_option_est_refuse() {
         let mut invalid = profile();
-        if let ConnectionProfile::Ssh { host, .. } = &mut invalid {
-            *host = "-oProxyCommand=evil".into();
-        }
+        let ConnectionProfile::Ssh { host, .. } = &mut invalid;
+        *host = "-oProxyCommand=evil".into();
         assert!(forward_invocation(&invalid, Path::new("/tmp/known_hosts"), 39001, 17888).is_err());
     }
 
