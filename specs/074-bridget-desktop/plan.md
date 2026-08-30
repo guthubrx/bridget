@@ -2,7 +2,7 @@
 
 ## Résumé technique
 
-Créer le premier client Bridget séparé dans `apps/bridget-desktop`. Il conserve le modèle de sécurité actuel : les relais restent en boucle locale sur chaque serveur. Le client macOS ouvre et supervise les tunnels SSH, puis rend l'UI existante de chaque relais dans un panneau sans lui donner de privilèges Tauri.
+Créer le premier client Bridget séparé dans `apps/bridget-desktop`. Il conserve le modèle de sécurité actuel : les relais restent en boucle locale sur chaque serveur. Le client macOS rejoint un endpoint Bridget déjà accessible ou ouvre et supervise un tunnel SSH à la demande, puis rend l'UI existante de chaque relais dans un panneau sans lui donner de privilèges Tauri.
 
 Le développement des sources et des tests serveur reste sur cartae.app. La génération et la validation du paquet `.app` sont une étape cible macOS, car le serveur Linux ne possède ni WebKit ni Xcode.
 
@@ -12,7 +12,7 @@ Le développement des sources et des tests serveur reste sur cartae.app. La gén
 2. Ajouter au daemon une commande de découverte d'endpoint UI strictement locale, typée et non journalisante. Elle remplace la lecture brute du fichier interne contenant le jeton.
 3. Réutiliser le relais UI, son API HTTP, ses flux SSE, ses jetons et l'interface actuelle. Ne pas cloner l'interface de conversation dans Bridget Desktop.
 4. Isoler la coque locale Bridget Desktop du contenu distant : la coque gère les profils, les tunnels et les panneaux ; les vues chargées depuis un tunnel n'obtiennent aucune capacité Tauri. Les deux panneaux côte à côte utilisent les webviews enfants Tauri derrière son feature `unstable`, car c'est l'API qui permet de distinguer leur label de celui de la coque et donc leurs permissions.
-5. Prévoir deux types de profil concrets, `ssh` et `local`, sans créer une abstraction de transport plus vaste avant d'avoir une troisième utilisation réelle.
+5. Prévoir deux accès concrets, `ssh` géré et endpoint loopback existant. Le tag persistant `local` reste compatible avec les premiers profils, mais il est présenté comme un endpoint et non comme une autre sorte de serveur.
 6. Limiter la première vue simultanée à deux panneaux. Chaque panneau a une session, un tunnel et une origine explicites.
 7. Documenter le navigateur distant comme capacité future par profil, mais ne créer ni tunnel générique, ni VNC, ni navigateur dans ce lot.
 
@@ -55,7 +55,7 @@ Le développement des sources et des tests serveur reste sur cartae.app. La gén
 1. Établir le tunnel local vers le relais distant après découverte de son endpoint.
 2. Charger l'UI existante dans une webview enfant externe, sans capacité locale, et exposer les états séparés : SSH, tunnel, relais et flux.
 3. Créer les onglets de profils et un mode deux panneaux. Garantir l'origine persistante dans chaque panneau et la séparation des notifications.
-4. Connecter un profil local directement au relais local avec les mêmes états, sans SSH.
+4. Connecter un endpoint loopback déjà accessible avec les mêmes états, sans SSH et sans chercher à identifier le tunnel ou proxy qui le rend joignable.
 
 ### P5 - Qualité, sûreté et livraison
 
@@ -84,7 +84,7 @@ Le développement des sources et des tests serveur reste sur cartae.app. La gén
 ## Critères de sortie
 
 - Bridget Desktop se connecte à cartae.app via SSH sans ouvrir le port UI du serveur.
-- Un profil local et un profil distant sont distingués dans la vue et dans les erreurs.
+- Un endpoint existant et un tunnel SSH géré sont distingués par leur accès, sans être présentés comme deux sortes de serveur.
 - Deux serveurs peuvent être ouverts sans confusion de messages, agents ou notification.
 - Les tests ne révèlent ni clé privée ni jeton d'endpoint.
 - Le paquet macOS peut être construit et l'ensemble des parcours manuels critiques est vérifié.

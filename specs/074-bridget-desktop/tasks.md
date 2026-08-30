@@ -6,7 +6,7 @@
 
 ## Dépendances
 
-`Fondations` -> `US1 distant` -> `US2 états` -> `US3 deux panneaux` -> `US4 local` -> `Qualité et paquet macOS`.
+`Fondations` -> `US1 distant` -> `US2 états` -> `US3 deux panneaux` -> `US4 endpoint existant` -> `Qualité et paquet macOS`.
 
 US5 ne crée pas de navigateur: elle prouve que la frontière future reste documentée et non simulée par une abstraction prématurée.
 
@@ -65,15 +65,15 @@ US5 ne crée pas de navigateur: elle prouve que la frontière future reste docum
 - [x] T027 [US3] Ajouter dans `apps/bridget-desktop/ui/index.html`, `apps/bridget-desktop/ui/app.js` et `apps/bridget-desktop/ui/theme.css` les onglets de profils et le mode deux panneaux, avec un nom d'origine toujours visible et une séparation de notifications par profil.
 - [x] T028 [US3] Ajouter dans `apps/bridget-desktop/src-tauri/tests/two_panels.rs` un test d'intégration de deux sessions factices: fermeture ou reconnexion du premier panneau sans impact sur le second.
 
-## Phase 6 - User Story 4 - Utiliser un Bridget local sans SSH (P2)
+## Phase 6 - User Story 4 - Utiliser un endpoint Bridget existant sans SSH (P2)
 
-**Objectif** : sélectionner un profil local qui rejoint un relais local sans ouvrir de tunnel, et explique précisément son absence.
+**Objectif** : sélectionner un endpoint loopback déjà accessible qui rejoint un relais sans ouvrir de tunnel, et explique précisément son absence.
 
-**Critère indépendant** : un profil local joignable devient `connected` sans enfant SSH; un port absent signale une erreur relais, pas une erreur SSH.
+**Critère indépendant** : un endpoint joignable devient `connected` sans enfant SSH; un port absent signale une erreur relais, pas une erreur SSH.
 
 - [x] T029 [US4] Ajouter dans `apps/bridget-desktop/src-tauri/src/connection.rs` les tests de connexion locale et de séparation d'erreurs `relay_unavailable` versus `ssh_unavailable`.
 - [x] T030 [US4] Implémenter dans `apps/bridget-desktop/src-tauri/src/connection.rs` le chemin de relais direct et son contrôle HTTP, sans découverte SSH ni création de tunnel.
-- [x] T031 [US4] Mettre à jour `apps/bridget-desktop/ui/app.js` et `apps/bridget-desktop/ui/theme.css` pour présenter clairement le type de relais direct et son état.
+- [x] T031 [US4] Mettre à jour `apps/bridget-desktop/ui/app.js` et `apps/bridget-desktop/ui/theme.css` pour présenter clairement le type d'endpoint existant et son état.
 
 ## Phase 7 - User Story 5 - Préserver la future capacité navigateur (P3 documentaire)
 
@@ -92,6 +92,7 @@ US5 ne crée pas de navigateur: elle prouve que la frontière future reste docum
 - [x] T037 Construire sur macOS avec `cargo build --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml --release` puis `cargo tauri build --config apps/bridget-desktop/src-tauri/tauri.conf.json`, consigner le chemin du paquet ou l'obstacle environnemental vérifiable dans `specs/074-bridget-desktop/evidence/macos-package.md`.
 - [x] T038 Mettre à jour `specs/074-bridget-desktop/spec.md`, `specs/074-bridget-desktop/quickstart.md` et `specs/074-bridget-desktop/implementation.md` avec les preuves réelles, les limites résiduelles et le statut exact de la SPEC.
 - [x] T039 Correctif d'acceptation : activer explicitement l'API globale Tauri requise par la coque statique, renommer le profil local en relais Bridget direct avec hôte loopback et port, demander son jeton uniquement pour la connexion en mémoire, et réaligner l'habillage sur `crates/bridget-daemon/assets/ui/theme.css`.
+- [x] T040 Correctif d'acceptation : présenter l'accès comme un endpoint déjà accessible ou un tunnel SSH géré, accepter tout port loopback valide, ne jamais tenter de classifier le tunnel préexistant et expliquer le trajet dans le formulaire et les états.
 
 ## Ordre d'implémentation
 

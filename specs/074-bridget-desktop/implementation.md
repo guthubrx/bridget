@@ -77,7 +77,7 @@
 ### T024-T031 - Panneaux isolés et profil local
 
 - Statut : Complété.
-- Fonctionnement : les panneaux `panel-*` sont des enfants Tauri externes, limités aux URL `http://127.0.0.1:<port>/?token=...` issues d'une session vérifiée. Deux panneaux au maximum sont redimensionnés côte à côte; leurs origines restent visibles dans l'en-tête de la coque. Un profil local lit le même contrat CLI sans SSH.
+- Fonctionnement : les panneaux `panel-*` sont des enfants Tauri externes, limités aux URL `http://127.0.0.1:<port>/?token=...` issues d'une session vérifiée. Deux panneaux au maximum sont redimensionnés côte à côte; leurs origines restent visibles dans l'en-tête de la coque. Un endpoint loopback déjà accessible lit le même contrat sans SSH supplémentaire.
 - Sécurité : la capability ne cible que `main`; les panneaux ne reçoivent aucune commande Tauri.
 - Vérification : tests de limite, d'URL loopback, de fermeture indépendante, de capability et de chemin local.
 
@@ -92,9 +92,16 @@
 
 - Statut : Complété.
 - Cause : la coque HTML lit volontairement `window.__TAURI__.core.invoke`, mais la configuration Tauri n'activait pas `app.withGlobalTauri`. Dans l'application native, elle se croyait donc ouverte dans un navigateur.
-- Correctif : `withGlobalTauri` est activé explicitement. Le type visible « Relais Bridget direct » accepte `127.0.0.1:port` ou `localhost:port` pour un tunnel déjà existant. Son jeton est demandé à la connexion, reste en mémoire dans la session et n'entre jamais dans le profil persistant.
+- Correctif : `withGlobalTauri` est activé explicitement. L'accès visible « Endpoint déjà accessible depuis ce Mac » accepte `127.0.0.1:port` ou `localhost:port`, y compris tout port loopback tel que `17893` issu d'un tunnel déjà existant. Son jeton est demandé à la connexion, reste en mémoire dans la session et n'entre jamais dans le profil persistant.
 - Présentation : le client réutilise désormais la feuille de style fondatrice de l'UI Bridget, complétée par une coque Desktop compacte plutôt qu'une identité visuelle indépendante.
 - Vérification : 30 tests Desktop passent, le build macOS et la vérification de signature ad hoc passent avant installation.
+
+### T040 - Clarification endpoint et tunnel SSH géré
+
+- Statut : Complété.
+- Modèle : Bridget Desktop ne distingue plus deux sortes de serveur. Il rejoint soit un endpoint déjà accessible depuis le Mac, sans tenter d'identifier son trajet, soit crée lui-même un tunnel SSH temporaire.
+- Présentation : le formulaire commence par ce choix de trajet. Un endpoint accepte `127.0.0.1` ou `localhost` avec son port effectif. Le trajet SSH demande seulement le serveur SSH, son port, le compte et l'identité déjà présente sur le Mac.
+- Vérification : syntaxe JavaScript, validation des profils loopback et suite Desktop complète avant reconstruction macOS.
 
 ## Etat final
 

@@ -18,16 +18,16 @@ Depuis le Mac, un tunnel de vérification possédé par la commande a relié un 
 
 ## Parcours utilisateur couvert
 
-- Ajout, édition et retrait confirmé de profils SSH ou de relais Bridget directs dans la coque native.
+- Ajout, édition et retrait confirmé de profils avec endpoint loopback déjà accessible ou tunnel SSH géré dans la coque native.
 - Première empreinte SSH affichée puis acceptée explicitement avant la connexion.
 - Tunnel SSH loopback, contrôle HTTP du relais et panneau externe limité à `127.0.0.1`.
 - Deux panneaux maximum, isolés par profil, et fermeture du premier sans suppression du second.
-- Relais Bridget direct loopback sans tunnel SSH créé par l'application, avec jeton conservé en mémoire seulement.
+- Endpoint Bridget loopback sans tunnel SSH créé par l'application, avec jeton conservé en mémoire seulement.
 
 ## Correctif d'acceptation macOS
 
 - Le bundle initial ne rendait pas l'API globale Tauri à la coque statique. La cause est corrigée par `app.withGlobalTauri: true`, validée par la construction macOS.
-- Le type présenté est « Relais Bridget direct » : il accepte `127.0.0.1:port` ou `localhost:port`, ce qui couvre un tunnel SSH déjà ouvert sans créer un second modèle « ce Mac ».
+- L'accès est présenté comme un « endpoint déjà accessible depuis ce Mac » : il accepte `127.0.0.1:port` ou `localhost:port`, y compris un port comme `17893` issu d'un tunnel SSH déjà ouvert, sans créer un second modèle « ce Mac » ni tenter de classifier ce tunnel.
 - Le thème racine embarqué est celui de `crates/bridget-daemon/assets/ui/theme.css`; `desktop.css` ne contient que la mise en page compacte propre au client.
 - Le bundle final est vérifié avec `codesign --verify --deep --strict` après signature ad hoc.
 

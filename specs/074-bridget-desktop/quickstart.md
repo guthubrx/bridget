@@ -8,14 +8,15 @@
 
 Le client n'expose aucun nouveau port serveur. Les agents, le daemon et le relais restent sur le serveur choisi.
 
-## Préparer une connexion distante
+## Choisir comment joindre un relais
 
 1. Ouvrir Bridget Desktop sur le Mac.
 2. Ajouter un profil nommé, par exemple `cartae.app`.
-3. Renseigner `cartae.app`, le port SSH `2222`, le compte, puis choisir l'agent SSH du Mac ou un chemin de clé déjà existant. Ne jamais coller une clé privée.
-4. Vérifier l'empreinte affichée à la première connexion avant de l'accepter.
-5. Vérifier que la vue affiche le relais vérifié puis ouvre le panneau du serveur. L'en-tête doit toujours montrer `cartae.app - SSH`.
-6. Cliquer `Gérer les serveurs`, puis `Déconnecter` : le panneau doit disparaître sans supprimer le profil.
+3. Si un endpoint existe déjà sur le Mac, choisir `Endpoint déjà accessible depuis ce Mac`, renseigner `127.0.0.1` ou `localhost` et son port réel, par exemple `17893`. Le client ne cherche pas à savoir si ce port vient d'un tunnel SSH, d'un proxy ou d'un autre chemin local.
+4. Sinon choisir `Bridget Desktop ouvre un tunnel SSH`, renseigner `cartae.app`, le port SSH `2222`, le compte, puis choisir l'agent SSH du Mac ou un chemin de clé déjà existant. Ne jamais coller une clé privée.
+5. Pour un endpoint existant, fournir le jeton du relais à la connexion. Pour le tunnel géré, vérifier l'empreinte affichée à la première connexion avant de l'accepter.
+6. Vérifier que la vue affiche le relais vérifié puis ouvre le panneau du serveur.
+7. Cliquer `Serveurs`, puis `Déconnecter` : le panneau doit disparaître sans supprimer le profil.
 
 ## Vérifier un refus honnête
 
@@ -30,10 +31,10 @@ Le client n'expose aucun nouveau port serveur. Les agents, le daemon et le relai
 3. Vérifier que chaque panneau porte son serveur, ses agents et ses notifications propres.
 4. Couper le premier tunnel de test : le premier profil doit afficher `Tunnel interrompu - réessayez explicitement`, sans dégrader le second. Le bouton `Réessayer` relance uniquement ce profil.
 
-## Vérifier le local
+## Vérifier un endpoint existant
 
-1. Ajouter un profil local sur un Mac sans relais local : l'application doit signaler précisément l'absence du relais, sans erreur SSH.
-2. Lorsqu'un relais local est disponible, ouvrir le profil et vérifier qu'aucun tunnel SSH n'est lancé.
+1. Ajouter un endpoint loopback sur un Mac sans relais : l'application doit signaler précisément l'absence du relais, sans erreur SSH.
+2. Lorsqu'un endpoint existe, y compris derrière un tunnel SSH déjà ouvert, ouvrir le profil et vérifier qu'aucun tunnel SSH n'est lancé par Bridget Desktop.
 
 ## Limites assumées
 

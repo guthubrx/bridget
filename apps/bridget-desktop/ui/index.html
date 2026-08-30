@@ -25,7 +25,7 @@
           <button id="add-profile" type="button">Ajouter un serveur</button>
         </div>
         <div id="load-error" class="notice notice-error" hidden role="alert"></div>
-        <div id="empty-state" class="empty-state" hidden><h3>Aucun serveur configuré</h3><p>Ajoutez un serveur SSH ou un relais Bridget direct pour commencer.</p></div>
+        <div id="empty-state" class="empty-state" hidden><h3>Aucun serveur configuré</h3><p>Ajoutez un endpoint déjà accessible ou laissez Bridget Desktop ouvrir le tunnel SSH.</p></div>
         <ul id="profiles-list" class="profile-list" aria-label="Profils configurés"></ul>
       </section>
     </main>
@@ -33,19 +33,20 @@
       <form id="profile-form" method="dialog" novalidate>
         <header class="dialog-heading"><div><p class="eyebrow">CONNEXION</p><h2 id="profile-dialog-title">Ajouter un serveur</h2></div><button class="icon-button" id="close-dialog" type="button" aria-label="Fermer">×</button></header>
         <input id="profile-id" name="profile-id" type="hidden" />
-        <label>Type de connexion<select id="profile-kind" name="kind"><option value="ssh">Serveur SSH</option><option value="local">Relais Bridget direct</option></select></label>
+        <label>Comment joindre Bridget ?<select id="profile-kind" name="kind"><option value="local">Endpoint déjà accessible depuis ce Mac</option><option value="ssh">Bridget Desktop ouvre un tunnel SSH</option></select></label>
         <label>Nom du serveur<input id="profile-label" name="label" maxlength="96" required autocomplete="off" /></label>
         <div id="ssh-fields">
-          <label>Hôte<input id="profile-host" name="host" inputmode="url" placeholder="cartae.app" autocomplete="off" /></label>
+          <label>Serveur SSH<input id="profile-host" name="host" inputmode="url" placeholder="cartae.app" autocomplete="off" /></label>
           <div class="field-grid"><label>Port SSH<input id="profile-port" name="port" type="number" min="1" max="65535" value="22" inputmode="numeric" /></label><label>Utilisateur SSH<input id="profile-user" name="user" autocomplete="username" placeholder="moi" /></label></div>
           <fieldset><legend>Identité SSH</legend><label class="choice"><input type="radio" name="identity-source" value="agent" checked /> Utiliser l'agent SSH du Mac</label><label class="choice"><input type="radio" name="identity-source" value="file" /> Référencer un fichier de clé existant</label><label id="identity-file-field" hidden>Chemin absolu de la clé existante<input id="profile-identity-file" name="identity-file" autocomplete="off" spellcheck="false" /></label></fieldset>
+          <p class="field-help">Bridget Desktop découvre le relais sur ce serveur puis ouvre son propre tunnel local temporaire.</p>
         </div>
-        <div id="direct-fields" hidden><label>Hôte du relais<input id="profile-direct-host" name="direct-host" value="127.0.0.1" autocomplete="off" spellcheck="false" /></label><label>Port du relais<input id="profile-direct-port" name="direct-port" type="number" min="1" max="65535" value="17888" inputmode="numeric" /></label><p class="field-help">Pour un tunnel existant, utilisez <code>127.0.0.1</code> et son port local. Le jeton est demandé à la connexion et reste en mémoire seulement.</p></div>
+        <div id="direct-fields" hidden><label>Hôte accessible depuis ce Mac<input id="profile-direct-host" name="direct-host" value="127.0.0.1" placeholder="127.0.0.1" autocomplete="off" spellcheck="false" /></label><label>Port de l'endpoint<input id="profile-direct-port" name="direct-port" type="number" min="1" max="65535" value="17888" inputmode="numeric" /></label><p class="field-help">Utilisez <code>127.0.0.1</code> ou <code>localhost</code> et le port réellement exposé, par exemple <code>17893</code>. Il peut venir d'un tunnel SSH déjà ouvert ou d'un autre chemin local. Bridget Desktop vérifie le relais avec son jeton sans chercher à connaître ce trajet.</p></div>
         <p id="form-error" class="notice notice-error" hidden role="alert"></p>
         <footer class="dialog-actions"><button id="cancel-profile" class="secondary" type="button">Annuler</button><button type="submit">Enregistrer</button></footer>
       </form>
     </dialog>
-    <dialog id="direct-token-dialog"><form id="direct-token-form" method="dialog"><header class="dialog-heading"><div><p class="eyebrow">RELAIS DIRECT</p><h2>Accès au relais</h2></div></header><p class="field-help">Le relais Bridget est protégé. Son jeton reste seulement en mémoire pour cette connexion.</p><label>Jeton du relais<input id="direct-token" type="password" autocomplete="off" required /></label><footer class="dialog-actions"><button id="cancel-direct-token" class="secondary" type="button">Annuler</button><button type="submit">Connecter</button></footer></form></dialog>
+    <dialog id="direct-token-dialog"><form id="direct-token-form" method="dialog"><header class="dialog-heading"><div><p class="eyebrow">ENDPOINT</p><h2>Accès au relais</h2></div></header><p class="field-help">Le relais Bridget est protégé. Son jeton reste seulement en mémoire pour cette connexion.</p><label>Jeton du relais<input id="direct-token" type="password" autocomplete="off" required /></label><footer class="dialog-actions"><button id="cancel-direct-token" class="secondary" type="button">Annuler</button><button type="submit">Vérifier et connecter</button></footer></form></dialog>
     <script type="module" src="./app.js"></script>
   </body>
 </html>
