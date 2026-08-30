@@ -30,6 +30,11 @@
   dans `app.js`. Preuve : `prompt_dispatched` ne prétend plus que l'agent
   travaille ; l'erreur durable est reliée au message concerné et détaillable.
 
+- [x] T012 - Afficher trois points animés pendant la seule remise, dans
+  index.html, theme.css et app.js, puis les retirer au premier acte réel ou au
+  terminal corrélé. Preuve : témoin Node de corrélation et asset livré par le
+  relais UI courant.
+
 ## Notification et navigation - P2
 
 - [x] T008 - Ajouter les témoins Node de permission, déduplication et ciblage

@@ -131,6 +131,16 @@
 
         <!-- Le compositeur est volontairement frère du fil. Le rendu du fil
              peut remplacer #thread sans atteindre le brouillon ni son focus. -->
+        <div
+          class="delivery-activity"
+          id="delivery-activity"
+          role="status"
+          aria-live="polite"
+          aria-label="Message remis, en attente d’une trace de l’agent"
+          hidden
+        >
+          <span class="delivery-activity__dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        </div>
         <div class="agent-activity" id="agent-activity" aria-live="polite" hidden></div>
         <footer class="composer-shell" id="composer-shell">
           <form class="composer" id="composer" novalidate>

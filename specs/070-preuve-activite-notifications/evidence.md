@@ -1,22 +1,27 @@
 # Preuves d'exécution - SPEC-070
 
 **Date** : 30 août 2026
-**Portée** : worktree isolé, aucune livraison ni redémarrage.
+**Portée** : worktree isolé, puis livraison du seul relais UI. Le daemon et les agents ne sont pas redémarrés.
 
 ## Commandes validées
 
 | Commande | Résultat |
 |---|---|
-| `node --test crates/bridget-daemon/assets/ui/app.js` | 71 tests réussis |
+| `node --test crates/bridget-daemon/assets/ui/app.js` | 72 tests réussis |
 | `/home/moi/.cargo/bin/cargo test -p bridget-daemon --lib -- --quiet` | 651 réussis, 7 ignorés |
 | `/home/moi/.cargo/bin/cargo test -p bridget-transport --lib -- --quiet` | 218 réussis, 1 ignoré |
 | `/home/moi/.cargo/bin/cargo fmt --check` | réussi |
 | `git diff --check` | réussi |
+| `/home/moi/.cargo/bin/cargo build --release -p bridget-daemon` | binaire de livraison construit |
+| service `bridget-ui.service` + lecture de `/app.js` | actif, asset courant vérifié |
 
 ## Couverture apportée
 
 - Une acceptation ou un `prompt_dispatched` seul ne crée aucune activité.
+- Une remise seule affiche trois points animés, sans bouille ni libellé de
+  travail ; le premier acte fournisseur ou le terminal les retire.
 - Un acte fournisseur produit une ligne compacte sûre, retirée au terminal.
+- Le port UI 17888 est désormais tenu par `bridget-ui.service`, lancé sur le binaire courant ; le daemon actif est resté inchangé.
 - Une réponse suivie conserve l'échéance fournisseur configurée, au-delà de 60 s.
 - Une échéance fournisseur écrit `turn/interrupt` puis produit un terminal d'échec unique.
 - Une erreur terminale remplace ou met à jour la bulle optimiste du bon message, même sans corps répété par le journal, et expose une référence de journal dépliable.

@@ -199,6 +199,22 @@
         assert.equal(api.deliveryStateLabel("dispatched"), "en attente d’une trace de l’agent");
       });
 
+      test("remise_animee_disparait_des_qu_une_activite_reelle_est_journalisee", () => {
+        const pending = new Map([["m-remise", { target: "rc1", acceptedAt: 1, state: "delivered" }]]);
+        assert.equal(api.pendingDeliveryPulse(pending, "rc1", []).messageId, "m-remise");
+        assert.equal(
+          api.pendingDeliveryPulse(pending, "rc1", [{ kind: "activity", messageId: "m-remise" }]),
+          null,
+        );
+        assert.equal(
+          api.pendingDeliveryPulse(pending, "rc1", [{ kind: "work", messageId: "m-remise" }]),
+          null,
+        );
+        assert.equal(api.pendingDeliveryPulse(pending, "jc1", []), null);
+        pending.set("m-remise", { target: "rc1", state: "terminal" });
+        assert.equal(api.pendingDeliveryPulse(pending, "rc1", []), null);
+      });
+
       test("activite_live_exige_un_acte_fournisseur_et_s_arrete_au_terminal", () => {
         const base = [
           {
@@ -3411,6 +3427,27 @@
     return Array.isArray(payload && payload.options) ? payload.options : [];
   }
 
+  // La remise est honnête mais n’est pas une activité. Les trois points ne
+  // vivent donc que jusqu’au premier acte fournisseur ou au terminal du même
+  // message. Une autre activité de l’agent reste visible séparément.
+  function pendingDeliveryPulse(messages, selectedAgent, timeline) {
+    if (!(messages instanceof Map) || !selectedAgent) return null;
+    const entries = Array.isArray(timeline) ? timeline : [];
+    const proven = new Set(
+      entries
+        .filter((entry) => entry && (entry.kind === "activity" || entry.kind === "work"))
+        .map((entry) => text(entry.messageId))
+        .filter(Boolean),
+    );
+    for (const [messageId, pending] of [...messages.entries()].reverse()) {
+      if (pendingDeliveryTarget(pending) !== selectedAgent) continue;
+      if (pending && pending.state === "terminal") continue;
+      if (proven.has(messageId)) continue;
+      return { messageId, pending };
+    }
+    return null;
+  }
+
   function permissionOptionId(option) {
     return text(option && option.optionId, option && option.option_id);
   }
@@ -3763,6 +3800,7 @@
       projected.push({
         kind: "work",
         at: turn.endAt || turn.startAt,
+        messageId: turn.key,
         durationMs: Math.max(0, ((turn.endAt || turn.startAt) - turn.startAt) * 1000),
         acts: turn.acts,
         reasoning: turn.reasoning || { available: false, summary: "", raw: "" },
@@ -3958,6 +3996,7 @@
     thread: "thread",
     newMessages: "new-messages",
     newMessagesLabel: "new-messages-label",
+    deliveryActivity: "delivery-activity",
     agentActivity: "agent-activity",
     composerShell: "composer-shell",
     composer: "composer",
@@ -4651,6 +4690,14 @@
       nodes.agentActivity.append(avatar, make("span", "", activity.text));
     };
 
+    const renderDeliveryActivity = (entries) => {
+      nodes.deliveryActivity.hidden = !pendingDeliveryPulse(
+        pendingUiMessages,
+        state.selectedAgent,
+        entries,
+      );
+    };
+
     const renderThread = (incomingCount = 0) => {
       const before = currentMetrics();
       const entries = projectTimeline(state.timelines[state.selectedAgent] || []);
@@ -4672,6 +4719,7 @@
         timeline.append(make("p", "empty-state", "Les messages de l’agent apparaîtront ici."));
       }
       renderActivity(entries);
+      renderDeliveryActivity(entries);
       nodes.thread.replaceChildren(timeline);
       const after = currentMetrics();
       const decision = decideScroll(before, after, incomingCount);
@@ -4700,18 +4748,19 @@
     const ingestThreadMessage = (payload, agentName) => {
       const deliveryId = text(payload && payload.delivery_id);
       if (!deliveryId) return false;
+      const role = payload.role === "user" ? "user" : "agent";
       const pending = pendingUiMessages.get(deliveryId);
       if (pending) {
         const pendingTarget = pendingDeliveryTarget(pending);
-        pendingUiMessages.set(deliveryId, { ...pending, state: "delivered" });
+        const terminal = role === "agent";
+        pendingUiMessages.set(deliveryId, { ...pending, state: terminal ? "terminal" : "delivered" });
         if (pendingTarget === state.selectedAgent) {
-          nodes.sendState.textContent = deliveryStateLabel("delivered");
+          nodes.sendState.textContent = terminal ? "réponse disponible" : deliveryStateLabel("delivered");
         }
       }
       const key = `${agentName}:${deliveryId}`;
       if (seenThreadMessages.has(key)) return false;
       seenThreadMessages.add(key);
-      const role = payload.role === "user" ? "user" : "agent";
       const body = text(payload.text);
       if (!body) return false;
       journalBodies.set(deliveryId, {
@@ -5035,26 +5084,18 @@
         const payload = await response.json();
         if (!response.ok) throw new Error(text(payload.code, `http_${response.status}`));
         const messageId = uiMessageIdentity(payload);
+        const acceptedAt = epochSeconds(payload.issued_at) || Date.now() / 1000;
+        rememberPendingUiMessage(pendingUiMessages, messageId, target, acceptedAt);
         applyIncoming({
           kind: "message",
           role: "user",
           agent: target,
           text: body,
-          at: epochSeconds(payload.issued_at) || Date.now() / 1000,
+          at: acceptedAt,
           status: deliveryStateLabel("accepted"),
           messageId: messageId || null,
           deliveryId: messageId || null,
         });
-        const injectionAlreadyObserved = (state.timelines[target] || []).some((entry) => {
-          if (entry.kind === "message") {
-            return !entry.status && uiMessageIdentity(entry) === messageId;
-          }
-          return entry.kind === "record"
-            && entry.record
-            && entry.record.event === "prompt_dispatched"
-            && entry.record.message_id === messageId;
-        });
-
         const current = createDraft(
           nodes.draft.value,
           nodes.draft.selectionStart,
@@ -5071,23 +5112,7 @@
             selectionEnd: completed.selectionEnd,
           });
         }
-        if (injectionAlreadyObserved) {
-          rememberPendingUiMessage(
-            pendingUiMessages,
-            messageId,
-            target,
-            epochSeconds(payload.issued_at) || Date.now() / 1000,
-          );
-          nodes.sendState.textContent = deliveryStateLabel("accepted");
-        } else {
-          rememberPendingUiMessage(
-            pendingUiMessages,
-            messageId,
-            target,
-            epochSeconds(payload.issued_at) || Date.now() / 1000,
-          );
-          nodes.sendState.textContent = deliveryStateLabel("accepted");
-        }
+        nodes.sendState.textContent = deliveryStateLabel("accepted");
       } catch (error) {
         const labels = {
           invalid_body: "message invalide",
@@ -5273,6 +5298,7 @@
     explicitSend,
     uiMessageIdentity,
     deliveryStateLabel,
+    pendingDeliveryPulse,
     notificationTarget,
     hasNewPendingReplayEvent,
     shouldSubmitKey,

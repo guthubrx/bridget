@@ -37,6 +37,9 @@ Critères d'acceptation :
   une formulation humaine de la dernière activité. Il ne révèle pas
   automatiquement un argument de commande ou du contenu sensible.
 - Sans activité fournisseur, aucun faux signal de travail n'est affiché.
+- Entre la remise par Bridget et la première trace fournisseur, l'interface
+  montre seulement trois points animés, sans bouille ni libellé de travail. Ils
+  disparaissent dès une activité réelle ou un terminal corrélé.
 - L'état disparaît ou devient terminal à la réponse finale, à l'interruption
   attestée ou à l'erreur terminale attestée.
 
