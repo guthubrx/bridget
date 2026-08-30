@@ -5,10 +5,10 @@
 
 Spec: 067-profils-extensions-secrets-projet
 Titre: Profils, extensions et secrets bornés par projet
-Statut: Draft
+Statut: Implemented - deployee en production le 2026-08-31
 Priorité: P1
-Tâches: 5/38 (13%)
-Tests: 2/19 (11%)
+Taches: 38/38 (100%)
+Tests: 15 tests cibles PASS; 4 echecs workspace preexistants documentes
 
 Résumé:
 - Contexte: un environnement Docker sans credentials, profils ni extensions ne peut pas servir durablement Codex, Claude ou Cursor, mais monter le home ou tous les secrets de l'hôte annulerait la frontière projet.
@@ -26,9 +26,9 @@ Fichiers:
 - implementation.md: ✓ (specs/067-profils-extensions-secrets-projet/implementation.md)
 <!-- SPEC-FORMALISM:END -->
 
-**Feature Branch**: `session-065-programme-environnements-projet`
+**Feature Branch**: `main` (integree, branche de travail supprimee)
 **Created**: 2026-08-29
-**Status**: Draft
+**Status**: Implemented - deployee en production le 2026-08-31
 **Priority**: P1
 **Dependencies**: SPEC-011, SPEC-015, SPEC-026, SPEC-064, SPEC-065, SPEC-066, SPEC-068
 

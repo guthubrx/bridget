@@ -44,7 +44,8 @@
 
 - Validation effectuée le 2026-08-29, itération 2 après clarification de
   l'accessibilité des secrets à tous les agents du projet.
-- Le statut reste `Draft` jusqu'à approbation humaine.
+- Approbation humaine recue le 2026-08-31 : statut implemente apres
+  integration, deploiement et controles de production.
 - Complément RC8 validé le 2026-08-30 sans credential réel.
 - Relecture indépendante intégrée contre `main` à `d589b24`; aucune valeur
   secrète ni tâche d'implémentation n'a été ajoutée.
