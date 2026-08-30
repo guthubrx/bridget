@@ -942,22 +942,37 @@ body:has(.agent-pane-resizer[data-dragging="true"]) {
   padding-top: 0.15rem;
 }
 
-.agent-identity-card__decommission {
-  justify-self: start;
+.agent-identity-card__action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.agent-identity-card__lifecycle {
   padding: 0.48rem 0.68rem;
   border-radius: 0.62rem;
-  background: color-mix(in srgb, var(--activity-error) 13%, transparent);
-  color: #ffb4ba;
+  background: var(--surface-hover);
+  color: var(--text-primary);
   font-size: 0.76rem;
   font-weight: 700;
 }
 
-.agent-identity-card__decommission:hover,
-.agent-identity-card__decommission:focus-visible {
+.agent-identity-card__lifecycle:hover,
+.agent-identity-card__lifecycle:focus-visible {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface-hover));
+}
+
+.agent-identity-card__lifecycle--decommission {
+  background: color-mix(in srgb, var(--activity-error) 13%, transparent);
+  color: #ffb4ba;
+}
+
+.agent-identity-card__lifecycle--decommission:hover,
+.agent-identity-card__lifecycle--decommission:focus-visible {
   background: color-mix(in srgb, var(--activity-error) 22%, transparent);
 }
 
-.agent-identity-card__decommission:disabled {
+.agent-identity-card__lifecycle:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
@@ -1036,6 +1051,12 @@ body:has(.agent-pane-resizer[data-dragging="true"]) {
 .agent-stop-confirmation__confirm {
   background: color-mix(in srgb, var(--activity-error) 28%, var(--surface-raised));
   color: #ffd4d7;
+}
+
+.agent-stop-confirmation__confirm[data-action="stop"],
+.agent-stop-confirmation__confirm[data-action="relaunch"] {
+  background: color-mix(in srgb, var(--accent) 24%, var(--surface-raised));
+  color: var(--text-primary);
 }
 
 @media (max-width: 42rem), (min-resolution: 2dppx) {

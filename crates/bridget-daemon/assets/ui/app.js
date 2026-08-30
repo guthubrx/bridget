@@ -247,7 +247,7 @@
         assert.equal(api.buildAgentStopUrl("jeton +"), "/v1/agents/stop?token=jeton+%2B");
         assert.deepEqual(api.agentStopFeedback(true, { outcome: "stopped" }), {
           tone: "success",
-          message: "Agent arrêté proprement. Son historique est conservé.",
+          message: "Agent arrêté proprement. Il reste visible et peut être relancé.",
         });
         assert.match(
           api.agentStopFeedback(true, { outcome: "stopped_forced", survivors_killed: 2 }).message,
@@ -262,6 +262,44 @@
         ]) {
           assert.match(api.agentStopFeedback(false, { code }).message, new RegExp(fragment));
         }
+      });
+
+      test("spec_075_matrice_cycle_de_vie_et_routes", () => {
+        const running = api.normalizeAgentRow({
+          name: "managed-running",
+          state: "connected",
+          persistent: true,
+        });
+        const stopped = { ...running, state: "stopped" };
+        const idle = { ...running, state: "idle" };
+        const recovering = { ...running, state: "recovering" };
+        assert.equal(api.agentLifecycleEligibility(running, "stop").eligible, true);
+        assert.equal(api.agentLifecycleEligibility(idle, "stop").eligible, true);
+        assert.equal(api.agentLifecycleEligibility(running, "relaunch").code, "agent_already_running");
+        assert.equal(api.agentLifecycleEligibility(stopped, "relaunch").eligible, true);
+        assert.equal(api.agentLifecycleEligibility(stopped, "decommission").eligible, true);
+        assert.deepEqual(api.agentLifecycleEligibility(recovering, "stop"), {
+          eligible: false,
+          code: "lifecycle_in_progress",
+          reason: "Une opération de cycle de vie est déjà en cours.",
+        });
+        assert.equal(api.buildAgentLifecycleUrl("relaunch", "a b"), "/v1/agents/relaunch?token=a+b");
+        assert.equal(
+          api.buildAgentLifecycleUrl("decommission", "a b"),
+          "/v1/agents/decommission?token=a+b",
+        );
+        assert.throws(
+          () => api.buildAgentLifecycleUrl("unknown", "a b"),
+          /Action de cycle de vie inconnue/,
+        );
+        assert.match(
+          api.agentLifecycleFeedback("relaunch", true, { outcome: "started", generation: 4 }).message,
+          /génération 4/,
+        );
+        assert.match(
+          api.agentLifecycleFeedback("decommission", true, { outcome: "decommissioned" }).message,
+          /historique est conservé/,
+        );
       });
 
       test("spec_073_ouverture_locale_reste_sous_150_ms_sans_reseau", () => {
@@ -2979,6 +3017,10 @@
   }
 
   function agentPresenceLabel(state) {
+    const normalized = String(state || "").trim().toLowerCase();
+    if (normalized === "recovering" || normalized === "relaunching") {
+      return "Relance en cours";
+    }
     const visualState = agentVisualState(state);
     const labels = {
       busy: "En cours",
@@ -3040,14 +3082,12 @@
   }
 
   function agentStopEligibility(agent) {
+    return agentLifecycleEligibility(agent, "stop");
+  }
+
+  function agentLifecycleEligibility(agent, action) {
     const normalized = normalizeAgentRow(agent);
-    if (normalized.state === "stopped") {
-      return {
-        eligible: false,
-        code: "agent_stopped",
-        reason: "Cet agent est déjà arrêté.",
-      };
-    }
+    const state = normalized.state.trim().toLowerCase();
     if (normalized.persistent === null) {
       return {
         eligible: false,
@@ -3055,7 +3095,57 @@
         reason: "Cet agent n’est pas géré par Bridget.",
       };
     }
-    return { eligible: true, code: "eligible", reason: "" };
+    if (state === "recovering" || state === "relaunching") {
+      return {
+        eligible: false,
+        code: "lifecycle_in_progress",
+        reason: "Une opération de cycle de vie est déjà en cours.",
+      };
+    }
+    const active = ["connected", "busy", "dnd", "alive", "idle"].includes(state);
+    if (action === "stop") {
+      if (state === "stopped") {
+        return {
+          eligible: false,
+          code: "agent_stopped",
+          reason: "Cet agent est déjà arrêté.",
+        };
+      }
+      if (active) return { eligible: true, code: "eligible", reason: "" };
+      return {
+        eligible: false,
+        code: "agent_unavailable",
+        reason: "L’état de cet agent ne permet pas une action de cycle de vie.",
+      };
+    }
+    if (action === "relaunch") {
+      if (state === "stopped") return { eligible: true, code: "eligible", reason: "" };
+      if (active) {
+        return {
+          eligible: false,
+          code: "agent_already_running",
+          reason: "Cet agent est déjà actif.",
+        };
+      }
+      return {
+        eligible: false,
+        code: "agent_unavailable",
+        reason: "L’état de cet agent ne permet pas une action de cycle de vie.",
+      };
+    }
+    if (action === "decommission") {
+      if (state === "stopped" || active) return { eligible: true, code: "eligible", reason: "" };
+      return {
+        eligible: false,
+        code: "agent_unavailable",
+        reason: "L’état de cet agent ne permet pas une action de cycle de vie.",
+      };
+    }
+    return {
+      eligible: false,
+      code: "agent_unavailable",
+      reason: "L’action de cycle de vie est inconnue.",
+    };
   }
 
   function agentHasActiveTurn(agent) {
@@ -3078,14 +3168,31 @@
   }
 
   function buildAgentStopUrl(token) {
-    return agentResourceUrl("/v1/agents/stop", token);
+    return buildAgentLifecycleUrl("stop", token);
+  }
+
+  function buildAgentLifecycleUrl(action, token) {
+    const routes = {
+      stop: "/v1/agents/stop",
+      relaunch: "/v1/agents/relaunch",
+      decommission: "/v1/agents/decommission",
+    };
+    const route = routes[action];
+    if (!route) {
+      throw new Error(`Action de cycle de vie inconnue: ${String(action || "")}`);
+    }
+    return agentResourceUrl(route, token);
   }
 
   function agentStopFeedback(ok, payload) {
+    return agentLifecycleFeedback("stop", ok, payload);
+  }
+
+  function agentLifecycleFeedback(action, ok, payload) {
     if (ok && payload && payload.outcome === "stopped") {
       return {
         tone: "success",
-        message: "Agent arrêté proprement. Son historique est conservé.",
+        message: "Agent arrêté proprement. Il reste visible et peut être relancé.",
       };
     }
     if (ok && payload && payload.outcome === "stopped_forced") {
@@ -3094,20 +3201,53 @@
         : 0;
       return {
         tone: "warning",
-        message: `Agent arrêté avec terminaison forcée (${survivors} processus survivants terminés). Son historique est conservé.`,
+        message: `Agent arrêté avec terminaison forcée (${survivors} processus survivants terminés). Il peut être relancé.`,
+      };
+    }
+    if (ok && payload && payload.outcome === "started") {
+      return {
+        tone: "success",
+        message: `Agent relancé${Number.isInteger(payload.generation) ? ` - génération ${payload.generation}` : ""}.`,
+      };
+    }
+    if (ok && payload && payload.outcome === "decommissioned") {
+      return {
+        tone: "success",
+        message: "Agent décommissionné. Son historique est conservé.",
+      };
+    }
+    if (ok && payload && payload.outcome === "decommissioned_forced") {
+      const survivors = Number.isInteger(payload.survivors_killed)
+        ? payload.survivors_killed
+        : 0;
+      return {
+        tone: "warning",
+        message: `Agent décommissionné après terminaison forcée (${survivors} processus survivants terminés).`,
       };
     }
     const messages = {
       agent_not_managed: "Cet agent n’est pas géré par Bridget.",
       agent_not_found: "Cet agent est introuvable.",
       agent_stopped: "Cet agent est déjà arrêté.",
+      agent_already_running: "Cet agent est déjà actif.",
+      agent_not_relaunchable: "Cet agent ne peut pas être relancé.",
+      agent_already_decommissioned: "Cet agent est déjà décommissionné.",
+      relaunch_rejected: "La relance a été refusée.",
       stop_timeout: "L’arrêt n’a pas été confirmé dans le délai.",
+      lifecycle_in_progress: "Une opération de cycle de vie est déjà en cours.",
+      agent_unavailable: "L’état de cet agent ne permet pas une action de cycle de vie.",
+      lifecycle_timeout: "L’opération n’a pas été confirmée dans le délai.",
       daemon_unavailable: "Le daemon Bridget est indisponible.",
-      invalid_request: "La demande de décommissionnement est invalide.",
+      invalid_request: "La demande de cycle de vie est invalide.",
+    };
+    const labels = {
+      stop: "L’arrêt a échoué.",
+      relaunch: "La relance a échoué.",
+      decommission: "Le décommissionnement a échoué.",
     };
     return {
       tone: "error",
-      message: messages[payload && payload.code] || "Le décommissionnement a échoué.",
+      message: messages[payload && payload.code] || labels[action] || "L’opération a échoué.",
     };
   }
 
@@ -5227,6 +5367,7 @@
     let identityCardAgentName = null;
     let identityCardFocusTarget = null;
     let stopConfirmationAgent = null;
+    let stopConfirmationAction = null;
     let stopConfirmationReturnFocus = null;
     let stopConfirmationControls = [];
     let stopInFlight = null;
@@ -5256,6 +5397,7 @@
     const closeStopConfirmation = (restoreFocus = true) => {
       const target = stopConfirmationReturnFocus;
       stopConfirmationAgent = null;
+      stopConfirmationAction = null;
       stopConfirmationReturnFocus = null;
       stopConfirmationControls = [];
       if (stopConfirmation) {
@@ -5342,26 +5484,45 @@
         children.push(excerpt);
       }
       const actionArea = make("div", "agent-identity-card__actions");
-      const eligibility = agentStopEligibility(agent);
-      const stopButton = make("button", "agent-identity-card__decommission", "Décommissionner");
-      stopButton.type = "button";
       const submitting = stopInFlight && stopInFlight.name === agent.name;
-      const terminalSuccess = stopResult
-        && stopResult.name === agent.name
-        && ["success", "warning"].includes(stopResult.tone);
-      stopButton.disabled = !eligibility.eligible || submitting || terminalSuccess;
-      if (submitting) stopButton.textContent = "Décommissionnement en cours…";
-      if (eligibility.eligible) {
-        stopButton.addEventListener("click", () => openStopConfirmation(agent, stopButton));
+      const managed = agentLifecycleEligibility(agent, "decommission");
+      const actionButtons = make("div", "agent-identity-card__action-buttons");
+      const lifecycleState = normalizeAgentRow(agent).state.trim().toLowerCase();
+      const stopped = lifecycleState === "stopped";
+      const active = ["connected", "busy", "dnd", "alive", "idle"].includes(lifecycleState);
+      const availableActions = stopped
+        ? [
+          { key: "relaunch", label: "Relancer" },
+          { key: "decommission", label: "Décommissionner" },
+        ]
+        : active ? [
+          { key: "stop", label: "Arrêter" },
+          { key: "decommission", label: "Décommissionner" },
+        ] : [];
+      for (const action of availableActions) {
+        const eligibility = agentLifecycleEligibility(agent, action.key);
+        const button = make(
+          "button",
+          `agent-identity-card__lifecycle agent-identity-card__lifecycle--${action.key}`,
+          submitting && stopInFlight.action === action.key ? `${action.label}…` : action.label,
+        );
+        button.type = "button";
+        button.disabled = !eligibility.eligible || submitting;
+        if (eligibility.eligible) {
+          button.addEventListener("click", () => openStopConfirmation(agent, action.key, button));
+        }
+        actionButtons.append(button);
       }
-      actionArea.append(stopButton);
-      if (!eligibility.eligible) {
-        actionArea.append(make("p", "agent-identity-card__action-note", eligibility.reason));
+      actionArea.append(actionButtons);
+      if (!managed.eligible) {
+        actionArea.append(make("p", "agent-identity-card__action-note", managed.reason));
       } else {
         actionArea.append(make(
           "p",
           "agent-identity-card__action-note",
-          "Arrête l’agent et le retire de la flotte active. Son historique est conservé.",
+          stopped
+            ? "La relance conserve son identité et son historique. Le décommissionnement le retire de la flotte."
+            : "L’arrêt le garde dans la flotte. Le décommissionnement le retire. L’historique est toujours conservé.",
         ));
       }
       if (stopResult && stopResult.name === agent.name) {
@@ -5405,25 +5566,43 @@
       if (moveFocus && canFocus(identityCardFocusTarget)) identityCardFocusTarget.focus();
     };
 
-    const openStopConfirmation = (agent, returnFocus) => {
+    const openStopConfirmation = (agent, action, returnFocus) => {
       if (!stopConfirmation || stopInFlight) return;
       stopConfirmationAgent = agent;
+      stopConfirmationAction = action;
       stopConfirmationReturnFocus = returnFocus;
       const dialog = make("div", "agent-stop-confirmation__dialog");
       dialog.setAttribute("role", "alertdialog");
       dialog.setAttribute("aria-modal", "true");
       dialog.setAttribute("aria-labelledby", "agent-stop-confirmation-title");
       dialog.setAttribute("aria-describedby", "agent-stop-confirmation-description");
-      const title = make("h2", "agent-stop-confirmation__title", `Décommissionner ${agent.name} ?`);
+      const wording = {
+        stop: {
+          verb: "Arrêter",
+          title: `Arrêter ${agent.name} ?`,
+          description: "Le processus sera arrêté. L’agent restera visible, relançable et son historique sera conservé.",
+        },
+        relaunch: {
+          verb: "Relancer",
+          title: `Relancer ${agent.name} ?`,
+          description: "Un nouveau processus sera lancé sous la même identité. L’historique sera conservé.",
+        },
+        decommission: {
+          verb: "Décommissionner",
+          title: `Décommissionner ${agent.name} ?`,
+          description: "Le processus sera arrêté si nécessaire, puis l’agent quittera la flotte. Son historique sera conservé.",
+        },
+      }[action];
+      const title = make("h2", "agent-stop-confirmation__title", wording.title);
       title.id = "agent-stop-confirmation-title";
       const description = make(
         "p",
         "agent-stop-confirmation__description",
-        "Le processus sera arrêté et l’agent quittera la flotte active. Son historique sera conservé.",
+        wording.description,
       );
       description.id = "agent-stop-confirmation-description";
       const children = [title, description];
-      if (agentHasActiveTurn(agent)) {
+      if (action !== "relaunch" && agentHasActiveTurn(agent)) {
         children.push(make(
           "p",
           "agent-stop-confirmation__warning",
@@ -5434,8 +5613,9 @@
       const cancelButton = make("button", "agent-stop-confirmation__cancel", "Annuler");
       cancelButton.type = "button";
       cancelButton.addEventListener("click", () => closeStopConfirmation(true));
-      const confirmButton = make("button", "agent-stop-confirmation__confirm", "Décommissionner");
+      const confirmButton = make("button", "agent-stop-confirmation__confirm", wording.verb);
       confirmButton.type = "button";
+      confirmButton.dataset.action = action;
       confirmButton.addEventListener("click", () => void submitAgentStop());
       controls.append(cancelButton, confirmButton);
       children.push(controls);
@@ -5448,29 +5628,30 @@
     };
 
     const submitAgentStop = async () => {
-      if (!stopConfirmationAgent || stopInFlight) return;
+      if (!stopConfirmationAgent || !stopConfirmationAction || stopInFlight) return;
       const agent = stopConfirmationAgent;
+      const action = stopConfirmationAction;
       const randomPart = windowRef.crypto && typeof windowRef.crypto.randomUUID === "function"
         ? windowRef.crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      const request = buildAgentStopRequest(agent.name, `stop-ui-${randomPart}`);
-      stopInFlight = { name: agent.name, commandId: request.command_id };
+      const request = buildAgentStopRequest(agent.name, `${action}-ui-${randomPart}`);
+      stopInFlight = { name: agent.name, action, commandId: request.command_id };
       stopResult = {
         name: agent.name,
         tone: "pending",
-        message: "Décommissionnement en cours…",
+        message: `${action === "stop" ? "Arrêt" : action === "relaunch" ? "Relance" : "Décommissionnement"} en cours…`,
       };
       closeStopConfirmation(false);
       renderIdentityCard(agent);
       try {
-        const response = await windowRef.fetch(buildAgentStopUrl(token), {
+        const response = await windowRef.fetch(buildAgentLifecycleUrl(action, token), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(request),
         });
         let payload = {};
         try { payload = await response.json(); } catch (_error) { /* réponse illisible */ }
-        stopResult = { name: agent.name, ...agentStopFeedback(response.ok, payload) };
+        stopResult = { name: agent.name, ...agentLifecycleFeedback(action, response.ok, payload) };
         if (response.ok) {
           fetchScopedSnapshot((url) => windowRef.fetch(url), token, state.selectedAgent)
             .then((scoped) => applySnapshotPayload(scoped.snapshot, scoped.agent))
@@ -5479,7 +5660,7 @@
       } catch (_error) {
         stopResult = {
           name: agent.name,
-          ...agentStopFeedback(false, { code: "daemon_unavailable" }),
+          ...agentLifecycleFeedback(action, false, { code: "daemon_unavailable" }),
         };
       } finally {
         stopInFlight = null;
@@ -6901,10 +7082,13 @@
     identityCardData,
     identityCardPosition,
     agentStopEligibility,
+    agentLifecycleEligibility,
     agentHasActiveTurn,
     buildAgentStopRequest,
     buildAgentStopUrl,
+    buildAgentLifecycleUrl,
     agentStopFeedback,
+    agentLifecycleFeedback,
     agentVisualState,
     createAgentAvatar,
     createDraft,

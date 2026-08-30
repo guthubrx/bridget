@@ -5,15 +5,16 @@
 //! `fleet.rs` ne fait aucun lookup idempotent parallèle.
 
 use crate::desired_state::{
-    DesiredAgentLink, DesiredEquipier, DesiredFleet, DesiredStateError, DesiredStateStore,
+    DesiredAgentLink, DesiredEquipier, DesiredFleet, DesiredLifecycleState, DesiredStateError,
+    DesiredStateStore,
 };
 pub use crate::idempotency::{
     AgentLinkEvent, AgentLinkRecord as AgentLink, AgentLinkState, DelegatedRuntimeEventInput,
     DelegatedRuntimeEventRecord,
 };
 use crate::idempotency::{
-    IdempotencyError, IdempotencyKey, IdempotencyStore, OperationKind, SpawnCommand,
-    SpawnCommandIssue, SpawnCommandState, SpawnReservation,
+    HistoricalManagedSpawn, IdempotencyError, IdempotencyKey, IdempotencyStore, OperationKind,
+    SpawnCommand, SpawnCommandIssue, SpawnCommandState, SpawnReservation,
 };
 
 /// Vue de propriété calculée depuis le lien durable et ses index. Elle ne
@@ -287,6 +288,13 @@ pub enum SpawnSubmission {
     IdempotencyExpired,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdoptStoppedResult {
+    Adopted { generation: u64 },
+    AlreadyManaged,
+    NoManagedHistory,
+}
+
 #[derive(Debug)]
 pub enum FleetError {
     InvalidOrder(&'static str),
@@ -401,6 +409,7 @@ impl FleetSupervisor {
         }
         let mut idempotency = IdempotencyStore::open(database_path)?;
         let supervisor_scope = idempotency.supervisor_scope()?;
+        desired.stop_non_persistent_running()?;
         let desired_fleet = desired.load_at_startup()?;
         let mut inner = FleetInner {
             idempotency,
@@ -503,14 +512,92 @@ impl FleetSupervisor {
         self.desired.load().map_err(Into::into)
     }
 
+    pub fn desired_entry(&self, name: &str) -> Result<Option<DesiredEquipier>, FleetError> {
+        Ok(self.desired.load()?.equipiers.remove(name))
+    }
+
+    pub fn mark_stopped(&self, name: &str) -> Result<bool, FleetError> {
+        Ok(self
+            .desired
+            .set_lifecycle_state(name, DesiredLifecycleState::Stopped)?
+            .is_some())
+    }
+
+    pub fn decommission(&self, name: &str) -> Result<bool, FleetError> {
+        let changed = self
+            .desired
+            .set_lifecycle_state(name, DesiredLifecycleState::Decommissioned)?
+            .is_some();
+        if changed {
+            self.roster.forget(name);
+        }
+        Ok(changed)
+    }
+
+    /// Importe explicitement dans le registre v4 un ancien agent arrêté.
+    /// Le nom seul ne suffit jamais : une saga connectée et une définition
+    /// runtime complète doivent être présentes dans le store idempotent.
+    pub fn adopt_stopped(&self, name: &str, now: i64) -> Result<AdoptStoppedResult, FleetError> {
+        if self.desired.load()?.equipiers.contains_key(name) {
+            return Ok(AdoptStoppedResult::AlreadyManaged);
+        }
+        let historical: Option<HistoricalManagedSpawn> = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .idempotency
+            .latest_connected_spawn_by_name(name)?;
+        let Some(historical) = historical else {
+            return Ok(AdoptStoppedResult::NoManagedHistory);
+        };
+        self.desired.upsert(
+            name.to_string(),
+            DesiredEquipier {
+                agent_type: historical.agent_type.clone(),
+                cwd: historical.cwd.clone(),
+                command_id: historical.command_id,
+                generation: historical.generation,
+                created: now.to_string(),
+                persistent: historical.persistent,
+                lifecycle_state: DesiredLifecycleState::Stopped,
+                resolved_definition: Some(historical.resolved_definition),
+                domain: resolved_domain(None, &historical.cwd),
+                project: historical.project,
+                agent_link: None,
+            },
+        )?;
+        self.roster.remember(
+            name.to_string(),
+            NamedRosterEntry {
+                agent_type: historical.agent_type,
+                persistent: historical.persistent,
+                domain: resolved_domain(None, &historical.cwd),
+            },
+        );
+        Ok(AdoptStoppedResult::Adopted {
+            generation: historical.generation,
+        })
+    }
+
     pub fn remove_desired(&self, name: &str) -> Result<(), FleetError> {
         self.desired.remove(name)?;
         self.roster.forget(name);
         Ok(())
     }
 
-    pub fn drain_non_persistent_named(&self) -> Vec<(String, NamedRosterEntry)> {
-        self.roster.drain_non_persistent()
+    pub fn drain_legacy_non_persistent_named(
+        &self,
+    ) -> Result<Vec<(String, NamedRosterEntry)>, FleetError> {
+        let desired = self.desired.load()?;
+        let mut legacy = Vec::new();
+        for (name, entry) in self.roster.drain_non_persistent() {
+            if desired.equipiers.contains_key(&name) {
+                self.roster.remember(name, entry);
+            } else {
+                legacy.push((name, entry));
+            }
+        }
+        Ok(legacy)
     }
 
     pub fn persistent_named(&self) -> Vec<(String, NamedRosterEntry)> {
@@ -523,10 +610,18 @@ impl FleetSupervisor {
     /// ne garde qu'une entrée par nom, donc la dernière génération connectée,
     /// alors que la table conserve toutes les générations et rend une ligne
     /// arbitraire dès qu'on la groupe sans trier. C'est aussi la source que
-    /// consulte `drain_non_persistent_named` : l'annuaire publie donc
+    /// consulte `drain_legacy_non_persistent_named` : l'annuaire publie donc
     /// exactement ce qui décidera du drain.
     pub fn named_persistence(&self) -> BTreeMap<String, bool> {
-        self.roster.persistence_by_name()
+        let mut persistence = self.roster.persistence_by_name();
+        if let Ok(desired) = self.desired.load() {
+            for (name, entry) in desired.equipiers {
+                if entry.lifecycle_state != DesiredLifecycleState::Decommissioned {
+                    persistence.insert(name, entry.persistent);
+                }
+            }
+        }
+        persistence
     }
 
     pub fn forget_named(&self, name: &str) {
@@ -757,6 +852,56 @@ impl FleetSupervisor {
         order: &SpawnOrder,
         now: i64,
     ) -> Result<SpawnSubmission, FleetError> {
+        self.request_spawn_with_policy(order, now, None)
+    }
+
+    /// Réserve une nouvelle génération sous un nom arrêté déjà présent dans
+    /// l'inventaire. Aucun autre état existant n'est contourné.
+    pub fn request_relaunch(
+        &self,
+        order: &SpawnOrder,
+        now: i64,
+    ) -> Result<SpawnSubmission, FleetError> {
+        let Some(name) = order.requested_name.as_deref() else {
+            return Err(FleetError::InvalidOrder("nom de relance absent"));
+        };
+        let Some(entry) = self.desired_entry(name)? else {
+            return Err(FleetError::InvalidOrder("agent de relance absent"));
+        };
+        if entry.lifecycle_state != DesiredLifecycleState::Stopped {
+            return Err(FleetError::InvalidOrder("agent de relance non arrêté"));
+        }
+        self.request_spawn_with_policy(order, now, Some(DesiredLifecycleState::Stopped))
+    }
+
+    /// Réserve une nouvelle génération de reprise sous une entrée persistante
+    /// encore déclarée running. Ce contournement n'est accessible qu'au
+    /// chemin de reprise du daemon.
+    pub fn request_recovery(
+        &self,
+        order: &SpawnOrder,
+        now: i64,
+    ) -> Result<SpawnSubmission, FleetError> {
+        let Some(name) = order.requested_name.as_deref() else {
+            return Err(FleetError::InvalidOrder("nom de reprise absent"));
+        };
+        let Some(entry) = self.desired_entry(name)? else {
+            return Err(FleetError::InvalidOrder("agent de reprise absent"));
+        };
+        if entry.lifecycle_state != DesiredLifecycleState::Running || !entry.persistent {
+            return Err(FleetError::InvalidOrder(
+                "agent de reprise non persistant ou non actif",
+            ));
+        }
+        self.request_spawn_with_policy(order, now, Some(DesiredLifecycleState::Running))
+    }
+
+    fn request_spawn_with_policy(
+        &self,
+        order: &SpawnOrder,
+        now: i64,
+        allowed_existing_state: Option<DesiredLifecycleState>,
+    ) -> Result<SpawnSubmission, FleetError> {
         validate_order(order)?;
         let canonical = canonical_order(order)?;
         let mut inner = self
@@ -808,6 +953,21 @@ impl FleetSupervisor {
                         &command,
                         "name_active",
                         "nom déjà actif",
+                    );
+                }
+                let existing = self.desired.load()?.equipiers.remove(&command.name);
+                let allowed = allowed_existing_state.is_some_and(|allowed_state| {
+                    existing
+                        .as_ref()
+                        .is_some_and(|entry| entry.lifecycle_state == allowed_state)
+                });
+                if existing.is_some() && !allowed {
+                    return terminal_refusal(
+                        &mut inner,
+                        &key,
+                        &command,
+                        "name_reserved",
+                        "nom réservé par un agent géré",
                     );
                 }
                 if inner.active_by_command.len() >= self.config.quota {
@@ -998,22 +1158,22 @@ impl FleetSupervisor {
                 expected: SpawnCommandState::Starting,
             });
         }
-        if active.persistent {
-            self.desired.upsert(
-                active.name.clone(),
-                DesiredEquipier {
-                    agent_type: active.agent_type.clone(),
-                    cwd: active.cwd.clone(),
-                    command_id: active.command_id.clone(),
-                    generation: active.generation,
-                    created: now.to_string(),
-                    agent_link: desired_agent_link(&active),
-                    resolved_definition: active.resolved_definition.clone(),
-                    domain: resolved_domain(None, &active.cwd),
-                    project: active.project.clone(),
-                },
-            )?;
-        }
+        self.desired.upsert(
+            active.name.clone(),
+            DesiredEquipier {
+                agent_type: active.agent_type.clone(),
+                cwd: active.cwd.clone(),
+                command_id: active.command_id.clone(),
+                generation: active.generation,
+                created: now.to_string(),
+                persistent: active.persistent,
+                lifecycle_state: DesiredLifecycleState::Running,
+                agent_link: desired_agent_link(&active),
+                resolved_definition: active.resolved_definition.clone(),
+                domain: resolved_domain(None, &active.cwd),
+                project: active.project.clone(),
+            },
+        )?;
         self.roster.remember(
             active.name.clone(),
             NamedRosterEntry {
@@ -1073,8 +1233,8 @@ impl FleetSupervisor {
 
     /// Invalide la génération avant toute E/S d'arrêt. Une génération encore
     /// en lancement devient `Cancelled`; une génération déjà `Connected`
-    /// conserve son issue de spawn mais est retirée durablement de l'état
-    /// désiré afin qu'aucun redémarrage ne puisse la ressusciter.
+    /// conserve son issue de spawn mais passe durablement à `stopped` afin
+    /// qu'aucun redémarrage ne puisse la ressusciter.
     pub fn invalidate_for_stop(&self, lease: &SpawnLease) -> Result<(), FleetError> {
         let mut inner = self
             .inner
@@ -1085,10 +1245,7 @@ impl FleetSupervisor {
                 return Err(FleetError::StaleGeneration);
             }
             close_agent_link(&mut inner, &active, unix_now())?;
-            if active.persistent {
-                self.desired.remove(&active.name)?;
-            }
-            self.roster.forget(&active.name);
+            self.persist_stopped_active(&active)?;
             let issue = SpawnCommandIssue::Cancelled {
                 reason: "arrêt demandé".to_string(),
             };
@@ -1115,10 +1272,24 @@ impl FleetSupervisor {
         if !connected {
             return Err(FleetError::StaleGeneration);
         }
-        if lease.persistent {
-            self.desired.remove(&lease.name)?;
-        }
-        self.roster.forget(&lease.name);
+        self.desired.mark_stopped_if_generation(
+            &lease.name,
+            &lease.command_id,
+            lease.generation,
+        )?;
+        self.roster.remember(
+            lease.name.clone(),
+            NamedRosterEntry {
+                agent_type: self
+                    .desired_entry(&lease.name)?
+                    .map(|entry| entry.agent_type)
+                    .unwrap_or_else(|| "unknown".to_string()),
+                persistent: lease.persistent,
+                domain: self
+                    .desired_entry(&lease.name)?
+                    .and_then(|entry| entry.domain),
+            },
+        );
         if let Some(link_id) = &lease.link_id {
             inner.idempotency.transition_agent_link(
                 link_id,
@@ -1136,6 +1307,61 @@ impl FleetSupervisor {
         Ok(())
     }
 
+    fn persist_stopped_active(&self, active: &ActiveSpawn) -> Result<(), FleetError> {
+        let existing = self.desired_entry(&active.name)?;
+        if let Some(entry) = existing {
+            if entry.command_id == active.command_id && entry.generation == active.generation {
+                self.desired.mark_stopped_if_generation(
+                    &active.name,
+                    &active.command_id,
+                    active.generation,
+                )?;
+            } else {
+                self.desired
+                    .set_lifecycle_state(&active.name, DesiredLifecycleState::Stopped)?;
+            }
+            self.roster.remember(
+                active.name.clone(),
+                NamedRosterEntry {
+                    agent_type: entry.agent_type,
+                    persistent: entry.persistent,
+                    domain: entry.domain,
+                },
+            );
+            return Ok(());
+        }
+        let Some(resolved_definition) = active.resolved_definition.clone() else {
+            self.roster.forget(&active.name);
+            return Ok(());
+        };
+        let domain = resolved_domain(None, &active.cwd);
+        self.desired.upsert(
+            active.name.clone(),
+            DesiredEquipier {
+                agent_type: active.agent_type.clone(),
+                cwd: active.cwd.clone(),
+                command_id: active.command_id.clone(),
+                generation: active.generation,
+                created: unix_now().to_string(),
+                persistent: active.persistent,
+                lifecycle_state: DesiredLifecycleState::Stopped,
+                resolved_definition: Some(resolved_definition),
+                domain: domain.clone(),
+                project: active.project.clone(),
+                agent_link: desired_agent_link(active),
+            },
+        )?;
+        self.roster.remember(
+            active.name.clone(),
+            NamedRosterEntry {
+                agent_type: active.agent_type.clone(),
+                persistent: active.persistent,
+                domain,
+            },
+        );
+        Ok(())
+    }
+
     fn finish_non_success(
         &self,
         lease: &SpawnLease,
@@ -1146,10 +1372,11 @@ impl FleetSupervisor {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         let active = active_for_lease(&inner, lease)?.clone();
-        if active.persistent {
-            self.desired.remove(&active.name)?;
+        if self.desired_entry(&active.name)?.is_some() {
+            self.persist_stopped_active(&active)?;
+        } else {
+            self.roster.forget(&active.name);
         }
-        self.roster.forget(&active.name);
         close_agent_link(&mut inner, &active, unix_now())?;
         let key = spawn_key(&inner, &active.command_id)?;
         inner
@@ -1226,6 +1453,8 @@ fn recover_commands(inner: &mut FleetInner, desired: &DesiredFleet) -> Result<()
         if let Some(equipier) = desired.equipiers.get(&command.name)
             && equipier.command_id == command.command_id
             && equipier.generation == command.generation
+            && equipier.persistent
+            && equipier.lifecycle_state == DesiredLifecycleState::Running
         {
             let active =
                 ActiveSpawn {
@@ -1236,7 +1465,7 @@ fn recover_commands(inner: &mut FleetInner, desired: &DesiredFleet) -> Result<()
                     )?,
                     generation: command.generation,
                     deadline_at: command.deadline_at,
-                    persistent: true,
+                    persistent: equipier.persistent,
                     project: equipier.project.clone(),
                     link_id: equipier
                         .agent_link
@@ -1553,10 +1782,11 @@ fn expire_locked(
     roster: &NamedRosterStore,
     active: &ActiveSpawn,
 ) -> Result<(), FleetError> {
-    if active.persistent {
-        desired.remove(&active.name)?;
+    let retained =
+        desired.mark_stopped_if_generation(&active.name, &active.command_id, active.generation)?;
+    if !retained {
+        roster.forget(&active.name);
     }
-    roster.forget(&active.name);
     close_agent_link(inner, active, unix_now())?;
     let issue = SpawnCommandIssue::Cancelled {
         reason: "spawn_timeout".to_string(),
@@ -1717,6 +1947,143 @@ mod tests {
     }
 
     #[test]
+    fn adoption_exige_une_generation_connectee_et_reconstruit_un_stopped_complet() {
+        let root = test_root("adopt-stopped");
+        let supervisor = open(&root);
+        let spawn = order("command-adopt", Some("ancien-codex"), false);
+        let lease = start(&supervisor, &spawn);
+        supervisor
+            .mark_starting(&lease, NOW, &resolved_test_definition())
+            .unwrap();
+        supervisor
+            .register_connected(&lease, &lease.instance_id, NOW + 1)
+            .unwrap();
+        supervisor.remove_desired("ancien-codex").unwrap();
+
+        assert_eq!(
+            supervisor.adopt_stopped("inconnu", NOW + 2).unwrap(),
+            AdoptStoppedResult::NoManagedHistory
+        );
+        assert_eq!(
+            supervisor.adopt_stopped("ancien-codex", NOW + 2).unwrap(),
+            AdoptStoppedResult::Adopted {
+                generation: lease.generation
+            }
+        );
+        let adopted = supervisor
+            .desired_entry("ancien-codex")
+            .unwrap()
+            .expect("entrée adoptée");
+        assert_eq!(adopted.lifecycle_state, DesiredLifecycleState::Stopped);
+        assert!(!adopted.persistent);
+        assert_eq!(adopted.cwd, PathBuf::from("/tmp"));
+        assert_eq!(
+            adopted.resolved_definition,
+            Some(resolved_test_definition())
+        );
+        assert_eq!(
+            supervisor.adopt_stopped("ancien-codex", NOW + 3).unwrap(),
+            AdoptStoppedResult::AlreadyManaged
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn relance_change_de_generation_sans_perdre_le_stopped_et_decommission_reserve_le_nom() {
+        let root = test_root("relaunch-decommission");
+        let supervisor = open(&root);
+        let initial = order("command-initial", Some("agent-logique"), true);
+        let initial_lease = start(&supervisor, &initial);
+        supervisor
+            .mark_starting(&initial_lease, NOW, &resolved_test_definition())
+            .unwrap();
+        supervisor
+            .register_connected(&initial_lease, &initial_lease.instance_id, NOW + 1)
+            .unwrap();
+        assert!(supervisor.mark_stopped("agent-logique").unwrap());
+        drop(supervisor);
+        let supervisor = open(&root);
+        assert_eq!(
+            supervisor
+                .desired_entry("agent-logique")
+                .unwrap()
+                .unwrap()
+                .lifecycle_state,
+            DesiredLifecycleState::Stopped
+        );
+
+        let failed_order = order("command-relaunch-failed", Some("agent-logique"), true);
+        let failed_lease = match supervisor.request_relaunch(&failed_order, NOW + 2).unwrap() {
+            SpawnSubmission::Start(lease) => lease,
+            other => panic!("relance attendue: {other:?}"),
+        };
+        supervisor
+            .mark_starting(&failed_lease, NOW + 2, &resolved_test_definition())
+            .unwrap();
+        supervisor
+            .fail(&failed_lease, "startup_failed", "fixture")
+            .unwrap();
+        let retained = supervisor
+            .desired_entry("agent-logique")
+            .unwrap()
+            .expect("stopped conservé après échec");
+        assert_eq!(retained.lifecycle_state, DesiredLifecycleState::Stopped);
+        assert_eq!(retained.command_id, initial.command_id);
+
+        let success_order = order("command-relaunch-ok", Some("agent-logique"), true);
+        let success_lease = match supervisor
+            .request_relaunch(&success_order, NOW + 3)
+            .unwrap()
+        {
+            SpawnSubmission::Start(lease) => lease,
+            other => panic!("nouvelle relance attendue: {other:?}"),
+        };
+        assert!(success_lease.generation > initial_lease.generation);
+        supervisor
+            .mark_starting(&success_lease, NOW + 3, &resolved_test_definition())
+            .unwrap();
+        supervisor
+            .register_connected(&success_lease, &success_lease.instance_id, NOW + 4)
+            .unwrap();
+        let running = supervisor
+            .desired_entry("agent-logique")
+            .unwrap()
+            .expect("relance connectée");
+        assert_eq!(running.lifecycle_state, DesiredLifecycleState::Running);
+        assert_eq!(running.command_id, success_order.command_id);
+
+        assert!(supervisor.mark_stopped("agent-logique").unwrap());
+        assert!(supervisor.decommission("agent-logique").unwrap());
+        drop(supervisor);
+        let supervisor = open(&root);
+        assert_eq!(
+            supervisor
+                .desired_entry("agent-logique")
+                .unwrap()
+                .unwrap()
+                .lifecycle_state,
+            DesiredLifecycleState::Decommissioned
+        );
+        let historical = supervisor
+            .inner
+            .lock()
+            .unwrap()
+            .idempotency
+            .latest_connected_spawn_by_name("agent-logique")
+            .unwrap()
+            .expect("historique de la génération relancée conservé");
+        assert_eq!(historical.generation, success_lease.generation);
+        let reserved = order("command-reuse", Some("agent-logique"), true);
+        assert!(matches!(
+            supervisor.request_spawn(&reserved, NOW + 5).unwrap(),
+            SpawnSubmission::Terminal(SpawnCommandIssue::Failed { category, .. })
+                if category == "name_reserved"
+        ));
+        assert!(!supervisor.named_persistence().contains_key("agent-logique"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn reprise_expose_les_generations_en_vol_dans_l_ordre_des_noms() {
         let root = test_root("recovery-candidates");
         let supervisor = open(&root);
@@ -1742,6 +2109,8 @@ mod tests {
                         command_id: command_id.to_string(),
                         generation: lease.generation,
                         created: NOW.to_string(),
+                        persistent: true,
+                        lifecycle_state: DesiredLifecycleState::Running,
                         resolved_definition: Some(resolved_test_definition()),
                         domain: None,
                         project: project.clone(),
@@ -1991,18 +2360,19 @@ mod tests {
             SpawnSubmission::Terminal(SpawnCommandIssue::Cancelled { ref reason })
                 if reason == "arrêt demandé"
         ));
-        assert!(
+        assert_eq!(
             DesiredStateStore::at_path(root.join("fleet.json"))
                 .load()
                 .unwrap()
-                .equipiers
-                .is_empty()
+                .equipiers["codex-stop"]
+                .lifecycle_state,
+            DesiredLifecycleState::Stopped
         );
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn stop_connecte_preserve_l_issue_spawn_mais_retire_l_etat_desire() {
+    fn stop_connecte_preserve_l_issue_spawn_et_marque_l_agent_arrete() {
         let root = test_root("stop-connected");
         let supervisor = open(&root);
         let spawn = order("command-stop-connected", Some("codex-stop"), true);
@@ -2020,12 +2390,13 @@ mod tests {
             supervisor.request_spawn(&spawn, NOW + 2).unwrap(),
             SpawnSubmission::Terminal(connected)
         );
-        assert!(
+        assert_eq!(
             DesiredStateStore::at_path(root.join("fleet.json"))
                 .load()
                 .unwrap()
-                .equipiers
-                .is_empty()
+                .equipiers["codex-stop"]
+                .lifecycle_state,
+            DesiredLifecycleState::Stopped
         );
         fs::remove_dir_all(root).unwrap();
     }

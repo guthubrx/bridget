@@ -3,10 +3,11 @@
 use crate::daemon::{self, DaemonConfig};
 use bridget_core::{BridgetMessage, router::validate_agent_name};
 use bridget_transport::protocol::{
-    AgentInfo, AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole,
-    GuichetDurationClass, IdempotencyIssue, LedgerMessage, LedgerScope, PresenceMode, RequestInfo,
-    ReviewTarget, ReviewVerdict, ReviewVerdictEvidence, RuntimeSource, ServiceRequestOperation,
-    ServiceRequestPayload, ServiceSuiteDeclaration, decode, encode, is_canonical_git_sha,
+    AdoptStoppedOutcome, AgentInfo, AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability,
+    ConnectionRole, DecommissionOutcome, GuichetDurationClass, IdempotencyIssue, LedgerMessage,
+    LedgerScope, PresenceMode, RelaunchOutcome, RequestInfo, ReviewTarget, ReviewVerdict,
+    ReviewVerdictEvidence, RuntimeSource, ServiceRequestOperation, ServiceRequestPayload,
+    ServiceSuiteDeclaration, decode, encode, is_canonical_git_sha,
 };
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::fmt::Write as _;
@@ -126,6 +127,9 @@ pub fn run() {
         "attach" => cmd_attach(&args[2..]),
         "spawn" => cmd_spawn(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
+        "relaunch" => cmd_relaunch(&args[2..]),
+        "decommission" => cmd_decommission(&args[2..]),
+        "adopt-stopped" => cmd_adopt_stopped(&args[2..]),
         "send" => cmd_send(&args[2..]),
         "guichet" => cmd_guichet(&args[2..]),
         "cancel" => cmd_cancel(&args[2..]),
@@ -287,6 +291,9 @@ fn print_usage() {
            attach <N>             Suit un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--name N]\n  \
            stop <N>               Arrête un équipier géré\n  \
+           relaunch <N>           Relance un équipier géré arrêté\n  \
+           decommission <N>       Retire un équipier de la flotte visible\n  \
+           adopt-stopped <N>...   Importe explicitement d'anciens agents arrêtés\n  \
            send --to <N> [--] <MSG> Envoie un message\n  \
            reply [--] <MSG>       Répond au dernier expéditeur\n  \
            cancel <ID>            Annule une demande suivie [--reason <T>]\n  \
@@ -481,6 +488,155 @@ fn cmd_stop(args: &[String]) {
     }
 }
 
+fn cmd_relaunch(args: &[String]) {
+    let (name, command_id) = parse_lifecycle_args(args, "relaunch").unwrap_or_else(|error| {
+        eprintln!("usage: bridget relaunch <nom> [--command-id ID]");
+        eprintln!("erreur: {error}");
+        std::process::exit(2);
+    });
+    println!("command_id: {command_id}");
+    match send_control_to_daemon(WrapperToDaemon::RelaunchOrder {
+        name,
+        command_id: command_id.clone(),
+    }) {
+        Ok(DaemonToWrapper::RelaunchResult { outcome, .. }) => match outcome {
+            RelaunchOutcome::Started { name, generation } => {
+                println!("Équipier relancé : {name} (génération {generation}).")
+            }
+            RelaunchOutcome::AlreadyRunning => {
+                eprintln!("RELANCE REFUSÉE: l'équipier est déjà actif");
+                std::process::exit(1);
+            }
+            RelaunchOutcome::NotManaged => {
+                eprintln!("RELANCE REFUSÉE: l'agent n'est pas géré par le daemon");
+                std::process::exit(1);
+            }
+            RelaunchOutcome::NotFound => {
+                eprintln!("RELANCE REFUSÉE: équipier introuvable");
+                std::process::exit(1);
+            }
+            RelaunchOutcome::NotRelaunchable { reason } => {
+                eprintln!("RELANCE REFUSÉE: {reason}");
+                std::process::exit(1);
+            }
+            RelaunchOutcome::Rejected { reason } => {
+                eprintln!("RELANCE REFUSÉE: {}", display_spawn_refusal(&reason));
+                std::process::exit(1);
+            }
+            RelaunchOutcome::Timeout { state } => {
+                eprintln!("RELANCE INCOMPLÈTE: délai dépassé dans l'état {state}");
+                std::process::exit(1);
+            }
+        },
+        Ok(other) => {
+            eprintln!("réponse relaunch inattendue du daemon: {other:?}");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("daemon inaccessible: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_decommission(args: &[String]) {
+    let (name, command_id) = parse_lifecycle_args(args, "decommission").unwrap_or_else(|error| {
+        eprintln!("usage: bridget decommission <nom> [--command-id ID]");
+        eprintln!("erreur: {error}");
+        std::process::exit(2);
+    });
+    println!("command_id: {command_id}");
+    match send_control_to_daemon(WrapperToDaemon::DecommissionOrder {
+        name,
+        command_id: command_id.clone(),
+    }) {
+        Ok(DaemonToWrapper::DecommissionResult { outcome, .. }) => match outcome {
+            DecommissionOutcome::Decommissioned => {
+                println!("Équipier décommissionné. Historique conservé.")
+            }
+            DecommissionOutcome::DecommissionedForced { survivors_killed } => println!(
+                "Équipier décommissionné après arrêt forcé ({survivors_killed} processus survivants terminés). Historique conservé."
+            ),
+            DecommissionOutcome::AlreadyDecommissioned => {
+                println!("Équipier déjà décommissionné.")
+            }
+            DecommissionOutcome::NotManaged => {
+                eprintln!("DÉCOMMISSIONNEMENT REFUSÉ: l'agent n'est pas géré par le daemon");
+                std::process::exit(1);
+            }
+            DecommissionOutcome::NotFound => {
+                eprintln!("DÉCOMMISSIONNEMENT REFUSÉ: équipier introuvable");
+                std::process::exit(1);
+            }
+            DecommissionOutcome::Timeout { state } => {
+                eprintln!("DÉCOMMISSIONNEMENT INCOMPLET: {state}");
+                std::process::exit(1);
+            }
+        },
+        Ok(other) => {
+            eprintln!("réponse decommission inattendue du daemon: {other:?}");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("daemon inaccessible: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_adopt_stopped(args: &[String]) {
+    if args.is_empty() {
+        eprintln!("usage: bridget adopt-stopped <nom>...");
+        std::process::exit(2);
+    }
+    for name in args {
+        if let Err(error) = validate_agent_name(name) {
+            eprintln!("adopt-stopped: nom invalide {name}: {error}");
+            std::process::exit(2);
+        }
+    }
+    let mut refused = false;
+    for name in args {
+        let command_id = uuid::Uuid::new_v4().to_string();
+        match send_control_to_daemon(WrapperToDaemon::AdoptStoppedOrder {
+            name: name.clone(),
+            command_id,
+        }) {
+            Ok(DaemonToWrapper::AdoptStoppedResult { outcome, .. }) => match outcome {
+                AdoptStoppedOutcome::Adopted { generation } => {
+                    println!("{name}: adopté en état arrêté (génération {generation})")
+                }
+                AdoptStoppedOutcome::AlreadyManaged => {
+                    println!("{name}: déjà géré par le registre durable")
+                }
+                AdoptStoppedOutcome::NotStopped => {
+                    eprintln!("{name}: refusé, l'agent est encore actif ou injoignable");
+                    refused = true;
+                }
+                AdoptStoppedOutcome::NoManagedHistory => {
+                    eprintln!("{name}: refusé, aucune génération gérée connectée n'est prouvée");
+                    refused = true;
+                }
+                AdoptStoppedOutcome::IncompleteHistory { reason } => {
+                    eprintln!("{name}: refusé, historique géré incomplet: {reason}");
+                    refused = true;
+                }
+            },
+            Ok(other) => {
+                eprintln!("{name}: réponse d'adoption inattendue du daemon: {other:?}");
+                refused = true;
+            }
+            Err(error) => {
+                eprintln!("{name}: daemon inaccessible: {error}");
+                refused = true;
+            }
+        }
+    }
+    if refused {
+        std::process::exit(1);
+    }
+}
+
 fn parse_spawn_args(args: &[String]) -> Result<ParsedSpawnArgs, String> {
     let agent_type = args
         .first()
@@ -553,6 +709,10 @@ fn parse_spawn_args(args: &[String]) -> Result<ParsedSpawnArgs, String> {
 }
 
 fn parse_stop_args(args: &[String]) -> Result<(String, String), String> {
+    parse_lifecycle_args(args, "stop")
+}
+
+fn parse_lifecycle_args(args: &[String], action: &str) -> Result<(String, String), String> {
     let name = args
         .first()
         .cloned()
@@ -564,7 +724,7 @@ fn parse_stop_args(args: &[String]) -> Result<(String, String), String> {
             validate_command_id(&args[2])?;
             args[2].clone()
         }
-        Some(_) => return Err("options stop invalides".to_string()),
+        Some(_) => return Err(format!("options {action} invalides")),
     };
     Ok((name, command_id))
 }
