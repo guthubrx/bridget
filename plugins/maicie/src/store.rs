@@ -22,11 +22,12 @@ use crate::domain::{
     IssueGreffe, LienArbitrage, LigneeDelegation, LotReassignation, MotifRefusDelegationLocale,
     MotifRefusGreffe, NotificationOutbox, NotificationReassignation, ObjectifCoordonne,
     ObjectiveOpeningPermit, OperationGuichet, OutboxDelegation, PolitiqueReassignation,
-    QualificationDependance, ReceptionGreffe, RecuCorrelation, ReductionCoordinationActive,
-    ReductionOuvertureDelegation, ReductionReassignation, SuiteObjective,
-    TransitionCoordinationActive, TypeDecision, TypeEffetDemandeSuivie, TypeEvenementAttendu,
-    TypeFaitReassignation, TypeNotificationReassignation, identifiant_deterministe,
-    reduire_coordination, reduire_ouverture_dependance, reduire_reassignation,
+    ProjectIdentity, ProjectIdentityStatus, QualificationDependance, ReceptionGreffe,
+    RecuCorrelation, ReductionCoordinationActive, ReductionOuvertureDelegation,
+    ReductionReassignation, SuiteObjective, TransitionCoordinationActive, TypeDecision,
+    TypeEffetDemandeSuivie, TypeEvenementAttendu, TypeFaitReassignation,
+    TypeNotificationReassignation, identifiant_deterministe, reduire_coordination,
+    reduire_ouverture_dependance, reduire_reassignation,
 };
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
@@ -52,7 +53,7 @@ use uuid::Uuid;
 
 /// Version courante du schéma SQLite. Les oracles de migration doivent lire
 /// cette constante — un littéral en dur meurt à chaque migration.
-pub const SCHEMA_VERSION: i64 = 21;
+pub const SCHEMA_VERSION: i64 = 22;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -93,6 +94,53 @@ pub struct SchemaPreflight {
     pub database_version: Option<i64>,
     pub supported_version: i64,
     pub bootstrap_required: bool,
+}
+
+/// État durable de la commande d'enregistrement projet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectRegistrationState {
+    Prepared,
+    Binding,
+    Bound,
+    Failed,
+    Expired,
+}
+
+impl ProjectRegistrationState {
+    fn from_db(value: &str) -> Result<Self, StoreError> {
+        match value {
+            "prepared" => Ok(Self::Prepared),
+            "binding" => Ok(Self::Binding),
+            "bound" => Ok(Self::Bound),
+            "failed" => Ok(Self::Failed),
+            "expired" => Ok(Self::Expired),
+            _ => Err(StoreError::Corrupt("état enregistrement projet inconnu")),
+        }
+    }
+}
+
+/// Intention préparée avant tout appel à Bridget.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRegistrationIntent {
+    pub command_id: String,
+    pub proposed_project_id: String,
+    pub display_name: String,
+    pub requested_root: String,
+    pub canonical_payload: Vec<u8>,
+    pub created_at: i64,
+    pub retry_until: i64,
+}
+
+/// Vue durable et rejouable de la préparation d'une commande projet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRegistrationRecord {
+    pub command_id: String,
+    pub identity: ProjectIdentity,
+    pub requested_root: String,
+    pub state: ProjectRegistrationState,
+    pub resolved_project_id: Option<String>,
+    pub retry_until: i64,
+    pub outbox_pending: bool,
 }
 
 /// Paramètres figés pour créer l'outbox au déblocage F37 (aucune intention
@@ -493,6 +541,100 @@ impl MaicieStore {
         self.connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(StoreError::Sql)
+    }
+
+    /// Prépare en une transaction l'identité pending, la commande immuable et
+    /// l'outbox locale. Aucun appel Bridget n'est effectué ici.
+    pub fn prepare_project_registration(
+        &mut self,
+        intent: &ProjectRegistrationIntent,
+    ) -> Result<ProjectRegistrationRecord, StoreError> {
+        validate_project_registration_intent(intent)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        if let Some(existing) = project_registration_for_command(&tx, &intent.command_id)? {
+            if existing.canonical_payload != intent.canonical_payload {
+                return Err(StoreError::EnvelopeMismatch);
+            }
+            let record = project_registration_record_from_stored(&tx, existing)?;
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(record);
+        }
+
+        let identity = ProjectIdentity::pending(
+            intent.proposed_project_id.clone(),
+            intent.display_name.clone(),
+            intent.command_id.clone(),
+            intent.created_at,
+        )
+        .map_err(StoreError::Domain)?;
+        tx.execute(
+            "INSERT INTO project_identities (
+                 project_id, display_name, status, created_at, updated_at, registration_command_id
+             ) VALUES (?1, ?2, 'pending_binding', ?3, ?3, ?4)",
+            params![
+                identity.project_id,
+                identity.display_name,
+                identity.created_at,
+                identity.registration_command_id,
+            ],
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::SqliteFailure(ref failure, _)
+                if failure.code == ErrorCode::ConstraintViolation =>
+            {
+                StoreError::Conflict("identité projet déjà préparée")
+            }
+            other => StoreError::Sql(other),
+        })?;
+        tx.execute(
+            "INSERT INTO project_registration_commands (
+                 command_id, canonical_payload, proposed_project_id, resolved_project_id,
+                 requested_root, state, retry_until
+             ) VALUES (?1, ?2, ?3, NULL, ?4, 'prepared', ?5)",
+            params![
+                intent.command_id,
+                intent.canonical_payload,
+                intent.proposed_project_id,
+                intent.requested_root,
+                intent.retry_until,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+        tx.execute(
+            "INSERT INTO project_registration_outbox (
+                 command_id, canonical_request, state
+             ) VALUES (?1, ?2, 'prepared')",
+            params![intent.command_id, intent.canonical_payload],
+        )
+        .map_err(StoreError::Sql)?;
+        let stored = project_registration_for_command(&tx, &intent.command_id)?.ok_or(
+            StoreError::Corrupt("commande projet absente après insertion"),
+        )?;
+        let record = project_registration_record_from_stored(&tx, stored)?;
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(record)
+    }
+
+    pub fn project_identities(&self) -> Result<Vec<ProjectIdentity>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT project_id, display_name, status, created_at, updated_at,
+                        registration_command_id
+                 FROM project_identities ORDER BY created_at ASC, project_id ASC",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], project_identity_from_row)
+            .map_err(StoreError::Sql)?;
+        rows.map(|row| {
+            row.map_err(StoreError::Sql)
+                .and_then(decode_project_identity)
+        })
+        .collect()
     }
 
     /// Fige la définition 016 et sa génération initiale sous transaction
@@ -8257,6 +8399,52 @@ fn migrate_to_version(
             .map_err(StoreError::Sql)?;
         }
     }
+    // v22 : identité projet Maicie, commande idempotente et outbox locale.
+    // La racine demandée reste une intention : Bridget seul la canonise et
+    // l'autorise avant d'activer l'identité.
+    if target_version >= 22 {
+        if current_version < 22 {
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS project_identities (
+                     project_id TEXT PRIMARY KEY,
+                     display_name TEXT NOT NULL,
+                     status TEXT NOT NULL CHECK(status IN (
+                         'pending_binding', 'active', 'registration_conflict', 'disabled'
+                     )),
+                     created_at INTEGER NOT NULL,
+                     updated_at INTEGER NOT NULL,
+                     registration_command_id TEXT NOT NULL UNIQUE
+                 );
+                 CREATE INDEX IF NOT EXISTS project_identities_status_idx
+                     ON project_identities(status, updated_at, project_id);
+                 CREATE TABLE IF NOT EXISTS project_registration_commands (
+                     command_id TEXT PRIMARY KEY,
+                     canonical_payload BLOB NOT NULL,
+                     proposed_project_id TEXT NOT NULL UNIQUE
+                         REFERENCES project_identities(project_id),
+                     resolved_project_id TEXT REFERENCES project_identities(project_id),
+                     requested_root TEXT NOT NULL,
+                     state TEXT NOT NULL CHECK(state IN (
+                         'prepared', 'binding', 'bound', 'failed', 'expired'
+                     )),
+                     retry_until INTEGER NOT NULL
+                 );
+                 CREATE INDEX IF NOT EXISTS project_registration_commands_pending_idx
+                     ON project_registration_commands(state, retry_until, command_id);
+                 CREATE TABLE IF NOT EXISTS project_registration_outbox (
+                     command_id TEXT PRIMARY KEY
+                         REFERENCES project_registration_commands(command_id),
+                     canonical_request BLOB NOT NULL,
+                     state TEXT NOT NULL CHECK(state IN (
+                         'prepared', 'outcome_unknown', 'applied', 'rejected'
+                     ))
+                 );
+                 CREATE INDEX IF NOT EXISTS project_registration_outbox_pending_idx
+                     ON project_registration_outbox(state, command_id);",
+            )
+            .map_err(StoreError::Sql)?;
+        }
+    }
 
     for version in (current_version + 1)..=target_version {
         tx.execute(
@@ -9650,6 +9838,154 @@ impl TryFrom<RawRecovery> for RecoverySnapshot {
     }
 }
 
+#[derive(Debug)]
+struct StoredProjectIdentity {
+    project_id: String,
+    display_name: String,
+    status: String,
+    created_at: i64,
+    updated_at: i64,
+    registration_command_id: String,
+}
+
+fn project_identity_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredProjectIdentity> {
+    Ok(StoredProjectIdentity {
+        project_id: row.get(0)?,
+        display_name: row.get(1)?,
+        status: row.get(2)?,
+        created_at: row.get(3)?,
+        updated_at: row.get(4)?,
+        registration_command_id: row.get(5)?,
+    })
+}
+
+fn decode_project_identity(stored: StoredProjectIdentity) -> Result<ProjectIdentity, StoreError> {
+    let status = match stored.status.as_str() {
+        "pending_binding" => ProjectIdentityStatus::PendingBinding,
+        "active" => ProjectIdentityStatus::Active,
+        "registration_conflict" => ProjectIdentityStatus::RegistrationConflict,
+        "disabled" => ProjectIdentityStatus::Disabled,
+        _ => return Err(StoreError::Corrupt("état identité projet inconnu")),
+    };
+    if stored.project_id.trim().is_empty()
+        || stored.display_name.trim().is_empty()
+        || stored.registration_command_id.trim().is_empty()
+        || stored.created_at < 0
+        || stored.updated_at < stored.created_at
+    {
+        return Err(StoreError::Corrupt("identité projet durable invalide"));
+    }
+    Ok(ProjectIdentity {
+        project_id: stored.project_id,
+        display_name: stored.display_name,
+        status,
+        created_at: stored.created_at,
+        updated_at: stored.updated_at,
+        registration_command_id: stored.registration_command_id,
+    })
+}
+
+#[derive(Debug)]
+struct StoredProjectRegistration {
+    command_id: String,
+    canonical_payload: Vec<u8>,
+    proposed_project_id: String,
+    resolved_project_id: Option<String>,
+    requested_root: String,
+    state: String,
+    retry_until: i64,
+}
+
+fn project_registration_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<StoredProjectRegistration> {
+    Ok(StoredProjectRegistration {
+        command_id: row.get(0)?,
+        canonical_payload: row.get(1)?,
+        proposed_project_id: row.get(2)?,
+        resolved_project_id: row.get(3)?,
+        requested_root: row.get(4)?,
+        state: row.get(5)?,
+        retry_until: row.get(6)?,
+    })
+}
+
+fn project_registration_for_command(
+    connection: &Connection,
+    command_id: &str,
+) -> Result<Option<StoredProjectRegistration>, StoreError> {
+    connection
+        .query_row(
+            "SELECT command_id, canonical_payload, proposed_project_id, resolved_project_id,
+                    requested_root, state, retry_until
+             FROM project_registration_commands WHERE command_id = ?1",
+            [command_id],
+            project_registration_from_row,
+        )
+        .optional()
+        .map_err(StoreError::Sql)
+}
+
+fn project_registration_record_from_stored(
+    connection: &Connection,
+    stored: StoredProjectRegistration,
+) -> Result<ProjectRegistrationRecord, StoreError> {
+    let identity = connection
+        .query_row(
+            "SELECT project_id, display_name, status, created_at, updated_at,
+                    registration_command_id
+             FROM project_identities WHERE project_id = ?1",
+            [&stored.proposed_project_id],
+            project_identity_from_row,
+        )
+        .map_err(StoreError::Sql)
+        .and_then(decode_project_identity)?;
+    if identity.registration_command_id != stored.command_id {
+        return Err(StoreError::Corrupt(
+            "identité et commande projet divergentes",
+        ));
+    }
+    let state = ProjectRegistrationState::from_db(&stored.state)?;
+    let outbox_pending: bool = connection
+        .query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM project_registration_outbox
+                 WHERE command_id = ?1 AND state IN ('prepared', 'outcome_unknown')
+             )",
+            [&stored.command_id],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::Sql)?;
+    Ok(ProjectRegistrationRecord {
+        command_id: stored.command_id,
+        identity,
+        requested_root: stored.requested_root,
+        state,
+        resolved_project_id: stored.resolved_project_id,
+        retry_until: stored.retry_until,
+        outbox_pending,
+    })
+}
+
+fn validate_project_registration_intent(
+    intent: &ProjectRegistrationIntent,
+) -> Result<(), StoreError> {
+    if intent.command_id.trim().is_empty()
+        || intent.proposed_project_id.trim().is_empty()
+        || intent.display_name.trim().is_empty()
+        || intent.canonical_payload.is_empty()
+        || intent.created_at < 0
+        || intent.retry_until < intent.created_at
+        || intent.requested_root.trim().is_empty()
+        || !Path::new(&intent.requested_root).is_absolute()
+    {
+        return Err(StoreError::Invalid(
+            "intention enregistrement projet invalide",
+        ));
+    }
+    Ok(())
+}
+
 fn parse_uuid(value: &str) -> Result<Uuid, StoreError> {
     Uuid::parse_str(value).map_err(|_| StoreError::Corrupt("UUID stocké invalide"))
 }
@@ -10047,7 +10383,7 @@ mod migration_v20_tests {
         fs::set_permissions(&database, fs::Permissions::from_mode(0o600)).unwrap();
 
         let store = MaicieStore::open_with_migration_consent(&database, true).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 21);
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
         drop(store);
 
         let connection = Connection::open(&database).unwrap();
