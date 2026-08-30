@@ -162,7 +162,10 @@ fn base_arguments(
         OsString::from("-o"),
         OsString::from("StrictHostKeyChecking=yes"),
         OsString::from("-o"),
-        OsString::from(format!("UserKnownHostsFile={known_hosts}")),
+        // OpenSSH réinterprète les valeurs de ses options : sans guillemets,
+        // le chemin macOS « Application Support » serait coupé au premier
+        // espace et l'empreinte approuvée ne serait jamais relue.
+        OsString::from(format!("UserKnownHostsFile=\"{known_hosts}\"")),
         OsString::from("-o"),
         OsString::from("LogLevel=ERROR"),
     ];
@@ -252,6 +255,24 @@ mod tests {
                 .any(|argument| argument.contains("ProxyCommand"))
         );
         assert_eq!(invocation.diagnostic(), "SSH Bridget Desktop en cours");
+    }
+
+    #[test]
+    fn known_hosts_avec_espace_reste_un_unique_argument_ssh() {
+        let invocation = forward_invocation(
+            &profile(),
+            Path::new(
+                "/Users/moi/Library/Application Support/app.cartae.bridget-desktop/known_hosts",
+            ),
+            39001,
+            17888,
+        )
+        .expect("invocation");
+        let args = as_strings(invocation.args());
+        assert!(args.iter().any(|argument| {
+            argument
+                == "UserKnownHostsFile=\"/Users/moi/Library/Application Support/app.cartae.bridget-desktop/known_hosts\""
+        }));
     }
 
     #[test]
