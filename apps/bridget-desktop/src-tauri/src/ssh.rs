@@ -145,6 +145,11 @@ fn base_arguments(
         ))
     })?;
     let mut args = vec![
+        // Le profil Bridget Desktop est la configuration SSH de cette session.
+        // Ignorer ~/.ssh/config empêche alias, ProxyCommand ou HostName global
+        // de transformer la cible dont l'empreinte a été approuvée.
+        OsString::from("-F"),
+        OsString::from("/dev/null"),
         OsString::from("-p"),
         OsString::from(port.to_string()),
         OsString::from("-o"),
@@ -233,6 +238,8 @@ mod tests {
                 .expect("invocation");
         let args = as_strings(invocation.args());
         for required in [
+            "-F",
+            "/dev/null",
             "BatchMode=yes",
             "ControlMaster=no",
             "ControlPath=none",
