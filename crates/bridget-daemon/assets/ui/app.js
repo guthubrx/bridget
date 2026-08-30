@@ -196,7 +196,131 @@
       test("etat_remise_ui_reste_fonde_sur_la_preuve_disponible", () => {
         assert.equal(api.deliveryStateLabel("accepted"), "envoi accepté · confirmation en attente");
         assert.equal(api.deliveryStateLabel("delivered"), "remis à l’agent");
-        assert.equal(api.deliveryStateLabel("dispatched"), "traitement démarré");
+        assert.equal(api.deliveryStateLabel("dispatched"), "en attente d’une trace de l’agent");
+      });
+
+      test("activite_live_exige_un_acte_fournisseur_et_s_arrete_au_terminal", () => {
+        const base = [
+          {
+            kind: "record",
+            agent: "rc1",
+            at: 10,
+            record: { message_id: "m-live", event: "turn_start", payload: { body: "question" } },
+          },
+          {
+            kind: "record",
+            agent: "rc1",
+            at: 11,
+            record: { message_id: "m-live", event: "prompt_dispatched", payload: { body: "question" } },
+          },
+        ];
+        assert.equal(
+          api.projectTimeline(base).some((entry) => entry.kind === "activity"),
+          false,
+          "la remise seule ne doit jamais être présentée comme du travail",
+        );
+        const active = [...base, {
+          kind: "record",
+          agent: "rc1",
+          at: 12,
+          record: { message_id: "m-live", event: "update", payload: { kind: "command", text: "commande secrète" } },
+        }];
+        const activity = api.projectTimeline(active).find((entry) => entry.kind === "activity");
+        assert.equal(activity.text, "Exécute une commande");
+        assert.doesNotMatch(activity.text, /secrète/);
+        const terminal = [...active, {
+          kind: "record",
+          agent: "rc1",
+          at: 13,
+          record: { message_id: "m-live", event: "turn_end", payload: {} },
+        }];
+        assert.equal(api.projectTimeline(terminal).some((entry) => entry.kind === "activity"), false);
+      });
+
+      test("notification_terminale_exige_permission_arriere_plan_et_message_suivi", () => {
+        const record = { message_id: "m-notify", event: "turn_end", payload: {} };
+        const pending = new Map([["m-notify", { target: "rc1", acceptedAt: 1 }]]);
+        assert.equal(api.notificationTarget(record, "rc1", pending, false, "granted", new Set()), null);
+        assert.equal(api.notificationTarget(record, "rc1", pending, true, "denied", new Set()), null);
+        assert.equal(api.notificationTarget({ ...record, event: "update" }, "rc1", pending, true, "granted", new Set()), null);
+        const target = api.notificationTarget(record, "rc1", pending, true, "granted", new Set());
+        assert.deepEqual(target, {
+          key: "rc1:m-notify",
+          agent: "rc1",
+          messageId: "m-notify",
+          role: "agent",
+          title: "rc1 a répondu",
+          body: "Ouvrir la réponse",
+        });
+        assert.equal(
+          api.notificationTarget(record, "rc1", pending, true, "granted", new Set(["rc1:m-notify"])),
+          null,
+        );
+      });
+
+      test("erreur_terminale_reste_attachee_a_la_question_concernee", () => {
+        const timeline = api.projectTimeline([
+          {
+            kind: "message",
+            role: "user",
+            agent: "rc1",
+            text: "question à suivre",
+            at: 9,
+            messageId: "m-error",
+            deliveryId: "m-error",
+            status: api.deliveryStateLabel("accepted"),
+          },
+          {
+            kind: "record",
+            agent: "rc1",
+            at: 10,
+            record: { message_id: "m-error", event: "turn_start", payload: { body: "question à suivre" } },
+          },
+          {
+            kind: "record",
+            agent: "rc1",
+            at: 20,
+            record: {
+              message_id: "m-error",
+              event: "error",
+              payload: { terminal_kind: "turn_failed", reason: "api_error" },
+            },
+          },
+        ]);
+        const question = timeline.find((entry) => entry.role === "user");
+        assert.equal(timeline.filter((entry) => entry.role === "user").length, 1);
+        assert.equal(question.status, "Le fournisseur a refusé ce tour.");
+        assert.equal(question.failure.reference, "m-error");
+      });
+
+      test("erreur_terminale_rattrape_la_bulle_optimiste_sans_corps_journal", () => {
+        const timeline = api.projectTimeline([
+          {
+            kind: "message",
+            role: "user",
+            agent: "rc1",
+            text: "question locale à suivre",
+            at: 9,
+            messageId: "m-local-error",
+            deliveryId: "m-local-error",
+            status: api.deliveryStateLabel("accepted"),
+          },
+          {
+            kind: "record",
+            agent: "rc1",
+            at: 20,
+            record: {
+              message_id: "m-local-error",
+              event: "error",
+              payload: { terminal_kind: "turn_failed", reason: "api_error" },
+            },
+          },
+        ]);
+        const question = timeline.find((entry) => entry.role === "user");
+        assert.equal(timeline.filter((entry) => entry.role === "user").length, 1);
+        assert.equal(question.text, "question locale à suivre");
+        assert.equal(question.status, "Le fournisseur a refusé ce tour.");
+        assert.equal(question.failure.reference, "m-local-error");
       });
 
       test("rattrapage_apres_envoi_local_ne_rejoue_que_les_evenements_recents", () => {
@@ -2413,6 +2537,22 @@
     return "Le tour s’est terminé en erreur.";
   }
 
+  function turnFailureDetail(payload, reference) {
+    const id = text(reference, "référence absente");
+    return `Détail : ${turnFailureLabel(payload)} Référence de journal : ${id}.`;
+  }
+
+  function activityLabel(activity) {
+    const kind = text(activity && activity.kind);
+    if (kind === "text") return "Rédige une réponse";
+    if (kind === "reasoning") return "Analyse la demande";
+    if (kind === "command") return "Exécute une commande";
+    if (kind === "file") return "Lit ou modifie un fichier";
+    if (kind === "plan") return "Met à jour son plan";
+    if (kind === "approval") return "Attend une autorisation";
+    return "Utilise un outil";
+  }
+
   function providerRequestRejectedLabel(payload) {
     const code = text(payload && payload.code, "unsupported_provider_request");
     const reference = text(payload && payload.reference, "référence absente");
@@ -2706,8 +2846,35 @@
 
   function deliveryStateLabel(state) {
     if (state === "delivered") return "remis à l’agent";
-    if (state === "dispatched") return "traitement démarré";
+    if (state === "dispatched") return "en attente d’une trace de l’agent";
     return "envoi accepté · confirmation en attente";
+  }
+
+  function notificationTarget(record, agent, messages, pageHidden, permission, notified) {
+    const messageId = text(record && record.message_id);
+    const payload = record && record.payload && typeof record.payload === "object" ? record.payload : {};
+    const terminal = record && (
+      record.event === "turn_end"
+      || (record.event === "error" && payload.terminal_kind === "turn_failed")
+    );
+    const key = `${agent}:${messageId}`;
+    if (
+      !terminal
+      || !messageId
+      || !pageHidden
+      || permission !== "granted"
+      || !(messages instanceof Map && messages.has(messageId))
+      || (notified instanceof Set && notified.has(key))
+    ) return null;
+    const failed = record.event === "error";
+    return {
+      key,
+      agent,
+      messageId,
+      role: failed ? "user" : "agent",
+      title: failed ? `${agent} n’a pas pu terminer` : `${agent} a répondu`,
+      body: failed ? turnFailureLabel(payload) : "Ouvrir la réponse",
+    };
   }
 
   function pendingDeliveryTarget(pending) {
@@ -3380,6 +3547,7 @@
     );
     const turns = new Map();
     const projected = [];
+    const nonJournalUserMessages = new Map();
     // Vocabulaire d'actes = JournalUpdateKind::ACTS (contrat écriture).
     // Mesure 2026-08-26 : text · tool_call · command · approval au journal ;
     // tool (ACP/Claude) depuis 78d57dc ; file/plan producteurs Codex sans émission.
@@ -3404,6 +3572,8 @@
           promptAt: null,
           acts: [],
           reasoning: null,
+          activity: null,
+          failure: null,
           terminal: false,
         });
       }
@@ -3434,6 +3604,10 @@
         ) {
           return;
         }
+        if (entry.kind === "message" && entry.role === "user") {
+          const messageId = uiMessageIdentity(entry);
+          if (messageId) nonJournalUserMessages.set(messageId, entry);
+        }
         projected.push(entry);
         return;
       }
@@ -3460,6 +3634,7 @@
           if (content) {
             turn.textParts.push(content);
             turn.textAt ||= entry.at;
+            turn.activity = { kind: "text", at: entry.at };
           }
         } else if (actKinds.has(payload.kind)) {
           // tool_call legacy porte title/tool/summary, pas text/content.
@@ -3477,6 +3652,7 @@
             detail: text(payload.detail, text(payload.summary)),
             at: entry.at,
           });
+          turn.activity = { kind: displayKind, at: entry.at };
         }
         return;
       }
@@ -3486,6 +3662,7 @@
           summary: text(payload.summary),
           raw: text(payload.raw),
         };
+        turn.activity = { kind: "reasoning", at: entry.at };
         return;
       }
       if (record.event === "permission") {
@@ -3496,6 +3673,7 @@
           detail: permissionAct.detail,
           at: entry.at,
         });
+        turn.activity = { kind: "approval", at: entry.at };
         return;
       }
       if (record.event === "turn_end") {
@@ -3507,13 +3685,15 @@
         if (payload.terminal_kind === "turn_failed") {
           turn.endAt = entry.at;
           turn.terminal = true;
+          turn.failure = { ...payload, reference: turn.key };
+        } else {
+          projected.push({
+            kind: "system",
+            agent: entry.agent,
+            at: entry.at,
+            text: turnFailureLabel(payload),
+          });
         }
-        projected.push({
-          kind: "system",
-          agent: entry.agent,
-          at: entry.at,
-          text: turnFailureLabel(payload),
-        });
         return;
       }
       if (record.event === "provider_request_rejected") {
@@ -3528,6 +3708,11 @@
 
     const roundDeliveryIds = new Set();
     turns.forEach((turn) => {
+      const existingUserMessage = nonJournalUserMessages.get(turn.key);
+      if (turn.failure && !turn.promptText && existingUserMessage) {
+        existingUserMessage.status = turnFailureLabel(turn.failure);
+        existingUserMessage.failure = turn.failure;
+      }
       const round = vigilanceRoundInfo(turn.promptText);
       if (round) {
         roundDeliveryIds.add(turn.key);
@@ -3549,6 +3734,8 @@
           at: turn.promptAt || turn.startAt,
           messageId: turn.key,
           deliveryId: journalRecordMessageIds.has(turn.key) ? turn.key : undefined,
+          status: turn.failure ? turnFailureLabel(turn.failure) : undefined,
+          failure: turn.failure,
         });
       }
       if (turn.textParts.length > 0) {
@@ -3561,7 +3748,18 @@
           messageId: turn.key,
         });
       }
-      if (!turn.terminal) return;
+      if (!turn.terminal) {
+        if (turn.activity) {
+          projected.push({
+            kind: "activity",
+            agent: turn.agent,
+            at: turn.activity.at || turn.startAt,
+            messageId: turn.key,
+            text: activityLabel(turn.activity),
+          });
+        }
+        return;
+      }
       projected.push({
         kind: "work",
         at: turn.endAt || turn.startAt,
@@ -3574,7 +3772,7 @@
     const renderedRounds = new Set();
     const durableUserMessageIds = new Set(
       projected
-        .filter((entry) => entry.kind === "message" && entry.role === "user" && !entry.status)
+        .filter((entry) => entry.kind === "message" && entry.role === "user" && (!entry.status || entry.failure))
         .map((entry) => uiMessageIdentity(entry))
         .filter(Boolean),
     );
@@ -3584,7 +3782,7 @@
         if (
           entry.kind === "message"
           && entry.role === "user"
-          && entry.status
+          && entry.status && !entry.failure
           && durableUserMessageIds.has(uiMessageIdentity(entry))
         ) {
           return false;
@@ -3760,10 +3958,12 @@
     thread: "thread",
     newMessages: "new-messages",
     newMessagesLabel: "new-messages-label",
+    agentActivity: "agent-activity",
     composerShell: "composer-shell",
     composer: "composer",
     draft: "draft",
     reply: "reply",
+    notificationControl: "notification-control",
     send: "send",
     sendState: "send-state",
     contextLine: "context-line",
@@ -3838,6 +4038,7 @@
     });
     let state = createUiState({ selectedAgent: requestedAgent });
     const pendingUiMessages = new Map();
+    const notifiedTerminalIds = new Set();
     let source = null;
     let sourceGeneration = 0;
     let replayingJournal = true;
@@ -4198,11 +4399,19 @@
 
     const renderMessage = (entry) => {
       const wrapper = make("article", `message message--${entry.role === "user" ? "user" : "agent"}`);
+      if (entry.messageId) wrapper.dataset.messageId = entry.messageId;
+      wrapper.dataset.messageRole = entry.role;
       const bubble = make("div", "bubble");
       appendMessageContent(bubble, entry);
       const meta = make("span", "message-meta", timestamp(entry.at));
       if (entry.status) meta.textContent += ` · ${entry.status}`;
       bubble.append(meta);
+      if (entry.failure) {
+        const details = make("details", "message-failure message-expanded");
+        details.append(make("summary", "", "Voir le détail de l’échec"));
+        details.append(make("p", "", turnFailureDetail(entry.failure, entry.failure.reference)));
+        bubble.append(details);
+      }
       wrapper.append(bubble);
       return wrapper;
     };
@@ -4422,6 +4631,26 @@
       renderAgents();
     };
 
+    const renderActivity = (entries) => {
+      const activity = [...entries].reverse().find((entry) => entry.kind === "activity");
+      nodes.agentActivity.replaceChildren();
+      nodes.agentActivity.hidden = !activity;
+      if (!activity) return;
+      const agent = state.agents.find((entry) => entry.name === activity.agent) || {
+        name: activity.agent,
+        state: "busy",
+      };
+      const avatar = createAgentAvatar(
+        documentRef,
+        { ...agent, state: "busy" },
+        colorForAgent(agent.name),
+        "small",
+        shapeForAgent(agent.name),
+      );
+      avatar.setAttribute("aria-hidden", "true");
+      nodes.agentActivity.append(avatar, make("span", "", activity.text));
+    };
+
     const renderThread = (incomingCount = 0) => {
       const before = currentMetrics();
       const entries = projectTimeline(state.timelines[state.selectedAgent] || []);
@@ -4442,6 +4671,7 @@
       if (entries.length === 0) {
         timeline.append(make("p", "empty-state", "Les messages de l’agent apparaîtront ici."));
       }
+      renderActivity(entries);
       nodes.thread.replaceChildren(timeline);
       const after = currentMetrics();
       const decision = decideScroll(before, after, incomingCount);
@@ -4599,16 +4829,7 @@
           if (event.kind !== "record") return true;
           rememberEventBody(event);
           const record = event.record || {};
-          if (record.event === "prompt_dispatched") {
-            const pending = pendingUiMessages.get(record.message_id);
-            if (pending) {
-              const pendingTarget = pendingDeliveryTarget(pending);
-              pendingUiMessages.set(record.message_id, { ...pending, state: "dispatched" });
-              if (pendingTarget === state.selectedAgent) {
-                nodes.sendState.textContent = deliveryStateLabel("dispatched");
-              }
-            }
-          }
+          notifyTerminal(record, event.agent);
           return true;
         });
         state = appendTimelineBatch(state, accepted);
@@ -4727,6 +4948,72 @@
       connectWatch(agentName);
     };
 
+    const focusMessage = (agentName, messageId, role) => {
+      selectAgent(agentName);
+      windowRef.setTimeout(() => {
+        if (typeof nodes.thread.querySelectorAll !== "function") return;
+        const entries = [...nodes.thread.querySelectorAll("[data-message-id]")];
+        const target = entries.find((entry) => (
+          entry.dataset.messageId === messageId && entry.dataset.messageRole === role
+        ));
+        if (target && typeof target.scrollIntoView === "function") {
+          target.scrollIntoView({ block: "center" });
+        }
+      }, 0);
+    };
+
+    const notifyTerminal = (record, agent) => {
+      const NotificationApi = windowRef.Notification;
+      if (typeof NotificationApi !== "function") return;
+      const target = notificationTarget(
+        record,
+        agent,
+        pendingUiMessages,
+        documentRef.visibilityState === "hidden",
+        NotificationApi.permission,
+        notifiedTerminalIds,
+      );
+      if (!target) return;
+      notifiedTerminalIds.add(target.key);
+      while (notifiedTerminalIds.size > 20) {
+        notifiedTerminalIds.delete(notifiedTerminalIds.values().next().value);
+      }
+      try {
+        const notification = new NotificationApi(target.title, {
+          body: target.body,
+          tag: target.key,
+        });
+        notification.onclick = () => {
+          if (typeof windowRef.focus === "function") windowRef.focus();
+          if (typeof notification.close === "function") notification.close();
+          focusMessage(target.agent, target.messageId, target.role);
+        };
+      } catch (_error) {
+        notifiedTerminalIds.delete(target.key);
+      }
+    };
+
+    const updateNotificationControl = () => {
+      const NotificationApi = windowRef.Notification;
+      if (!NotificationApi || typeof NotificationApi.requestPermission !== "function") {
+        nodes.notificationControl.disabled = true;
+        nodes.notificationControl.textContent = "Notifications indisponibles";
+        return;
+      }
+      const permission = NotificationApi.permission;
+      nodes.notificationControl.disabled = permission === "denied";
+      nodes.notificationControl.textContent = permission === "granted"
+        ? "Notifications activées"
+        : permission === "denied" ? "Notifications bloquées" : "Activer les notifications";
+    };
+
+    const requestNotificationPermission = async () => {
+      const NotificationApi = windowRef.Notification;
+      if (!NotificationApi || typeof NotificationApi.requestPermission !== "function") return;
+      try { await NotificationApi.requestPermission(); } catch (_error) { /* permission refusée */ }
+      updateNotificationControl();
+    };
+
     const sendMessage = async () => {
       const body = nodes.draft.value;
       const target = state.selectedAgent;
@@ -4785,7 +5072,13 @@
           });
         }
         if (injectionAlreadyObserved) {
-          nodes.sendState.textContent = deliveryStateLabel("dispatched");
+          rememberPendingUiMessage(
+            pendingUiMessages,
+            messageId,
+            target,
+            epochSeconds(payload.issued_at) || Date.now() / 1000,
+          );
+          nodes.sendState.textContent = deliveryStateLabel("accepted");
         } else {
           rememberPendingUiMessage(
             pendingUiMessages,
@@ -4812,6 +5105,10 @@
       }
     };
 
+    nodes.notificationControl.addEventListener("click", () => {
+      void requestNotificationPermission();
+    });
+    updateNotificationControl();
     nodes.composer.addEventListener("submit", (event) => {
       event.preventDefault();
       void sendMessage();
@@ -4953,6 +5250,8 @@
     shouldCollapseMessage,
     messagePreview,
     turnFailureLabel,
+    turnFailureDetail,
+    activityLabel,
     BOTTOM_THRESHOLD_PX,
     agentPaneWidthBounds,
     clampAgentPaneWidth,
@@ -4974,6 +5273,7 @@
     explicitSend,
     uiMessageIdentity,
     deliveryStateLabel,
+    notificationTarget,
     hasNewPendingReplayEvent,
     shouldSubmitKey,
     completeExplicitSend,

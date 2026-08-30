@@ -1184,6 +1184,28 @@ code {
   font-weight: 720;
 }
 
+.agent-activity {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  max-width: 68rem;
+  margin: 0 auto;
+  padding: 0.35rem 0.9rem;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+}
+
+.agent-activity .agent-avatar {
+  flex: 0 0 auto;
+}
+
+.notification-control {
+  color: var(--text-secondary);
+  font-size: 0.73rem;
+}
+
+.notification-control:hover { color: var(--text-primary); }
+
 .composer-shell {
   padding: 0.85rem clamp(1rem, 4vw, 4.5rem) 1rem;
   background: var(--card);

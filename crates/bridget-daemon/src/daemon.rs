@@ -5152,26 +5152,19 @@ fn live_notify_timeout_secs(fallback: &AgentRegistry, agent_type: &str) -> u64 {
     }
 }
 
-/// Pose `deadline_at` absolue pour un mandat reply=false au moment de la
+/// Pose `deadline_at` absolue d'exécution au moment de la
 /// POUSSÉE vers le wrapper. Point unique : couvre Deliver classique ET
 /// DeliverIdempotent (Maicie / reprise après redémarrage). Sans cela, le
 /// worker retombe sur `notify_timeout` figé dans fleet.json — encore 600 s
 /// pour les codex absents de agents.json.
+///
+/// `reply_timeout` reste un délai métier de suivi de réponse. Il ne borne pas
+/// le tour du fournisseur : une question humaine doit pouvoir dépasser 60 s.
 fn stamp_turn_deadline_for_delivery(
     message: &mut bridget_core::BridgetMessage,
     registry: &AgentRegistry,
     agent_type: &str,
 ) {
-    if message.reply {
-        if message.deadline_at.is_none() {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            message.deadline_at = Some(now.saturating_add(message.reply_timeout.unwrap_or(60)));
-        }
-        return;
-    }
     if message.deadline_at.is_some() {
         return;
     }
@@ -5179,7 +5172,7 @@ fn stamp_turn_deadline_for_delivery(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let timeout_secs = if message.origin == Some(bridget_core::MessageOrigin::Human) {
+    let timeout_secs = if message.intent == Some(bridget_core::MessageIntent::SteerCurrent) {
         HUMAN_STEER_TIMEOUT_SECS
     } else {
         live_notify_timeout_secs(registry, agent_type)
@@ -5753,10 +5746,6 @@ fn handle_idempotent_send(
     // L'identifiant métier est l'autorité publique ; l'ancien champ `id` de
     // Bridget est donc normalisé avant toute comparaison ou garde mutable.
     message.id = message_id.clone();
-    if message.reply && message.deadline_at.is_none() {
-        let timeout = message.reply_timeout.unwrap_or(60);
-        message.deadline_at = Some(issued_at.saturating_add(timeout as i64).max(0) as u64);
-    }
     let key = match IdempotencyKey::new(negotiated.issuer_scope, OperationKind::Send, message_id) {
         Ok(key) => key,
         Err(_error) => {
@@ -5892,10 +5881,11 @@ fn handle_idempotent_send(
         sender: message.from.clone(),
         target: message.to.clone(),
         created_at: now,
-        deadline_at: message
-            .deadline_at
-            .expect("un reply idempotent est normalisé avant réservation")
-            .min(i64::MAX as u64) as i64,
+        // Le suivi métier de réponse garde son propre délai. L'enveloppe
+        // remise au fournisseur recevra plus tard son échéance d'exécution.
+        deadline_at: issued_at
+            .saturating_add(message.reply_timeout.unwrap_or(60).min(i64::MAX as u64) as i64)
+            .max(0),
     });
     let delivery_result = match reply_tracking.as_ref() {
         Some(reply) => st
@@ -12544,11 +12534,11 @@ mod presence_tests {
     }
 
     #[test]
-    fn message_humain_sans_reply_recoit_une_echeance_de_steer_bornee() {
+    fn message_humain_recoit_l_echeance_fournisseur_sauf_steer_explicite() {
         let registry = AgentRegistry::from_json("{}", "/tmp/agents-temoin-humain-deadline.json")
             .expect("registre natif");
-        let mut message = idempotent_message("message humain sans reply");
-        message.reply = false;
+        let mut message = idempotent_message("question humaine suivie");
+        message.reply = true;
         message.origin = Some(bridget_core::MessageOrigin::Human);
         let before = unix_now_secs() as u64;
         stamp_turn_deadline_for_delivery(&mut message, &registry, "codex");
@@ -12558,10 +12548,27 @@ mod presence_tests {
             .expect("échéance humaine")
             .saturating_sub(before);
         assert!(
+            timeout >= DEFAULT_NOTIFY_TIMEOUT_SECS.saturating_sub(1)
+                && timeout
+                    <= DEFAULT_NOTIFY_TIMEOUT_SECS.saturating_add(after.saturating_sub(before) + 1),
+            "une réponse humaine ne doit pas rétrécir l'échéance fournisseur ; timeout={timeout}"
+        );
+
+        let mut steer = idempotent_message("pilotage humain explicite");
+        steer.origin = Some(bridget_core::MessageOrigin::Human);
+        steer.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        let before = unix_now_secs() as u64;
+        stamp_turn_deadline_for_delivery(&mut steer, &registry, "codex");
+        let after = unix_now_secs() as u64;
+        let timeout = steer
+            .deadline_at
+            .expect("échéance de steer")
+            .saturating_sub(before);
+        assert!(
             timeout >= HUMAN_STEER_TIMEOUT_SECS.saturating_sub(1)
                 && timeout
                     <= HUMAN_STEER_TIMEOUT_SECS.saturating_add(after.saturating_sub(before) + 1),
-            "échéance humaine attendue ≈ {HUMAN_STEER_TIMEOUT_SECS}s, reçue {timeout}s"
+            "le steer explicite doit rester borné ; timeout={timeout}"
         );
     }
 
@@ -12788,12 +12795,13 @@ mod presence_tests {
         reply.from = "maicie".to_string();
         reply.reply = true;
         reply.in_reply_to = Some("request-open".to_string());
+        let issued_at = unix_now_secs();
         let result = handle_wrapper_message(
             "client-reply",
             WrapperToDaemon::SendIdempotent {
                 message: reply,
                 message_id: "reply-idempotent".to_string(),
-                issued_at: unix_now_secs(),
+                issued_at,
             },
             &shared,
         );
@@ -12813,6 +12821,15 @@ mod presence_tests {
                 .unwrap()
                 .state,
             "open"
+        );
+        assert_eq!(
+            state
+                .store
+                .get_request("reply-idempotent")
+                .unwrap()
+                .unwrap()
+                .deadline_at,
+            issued_at + 60
         );
         assert!(
             state

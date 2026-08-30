@@ -131,6 +131,7 @@
 
         <!-- Le compositeur est volontairement frère du fil. Le rendu du fil
              peut remplacer #thread sans atteindre le brouillon ni son focus. -->
+        <div class="agent-activity" id="agent-activity" aria-live="polite" hidden></div>
         <footer class="composer-shell" id="composer-shell">
           <form class="composer" id="composer" novalidate>
             <label class="sr-only" for="draft">Message</label>
@@ -147,6 +148,7 @@
                 <input id="reply" name="reply" type="checkbox" checked>
                 <span>Attendre une réponse</span>
               </label>
+              <button class="notification-control" id="notification-control" type="button">Activer les notifications</button>
               <div class="send-controls">
                 <span class="send-state" id="send-state" aria-live="polite">prêt</span>
                 <button class="send-button" id="send" type="submit" aria-label="Envoyer">

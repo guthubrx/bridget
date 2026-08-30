@@ -919,6 +919,7 @@ fn wait_for_turn(
     let mut interrupted = false;
     let mut interrupt_terminal_deadline = None;
     let mut steering_allowed = true;
+    let mut deadline_interrupted = false;
     // Un accusé `turn/steer` ne prouve jamais la remise. Chaque message reste
     // dans `accepted_pending` jusqu’à sa complétion `userMessage` corrélée.
     let mut accepted_pending: Vec<BridgetMessage> = Vec::new();
@@ -1002,6 +1003,13 @@ fn wait_for_turn(
         drop(observed);
         confirm_consumed_steers(worker, turn_id, consumed);
         if let Some(terminal) = terminal {
+            if deadline_interrupted {
+                requeue_unconfirmed(&worker.queue, &mut accepted_pending);
+                return ManagedEventKind::DeliveryRejected {
+                    message_id: message.id.clone(),
+                    reason: "échéance Codex dépassée".to_string(),
+                };
+            }
             // Même un terminal `completed` ne solde pas un pilotage sans
             // complétion corrélée : la restitution FIFO est donc obligatoire.
             requeue_unconfirmed(&worker.queue, &mut accepted_pending);
@@ -1012,8 +1020,26 @@ fn wait_for_turn(
             };
         }
         let now = SystemTime::now();
+        // L'échéance du fournisseur ne doit pas détacher le processus Codex.
+        // Elle déclenche le même arrêt borné que les autres fins de tour, puis
+        // rapporte l'échec au message qui a atteint ce plafond.
+        if !interrupted && now >= deadline {
+            interrupted = true;
+            deadline_interrupted = true;
+            let _ = request_with_timeout(
+                &worker.writer,
+                &worker.waiters,
+                &worker.next_id,
+                "turn/interrupt",
+                json!({ "threadId": worker.thread_id, "turnId": turn_id }),
+                INTERRUPT_REQUEST_TIMEOUT,
+            );
+            requeue_unconfirmed(&worker.queue, &mut accepted_pending);
+            interrupt_terminal_deadline = Some(now + INTERRUPT_TERMINAL_TIMEOUT);
+            continue;
+        }
         let terminal_deadline = interrupt_terminal_deadline
-            .map(|interrupt_deadline| interrupt_deadline.min(deadline))
+            .or(Some(deadline))
             .unwrap_or(deadline);
         if now >= terminal_deadline {
             requeue_unconfirmed(&worker.queue, &mut accepted_pending);
@@ -1022,7 +1048,12 @@ fn wait_for_turn(
                 reason: if interrupt_terminal_deadline
                     .is_some_and(|interrupt_deadline| now >= interrupt_deadline)
                 {
-                    "interruption Codex sans terminal après pilotage humain non attesté".to_string()
+                    if deadline_interrupted {
+                        "interruption Codex sans terminal après échéance fournisseur".to_string()
+                    } else {
+                        "interruption Codex sans terminal après pilotage humain non attesté"
+                            .to_string()
+                    }
                 } else {
                     "échéance Codex dépassée".to_string()
                 },
@@ -4161,6 +4192,12 @@ mod tests {
             rejected,
             "DeliveryRejected échéance attendu; trace={}",
             fs::read_to_string(&trace).unwrap_or_else(|error| error.to_string())
+        );
+        assert!(
+            fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("\"method\":\"turn/interrupt\""),
+            "l'échéance fournisseur doit interrompre le tour avant le terminal"
         );
         transport.stop();
 
