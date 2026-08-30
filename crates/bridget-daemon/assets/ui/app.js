@@ -176,23 +176,119 @@
         );
       });
 
-      test("fiche_identite_est_globale_accessible_et_compacte", () => {
+      test("spec_073_fiche_identite_est_volontaire_accessible_et_compacte", () => {
         const source = fs.readFileSync(__filename, "utf8");
         const css = fs.readFileSync(path.join(__dirname, "theme.css"), "utf8");
-        assert.match(source, /identityCard\.setAttribute\("role", "tooltip"\)/);
-        assert.match(source, /button\.setAttribute\("aria-describedby", identityCard\.id\)/);
-        assert.match(source, /event\.key !== "Escape"/);
+        assert.match(source, /identityCard\.setAttribute\("role", "dialog"\)/);
+        assert.match(source, /actions\.setAttribute\("aria-haspopup", "dialog"\)/);
+        assert.match(source, /actions\.setAttribute\("aria-controls", identityCard\.id\)/);
+        assert.match(source, /actions\.setAttribute\("aria-expanded", "false"\)/);
         assert.match(source, /documentRef\.body\.append\(identityCard\)/);
-        assert.match(source, /identityCard\.addEventListener\("mouseenter", clearIdentityCardClose\)/);
-        assert.match(source, /identityCard\.addEventListener\("mouseleave", scheduleIdentityCardClose\)/);
+        assert.doesNotMatch(source, /addEventListener\("mouseenter", \(\) => openIdentityCard/);
+        assert.doesNotMatch(source, /addEventListener\("focus", \(\) => openIdentityCard/);
+        assert.match(source, /documentRef\.addEventListener\("pointerdown"/);
         assert.match(source, /windowRef\.addEventListener\("resize", closeIdentityCardForViewportChange\)/);
         assert.match(source, /windowRef\.addEventListener\("scroll", closeIdentityCardForViewportChange, true\)/);
-        assert.match(source, /const renderAgents = \(\) => \{\s*closeIdentityCard\(\)/);
+        assert.match(source, /setAttribute\("role", "alertdialog"\)/);
+        assert.match(source, /setAttribute\("aria-modal", "true"\)/);
+        assert.match(source, /cancelButton\.focus\(\)/);
+        assert.match(source, /event\.key === "Tab"/);
         const productive = source.slice(source.lastIndexOf("function createBridgetUi()"));
         assert.doesNotMatch(productive, /agent-row__tooltip/);
+        assert.doesNotMatch(productive, /\.state\s*=\s*"stopped"/);
+        assert.match(css, /\.agent-row-shell\s*\{/);
+        assert.match(css, /\.agent-row__actions\s*\{/);
         assert.match(css, /\.agent-identity-card\s*\{[\s\S]*?max-width:\s*22\.5rem;/);
         assert.match(css, /\.agent-identity-card__excerpt\s*\{[\s\S]*?-webkit-line-clamp:\s*2;/);
+        assert.match(css, /\.agent-stop-confirmation\s*\{/);
         assert.doesNotMatch(css, /\.agent-row__tooltip/);
+      });
+
+      test("spec_073_eligibilite_ne_depend_que_du_fait_de_gestion", () => {
+        const managedPersistent = api.normalizeAgentRow({
+          name: "managed-persistent",
+          state: "connected",
+          persistent: true,
+        });
+        const managedEphemeral = api.normalizeAgentRow({
+          name: "managed-ephemeral",
+          state: "connected",
+          persistent: false,
+        });
+        const namedLikeManaged = api.normalizeAgentRow({
+          name: "bridget-flux",
+          type: "codex",
+          transport: "codex_app_server",
+          state: "connected",
+        });
+        assert.deepEqual(api.agentStopEligibility(managedPersistent), {
+          eligible: true,
+          code: "eligible",
+          reason: "",
+        });
+        assert.equal(api.agentStopEligibility(managedEphemeral).eligible, true);
+        assert.deepEqual(api.agentStopEligibility(namedLikeManaged), {
+          eligible: false,
+          code: "agent_not_managed",
+          reason: "Cet agent n’est pas géré par Bridget.",
+        });
+        assert.equal(
+          api.agentStopEligibility({ ...managedPersistent, state: "stopped" }).code,
+          "agent_stopped",
+        );
+      });
+
+      test("spec_073_demande_et_verdicts_stop_restent_exacts", () => {
+        assert.deepEqual(api.buildAgentStopRequest("agent-1", "stop-ui-fixed"), {
+          version: 1,
+          name: "agent-1",
+          command_id: "stop-ui-fixed",
+        });
+        assert.equal(api.buildAgentStopUrl("jeton +"), "/v1/agents/stop?token=jeton+%2B");
+        assert.deepEqual(api.agentStopFeedback(true, { outcome: "stopped" }), {
+          tone: "success",
+          message: "Agent arrêté proprement. Son historique est conservé.",
+        });
+        assert.match(
+          api.agentStopFeedback(true, { outcome: "stopped_forced", survivors_killed: 2 }).message,
+          /2 processus survivants/,
+        );
+        for (const [code, fragment] of [
+          ["agent_not_managed", "pas géré"],
+          ["agent_not_found", "introuvable"],
+          ["agent_stopped", "déjà arrêté"],
+          ["stop_timeout", "pas été confirmé"],
+          ["daemon_unavailable", "indisponible"],
+        ]) {
+          assert.match(api.agentStopFeedback(false, { code }).message, new RegExp(fragment));
+        }
+      });
+
+      test("spec_073_ouverture_locale_reste_sous_150_ms_sans_reseau", () => {
+        const agent = api.normalizeAgentRow({
+          name: "agent-mesure",
+          type: "codex",
+          state: "connected",
+          persistent: true,
+          last_message_at: 10_000,
+        });
+        const started = performance.now();
+        for (let index = 0; index < 100; index += 1) {
+          api.identityCardData(agent, 10_100);
+          api.identityCardPosition(
+            { left: 20, right: 300, top: 40, bottom: 100 },
+            { width: 320, height: 240 },
+            { width: 1280, height: 720 },
+          );
+        }
+        assert.ok(performance.now() - started < 150);
+      });
+
+      test("spec_073_tour_actif_declenche_uniquement_l_avertissement", () => {
+        assert.equal(api.agentHasActiveTurn({ turn_state: "running" }), true);
+        assert.equal(api.agentHasActiveTurn({ turn_state: "waiting_approval" }), true);
+        assert.equal(api.agentHasActiveTurn({ wait_state: "waiting_provider" }), true);
+        assert.equal(api.agentHasActiveTurn({ turn_state: null, wait_state: null }), false);
       });
 
       test("propriete_agent_reste_visible_sans_alourdir_la_carte", () => {
@@ -2906,6 +3002,78 @@
     return { left, top, side };
   }
 
+  function agentStopEligibility(agent) {
+    const normalized = normalizeAgentRow(agent);
+    if (normalized.state === "stopped") {
+      return {
+        eligible: false,
+        code: "agent_stopped",
+        reason: "Cet agent est déjà arrêté.",
+      };
+    }
+    if (normalized.persistent === null) {
+      return {
+        eligible: false,
+        code: "agent_not_managed",
+        reason: "Cet agent n’est pas géré par Bridget.",
+      };
+    }
+    return { eligible: true, code: "eligible", reason: "" };
+  }
+
+  function agentHasActiveTurn(agent) {
+    return Boolean(
+      agent
+      && (
+        agent.turn_state === "running"
+        || agent.turn_state === "waiting_approval"
+        || (typeof agent.wait_state === "string" && agent.wait_state.length > 0)
+      )
+    );
+  }
+
+  function buildAgentStopRequest(name, commandId) {
+    return {
+      version: 1,
+      name: String(name || ""),
+      command_id: String(commandId || ""),
+    };
+  }
+
+  function buildAgentStopUrl(token) {
+    return agentResourceUrl("/v1/agents/stop", token);
+  }
+
+  function agentStopFeedback(ok, payload) {
+    if (ok && payload && payload.outcome === "stopped") {
+      return {
+        tone: "success",
+        message: "Agent arrêté proprement. Son historique est conservé.",
+      };
+    }
+    if (ok && payload && payload.outcome === "stopped_forced") {
+      const survivors = Number.isInteger(payload.survivors_killed)
+        ? payload.survivors_killed
+        : 0;
+      return {
+        tone: "warning",
+        message: `Agent arrêté avec terminaison forcée (${survivors} processus survivants terminés). Son historique est conservé.`,
+      };
+    }
+    const messages = {
+      agent_not_managed: "Cet agent n’est pas géré par Bridget.",
+      agent_not_found: "Cet agent est introuvable.",
+      agent_stopped: "Cet agent est déjà arrêté.",
+      stop_timeout: "L’arrêt n’a pas été confirmé dans le délai.",
+      daemon_unavailable: "Le daemon Bridget est indisponible.",
+      invalid_request: "La demande de décommissionnement est invalide.",
+    };
+    return {
+      tone: "error",
+      message: messages[payload && payload.code] || "Le décommissionnement a échoué.",
+    };
+  }
+
   function createDraft(value = "", selectionStart = 0, selectionEnd = 0, focused = false) {
     return {
       value,
@@ -3297,6 +3465,9 @@
         : null,
       effort: typeof (agent && agent.effort) === "string" && agent.effort.trim()
         ? agent.effort.trim()
+        : null,
+      persistent: typeof (agent && agent.persistent) === "boolean"
+        ? agent.persistent
         : null,
       state: text(agent && agent.state, "unknown"),
       connection_state: text(agent && agent.connection_state, text(agent && agent.state, "unknown")),
@@ -4977,36 +5148,66 @@
     };
 
     const identityCard = documentRef.body ? make("div", "agent-identity-card") : null;
+    const stopConfirmation = documentRef.body
+      ? make("div", "agent-stop-confirmation")
+      : null;
     let identityCardTrigger = null;
-    let identityCardCloseTimer = null;
+    let identityCardAgentName = null;
+    let identityCardFocusTarget = null;
+    let stopConfirmationAgent = null;
+    let stopConfirmationReturnFocus = null;
+    let stopConfirmationControls = [];
+    let stopInFlight = null;
+    let stopResult = null;
     if (identityCard) {
       identityCard.id = "agent-identity-card";
       identityCard.hidden = true;
-      identityCard.setAttribute("role", "tooltip");
+      identityCard.setAttribute("role", "dialog");
+      identityCard.setAttribute("aria-modal", "false");
+      identityCard.setAttribute("aria-labelledby", "agent-identity-card-title");
       identityCard.setAttribute("aria-hidden", "true");
+      identityCard.tabIndex = -1;
       documentRef.body.append(identityCard);
     }
+    if (stopConfirmation) {
+      stopConfirmation.hidden = true;
+      stopConfirmation.setAttribute("aria-hidden", "true");
+      documentRef.body.append(stopConfirmation);
+    }
 
-    const clearIdentityCardClose = () => {
-      if (!identityCardCloseTimer) return;
-      windowRef.clearTimeout(identityCardCloseTimer);
-      identityCardCloseTimer = null;
+    const canFocus = (node) => (
+      node
+      && node.isConnected !== false
+      && typeof node.focus === "function"
+    );
+
+    const closeStopConfirmation = (restoreFocus = true) => {
+      const target = stopConfirmationReturnFocus;
+      stopConfirmationAgent = null;
+      stopConfirmationReturnFocus = null;
+      stopConfirmationControls = [];
+      if (stopConfirmation) {
+        stopConfirmation.hidden = true;
+        stopConfirmation.setAttribute("aria-hidden", "true");
+        stopConfirmation.replaceChildren();
+      }
+      if (restoreFocus && canFocus(target)) target.focus();
     };
 
-    const closeIdentityCard = () => {
-      clearIdentityCardClose();
-      if (identityCardTrigger && typeof identityCardTrigger.removeAttribute === "function") {
-        identityCardTrigger.removeAttribute("aria-describedby");
+    const closeIdentityCard = (restoreFocus = true) => {
+      const target = identityCardTrigger;
+      closeStopConfirmation(false);
+      if (identityCardTrigger && typeof identityCardTrigger.setAttribute === "function") {
+        identityCardTrigger.setAttribute("aria-expanded", "false");
       }
       identityCardTrigger = null;
-      if (!identityCard) return;
-      identityCard.hidden = true;
-      identityCard.setAttribute("aria-hidden", "true");
-    };
-
-    const scheduleIdentityCardClose = () => {
-      clearIdentityCardClose();
-      identityCardCloseTimer = windowRef.setTimeout(closeIdentityCard, 140);
+      identityCardAgentName = null;
+      identityCardFocusTarget = null;
+      if (identityCard) {
+        identityCard.hidden = true;
+        identityCard.setAttribute("aria-hidden", "true");
+      }
+      if (restoreFocus && canFocus(target)) target.focus();
     };
 
     const appendIdentityFact = (list, label, value) => {
@@ -5022,14 +5223,23 @@
       const data = identityCardData(agent);
       const heading = make("div", "agent-identity-card__heading");
       const agentBlock = make("div", "agent-identity-card__agent");
+      const agentName = make("strong", "agent-identity-card__name", data.name);
+      agentName.id = "agent-identity-card-title";
       agentBlock.append(
-        make("strong", "agent-identity-card__name", data.name),
+        agentName,
         make("span", "agent-identity-card__presence", data.presence),
       );
       agentBlock.dataset.state = data.state;
       const mode = make("span", "agent-identity-card__mode", data.mode.label);
       mode.dataset.mode = data.mode.key;
-      heading.append(agentBlock, mode);
+      const closeButton = make("button", "agent-identity-card__close", "Fermer");
+      closeButton.type = "button";
+      closeButton.setAttribute("aria-label", `Fermer la fiche de ${data.name}`);
+      closeButton.addEventListener("click", () => closeIdentityCard(true));
+      const headingActions = make("div", "agent-identity-card__heading-actions");
+      headingActions.append(mode, closeButton);
+      heading.append(agentBlock, headingActions);
+      identityCardFocusTarget = closeButton;
 
       const runtime = make("div", "agent-identity-card__runtime");
       const mark = data.runtime.logo
@@ -5059,6 +5269,36 @@
         excerpt.setAttribute("aria-label", `Dernier message : ${data.excerpt}`);
         children.push(excerpt);
       }
+      const actionArea = make("div", "agent-identity-card__actions");
+      const eligibility = agentStopEligibility(agent);
+      const stopButton = make("button", "agent-identity-card__decommission", "Décommissionner");
+      stopButton.type = "button";
+      const submitting = stopInFlight && stopInFlight.name === agent.name;
+      const terminalSuccess = stopResult
+        && stopResult.name === agent.name
+        && ["success", "warning"].includes(stopResult.tone);
+      stopButton.disabled = !eligibility.eligible || submitting || terminalSuccess;
+      if (submitting) stopButton.textContent = "Décommissionnement en cours…";
+      if (eligibility.eligible) {
+        stopButton.addEventListener("click", () => openStopConfirmation(agent, stopButton));
+      }
+      actionArea.append(stopButton);
+      if (!eligibility.eligible) {
+        actionArea.append(make("p", "agent-identity-card__action-note", eligibility.reason));
+      } else {
+        actionArea.append(make(
+          "p",
+          "agent-identity-card__action-note",
+          "Arrête l’agent et le retire de la flotte active. Son historique est conservé.",
+        ));
+      }
+      if (stopResult && stopResult.name === agent.name) {
+        const feedback = make("p", "agent-identity-card__stop-result", stopResult.message);
+        feedback.dataset.tone = stopResult.tone;
+        feedback.setAttribute("role", stopResult.tone === "error" ? "alert" : "status");
+        actionArea.append(feedback);
+      }
+      children.push(actionArea);
       identityCard.replaceChildren(...children);
     };
 
@@ -5078,28 +5318,154 @@
       identityCard.dataset.side = position.side;
     };
 
-    const openIdentityCard = (agent, button) => {
+    const openIdentityCard = (agent, button, moveFocus = true) => {
       if (!identityCard) return;
-      clearIdentityCardClose();
       if (identityCardTrigger && identityCardTrigger !== button) {
-        identityCardTrigger.removeAttribute("aria-describedby");
+        identityCardTrigger.setAttribute("aria-expanded", "false");
       }
       identityCardTrigger = button;
+      identityCardAgentName = agent.name;
       renderIdentityCard(agent);
       identityCard.hidden = false;
       identityCard.setAttribute("aria-hidden", "false");
-      button.setAttribute("aria-describedby", identityCard.id);
+      button.setAttribute("aria-expanded", "true");
       positionIdentityCard();
+      if (moveFocus && canFocus(identityCardFocusTarget)) identityCardFocusTarget.focus();
     };
 
-    const closeIdentityCardForViewportChange = () => closeIdentityCard();
+    const openStopConfirmation = (agent, returnFocus) => {
+      if (!stopConfirmation || stopInFlight) return;
+      stopConfirmationAgent = agent;
+      stopConfirmationReturnFocus = returnFocus;
+      const dialog = make("div", "agent-stop-confirmation__dialog");
+      dialog.setAttribute("role", "alertdialog");
+      dialog.setAttribute("aria-modal", "true");
+      dialog.setAttribute("aria-labelledby", "agent-stop-confirmation-title");
+      dialog.setAttribute("aria-describedby", "agent-stop-confirmation-description");
+      const title = make("h2", "agent-stop-confirmation__title", `Décommissionner ${agent.name} ?`);
+      title.id = "agent-stop-confirmation-title";
+      const description = make(
+        "p",
+        "agent-stop-confirmation__description",
+        "Le processus sera arrêté et l’agent quittera la flotte active. Son historique sera conservé.",
+      );
+      description.id = "agent-stop-confirmation-description";
+      const children = [title, description];
+      if (agentHasActiveTurn(agent)) {
+        children.push(make(
+          "p",
+          "agent-stop-confirmation__warning",
+          "Un travail est en cours et sera interrompu.",
+        ));
+      }
+      const controls = make("div", "agent-stop-confirmation__controls");
+      const cancelButton = make("button", "agent-stop-confirmation__cancel", "Annuler");
+      cancelButton.type = "button";
+      cancelButton.addEventListener("click", () => closeStopConfirmation(true));
+      const confirmButton = make("button", "agent-stop-confirmation__confirm", "Décommissionner");
+      confirmButton.type = "button";
+      confirmButton.addEventListener("click", () => void submitAgentStop());
+      controls.append(cancelButton, confirmButton);
+      children.push(controls);
+      dialog.append(...children);
+      stopConfirmation.replaceChildren(dialog);
+      stopConfirmation.hidden = false;
+      stopConfirmation.setAttribute("aria-hidden", "false");
+      stopConfirmationControls = [cancelButton, confirmButton];
+      cancelButton.focus();
+    };
+
+    const submitAgentStop = async () => {
+      if (!stopConfirmationAgent || stopInFlight) return;
+      const agent = stopConfirmationAgent;
+      const randomPart = windowRef.crypto && typeof windowRef.crypto.randomUUID === "function"
+        ? windowRef.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const request = buildAgentStopRequest(agent.name, `stop-ui-${randomPart}`);
+      stopInFlight = { name: agent.name, commandId: request.command_id };
+      stopResult = {
+        name: agent.name,
+        tone: "pending",
+        message: "Décommissionnement en cours…",
+      };
+      closeStopConfirmation(false);
+      renderIdentityCard(agent);
+      try {
+        const response = await windowRef.fetch(buildAgentStopUrl(token), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+        });
+        let payload = {};
+        try { payload = await response.json(); } catch (_error) { /* réponse illisible */ }
+        stopResult = { name: agent.name, ...agentStopFeedback(response.ok, payload) };
+        if (response.ok) {
+          fetchScopedSnapshot((url) => windowRef.fetch(url), token, state.selectedAgent)
+            .then((scoped) => applySnapshotPayload(scoped.snapshot, scoped.agent))
+            .catch(() => updateRelay("reconnecting"));
+        }
+      } catch (_error) {
+        stopResult = {
+          name: agent.name,
+          ...agentStopFeedback(false, { code: "daemon_unavailable" }),
+        };
+      } finally {
+        stopInFlight = null;
+        const latest = state.agents.find((entry) => entry.name === agent.name) || agent;
+        if (identityCardAgentName === agent.name) {
+          renderIdentityCard(latest);
+          positionIdentityCard();
+          if (canFocus(identityCard)) identityCard.focus();
+        }
+      }
+    };
+
+    const closeIdentityCardForViewportChange = () => closeIdentityCard(false);
     if (identityCard) {
-      identityCard.addEventListener("mouseenter", clearIdentityCardClose);
-      identityCard.addEventListener("mouseleave", scheduleIdentityCardClose);
       if (typeof windowRef.addEventListener === "function") {
         windowRef.addEventListener("resize", closeIdentityCardForViewportChange);
         windowRef.addEventListener("scroll", closeIdentityCardForViewportChange, true);
       }
+    }
+    const handleIdentityPointerDown = (event) => {
+      if (!identityCard || identityCard.hidden || (stopConfirmation && !stopConfirmation.hidden)) return;
+      const insideCard = typeof identityCard.contains === "function"
+        && identityCard.contains(event.target);
+      const insideTrigger = identityCardTrigger
+        && typeof identityCardTrigger.contains === "function"
+        && identityCardTrigger.contains(event.target);
+      if (!insideCard && !insideTrigger && event.target !== identityCardTrigger) {
+        closeIdentityCard(true);
+      }
+    };
+    const handleIdentityKeydown = (event) => {
+      if (stopConfirmation && !stopConfirmation.hidden) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeStopConfirmation(true);
+          return;
+        }
+        if (event.key === "Tab" && stopConfirmationControls.length > 0) {
+          const first = stopConfirmationControls[0];
+          const last = stopConfirmationControls[stopConfirmationControls.length - 1];
+          if (event.shiftKey && documentRef.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && documentRef.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
+        return;
+      }
+      if (event.key === "Escape" && identityCard && !identityCard.hidden) {
+        event.preventDefault();
+        closeIdentityCard(true);
+      }
+    };
+    if (typeof documentRef.addEventListener === "function") {
+      documentRef.addEventListener("pointerdown", handleIdentityPointerDown);
+      documentRef.addEventListener("keydown", handleIdentityKeydown);
     }
 
     const timestamp = (at) => {
@@ -5254,6 +5620,7 @@
     };
 
     const renderAgentButton = (agent) => {
+      const shell = make("div", "agent-row-shell");
       const button = make("button", "agent-row");
       button.type = "button";
       button.dataset.agent = agent.name;
@@ -5296,29 +5663,53 @@
       }
       layout.append(content);
       button.append(layout);
-      button.addEventListener("mouseenter", () => openIdentityCard(agent, button));
-      button.addEventListener("mouseleave", scheduleIdentityCardClose);
-      button.addEventListener("focus", () => openIdentityCard(agent, button));
-      button.addEventListener("blur", scheduleIdentityCardClose);
-      button.addEventListener("keydown", (event) => {
-        if (event.key !== "Escape") return;
+      button.addEventListener("click", () => selectAgent(agent.name));
+
+      const actions = make("button", "agent-row__actions", "⋯");
+      actions.type = "button";
+      actions.setAttribute("aria-label", `Ouvrir la fiche et les actions de ${agent.name}`);
+      actions.setAttribute("aria-haspopup", "dialog");
+      if (identityCard) {
+        actions.setAttribute("aria-controls", identityCard.id);
+      } else {
+        actions.setAttribute("aria-controls", "agent-identity-card");
+      }
+      actions.setAttribute("aria-expanded", "false");
+      actions.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        closeIdentityCard();
+        if (identityCardAgentName === agent.name && identityCard && !identityCard.hidden) {
+          closeIdentityCard(true);
+          return;
+        }
+        openIdentityCard(agent, actions, true);
       });
-      button.addEventListener("click", () => selectAgent(agent.name));
-      return button;
+      shell.append(button, actions);
+      shell.identityActionButton = actions;
+      return shell;
     };
 
     const renderAgents = () => {
-      closeIdentityCard();
+      const openedName = identityCardAgentName;
       const active = state.agents.filter((agent) => agent.state !== "stopped");
       const stopped = state.agents.filter((agent) => agent.state === "stopped");
-      nodes.agentList.replaceChildren(...active.map(renderAgentButton));
-      nodes.stoppedAgentList.replaceChildren(...stopped.map(renderAgentButton));
+      const activeRows = active.map((agent) => ({ agent, node: renderAgentButton(agent) }));
+      const stoppedRows = stopped.map((agent) => ({ agent, node: renderAgentButton(agent) }));
+      nodes.agentList.replaceChildren(...activeRows.map((entry) => entry.node));
+      nodes.stoppedAgentList.replaceChildren(...stoppedRows.map((entry) => entry.node));
       nodes.stoppedCount.textContent = String(stopped.length);
       nodes.stoppedAgents.hidden = stopped.length === 0;
       nodes.fleetCount.textContent = String(state.agents.length);
+      if (openedName) {
+        const opened = [...activeRows, ...stoppedRows].find(
+          (entry) => entry.agent.name === openedName,
+        );
+        if (opened) {
+          openIdentityCard(opened.agent, opened.node.identityActionButton, false);
+        } else {
+          closeIdentityCard(false);
+        }
+      }
     };
 
     const renderHeader = () => {
@@ -5918,12 +6309,19 @@
     };
 
     const closeAll = () => {
-      closeIdentityCard();
+      closeIdentityCard(false);
       if (identityCard && typeof windowRef.removeEventListener === "function") {
         windowRef.removeEventListener("resize", closeIdentityCardForViewportChange);
         windowRef.removeEventListener("scroll", closeIdentityCardForViewportChange, true);
       }
+      if (typeof documentRef.removeEventListener === "function") {
+        documentRef.removeEventListener("pointerdown", handleIdentityPointerDown);
+        documentRef.removeEventListener("keydown", handleIdentityKeydown);
+      }
       if (identityCard && typeof identityCard.remove === "function") identityCard.remove();
+      if (stopConfirmation && typeof stopConfirmation.remove === "function") {
+        stopConfirmation.remove();
+      }
       closeWatch();
       historyConnections.forEach((history) => history.close());
       historyConnections.clear();
@@ -6059,6 +6457,7 @@
 
     const selectAgent = (agentName) => {
       if (!state.agents.some((agent) => agent.name === agentName)) return;
+      closeIdentityCard(false);
       if (state.selectedAgent !== agentName) storeCurrentDraft();
       state = { ...state, selectedAgent: agentName };
       renderAgents();
@@ -6362,6 +6761,11 @@
     executionModeIdentity,
     identityCardData,
     identityCardPosition,
+    agentStopEligibility,
+    agentHasActiveTurn,
+    buildAgentStopRequest,
+    buildAgentStopUrl,
+    agentStopFeedback,
     agentVisualState,
     createAgentAvatar,
     createDraft,
