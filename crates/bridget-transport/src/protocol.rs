@@ -112,6 +112,8 @@ where
 pub const CLIENT_CONTRACT_VERSION: u16 = 1;
 /// Version du contrat de service du guichet Maicie.
 pub const SERVICE_CONTRACT_VERSION: u16 = 1;
+/// Version du contrat local de registre de projets.
+pub const PROJECT_REGISTRY_CONTRACT_VERSION: u16 = 1;
 /// Version requise uniquement lorsqu'une délégation transporte une cible de
 /// revue. Les autres opérations restent en v1 afin que `ServiceHello` et les
 /// clients historiques ne négocient pas une capacité qu'ils n'utilisent pas.
@@ -247,10 +249,95 @@ pub struct ExecutionProviderContext {
 #[serde(rename_all = "snake_case")]
 pub enum ServiceCapability {
     MaicieGuichet,
+    /// Registre local Bridget, exclusivement négocié par le service Maicie.
+    ProjectRegistryV1,
     CoordinationEventsV1,
     /// Relève bornée et cursée des faits 016. La v1 reste disponible pour les
     /// consommateurs qui n'ont besoin que du rejeu initial historique.
     CoordinationEventsV2,
+}
+
+/// Backend d'exécution admis par le registre de projets.
+///
+/// La v1 n'accepte qu'une racine validée directement sur l'hôte du daemon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectBackend {
+    Host,
+}
+
+/// Requête de liaison de projet portée par la variante dédiée du protocole.
+///
+/// Le contrôle de l'UID pair reste hors du JSON : il est effectué par le
+/// daemon sur la socket Unix avant de décoder cette charge métier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBindRequest {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub issued_at: i64,
+    pub deadline_at: i64,
+    pub project_id: String,
+    pub requested_root: String,
+    pub backend: ProjectBackend,
+}
+
+/// État terminal d'une tentative de liaison de projet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectBindStatus {
+    Active,
+    BindingFailed,
+    RegistrationConflict,
+}
+
+/// Raisons fermées exposées par le registre de projets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRegistryRefusal {
+    InvalidContract,
+    InvalidProjectId,
+    InvalidAbsoluteRoot,
+    RootMissing,
+    RootNotDirectory,
+    RootOutsideAllowedPrefixes,
+    RootTooBroad,
+    RootAlreadyBound,
+    ProjectAlreadyBoundElsewhere,
+    RebindRequired,
+    ProjectDisabled,
+    EnvelopeMismatch,
+    IdempotencyExpired,
+    StoreUnavailable,
+    RegistrationConflict,
+    ProjectRegistryCapabilityMissing,
+    ProjectRegistryVersionUnsupported,
+    LocalOperatorRequired,
+    PeerUidMismatch,
+    ProjectRootPolicyUnavailable,
+    ProjectRootPolicyInvalid,
+    ProjectRootPolicyPermissionsInvalid,
+}
+
+/// Issue terminale d'une demande de liaison, sans chemin canonique exposé.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBindOutcome {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub project_id: String,
+    pub status: ProjectBindStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<ProjectBackend>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProjectRegistryRefusal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub existing_project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub existing_binding_generation: Option<u64>,
+    pub observed_at: i64,
 }
 
 /// Refus structurés de la frontière réservée aux services.
@@ -967,6 +1054,12 @@ pub enum WrapperToDaemon {
         issuer_scope: String,
         capabilities: Vec<ServiceCapability>,
     },
+    /// Demande locale Maicie vers Bridget. Elle ne reprend pas le sens inverse
+    /// de `ServiceRequest`, qui reste un dépôt Bridget vers le guichet Maicie.
+    #[serde(rename = "project_registry_request")]
+    ProjectRegistryRequest {
+        request: ProjectBindRequest,
+    },
     /// Ouvre une relève bornée des faits de coordination v2. Le curseur est
     /// opaque pour le consommateur : Bridget seul lui donne un ordre durable.
     #[serde(rename = "coordination_subscribe")]
@@ -1623,6 +1716,9 @@ pub enum DaemonToWrapper {
     },
     /// Refus motivé de la négociation ou de la matrice de service.
     ServiceRejected { reason: ServiceRefusal },
+    /// Issue terminale du registre local, corrélée à la commande Maicie.
+    #[serde(rename = "project_registry_outcome")]
+    ProjectRegistryOutcome { outcome: ProjectBindOutcome },
     /// Issue durable ou calculée d'une opération du guichet.
     #[serde(rename = "guichet_result")]
     GuichetResult {
@@ -4010,5 +4106,79 @@ mod tests {
                 if event_id == "runtime-link-1-execution-child-42-warning"
         ));
         assert!(serde_json::from_str::<DelegatedRuntimeEventKind>("\"other\"").is_err());
+    }
+
+    #[test]
+    fn spec_065_registre_projet_est_ferme_directionnel_et_negocie() {
+        let request = ProjectBindRequest {
+            contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+            command_id: "project-command-1".to_string(),
+            issued_at: 1_787_997_600,
+            deadline_at: 1_787_998_200,
+            project_id: "project-opaque-1".to_string(),
+            requested_root: "/srv/projects/fixture".to_string(),
+            backend: ProjectBackend::Host,
+        };
+        let message = WrapperToDaemon::ProjectRegistryRequest {
+            request: request.clone(),
+        };
+        let wire = encode(&message).unwrap();
+        assert!(wire.contains(r#""type":"project_registry_request""#));
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&wire).unwrap(),
+            WrapperToDaemon::ProjectRegistryRequest { request: decoded }
+                if decoded == request
+        ));
+        assert!(serde_json::from_str::<ProjectBindRequest>(
+            r#"{"contract_version":1,"command_id":"project-command-1","issued_at":1,"deadline_at":2,"project_id":"project-opaque-1","requested_root":"/srv/projects/fixture","backend":"host","unexpected":true}"#
+        )
+        .is_err());
+
+        let hello = WrapperToDaemon::ServiceHello {
+            version: SERVICE_CONTRACT_VERSION,
+            service: "maicie".to_string(),
+            issuer_scope: "065_scope_0123456789abcdef0123456789abcdef".to_string(),
+            capabilities: vec![ServiceCapability::ProjectRegistryV1],
+        };
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encode(&hello).unwrap()).unwrap(),
+            WrapperToDaemon::ServiceHello {
+                service,
+                capabilities,
+                ..
+            } if service == "maicie" && capabilities == vec![ServiceCapability::ProjectRegistryV1]
+        ));
+
+        let conflict = ProjectBindOutcome {
+            contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+            command_id: "project-command-2".to_string(),
+            project_id: "project-loser".to_string(),
+            status: ProjectBindStatus::RegistrationConflict,
+            binding_generation: None,
+            backend: None,
+            reason: Some(ProjectRegistryRefusal::RootAlreadyBound),
+            existing_project_id: Some("project-winner".to_string()),
+            existing_binding_generation: Some(4),
+            observed_at: 1_787_997_601,
+        };
+        let outcome = DaemonToWrapper::ProjectRegistryOutcome {
+            outcome: conflict.clone(),
+        };
+        assert!(matches!(
+            decode::<DaemonToWrapper>(&encode(&outcome).unwrap()).unwrap(),
+            DaemonToWrapper::ProjectRegistryOutcome { outcome: decoded }
+                if decoded == conflict
+        ));
+
+        let version_refusal = ProjectRegistryRefusal::ProjectRegistryVersionUnsupported;
+        assert_eq!(
+            serde_json::to_string(&version_refusal).unwrap(),
+            "\"project_registry_version_unsupported\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ProjectRegistryRefusal::PeerUidMismatch).unwrap(),
+            "\"peer_uid_mismatch\""
+        );
+        assert!(serde_json::from_str::<ProjectRegistryRefusal>("\"unknown\"").is_err());
     }
 }

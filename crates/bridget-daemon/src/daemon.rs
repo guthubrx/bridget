@@ -9,9 +9,10 @@ use bridget_transport::protocol::{
     AgentLinkEventFrame, AttachRefusal, CLIENT_CONTRACT_VERSION, COORDINATION_EVENTS_VERSION,
     COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal, ConnectionRole,
     DelegatedRuntimeEventFrame, DiskSpaceFact, ExecutionControlCommand, ExecutionControlOperation,
-    ExecutionControlOutcome, ExecutionControlRefusal, IdempotencyIssue, PresenceMode,
-    REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal,
-    SpawnRefusal, StopOutcome, decode, encode,
+    ExecutionControlOutcome, ExecutionControlRefusal, IdempotencyIssue,
+    PROJECT_REGISTRY_CONTRACT_VERSION, PresenceMode, ProjectBindOutcome, ProjectBindStatus,
+    ProjectRegistryRefusal, REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION,
+    ServiceCapability, ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
@@ -6261,6 +6262,7 @@ fn handle_wrapper_message(
         let is_service_message = matches!(
             &msg,
             WrapperToDaemon::ServiceHello { .. }
+                | WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
                 | WrapperToDaemon::GuichetClaim { .. }
@@ -6278,6 +6280,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::GuichetClaim { .. }
                 | WrapperToDaemon::GuichetLookup { .. }
                 | WrapperToDaemon::GuichetReply { .. }
+                | WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                     if !st.service_negotiations.contains_key(conn_id) =>
                 {
@@ -6312,6 +6315,19 @@ fn handle_wrapper_message(
                 {
                     Some(ServiceRefusal::CapabilityRequired)
                 }
+                WrapperToDaemon::ProjectRegistryRequest { .. }
+                    if !st
+                        .service_negotiations
+                        .get(conn_id)
+                        .is_some_and(|negotiated| {
+                            negotiated.version == SERVICE_CONTRACT_VERSION
+                                && negotiated
+                                    .capabilities
+                                    .contains(&ServiceCapability::ProjectRegistryV1)
+                        }) =>
+                {
+                    Some(ServiceRefusal::CapabilityRequired)
+                }
                 // MATRICE EXHAUSTIVE — même raison que pour le rôle Client, et
                 // conséquence PIRE ici. Un message non classé y était refusé en
                 // silence : une sonde d'identité posée sur ce rôle rendrait
@@ -6320,6 +6336,7 @@ fn handle_wrapper_message(
                 // ressemble à une garde qui marche — elle passe la revue verte
                 // et ne protège rien.
                 WrapperToDaemon::ServiceHello { .. }
+                | WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
                 | WrapperToDaemon::GuichetClaim { .. }
@@ -6461,6 +6478,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ServiceHello { .. }
+                | WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::ServiceRequest { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
@@ -6530,6 +6548,30 @@ fn handle_wrapper_message(
 
     match msg {
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
+        // La persistance de la liaison et la preuve SO_PEERCRED arrivent dans
+        // T014. Dès cette fondation, la trame ne traverse toutefois que le
+        // rôle Service après capability exacte, puis répond de façon fermée.
+        WrapperToDaemon::ProjectRegistryRequest { request } => {
+            let reason = if request.contract_version != PROJECT_REGISTRY_CONTRACT_VERSION {
+                ProjectRegistryRefusal::ProjectRegistryVersionUnsupported
+            } else {
+                ProjectRegistryRefusal::StoreUnavailable
+            };
+            Some(DaemonToWrapper::ProjectRegistryOutcome {
+                outcome: ProjectBindOutcome {
+                    contract_version: request.contract_version,
+                    command_id: request.command_id,
+                    project_id: request.project_id,
+                    status: ProjectBindStatus::BindingFailed,
+                    binding_generation: None,
+                    backend: None,
+                    reason: Some(reason),
+                    existing_project_id: None,
+                    existing_binding_generation: None,
+                    observed_at: unix_now_secs(),
+                },
+            })
+        }
         WrapperToDaemon::DelegatedRuntimeEvent {
             execution_id,
             kind,
@@ -6692,13 +6734,28 @@ fn handle_wrapper_message(
             let canonical_capabilities = matches!(
                 capabilities.as_slice(),
                 [] | [ServiceCapability::MaicieGuichet]
+                    | [ServiceCapability::ProjectRegistryV1]
+                    | [
+                        ServiceCapability::MaicieGuichet,
+                        ServiceCapability::ProjectRegistryV1,
+                    ]
                     | [
                         ServiceCapability::MaicieGuichet,
                         ServiceCapability::CoordinationEventsV1,
                     ]
                     | [
                         ServiceCapability::MaicieGuichet,
+                        ServiceCapability::CoordinationEventsV1,
+                        ServiceCapability::ProjectRegistryV1,
+                    ]
+                    | [
+                        ServiceCapability::MaicieGuichet,
                         ServiceCapability::CoordinationEventsV2,
+                    ]
+                    | [
+                        ServiceCapability::MaicieGuichet,
+                        ServiceCapability::CoordinationEventsV2,
+                        ServiceCapability::ProjectRegistryV1,
                     ]
             );
             if !canonical_capabilities {
