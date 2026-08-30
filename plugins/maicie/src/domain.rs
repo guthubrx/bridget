@@ -30,6 +30,127 @@ pub enum DomainError {
     ApprobationIncoherente,
 }
 
+/// État métier de l'identité projet, détenu exclusivement par Maicie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectIdentityStatus {
+    PendingBinding,
+    Active,
+    RegistrationConflict,
+    Disabled,
+}
+
+/// Référence opaque propagée vers les délégations et exécutions.
+///
+/// Le chemin canonique, le backend et la santé de liaison restent chez Bridget.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectReference {
+    pub project_id: String,
+    pub binding_generation: u64,
+}
+
+/// Identité métier durable d'un projet, sans donnée de runtime hôte.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectIdentity {
+    pub project_id: String,
+    pub display_name: String,
+    pub status: ProjectIdentityStatus,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub registration_command_id: String,
+}
+
+impl ProjectIdentity {
+    pub fn pending(
+        project_id: String,
+        display_name: String,
+        registration_command_id: String,
+        created_at: i64,
+    ) -> Result<Self, DomainError> {
+        if project_id.trim().is_empty()
+            || display_name.trim().is_empty()
+            || registration_command_id.trim().is_empty()
+            || created_at < 0
+        {
+            return Err(DomainError::DonneeInvalide("identité projet invalide"));
+        }
+        Ok(Self {
+            project_id,
+            display_name,
+            status: ProjectIdentityStatus::PendingBinding,
+            created_at,
+            updated_at: created_at,
+            registration_command_id,
+        })
+    }
+
+    pub fn activate(
+        &mut self,
+        binding_generation: u64,
+        observed_at: i64,
+    ) -> Result<ProjectReference, DomainError> {
+        if binding_generation == 0 {
+            return Err(DomainError::DonneeInvalide(
+                "génération de liaison invalide",
+            ));
+        }
+        match self.status {
+            ProjectIdentityStatus::PendingBinding => {
+                self.transition(ProjectIdentityStatus::Active, observed_at)?;
+            }
+            ProjectIdentityStatus::Active => {}
+            ProjectIdentityStatus::RegistrationConflict | ProjectIdentityStatus::Disabled => {
+                return Err(DomainError::TransitionInterdite);
+            }
+        }
+        self.reference(binding_generation)
+    }
+
+    pub fn registration_conflict(&mut self, observed_at: i64) -> Result<(), DomainError> {
+        if self.status != ProjectIdentityStatus::PendingBinding {
+            return Err(DomainError::TransitionInterdite);
+        }
+        self.transition(ProjectIdentityStatus::RegistrationConflict, observed_at)
+    }
+
+    pub fn disable(&mut self, observed_at: i64) -> Result<(), DomainError> {
+        if self.status != ProjectIdentityStatus::Active {
+            return Err(DomainError::TransitionInterdite);
+        }
+        self.transition(ProjectIdentityStatus::Disabled, observed_at)
+    }
+
+    pub fn reference(&self, binding_generation: u64) -> Result<ProjectReference, DomainError> {
+        if self.status != ProjectIdentityStatus::Active {
+            return Err(DomainError::TransitionInterdite);
+        }
+        if binding_generation == 0 {
+            return Err(DomainError::DonneeInvalide(
+                "génération de liaison invalide",
+            ));
+        }
+        Ok(ProjectReference {
+            project_id: self.project_id.clone(),
+            binding_generation,
+        })
+    }
+
+    fn transition(
+        &mut self,
+        status: ProjectIdentityStatus,
+        observed_at: i64,
+    ) -> Result<(), DomainError> {
+        if observed_at < self.updated_at {
+            return Err(DomainError::DonneeInvalide("date de transition antérieure"));
+        }
+        self.status = status;
+        self.updated_at = observed_at;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModeObjectif {
@@ -2728,5 +2849,48 @@ impl ActivationOutbox {
         }
         self.etat = next;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spec_065_identite_projet_n_est_referencable_qu_apres_activation() {
+        let mut pending = ProjectIdentity::pending(
+            "project-pending".to_string(),
+            "Projet pending".to_string(),
+            "register-command-pending".to_string(),
+            100,
+        )
+        .unwrap();
+        assert_eq!(pending.status, ProjectIdentityStatus::PendingBinding);
+        assert_eq!(pending.reference(1), Err(DomainError::TransitionInterdite));
+
+        pending.registration_conflict(101).unwrap();
+        assert_eq!(pending.status, ProjectIdentityStatus::RegistrationConflict);
+        assert_eq!(pending.reference(1), Err(DomainError::TransitionInterdite));
+
+        let mut winner = ProjectIdentity::pending(
+            "project-winner".to_string(),
+            "Projet gagnant".to_string(),
+            "register-command-winner".to_string(),
+            100,
+        )
+        .unwrap();
+        let reference = winner.activate(4, 102).unwrap();
+        assert_eq!(winner.status, ProjectIdentityStatus::Active);
+        assert_eq!(reference.project_id, "project-winner");
+        assert_eq!(reference.binding_generation, 4);
+        assert_eq!(winner.reference(4), Ok(reference));
+
+        winner.disable(103).unwrap();
+        assert_eq!(winner.status, ProjectIdentityStatus::Disabled);
+        assert_eq!(winner.reference(4), Err(DomainError::TransitionInterdite));
+        assert_eq!(
+            winner.activate(5, 104),
+            Err(DomainError::TransitionInterdite)
+        );
     }
 }
