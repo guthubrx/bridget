@@ -178,7 +178,23 @@ fn cmd_mcp() {
     }
 }
 
-fn cmd_ui(args: &[String]) {
+#[derive(Debug, PartialEq, Eq)]
+enum UiCommand {
+    Serve { maicie_config: PathBuf },
+    EndpointJson,
+}
+
+/// Grammaire fermée de `bridget ui`: démarrer le relais exige sa configuration
+/// explicite, tandis que Desktop ne peut lire que le contrat JSON versionné.
+fn parse_ui_command(args: &[String]) -> Result<UiCommand, String> {
+    if matches!(args.first().map(String::as_str), Some("endpoint")) {
+        return match &args[1..] {
+            [format] if format == "--json" => Ok(UiCommand::EndpointJson),
+            [] => Err("bridget ui endpoint: --json est obligatoire".to_string()),
+            [option, ..] => Err(unknown_argument("ui endpoint", option)),
+        };
+    }
+
     let mut maicie_config = None;
     let mut index = 0;
     while index < args.len() {
@@ -187,28 +203,52 @@ fn cmd_ui(args: &[String]) {
                 index += 1;
                 maicie_config = args.get(index).map(PathBuf::from);
                 if maicie_config.is_none() {
-                    eprintln!("bridget ui: --maicie-config requiert un chemin absolu");
-                    std::process::exit(2);
+                    return Err("bridget ui: --maicie-config requiert un chemin absolu".to_string());
                 }
             }
             option => {
-                eprintln!("bridget ui: option inconnue {option}");
-                std::process::exit(2);
+                return Err(unknown_argument("ui", option));
             }
         }
         index += 1;
     }
-    let maicie_config = maicie_config.unwrap_or_else(|| {
-        eprintln!("bridget ui: --maicie-config <chemin-absolu> est obligatoire");
-        std::process::exit(2);
-    });
+    let maicie_config = maicie_config
+        .ok_or_else(|| "bridget ui: --maicie-config <chemin-absolu> est obligatoire".to_string())?;
     if !maicie_config.is_absolute() {
-        eprintln!("bridget ui: le chemin --maicie-config doit être absolu");
-        std::process::exit(2);
+        return Err("bridget ui: le chemin --maicie-config doit être absolu".to_string());
     }
-    if let Err(error) = crate::ui::run(socket_path(), maicie_config) {
-        eprintln!("bridget ui: {error}");
-        std::process::exit(1);
+    Ok(UiCommand::Serve { maicie_config })
+}
+
+fn render_ui_endpoint_json(endpoint: &crate::ui::UiEndpoint) -> String {
+    serde_json::json!({
+        "version": 1,
+        "port": endpoint.port,
+        "token": endpoint.token,
+    })
+    .to_string()
+}
+
+fn cmd_ui(args: &[String]) {
+    match parse_ui_command(args) {
+        Ok(UiCommand::Serve { maicie_config }) => {
+            if let Err(error) = crate::ui::run(socket_path(), maicie_config) {
+                eprintln!("bridget ui: {error}");
+                std::process::exit(1);
+            }
+        }
+        Ok(UiCommand::EndpointJson) => {
+            let endpoint = crate::ui::load_ui_endpoint(&crate::ui::ui_endpoint_state_path())
+                .unwrap_or_else(|error| {
+                    eprintln!("bridget ui endpoint: endpoint UI indisponible: {error}");
+                    std::process::exit(1);
+                });
+            println!("{}", render_ui_endpoint_json(&endpoint));
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
     }
 }
 
@@ -284,6 +324,7 @@ fn print_usage() {
            daemon                 Lance le daemon\n  \
            mcp                    Lance le serveur MCP sur stdio\n  \
            ui --maicie-config <P> Lance le relais UI (port+jeton stables)\n  \
+           ui endpoint --json     Lit l'endpoint UI existant pour un client SSH\n  \
            attach <N>             Suit un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--name N]\n  \
            stop <N>               Arrête un équipier géré\n  \
@@ -4017,6 +4058,27 @@ mod hook_tests {
 
     fn argv(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn endpoint_ui_exige_un_contrat_json_ferme() {
+        assert!(matches!(
+            parse_ui_command(&argv(&["endpoint", "--json"])),
+            Ok(UiCommand::EndpointJson)
+        ));
+
+        for invalid in [
+            argv(&["endpoint"]),
+            argv(&["endpoint", "--text"]),
+            argv(&["endpoint", "--json", "surplus"]),
+            argv(&["endpoint", "--maicie-config", "/tmp/config"]),
+        ] {
+            let error = parse_ui_command(&invalid).expect_err("forme endpoint refusée");
+            assert!(
+                !error.contains("jeton-de-test-074"),
+                "une erreur de grammaire ne divulgue jamais un jeton: {error}"
+            );
+        }
     }
 
     #[test]
