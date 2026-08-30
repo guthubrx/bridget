@@ -398,6 +398,62 @@
         );
       });
 
+      test("sequence_texte_actions_texte_reclasse_le_lot_sans_doublon", () => {
+        const base = [
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 10,
+            record: { message_id: "m-sequence", event: "turn_start", payload: { body: "diagnostic" } },
+          },
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 11,
+            record: { message_id: "m-sequence", event: "update", payload: { kind: "text", content: "Je vérifie." } },
+          },
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 12,
+            record: { message_id: "m-sequence", event: "update", payload: { kind: "command", text: "git remote -v" } },
+          },
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 13,
+            record: { message_id: "m-sequence", event: "update", payload: { kind: "tool", text: "git ls-remote" } },
+          },
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 14,
+            record: { message_id: "m-sequence", event: "update", payload: { kind: "text", content: "Deux relais sont disponibles." } },
+          },
+        ];
+        const live = api.projectTimeline(base);
+        assert.deepEqual(
+          live
+            .filter((entry) => entry.kind === "message" && entry.role === "agent")
+            .map((entry) => entry.text),
+          ["Je vérifie.", "Deux relais sont disponibles."],
+        );
+        const batch = live.find((entry) => entry.kind === "activity_batch");
+        assert.deepEqual(batch.acts.map((act) => act.text), ["git remote -v", "git ls-remote"]);
+        const current = live.find((entry) => entry.kind === "activity");
+        assert.equal(current.text, "Rédige une réponse");
+        assert.equal(current.acts.length, 0, "le lot remonté ne reste pas dupliqué en bas");
+
+        const terminal = api.projectTimeline([...base, {
+          kind: "record",
+          agent: "bridget",
+          at: 15,
+          record: { message_id: "m-sequence", event: "turn_end", payload: {} },
+        }]);
+        assert.equal(terminal.some((entry) => entry.kind === "activity"), false);
+        assert.equal(terminal.filter((entry) => entry.kind === "activity_batch").length, 1);
+      });
+
       test("activite_live_conserve_tous_les_outils_et_le_verdict_d_autorisation", () => {
         const events = [
           {
@@ -3874,8 +3930,7 @@
           agent: null,
           startAt: at,
           endAt: null,
-          textParts: [],
-          textAt: null,
+          segments: [],
           promptText: "",
           promptFrom: "",
           promptAt: null,
@@ -3926,6 +3981,39 @@
       return text(payload && payload.state) === "pending"
         && /approval|permission/i.test(text(payload && payload.method));
     }
+
+    function appendTextSegment(turn, content, at) {
+      const previous = turn.segments.at(-1);
+      if (previous && previous.kind === "text") {
+        previous.parts.push(content);
+        return previous;
+      }
+      const segment = {
+        kind: "text",
+        at,
+        index: turn.segments.length,
+        parts: [content],
+      };
+      turn.segments.push(segment);
+      return segment;
+    }
+
+    function appendActSegment(turn, act) {
+      const previous = turn.segments.at(-1);
+      if (previous && previous.kind === "activity_batch") {
+        previous.acts.push(act);
+        return previous;
+      }
+      const segment = {
+        kind: "activity_batch",
+        at: act.at,
+        index: turn.segments.length,
+        acts: [act],
+      };
+      turn.segments.push(segment);
+      return segment;
+    }
+
     ordered.forEach((entry) => {
       if (entry.kind !== "record") {
         const ledgerRound = entry.kind === "peer_exchange"
@@ -3975,7 +4063,9 @@
         return;
       }
       if (record.event === "provider_request" && isProviderApprovalRequest(payload)) {
+        const actCount = turn.acts.length;
         const approval = recordApprovalAct(turn, payload, entry.at);
+        if (turn.acts.length > actCount) appendActSegment(turn, approval);
         turn.activity = { kind: "approval", state: approval.state, at: entry.at };
         return;
       }
@@ -3984,8 +4074,7 @@
         if (payload.kind === "text") {
           const content = text(payload.content, text(payload.text));
           if (content) {
-            turn.textParts.push(content);
-            turn.textAt ||= entry.at;
+            appendTextSegment(turn, content, entry.at);
             turn.activity = { kind: "text", at: entry.at };
           }
         } else if (actKinds.has(payload.kind)) {
@@ -4000,6 +4089,7 @@
           const displayKind = payload.kind === "tool_call" ? "tool" : payload.kind;
           if (displayKind === "approval") {
             const method = text(payload.detail, text(payload.method));
+            const actCount = turn.acts.length;
             let approval = pendingApprovalAct(turn, method);
             if (!approval) {
               approval = {
@@ -4012,16 +4102,19 @@
               };
               turn.acts.push(approval);
             }
+            if (turn.acts.length > actCount) appendActSegment(turn, approval);
             turn.activity = { kind: "approval", state: approval.state, at: entry.at };
           } else {
             const state = toolActState(payload);
-            turn.acts.push({
+            const act = {
               kind: displayKind,
               text: label,
               detail: text(payload.detail, text(payload.summary)),
               state,
               at: entry.at,
-            });
+            };
+            turn.acts.push(act);
+            appendActSegment(turn, act);
             turn.activity = { kind: displayKind, state, at: entry.at };
           }
         }
@@ -4038,7 +4131,9 @@
       }
       if (record.event === "permission") {
         const resolved = resolvePermissionDecision(payload);
+        const actCount = turn.acts.length;
         const approval = recordApprovalAct(turn, payload, entry.at, resolved.state);
+        if (turn.acts.length > actCount) appendActSegment(turn, approval);
         turn.activity = { kind: "approval", state: approval.state, at: entry.at };
         return;
       }
@@ -4104,25 +4199,50 @@
           failure: turn.failure,
         });
       }
-      if (turn.textParts.length > 0) {
-        projected.push({
-          kind: "message",
-          role: "agent",
-          agent: turn.agent,
-          text: turn.textParts.join(""),
-          at: turn.textAt || turn.startAt,
-          messageId: turn.key,
-        });
+      const lastSegment = turn.segments.at(-1) || null;
+      const renderedSegments = turn.terminal
+        ? turn.segments
+        : turn.segments.slice(0, -1);
+      const appendSegment = (segment) => {
+        if (segment.kind === "text") {
+          projected.push({
+            kind: "message",
+            role: "agent",
+            agent: turn.agent,
+            text: segment.parts.join(""),
+            at: segment.at || turn.startAt,
+            messageId: turn.key,
+            segment: segment.index,
+          });
+          return;
+        }
+        if (segment.kind === "activity_batch") {
+          projected.push({
+            kind: "activity_batch",
+            agent: turn.agent,
+            at: segment.at || turn.startAt,
+            messageId: turn.key,
+            segment: segment.index,
+            acts: segment.acts.map((act) => ({ ...act })),
+          });
+        }
+      };
+      renderedSegments.forEach(appendSegment);
+      if (!turn.terminal && lastSegment && lastSegment.kind === "text") {
+        appendSegment(lastSegment);
       }
       if (!turn.terminal) {
         if (turn.activity) {
+          const liveActs = lastSegment && lastSegment.kind === "activity_batch"
+            ? lastSegment.acts.map((act) => ({ ...act }))
+            : [];
           projected.push({
             kind: "activity",
             agent: turn.agent,
             at: turn.activity.at || turn.startAt,
             messageId: turn.key,
             text: activityLabel(turn.activity),
-            acts: turn.acts.map((act) => ({ ...act })),
+            acts: liveActs,
           });
         }
         return;
@@ -4964,13 +5084,6 @@
     const renderWork = (entry) => {
       const details = make("details", "work-detail");
       details.append(make("summary", "", `a travaillé ${formatDuration(entry.durationMs)}`));
-      const acts = make("ul", "acts");
-      entry.acts.forEach((act) => {
-        const className = act.kind === "intent" ? "act" : "act act--secondary";
-        const suffix = act.detail ? ` — ${act.detail}` : "";
-        acts.append(make("li", className, `${act.text}${suffix}`));
-      });
-      if (entry.acts.length > 0) details.append(acts);
       const reasoning = make("details", "reasoning");
       reasoning.append(make("summary", "", "Délibération"));
       reasoning.append(
@@ -4999,6 +5112,56 @@
         ),
       };
       renderAgents();
+    };
+
+    const renderActivityBatch = (entry) => {
+      const acts = Array.isArray(entry.acts) ? entry.acts : [];
+      const wrapper = make("section", "timeline-action-batch");
+      if (acts.length === 0) return wrapper;
+
+      const preview = activityStreamPreview(acts);
+      const previewRow = make("div", "agent-activity__summary");
+      previewRow.dataset.state = liveActivityActTone(preview.display);
+      previewRow.append(make("span", "agent-activity__act-label", liveActivityActLabel(preview.display)));
+      const detail = liveActivityActDetail(preview.display);
+      if (detail) previewRow.append(make("code", "agent-activity__act-detail", detail));
+      if (preview.resolution) {
+        const resolution = make("span", "agent-activity__resolution", liveActivityActLabel(preview.resolution));
+        resolution.dataset.state = liveActivityActTone(preview.resolution);
+        previewRow.append(resolution);
+      }
+      if (!preview.canExpand) {
+        wrapper.append(previewRow);
+        return wrapper;
+      }
+
+      const activityKey = "timeline:" + text(entry.messageId) + ":" + entry.segment;
+      const details = make("details", "agent-activity__details");
+      details.open = expandedActivityIds.has(activityKey);
+      const summary = make("summary", "agent-activity__disclosure");
+      const toggle = make(
+        "span",
+        "agent-activity__toggle",
+        activityStreamToggleLabel(preview.count, details.open),
+      );
+      summary.append(previewRow, toggle);
+      const stream = make("ol", "agent-activity__stream");
+      acts.forEach((act) => {
+        const row = make("li", "agent-activity__act");
+        row.dataset.state = liveActivityActTone(act);
+        row.append(make("span", "agent-activity__act-label", liveActivityActLabel(act)));
+        const actDetail = liveActivityActDetail(act);
+        if (actDetail) row.append(make("code", "agent-activity__act-detail", actDetail));
+        stream.append(row);
+      });
+      details.append(summary, stream);
+      details.addEventListener("toggle", () => {
+        if (details.open) expandedActivityIds.add(activityKey);
+        else expandedActivityIds.delete(activityKey);
+        toggle.textContent = activityStreamToggleLabel(preview.count, details.open);
+      });
+      wrapper.append(details);
+      return wrapper;
     };
 
     const renderActivity = (entries) => {
@@ -5130,6 +5293,7 @@
         if (entry.kind === "message") timeline.append(renderMessage(entry));
         else if (entry.kind === "round") timeline.append(renderRound(entry));
         else if (entry.kind === "peer_exchange") timeline.append(renderPeer(entry));
+        else if (entry.kind === "activity_batch") timeline.append(renderActivityBatch(entry));
         else if (entry.kind === "work") timeline.append(renderWork(entry));
         else if (entry.kind === "system") timeline.append(make("p", "system-event", entry.text));
       });
@@ -5420,9 +5584,10 @@
       windowRef.setTimeout(() => {
         if (typeof nodes.thread.querySelectorAll !== "function") return;
         const entries = [...nodes.thread.querySelectorAll("[data-message-id]")];
-        const target = entries.find((entry) => (
+        const matches = entries.filter((entry) => (
           entry.dataset.messageId === messageId && entry.dataset.messageRole === role
         ));
+        const target = role === "agent" ? matches.at(-1) : matches[0];
         if (target && typeof target.scrollIntoView === "function") {
           target.scrollIntoView({ block: "center" });
         }

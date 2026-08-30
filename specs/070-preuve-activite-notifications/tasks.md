@@ -70,3 +70,8 @@
   activité fournisseur dans `app.js` et `theme.css`. Preuve : le témoin Node
   couvre les trois phases, 76 tests UI passent ; les points et la bouille sont
   alignés sur le rail gauche du fil et le libellé de remise reste atténué.
+
+
+- [x] T016 - Reprojeter les séquences texte, actions, texte dans le fil tout
+  en gardant le dernier lot vivant sous le compositeur. Preuve : témoin Node
+  sur une séquence complète, sans duplication ; commandes en lignes séparées.

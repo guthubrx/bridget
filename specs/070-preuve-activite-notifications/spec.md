@@ -153,3 +153,16 @@ Les points et la bouille suivent le même rail gauche que les bulles des agents.
 La bouille de remise reprend son état connu sans le forcer à `busy` : la
 présence visuelle ne prétend donc jamais que le modèle réfléchit avant la
 première trace réelle.
+
+
+## Correctif de séquence texte et outils - 30 août 2026
+
+- Les fragments texte consécutifs restent dans une même bulle ; un acte réel
+  clôt ce fragment pour préserver la chronologie.
+- Un lot de commandes ou autres outils demeure en direct sous le fil tant que ce lot est le dernier
+  événement du tour. Dès que le fournisseur écrit à nouveau, il est déplacé
+  entre les deux bulles, sans duplication.
+- Le lot reste replié par défaut et révèle les commandes exactes à la demande.
+  Les détails passent sur leur propre ligne pour laisser respirer le texte.
+- En fin de tour, les actes sont visibles dans leur position chronologique ; le
+  résumé de durée ne les répète plus.

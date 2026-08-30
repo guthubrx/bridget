@@ -92,3 +92,20 @@ des bulles agent.
   port local 17888 contiennent `deliveryVisualState` et
   `delivery-activity__receipt`.
 - Le daemon métier et les agents actifs n’ont pas été redémarrés.
+
+
+## Correctif de séquence texte et outils - 30 août 2026
+
+| Commande | Résultat |
+|---|---|
+| `node --test crates/bridget-daemon/assets/ui/app.js` | 77 tests réussis, dont le témoin texte -> actions -> texte |
+| `git diff --check` | réussi |
+
+Le projecteur UI forme des segments contigus de texte et des lots contigus de travail. Tant que ce lot est terminal dans un tour actif, il demeure dans la
+zone vivante. Lorsque le fournisseur émet un fragment texte ultérieur, le lot devient un
+élément chronologique repliable du fil, entre les deux bulles. Il ne reste donc
+pas en double sous le compositeur.
+
+Le résumé terminal ne répète plus les actes déjà projetés dans le fil. Les
+détails techniques du lot sont placés sous leur libellé et conservent leurs
+retours à la ligne réels.
