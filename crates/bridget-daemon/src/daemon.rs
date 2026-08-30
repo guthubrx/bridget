@@ -10,8 +10,9 @@ use bridget_transport::protocol::{
     COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal, ConnectionRole,
     DelegatedRuntimeEventFrame, DiskSpaceFact, ExecutionControlCommand, ExecutionControlOperation,
     ExecutionControlOutcome, ExecutionControlRefusal, IdempotencyIssue,
-    PROJECT_REGISTRY_CONTRACT_VERSION, PresenceMode, ProjectBackend, ProjectBindOutcome,
-    ProjectBindRequest, ProjectBindStatus, ProjectRegistryRefusal,
+    PROJECT_REGISTRY_CONTRACT_VERSION, PresenceMode, ProjectAdminOperation, ProjectAdminOutcome,
+    ProjectAdminRequest, ProjectBackend, ProjectBindOutcome, ProjectBindRequest, ProjectBindStatus,
+    ProjectBindingProjection, ProjectBindingStatus, ProjectRegistryRefusal,
     REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal,
     SpawnRefusal, StopOutcome, decode, encode,
 };
@@ -3715,11 +3716,43 @@ fn project_registry_failed_outcome(
     }
 }
 
+fn project_registry_admin_failure(
+    request: &ProjectAdminRequest,
+    reason: ProjectRegistryRefusal,
+    observed_at: i64,
+) -> DaemonToWrapper {
+    DaemonToWrapper::ProjectRegistryAdminOutcome {
+        outcome: ProjectAdminOutcome {
+            contract_version: request.contract_version,
+            command_id: request.command_id.clone(),
+            operation: request.operation,
+            bindings: Vec::new(),
+            reason: Some(reason),
+            observed_at,
+        },
+    }
+}
+
+fn unregistered_project_projection(
+    project_id: String,
+    observed_at: i64,
+) -> ProjectBindingProjection {
+    ProjectBindingProjection {
+        project_id,
+        state: ProjectBindingStatus::Unregistered,
+        binding_generation: None,
+        backend: None,
+        reason: None,
+        observed_at,
+    }
+}
+
 fn is_guichet_frame(message: &WrapperToDaemon) -> bool {
     matches!(
         message,
         WrapperToDaemon::ServiceHello { .. }
             | WrapperToDaemon::ProjectRegistryRequest { .. }
+            | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
             | WrapperToDaemon::CoordinationSubscribe { .. }
             | WrapperToDaemon::ServiceRequest { .. }
             | WrapperToDaemon::GuichetClaimNext { .. }
@@ -6363,6 +6396,7 @@ fn handle_wrapper_message(
             &msg,
             WrapperToDaemon::ServiceHello { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
+                | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
                 | WrapperToDaemon::GuichetClaim { .. }
@@ -6381,6 +6415,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::GuichetLookup { .. }
                 | WrapperToDaemon::GuichetReply { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
+                | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                     if !st.service_negotiations.contains_key(conn_id) =>
                 {
@@ -6416,6 +6451,7 @@ fn handle_wrapper_message(
                     Some(ServiceRefusal::CapabilityRequired)
                 }
                 WrapperToDaemon::ProjectRegistryRequest { .. }
+                | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
                     if !st
                         .service_negotiations
                         .get(conn_id)
@@ -6437,6 +6473,7 @@ fn handle_wrapper_message(
                 // et ne protège rien.
                 WrapperToDaemon::ServiceHello { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
+                | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
                 | WrapperToDaemon::GuichetClaim { .. }
@@ -6579,6 +6616,7 @@ fn handle_wrapper_message(
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ServiceHello { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
+                | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::ServiceRequest { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
@@ -6733,6 +6771,154 @@ fn handle_wrapper_message(
                     }
                 });
             Some(DaemonToWrapper::ProjectRegistryOutcome { outcome })
+        }
+        WrapperToDaemon::ProjectRegistryAdminRequest { request } => {
+            let observed_at = unix_now_secs();
+            if request.contract_version != PROJECT_REGISTRY_CONTRACT_VERSION {
+                return Some(project_registry_admin_failure(
+                    &request,
+                    ProjectRegistryRefusal::ProjectRegistryVersionUnsupported,
+                    observed_at,
+                ));
+            }
+            if request.command_id.trim().is_empty()
+                || request.issued_at < 0
+                || request.deadline_at < request.issued_at
+                || observed_at > request.deadline_at
+            {
+                return Some(project_registry_admin_failure(
+                    &request,
+                    ProjectRegistryRefusal::IdempotencyExpired,
+                    observed_at,
+                ));
+            }
+            let project_id = request
+                .project_id
+                .clone()
+                .filter(|id| !id.trim().is_empty());
+            if !matches!(request.operation, ProjectAdminOperation::List) && project_id.is_none() {
+                return Some(project_registry_admin_failure(
+                    &request,
+                    ProjectRegistryRefusal::InvalidProjectId,
+                    observed_at,
+                ));
+            }
+            let mutation = matches!(
+                request.operation,
+                ProjectAdminOperation::Rebind
+                    | ProjectAdminOperation::Disable
+                    | ProjectAdminOperation::ReviewProjectReconcile
+            );
+            let policy = if mutation {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                if st.peer_uids.get(conn_id).copied() != Some(unsafe { libc::geteuid() }) {
+                    return Some(project_registry_admin_failure(
+                        &request,
+                        ProjectRegistryRefusal::PeerUidMismatch,
+                        observed_at,
+                    ));
+                }
+                match &st.project_root_policy {
+                    Ok(policy) => Some(policy.clone()),
+                    Err(reason) => {
+                        return Some(project_registry_admin_failure(
+                            &request,
+                            *reason,
+                            observed_at,
+                        ));
+                    }
+                }
+            } else {
+                None
+            };
+            let canonical_root = match request.operation {
+                ProjectAdminOperation::Rebind | ProjectAdminOperation::ReviewProjectReconcile => {
+                    let Some(root) = request.requested_root.as_deref() else {
+                        return Some(project_registry_admin_failure(
+                            &request,
+                            ProjectRegistryRefusal::InvalidAbsoluteRoot,
+                            observed_at,
+                        ));
+                    };
+                    match policy
+                        .as_ref()
+                        .expect("politique rebind présente")
+                        .validate_requested_root(std::path::Path::new(root))
+                    {
+                        Ok(root) => Some(root.to_string_lossy().into_owned()),
+                        Err(reason) => {
+                            return Some(project_registry_admin_failure(
+                                &request,
+                                reason,
+                                observed_at,
+                            ));
+                        }
+                    }
+                }
+                ProjectAdminOperation::Disable
+                | ProjectAdminOperation::Status
+                | ProjectAdminOperation::List => None,
+            };
+            let outcome = match request.operation {
+                ProjectAdminOperation::List => state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .store
+                    .project_binding_projections(observed_at)
+                    .map(|bindings| ProjectAdminOutcome {
+                        contract_version: request.contract_version,
+                        command_id: request.command_id.clone(),
+                        operation: request.operation,
+                        bindings,
+                        reason: None,
+                        observed_at,
+                    }),
+                ProjectAdminOperation::Status => {
+                    let project_id = project_id.expect("project_id status validé");
+                    state
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .store
+                        .project_binding_projection_for_project(&project_id, observed_at)
+                        .map(|binding| ProjectAdminOutcome {
+                            contract_version: request.contract_version,
+                            command_id: request.command_id.clone(),
+                            operation: request.operation,
+                            bindings: binding.map(|binding| vec![binding]).unwrap_or_else(|| {
+                                vec![unregistered_project_projection(project_id, observed_at)]
+                            }),
+                            reason: None,
+                            observed_at,
+                        })
+                }
+                ProjectAdminOperation::Rebind
+                | ProjectAdminOperation::Disable
+                | ProjectAdminOperation::ReviewProjectReconcile => state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .store
+                    .apply_project_admin_mutation(
+                        &request.command_id,
+                        request.operation,
+                        project_id.as_deref().expect("project_id mutation validé"),
+                        canonical_root.as_deref(),
+                        observed_at,
+                    ),
+            };
+            Some(match outcome {
+                Ok(outcome) => DaemonToWrapper::ProjectRegistryAdminOutcome { outcome },
+                Err(StoreError::ProjectRegistryRefusal(reason)) => {
+                    project_registry_admin_failure(&request, reason, observed_at)
+                }
+                Err(error) => {
+                    warn!("administration projet indisponible: {error}");
+                    project_registry_admin_failure(
+                        &request,
+                        ProjectRegistryRefusal::StoreUnavailable,
+                        observed_at,
+                    )
+                }
+            })
         }
         WrapperToDaemon::DelegatedRuntimeEvent {
             execution_id,

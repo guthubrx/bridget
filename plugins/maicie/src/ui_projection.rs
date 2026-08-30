@@ -5,6 +5,7 @@
 //! la base SQLite privée de Maicie.
 
 use crate::config::{ConfigError, MaicieConfig};
+use crate::runtime::project_binding_observation;
 use crate::store::{MaicieStore, StoreError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -25,6 +26,20 @@ pub struct UiMissionProjectionV1 {
     pub version: u8,
     pub published_at: i64,
     pub objectives: Vec<UiObjectiveProjection>,
+    #[serde(default)]
+    pub projects: Vec<UiProjectProjection>,
+}
+
+/// État projet lisible par l'interface. Les deux statuts restent séparés :
+/// Maicie décrit le métier, Bridget la liaison technique et sa fraîcheur.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UiProjectProjection {
+    pub project_id: String,
+    pub maicie_status: String,
+    pub bridget_status: String,
+    pub freshness: String,
+    pub observed_at: i64,
+    pub next_action: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -239,6 +254,26 @@ pub fn read_ui_mission_projection_v1(
             delegations,
         });
     }
+    let projects = store
+        .project_identities()
+        .map_err(UiProjectionError::Store)?
+        .into_iter()
+        .map(|identity| {
+            let observation = project_binding_observation(&identity, None);
+            Ok(UiProjectProjection {
+                project_id: observation.project_id,
+                maicie_status: json_label(&observation.maicie_status)?,
+                bridget_status: observation
+                    .bridget_status
+                    .map(|status| json_label(&status))
+                    .transpose()?
+                    .unwrap_or_else(|| "unavailable".to_string()),
+                freshness: json_label(&observation.freshness)?,
+                observed_at: observation.observed_at,
+                next_action: observation.next_action.to_string(),
+            })
+        })
+        .collect::<Result<Vec<_>, UiProjectionError>>()?;
     let published_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| UiProjectionError::Io(std::io::Error::other(error)))?
@@ -247,6 +282,7 @@ pub fn read_ui_mission_projection_v1(
         version: UI_MISSION_PROJECTION_VERSION,
         published_at,
         objectives,
+        projects,
     })
 }
 /// Pour l'instantané page : n'envoie que les objectifs encore vivants.
@@ -278,6 +314,7 @@ mod tests {
             version: UI_MISSION_PROJECTION_VERSION,
             published_at: 42,
             objectives,
+            projects: Vec::new(),
         }
     }
 
@@ -290,6 +327,24 @@ mod tests {
         assert!(!encoded.contains("review_verdicts"));
         assert!(!encoded.contains("local_deliveries"));
         assert!(!encoded.contains("decisions"));
+    }
+
+    #[test]
+    fn projection_ui_projet_expose_l_indisponibilite_sans_racine_hote() {
+        let mut rendered = projection(Vec::new());
+        rendered.projects.push(UiProjectProjection {
+            project_id: "project-1".to_string(),
+            maicie_status: "active".to_string(),
+            bridget_status: "unavailable".to_string(),
+            freshness: "unavailable".to_string(),
+            observed_at: 12,
+            next_action: "project status --project-id".to_string(),
+        });
+        let encoded = serde_json::to_string(&rendered).expect("projection sérialisable");
+        assert!(encoded.contains("\"bridget_status\":\"unavailable\""));
+        assert!(encoded.contains("\"freshness\":\"unavailable\""));
+        assert!(!encoded.contains("/srv/"));
+        assert!(!encoded.contains("canonical_root"));
     }
 
     #[test]

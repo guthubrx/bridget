@@ -8,8 +8,12 @@
 use crate::bridget_client::{
     AttachWindow, BridgetClient, BridgetClientError, Subscription, SubscriptionEvent,
 };
-use crate::domain::{EtatFlux, ExecutionProjection, ExecutionReference, SourceSnapshot};
+use crate::domain::{
+    EtatFlux, ExecutionProjection, ExecutionReference, ProjectIdentity, ProjectIdentityStatus,
+    SourceSnapshot,
+};
 use crate::store::{MaicieStore, StoreError};
+use bridget_transport::protocol::{ProjectBindingProjection, ProjectBindingStatus};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fmt;
@@ -24,6 +28,46 @@ pub enum RuntimeNature {
     Tour,
     Outil,
     PermissionAutoDecidee,
+}
+
+/// Projection explicite de l'identité métier et du dernier fait Bridget. Une
+/// absence de fait public ne devient jamais une liaison active implicite.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectBindingObservation {
+    pub project_id: String,
+    pub maicie_status: ProjectIdentityStatus,
+    pub bridget_status: Option<ProjectBindingStatus>,
+    pub freshness: EtatFlux,
+    pub observed_at: i64,
+    pub next_action: &'static str,
+}
+
+/// Réduit une réponse versionnée Bridget à un affichage Maicie sans modifier
+/// l'identité métier. `None` représente une source indisponible ou non lue,
+/// jamais un projet actif par déduction.
+pub fn project_binding_observation(
+    identity: &ProjectIdentity,
+    binding: Option<&ProjectBindingProjection>,
+) -> ProjectBindingObservation {
+    let binding = binding.filter(|binding| binding.project_id == identity.project_id);
+    match binding {
+        Some(binding) => ProjectBindingObservation {
+            project_id: identity.project_id.clone(),
+            maicie_status: identity.status,
+            bridget_status: Some(binding.state),
+            freshness: EtatFlux::Fresh,
+            observed_at: binding.observed_at,
+            next_action: "none",
+        },
+        None => ProjectBindingObservation {
+            project_id: identity.project_id.clone(),
+            maicie_status: identity.status,
+            bridget_status: None,
+            freshness: EtatFlux::Unavailable,
+            observed_at: identity.updated_at,
+            next_action: "project status --project-id",
+        },
+    }
 }
 
 /// Fait brut, daté et corrélé issu d'une ligne journal v1 publique.
@@ -645,4 +689,45 @@ fn required_payload_bool(
         .get(field)
         .and_then(Value::as_bool)
         .ok_or_else(|| RuntimeError::Journal(format!("{event}.{field} absent ou invalide")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bridget_transport::protocol::ProjectBackend;
+
+    fn identity() -> ProjectIdentity {
+        ProjectIdentity::pending(
+            "project-1".to_string(),
+            "Projet 1".to_string(),
+            "command-1".to_string(),
+            10,
+        )
+        .expect("identité valide")
+    }
+
+    #[test]
+    fn spec_065_projection_projet_distingue_fraicheur_et_indisponibilite() {
+        let mut identity = identity();
+        identity.activate(1, 11).expect("activation");
+        let unavailable = project_binding_observation(&identity, None);
+        assert_eq!(unavailable.freshness, EtatFlux::Unavailable);
+        assert_eq!(unavailable.bridget_status, None);
+        assert_eq!(unavailable.next_action, "project status --project-id");
+
+        let fresh = project_binding_observation(
+            &identity,
+            Some(&ProjectBindingProjection {
+                project_id: "project-1".to_string(),
+                state: ProjectBindingStatus::Active,
+                binding_generation: Some(1),
+                backend: Some(ProjectBackend::Host),
+                reason: None,
+                observed_at: 12,
+            }),
+        );
+        assert_eq!(fresh.freshness, EtatFlux::Fresh);
+        assert_eq!(fresh.bridget_status, Some(ProjectBindingStatus::Active));
+        assert_eq!(fresh.observed_at, 12);
+    }
 }

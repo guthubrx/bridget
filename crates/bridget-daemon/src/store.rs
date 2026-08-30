@@ -3,7 +3,8 @@
 use bridget_transport::greffe_authorization::GreffeAuthorizationAttestation;
 use bridget_transport::protocol::{
     CoordinationEventKind, GuichetLifecycleState, GuichetOutcome,
-    PROJECT_REGISTRY_CONTRACT_VERSION, ProjectBackend, ProjectBindOutcome, ProjectBindStatus,
+    PROJECT_REGISTRY_CONTRACT_VERSION, ProjectAdminOperation, ProjectAdminOutcome, ProjectBackend,
+    ProjectBindOutcome, ProjectBindStatus, ProjectBindingProjection, ProjectBindingStatus,
     ProjectRegistryRefusal, ServiceRequestOperation, ServiceRequestPayload,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
@@ -583,6 +584,14 @@ impl Store {
                  canonical_root TEXT NOT NULL,
                  outcome_json BLOB NOT NULL,
                  observed_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS project_admin_attempts (
+                 command_id TEXT PRIMARY KEY,
+                 operation TEXT NOT NULL,
+                 project_id TEXT,
+                 canonical_root TEXT,
+                 outcome_json BLOB NOT NULL,
+                 observed_at INTEGER NOT NULL
              );",
         )
         .map_err(StoreError::Sqlite)?;
@@ -731,6 +740,19 @@ impl Store {
         project_binding_for_project(&self.conn, project_id)
     }
 
+    /// Consulte une liaison sans exposer sa racine canonique à l'appelant.
+    pub fn project_binding_projection_for_project(
+        &self,
+        project_id: &str,
+        observed_at: i64,
+    ) -> Result<Option<ProjectBindingProjection>, StoreError> {
+        self.project_binding(project_id).map(|binding| {
+            binding
+                .as_ref()
+                .map(|binding| project_binding_projection(binding, observed_at))
+        })
+    }
+
     pub fn project_binding_for_root(
         &self,
         canonical_root: &str,
@@ -818,6 +840,211 @@ impl Store {
             .ok_or(StoreError::Invariant("liaison projet disparue"))?;
         tx.commit().map_err(StoreError::Sqlite)?;
         Ok(rebound)
+    }
+
+    /// Retourne les liaisons comme projections publiques sans chemin hôte.
+    /// Complexité : O(n), avec n le nombre de liaisons retenues pour la liste.
+    pub fn project_binding_projections(
+        &self,
+        observed_at: i64,
+    ) -> Result<Vec<ProjectBindingProjection>, StoreError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT project_id, canonical_root, backend, state, generation,
+                        bound_at, updated_at, last_reason
+                 FROM project_bindings ORDER BY project_id ASC",
+            )
+            .map_err(StoreError::Sqlite)?;
+        statement
+            .query_map([], project_binding_from_row)
+            .map_err(StoreError::Sqlite)?
+            .map(|row| {
+                row.map_err(StoreError::Sqlite)
+                    .and_then(decode_project_binding)
+                    .map(|binding| project_binding_projection(&binding, observed_at))
+            })
+            .collect()
+    }
+
+    /// Applique rebind ou disable avec son audit dans la transaction qui porte
+    /// la mutation. L'issue complète est mémorisée par command_id, de sorte
+    /// qu'un retry ne peut ni changer de racine ni écrire un second audit.
+    pub fn apply_project_admin_mutation(
+        &mut self,
+        command_id: &str,
+        operation: ProjectAdminOperation,
+        project_id: &str,
+        canonical_root: Option<&str>,
+        observed_at: i64,
+    ) -> Result<ProjectAdminOutcome, StoreError> {
+        if command_id.trim().is_empty() || project_id.trim().is_empty() || observed_at < 0 {
+            return Err(StoreError::Invariant(
+                "mutation projet administrative invalide",
+            ));
+        }
+        if !matches!(
+            operation,
+            ProjectAdminOperation::Rebind
+                | ProjectAdminOperation::Disable
+                | ProjectAdminOperation::ReviewProjectReconcile
+        ) {
+            return Err(StoreError::Invariant("opération projet non mutante"));
+        }
+        if matches!(
+            operation,
+            ProjectAdminOperation::Rebind | ProjectAdminOperation::ReviewProjectReconcile
+        ) && !canonical_root
+            .is_some_and(|root| !root.trim().is_empty() && Path::new(root).is_absolute())
+        {
+            return Err(StoreError::Invariant("racine de rebind invalide"));
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sqlite)?;
+        if let Some(attempt) = project_admin_attempt_for_command(&tx, command_id)? {
+            if attempt.operation != project_admin_operation_name(operation)
+                || attempt.project_id.as_deref() != Some(project_id)
+                || attempt.canonical_root.as_deref() != canonical_root
+            {
+                return Err(StoreError::ProjectRegistryRefusal(
+                    ProjectRegistryRefusal::EnvelopeMismatch,
+                ));
+            }
+            let outcome = serde_json::from_slice(&attempt.outcome_json)
+                .map_err(|_| StoreError::Invariant("issue administrative projet corrompue"))?;
+            tx.commit().map_err(StoreError::Sqlite)?;
+            return Ok(outcome);
+        }
+
+        let outcome = match project_binding_for_project(&tx, project_id)? {
+            None => project_admin_failure(
+                command_id,
+                operation,
+                ProjectRegistryRefusal::InvalidProjectId,
+                observed_at,
+            ),
+            Some(binding) if observed_at < binding.updated_at => project_admin_failure(
+                command_id,
+                operation,
+                ProjectRegistryRefusal::IdempotencyExpired,
+                observed_at,
+            ),
+            Some(binding) => match operation {
+                ProjectAdminOperation::Rebind | ProjectAdminOperation::ReviewProjectReconcile => {
+                    let canonical_root = canonical_root.expect("racine rebind validée");
+                    if binding.state == ProjectBindingState::Disabled {
+                        project_admin_failure(
+                            command_id,
+                            operation,
+                            ProjectRegistryRefusal::ProjectDisabled,
+                            observed_at,
+                        )
+                    } else if binding.state == ProjectBindingState::Active
+                        && binding.canonical_root == canonical_root
+                    {
+                        if operation == ProjectAdminOperation::ReviewProjectReconcile {
+                            let audit = ProjectAuditEvent::for_mutation(
+                                command_id,
+                                project_id,
+                                ProjectAuditOperation::ReviewProjectReconcile,
+                                binding.generation,
+                                ProjectAuditOutcome::Applied,
+                                Some(&binding.canonical_root),
+                                observed_at,
+                            );
+                            record_project_audit_event_in_transaction(&tx, &audit)?;
+                        }
+                        project_admin_success(command_id, operation, &binding, observed_at)
+                    } else if let Some(owner) = project_binding_for_root(&tx, canonical_root)?
+                        && owner.project_id != project_id
+                    {
+                        project_admin_failure(
+                            command_id,
+                            operation,
+                            ProjectRegistryRefusal::RootAlreadyBound,
+                            observed_at,
+                        )
+                    } else {
+                        let generation = binding
+                            .generation
+                            .checked_add(1)
+                            .ok_or(StoreError::Invariant("génération liaison épuisée"))?;
+                        tx.execute(
+                            "UPDATE project_bindings
+                             SET canonical_root = ?1, state = 'active', generation = ?2,
+                                 bound_at = ?3, updated_at = ?3, last_reason = NULL
+                             WHERE project_id = ?4",
+                            params![canonical_root, generation as i64, observed_at, project_id],
+                        )
+                        .map_err(StoreError::Sqlite)?;
+                        let rebound = project_binding_for_project(&tx, project_id)?
+                            .ok_or(StoreError::Invariant("liaison projet disparue"))?;
+                        let audit = ProjectAuditEvent::for_mutation(
+                            command_id,
+                            project_id,
+                            if operation == ProjectAdminOperation::ReviewProjectReconcile {
+                                ProjectAuditOperation::ReviewProjectReconcile
+                            } else {
+                                ProjectAuditOperation::Rebind
+                            },
+                            rebound.generation,
+                            ProjectAuditOutcome::Applied,
+                            Some(&binding.canonical_root),
+                            observed_at,
+                        );
+                        record_project_audit_event_in_transaction(&tx, &audit)?;
+                        project_admin_success(command_id, operation, &rebound, observed_at)
+                    }
+                }
+                ProjectAdminOperation::Disable => {
+                    if binding.state == ProjectBindingState::Disabled {
+                        project_admin_success(command_id, operation, &binding, observed_at)
+                    } else {
+                        tx.execute(
+                            "UPDATE project_bindings
+                             SET state = 'disabled', updated_at = ?1, last_reason = NULL
+                             WHERE project_id = ?2",
+                            params![observed_at, project_id],
+                        )
+                        .map_err(StoreError::Sqlite)?;
+                        let disabled = project_binding_for_project(&tx, project_id)?
+                            .ok_or(StoreError::Invariant("liaison projet disparue"))?;
+                        let audit = ProjectAuditEvent::for_mutation(
+                            command_id,
+                            project_id,
+                            ProjectAuditOperation::Disable,
+                            disabled.generation,
+                            ProjectAuditOutcome::Applied,
+                            Some(&binding.canonical_root),
+                            observed_at,
+                        );
+                        record_project_audit_event_in_transaction(&tx, &audit)?;
+                        project_admin_success(command_id, operation, &disabled, observed_at)
+                    }
+                }
+                ProjectAdminOperation::List | ProjectAdminOperation::Status => unreachable!(),
+            },
+        };
+        let outcome_json = serde_json::to_vec(&outcome)
+            .map_err(|_| StoreError::Invariant("issue administrative projet non sérialisable"))?;
+        tx.execute(
+            "INSERT INTO project_admin_attempts (
+                 command_id, operation, project_id, canonical_root, outcome_json, observed_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                command_id,
+                project_admin_operation_name(operation),
+                project_id,
+                canonical_root,
+                outcome_json,
+                observed_at,
+            ],
+        )
+        .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+        Ok(outcome)
     }
 
     /// Écrit exactement un audit déterministe pour une mutation effective.
@@ -2373,6 +2600,98 @@ struct StoredProjectBindingAttempt {
     outcome_json: Vec<u8>,
 }
 
+#[derive(Debug)]
+struct StoredProjectAdminAttempt {
+    operation: String,
+    project_id: Option<String>,
+    canonical_root: Option<String>,
+    outcome_json: Vec<u8>,
+}
+
+fn project_admin_attempt_for_command(
+    conn: &Connection,
+    command_id: &str,
+) -> Result<Option<StoredProjectAdminAttempt>, StoreError> {
+    conn.query_row(
+        "SELECT operation, project_id, canonical_root, outcome_json
+         FROM project_admin_attempts WHERE command_id = ?1",
+        [command_id],
+        |row| {
+            Ok(StoredProjectAdminAttempt {
+                operation: row.get(0)?,
+                project_id: row.get(1)?,
+                canonical_root: row.get(2)?,
+                outcome_json: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(StoreError::Sqlite)
+}
+
+fn project_admin_operation_name(operation: ProjectAdminOperation) -> &'static str {
+    match operation {
+        ProjectAdminOperation::List => "list",
+        ProjectAdminOperation::Status => "status",
+        ProjectAdminOperation::Rebind => "rebind",
+        ProjectAdminOperation::Disable => "disable",
+        ProjectAdminOperation::ReviewProjectReconcile => "review_project_reconcile",
+    }
+}
+
+fn project_binding_projection(
+    binding: &ProjectBinding,
+    observed_at: i64,
+) -> ProjectBindingProjection {
+    let state = match binding.state {
+        ProjectBindingState::Active => ProjectBindingStatus::Active,
+        ProjectBindingState::Disabled => ProjectBindingStatus::Disabled,
+        ProjectBindingState::PathMissing => ProjectBindingStatus::PathMissing,
+        ProjectBindingState::PendingBinding => ProjectBindingStatus::PendingBinding,
+        ProjectBindingState::BindingFailed => ProjectBindingStatus::BindingFailed,
+    };
+    ProjectBindingProjection {
+        project_id: binding.project_id.clone(),
+        state,
+        binding_generation: Some(binding.generation),
+        backend: Some(binding.backend),
+        reason: binding.last_reason,
+        observed_at,
+    }
+}
+
+fn project_admin_success(
+    command_id: &str,
+    operation: ProjectAdminOperation,
+    binding: &ProjectBinding,
+    observed_at: i64,
+) -> ProjectAdminOutcome {
+    ProjectAdminOutcome {
+        contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+        command_id: command_id.to_string(),
+        operation,
+        bindings: vec![project_binding_projection(binding, observed_at)],
+        reason: None,
+        observed_at,
+    }
+}
+
+fn project_admin_failure(
+    command_id: &str,
+    operation: ProjectAdminOperation,
+    reason: ProjectRegistryRefusal,
+    observed_at: i64,
+) -> ProjectAdminOutcome {
+    ProjectAdminOutcome {
+        contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+        command_id: command_id.to_string(),
+        operation,
+        bindings: Vec::new(),
+        reason: Some(reason),
+        observed_at,
+    }
+}
+
 fn project_binding_attempt_for_command(
     conn: &Connection,
     command_id: &str,
@@ -3836,6 +4155,91 @@ mod tests {
             Some(ProjectRegistryRefusal::RebindRequired)
         );
 
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn spec_065_rebind_et_disable_sont_idempotents_audites_et_non_destructifs() {
+        let path =
+            std::env::temp_dir().join(format!("bridget-project-admin-{}.db", Uuid::new_v4()));
+        let mut store = Store::open(&path).unwrap();
+        store
+            .bind_project_registration("register-1", "project-1", "/srv/projects/one", 100)
+            .unwrap();
+
+        let rebound = store
+            .apply_project_admin_mutation(
+                "rebind-1",
+                ProjectAdminOperation::Rebind,
+                "project-1",
+                Some("/srv/projects/two"),
+                101,
+            )
+            .unwrap();
+        assert_eq!(rebound.bindings[0].state, ProjectBindingStatus::Active);
+        assert_eq!(rebound.bindings[0].binding_generation, Some(2));
+        assert_eq!(
+            store
+                .apply_project_admin_mutation(
+                    "rebind-1",
+                    ProjectAdminOperation::Rebind,
+                    "project-1",
+                    Some("/srv/projects/two"),
+                    102,
+                )
+                .unwrap(),
+            rebound,
+            "un rejeu de rebind relit l'issue plutôt que de créer un audit"
+        );
+        let collision = store
+            .apply_project_admin_mutation(
+                "rebind-collision",
+                ProjectAdminOperation::Rebind,
+                "project-1",
+                Some("/srv/projects/two"),
+                103,
+            )
+            .unwrap();
+        assert!(collision.reason.is_none(), "même racine = no-op idempotent");
+
+        let disabled = store
+            .apply_project_admin_mutation(
+                "disable-1",
+                ProjectAdminOperation::Disable,
+                "project-1",
+                None,
+                104,
+            )
+            .unwrap();
+        assert_eq!(disabled.bindings[0].state, ProjectBindingStatus::Disabled);
+        assert_eq!(
+            store
+                .apply_project_admin_mutation(
+                    "disable-1",
+                    ProjectAdminOperation::Disable,
+                    "project-1",
+                    None,
+                    105,
+                )
+                .unwrap(),
+            disabled
+        );
+        let audits = store.project_audit_events("project-1").unwrap();
+        assert_eq!(
+            audits.len(),
+            3,
+            "register, rebind, disable exactement une fois"
+        );
+        assert_eq!(audits[1].operation, ProjectAuditOperation::Rebind);
+        assert_eq!(audits[2].operation, ProjectAuditOperation::Disable);
+        assert!(audits.iter().all(|audit| {
+            !audit
+                .previous_root_reference
+                .as_deref()
+                .unwrap_or_default()
+                .contains("/srv/projects")
+        }));
         drop(store);
         let _ = std::fs::remove_file(path);
     }

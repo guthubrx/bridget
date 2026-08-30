@@ -4024,6 +4024,37 @@ impl MaicieStore {
             .collect()
     }
 
+    /// Désactive l'identité métier uniquement après la désactivation technique
+    /// attestée par Bridget. Aucun objectif ni délégation n'est réécrit ici.
+    pub fn disable_project_identity(
+        &mut self,
+        project_id: &str,
+        observed_at: i64,
+    ) -> Result<ProjectIdentity, StoreError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let mut identity = tx
+            .query_row(
+                "SELECT project_id, display_name, status, created_at, updated_at,
+                        registration_command_id
+                 FROM project_identities WHERE project_id = ?1",
+                [project_id],
+                project_identity_from_row,
+            )
+            .optional()
+            .map_err(StoreError::Sql)?
+            .ok_or(StoreError::NotFound("identité projet inconnue"))
+            .and_then(decode_project_identity)?;
+        if identity.status == ProjectIdentityStatus::Active {
+            identity.disable(observed_at).map_err(StoreError::Domain)?;
+            persist_project_identity(&tx, &identity)?;
+        }
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(identity)
+    }
+
     /// Pose les arêtes OBJECTIF→OBJECTIF pour une délégation déjà créée
     /// (prérequis tous clos → dispatch immédiat, arêtes journalisées quand même).
     pub fn register_objective_dependencies(

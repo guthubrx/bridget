@@ -340,6 +340,77 @@ pub struct ProjectBindOutcome {
     pub observed_at: i64,
 }
 
+/// Opération administrative locale du registre. Les mutations restent
+/// strictement sur la connexion Service Maicie négociée; `List` et `Status`
+/// sont des lectures explicites et ne créent aucune liaison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectAdminOperation {
+    List,
+    Status,
+    Rebind,
+    Disable,
+    ReviewProjectReconcile,
+}
+
+/// Requête versionnée dédiée aux lectures et mutations administratives. Une
+/// action porte un command_id stable, y compris quand elle n'écrit rien, pour
+/// garder diagnostics et retentatives corrélables sans détourner ServiceRequest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectAdminRequest {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub issued_at: i64,
+    pub deadline_at: i64,
+    pub operation: ProjectAdminOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_root: Option<String>,
+}
+
+/// Projection technique publique d'une liaison, sans racine hôte ni contenu
+/// de dépôt. La référence de racine auditée ne quitte jamais le store Bridget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectBindingStatus {
+    Active,
+    Disabled,
+    PathMissing,
+    PendingBinding,
+    BindingFailed,
+    Unregistered,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBindingProjection {
+    pub project_id: String,
+    pub state: ProjectBindingStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<ProjectBackend>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProjectRegistryRefusal>,
+    pub observed_at: i64,
+}
+
+/// Issue corrélée de l'administration du registre. Une mutation effective
+/// renvoie une seule projection et un rejet ne fabrique jamais d'audit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectAdminOutcome {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub operation: ProjectAdminOperation,
+    pub bindings: Vec<ProjectBindingProjection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProjectRegistryRefusal>,
+    pub observed_at: i64,
+}
+
 /// Refus structurés de la frontière réservée aux services.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -1060,6 +1131,12 @@ pub enum WrapperToDaemon {
     ProjectRegistryRequest {
         request: ProjectBindRequest,
     },
+    /// Lecture ou mutation administrative du registre, toujours sur le même
+    /// rôle Service authentifié que l'enregistrement initial.
+    #[serde(rename = "project_registry_admin_request")]
+    ProjectRegistryAdminRequest {
+        request: ProjectAdminRequest,
+    },
     /// Ouvre une relève bornée des faits de coordination v2. Le curseur est
     /// opaque pour le consommateur : Bridget seul lui donne un ordre durable.
     #[serde(rename = "coordination_subscribe")]
@@ -1719,6 +1796,9 @@ pub enum DaemonToWrapper {
     /// Issue terminale du registre local, corrélée à la commande Maicie.
     #[serde(rename = "project_registry_outcome")]
     ProjectRegistryOutcome { outcome: ProjectBindOutcome },
+    /// Issue corrélée d'une lecture ou mutation administrative du registre.
+    #[serde(rename = "project_registry_admin_outcome")]
+    ProjectRegistryAdminOutcome { outcome: ProjectAdminOutcome },
     /// Issue durable ou calculée d'une opération du guichet.
     #[serde(rename = "guichet_result")]
     GuichetResult {
@@ -4168,6 +4248,52 @@ mod tests {
             decode::<DaemonToWrapper>(&encode(&outcome).unwrap()).unwrap(),
             DaemonToWrapper::ProjectRegistryOutcome { outcome: decoded }
                 if decoded == conflict
+        ));
+
+        let admin_request = ProjectAdminRequest {
+            contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+            command_id: "project-rebind-1".to_string(),
+            issued_at: 1_787_997_602,
+            deadline_at: 1_787_998_202,
+            operation: ProjectAdminOperation::Rebind,
+            project_id: Some("project-winner".to_string()),
+            requested_root: Some("/srv/projects/other".to_string()),
+        };
+        let admin_wire = encode(&WrapperToDaemon::ProjectRegistryAdminRequest {
+            request: admin_request.clone(),
+        })
+        .unwrap();
+        assert!(admin_wire.contains(r#""type":"project_registry_admin_request""#));
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&admin_wire).unwrap(),
+            WrapperToDaemon::ProjectRegistryAdminRequest { request }
+                if request == admin_request
+        ));
+        let admin_outcome = ProjectAdminOutcome {
+            contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+            command_id: admin_request.command_id.clone(),
+            operation: ProjectAdminOperation::Rebind,
+            bindings: vec![ProjectBindingProjection {
+                project_id: "project-winner".to_string(),
+                state: ProjectBindingStatus::Active,
+                binding_generation: Some(2),
+                backend: Some(ProjectBackend::Host),
+                reason: None,
+                observed_at: 1_787_997_603,
+            }],
+            reason: None,
+            observed_at: 1_787_997_603,
+        };
+        assert!(matches!(
+            decode::<DaemonToWrapper>(
+                &encode(&DaemonToWrapper::ProjectRegistryAdminOutcome {
+                    outcome: admin_outcome.clone(),
+                })
+                .unwrap()
+            )
+            .unwrap(),
+            DaemonToWrapper::ProjectRegistryAdminOutcome { outcome }
+                if outcome == admin_outcome
         ));
 
         let version_refusal = ProjectRegistryRefusal::ProjectRegistryVersionUnsupported;

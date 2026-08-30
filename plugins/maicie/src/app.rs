@@ -211,6 +211,19 @@ pub fn project_registration_request_bytes(
         .map_err(|error| ProjectRegistrationError::Store(error.to_string()))
 }
 
+/// Répercute dans l'autorité métier Maicie une désactivation déjà attestée par
+/// Bridget. Cette transition ne touche ni dépôt, ni worktree, ni exécution.
+pub fn disable_project_identity(
+    store: &mut MaicieStore,
+    project_id: &str,
+    observed_at: i64,
+) -> Result<(), ProjectRegistrationError> {
+    store
+        .disable_project_identity(project_id, observed_at)
+        .map(|_| ())
+        .map_err(|error| ProjectRegistrationError::Store(error.to_string()))
+}
+
 /// Résultat applicatif d'une relève. Les octets de réponse sont exactement
 /// ceux du reçu durable ; ils ne doivent jamais être reconstruits par le CLI.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,8 +1,12 @@
 use bridget_daemon::daemon::{self, DaemonConfig};
-use bridget_transport::protocol::ProjectBindStatus;
+use bridget_daemon::store::{ProjectAuditOperation, Store as BridgetStore};
+use bridget_transport::protocol::{
+    PROJECT_REGISTRY_CONTRACT_VERSION, ProjectAdminOperation, ProjectAdminRequest,
+    ProjectBindStatus, ProjectBindingStatus,
+};
 use maicie::app::{
-    ProjectRegistrationRequest, prepare_project_registration, project_registration_request_bytes,
-    resolve_project_registration,
+    ProjectRegistrationRequest, disable_project_identity, prepare_project_registration,
+    project_registration_request_bytes, resolve_project_registration,
 };
 use maicie::bridget_client::ProjectRegistryClient;
 use maicie::domain::ProjectIdentityStatus;
@@ -58,6 +62,24 @@ fn request(
     }
 }
 
+fn admin_request(
+    command_id: &str,
+    operation: ProjectAdminOperation,
+    project_id: Option<&str>,
+    requested_root: Option<&Path>,
+    issued_at: i64,
+) -> ProjectAdminRequest {
+    ProjectAdminRequest {
+        contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+        command_id: command_id.to_string(),
+        issued_at,
+        deadline_at: issued_at + 120,
+        operation,
+        project_id: project_id.map(str::to_owned),
+        requested_root: requested_root.map(|root| root.display().to_string()),
+    }
+}
+
 #[test]
 fn spec_065_reprise_apres_crash_et_collision_alias_ne_creent_qu_un_actif() {
     let root = test_root();
@@ -67,7 +89,12 @@ fn spec_065_reprise_apres_crash_et_collision_alias_ne_creent_qu_un_actif() {
     let allowed_root = root.join("allowed");
     let project_root = allowed_root.join("project");
     let alias_root = allowed_root.join("project-alias");
+    let moved_root = allowed_root.join("project-moved");
     std::fs::create_dir_all(&project_root).expect("racine projet");
+    std::fs::create_dir_all(&moved_root).expect("racine projet déplacée");
+    let sentinel = project_root.join("sentinel.txt");
+    std::fs::write(&sentinel, "contenu de dépôt à préserver").expect("sentinelle dépôt");
+    let sentinel_before = std::fs::read(&sentinel).expect("lecture sentinelle avant");
     symlink(&project_root, &alias_root).expect("alias projet");
     let policy_path = root.join("project-policy.json");
     std::fs::write(
@@ -108,6 +135,13 @@ fn spec_065_reprise_apres_crash_et_collision_alias_ne_creent_qu_un_actif() {
         issued_at,
     );
     let mut store = MaicieStore::open(&maicie_db).expect("store Maicie");
+    assert!(
+        store
+            .project_identities()
+            .expect("identités après création ou migration")
+            .is_empty(),
+        "l'ouverture et la migration ne doivent jamais créer une identité depuis une configuration"
+    );
     let prepared = prepare_project_registration(&mut store, &first_request).expect("préparation");
     let persisted_bytes = prepared.canonical_request.clone();
     drop(store);
@@ -176,4 +210,131 @@ fn spec_065_reprise_apres_crash_et_collision_alias_ne_creent_qu_un_actif() {
         1,
         "les alias ne doivent jamais créer une seconde identité active"
     );
+
+    let listed = client
+        .administer(&admin_request(
+            "project-list",
+            ProjectAdminOperation::List,
+            None,
+            None,
+            issued_at,
+        ))
+        .expect("liste administrative");
+    assert_eq!(listed.bindings.len(), 1);
+    assert_eq!(listed.bindings[0].project_id, "project-winner");
+
+    let active = client
+        .administer(&admin_request(
+            "project-status-active",
+            ProjectAdminOperation::Status,
+            Some("project-winner"),
+            None,
+            issued_at,
+        ))
+        .expect("statut actif");
+    assert_eq!(active.bindings[0].state, ProjectBindingStatus::Active);
+    assert_eq!(active.bindings[0].binding_generation, Some(1));
+
+    let rebind_request = admin_request(
+        "project-rebind",
+        ProjectAdminOperation::Rebind,
+        Some("project-winner"),
+        Some(&moved_root),
+        issued_at,
+    );
+    let rebound = client.administer(&rebind_request).expect("rebind");
+    assert_eq!(rebound.bindings[0].state, ProjectBindingStatus::Active);
+    assert_eq!(rebound.bindings[0].binding_generation, Some(2));
+    assert_eq!(
+        client.administer(&rebind_request).expect("rejeu rebind"),
+        rebound,
+        "le rebind rejoué conserve l'issue exacte"
+    );
+
+    let reconcile_request = admin_request(
+        "review-project-reconcile",
+        ProjectAdminOperation::ReviewProjectReconcile,
+        Some("project-winner"),
+        Some(&moved_root),
+        issued_at,
+    );
+    let reconciled = client
+        .administer(&reconcile_request)
+        .expect("rapprochement explicite");
+    assert_eq!(reconciled.bindings[0].binding_generation, Some(2));
+    assert_eq!(
+        client
+            .administer(&reconcile_request)
+            .expect("rejeu rapprochement"),
+        reconciled,
+        "le rapprochement rejoué n'ajoute pas de second audit"
+    );
+
+    let disable_request = admin_request(
+        "project-disable",
+        ProjectAdminOperation::Disable,
+        Some("project-winner"),
+        None,
+        issued_at,
+    );
+    let disabled = client.administer(&disable_request).expect("désactivation");
+    assert_eq!(disabled.bindings[0].state, ProjectBindingStatus::Disabled);
+    assert_eq!(
+        client
+            .administer(&disable_request)
+            .expect("rejeu désactivation"),
+        disabled,
+        "la désactivation rejouée conserve l'issue exacte"
+    );
+    disable_project_identity(&mut store, "project-winner", disabled.observed_at)
+        .expect("projection Maicie de désactivation");
+    assert_eq!(
+        store
+            .project_identities()
+            .expect("identités Maicie")
+            .into_iter()
+            .find(|identity| identity.project_id == "project-winner")
+            .expect("identité gagnante présente")
+            .status,
+        ProjectIdentityStatus::Disabled
+    );
+
+    let status_disabled = client
+        .administer(&admin_request(
+            "project-status-disabled",
+            ProjectAdminOperation::Status,
+            Some("project-winner"),
+            None,
+            issued_at,
+        ))
+        .expect("statut désactivé");
+    assert_eq!(
+        status_disabled.bindings[0].state,
+        ProjectBindingStatus::Disabled
+    );
+    assert_eq!(
+        std::fs::read(&sentinel).expect("lecture sentinelle après"),
+        sentinel_before,
+        "les opérations de registre ne doivent jamais modifier le dépôt"
+    );
+
+    let bridget_store = BridgetStore::open(&root.join("bridget.db")).expect("lecture audit");
+    let audits = bridget_store
+        .project_audit_events("project-winner")
+        .expect("audits projet");
+    assert_eq!(
+        audits.len(),
+        4,
+        "register, rebind, reconcile, disable une fois"
+    );
+    assert!(
+        audits
+            .iter()
+            .any(|audit| audit.operation == ProjectAuditOperation::ReviewProjectReconcile),
+        "l'horodatage commun ne doit pas imposer un ordre d'audit artificiel"
+    );
+    assert!(audits.iter().all(|audit| {
+        !format!("{audit:?}").contains(&project_root.display().to_string())
+            && !format!("{audit:?}").contains(&moved_root.display().to_string())
+    }));
 }

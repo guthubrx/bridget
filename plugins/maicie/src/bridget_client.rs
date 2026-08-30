@@ -1257,6 +1257,22 @@ impl ProjectRegistryClient {
         parse_project_registry_outcome(response, &request.command_id)
     }
 
+    /// Exécute une lecture ou mutation administrative sur le même contrat
+    /// dédié. Les réponses restent corrélées par command_id et le client ne
+    /// possède toujours aucun accès au stockage privé de Bridget.
+    pub fn administer(
+        &mut self,
+        request: &bridget_transport::protocol::ProjectAdminRequest,
+    ) -> Result<bridget_transport::protocol::ProjectAdminOutcome, BridgetClientError> {
+        let request_bytes = serde_json::to_vec(request).map_err(BridgetClientError::Encode)?;
+        let frame = project_registry_admin_request_frame(&request_bytes)?;
+        let response = match self.deadline {
+            Some(deadline) => self.connection.request_raw_json_until(&frame, deadline),
+            None => self.connection.request_raw_json(&frame),
+        }?;
+        parse_project_registry_admin_outcome(response, &request.command_id)
+    }
+
     pub fn limits(&self) -> BridgetClientLimits {
         self.limits
     }
@@ -1598,6 +1614,26 @@ fn project_registry_request_frame(request_bytes: &[u8]) -> Result<Vec<u8>, Bridg
     }
     let mut frame = Vec::with_capacity(request_bytes.len() + 48);
     frame.extend_from_slice(br#"{"type":"project_registry_request","request":"#);
+    frame.extend_from_slice(request_bytes);
+    frame.push(b'}');
+    Ok(frame)
+}
+
+fn project_registry_admin_request_frame(
+    request_bytes: &[u8],
+) -> Result<Vec<u8>, BridgetClientError> {
+    let request: bridget_transport::protocol::ProjectAdminRequest =
+        serde_json::from_slice(request_bytes).map_err(|source| BridgetClientError::Decode {
+            line: String::from_utf8_lossy(request_bytes).into_owned(),
+            source,
+        })?;
+    if request.command_id.trim().is_empty() || request.deadline_at < request.issued_at {
+        return Err(BridgetClientError::InvalidEnvelope(
+            "ProjectAdminRequest incomplet ou invalide".to_string(),
+        ));
+    }
+    let mut frame = Vec::with_capacity(request_bytes.len() + 54);
+    frame.extend_from_slice(br#"{"type":"project_registry_admin_request","request":"#);
     frame.extend_from_slice(request_bytes);
     frame.push(b'}');
     Ok(frame)
@@ -2154,6 +2190,34 @@ fn parse_project_registry_outcome(
             reason: response.get("reason").cloned().unwrap_or(Value::Null),
         }),
         other => Err(unexpected("project_registry_outcome", other)),
+    }
+}
+
+fn parse_project_registry_admin_outcome(
+    response: Value,
+    expected_command_id: &str,
+) -> Result<bridget_transport::protocol::ProjectAdminOutcome, BridgetClientError> {
+    match response_type(&response)? {
+        "project_registry_admin_outcome" => {
+            let outcome = response.get("outcome").cloned().ok_or_else(|| {
+                BridgetClientError::Protocol("issue administrative projet absente".to_string())
+            })?;
+            let outcome: bridget_transport::protocol::ProjectAdminOutcome =
+                serde_json::from_value(outcome).map_err(|source| BridgetClientError::Decode {
+                    line: response.to_string(),
+                    source,
+                })?;
+            if outcome.command_id != expected_command_id {
+                return Err(BridgetClientError::Protocol(
+                    "issue administrative corrélée à une autre commande".to_string(),
+                ));
+            }
+            Ok(outcome)
+        }
+        "ServiceRejected" | "ClientRejected" => Err(BridgetClientError::ClientRejected {
+            reason: response.get("reason").cloned().unwrap_or(Value::Null),
+        }),
+        other => Err(unexpected("project_registry_admin_outcome", other)),
     }
 }
 
