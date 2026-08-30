@@ -12,6 +12,9 @@
       {
         "label": "main",
         "title": "Bridget Desktop",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "decorations": true,
         "width": 1080,
         "height": 760,
         "minWidth": 760,

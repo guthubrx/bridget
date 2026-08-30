@@ -1921,22 +1921,18 @@ code {
   --agent-pane-selected-surface: #2c2c2c;
   --agent-pane-hover-surface: #1d1d1d;
   --agent-pane-secondary: #a6a6a6;
-  padding: 0.9rem 0.65rem 1.15rem;
+  padding: 0 0.65rem 1.15rem;
   background: #101010;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
 }
 
 .agent-pane__header {
-  padding: 0.1rem 0.1rem 0.75rem;
-}
-
-.agent-pane h1 {
-  font-size: 0.95rem;
-  font-weight: 650;
-  letter-spacing: -0.015em;
+  min-height: 3.25rem;
+  padding: 0 0.1rem 0 4.6rem;
 }
 
 .agent-pane .fleet-count {
+  margin-left: auto;
   border-radius: 0.5rem;
   background: var(--agent-pane-search-surface);
   color: var(--agent-pane-secondary);

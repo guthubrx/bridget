@@ -171,15 +171,14 @@ pub fn run() {
             return Ok(());
         }
         let count = u32::try_from(all.len()).map_err(|_| "Trop de panneaux ouverts.")?;
-        let top = 82_u32;
         let width = (size.width / count).max(1);
-        let height = size.height.saturating_sub(top).max(1);
+        let height = size.height.max(1);
         for (index, panel) in all.into_iter().enumerate() {
             if let Some(webview) = app.get_webview(&panel.label) {
                 webview
                     .set_position(PhysicalPosition::new(
                         (index as u32 * width) as i32,
-                        top as i32,
+                        0_i32,
                     ))
                     .map_err(as_message)?;
                 webview
@@ -393,7 +392,7 @@ pub fn run() {
             .on_navigation(|url| url.scheme() == "http" && url.host_str() == Some("127.0.0.1"));
         if let Err(error) = main.add_child(
             child,
-            PhysicalPosition::new(0_i32, 82_i32),
+            PhysicalPosition::new(0_i32, 0_i32),
             PhysicalSize::new(1_u32, 1_u32),
         ) {
             state.panels.lock().map_err(as_message)?.close(&panel.label);
