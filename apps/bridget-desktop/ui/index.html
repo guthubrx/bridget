@@ -42,6 +42,14 @@
         <footer class="dialog-actions"><button id="cancel-profile" class="secondary" type="button">Annuler</button><button type="submit">Enregistrer</button></footer>
       </form>
     </dialog>
+    <dialog id="host-identity-dialog" aria-labelledby="host-identity-title">
+      <form method="dialog">
+        <header class="dialog-heading"><div><p class="eyebrow">SÉCURITÉ SSH</p><h2 id="host-identity-title">Vérifier l'identité du serveur</h2></div></header>
+        <p class="field-help">Première connexion à <strong id="host-identity-server"></strong>. Vérifie cette empreinte par un canal fiable avant de l'approuver.</p>
+        <code id="host-identity-fingerprint" class="host-fingerprint"></code>
+        <footer class="dialog-actions"><button value="cancel" class="secondary" type="submit" autofocus>Annuler</button><button value="approve" type="submit">Approuver l'identité</button></footer>
+      </form>
+    </dialog>
     <script type="module" src="./app.js"></script>
   </body>
 </html>

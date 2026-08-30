@@ -111,6 +111,12 @@
 - Secret : la commande distante constante prépare uniquement `~/.local/bin` dans le `PATH`, puis exécute `bridget ui endpoint --json`. Elle est contrôlée par le client natif, ne reçoit aucune donnée de la WebView et le jeton reste seulement dans la session mémoire.
 - Vérification : 30 tests Desktop, contrôle de format Rust, contrôle de syntaxe JavaScript, contrôle de diff, contrat réel du daemon actif sur cartae.app et paquet macOS signé ad hoc ont tous réussi.
 
+### Correctif T041 - Approbation visible de l'identité SSH
+
+- Cause : la première approbation utilisait `window.confirm` après une invocation Tauri asynchrone. Sur la WebView macOS, cette boîte ne constitue pas une interface fiable pour une décision de sécurité et pouvait être résolue comme un refus sans être visible.
+- Correctif : un dialogue HTML natif de Bridget Desktop affiche le serveur et l'empreinte, avec deux choix explicites : `Annuler` par défaut ou `Approuver l'identité`. Le ticket mémoire déjà vérifié reste inchangé.
+- Vérification : `node --check apps/bridget-desktop/ui/app.js`, `git diff --check` et le paquet macOS reconstruit et vérifié par `codesign --verify --deep --strict`.
+
 ## Etat final
 
 L'implémentation est terminée et les preuves automatisées sont présentes. Il reste seulement la validation graphique manuelle d'acceptation listée dans `quickstart.md` avant de déclarer la SPEC entièrement acceptée par l'opérateur.

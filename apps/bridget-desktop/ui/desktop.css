@@ -52,6 +52,7 @@ legend { color: var(--text-secondary); padding: 0 .2rem; }
 .choice input { min-height: auto; }
 .field-grid { display: grid; gap: .65rem; grid-template-columns: 1fr 1fr; }
 .field-help { margin: 0; }
+.host-fingerprint { background: #0a0a0a; border: 1px solid #303030; border-radius: .35rem; color: var(--code-text); display: block; font-size: .72rem; line-height: 1.45; overflow-wrap: anywhere; padding: .65rem; }
 code { color: var(--code-text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .connection-status { clip: rect(0, 0, 0, 0); height: 1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px; }
 .active-panels { display: none; }

@@ -50,3 +50,10 @@ L'application installée a été ouverte en arrière-plan sur le Mac, son binair
 - `/Users/moi/.cargo/bin/cargo tauri build --bundles app` : succès. Paquet produit : `/tmp/bridget-desktop-managed-ssh-package.khBcgR/source/src-tauri/target/release/bundle/macos/Bridget Desktop.app`.
 
 Le parcours graphique final reste une acceptation opérateur : à la première connexion, confirmer l'empreinte SSH de cartae.app. Après cette confirmation, le profil se reconnecte automatiquement à chaque lancement de Bridget Desktop et le jeton reste transparent.
+
+## Correctif T041 - Dialogue d'empreinte SSH
+
+- Observation réelle : le profil `Loin` avait `host_fingerprint: null` et l'interface affichait « L'identité SSH n'a pas été approuvée » sans dialogue visible.
+- Cause corrigée : `window.confirm` est remplacé par un élément `<dialog>` de la coque Desktop. L'empreinte et le serveur sont visibles et le bouton par défaut est `Annuler`.
+- `node --check apps/bridget-desktop/ui/app.js` et `git diff --check` : succès.
+- Paquet macOS reconstruit, signé ad hoc et vérifié avec `codesign --verify --deep --strict` : succès.

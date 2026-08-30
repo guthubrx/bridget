@@ -1,5 +1,5 @@
 const elements = {
-  add: document.querySelector("#add-profile"), dialog: document.querySelector("#profile-dialog"), close: document.querySelector("#close-dialog"), cancel: document.querySelector("#cancel-profile"), form: document.querySelector("#profile-form"), list: document.querySelector("#profiles-list"), empty: document.querySelector("#empty-state"), status: document.querySelector("#app-status"), connectionStatus: document.querySelector("#connection-status"), showProfiles: document.querySelector("#show-profiles"), activePanels: document.querySelector("#active-panels"), loadError: document.querySelector("#load-error"), formError: document.querySelector("#form-error"), title: document.querySelector("#profile-dialog-title"), id: document.querySelector("#profile-id"), label: document.querySelector("#profile-label"), host: document.querySelector("#profile-host"), port: document.querySelector("#profile-port"), user: document.querySelector("#profile-user"), identityFileField: document.querySelector("#identity-file-field"), identityFile: document.querySelector("#profile-identity-file"),
+  add: document.querySelector("#add-profile"), dialog: document.querySelector("#profile-dialog"), close: document.querySelector("#close-dialog"), cancel: document.querySelector("#cancel-profile"), form: document.querySelector("#profile-form"), list: document.querySelector("#profiles-list"), empty: document.querySelector("#empty-state"), status: document.querySelector("#app-status"), connectionStatus: document.querySelector("#connection-status"), showProfiles: document.querySelector("#show-profiles"), activePanels: document.querySelector("#active-panels"), loadError: document.querySelector("#load-error"), formError: document.querySelector("#form-error"), title: document.querySelector("#profile-dialog-title"), id: document.querySelector("#profile-id"), label: document.querySelector("#profile-label"), host: document.querySelector("#profile-host"), port: document.querySelector("#profile-port"), user: document.querySelector("#profile-user"), identityFileField: document.querySelector("#identity-file-field"), identityFile: document.querySelector("#profile-identity-file"), hostIdentityDialog: document.querySelector("#host-identity-dialog"), hostIdentityServer: document.querySelector("#host-identity-server"), hostIdentityFingerprint: document.querySelector("#host-identity-fingerprint"),
 };
 
 let profiles = [];
@@ -66,6 +66,16 @@ function openProfileDialog(profile = null) { resetForm(profile); elements.dialog
 function closeProfileDialog() { elements.dialog.close(); }
 function makeDraft() { const identity = selectedIdentitySource() === "file" ? { source: "file", path: elements.identityFile.value.trim() } : { source: "agent" }; return { kind: "ssh", label: elements.label.value.trim(), host: elements.host.value.trim(), port: Number(elements.port.value), user: elements.user.value.trim(), identity }; }
 
+function requestHostIdentityApproval(profile, fingerprint) {
+  elements.hostIdentityServer.textContent = profileOrigin(profile);
+  elements.hostIdentityFingerprint.textContent = fingerprint;
+  elements.hostIdentityDialog.returnValue = "cancel";
+  elements.hostIdentityDialog.showModal();
+  return new Promise((resolve) => {
+    elements.hostIdentityDialog.addEventListener("close", () => resolve(elements.hostIdentityDialog.returnValue === "approve"), { once: true });
+  });
+}
+
 async function saveProfile(event) {
   event.preventDefault(); clearError(elements.formError); if (!elements.form.reportValidity()) return;
   try {
@@ -86,7 +96,7 @@ async function verifyHostIdentity(profile) {
   if (identity.status === "approved") return;
   if (identity.status === "changed") throw new Error(`L'identité SSH de ${profile.label} a changé (${identity.fingerprint}). La connexion est bloquée pour votre sécurité.`);
   if (identity.status !== "awaiting_approval" || !identity.ticket) throw new Error("Le contrôle d'identité SSH n'a pas produit de décision exploitable.");
-  const accepted = window.confirm(`Première connexion à ${profileOrigin(profile)}.\n\nEmpreinte présentée :\n${identity.fingerprint}\n\nN'acceptez que si cette empreinte vous a été communiquée par une source fiable.`);
+  const accepted = await requestHostIdentityApproval(profile, identity.fingerprint);
   if (!accepted) throw new Error("L'identité SSH n'a pas été approuvée. Aucune connexion n'a été ouverte.");
   await invoke("host_identity_approve", { profile_id: profile.id, ticket: identity.ticket });
 }
