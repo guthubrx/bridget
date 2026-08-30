@@ -616,6 +616,13 @@
         assert.match(css, /\.agent-row\s*\{[\s\S]*?border-radius: 0\.7rem;/);
         assert.match(html, /<div class="conversation-status" id="conversation-status">[\s\S]*id="relay-banner"[\s\S]*id="stopped-banner"/);
         assert.match(css, /\.conversation\s*\{[\s\S]*?grid-template-rows: auto auto minmax\(0, 1fr\) auto;/);
+        const cssBalance = [...css.replace(/\/\*[\s\S]*?\*\//g, "")]
+          .reduce((depth, character) => depth + (character === "{" ? 1 : character === "}" ? -1 : 0), 0);
+        assert.equal(cssBalance, 0, "theme.css doit fermer chaque bloc");
+        assert.match(css, /\.agent-row__execution\s*\{\s*min-width: 0;/);
+        assert.match(css, /\.agent-row__excerpt\s*\{\s*min-width: 0;/);
+        assert.match(css, /\.agent-pane \.agent-row__execution\s*\{\s*font-size: 0\.75rem;/);
+
         assert.match(css, /\.conversation-status\s*\{\s*min-height: 0;\s*\}/);
         assert.match(css, /--agent-pane-search-surface:\s*#252525/);
         assert.match(css, /\.agent-pane \.agent-row__layout\s*\{[\s\S]*?grid-template-columns: 2\.5rem minmax\(0, 1fr\);[\s\S]*?gap: 0\.78rem;/);
