@@ -7,3 +7,10 @@
 - Délai observé : 1 min 13 s.
 
 ## Vérifications
+
+## Production
+
+- `main` publié au commit `98692a6`.
+- Build release réussi ; binaire installé et release de même SHA-256.
+- Daemon redémarré, agents réinscrits.
+- Le processus UI obsolète sur binaire supprimé a été remplacé ; le port 17888 sert l'asset authentifié contenant le nouveau statut et le rendu de rattrapage.

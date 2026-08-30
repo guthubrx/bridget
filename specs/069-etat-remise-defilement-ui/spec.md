@@ -1,6 +1,6 @@
 # SPEC-069 - Etat de remise honnête et défilement de conversation
 
-**Statut** : En cours
+**Statut** : Terminé
 
 ## Problème constaté
 

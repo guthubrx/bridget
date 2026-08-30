@@ -7,4 +7,4 @@
 - [x] T005 - Préserver la puce de nouveaux messages hors du bas du fil.
 - [x] T006 - Ajouter les preuves unitaires UI correspondantes.
 - [x] T007 - Exécuter les tests et vérifier le comportement sur l'interface servie.
-- [ ] T008 - Commiter, fusionner, livrer et consigner les preuves.
+- [x] T008 - Commiter, fusionner, livrer et consigner les preuves.
