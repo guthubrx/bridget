@@ -5,9 +5,11 @@ use crate::ssh::{OwnedTunnel, discovery_invocation};
 use serde::Deserialize;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const ENDPOINT_VERSION: u8 = 1;
+const RELAY_READY_TIMEOUT: Duration = Duration::from_secs(4);
+const RELAY_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -258,27 +260,50 @@ pub struct HttpRelayProbe;
 impl RelayProbe for HttpRelayProbe {
     fn check(&mut self, local_port: u16, endpoint: &RelayEndpoint) -> Result<(), ConnectionError> {
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, local_port));
-        let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(4))
-            .map_err(|_| ConnectionError::RelayUnavailable)?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(4)))
-            .map_err(|_| ConnectionError::RelayUnavailable)?;
-        let request = format!(
-            "GET /?token={} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
-            percent_encode(endpoint.token())
-        );
-        stream
-            .write_all(request.as_bytes())
-            .map_err(|_| ConnectionError::RelayUnavailable)?;
-        let mut response = [0_u8; 96];
-        let size = stream
-            .read(&mut response)
-            .map_err(|_| ConnectionError::RelayUnavailable)?;
-        if !response[..size].starts_with(b"HTTP/1.1 200") {
-            return Err(ConnectionError::RelayUnavailable);
+        let deadline = Instant::now() + RELAY_READY_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ConnectionError::RelayUnavailable);
+            }
+            let attempt_timeout = remaining.min(Duration::from_millis(250));
+            if check_relay_once(address, endpoint, attempt_timeout).is_ok() {
+                return Ok(());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ConnectionError::RelayUnavailable);
+            }
+            std::thread::sleep(RELAY_RETRY_INTERVAL.min(remaining));
         }
-        Ok(())
     }
+}
+
+fn check_relay_once(
+    address: SocketAddr,
+    endpoint: &RelayEndpoint,
+    timeout: Duration,
+) -> Result<(), ConnectionError> {
+    let mut stream = TcpStream::connect_timeout(&address, timeout)
+        .map_err(|_| ConnectionError::RelayUnavailable)?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|_| ConnectionError::RelayUnavailable)?;
+    let request = format!(
+        "GET /?token={} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        percent_encode(endpoint.token())
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|_| ConnectionError::RelayUnavailable)?;
+    let mut response = [0_u8; 96];
+    let size = stream
+        .read(&mut response)
+        .map_err(|_| ConnectionError::RelayUnavailable)?;
+    if !response[..size].starts_with(b"HTTP/1.1 200") {
+        return Err(ConnectionError::RelayUnavailable);
+    }
+    Ok(())
 }
 
 /// `connected` est atteint uniquement après la réponse HTTP du relais.
@@ -360,14 +385,18 @@ fn percent_encode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectionError, RelayProbe, RemoteTransport, connect_remote, mark_tunnel_lost,
-        parse_endpoint_document, transition,
+        ConnectionError, HttpRelayProbe, RelayProbe, RemoteTransport, connect_remote,
+        mark_tunnel_lost, parse_endpoint_document, transition,
     };
     use crate::profile::{
         ConnectionProfile, ConnectionSession, ConnectionState, ProfileCapability, RelayEndpoint,
         SshIdentityRef,
     };
     use std::cell::Cell;
+    use std::io::{Read, Write};
+    use std::net::{Ipv4Addr, TcpListener};
+    use std::thread;
+    use std::time::Duration;
 
     fn ssh_profile(approved: bool) -> ConnectionProfile {
         ConnectionProfile::Ssh {
@@ -455,6 +484,27 @@ mod tests {
         ));
         assert!(transport.opened.get());
         assert!(transport.closed.get());
+    }
+
+    #[test]
+    fn sonde_attend_un_relais_qui_devient_disponible() {
+        let reservation = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("port de test");
+        let port = reservation.local_addr().expect("adresse").port();
+        drop(reservation);
+        let server = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(75));
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).expect("relais tardif");
+            let (mut stream, _) = listener.accept().expect("connexion sonde");
+            let mut request = [0_u8; 512];
+            let _ = stream.read(&mut request).expect("requête");
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .expect("réponse");
+        });
+        let endpoint = RelayEndpoint::new(17888, "fixture-token".into()).expect("endpoint");
+        let mut probe = HttpRelayProbe;
+        assert!(probe.check(port, &endpoint).is_ok());
+        server.join().expect("serveur terminé");
     }
 
     #[test]
