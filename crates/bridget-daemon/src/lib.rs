@@ -23,6 +23,7 @@ pub use managed_supervisor::{GovernedContinuation, reserve_governed_continuation
 pub mod mcp;
 pub mod mcp_identity;
 pub mod mission_projection;
+pub mod project_policy;
 pub mod reaper;
 pub mod receipt_store;
 pub mod recovery_trace;
