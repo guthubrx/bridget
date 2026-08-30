@@ -62,6 +62,7 @@ fn daemon_config(root: &Path) -> DaemonConfig {
         quarantine_window: 3_600,
         retention_days: 7,
         project_root_policy_path: None,
+        project_runtime_policy_path: None,
     }
 }
 

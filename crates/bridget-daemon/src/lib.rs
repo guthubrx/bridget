@@ -24,6 +24,7 @@ pub mod mcp;
 pub mod mcp_identity;
 pub mod mission_projection;
 pub mod project_policy;
+pub mod project_runtime;
 pub mod reaper;
 pub mod receipt_store;
 pub mod recovery_trace;

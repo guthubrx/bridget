@@ -722,6 +722,7 @@ mod tests {
                 state: ProjectBindingStatus::Active,
                 binding_generation: Some(1),
                 backend: Some(ProjectBackend::Host),
+                runtime_policy: None,
                 reason: None,
                 observed_at: 12,
             }),

@@ -264,6 +264,20 @@ pub enum ServiceCapability {
 #[serde(rename_all = "snake_case")]
 pub enum ProjectBackend {
     Host,
+    Docker,
+}
+
+/// Politique hôte effectivement attestée pour une liaison Docker.
+///
+/// Les champs sont absents des projections historiques et ne transportent
+/// aucune option Docker libre, aucun chemin hôte ni aucun secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRuntimePolicyReference {
+    pub policy_id: String,
+    pub policy_version: u64,
+    pub policy_digest: String,
+    pub environment_epoch: u64,
 }
 
 /// Requête de liaison de projet portée par la variante dédiée du protocole.
@@ -280,6 +294,10 @@ pub struct ProjectBindRequest {
     pub project_id: String,
     pub requested_root: String,
     pub backend: ProjectBackend,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_version: Option<u64>,
 }
 
 /// État terminal d'une tentative de liaison de projet.
@@ -331,6 +349,8 @@ pub struct ProjectBindOutcome {
     pub binding_generation: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<ProjectBackend>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_policy: Option<ProjectRuntimePolicyReference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<ProjectRegistryRefusal>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -403,6 +423,8 @@ pub struct ProjectBindingProjection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<ProjectBackend>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_policy: Option<ProjectRuntimePolicyReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<ProjectRegistryRefusal>,
     pub observed_at: i64,
 }
@@ -421,7 +443,102 @@ pub struct ProjectAdminOutcome {
     pub observed_at: i64,
 }
 
+/// Opération locale explicitement bornée sur l'environnement Docker d'un projet.
+/// Elle n'accepte ni argument Docker, ni chemin hôte, ni image fournie par l'appelant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRuntimeOperation {
+    Prepare,
+    Status,
+    Stop,
+    Remove,
+    Recreate,
+    SwitchBackend,
+}
+
+/// Requête locale versionnée du pilote d'environnement. Seul le daemon lit la
+/// liaison durable et la politique hôte fermée correspondante.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRuntimeRequest {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub issued_at: i64,
+    pub deadline_at: i64,
+    pub operation: ProjectRuntimeOperation,
+    pub project_id: String,
+}
+
+/// Refus fermé du pilote Docker, sans détail de commande ni chemin local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRuntimeRefusal {
+    InvalidContract,
+    InvalidProjectId,
+    IdempotencyExpired,
+    PeerUidMismatch,
+    ProjectNotDocker,
+    ProjectNotFound,
+    PolicyUnavailable,
+    EnvironmentBusy,
+    PrepareFailed,
+    RecreateFailed,
+    StoreUnavailable,
+}
+
+/// Projection d'exploitation d'un environnement. Les références de racine,
+/// les identifiants complets de conteneur et les détails Docker restent privés
+/// au daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRuntimeOutcome {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub project_id: String,
+    pub operation: ProjectRuntimeOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_policy: Option<ProjectRuntimePolicyReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProjectRuntimeRefusal>,
+    pub observed_at: i64,
+}
+
 /// Refus structurés de la frontière réservée aux services.
+/// Version fermée du handshake du socket privé d'un environnement Docker.
+pub const RUNTIME_INGRESS_CONTRACT_VERSION: u16 = 1;
+
+/// Preuve déclarée par le wrapper avant toute inscription sur l'ingress privé.
+/// Le daemon compare chaque champ à l'environnement durable et à la réservation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeIngressHandshake {
+    pub contract_version: u16,
+    pub project_id: String,
+    pub binding_generation: u64,
+    pub container_id: String,
+    pub environment_epoch: u64,
+    pub agent_generation: u64,
+    pub instance_id: String,
+}
+
+/// Refus fermé de l'ingress. Aucune information de chemin hôte ou Docker n'est
+/// rendue au conteneur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeIngressRefusal {
+    InvalidContract,
+    IdentityMismatch,
+    GenerationMismatch,
+    EnvironmentEpochStale,
+    ReservationMissing,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ServiceRefusal {
@@ -891,6 +1008,9 @@ pub enum SpawnRefusal {
     ProjectCwdMismatch {
         project_id: String,
     },
+    DockerRuntimeUnavailable {
+        project_id: String,
+    },
     NegotiationFailed {
         detail: String,
     },
@@ -1137,7 +1257,7 @@ impl DelegatedRuntimeEventKind {
         }
     }
 
-    pub fn from_str(value: &str) -> Option<Self> {
+    pub fn parse(value: &str) -> Option<Self> {
         match value {
             "warning" => Some(Self::Warning),
             "failed" => Some(Self::Failed),
@@ -1195,6 +1315,18 @@ pub enum WrapperToDaemon {
     #[serde(rename = "project_registry_admin_request")]
     ProjectRegistryAdminRequest {
         request: ProjectAdminRequest,
+    },
+    /// Commande locale du pilote Docker. L'authentification reste fondée sur
+    /// le pair Unix observé par le daemon, jamais sur un champ JSON.
+    #[serde(rename = "project_runtime_request")]
+    ProjectRuntimeRequest {
+        request: ProjectRuntimeRequest,
+    },
+    /// Handshake obligatoire avant toute inscription via le socket privé d'un
+    /// environnement Docker. Il n'est jamais envoyé sur le socket utilisateur.
+    #[serde(rename = "runtime_ingress_hello")]
+    RuntimeIngressHello {
+        hello: RuntimeIngressHandshake,
     },
     /// Ouvre une relève bornée des faits de coordination v2. Le curseur est
     /// opaque pour le consommateur : Bridget seul lui donne un ordre durable.
@@ -1847,6 +1979,14 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    #[serde(rename = "runtime_ingress_accepted")]
+    RuntimeIngressAccepted {
+        project_id: String,
+        binding_generation: u64,
+        environment_epoch: u64,
+    },
+    #[serde(rename = "runtime_ingress_rejected")]
+    RuntimeIngressRejected { reason: RuntimeIngressRefusal },
     /// Le rôle demandé est accepté pour cette connexion.
     RoleAccepted { role: ConnectionRole },
     /// Contrat et capacités réellement négociés avec un client public.
@@ -1875,6 +2015,9 @@ pub enum DaemonToWrapper {
     /// Issue corrélée d'une lecture ou mutation administrative du registre.
     #[serde(rename = "project_registry_admin_outcome")]
     ProjectRegistryAdminOutcome { outcome: ProjectAdminOutcome },
+    /// Issue bornée d'une opération locale d'environnement Docker.
+    #[serde(rename = "project_runtime_outcome")]
+    ProjectRuntimeOutcome { outcome: ProjectRuntimeOutcome },
     /// Issue durable ou calculée d'une opération du guichet.
     #[serde(rename = "guichet_result")]
     GuichetResult {
@@ -4349,6 +4492,8 @@ mod tests {
             project_id: "project-opaque-1".to_string(),
             requested_root: "/srv/projects/fixture".to_string(),
             backend: ProjectBackend::Host,
+            policy_id: None,
+            policy_version: None,
         };
         let message = WrapperToDaemon::ProjectRegistryRequest {
             request: request.clone(),
@@ -4387,6 +4532,7 @@ mod tests {
             status: ProjectBindStatus::RegistrationConflict,
             binding_generation: None,
             backend: None,
+            runtime_policy: None,
             reason: Some(ProjectRegistryRefusal::RootAlreadyBound),
             existing_project_id: Some("project-winner".to_string()),
             existing_binding_generation: Some(4),
@@ -4429,6 +4575,7 @@ mod tests {
                 state: ProjectBindingStatus::Active,
                 binding_generation: Some(2),
                 backend: Some(ProjectBackend::Host),
+                runtime_policy: None,
                 reason: None,
                 observed_at: 1_787_997_603,
             }],
@@ -4457,5 +4604,86 @@ mod tests {
             "\"peer_uid_mismatch\""
         );
         assert!(serde_json::from_str::<ProjectRegistryRefusal>("\"unknown\"").is_err());
+    }
+    #[test]
+    fn spec_066_runtime_local_est_versionne_ferme_et_sans_chemin_hote() {
+        let request = ProjectRuntimeRequest {
+            contract_version: 1,
+            command_id: "runtime-command-1".to_string(),
+            issued_at: 1_788_000_000,
+            deadline_at: 1_788_000_060,
+            operation: ProjectRuntimeOperation::Prepare,
+            project_id: "project-066".to_string(),
+        };
+        let wire = encode(&WrapperToDaemon::ProjectRuntimeRequest {
+            request: request.clone(),
+        })
+        .unwrap();
+        assert!(wire.contains(r#""type":"project_runtime_request""#));
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&wire).unwrap(),
+            WrapperToDaemon::ProjectRuntimeRequest { request: decoded } if decoded == request
+        ));
+        assert!(serde_json::from_str::<ProjectRuntimeRequest>(
+            r#"{"contract_version":1,"command_id":"runtime-command-1","issued_at":1,"deadline_at":2,"operation":"prepare","project_id":"project-066","path":"/srv/private"}"#
+        )
+        .is_err());
+
+        let outcome = ProjectRuntimeOutcome {
+            contract_version: 1,
+            command_id: request.command_id.clone(),
+            project_id: request.project_id.clone(),
+            operation: request.operation,
+            binding_generation: Some(2),
+            state: Some("ready".to_string()),
+            runtime_policy: Some(ProjectRuntimePolicyReference {
+                policy_id: "fixture-local".to_string(),
+                policy_version: 1,
+                policy_digest: format!("sha256:{}", "a".repeat(64)),
+                environment_epoch: 3,
+            }),
+            last_reason: Some("runtime_exec_lost".to_string()),
+            reason: None,
+            observed_at: 1_788_000_001,
+        };
+        assert!(matches!(
+            decode::<DaemonToWrapper>(
+                &encode(&DaemonToWrapper::ProjectRuntimeOutcome {
+                    outcome: outcome.clone(),
+                })
+                .unwrap()
+            )
+            .unwrap(),
+            DaemonToWrapper::ProjectRuntimeOutcome { outcome: decoded } if decoded == outcome
+        ));
+    }
+    #[test]
+    fn spec_066_handshake_ingress_est_ferme_et_versionne() {
+        let hello = RuntimeIngressHandshake {
+            contract_version: RUNTIME_INGRESS_CONTRACT_VERSION,
+            project_id: "project-066".to_string(),
+            binding_generation: 2,
+            container_id: "a".repeat(64),
+            environment_epoch: 3,
+            agent_generation: 4,
+            instance_id: "00000000-0000-4000-8000-000000000066".to_string(),
+        };
+        let wire = encode(&WrapperToDaemon::RuntimeIngressHello {
+            hello: hello.clone(),
+        })
+        .unwrap();
+        assert!(wire.contains(r#""type":"runtime_ingress_hello""#));
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&wire).unwrap(),
+            WrapperToDaemon::RuntimeIngressHello { hello: decoded } if decoded == hello
+        ));
+        assert!(serde_json::from_str::<RuntimeIngressHandshake>(
+            r#"{"contract_version":1,"project_id":"project-066","binding_generation":2,"container_id":"abc","environment_epoch":3,"agent_generation":4,"host_path":"/srv/private"}"#
+        )
+        .is_err());
+        assert_eq!(
+            serde_json::to_string(&RuntimeIngressRefusal::EnvironmentEpochStale).unwrap(),
+            "\"environment_epoch_stale\""
+        );
     }
 }

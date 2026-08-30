@@ -8566,10 +8566,9 @@ fn migrate_to_version(
     // v22 : identité projet Maicie, commande idempotente et outbox locale.
     // La racine demandée reste une intention : Bridget seul la canonise et
     // l'autorise avant d'activer l'identité.
-    if target_version >= 22 {
-        if current_version < 22 {
-            tx.execute_batch(
-                "CREATE TABLE IF NOT EXISTS project_identities (
+    if target_version >= 22 && current_version < 22 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS project_identities (
                      project_id TEXT PRIMARY KEY,
                      display_name TEXT NOT NULL,
                      status TEXT NOT NULL CHECK(status IN (
@@ -8607,9 +8606,8 @@ fn migrate_to_version(
                  );
                  CREATE INDEX IF NOT EXISTS project_registration_outbox_pending_idx
                      ON project_registration_outbox(state, command_id);",
-            )
-            .map_err(StoreError::Sql)?;
-        }
+        )
+        .map_err(StoreError::Sql)?;
     }
 
     for version in (current_version + 1)..=target_version {

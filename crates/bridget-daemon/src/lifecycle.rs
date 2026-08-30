@@ -163,6 +163,35 @@ pub fn submit_spawn_for_project(
         canonical_project_root,
         false,
         false,
+        true,
+    )
+}
+
+/// Admission Docker : la commande fournisseur est attestée par la politique
+/// de runtime et doit rester absente de l'hôte du daemon.
+#[allow(clippy::too_many_arguments)]
+pub fn submit_spawn_for_project_in_runtime(
+    supervisor: &FleetSupervisor,
+    registry: &AgentRegistry,
+    source: &SourceEnvironment,
+    order: &SpawnOrder,
+    now: i64,
+    recovering: bool,
+    hosts: &SpawnHosts,
+    canonical_project_root: Option<&Path>,
+) -> Result<SpawnDecision, FleetError> {
+    submit_spawn_for_project_with_policy(
+        supervisor,
+        registry,
+        source,
+        order,
+        now,
+        recovering,
+        hosts,
+        canonical_project_root,
+        false,
+        false,
+        false,
     )
 }
 
@@ -178,6 +207,7 @@ fn submit_spawn_for_project_with_policy(
     canonical_project_root: Option<&Path>,
     relaunch: bool,
     recovery: bool,
+    verify_host_command: bool,
 ) -> Result<SpawnDecision, FleetError> {
     if let Some(project) = order.project.as_ref() {
         let matches_root = canonical_project_root
@@ -212,9 +242,10 @@ fn submit_spawn_for_project_with_policy(
         return Ok(SpawnDecision::Rejected(reason));
     }
     // Une commande absente est une erreur de préparation locale, corrigeable
-    // dans le registre. Elle doit donc rester hors de la saga durable : le
-    // même command_id pourra être rejoué une fois la définition corrigée.
-    if !supervisor.knows_command(&order.command_id)
+    // dans le registre. Une admission Docker en a une autre autorité : le
+    // chemin interne est vérifié dans la politique et l'image, jamais ici.
+    if verify_host_command
+        && !supervisor.knows_command(&order.command_id)
         && let Ok(definition) = registry.get(&order.agent_type)
         && let Ok(env) = build_environment(definition, source)
         && !command_exists(&definition.command, &env)
@@ -233,7 +264,14 @@ fn submit_spawn_for_project_with_policy(
     };
     match submission {
         SpawnSubmission::Start(lease) => {
-            let prepared = match prepare_spawn(registry, source, order, lease.clone(), hosts) {
+            let prepared = match prepare_spawn(
+                registry,
+                source,
+                order,
+                lease.clone(),
+                hosts,
+                verify_host_command,
+            ) {
                 Ok(prepared) => prepared,
                 Err(reason) => {
                     let (category, detail) = refusal_record(&reason);
@@ -307,7 +345,7 @@ pub fn submit_spawn_from_resolved(
     let registry = AgentRegistry::from_resolved(&order.agent_type, resolved)
         .map_err(|_| FleetError::InvalidOrder("définition figée de reprise invalide"))?;
     submit_spawn_for_project_with_policy(
-        supervisor, &registry, source, order, now, false, hosts, None, false, true,
+        supervisor, &registry, source, order, now, false, hosts, None, false, true, true,
     )
 }
 
@@ -336,6 +374,7 @@ pub fn submit_relaunch_from_resolved(
         canonical_project_root,
         true,
         false,
+        true,
     )
 }
 
@@ -345,6 +384,7 @@ fn prepare_spawn(
     order: &SpawnOrder,
     lease: SpawnLease,
     hosts: &SpawnHosts,
+    verify_host_command: bool,
 ) -> Result<PreparedSpawn, SpawnRefusal> {
     prepare_spawn_parts(
         registry,
@@ -353,6 +393,7 @@ fn prepare_spawn(
         &order.cwd,
         lease,
         hosts,
+        verify_host_command,
     )
 }
 
@@ -378,6 +419,7 @@ pub fn prepare_recovery(
         &candidate.cwd,
         candidate.lease,
         &SpawnHosts::local(),
+        true,
     )
 }
 
@@ -388,6 +430,7 @@ fn prepare_spawn_parts(
     cwd: &Path,
     lease: SpawnLease,
     hosts: &SpawnHosts,
+    verify_host_command: bool,
 ) -> Result<PreparedSpawn, SpawnRefusal> {
     let definition = registry
         .get(agent_type)
@@ -414,12 +457,13 @@ fn prepare_spawn_parts(
         "acp" | "claude_stream_json" | "codex_app_server"
     ) {
         return Err(SpawnRefusal::NegotiationFailed {
-            detail: format!("le protocole '{}' n'est pas ACP", definition.protocol),
+            detail: format!(
+                "le protocole '{}' n'utilise pas une session gérée",
+                definition.protocol
+            ),
         });
     }
     if !cwd.is_dir() {
-        // Le verdict porte la machine qui l'a rendu : c'est ICI que le chemin a
-        // été cherché, et le demandeur peut être ailleurs.
         return Err(SpawnRefusal::CwdGone {
             searched_on: hosts.searched_on.clone(),
             requested_from: hosts.requested_from.clone(),
@@ -438,7 +482,7 @@ fn prepare_spawn_parts(
             OsString::from(max),
         );
     }
-    if !command_exists(&definition.command, &env) {
+    if verify_host_command && !command_exists(&definition.command, &env) {
         return Err(SpawnRefusal::CommandMissing {
             command: definition.command.clone(),
             registry: registry.source().display().to_string(),
@@ -587,6 +631,7 @@ fn refusal_record(reason: &SpawnRefusal) -> (&'static str, String) {
         SpawnRefusal::EnvUnfit { .. } => "env_unfit",
         SpawnRefusal::CwdGone { .. } => "cwd_gone",
         SpawnRefusal::ProjectCwdMismatch { .. } => "project_cwd_mismatch",
+        SpawnRefusal::DockerRuntimeUnavailable { .. } => "docker_runtime_unavailable",
         SpawnRefusal::NegotiationFailed { .. } => "negotiation_failed",
         SpawnRefusal::SpawnTimeout => "spawn_timeout",
         SpawnRefusal::QuotaExceeded { .. } => "quota_exceeded",
@@ -783,7 +828,7 @@ mod tests {
         git(&["worktree", "add", "--detach", linked.to_str().unwrap()]);
 
         assert!(
-            project_cwd_belongs_to_binding(&project.join("nested"), &project) == false,
+            !project_cwd_belongs_to_binding(&project.join("nested"), &project),
             "un sous-répertoire inexistant est refusé"
         );
         fs::create_dir_all(project.join("nested")).unwrap();
@@ -1314,6 +1359,39 @@ mod tests {
             }
             other => panic!("refus attendu CwdGone, obtenu {other:?}"),
         }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_066_runtime_docker_n_exige_jamais_la_commande_fournisseur_sur_l_hote() {
+        let root = root("runtime-command");
+        fs::create_dir_all(&root).unwrap();
+        let supervisor = supervisor(&root, 1);
+        let registry = registry("/usr/local/bin/fixture-agent", "acp", &[]);
+        let env = source(&root);
+        let mut spawn = order(&root, "runtime-command-066", "runtime-agent-066");
+        spawn.project = Some(bridget_transport::protocol::ProjectReference {
+            project_id: "project-066".to_string(),
+            binding_generation: 1,
+        });
+
+        let decision = submit_spawn_for_project_in_runtime(
+            &supervisor,
+            &registry,
+            &env,
+            &spawn,
+            NOW,
+            false,
+            &hosts_fixture(),
+            Some(&root),
+        )
+        .unwrap();
+        assert!(matches!(
+            decision,
+            SpawnDecision::Ready(ref prepared)
+                if prepared.command == "/usr/local/bin/fixture-agent"
+        ));
+        drop(supervisor);
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -5,9 +5,10 @@ use bridget_core::{BridgetMessage, router::validate_agent_name};
 use bridget_transport::protocol::{
     AdoptStoppedOutcome, AgentInfo, AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability,
     ConnectionRole, DecommissionOutcome, GuichetDurationClass, IdempotencyIssue, LedgerMessage,
-    LedgerScope, PresenceMode, RelaunchOutcome, RequestInfo, ReviewTarget, ReviewVerdict,
-    ReviewVerdictEvidence, RuntimeSource, ServiceRequestOperation, ServiceRequestPayload,
-    ServiceSuiteDeclaration, decode, encode, is_canonical_git_sha,
+    LedgerScope, PresenceMode, ProjectRuntimeOperation, ProjectRuntimeRequest, RelaunchOutcome,
+    RequestInfo, ReviewTarget, ReviewVerdict, ReviewVerdictEvidence, RuntimeSource,
+    ServiceRequestOperation, ServiceRequestPayload, ServiceSuiteDeclaration, decode, encode,
+    is_canonical_git_sha,
 };
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::fmt::Write as _;
@@ -122,6 +123,8 @@ pub fn run() {
         "daemon" => cmd_daemon(&args[2..]),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
+        "managed-runtime-wrapper" => cmd_managed_runtime_wrapper(&args[2..]),
+        "managed-runtime-stop" => cmd_managed_runtime_stop(&args[2..]),
         "mcp" => cmd_mcp(),
         "ui" => cmd_ui(&args[2..]),
         "attach" => cmd_attach(&args[2..]),
@@ -137,6 +140,7 @@ pub fn run() {
         "rename" => cmd_rename(&args[2..]),
         "runtime" => cmd_runtime(&args[2..]),
         "domain" => cmd_domain(&args[2..]),
+        "project-runtime" => cmd_project_runtime(&args[2..]),
         "dnd" => cmd_dnd(&args[2..]),
         "hook" => cmd_hook(&args[2..]),
         "install-hooks" => cmd_install_hooks(&args[2..]),
@@ -281,7 +285,44 @@ fn cmd_managed_wrapper(args: &[String]) {
     }
 }
 
-/// Extrait --name des arguments du wrapper et retourne (name_option, args_restants).
+/// Entrée interne réservée au `docker exec` d'un environnement de projet.
+/// La commande fournisseur est issue de la politique runtime hôte et jamais
+/// du registre utilisateur ou des arguments d'un agent.
+fn cmd_managed_runtime_wrapper(args: &[String]) {
+    if args.len() != 4 {
+        eprintln!(
+            "bridget managed-runtime-wrapper: type, nom, commande interne et définition figée requis"
+        );
+        std::process::exit(2);
+    }
+    let definition = match serde_json::from_str(&args[3]) {
+        Ok(definition) => definition,
+        Err(error) => {
+            eprintln!("bridget managed-runtime-wrapper: définition figée invalide: {error}");
+            std::process::exit(2);
+        }
+    };
+    if let Err(error) =
+        crate::wrapper::launch_runtime_acp(&args[0], &args[1], &args[2], &definition)
+    {
+        eprintln!("bridget managed-runtime-wrapper: {error}");
+        std::process::exit(1);
+    }
+}
+
+/// Entrée interne réservée au superviseur Docker. Elle ne reçoit qu'un UUID
+/// déjà attesté par le lease; aucun nom ni chemin libre n'est accepté.
+fn cmd_managed_runtime_stop(args: &[String]) {
+    if args.len() != 1 {
+        eprintln!("bridget managed-runtime-stop: instance_id requis");
+        std::process::exit(2);
+    }
+    if let Err(error) = crate::wrapper::stop_runtime_acp(&args[0]) {
+        eprintln!("bridget managed-runtime-stop: {error}");
+        std::process::exit(1);
+    }
+}
+
 fn extract_wrapper_args(args: &[String]) -> (Option<String>, Vec<String>) {
     let mut name = None;
     let mut rest = Vec::new();
@@ -340,6 +381,7 @@ fn print_usage() {
            cancel <ID>            Annule une demande suivie [--reason <T>]\n  \
            requests [--all]       Mes demandes (défaut) ou toutes les ouvertes\n  \
            rename <N>             Renomme l'agent courant\n  \
+           project-runtime <OP> --project <ID> Prépare, consulte ou recrée Docker\n  \
            runtime --model <M>    Déclare le modèle courant [--effort <E>]\n  \
            domain <N> | --reset   Change le domaine de l'agent courant\n  \
            dnd [off]              Ne pas déranger [--duration 30m]\n  \
@@ -1114,6 +1156,11 @@ fn display_spawn_refusal(reason: &SpawnRefusal) -> String {
         SpawnRefusal::ProjectCwdMismatch { project_id } => {
             format!("répertoire de travail hors de la liaison du projet '{project_id}'")
         }
+        SpawnRefusal::DockerRuntimeUnavailable { project_id } => {
+            format!(
+                "lancement Docker indisponible pour le projet {project_id}; aucun repli hote n a ete execute"
+            )
+        }
         SpawnRefusal::NegotiationFailed { detail } => format!("négociation échouée: {detail}"),
         SpawnRefusal::SpawnTimeout => "délai de lancement dépassé".to_string(),
         SpawnRefusal::QuotaExceeded { limit } => format!("quota de flotte atteint ({limit})"),
@@ -1216,6 +1263,7 @@ fn resolve_cli_agent_name(file_name: Option<&str>, env_name: Option<&str>) -> St
 
 fn cmd_daemon(args: &[String]) {
     let mut project_root_policy_path = None;
+    let mut project_runtime_policy_path = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -1235,6 +1283,22 @@ fn cmd_daemon(args: &[String]) {
                 }
                 project_root_policy_path = Some(path);
             }
+            "--project-runtime-policy" => {
+                if project_runtime_policy_path.is_some() {
+                    eprintln!("bridget daemon: --project-runtime-policy dupliqué");
+                    std::process::exit(2);
+                }
+                index += 1;
+                let Some(path) = args.get(index).map(PathBuf::from) else {
+                    eprintln!("bridget daemon: --project-runtime-policy requiert un chemin absolu");
+                    std::process::exit(2);
+                };
+                if !path.is_absolute() {
+                    eprintln!("bridget daemon: --project-runtime-policy doit être absolu");
+                    std::process::exit(2);
+                }
+                project_runtime_policy_path = Some(path);
+            }
             option => {
                 eprintln!("bridget daemon: option inconnue {option}");
                 std::process::exit(2);
@@ -1244,6 +1308,7 @@ fn cmd_daemon(args: &[String]) {
     }
     let config = DaemonConfig {
         project_root_policy_path,
+        project_runtime_policy_path,
         ..DaemonConfig::default()
     };
     match daemon::run(config) {
@@ -2416,6 +2481,110 @@ fn send_runtime_to_daemon(
     line.clear();
     reader.read_line(&mut line).map_err(|e| e.to_string())?;
     decode(line.trim()).map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectRuntimeCliCommand {
+    operation: ProjectRuntimeOperation,
+    project_id: String,
+    command_id: String,
+}
+
+fn parse_project_runtime_args(args: &[String]) -> Result<ProjectRuntimeCliCommand, String> {
+    let operation = match args.first().map(String::as_str) {
+        Some("prepare") => ProjectRuntimeOperation::Prepare,
+        Some("status") => ProjectRuntimeOperation::Status,
+        Some("stop") => ProjectRuntimeOperation::Stop,
+        Some("remove") => ProjectRuntimeOperation::Remove,
+        Some("recreate") => ProjectRuntimeOperation::Recreate,
+        Some("switch-backend") => ProjectRuntimeOperation::SwitchBackend,
+        Some(other) => {
+            return Err(format!(
+                "project-runtime: opération inconnue: {other}; attendu prepare, status, stop, remove, recreate ou switch-backend"
+            ));
+        }
+        None => return Err("project-runtime: opération manquante".to_string()),
+    };
+    let mut project_id = None;
+    let mut command_id = None;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--project" => {
+                index += 1;
+                project_id = args.get(index).cloned();
+                if project_id
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    return Err("project-runtime: --project requiert un identifiant".to_string());
+                }
+            }
+            "--command-id" => {
+                index += 1;
+                command_id = args.get(index).cloned();
+                if command_id
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    return Err("project-runtime: --command-id requiert une valeur".to_string());
+                }
+            }
+            option => return Err(unknown_argument("project-runtime", option)),
+        }
+        index += 1;
+    }
+    let project_id = project_id
+        .ok_or_else(|| "project-runtime: --project <identifiant> est obligatoire".to_string())?;
+    Ok(ProjectRuntimeCliCommand {
+        operation,
+        project_id,
+        command_id: command_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+    })
+}
+
+fn cmd_project_runtime(args: &[String]) {
+    let command = parse_project_runtime_args(args).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        eprintln!(
+            "usage: bridget project-runtime <prepare|status|stop|remove|recreate|switch-backend> --project <identifiant> [--command-id <id>]"
+        );
+        std::process::exit(2);
+    });
+    let issued_at = unix_timestamp();
+    let request = ProjectRuntimeRequest {
+        contract_version: crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION,
+        command_id: command.command_id,
+        issued_at,
+        deadline_at: issued_at.saturating_add(60),
+        operation: command.operation,
+        project_id: command.project_id,
+    };
+    match send_control_to_daemon(WrapperToDaemon::ProjectRuntimeRequest { request }) {
+        Ok(DaemonToWrapper::ProjectRuntimeOutcome { outcome }) => {
+            if let Some(reason) = outcome.reason {
+                eprintln!("RUNTIME PROJET REFUSÉ: {reason:?}");
+                std::process::exit(1);
+            }
+            let state = outcome.state.unwrap_or_else(|| "inconnu".to_string());
+            let policy = outcome
+                .runtime_policy
+                .map(|policy| format!("{}@{}", policy.policy_id, policy.policy_version))
+                .unwrap_or_else(|| "sans politique".to_string());
+            println!(
+                "Projet {}: état {}, politique {}, génération {:?}",
+                outcome.project_id, state, policy, outcome.binding_generation
+            );
+        }
+        Ok(other) => {
+            eprintln!("project-runtime: réponse inattendue du daemon: {other:?}");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("project-runtime: daemon inaccessible: {error}");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn cmd_runtime(args: &[String]) {
@@ -5444,6 +5613,7 @@ mod idempotency_projection_tests {
             quarantine_window: 3600,
             retention_days: 7,
             project_root_policy_path: None,
+            project_runtime_policy_path: None,
         };
         std::thread::spawn(move || {
             let _ = daemon::run(config);
@@ -6393,6 +6563,49 @@ mod depot_tests {
                 }
                 autre => panic!("Register attendu, obtenu {autre:?}"),
             }
+        }
+    }
+    #[test]
+    fn spec_066_cli_runtime_projet_exige_operation_et_identifiant_fermes() {
+        let argv = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>()
+        };
+        let status =
+            parse_project_runtime_args(&argv(&["status", "--project", "project-066"])).unwrap();
+        assert_eq!(status.operation, ProjectRuntimeOperation::Status);
+        assert_eq!(status.project_id, "project-066");
+        assert!(!status.command_id.is_empty());
+
+        let stable = parse_project_runtime_args(&argv(&[
+            "prepare",
+            "--project",
+            "project-066",
+            "--command-id",
+            "stable",
+        ]))
+        .unwrap();
+        assert_eq!(stable.command_id, "stable");
+
+        for (operation, expected) in [
+            ("stop", ProjectRuntimeOperation::Stop),
+            ("remove", ProjectRuntimeOperation::Remove),
+            ("switch-backend", ProjectRuntimeOperation::SwitchBackend),
+        ] {
+            let parsed =
+                parse_project_runtime_args(&argv(&[operation, "--project", "project-066"]))
+                    .unwrap();
+            assert_eq!(parsed.operation, expected);
+        }
+        for invalid in [
+            argv(&[]),
+            argv(&["unknown", "--project", "project-066"]),
+            argv(&["prepare"]),
+            argv(&["prepare", "--project", "project-066", "--unexpected"]),
+        ] {
+            assert!(parse_project_runtime_args(&invalid).is_err());
         }
     }
 }

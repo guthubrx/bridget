@@ -11,7 +11,8 @@ use bridget_core::{BridgetMessage, MessageOrigin};
 use bridget_transport::journal::valid_events;
 use bridget_transport::protocol::{
     AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
-    LedgerMessage, LedgerScope, PresenceMode, decode, encode,
+    LedgerMessage, LedgerScope, PresenceMode, ProjectRuntimeOperation, ProjectRuntimeRefusal,
+    ProjectRuntimeRequest, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
 use serde::{Deserialize, Serialize};
@@ -763,6 +764,18 @@ struct UiRelayStateV1 {
     since: i64,
 }
 
+#[derive(Debug, Serialize)]
+struct UiProjectRuntimeV1 {
+    version: u8,
+    project_id: String,
+    binding_generation: u64,
+    state: String,
+    policy_id: String,
+    policy_version: u64,
+    environment_epoch: u64,
+    last_reason: Option<String>,
+}
+
 #[derive(Serialize)]
 struct UiRecoveryLossV1 {
     name: String,
@@ -911,6 +924,24 @@ fn serve_connection(
                 },
             ),
         },
+        ("GET", "/v1/projects/runtime") => {
+            let project_id = request
+                .query
+                .get("project")
+                .ok_or_else(|| UiError::Protocol("paramètre project absent".to_string()))?;
+            match read_project_runtime(&config.daemon_socket, project_id) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
         ("POST", "/v1/search") => match post_ui_search(config, &request.body) {
             Ok(response) => write_json(stream, 200, &response),
             Err((status, message)) => write_text(stream, status, message),
@@ -1118,6 +1149,130 @@ fn map_ui_stop_outcome(
             504,
             "stop_timeout",
             "Le daemon n'a pas confirmé l'arrêt dans le délai.".to_string(),
+        )),
+    }
+}
+
+fn read_project_runtime(
+    socket_path: &Path,
+    project_id: &str,
+) -> Result<UiProjectRuntimeV1, (u16, &'static str, String)> {
+    let valid_project_id = !project_id.is_empty()
+        && project_id.len() <= 128
+        && project_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+    if !valid_project_id {
+        return Err((
+            400,
+            "invalid_project",
+            "Identifiant de projet invalide.".to_string(),
+        ));
+    }
+    let issued_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    let request = ProjectRuntimeRequest {
+        contract_version: crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION,
+        command_id: format!("ui-runtime-{}", uuid::Uuid::new_v4()),
+        issued_at,
+        deadline_at: issued_at.saturating_add(10),
+        operation: ProjectRuntimeOperation::Status,
+        project_id: project_id.to_string(),
+    };
+    let stream = UnixStream::connect(socket_path).map_err(|_| {
+        (
+            503,
+            "daemon_unavailable",
+            "Le daemon Bridget est indisponible.".to_string(),
+        )
+    })?;
+    let read_stream = stream.try_clone().map_err(|_| {
+        (
+            503,
+            "daemon_unavailable",
+            "Le daemon Bridget est indisponible.".to_string(),
+        )
+    })?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::ProjectRuntimeRequest { request },
+    )
+    .map_err(|_| {
+        (
+            503,
+            "daemon_unavailable",
+            "Le daemon Bridget est indisponible.".to_string(),
+        )
+    })?;
+    match read_daemon(&mut reader).map_err(|_| {
+        (
+            503,
+            "daemon_unavailable",
+            "Le daemon Bridget est indisponible.".to_string(),
+        )
+    })? {
+        DaemonToWrapper::ProjectRuntimeOutcome { outcome } => {
+            if let Some(reason) = outcome.reason {
+                let (status, code, message) = match reason {
+                    ProjectRuntimeRefusal::ProjectNotFound => {
+                        (404, "project_not_found", "Projet introuvable.".to_string())
+                    }
+                    ProjectRuntimeRefusal::ProjectNotDocker => (
+                        409,
+                        "project_not_docker",
+                        "Ce projet utilise le backend hôte.".to_string(),
+                    ),
+                    ProjectRuntimeRefusal::PeerUidMismatch => (
+                        403,
+                        "runtime_not_authorized",
+                        "Cette interface ne peut pas administrer cet environnement.".to_string(),
+                    ),
+                    _ => (
+                        503,
+                        "runtime_unavailable",
+                        "État Docker temporairement indisponible.".to_string(),
+                    ),
+                };
+                return Err((status, code, message));
+            }
+            let policy = outcome.runtime_policy.ok_or_else(|| {
+                (
+                    503,
+                    "runtime_unavailable",
+                    "Projection Docker incomplète.".to_string(),
+                )
+            })?;
+            Ok(UiProjectRuntimeV1 {
+                version: UI_VERSION,
+                project_id: outcome.project_id,
+                binding_generation: outcome.binding_generation.ok_or_else(|| {
+                    (
+                        503,
+                        "runtime_unavailable",
+                        "Projection Docker incomplète.".to_string(),
+                    )
+                })?,
+                state: outcome.state.ok_or_else(|| {
+                    (
+                        503,
+                        "runtime_unavailable",
+                        "Projection Docker incomplète.".to_string(),
+                    )
+                })?,
+                policy_id: policy.policy_id,
+                policy_version: policy.policy_version,
+                environment_epoch: policy.environment_epoch,
+                last_reason: outcome.last_reason,
+            })
+        }
+        response => Err((
+            503,
+            "runtime_unavailable",
+            format!("Réponse runtime inattendue: {response:?}"),
         )),
     }
 }

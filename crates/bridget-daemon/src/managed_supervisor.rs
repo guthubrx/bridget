@@ -183,6 +183,7 @@ mod tests {
             quarantine_window: 3600,
             retention_days: 7,
             project_root_policy_path: None,
+            project_runtime_policy_path: None,
         }
     }
 

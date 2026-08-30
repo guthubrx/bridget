@@ -1,11 +1,13 @@
 //! Persistance SQLite — ledger, compteurs disjoncteur, historique.
 
+use crate::project_runtime::ProjectEnvironmentState;
 use bridget_transport::greffe_authorization::GreffeAuthorizationAttestation;
 use bridget_transport::protocol::{
     CoordinationEventKind, GuichetLifecycleState, GuichetOutcome,
     PROJECT_REGISTRY_CONTRACT_VERSION, ProjectAdminOperation, ProjectAdminOutcome, ProjectBackend,
     ProjectBindOutcome, ProjectBindStatus, ProjectBindingProjection, ProjectBindingStatus,
-    ProjectRegistryRefusal, ServiceRequestOperation, ServiceRequestPayload,
+    ProjectRegistryRefusal, ProjectRuntimePolicyReference, ServiceRequestOperation,
+    ServiceRequestPayload,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
@@ -273,6 +275,7 @@ pub struct ProjectBinding {
     pub bound_at: i64,
     pub updated_at: i64,
     pub last_reason: Option<ProjectRegistryRefusal>,
+    pub runtime: Option<ProjectRuntimeBinding>,
 }
 
 impl ProjectBinding {
@@ -291,6 +294,28 @@ impl ProjectBinding {
             bound_at: observed_at,
             updated_at: observed_at,
             last_reason: None,
+            runtime: None,
+        };
+        binding.validate()?;
+        Ok(binding)
+    }
+
+    pub fn docker(
+        project_id: String,
+        canonical_root: String,
+        runtime: ProjectRuntimeBinding,
+        observed_at: i64,
+    ) -> Result<Self, StoreError> {
+        let binding = Self {
+            project_id,
+            canonical_root,
+            backend: ProjectBackend::Docker,
+            state: ProjectBindingState::Active,
+            generation: 1,
+            bound_at: observed_at,
+            updated_at: observed_at,
+            last_reason: None,
+            runtime: Some(runtime),
         };
         binding.validate()?;
         Ok(binding)
@@ -305,6 +330,55 @@ impl ProjectBinding {
             || self.updated_at < self.bound_at
         {
             return Err(StoreError::Invariant("liaison projet invalide"));
+        }
+        match (self.backend, self.runtime.as_ref()) {
+            (ProjectBackend::Host, None) => {}
+            (ProjectBackend::Docker, Some(runtime)) => runtime.validate()?,
+            _ => {
+                return Err(StoreError::Invariant(
+                    "backend et runtime projet incohérents",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRuntimeBinding {
+    pub state: ProjectEnvironmentState,
+    pub policy_id: String,
+    pub policy_version: u64,
+    pub policy_digest: String,
+    pub image_reference: String,
+    pub resolved_image_id: Option<String>,
+    pub run_as_uid: u32,
+    pub run_as_gid: u32,
+    pub environment_epoch: u64,
+    pub container_id: Option<String>,
+    pub last_reason: Option<String>,
+}
+
+impl ProjectRuntimeBinding {
+    pub fn policy_reference(&self) -> ProjectRuntimePolicyReference {
+        ProjectRuntimePolicyReference {
+            policy_id: self.policy_id.clone(),
+            policy_version: self.policy_version,
+            policy_digest: self.policy_digest.clone(),
+            environment_epoch: self.environment_epoch,
+        }
+    }
+
+    fn validate(&self) -> Result<(), StoreError> {
+        if self.policy_id.trim().is_empty()
+            || self.policy_version == 0
+            || !self.policy_digest.starts_with("sha256:")
+            || self.image_reference.trim().is_empty()
+            || self.run_as_uid == 0
+            || self.run_as_gid == 0
+            || self.environment_epoch == 0
+        {
+            return Err(StoreError::Invariant("runtime projet docker invalide"));
         }
         Ok(())
     }
@@ -552,14 +626,25 @@ impl Store {
              CREATE TABLE IF NOT EXISTS project_bindings (
                  project_id TEXT PRIMARY KEY,
                  canonical_root TEXT NOT NULL,
-                 backend TEXT NOT NULL CHECK (backend = 'host'),
+                 backend TEXT NOT NULL CHECK (backend IN ('host', 'docker')),
                  state TEXT NOT NULL CHECK (state IN (
                      'pending_binding', 'active', 'disabled', 'path_missing', 'binding_failed'
                  )),
                  generation INTEGER NOT NULL CHECK (generation > 0),
                  bound_at INTEGER NOT NULL,
                  updated_at INTEGER NOT NULL,
-                 last_reason TEXT
+                 last_reason TEXT,
+                 runtime_state TEXT,
+                 runtime_last_reason TEXT,
+                 policy_id TEXT,
+                 policy_version INTEGER,
+                 policy_digest TEXT,
+                 image_reference TEXT,
+                 resolved_image_id TEXT,
+                 run_as_uid INTEGER,
+                 run_as_gid INTEGER,
+                 environment_epoch INTEGER NOT NULL DEFAULT 0,
+                 container_id TEXT
              );
              CREATE UNIQUE INDEX IF NOT EXISTS idx_project_bindings_live_root
                  ON project_bindings(canonical_root) WHERE state != 'disabled';
@@ -595,26 +680,57 @@ impl Store {
              );",
         )
         .map_err(StoreError::Sqlite)?;
+        ensure_project_bindings_runtime_schema(conn)?;
         Ok(())
     }
 
     /// Insère une liaison déjà validée par la frontière daemon.
     pub fn insert_project_binding(&mut self, binding: &ProjectBinding) -> Result<(), StoreError> {
         binding.validate()?;
+        let runtime = binding.runtime.as_ref();
+        let policy_version = runtime
+            .map(|runtime| i64::try_from(runtime.policy_version))
+            .transpose()
+            .map_err(|_| StoreError::Invariant("version policy runtime invalide"))?;
+        let environment_epoch = runtime
+            .map(|runtime| i64::try_from(runtime.environment_epoch))
+            .transpose()
+            .map_err(|_| StoreError::Invariant("epoch runtime invalide"))?
+            .unwrap_or(0);
         self.conn
             .execute(
                 "INSERT INTO project_bindings (
                      project_id, canonical_root, backend, state, generation,
-                     bound_at, updated_at, last_reason
-                 ) VALUES (?1, ?2, 'host', ?3, ?4, ?5, ?6, ?7)",
+                     bound_at, updated_at, last_reason, runtime_state, runtime_last_reason, policy_id,
+                     policy_version, policy_digest, image_reference, resolved_image_id,
+                     run_as_uid, run_as_gid, environment_epoch, container_id
+                 ) VALUES (
+                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                     ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
+                 )",
                 params![
-                    binding.project_id,
-                    binding.canonical_root,
+                    &binding.project_id,
+                    &binding.canonical_root,
+                    match binding.backend {
+                        ProjectBackend::Host => "host",
+                        ProjectBackend::Docker => "docker",
+                    },
                     binding.state.as_db(),
                     binding.generation as i64,
                     binding.bound_at,
                     binding.updated_at,
                     binding.last_reason.map(project_registry_refusal_name),
+                    runtime.map(|runtime| project_environment_state_name(runtime.state)),
+                    runtime.and_then(|runtime| runtime.last_reason.as_deref()),
+                    runtime.map(|runtime| runtime.policy_id.as_str()),
+                    policy_version,
+                    runtime.map(|runtime| runtime.policy_digest.as_str()),
+                    runtime.map(|runtime| runtime.image_reference.as_str()),
+                    runtime.and_then(|runtime| runtime.resolved_image_id.as_deref()),
+                    runtime.map(|runtime| i64::from(runtime.run_as_uid)),
+                    runtime.map(|runtime| i64::from(runtime.run_as_gid)),
+                    environment_epoch,
+                    runtime.and_then(|runtime| runtime.container_id.as_deref()),
                 ],
             )
             .map_err(StoreError::Sqlite)?;
@@ -644,13 +760,17 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(StoreError::Sqlite)?;
         if let Some(existing) = project_binding_attempt_for_command(&tx, command_id)? {
-            if existing.project_id != project_id || existing.canonical_root != canonical_root {
+            let outcome: ProjectBindOutcome = serde_json::from_slice(&existing.outcome_json)
+                .map_err(|_| StoreError::Invariant("issue liaison projet corrompue"))?;
+            if existing.project_id != project_id
+                || existing.canonical_root != canonical_root
+                || outcome.backend != Some(ProjectBackend::Host)
+                || outcome.runtime_policy.is_some()
+            {
                 return Err(StoreError::ProjectRegistryRefusal(
                     ProjectRegistryRefusal::EnvelopeMismatch,
                 ));
             }
-            let outcome = serde_json::from_slice(&existing.outcome_json)
-                .map_err(|_| StoreError::Invariant("issue liaison projet corrompue"))?;
             tx.commit().map_err(StoreError::Sqlite)?;
             return Ok(outcome);
         }
@@ -685,6 +805,7 @@ impl Store {
                 status: ProjectBindStatus::RegistrationConflict,
                 binding_generation: None,
                 backend: None,
+                runtime_policy: None,
                 reason: Some(ProjectRegistryRefusal::RootAlreadyBound),
                 existing_project_id: Some(existing.project_id),
                 existing_binding_generation: Some(existing.generation),
@@ -736,6 +857,274 @@ impl Store {
         Ok(outcome)
     }
 
+    pub fn bind_project_docker_registration(
+        &mut self,
+        command_id: &str,
+        project_id: &str,
+        canonical_root: &str,
+        runtime: ProjectRuntimeBinding,
+        observed_at: i64,
+    ) -> Result<ProjectBindOutcome, StoreError> {
+        if command_id.trim().is_empty()
+            || project_id.trim().is_empty()
+            || canonical_root.trim().is_empty()
+            || !Path::new(canonical_root).is_absolute()
+            || observed_at < 0
+        {
+            return Err(StoreError::Invariant("demande Docker projet invalide"));
+        }
+        runtime.validate()?;
+        let expected_runtime = runtime.policy_reference();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sqlite)?;
+        if let Some(existing) = project_binding_attempt_for_command(&tx, command_id)? {
+            let outcome: ProjectBindOutcome = serde_json::from_slice(&existing.outcome_json)
+                .map_err(|_| StoreError::Invariant("issue liaison projet corrompue"))?;
+            if existing.project_id != project_id
+                || existing.canonical_root != canonical_root
+                || outcome.backend != Some(ProjectBackend::Docker)
+                || outcome.runtime_policy.as_ref() != Some(&expected_runtime)
+            {
+                return Err(StoreError::ProjectRegistryRefusal(
+                    ProjectRegistryRefusal::EnvelopeMismatch,
+                ));
+            }
+            tx.commit().map_err(StoreError::Sqlite)?;
+            return Ok(outcome);
+        }
+
+        let outcome = if let Some(existing) = project_binding_for_project(&tx, project_id)? {
+            if existing.backend == ProjectBackend::Docker
+                && existing.state == ProjectBindingState::Active
+                && existing.canonical_root == canonical_root
+                && existing.runtime.as_ref() == Some(&runtime)
+            {
+                project_binding_active_outcome_for_binding(command_id, &existing, observed_at)
+            } else {
+                project_binding_failed_outcome(
+                    command_id,
+                    project_id,
+                    if existing.state == ProjectBindingState::Disabled {
+                        ProjectRegistryRefusal::ProjectDisabled
+                    } else {
+                        ProjectRegistryRefusal::RebindRequired
+                    },
+                    observed_at,
+                )
+            }
+        } else if let Some(existing) = project_binding_for_root(&tx, canonical_root)? {
+            ProjectBindOutcome {
+                contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+                command_id: command_id.to_string(),
+                project_id: project_id.to_string(),
+                status: ProjectBindStatus::RegistrationConflict,
+                binding_generation: None,
+                backend: None,
+                runtime_policy: None,
+                reason: Some(ProjectRegistryRefusal::RootAlreadyBound),
+                existing_project_id: Some(existing.project_id),
+                existing_binding_generation: Some(existing.generation),
+                observed_at,
+            }
+        } else {
+            let binding = ProjectBinding::docker(
+                project_id.to_string(),
+                canonical_root.to_string(),
+                runtime,
+                observed_at,
+            )?;
+            let runtime = binding
+                .runtime
+                .as_ref()
+                .ok_or(StoreError::Invariant("runtime Docker absent"))?;
+            tx.execute(
+                "INSERT INTO project_bindings (
+                     project_id, canonical_root, backend, state, generation,
+                     bound_at, updated_at, last_reason, runtime_state, runtime_last_reason, policy_id,
+                     policy_version, policy_digest, image_reference, resolved_image_id,
+                     run_as_uid, run_as_gid, environment_epoch, container_id
+                 ) VALUES (
+                     ?1, ?2, 'docker', ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+                     ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
+                 )",
+                params![
+                    &binding.project_id,
+                    &binding.canonical_root,
+                    binding.state.as_db(),
+                    binding.generation as i64,
+                    binding.bound_at,
+                    binding.updated_at,
+                    binding.last_reason.map(project_registry_refusal_name),
+                    project_environment_state_name(runtime.state),
+                    runtime.last_reason.as_deref(),
+                    &runtime.policy_id,
+                    i64::try_from(runtime.policy_version)
+                        .map_err(|_| StoreError::Invariant("version policy runtime invalide"))?,
+                    &runtime.policy_digest,
+                    &runtime.image_reference,
+                    runtime.resolved_image_id.as_deref(),
+                    i64::from(runtime.run_as_uid),
+                    i64::from(runtime.run_as_gid),
+                    i64::try_from(runtime.environment_epoch)
+                        .map_err(|_| StoreError::Invariant("epoch runtime invalide"))?,
+                    runtime.container_id.as_deref(),
+                ],
+            )
+            .map_err(StoreError::Sqlite)?;
+            let audit = ProjectAuditEvent::for_mutation(
+                command_id,
+                project_id,
+                ProjectAuditOperation::Register,
+                binding.generation,
+                ProjectAuditOutcome::Applied,
+                None,
+                observed_at,
+            );
+            record_project_audit_event_in_transaction(&tx, &audit)?;
+            project_binding_active_outcome_for_binding(command_id, &binding, observed_at)
+        };
+        let outcome_json = serde_json::to_vec(&outcome)
+            .map_err(|_| StoreError::Invariant("issue liaison Docker non sérialisable"))?;
+        tx.execute(
+            "INSERT INTO project_binding_attempts (
+                 command_id, project_id, canonical_root, outcome_json, observed_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                command_id,
+                project_id,
+                canonical_root,
+                outcome_json,
+                observed_at
+            ],
+        )
+        .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+        Ok(outcome)
+    }
+    pub fn update_project_runtime(
+        &mut self,
+        project_id: &str,
+        runtime: &ProjectRuntimeBinding,
+        observed_at: i64,
+    ) -> Result<ProjectBinding, StoreError> {
+        runtime.validate()?;
+        let transaction = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sqlite)?;
+        let existing = project_binding_for_project(&transaction, project_id)?
+            .ok_or(StoreError::Invariant("liaison projet absente"))?;
+        if existing.backend != ProjectBackend::Docker {
+            return Err(StoreError::Invariant("runtime Docker sur liaison host"));
+        }
+        let previous = existing
+            .runtime
+            .as_ref()
+            .ok_or(StoreError::Invariant("runtime Docker absent"))?;
+        if runtime.environment_epoch < previous.environment_epoch
+            || observed_at < existing.updated_at
+        {
+            return Err(StoreError::Invariant("mise a jour runtime obsolete"));
+        }
+        let policy_version = i64::try_from(runtime.policy_version)
+            .map_err(|_| StoreError::Invariant("version policy runtime invalide"))?;
+        let environment_epoch = i64::try_from(runtime.environment_epoch)
+            .map_err(|_| StoreError::Invariant("epoch runtime invalide"))?;
+        transaction
+            .execute(
+                "UPDATE project_bindings
+                 SET runtime_state = ?1, runtime_last_reason = ?2, policy_id = ?3, policy_version = ?4,
+                     policy_digest = ?5, image_reference = ?6, resolved_image_id = ?7,
+                     run_as_uid = ?8, run_as_gid = ?9, environment_epoch = ?10,
+                     container_id = ?11, updated_at = ?12
+                 WHERE project_id = ?13",
+                params![
+                    project_environment_state_name(runtime.state),
+                    runtime.last_reason.as_deref(),
+                    &runtime.policy_id,
+                    policy_version,
+                    &runtime.policy_digest,
+                    &runtime.image_reference,
+                    runtime.resolved_image_id.as_deref(),
+                    i64::from(runtime.run_as_uid),
+                    i64::from(runtime.run_as_gid),
+                    environment_epoch,
+                    runtime.container_id.as_deref(),
+                    observed_at,
+                    project_id,
+                ],
+            )
+            .map_err(StoreError::Sqlite)?;
+        let updated = project_binding_for_project(&transaction, project_id)?
+            .ok_or(StoreError::Invariant("liaison projet disparue"))?;
+        transaction.commit().map_err(StoreError::Sqlite)?;
+        Ok(updated)
+    }
+
+    /// Conserve une cause runtime déjà classée par le daemon, sans détail
+    /// Docker brut, et la rend disponible à la projection UI.
+    pub fn record_project_runtime_failure(
+        &mut self,
+        project_id: &str,
+        reason: &'static str,
+        observed_at: i64,
+    ) -> Result<ProjectBinding, StoreError> {
+        let binding = self
+            .project_binding(project_id)?
+            .ok_or(StoreError::Invariant("liaison projet absente"))?;
+        let mut runtime = binding
+            .runtime
+            .ok_or(StoreError::Invariant("runtime Docker absent"))?;
+        runtime.last_reason = Some(reason.to_string());
+        self.update_project_runtime(project_id, &runtime, observed_at)
+    }
+
+    /// Bascule explicitement une liaison Docker vers le backend hôte après que
+    /// le lifecycle a supprimé le conteneur. La génération change afin que toute
+    /// réservation Docker antérieure soit définitivement périmée.
+    pub fn switch_project_backend_to_host(
+        &mut self,
+        project_id: &str,
+        observed_at: i64,
+    ) -> Result<ProjectBinding, StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sqlite)?;
+        let binding = project_binding_for_project(&tx, project_id)?
+            .ok_or(StoreError::Invariant("liaison projet absente"))?;
+        if observed_at < binding.updated_at {
+            return Err(StoreError::Invariant("bascule backend obsolète"));
+        }
+        if binding.backend == ProjectBackend::Host {
+            tx.commit().map_err(StoreError::Sqlite)?;
+            return Ok(binding);
+        }
+        if binding.state != ProjectBindingState::Active {
+            return Err(StoreError::Invariant("liaison Docker non active"));
+        }
+        let generation = binding
+            .generation
+            .checked_add(1)
+            .ok_or(StoreError::Invariant("génération liaison épuisée"))?;
+        tx.execute(
+            "UPDATE project_bindings
+             SET backend = 'host', state = 'active', generation = ?1, bound_at = ?2,
+                 updated_at = ?2, last_reason = NULL, runtime_state = NULL,
+                 policy_id = NULL, policy_version = NULL, policy_digest = NULL,
+                 image_reference = NULL, resolved_image_id = NULL, run_as_uid = NULL,
+                 run_as_gid = NULL, environment_epoch = 0, container_id = NULL
+             WHERE project_id = ?3",
+            params![generation as i64, observed_at, project_id],
+        )
+        .map_err(StoreError::Sqlite)?;
+        let switched = project_binding_for_project(&tx, project_id)?
+            .ok_or(StoreError::Invariant("liaison projet disparue"))?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+        Ok(switched)
+    }
     pub fn project_binding(&self, project_id: &str) -> Result<Option<ProjectBinding>, StoreError> {
         project_binding_for_project(&self.conn, project_id)
     }
@@ -827,12 +1216,36 @@ impl Store {
                 .generation
                 .checked_add(1)
                 .ok_or(StoreError::Invariant("génération liaison épuisée"))?;
+            let rebind_runtime_epoch = binding
+                .runtime
+                .as_ref()
+                .map(|runtime| {
+                    runtime
+                        .environment_epoch
+                        .checked_add(1)
+                        .ok_or(StoreError::Invariant("epoch runtime épuisé"))
+                })
+                .transpose()?
+                .map(|epoch| {
+                    i64::try_from(epoch)
+                        .map_err(|_| StoreError::Invariant("epoch runtime invalide"))
+                })
+                .transpose()?;
             tx.execute(
                 "UPDATE project_bindings
                  SET canonical_root = ?1, state = 'active', generation = ?2,
-                     bound_at = ?3, updated_at = ?3, last_reason = NULL
-                 WHERE project_id = ?4",
-                params![canonical_root, generation as i64, observed_at, project_id],
+                     bound_at = ?3, updated_at = ?3, last_reason = NULL,
+                     runtime_state = COALESCE(?4, runtime_state),
+                     environment_epoch = COALESCE(?5, environment_epoch)
+                 WHERE project_id = ?6",
+                params![
+                    canonical_root,
+                    generation as i64,
+                    observed_at,
+                    rebind_runtime_epoch.as_ref().map(|_| "recreate_required"),
+                    rebind_runtime_epoch,
+                    project_id,
+                ],
             )
             .map_err(StoreError::Sqlite)?;
         }
@@ -852,7 +1265,9 @@ impl Store {
             .conn
             .prepare(
                 "SELECT project_id, canonical_root, backend, state, generation,
-                        bound_at, updated_at, last_reason
+                        bound_at, updated_at, last_reason, runtime_state, runtime_last_reason, policy_id,
+                        policy_version, policy_digest, image_reference, resolved_image_id,
+                        run_as_uid, run_as_gid, environment_epoch, container_id
                  FROM project_bindings ORDER BY project_id ASC",
             )
             .map_err(StoreError::Sqlite)?;
@@ -971,12 +1386,36 @@ impl Store {
                             .generation
                             .checked_add(1)
                             .ok_or(StoreError::Invariant("génération liaison épuisée"))?;
+                        let rebind_runtime_epoch = binding
+                            .runtime
+                            .as_ref()
+                            .map(|runtime| {
+                                runtime
+                                    .environment_epoch
+                                    .checked_add(1)
+                                    .ok_or(StoreError::Invariant("epoch runtime épuisé"))
+                            })
+                            .transpose()?
+                            .map(|epoch| {
+                                i64::try_from(epoch)
+                                    .map_err(|_| StoreError::Invariant("epoch runtime invalide"))
+                            })
+                            .transpose()?;
                         tx.execute(
                             "UPDATE project_bindings
                              SET canonical_root = ?1, state = 'active', generation = ?2,
-                                 bound_at = ?3, updated_at = ?3, last_reason = NULL
-                             WHERE project_id = ?4",
-                            params![canonical_root, generation as i64, observed_at, project_id],
+                                 bound_at = ?3, updated_at = ?3, last_reason = NULL,
+                                 runtime_state = COALESCE(?4, runtime_state),
+                                 environment_epoch = COALESCE(?5, environment_epoch)
+                             WHERE project_id = ?6",
+                            params![
+                                canonical_root,
+                                generation as i64,
+                                observed_at,
+                                rebind_runtime_epoch.as_ref().map(|_| "recreate_required"),
+                                rebind_runtime_epoch,
+                                project_id,
+                            ],
                         )
                         .map_err(StoreError::Sqlite)?;
                         let rebound = project_binding_for_project(&tx, project_id)?
@@ -2163,6 +2602,71 @@ impl Store {
     }
 }
 
+fn ensure_project_bindings_runtime_schema(conn: &Connection) -> Result<(), StoreError> {
+    let mut statement = conn
+        .prepare("PRAGMA table_info(project_bindings)")
+        .map_err(StoreError::Sqlite)?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(StoreError::Sqlite)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::Sqlite)?;
+    if !columns.iter().any(|column| column == "environment_epoch") {
+        conn.execute_batch(
+        "BEGIN IMMEDIATE;
+         DROP INDEX IF EXISTS idx_project_bindings_live_root;
+         ALTER TABLE project_bindings RENAME TO project_bindings_065;
+         CREATE TABLE project_bindings (
+             project_id TEXT PRIMARY KEY,
+             canonical_root TEXT NOT NULL,
+             backend TEXT NOT NULL CHECK (backend IN (\x27host\x27, \x27docker\x27)),
+             state TEXT NOT NULL CHECK (state IN (
+                 \x27pending_binding\x27, \x27active\x27, \x27disabled\x27, \x27path_missing\x27, \x27binding_failed\x27
+             )),
+             generation INTEGER NOT NULL CHECK (generation > 0),
+             bound_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             last_reason TEXT,
+             runtime_state TEXT,
+             runtime_last_reason TEXT,
+             policy_id TEXT,
+             policy_version INTEGER,
+             policy_digest TEXT,
+             image_reference TEXT,
+             resolved_image_id TEXT,
+             run_as_uid INTEGER,
+             run_as_gid INTEGER,
+             environment_epoch INTEGER NOT NULL DEFAULT 0,
+             container_id TEXT
+         );
+         INSERT INTO project_bindings (
+             project_id, canonical_root, backend, state, generation, bound_at,
+             updated_at, last_reason, runtime_state, runtime_last_reason, policy_id, policy_version,
+             policy_digest, image_reference, resolved_image_id, run_as_uid,
+             run_as_gid, environment_epoch, container_id
+         )
+         SELECT project_id, canonical_root, \x27host\x27, state, generation, bound_at,
+                updated_at, last_reason, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                NULL, NULL, 0, NULL
+         FROM project_bindings_065;
+         DROP TABLE project_bindings_065;
+         CREATE UNIQUE INDEX idx_project_bindings_live_root
+             ON project_bindings(canonical_root) WHERE state != \x27disabled\x27;
+         COMMIT;",
+    )
+    .map_err(StoreError::Sqlite)?;
+        return Ok(());
+    }
+    if !columns.iter().any(|column| column == "runtime_last_reason") {
+        conn.execute(
+            "ALTER TABLE project_bindings ADD COLUMN runtime_last_reason TEXT",
+            [],
+        )
+        .map_err(StoreError::Sqlite)?;
+    }
+    Ok(())
+}
+
 fn guichet_authorization_column_exists(conn: &Connection) -> Result<bool, StoreError> {
     let mut statement = conn
         .prepare("PRAGMA table_info(guichet_requests)")
@@ -2517,6 +3021,17 @@ struct StoredProjectBinding {
     bound_at: i64,
     updated_at: i64,
     last_reason: Option<String>,
+    runtime_state: Option<String>,
+    runtime_last_reason: Option<String>,
+    policy_id: Option<String>,
+    policy_version: Option<i64>,
+    policy_digest: Option<String>,
+    image_reference: Option<String>,
+    resolved_image_id: Option<String>,
+    run_as_uid: Option<i64>,
+    run_as_gid: Option<i64>,
+    environment_epoch: i64,
+    container_id: Option<String>,
 }
 
 fn project_binding_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredProjectBinding> {
@@ -2529,12 +3044,114 @@ fn project_binding_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredP
         bound_at: row.get(5)?,
         updated_at: row.get(6)?,
         last_reason: row.get(7)?,
+        runtime_state: row.get(8)?,
+        runtime_last_reason: row.get(9)?,
+        policy_id: row.get(10)?,
+        policy_version: row.get(11)?,
+        policy_digest: row.get(12)?,
+        image_reference: row.get(13)?,
+        resolved_image_id: row.get(14)?,
+        run_as_uid: row.get(15)?,
+        run_as_gid: row.get(16)?,
+        environment_epoch: row.get(17)?,
+        container_id: row.get(18)?,
     })
 }
 
+fn project_environment_state_name(state: ProjectEnvironmentState) -> &'static str {
+    match state {
+        ProjectEnvironmentState::Absent => "absent",
+        ProjectEnvironmentState::Creating => "creating",
+        ProjectEnvironmentState::Ready => "ready",
+        ProjectEnvironmentState::Running => "running",
+        ProjectEnvironmentState::Stopping => "stopping",
+        ProjectEnvironmentState::Stopped => "stopped",
+        ProjectEnvironmentState::Degraded => "degraded",
+        ProjectEnvironmentState::RecreateRequired => "recreate_required",
+    }
+}
+
+fn project_environment_state_from_name(value: &str) -> Result<ProjectEnvironmentState, StoreError> {
+    match value {
+        "absent" => Ok(ProjectEnvironmentState::Absent),
+        "creating" => Ok(ProjectEnvironmentState::Creating),
+        "ready" => Ok(ProjectEnvironmentState::Ready),
+        "running" => Ok(ProjectEnvironmentState::Running),
+        "stopping" => Ok(ProjectEnvironmentState::Stopping),
+        "stopped" => Ok(ProjectEnvironmentState::Stopped),
+        "degraded" => Ok(ProjectEnvironmentState::Degraded),
+        "recreate_required" => Ok(ProjectEnvironmentState::RecreateRequired),
+        _ => Err(StoreError::Invariant("etat runtime projet inconnu")),
+    }
+}
+
 fn decode_project_binding(row: StoredProjectBinding) -> Result<ProjectBinding, StoreError> {
-    let backend = match row.backend.as_str() {
-        "host" => ProjectBackend::Host,
+    let (backend, runtime) = match row.backend.as_str() {
+        "host" => {
+            if row.runtime_state.is_some()
+                || row.runtime_last_reason.is_some()
+                || row.policy_id.is_some()
+                || row.policy_version.is_some()
+                || row.policy_digest.is_some()
+                || row.image_reference.is_some()
+                || row.resolved_image_id.is_some()
+                || row.run_as_uid.is_some()
+                || row.run_as_gid.is_some()
+                || row.environment_epoch != 0
+                || row.container_id.is_some()
+            {
+                return Err(StoreError::Invariant("runtime docker sur backend host"));
+            }
+            (ProjectBackend::Host, None)
+        }
+        "docker" => {
+            let runtime_state = row
+                .runtime_state
+                .as_deref()
+                .ok_or(StoreError::Invariant("etat runtime docker absent"))?;
+            let policy_id = row
+                .policy_id
+                .ok_or(StoreError::Invariant("policy runtime absente"))?;
+            let policy_version = u64::try_from(
+                row.policy_version
+                    .ok_or(StoreError::Invariant("version policy runtime absente"))?,
+            )
+            .map_err(|_| StoreError::Invariant("version policy runtime invalide"))?;
+            let policy_digest = row
+                .policy_digest
+                .ok_or(StoreError::Invariant("digest policy runtime absent"))?;
+            let image_reference = row
+                .image_reference
+                .ok_or(StoreError::Invariant("image runtime absente"))?;
+            let run_as_uid = u32::try_from(
+                row.run_as_uid
+                    .ok_or(StoreError::Invariant("uid runtime absent"))?,
+            )
+            .map_err(|_| StoreError::Invariant("uid runtime invalide"))?;
+            let run_as_gid = u32::try_from(
+                row.run_as_gid
+                    .ok_or(StoreError::Invariant("gid runtime absent"))?,
+            )
+            .map_err(|_| StoreError::Invariant("gid runtime invalide"))?;
+            let environment_epoch = u64::try_from(row.environment_epoch)
+                .map_err(|_| StoreError::Invariant("epoch runtime invalide"))?;
+            (
+                ProjectBackend::Docker,
+                Some(ProjectRuntimeBinding {
+                    state: project_environment_state_from_name(runtime_state)?,
+                    policy_id,
+                    policy_version,
+                    policy_digest,
+                    image_reference,
+                    resolved_image_id: row.resolved_image_id,
+                    run_as_uid,
+                    run_as_gid,
+                    environment_epoch,
+                    container_id: row.container_id,
+                    last_reason: row.runtime_last_reason,
+                }),
+            )
+        }
         _ => return Err(StoreError::Invariant("backend projet inconnu")),
     };
     let generation = u64::try_from(row.generation)
@@ -2553,6 +3170,7 @@ fn decode_project_binding(row: StoredProjectBinding) -> Result<ProjectBinding, S
         bound_at: row.bound_at,
         updated_at: row.updated_at,
         last_reason,
+        runtime,
     };
     binding.validate()?;
     Ok(binding)
@@ -2565,7 +3183,9 @@ fn project_binding_for_project(
     let stored = conn
         .query_row(
             "SELECT project_id, canonical_root, backend, state, generation,
-                    bound_at, updated_at, last_reason
+                    bound_at, updated_at, last_reason, runtime_state, runtime_last_reason, policy_id,
+                    policy_version, policy_digest, image_reference, resolved_image_id,
+                    run_as_uid, run_as_gid, environment_epoch, container_id
              FROM project_bindings WHERE project_id = ?1",
             [project_id],
             project_binding_from_row,
@@ -2582,7 +3202,9 @@ fn project_binding_for_root(
     let stored = conn
         .query_row(
             "SELECT project_id, canonical_root, backend, state, generation,
-                    bound_at, updated_at, last_reason
+                    bound_at, updated_at, last_reason, runtime_state, runtime_last_reason, policy_id,
+                    policy_version, policy_digest, image_reference, resolved_image_id,
+                    run_as_uid, run_as_gid, environment_epoch, container_id
              FROM project_bindings
              WHERE canonical_root = ?1 AND state != 'disabled'",
             [canonical_root],
@@ -2655,6 +3277,10 @@ fn project_binding_projection(
         state,
         binding_generation: Some(binding.generation),
         backend: Some(binding.backend),
+        runtime_policy: binding
+            .runtime
+            .as_ref()
+            .map(ProjectRuntimeBinding::policy_reference),
         reason: binding.last_reason,
         observed_at,
     }
@@ -2712,6 +3338,29 @@ fn project_binding_attempt_for_command(
     .map_err(StoreError::Sqlite)
 }
 
+fn project_binding_active_outcome_for_binding(
+    command_id: &str,
+    binding: &ProjectBinding,
+    observed_at: i64,
+) -> ProjectBindOutcome {
+    ProjectBindOutcome {
+        contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+        command_id: command_id.to_string(),
+        project_id: binding.project_id.clone(),
+        status: ProjectBindStatus::Active,
+        binding_generation: Some(binding.generation),
+        backend: Some(binding.backend),
+        runtime_policy: binding
+            .runtime
+            .as_ref()
+            .map(ProjectRuntimeBinding::policy_reference),
+        reason: None,
+        existing_project_id: None,
+        existing_binding_generation: None,
+        observed_at,
+    }
+}
+
 fn project_binding_active_outcome(
     command_id: &str,
     project_id: &str,
@@ -2725,6 +3374,7 @@ fn project_binding_active_outcome(
         status: ProjectBindStatus::Active,
         binding_generation: Some(generation),
         backend: Some(ProjectBackend::Host),
+        runtime_policy: None,
         reason: None,
         existing_project_id: None,
         existing_binding_generation: None,
@@ -2745,6 +3395,7 @@ fn project_binding_failed_outcome(
         status: ProjectBindStatus::BindingFailed,
         binding_generation: None,
         backend: None,
+        runtime_policy: None,
         reason: Some(reason),
         existing_project_id: None,
         existing_binding_generation: None,
@@ -4061,6 +4712,93 @@ mod tests {
     }
 
     #[test]
+    fn spec_066_store_migre_hote_et_persiste_runtime_docker() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-project-runtime-store-{}.db",
+            Uuid::new_v4()
+        ));
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE project_bindings (
+                         project_id TEXT PRIMARY KEY,
+                         canonical_root TEXT NOT NULL,
+                         backend TEXT NOT NULL CHECK (backend = 'host'),
+                         state TEXT NOT NULL,
+                         generation INTEGER NOT NULL,
+                         bound_at INTEGER NOT NULL,
+                         updated_at INTEGER NOT NULL,
+                         last_reason TEXT
+                     );
+                     INSERT INTO project_bindings VALUES (
+                         'project-host', '/srv/projects/host', 'host', 'active', 1, 10, 10, NULL
+                     );",
+                )
+                .unwrap();
+        }
+
+        let mut store = Store::open(&path).unwrap();
+        let host = store.project_binding("project-host").unwrap().unwrap();
+        assert_eq!(host.backend, ProjectBackend::Host);
+        assert_eq!(host.runtime, None);
+
+        let runtime = ProjectRuntimeBinding {
+            state: ProjectEnvironmentState::Ready,
+            policy_id: "fixture".to_string(),
+            policy_version: 7,
+            policy_digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+            image_reference: "example.invalid/runtime:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+            resolved_image_id: Some("sha256:abcdef".to_string()),
+            run_as_uid: 1002,
+            run_as_gid: 1002,
+            environment_epoch: 3,
+            container_id: Some("container-opaque".to_string()),
+            last_reason: None,
+        };
+        let docker = ProjectBinding::docker(
+            "project-docker".to_string(),
+            "/srv/projects/docker".to_string(),
+            runtime.clone(),
+            11,
+        )
+        .unwrap();
+        store.insert_project_binding(&docker).unwrap();
+
+        let loaded = store.project_binding("project-docker").unwrap().unwrap();
+        assert_eq!(loaded, docker);
+        let projection = store
+            .project_binding_projection_for_project("project-docker", 12)
+            .unwrap()
+            .unwrap();
+        assert_eq!(projection.backend, Some(ProjectBackend::Docker));
+        assert_eq!(projection.runtime_policy, Some(runtime.policy_reference()));
+
+        let mut changed = runtime.clone();
+        changed.state = ProjectEnvironmentState::RecreateRequired;
+        changed.environment_epoch = 4;
+        changed.container_id = None;
+        let updated = store
+            .update_project_runtime("project-docker", &changed, 13)
+            .unwrap();
+        assert_eq!(updated.runtime, Some(changed));
+        let reasoned = store
+            .record_project_runtime_failure("project-docker", "runtime_exec_lost", 14)
+            .unwrap();
+        assert_eq!(
+            reasoned.runtime.and_then(|runtime| runtime.last_reason),
+            Some("runtime_exec_lost".to_string())
+        );
+        assert!(matches!(
+            store.update_project_runtime("project-host", &runtime, 14),
+            Err(StoreError::Invariant(_))
+        ));
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn spec_065_liaison_projet_path_missing_rebind_et_audit_deterministe() {
         let path =
             std::env::temp_dir().join(format!("bridget-project-binding-{}.db", Uuid::new_v4()));
@@ -4112,6 +4850,119 @@ mod tests {
                 .contains("/srv/projects/one")
         );
 
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+    #[test]
+    fn spec_066_liaison_docker_est_atomique_et_rejoue_exactement_la_meme_issue() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-project-runtime-idempotency-{}.db",
+            Uuid::new_v4()
+        ));
+        let mut store = Store::open(&path).unwrap();
+        let runtime = ProjectRuntimeBinding {
+            state: ProjectEnvironmentState::Absent,
+            policy_id: "fixture".to_string(),
+            policy_version: 1,
+            policy_digest: format!("sha256:{}", "a".repeat(64)),
+            image_reference: format!("sha256:{}", "b".repeat(64)),
+            resolved_image_id: None,
+            run_as_uid: 1002,
+            run_as_gid: 1002,
+            environment_epoch: 1,
+            container_id: None,
+            last_reason: None,
+        };
+        let first = store
+            .bind_project_docker_registration(
+                "docker-command-1",
+                "project-docker",
+                "/srv/projects/docker",
+                runtime.clone(),
+                10,
+            )
+            .unwrap();
+        let replay = store
+            .bind_project_docker_registration(
+                "docker-command-1",
+                "project-docker",
+                "/srv/projects/docker",
+                runtime.clone(),
+                11,
+            )
+            .unwrap();
+        assert_eq!(replay, first);
+        assert_eq!(
+            store.project_audit_events("project-docker").unwrap().len(),
+            1
+        );
+        let mut changed = runtime;
+        changed.policy_version = 2;
+        assert!(matches!(
+            store.bind_project_docker_registration(
+                "docker-command-1",
+                "project-docker",
+                "/srv/projects/docker",
+                changed,
+                12,
+            ),
+            Err(StoreError::ProjectRegistryRefusal(
+                ProjectRegistryRefusal::EnvelopeMismatch
+            ))
+        ));
+        drop(store);
+
+        let _ = std::fs::remove_file(path);
+    }
+    #[test]
+    fn spec_066_rebind_docker_invalide_l_admission_sans_tuer_les_agents_existants() {
+        let path =
+            std::env::temp_dir().join(format!("bridget-runtime-rebind-{}.db", Uuid::new_v4()));
+        let _ = std::fs::remove_file(&path);
+        let mut store = Store::open(&path).unwrap();
+        let runtime = ProjectRuntimeBinding {
+            state: ProjectEnvironmentState::Running,
+            policy_id: "fixture".to_string(),
+            policy_version: 1,
+            policy_digest: format!("sha256:{}", "a".repeat(64)),
+            image_reference: format!("sha256:{}", "b".repeat(64)),
+            resolved_image_id: Some(format!("sha256:{}", "c".repeat(64))),
+            run_as_uid: 1002,
+            run_as_gid: 1002,
+            environment_epoch: 3,
+            container_id: Some("d".repeat(64)),
+            last_reason: None,
+        };
+        store
+            .bind_project_docker_registration(
+                "register-docker",
+                "project-docker",
+                "/srv/projects/old",
+                runtime.clone(),
+                10,
+            )
+            .unwrap();
+        let outcome = store
+            .apply_project_admin_mutation(
+                "rebind-docker",
+                ProjectAdminOperation::Rebind,
+                "project-docker",
+                Some("/srv/projects/new"),
+                11,
+            )
+            .unwrap();
+        assert_eq!(outcome.bindings[0].binding_generation, Some(2));
+        let rebound = store.project_binding("project-docker").unwrap().unwrap();
+        let rebound_runtime = rebound.runtime.unwrap();
+        assert_eq!(
+            rebound_runtime.state,
+            ProjectEnvironmentState::RecreateRequired
+        );
+        assert_eq!(
+            rebound_runtime.environment_epoch,
+            runtime.environment_epoch + 1
+        );
+        assert_eq!(rebound_runtime.container_id, runtime.container_id);
         drop(store);
         let _ = std::fs::remove_file(path);
     }
@@ -4240,6 +5091,44 @@ mod tests {
                 .unwrap_or_default()
                 .contains("/srv/projects")
         }));
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+    #[test]
+    fn spec_066_switch_vers_host_invalide_l_environnement_docker() {
+        let path =
+            std::env::temp_dir().join(format!("bridget-runtime-switch-{}.db", Uuid::new_v4()));
+        let _ = std::fs::remove_file(&path);
+        let mut store = Store::open(&path).unwrap();
+        let runtime = ProjectRuntimeBinding {
+            state: ProjectEnvironmentState::Absent,
+            policy_id: "fixture".to_string(),
+            policy_version: 1,
+            policy_digest: format!("sha256:{}", "a".repeat(64)),
+            image_reference: format!("sha256:{}", "b".repeat(64)),
+            resolved_image_id: None,
+            run_as_uid: 1002,
+            run_as_gid: 1002,
+            environment_epoch: 4,
+            container_id: None,
+            last_reason: None,
+        };
+        store
+            .bind_project_docker_registration(
+                "register-switch",
+                "project-switch",
+                "/srv/projects/switch",
+                runtime,
+                100,
+            )
+            .unwrap();
+
+        let switched = store
+            .switch_project_backend_to_host("project-switch", 101)
+            .unwrap();
+        assert_eq!(switched.backend, ProjectBackend::Host);
+        assert_eq!(switched.generation, 2);
+        assert_eq!(switched.runtime, None);
         drop(store);
         let _ = std::fs::remove_file(path);
     }

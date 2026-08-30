@@ -13,9 +13,10 @@ use bridget_transport::protocol::{
     ExecutionControlRefusal, IdempotencyIssue, PROJECT_REGISTRY_CONTRACT_VERSION, PresenceMode,
     ProjectAdminOperation, ProjectAdminOutcome, ProjectAdminRequest, ProjectBackend,
     ProjectBindOutcome, ProjectBindRequest, ProjectBindStatus, ProjectBindingProjection,
-    ProjectBindingStatus, ProjectRegistryRefusal, REVIEW_DELEGATE_CONTRACT_VERSION,
-    RelaunchOutcome, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal, SpawnRefusal,
-    StopOutcome, decode, encode,
+    ProjectBindingStatus, ProjectRegistryRefusal, ProjectRuntimeOperation, ProjectRuntimeOutcome,
+    ProjectRuntimeRefusal, ProjectRuntimeRequest, REVIEW_DELEGATE_CONTRACT_VERSION,
+    RelaunchOutcome, RuntimeIngressRefusal, SERVICE_CONTRACT_VERSION, ServiceCapability,
+    ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
@@ -41,7 +42,8 @@ use crate::idempotency::{
 use crate::managed_supervisor::ManagedSupervisorGuard;
 use crate::store::{
     GuichetCoordinationEvent, GuichetDeposit, GuichetLifecycleEvent, GuichetNext,
-    GuichetReplyInput, GuichetResult, MAX_GUICHET_FRAME_BYTES, Store, StoreError,
+    GuichetReplyInput, GuichetResult, MAX_GUICHET_FRAME_BYTES, ProjectRuntimeBinding, Store,
+    StoreError,
 };
 use crate::{
     desired_state::{DesiredLifecycleState, DesiredStateStore},
@@ -50,13 +52,21 @@ use crate::{
     },
     lifecycle::{
         PreparedSpawn, SourceEnvironment, SpawnDecision, prepare_recovery, source_environment,
-        submit_relaunch_from_resolved, submit_spawn_for_project, submit_spawn_from_resolved,
+        submit_relaunch_from_resolved, submit_spawn_for_project,
+        submit_spawn_for_project_in_runtime, submit_spawn_from_resolved,
     },
     managed_process::{
         ManagedIdentity, ManagedLaunch, ManagedMarkerStore, ManagedStatus, ManagedStderrStore,
         ManagedStopResult, RunningManagedChild, spawn_managed_bootstrap_with_stderr,
     },
     project_policy::ProjectRootPolicy,
+    project_runtime::{
+        CONTAINER_INGRESS_DIRECTORY, DockerCli, DockerRuntimeLaunch, ProjectEnvironment,
+        ProjectEnvironmentState, ProjectMount, ProjectRuntimePolicyConfig, RuntimeIngressEndpoint,
+        RuntimeIngressExpectation, RuntimeIssue, bind_runtime_ingress, prepare_environment,
+        remove_environment, resolve_project_mounts, runtime_state_root, stop_environment,
+        stop_remove_environment,
+    },
     recovery_trace::{
         REASON_ABSENT_FROM_FLEET, REASON_FROZEN_DEFINITION, REASON_NON_PERSISTENT, REASON_QUOTA,
         REASON_RECOVERY_FAILED, RecoveryLossEntry,
@@ -564,6 +574,8 @@ pub struct DaemonConfig {
     /// Politique de racines explicite. Son absence ne bloque pas le daemon,
     /// mais ferme les seules mutations du registre projet.
     pub project_root_policy_path: Option<PathBuf>,
+    /// Docker runtime policy remains optional for historical host projects.
+    pub project_runtime_policy_path: Option<PathBuf>,
 }
 
 impl Default for DaemonConfig {
@@ -579,6 +591,7 @@ impl Default for DaemonConfig {
             quarantine_window: 3600,
             retention_days: 7,
             project_root_policy_path: None,
+            project_runtime_policy_path: None,
         }
     }
 }
@@ -686,6 +699,17 @@ struct DaemonState {
     /// La politique est chargée une seule fois. Une erreur reste mémorisée et
     /// n'affecte pas les routes historiques sans ProjectReference.
     project_root_policy: Result<ProjectRootPolicy, ProjectRegistryRefusal>,
+    /// Docker policy failure cannot change historical host behavior.
+    project_runtime_policy: Result<ProjectRuntimePolicyConfig, RuntimeIssue>,
+    /// Un listener privé par projet et génération Docker, jamais partagé avec
+    /// la socket utilisateur du daemon.
+    /// Admissions à usage unique créées avant docker exec. Elles lient le
+    /// premier handshake à un environnement attesté et à sa génération.
+    runtime_ingress_reservations: HashMap<(String, u64), RuntimeIngressExpectation>,
+    /// Ingress durable des agents déjà exécutés. Il survit au redémarrage du
+    /// daemon et autorise leurs reconnexions, jamais une nouvelle génération.
+    runtime_ingress_reconnections: HashMap<(String, u64), RuntimeIngressExpectation>,
+    runtime_ingresses: HashMap<String, RuntimeIngressEndpoint>,
     /// Relevés 016 v2 en cours. Une entrée non fraîche reste volontairement
     /// muette jusqu'à une nouvelle souscription ayant atteint son snapshot.
     coordination_subscriptions: HashMap<String, CoordinationSubscription>,
@@ -783,13 +807,17 @@ pub(crate) enum ManagedSupervisorCommand {
         prepared: PreparedSpawn,
         stop: Arc<ManagedStopControl>,
     },
+    StartDocker {
+        prepared: PreparedSpawn,
+        launch: DockerRuntimeLaunch,
+        stop: Arc<ManagedStopControl>,
+    },
     Registered {
         instance_id: String,
         conn_id: String,
         name: String,
     },
 }
-
 pub(crate) enum ManagedSupervisorEvent {
     Connected {
         lease: SpawnLease,
@@ -1629,9 +1657,76 @@ pub fn get_metrics() -> &'static Metrics {
     METRICS.get_or_init(Metrics::new)
 }
 
+enum SupervisedChild {
+    Host(RunningManagedChild),
+    Runtime {
+        child: std::process::Child,
+        launch: DockerRuntimeLaunch,
+    },
+}
+
+impl SupervisedChild {
+    fn try_status(
+        &mut self,
+    ) -> Result<Option<ManagedStatus>, crate::managed_process::ManagedProcessError> {
+        match self {
+            Self::Host(child) => child.try_status(),
+            Self::Runtime { .. } => Ok(None),
+        }
+    }
+
+    fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>, std::io::Error> {
+        match self {
+            Self::Host(child) => child.try_wait(),
+            Self::Runtime { child, .. } => child.try_wait(),
+        }
+    }
+
+    fn status_is_open(&self) -> bool {
+        match self {
+            Self::Host(child) => child.status_is_open(),
+            Self::Runtime { .. } => false,
+        }
+    }
+
+    fn remove_marker(&self) -> Result<(), std::io::Error> {
+        match self {
+            Self::Host(child) => child.remove_marker(),
+            Self::Runtime { .. } => Ok(()),
+        }
+    }
+
+    fn stop(&mut self) -> Result<ManagedStopResult, crate::managed_process::ManagedProcessError> {
+        match self {
+            Self::Host(child) => child.stop_group(
+                MANAGED_STOP_COOPERATIVE_GRACE,
+                MANAGED_STOP_FORCED_GRACE,
+                MANAGED_STOP_POLL,
+            ),
+            Self::Runtime { child, launch } => {
+                let docker =
+                    DockerCli::new(PathBuf::from("docker"), MANAGED_STOP_COOPERATIVE_GRACE);
+                docker.stop_runtime(launch).map_err(|error| {
+                    std::io::Error::other(format!("arrêt runtime Docker impossible: {error}"))
+                })?;
+                let deadline = Instant::now() + MANAGED_STOP_COOPERATIVE_GRACE;
+                loop {
+                    if child.try_wait()?.is_some() {
+                        return Ok(ManagedStopResult::Stopped);
+                    }
+                    if Instant::now() >= deadline {
+                        return Ok(ManagedStopResult::Timeout);
+                    }
+                    thread::sleep(MANAGED_STOP_POLL);
+                }
+            }
+        }
+    }
+}
+
 struct SupervisedProcess {
     prepared: PreparedSpawn,
-    child: RunningManagedChild,
+    child: SupervisedChild,
     registered: Option<(String, String)>,
     connected: bool,
     failure_sent: bool,
@@ -1767,7 +1862,7 @@ fn handle_managed_command(
                         prepared.lease.instance_id.clone(),
                         SupervisedProcess {
                             prepared,
-                            child,
+                            child: SupervisedChild::Host(child),
                             registered: None,
                             connected: false,
                             failure_sent: false,
@@ -1815,6 +1910,67 @@ fn handle_managed_command(
                 }
             }
         }
+        ManagedSupervisorCommand::StartDocker {
+            prepared,
+            launch,
+            stop,
+        } => {
+            if stop.is_actionable() {
+                let _ = events.send(ManagedSupervisorEvent::Stopped {
+                    lease: prepared.lease,
+                    conn_id: None,
+                    outcome: StopOutcome::Stopped,
+                    completion: stop,
+                });
+                return;
+            }
+            let docker = DockerCli::new(PathBuf::from("docker"), Duration::from_secs(20));
+            let identity = ManagedIdentity {
+                instance_id: prepared.lease.instance_id.clone(),
+                command_id: prepared.lease.command_id.clone(),
+                generation: prepared.lease.generation,
+            };
+            let stderr = match stderr_store.open(&prepared.lease.name, &identity) {
+                Ok((file, _)) => Stdio::from(file),
+                Err(error) => {
+                    let reason = error.to_string();
+                    let _ = fleet.fail(&prepared.lease, "negotiation_failed", &reason);
+                    let _ = events.send(ManagedSupervisorEvent::Failed {
+                        lease: prepared.lease,
+                        kind: "negotiation_failed".to_string(),
+                        reason,
+                        conn_id: None,
+                    });
+                    return;
+                }
+            };
+            match docker.spawn_runtime_with_stderr(&launch, stderr) {
+                Ok(child) => {
+                    active.insert(
+                        prepared.lease.instance_id.clone(),
+                        SupervisedProcess {
+                            prepared,
+                            child: SupervisedChild::Runtime { child, launch },
+                            registered: None,
+                            connected: false,
+                            failure_sent: false,
+                            stop,
+                            stop_attempted: false,
+                        },
+                    );
+                }
+                Err(error) => {
+                    let reason = error.to_string();
+                    let _ = fleet.fail(&prepared.lease, "negotiation_failed", &reason);
+                    let _ = events.send(ManagedSupervisorEvent::Failed {
+                        lease: prepared.lease,
+                        kind: "negotiation_failed".to_string(),
+                        reason,
+                        conn_id: None,
+                    });
+                }
+            }
+        }
         ManagedSupervisorCommand::Registered {
             instance_id,
             conn_id,
@@ -1837,11 +1993,7 @@ fn poll_managed_processes(
     let mut finished = Vec::new();
     for (instance_id, process) in active.iter_mut() {
         if process.stop.is_actionable() && !process.stop_attempted {
-            let outcome = match process.child.stop_group(
-                MANAGED_STOP_COOPERATIVE_GRACE,
-                MANAGED_STOP_FORCED_GRACE,
-                MANAGED_STOP_POLL,
-            ) {
+            let outcome = match process.child.stop() {
                 Ok(ManagedStopResult::Stopped) => StopOutcome::Stopped,
                 Ok(ManagedStopResult::StoppedForced { survivors_killed }) => {
                     StopOutcome::StoppedForced { survivors_killed }
@@ -2022,18 +2174,14 @@ fn reap_failed_managed_child(
         conn_id,
     });
     process.failure_sent = true;
-    match process.child.stop_group(
-        MANAGED_STOP_COOPERATIVE_GRACE,
-        MANAGED_STOP_FORCED_GRACE,
-        MANAGED_STOP_POLL,
-    ) {
+    match process.child.stop() {
         Ok(ManagedStopResult::Stopped | ManagedStopResult::StoppedForced { .. }) => {
             let _ = process.child.remove_marker();
             true
         }
         Ok(ManagedStopResult::Timeout) => {
             warn!(
-                "groupe encore vivant après SIGTERM suite à échec de spawn {} — pas de SIGKILL",
+                "groupe encore vivant après SIGTERM suite à échec de spawn {} - pas de SIGKILL",
                 process.prepared.lease.name
             );
             false
@@ -2106,6 +2254,7 @@ fn drain_managed_events(
                     reason,
                     conn_id,
                 } => {
+                    clear_runtime_ingress_for_lease(&mut st, &lease);
                     let relaunch_requesters = st
                         .relaunch_requesters
                         .remove(&lease.command_id)
@@ -2174,6 +2323,7 @@ fn drain_managed_events(
                     conn_id,
                     reason,
                 } => {
+                    clear_runtime_ingress_for_lease(&mut st, &lease);
                     let relaunch_requesters = st
                         .relaunch_requesters
                         .remove(&lease.command_id)
@@ -2187,6 +2337,17 @@ fn drain_managed_events(
                         && record.stop.is_requested()
                     {
                         stop_completion = Some((Arc::clone(&record.stop), StopOutcome::Stopped));
+                    }
+                    if !record
+                        .as_ref()
+                        .is_some_and(|record| record.stop.is_requested())
+                        && let Some(project) = lease.project.as_ref()
+                    {
+                        let _ = st.store.record_project_runtime_failure(
+                            &project.project_id,
+                            "runtime_exec_lost",
+                            unix_now_secs(),
+                        );
                     }
                     let wrapper_conn = conn_id
                         .or_else(|| record.as_ref().and_then(|value| value.wrapper_conn.clone()));
@@ -2241,6 +2402,7 @@ fn drain_managed_events(
                     outcome,
                     completion,
                 } => {
+                    clear_runtime_ingress_for_lease(&mut st, &lease);
                     let relaunch_requesters = st
                         .relaunch_requesters
                         .remove(&lease.command_id)
@@ -2352,6 +2514,17 @@ fn drain_managed_events(
     }
 }
 
+/// Retire l'autorisation d'ingress dès que la génération Docker devient
+/// terminale. Elle ne peut alors plus ressusciter par une reconnexion tardive.
+fn clear_runtime_ingress_for_lease(state: &mut DaemonState, lease: &SpawnLease) {
+    let Some(project) = lease.project.as_ref() else {
+        return;
+    };
+    let key = (project.project_id.clone(), lease.generation);
+    state.runtime_ingress_reservations.remove(&key);
+    state.runtime_ingress_reconnections.remove(&key);
+}
+
 fn finish_recovery_command(state: &mut DaemonState, command_id: &str) {
     state.recovery_commands.remove(command_id);
     if state.recovery_commands.is_empty() {
@@ -2369,6 +2542,10 @@ impl DaemonState {
         let project_root_policy = match config.project_root_policy_path.as_deref() {
             Some(path) => ProjectRootPolicy::load(path),
             None => Err(ProjectRegistryRefusal::ProjectRootPolicyUnavailable),
+        };
+        let project_runtime_policy = match config.project_runtime_policy_path.as_deref() {
+            Some(path) => ProjectRuntimePolicyConfig::load(path),
+            None => Err(RuntimeIssue::PolicyUnavailable),
         };
         store.recover_guichet_claims_after_restart()?;
         let idempotency = IdempotencyStore::open(&config.db_path)?;
@@ -2423,9 +2600,13 @@ impl DaemonState {
             auxiliary_connections: HashSet::new(),
             connection_roles: HashMap::new(),
             client_negotiations: HashMap::new(),
+            runtime_ingress_reconnections: HashMap::new(),
             service_negotiations: HashMap::new(),
             peer_uids: HashMap::new(),
+            runtime_ingress_reservations: HashMap::new(),
             project_root_policy,
+            project_runtime_policy,
+            runtime_ingresses: HashMap::new(),
             coordination_subscriptions: HashMap::new(),
             attach_subscriptions: HashMap::new(),
             attach_views: HashMap::new(),
@@ -2437,6 +2618,137 @@ impl DaemonState {
             pending_replies: Vec::new(),
             pending_post_response_controls: HashMap::new(),
         })
+    }
+
+    fn resolve_project_runtime_policy(
+        &self,
+        policy_id: &str,
+        policy_version: u64,
+    ) -> Result<crate::project_runtime::ProjectRuntimePolicy, RuntimeIssue> {
+        self.project_runtime_policy
+            .as_ref()
+            .map_err(|_| RuntimeIssue::PolicyUnavailable)?
+            .resolve(policy_id, policy_version)
+    }
+
+    fn ensure_runtime_ingress(
+        &mut self,
+        policy: &crate::project_runtime::ProjectRuntimePolicy,
+        environment: &ProjectEnvironment,
+    ) -> Result<PathBuf, RuntimeIssue> {
+        if let Some(existing) = self.runtime_ingresses.get(&environment.project_id)
+            && existing.binding_generation == environment.binding_generation
+        {
+            return Ok(existing.socket_path.clone());
+        }
+        self.runtime_ingresses.remove(&environment.project_id);
+        let endpoint = bind_runtime_ingress(policy, environment)?;
+        endpoint
+            .listener
+            .set_nonblocking(true)
+            .map_err(|_| RuntimeIssue::PolicyUnavailable)?;
+
+        let socket_path = endpoint.socket_path.clone();
+        self.runtime_ingresses
+            .insert(environment.project_id.clone(), endpoint);
+        Ok(socket_path)
+    }
+    /// Réinstalle uniquement les ingress d'agents Docker déjà corrélés et
+    /// encore compatibles avec le binding et la politique actuels. Un relevé
+    /// divergent n'autorise ni reconnexion ni nouvelle admission.
+    fn restore_runtime_ingress_reconnections(&mut self) {
+        let desired = match self.fleet.desired_fleet() {
+            Ok(desired) => desired,
+            Err(error) => {
+                warn!("ingress runtime non restauré: fleet.json illisible: {error}");
+                return;
+            }
+        };
+        for (name, equipier) in desired.equipiers {
+            let Some(execution) = equipier.runtime_execution else {
+                continue;
+            };
+            if !matches!(
+                execution.state,
+                crate::desired_state::ContainerAgentExecutionState::Starting
+                    | crate::desired_state::ContainerAgentExecutionState::Running
+            ) {
+                continue;
+            }
+            let Some(project) = equipier.project.as_ref() else {
+                warn!("ingress runtime {name} ignoré: projet durable absent");
+                continue;
+            };
+            let binding = match self.store.project_binding(&project.project_id) {
+                Ok(Some(binding))
+                    if binding.state == crate::store::ProjectBindingState::Active
+                        && binding.backend == ProjectBackend::Docker
+                        && binding.generation == project.binding_generation =>
+                {
+                    binding
+                }
+                _ => {
+                    warn!("ingress runtime {name} ignoré: liaison Docker non attestée");
+                    continue;
+                }
+            };
+            let environment = match project_environment_from_binding(&binding) {
+                Ok(environment) => environment,
+                Err(error) => {
+                    warn!("ingress runtime {name} ignoré: environnement invalide: {error}");
+                    continue;
+                }
+            };
+            let policy = match self
+                .resolve_project_runtime_policy(&environment.policy_id, environment.policy_version)
+            {
+                Ok(policy) => policy,
+                Err(error) => {
+                    warn!("ingress runtime {name} ignoré: politique indisponible: {error}");
+                    continue;
+                }
+            };
+            let provider = match policy.runtime_execution(&equipier.agent_type) {
+                Ok(provider) => provider,
+                Err(error) => {
+                    warn!("ingress runtime {name} ignoré: lanceur invalide: {error}");
+                    continue;
+                }
+            };
+            let expectation = match RuntimeIngressExpectation::from_environment(
+                &environment,
+                execution.generation,
+                &execution.agent_instance_id,
+            ) {
+                Ok(expectation) => expectation,
+                Err(error) => {
+                    warn!("ingress runtime {name} ignoré: attente invalide: {error}");
+                    continue;
+                }
+            };
+            let execution_is_current = execution.project_id == expectation.project_id
+                && execution.binding_generation == expectation.binding_generation
+                && execution.environment_epoch == expectation.environment_epoch
+                && execution.container_id == expectation.container_id
+                && execution.generation == equipier.generation
+                && execution.cwd == equipier.cwd
+                && execution.provider_identity == provider.provider_command
+                && uuid::Uuid::parse_str(&execution.exec_id).is_ok();
+            if !execution_is_current {
+                warn!("ingress runtime {name} ignoré: corrélation périmée");
+                continue;
+            }
+            if let Err(error) = self.ensure_runtime_ingress(&policy, &environment) {
+                warn!("ingress runtime {name} ignoré: socket indisponible: {error}");
+                continue;
+            }
+            self.runtime_ingress_reconnections.insert(
+                (expectation.project_id.clone(), expectation.agent_generation),
+                expectation,
+            );
+            self.managed_by_instance
+                .insert(execution.agent_instance_id, equipier.command_id);
+        }
     }
 
     fn next_conn_id(&mut self) -> String {
@@ -3068,6 +3380,29 @@ fn reserve_managed_recoveries(
             continue;
         }
         let lease = candidate.lease.clone();
+        if lease.project.as_ref().is_some_and(|project| {
+            state
+                .runtime_ingress_reconnections
+                .contains_key(&(project.project_id.clone(), lease.generation))
+        }) {
+            continue;
+        }
+        if let Some(project) = lease.project.as_ref()
+            && let Ok(Some(binding)) = state.store.project_binding(&project.project_id)
+            && binding.state == crate::store::ProjectBindingState::Active
+            && binding.generation == project.binding_generation
+            && let Some(reason) = docker_runtime_spawn_refusal(project, binding.backend)
+        {
+            let detail = serde_json::to_string(&reason)
+                .unwrap_or_else(|_| String::from("docker_runtime_unavailable"));
+            absents.push(RecoveryLossEntry {
+                name: lease.name.clone(),
+                reason: REASON_RECOVERY_FAILED.to_string(),
+                detail: Some(detail.clone()),
+            });
+            let _ = state.fleet.fail(&lease, "recovery_failed", detail);
+            continue;
+        }
         match prepare_recovery(&state.source_env, candidate) {
             Ok(recovery) => prepared.push(recovery),
             Err(reason) => {
@@ -3088,6 +3423,17 @@ fn reserve_managed_recoveries(
             continue;
         }
         if equipier.lifecycle_state != DesiredLifecycleState::Running || !equipier.persistent {
+            continue;
+        }
+        if equipier
+            .runtime_execution
+            .as_ref()
+            .is_some_and(|execution| {
+                state
+                    .runtime_ingress_reconnections
+                    .contains_key(&(execution.project_id.clone(), execution.generation))
+            })
+        {
             continue;
         }
         let Some(resolved_definition) = equipier.resolved_definition else {
@@ -3111,6 +3457,23 @@ fn reserve_managed_recoveries(
             ownership: None,
             project: equipier.project,
         };
+        if let Some(project) = order.project.as_ref()
+            && let Ok(Some(binding)) = state.store.project_binding(&project.project_id)
+            && binding.state == crate::store::ProjectBindingState::Active
+            && binding.generation == project.binding_generation
+            && let Some(reason) = docker_runtime_spawn_refusal(project, binding.backend)
+        {
+            absents.push(RecoveryLossEntry {
+                name: name.clone(),
+                reason: REASON_RECOVERY_FAILED.to_string(),
+                detail: Some(
+                    serde_json::to_string(&reason)
+                        .unwrap_or_else(|_| String::from("docker_runtime_unavailable")),
+                ),
+            });
+            state.fleet.mark_stopped(&name)?;
+            continue;
+        }
         match submit_spawn_from_resolved(
             &state.fleet,
             &state.source_env,
@@ -3420,6 +3783,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     );
     let recoveries = {
         let mut st = state.lock().unwrap_or_else(|poison| poison.into_inner());
+        st.restore_runtime_ingress_reconnections();
         reserve_managed_recoveries(&mut st, unix_timestamp())?
     };
     for (prepared, stop) in recoveries {
@@ -3643,6 +4007,15 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
 
+        for stream in drain_runtime_ingress_connections(&state) {
+            let ingress_state = Arc::clone(&state);
+            thread::spawn(move || {
+                if let Err(error) = handle_runtime_ingress_connection(stream, ingress_state) {
+                    warn!("ingress runtime fermé: {error}");
+                }
+            });
+        }
+
         match listener.accept() {
             Ok((stream, _)) => {
                 if let Err(e) = stream.set_nonblocking(false) {
@@ -3667,6 +4040,99 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+}
+
+/// Récolte sans attente les connexions des sockets privés de projets. Elles
+/// restent hors de la socket utilisateur afin qu'un chemin monté ne suffise pas
+/// à se faire passer pour un wrapper hôte.
+fn drain_runtime_ingress_connections(state: &Arc<Mutex<DaemonState>>) -> Vec<UnixStream> {
+    let state = state.lock().unwrap_or_else(|error| error.into_inner());
+    let mut accepted = Vec::new();
+    for endpoint in state.runtime_ingresses.values() {
+        loop {
+            match endpoint.listener.accept() {
+                Ok((stream, _)) => accepted.push(stream),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => {
+                    warn!("accept ingress runtime impossible: {error}");
+                    break;
+                }
+            }
+        }
+    }
+    accepted
+}
+
+/// L endpoint privé ne laisse passer une connexion qu après consommation d une
+/// réservation exacte. Le futur docker exec sera l unique producteur de cette
+/// réservation, juste avant de lancer le wrapper dans le conteneur.
+fn handle_runtime_ingress_connection(
+    stream: UnixStream,
+    state: Arc<Mutex<DaemonState>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let peer_uid = unix_peer_uid(&stream).ok();
+    stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+    let mut line = String::new();
+    let read = BufReader::new(stream.try_clone()?).read_line(&mut line)?;
+    if read == 0 || line.len() > 64 * 1024 {
+        return Ok(());
+    }
+    let admission = match decode::<WrapperToDaemon>(line.trim()) {
+        Ok(WrapperToDaemon::RuntimeIngressHello { hello }) => {
+            let mut guarded = state.lock().unwrap_or_else(|error| error.into_inner());
+            let reconnections = guarded.runtime_ingress_reconnections.clone();
+            consume_runtime_ingress_reservation(
+                &mut guarded.runtime_ingress_reservations,
+                &reconnections,
+                &hello,
+                peer_uid,
+            )
+            .map(|expectation| (hello, expectation))
+        }
+        _ => Err(RuntimeIngressRefusal::IdentityMismatch),
+    };
+    let response = match &admission {
+        Ok((hello, _)) => DaemonToWrapper::RuntimeIngressAccepted {
+            project_id: hello.project_id.clone(),
+            binding_generation: hello.binding_generation,
+            environment_epoch: hello.environment_epoch,
+        },
+        Err(reason) => DaemonToWrapper::RuntimeIngressRejected { reason: *reason },
+    };
+    let mut writer = BufWriter::new(stream.try_clone()?);
+    writeln!(writer, "{}", encode(&response)?)?;
+    writer.flush()?;
+    if admission.is_err() {
+        return Ok(());
+    }
+    handle_connection(stream, state)
+}
+
+/// Consomme une admission runtime seulement après validation complète du
+/// handshake et de l UID kernel. Une tentative rejetée reste réservée afin que
+/// le vrai agent puisse encore se présenter; une admission réussie ne se rejoue
+/// jamais.
+fn consume_runtime_ingress_reservation(
+    reservations: &mut HashMap<(String, u64), crate::project_runtime::RuntimeIngressExpectation>,
+    reconnections: &HashMap<(String, u64), crate::project_runtime::RuntimeIngressExpectation>,
+    hello: &bridget_transport::protocol::RuntimeIngressHandshake,
+    peer_uid: Option<u32>,
+) -> Result<crate::project_runtime::RuntimeIngressExpectation, RuntimeIngressRefusal> {
+    let key = (hello.project_id.clone(), hello.agent_generation);
+    let first_admission = reservations.contains_key(&key);
+    let expectation = reservations
+        .get(&key)
+        .or_else(|| reconnections.get(&key))
+        .cloned()
+        .ok_or(RuntimeIngressRefusal::ReservationMissing)?;
+    expectation.validate(hello)?;
+    if peer_uid != Some(expectation.run_as_uid) {
+        return Err(RuntimeIngressRefusal::IdentityMismatch);
+    }
+    if first_admission {
+        reservations.remove(&key);
+    }
+    Ok(expectation)
 }
 
 /// Gère une connexion wrapper.
@@ -3887,6 +4353,7 @@ fn project_registry_failed_outcome(
         status: ProjectBindStatus::BindingFailed,
         binding_generation: None,
         backend: None,
+        runtime_policy: None,
         reason: Some(reason),
         existing_project_id: None,
         existing_binding_generation: None,
@@ -3911,6 +4378,129 @@ fn project_registry_admin_failure(
     }
 }
 
+fn project_runtime_failure(
+    request: &ProjectRuntimeRequest,
+    reason: ProjectRuntimeRefusal,
+    observed_at: i64,
+) -> DaemonToWrapper {
+    DaemonToWrapper::ProjectRuntimeOutcome {
+        outcome: ProjectRuntimeOutcome {
+            contract_version: request.contract_version,
+            command_id: request.command_id.clone(),
+            project_id: request.project_id.clone(),
+            operation: request.operation,
+            binding_generation: None,
+            state: None,
+            runtime_policy: None,
+            last_reason: None,
+            reason: Some(reason),
+            observed_at,
+        },
+    }
+}
+
+fn project_runtime_outcome(
+    request: &ProjectRuntimeRequest,
+    binding: &crate::store::ProjectBinding,
+    observed_at: i64,
+) -> DaemonToWrapper {
+    let runtime = binding.runtime.as_ref();
+    DaemonToWrapper::ProjectRuntimeOutcome {
+        outcome: ProjectRuntimeOutcome {
+            contract_version: request.contract_version,
+            command_id: request.command_id.clone(),
+            project_id: request.project_id.clone(),
+            operation: request.operation,
+            binding_generation: Some(binding.generation),
+            state: runtime.map(|runtime| project_environment_state_text(runtime.state)),
+            runtime_policy: runtime.map(ProjectRuntimeBinding::policy_reference),
+            last_reason: runtime.and_then(|runtime| runtime.last_reason.clone()),
+            reason: None,
+            observed_at,
+        },
+    }
+}
+
+fn project_environment_state_text(state: ProjectEnvironmentState) -> String {
+    match state {
+        ProjectEnvironmentState::Absent => "absent",
+        ProjectEnvironmentState::Creating => "creating",
+        ProjectEnvironmentState::Ready => "ready",
+        ProjectEnvironmentState::Running => "running",
+        ProjectEnvironmentState::Stopping => "stopping",
+        ProjectEnvironmentState::Stopped => "stopped",
+        ProjectEnvironmentState::Degraded => "degraded",
+        ProjectEnvironmentState::RecreateRequired => "recreate_required",
+    }
+    .to_string()
+}
+
+fn project_has_active_agents(fleet: &FleetSupervisor, project_id: &str) -> bool {
+    fleet
+        .desired_fleet()
+        .map(|desired| {
+            desired.equipiers.values().any(|equipier| {
+                equipier.lifecycle_state == DesiredLifecycleState::Running
+                    && equipier
+                        .project
+                        .as_ref()
+                        .is_some_and(|project| project.project_id == project_id)
+            })
+        })
+        .unwrap_or(true)
+}
+
+fn project_environment_from_binding(
+    binding: &crate::store::ProjectBinding,
+) -> Result<ProjectEnvironment, RuntimeIssue> {
+    let runtime = binding
+        .runtime
+        .as_ref()
+        .ok_or(RuntimeIssue::PolicyUnavailable)?;
+    Ok(ProjectEnvironment {
+        project_id: binding.project_id.clone(),
+        binding_generation: binding.generation,
+        state: runtime.state,
+        environment_epoch: runtime.environment_epoch,
+        container_id: runtime.container_id.clone(),
+        policy_id: runtime.policy_id.clone(),
+        policy_version: runtime.policy_version,
+        policy_digest: runtime.policy_digest.clone(),
+        image_reference: runtime.image_reference.clone(),
+        run_as_uid: runtime.run_as_uid,
+        run_as_gid: runtime.run_as_gid,
+        last_reason: None,
+    })
+}
+
+fn runtime_binding_from_environment(
+    environment: &ProjectEnvironment,
+    resolved_image_id: Option<String>,
+) -> ProjectRuntimeBinding {
+    ProjectRuntimeBinding {
+        state: environment.state,
+        policy_id: environment.policy_id.clone(),
+        policy_version: environment.policy_version,
+        policy_digest: environment.policy_digest.clone(),
+        image_reference: environment.image_reference.clone(),
+        resolved_image_id,
+        run_as_uid: environment.run_as_uid,
+        run_as_gid: environment.run_as_gid,
+        environment_epoch: environment.environment_epoch,
+        container_id: environment.container_id.clone(),
+        last_reason: environment.last_reason.clone(),
+    }
+}
+
+fn docker_runtime_spawn_refusal(
+    project: &bridget_transport::protocol::ProjectReference,
+    backend: ProjectBackend,
+) -> Option<SpawnRefusal> {
+    (backend == ProjectBackend::Docker).then(|| SpawnRefusal::DockerRuntimeUnavailable {
+        project_id: project.project_id.clone(),
+    })
+}
+
 fn unregistered_project_projection(
     project_id: String,
     observed_at: i64,
@@ -3920,6 +4510,7 @@ fn unregistered_project_projection(
         state: ProjectBindingStatus::Unregistered,
         binding_generation: None,
         backend: None,
+        runtime_policy: None,
         reason: None,
         observed_at,
     }
@@ -6699,6 +7290,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::GuichetReply { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
+                | WrapperToDaemon::ProjectRuntimeRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                     if !st.service_negotiations.contains_key(conn_id) =>
                 {
@@ -6757,6 +7349,7 @@ fn handle_wrapper_message(
                 WrapperToDaemon::ServiceHello { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
+                | WrapperToDaemon::ProjectRuntimeRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
                 | WrapperToDaemon::GuichetClaim { .. }
@@ -6768,6 +7361,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ClientHello { .. }
+                | WrapperToDaemon::RuntimeIngressHello { .. }
                 // Refusé AVANT ce lot aussi : il tombait dans le tiret bas.
                 // La forme change, le sort de ce message ne change pas.
                 | WrapperToDaemon::ServiceRequest { .. }
@@ -6901,8 +7495,10 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ServiceHello { .. }
+                | WrapperToDaemon::RuntimeIngressHello { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
+                | WrapperToDaemon::ProjectRuntimeRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::ServiceRequest { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
@@ -6975,6 +7571,11 @@ fn handle_wrapper_message(
 
     match msg {
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
+        WrapperToDaemon::RuntimeIngressHello { .. } => {
+            Some(DaemonToWrapper::RuntimeIngressRejected {
+                reason: RuntimeIngressRefusal::ReservationMissing,
+            })
+        }
         WrapperToDaemon::ProjectRegistryRequest { request } => {
             let observed_at = unix_now_secs();
             if request.contract_version != PROJECT_REGISTRY_CONTRACT_VERSION {
@@ -7001,7 +7602,18 @@ fn handle_wrapper_message(
                     observed_at,
                 ));
             }
-            if request.backend != ProjectBackend::Host {
+            if request.backend == ProjectBackend::Host
+                && (request.policy_id.is_some() || request.policy_version.is_some())
+            {
+                return Some(project_registry_failure(
+                    request,
+                    ProjectRegistryRefusal::InvalidContract,
+                    observed_at,
+                ));
+            }
+            if request.backend == ProjectBackend::Docker
+                && (request.policy_id.as_deref().is_none() || request.policy_version.is_none())
+            {
                 return Some(project_registry_failure(
                     request,
                     ProjectRegistryRefusal::InvalidContract,
@@ -7030,35 +7642,79 @@ fn handle_wrapper_message(
                 Ok(root) => root,
                 Err(reason) => return Some(project_registry_failure(request, reason, observed_at)),
             };
-            let outcome = state
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .store
-                .bind_project_registration(
-                    &request.command_id,
-                    &request.project_id,
-                    canonical_root.to_string_lossy().as_ref(),
+            let runtime = if request.backend == ProjectBackend::Docker {
+                let policy = match state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .resolve_project_runtime_policy(
+                        request
+                            .policy_id
+                            .as_deref()
+                            .expect("policy Docker presente"),
+                        request.policy_version.expect("version Docker presente"),
+                    ) {
+                    Ok(policy) => policy,
+                    Err(_) => {
+                        return Some(project_registry_failure(
+                            request,
+                            ProjectRegistryRefusal::InvalidContract,
+                            observed_at,
+                        ));
+                    }
+                };
+                Some(ProjectRuntimeBinding {
+                    state: ProjectEnvironmentState::Absent,
+                    policy_id: policy.policy_id,
+                    policy_version: policy.policy_version,
+                    policy_digest: policy.digest,
+                    image_reference: policy.image_reference,
+                    resolved_image_id: None,
+                    run_as_uid: policy.run_as_uid,
+                    run_as_gid: policy.run_as_gid,
+                    environment_epoch: 1,
+                    container_id: None,
+                    last_reason: None,
+                })
+            } else {
+                None
+            };
+            let registration = {
+                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+                match runtime {
+                    Some(runtime) => state.store.bind_project_docker_registration(
+                        &request.command_id,
+                        &request.project_id,
+                        canonical_root.to_string_lossy().as_ref(),
+                        runtime,
+                        observed_at,
+                    ),
+                    None => state.store.bind_project_registration(
+                        &request.command_id,
+                        &request.project_id,
+                        canonical_root.to_string_lossy().as_ref(),
+                        observed_at,
+                    ),
+                }
+            };
+            let outcome = registration.unwrap_or_else(|error| match error {
+                StoreError::ProjectRegistryRefusal(reason) => project_registry_failed_outcome(
+                    request.contract_version,
+                    request.command_id.clone(),
+                    request.project_id.clone(),
+                    reason,
                     observed_at,
-                )
-                .unwrap_or_else(|error| match error {
-                    StoreError::ProjectRegistryRefusal(reason) => project_registry_failed_outcome(
+                ),
+                other => {
+                    warn!("liaison projet indisponible: {other}");
+                    project_registry_failed_outcome(
                         request.contract_version,
                         request.command_id.clone(),
                         request.project_id.clone(),
-                        reason,
+                        ProjectRegistryRefusal::StoreUnavailable,
                         observed_at,
-                    ),
-                    other => {
-                        warn!("liaison projet indisponible: {other}");
-                        project_registry_failed_outcome(
-                            request.contract_version,
-                            request.command_id.clone(),
-                            request.project_id.clone(),
-                            ProjectRegistryRefusal::StoreUnavailable,
-                            observed_at,
-                        )
-                    }
-                });
+                    )
+                }
+            });
             Some(DaemonToWrapper::ProjectRegistryOutcome { outcome })
         }
         WrapperToDaemon::ProjectRegistryAdminRequest { request } => {
@@ -7208,6 +7864,469 @@ fn handle_wrapper_message(
                     )
                 }
             })
+        }
+        WrapperToDaemon::ProjectRuntimeRequest { request } => {
+            let observed_at = unix_now_secs();
+            if request.contract_version != crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION
+            {
+                return Some(project_runtime_failure(
+                    &request,
+                    ProjectRuntimeRefusal::InvalidContract,
+                    observed_at,
+                ));
+            }
+            if request.command_id.trim().is_empty()
+                || request.project_id.trim().is_empty()
+                || request.issued_at < 0
+                || request.deadline_at < request.issued_at
+                || observed_at > request.deadline_at
+            {
+                return Some(project_runtime_failure(
+                    &request,
+                    if request.project_id.trim().is_empty() {
+                        ProjectRuntimeRefusal::InvalidProjectId
+                    } else {
+                        ProjectRuntimeRefusal::IdempotencyExpired
+                    },
+                    observed_at,
+                ));
+            }
+            let binding = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                if st.peer_uids.get(conn_id).copied() != Some(unsafe { libc::geteuid() }) {
+                    return Some(project_runtime_failure(
+                        &request,
+                        ProjectRuntimeRefusal::PeerUidMismatch,
+                        observed_at,
+                    ));
+                }
+                match st.store.project_binding(&request.project_id) {
+                    Ok(Some(binding)) => binding,
+                    Ok(None) => {
+                        return Some(project_runtime_failure(
+                            &request,
+                            ProjectRuntimeRefusal::ProjectNotFound,
+                            observed_at,
+                        ));
+                    }
+                    Err(error) => {
+                        warn!("lecture runtime projet indisponible: {error}");
+                        return Some(project_runtime_failure(
+                            &request,
+                            ProjectRuntimeRefusal::StoreUnavailable,
+                            observed_at,
+                        ));
+                    }
+                }
+            };
+            if binding.backend != ProjectBackend::Docker {
+                if request.operation == ProjectRuntimeOperation::Status
+                    || request.operation == ProjectRuntimeOperation::SwitchBackend
+                {
+                    return Some(project_runtime_outcome(&request, &binding, observed_at));
+                }
+                return Some(project_runtime_failure(
+                    &request,
+                    ProjectRuntimeRefusal::ProjectNotDocker,
+                    observed_at,
+                ));
+            }
+            if request.operation == ProjectRuntimeOperation::Status {
+                return Some(project_runtime_outcome(&request, &binding, observed_at));
+            }
+            let mut environment = match project_environment_from_binding(&binding) {
+                Ok(environment) => environment,
+                Err(_) => {
+                    return Some(project_runtime_failure(
+                        &request,
+                        ProjectRuntimeRefusal::StoreUnavailable,
+                        observed_at,
+                    ));
+                }
+            };
+            if matches!(
+                request.operation,
+                ProjectRuntimeOperation::Stop
+                    | ProjectRuntimeOperation::Remove
+                    | ProjectRuntimeOperation::SwitchBackend
+            ) {
+                let active_project_agent = {
+                    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    project_has_active_agents(&st.fleet, &request.project_id)
+                        || st.managed_spawns.values().any(|spawn| {
+                            spawn
+                                .lease
+                                .project
+                                .as_ref()
+                                .is_some_and(|project| project.project_id == request.project_id)
+                        })
+                };
+                if active_project_agent {
+                    return Some(project_runtime_failure(
+                        &request,
+                        ProjectRuntimeRefusal::EnvironmentBusy,
+                        observed_at,
+                    ));
+                }
+
+                let resolved_image_id = binding
+                    .runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.resolved_image_id.clone());
+                let docker = DockerCli::new(PathBuf::from("docker"), Duration::from_secs(20));
+                let lifecycle = match request.operation {
+                    ProjectRuntimeOperation::Stop => stop_environment(&docker, &mut environment),
+                    ProjectRuntimeOperation::Remove => {
+                        remove_environment(&docker, &mut environment)
+                    }
+                    ProjectRuntimeOperation::SwitchBackend => {
+                        stop_remove_environment(&docker, &mut environment)
+                    }
+                    _ => unreachable!("opération lifecycle déjà filtrée"),
+                };
+                if let Err(error) = lifecycle {
+                    let replacement =
+                        runtime_binding_from_environment(&environment, resolved_image_id.clone());
+                    let _ = state
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .store
+                        .update_project_runtime(&request.project_id, &replacement, observed_at);
+                    warn!("lifecycle runtime projet refusé: {error}");
+                    return Some(project_runtime_failure(
+                        &request,
+                        ProjectRuntimeRefusal::RecreateFailed,
+                        observed_at,
+                    ));
+                }
+
+                if request.operation == ProjectRuntimeOperation::SwitchBackend {
+                    let switched = {
+                        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                        match st
+                            .store
+                            .switch_project_backend_to_host(&request.project_id, observed_at)
+                        {
+                            Ok(switched) => {
+                                st.runtime_ingresses.remove(&request.project_id);
+                                st.runtime_ingress_reservations
+                                    .retain(|(project_id, _), _| project_id != &request.project_id);
+                                st.runtime_ingress_reconnections
+                                    .retain(|(project_id, _), _| project_id != &request.project_id);
+                                switched
+                            }
+                            Err(error) => {
+                                warn!("bascule backend runtime indisponible: {error}");
+                                return Some(project_runtime_failure(
+                                    &request,
+                                    ProjectRuntimeRefusal::StoreUnavailable,
+                                    observed_at,
+                                ));
+                            }
+                        }
+                    };
+                    return Some(project_runtime_outcome(&request, &switched, observed_at));
+                }
+
+                let replacement = runtime_binding_from_environment(&environment, resolved_image_id);
+                let updated = {
+                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    match st.store.update_project_runtime(
+                        &request.project_id,
+                        &replacement,
+                        observed_at,
+                    ) {
+                        Ok(updated) => {
+                            if request.operation == ProjectRuntimeOperation::Remove {
+                                st.runtime_ingresses.remove(&request.project_id);
+                                st.runtime_ingress_reservations
+                                    .retain(|(project_id, _), _| project_id != &request.project_id);
+                                st.runtime_ingress_reconnections
+                                    .retain(|(project_id, _), _| project_id != &request.project_id);
+                            }
+                            updated
+                        }
+                        Err(error) => {
+                            warn!("persistance lifecycle runtime indisponible: {error}");
+                            return Some(project_runtime_failure(
+                                &request,
+                                ProjectRuntimeRefusal::StoreUnavailable,
+                                observed_at,
+                            ));
+                        }
+                    }
+                };
+                return Some(project_runtime_outcome(&request, &updated, observed_at));
+            }
+            let policy = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                match st.resolve_project_runtime_policy(
+                    &environment.policy_id,
+                    environment.policy_version,
+                ) {
+                    Ok(policy) => policy,
+                    Err(_) => {
+                        return Some(project_runtime_failure(
+                            &request,
+                            ProjectRuntimeRefusal::PolicyUnavailable,
+                            observed_at,
+                        ));
+                    }
+                }
+            };
+            let policy_changed = environment.policy_digest != policy.digest
+                || environment.image_reference != policy.image_reference
+                || environment.run_as_uid != policy.run_as_uid
+                || environment.run_as_gid != policy.run_as_gid;
+            let resolved_image_id = binding
+                .runtime
+                .as_ref()
+                .and_then(|runtime| runtime.resolved_image_id.clone());
+            if policy_changed {
+                let _ = environment.apply_runtime_policy(&policy);
+                let replacement =
+                    runtime_binding_from_environment(&environment, resolved_image_id.clone());
+                let update = state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .store
+                    .update_project_runtime(&request.project_id, &replacement, observed_at);
+                match update {
+                    Ok(updated) if request.operation == ProjectRuntimeOperation::Prepare => {
+                        return Some(project_runtime_failure(
+                            &request,
+                            ProjectRuntimeRefusal::EnvironmentBusy,
+                            observed_at,
+                        ));
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        warn!("persistance changement policy runtime indisponible: {error}");
+                        return Some(project_runtime_failure(
+                            &request,
+                            ProjectRuntimeRefusal::StoreUnavailable,
+                            observed_at,
+                        ));
+                    }
+                }
+            }
+            if request.operation == ProjectRuntimeOperation::Prepare
+                && environment.state == ProjectEnvironmentState::Ready
+            {
+                let current = state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .store
+                    .project_binding(&request.project_id);
+                return Some(match current {
+                    Ok(Some(current)) => project_runtime_outcome(&request, &current, observed_at),
+                    _ => project_runtime_failure(
+                        &request,
+                        ProjectRuntimeRefusal::StoreUnavailable,
+                        observed_at,
+                    ),
+                });
+            }
+            if request.operation == ProjectRuntimeOperation::Recreate {
+                let active_project_agent = {
+                    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    project_has_active_agents(&st.fleet, &request.project_id)
+                        || st.managed_spawns.values().any(|spawn| {
+                            spawn
+                                .lease
+                                .project
+                                .as_ref()
+                                .is_some_and(|project| project.project_id == request.project_id)
+                        })
+                };
+                if active_project_agent {
+                    return Some(project_runtime_failure(
+                        &request,
+                        ProjectRuntimeRefusal::EnvironmentBusy,
+                        observed_at,
+                    ));
+                }
+                if environment.state == ProjectEnvironmentState::Running
+                    || environment.state == ProjectEnvironmentState::Creating
+                    || environment.state == ProjectEnvironmentState::Stopping
+                {
+                    return Some(project_runtime_failure(
+                        &request,
+                        ProjectRuntimeRefusal::EnvironmentBusy,
+                        observed_at,
+                    ));
+                }
+                if environment.state != ProjectEnvironmentState::Absent {
+                    let docker = DockerCli::new(PathBuf::from("docker"), Duration::from_secs(20));
+                    if let Err(error) = stop_remove_environment(&docker, &mut environment) {
+                        let replacement = runtime_binding_from_environment(
+                            &environment,
+                            resolved_image_id.clone(),
+                        );
+                        let _ = state
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .store
+                            .update_project_runtime(&request.project_id, &replacement, observed_at);
+                        warn!("recreation runtime projet refusée: {error}");
+                        return Some(project_runtime_failure(
+                            &request,
+                            ProjectRuntimeRefusal::RecreateFailed,
+                            observed_at,
+                        ));
+                    }
+                    let replacement =
+                        runtime_binding_from_environment(&environment, resolved_image_id.clone());
+                    if state
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .store
+                        .update_project_runtime(&request.project_id, &replacement, observed_at)
+                        .is_err()
+                    {
+                        return Some(project_runtime_failure(
+                            &request,
+                            ProjectRuntimeRefusal::StoreUnavailable,
+                            observed_at,
+                        ));
+                    }
+                }
+            }
+            if environment.state != ProjectEnvironmentState::Absent {
+                return Some(project_runtime_failure(
+                    &request,
+                    ProjectRuntimeRefusal::EnvironmentBusy,
+                    observed_at,
+                ));
+            }
+            if environment
+                .transition(ProjectEnvironmentState::Creating, None)
+                .is_err()
+            {
+                return Some(project_runtime_failure(
+                    &request,
+                    ProjectRuntimeRefusal::EnvironmentBusy,
+                    observed_at,
+                ));
+            }
+            let preparing = runtime_binding_from_environment(&environment, None);
+            if state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .store
+                .update_project_runtime(&request.project_id, &preparing, observed_at)
+                .is_err()
+            {
+                return Some(project_runtime_failure(
+                    &request,
+                    ProjectRuntimeRefusal::StoreUnavailable,
+                    observed_at,
+                ));
+            }
+            let state_root = match runtime_state_root(&policy, &request.project_id) {
+                Ok(root) => root,
+                Err(_) => {
+                    return Some(project_runtime_failure(
+                        &request,
+                        ProjectRuntimeRefusal::PolicyUnavailable,
+                        observed_at,
+                    ));
+                }
+            };
+            let ingress_socket = match state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .ensure_runtime_ingress(&policy, &environment)
+            {
+                Ok(socket_path) => socket_path,
+                Err(error) => {
+                    warn!("ingress runtime projet indisponible: {error}");
+                    return Some(project_runtime_failure(
+                        &request,
+                        ProjectRuntimeRefusal::PrepareFailed,
+                        observed_at,
+                    ));
+                }
+            };
+            let mut mounts = match resolve_project_mounts(
+                std::path::Path::new(&binding.canonical_root),
+                &state_root,
+            ) {
+                Ok(mounts) => mounts,
+                Err(error) => {
+                    warn!("layout worktree runtime refusé: {error}");
+                    return Some(project_runtime_failure(
+                        &request,
+                        ProjectRuntimeRefusal::PrepareFailed,
+                        observed_at,
+                    ));
+                }
+            };
+            let ingress_directory = match ingress_socket.parent() {
+                Some(directory) => directory.to_path_buf(),
+                None => {
+                    return Some(project_runtime_failure(
+                        &request,
+                        ProjectRuntimeRefusal::PrepareFailed,
+                        observed_at,
+                    ));
+                }
+            };
+            mounts.push(ProjectMount {
+                host_path: ingress_directory,
+                container_path: CONTAINER_INGRESS_DIRECTORY.to_string(),
+                writable: false,
+            });
+            let docker = DockerCli::new(PathBuf::from("docker"), Duration::from_secs(20));
+            let inspection = prepare_environment(&docker, &mut environment, &policy, &mounts);
+            let replacement = runtime_binding_from_environment(
+                &environment,
+                inspection.as_ref().ok().and_then(|inspection| {
+                    inspection
+                        .get("Image")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                }),
+            );
+            let updated = state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .store
+                .update_project_runtime(&request.project_id, &replacement, observed_at);
+            if updated.is_err() {
+                return Some(project_runtime_failure(
+                    &request,
+                    ProjectRuntimeRefusal::StoreUnavailable,
+                    observed_at,
+                ));
+            }
+            match inspection {
+                Ok(_) => {
+                    let current = state
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .store
+                        .project_binding(&request.project_id);
+                    Some(match current {
+                        Ok(Some(current)) => {
+                            project_runtime_outcome(&request, &current, observed_at)
+                        }
+                        _ => project_runtime_failure(
+                            &request,
+                            ProjectRuntimeRefusal::StoreUnavailable,
+                            observed_at,
+                        ),
+                    })
+                }
+                Err(error) => {
+                    warn!("preparation runtime projet refusée: {error}");
+                    Some(project_runtime_failure(
+                        &request,
+                        ProjectRuntimeRefusal::PrepareFailed,
+                        observed_at,
+                    ))
+                }
+            }
         }
         WrapperToDaemon::DelegatedRuntimeEvent {
             execution_id,
@@ -8162,13 +9281,40 @@ fn handle_wrapper_message(
                     .cloned()
                     .unwrap_or_else(|| bridget_core::HOTE_NON_ATTESTE.to_string()),
             };
-            let project_root = if let Some(project) = order.project.as_ref() {
+            let (project_root, docker_target) = if let Some(project) = order.project.as_ref() {
                 match st.store.project_binding(&project.project_id) {
                     Ok(Some(binding))
                         if binding.state == crate::store::ProjectBindingState::Active
                             && binding.generation == project.binding_generation =>
                     {
-                        Some(PathBuf::from(binding.canonical_root))
+                        let project_root = Some(PathBuf::from(&binding.canonical_root));
+                        if binding.backend == ProjectBackend::Docker {
+                            let runtime = match project_environment_from_binding(&binding).and_then(
+                                |environment| {
+                                    let policy = st.resolve_project_runtime_policy(
+                                        &environment.policy_id,
+                                        environment.policy_version,
+                                    )?;
+                                    st.ensure_runtime_ingress(&policy, &environment)?;
+                                    let reservation = environment.reserve_spawn()?;
+                                    let execution = policy.runtime_execution(&order.agent_type)?;
+                                    Ok((environment, reservation, execution))
+                                },
+                            ) {
+                                Ok(target) => target,
+                                Err(_) => {
+                                    return Some(DaemonToWrapper::SpawnRejected {
+                                        command_id,
+                                        reason: SpawnRefusal::DockerRuntimeUnavailable {
+                                            project_id: project.project_id.clone(),
+                                        },
+                                    });
+                                }
+                            };
+                            (project_root, Some(runtime))
+                        } else {
+                            (project_root, None)
+                        }
                     }
                     Ok(_) | Err(_) => {
                         return Some(DaemonToWrapper::SpawnRejected {
@@ -8180,21 +9326,123 @@ fn handle_wrapper_message(
                     }
                 }
             } else {
-                None
+                (None, None)
             };
-            let decision = submit_spawn_for_project(
-                &st.fleet,
-                &st.registry,
-                &st.source_env,
-                &order,
-                unix_timestamp(),
-                st.recovering,
-                &hosts,
-                project_root.as_deref(),
-            );
+            let decision = if docker_target.is_some() {
+                submit_spawn_for_project_in_runtime(
+                    &st.fleet,
+                    &st.registry,
+                    &st.source_env,
+                    &order,
+                    unix_timestamp(),
+                    st.recovering,
+                    &hosts,
+                    project_root.as_deref(),
+                )
+            } else {
+                submit_spawn_for_project(
+                    &st.fleet,
+                    &st.registry,
+                    &st.source_env,
+                    &order,
+                    unix_timestamp(),
+                    st.recovering,
+                    &hosts,
+                    project_root.as_deref(),
+                )
+            };
             match decision {
                 Ok(SpawnDecision::Ready(prepared)) => {
                     let stop = Arc::new(ManagedStopControl::new());
+                    let supervisor_command =
+                        if let Some((environment, reservation, execution)) = docker_target {
+                            let expectation = match RuntimeIngressExpectation::from_environment(
+                                &environment,
+                                prepared.lease.generation,
+                                &prepared.lease.instance_id,
+                            ) {
+                                Ok(expectation) => expectation,
+                                Err(error) => {
+                                    let _ = st.fleet.fail(
+                                        &prepared.lease,
+                                        "negotiation_failed",
+                                        error.to_string(),
+                                    );
+                                    return Some(DaemonToWrapper::SpawnRejected {
+                                        command_id,
+                                        reason: SpawnRefusal::DockerRuntimeUnavailable {
+                                            project_id: environment.project_id,
+                                        },
+                                    });
+                                }
+                            };
+                            let resolved_definition_json =
+                                match serde_json::to_string(&prepared.resolved_definition) {
+                                    Ok(definition) => definition,
+                                    Err(error) => {
+                                        let _ = st.fleet.fail(
+                                            &prepared.lease,
+                                            "negotiation_failed",
+                                            error.to_string(),
+                                        );
+                                        return Some(DaemonToWrapper::SpawnRejected {
+                                            command_id,
+                                            reason: SpawnRefusal::NegotiationFailed {
+                                                detail: "définition runtime non sérialisable"
+                                                    .to_string(),
+                                            },
+                                        });
+                                    }
+                                };
+                            let launch = DockerRuntimeLaunch {
+                                reservation,
+                                container_id: expectation.container_id.clone(),
+                                run_as_uid: environment.run_as_uid,
+                                run_as_gid: environment.run_as_gid,
+                                exec_id: Uuid::new_v4().to_string(),
+                                execution,
+                                agent_type: prepared.agent_type.clone(),
+                                agent_name: prepared.lease.name.clone(),
+                                instance_id: prepared.lease.instance_id.clone(),
+                                agent_generation: prepared.lease.generation,
+                                cwd: prepared.cwd.clone(),
+                                resolved_definition_json,
+                            };
+                            if let Err(error) = st.fleet.record_runtime_execution(
+                                &prepared.lease,
+                                launch.durable_execution(),
+                            ) {
+                                let _ = st.fleet.fail(
+                                    &prepared.lease,
+                                    "negotiation_failed",
+                                    error.to_string(),
+                                );
+                                return Some(DaemonToWrapper::SpawnRejected {
+                                    command_id,
+                                    reason: SpawnRefusal::DockerRuntimeUnavailable {
+                                        project_id: environment.project_id,
+                                    },
+                                });
+                            }
+                            st.runtime_ingress_reconnections.insert(
+                                (expectation.project_id.clone(), expectation.agent_generation),
+                                expectation.clone(),
+                            );
+                            st.runtime_ingress_reservations.insert(
+                                (expectation.project_id.clone(), expectation.agent_generation),
+                                expectation,
+                            );
+                            ManagedSupervisorCommand::StartDocker {
+                                prepared: prepared.clone(),
+                                launch,
+                                stop: Arc::clone(&stop),
+                            }
+                        } else {
+                            ManagedSupervisorCommand::Start {
+                                prepared: prepared.clone(),
+                                stop: Arc::clone(&stop),
+                            }
+                        };
                     st.managed_by_instance.insert(
                         prepared.lease.instance_id.clone(),
                         prepared.lease.command_id.clone(),
@@ -8209,19 +9457,16 @@ fn handle_wrapper_message(
                             stop: Arc::clone(&stop),
                         },
                     );
-                    if st
-                        .managed_tx
-                        .send(ManagedSupervisorCommand::Start {
-                            prepared: prepared.clone(),
-                            stop,
-                        })
-                        .is_err()
-                    {
+                    if st.managed_tx.send(supervisor_command).is_err() {
                         let _ = st.fleet.fail(
                             &prepared.lease,
                             "negotiation_failed",
                             "superviseur de processus indisponible",
                         );
+                        if let Some(project) = prepared.lease.project.as_ref() {
+                            st.runtime_ingress_reservations
+                                .remove(&(project.project_id.clone(), prepared.lease.generation));
+                        }
                         st.managed_spawns.remove(&prepared.lease.command_id);
                         st.managed_by_instance.remove(&prepared.lease.instance_id);
                         st.managed_terminal_instances
@@ -8351,6 +9596,13 @@ fn handle_wrapper_message(
                         if binding.state == crate::store::ProjectBindingState::Active
                             && binding.generation == project.binding_generation =>
                     {
+                        if let Some(reason) = docker_runtime_spawn_refusal(project, binding.backend)
+                        {
+                            return Some(DaemonToWrapper::RelaunchResult {
+                                command_id,
+                                outcome: RelaunchOutcome::Rejected { reason },
+                            });
+                        }
                         Some(PathBuf::from(binding.canonical_root))
                     }
                     Ok(_) | Err(_) => {
@@ -9905,6 +11157,7 @@ mod matrice_roles_tests {
             quarantine_window: 3600,
             retention_days: 7,
             project_root_policy_path: None,
+            project_runtime_policy_path: None,
         };
         let (managed_tx, _managed_rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(DaemonState::new(&config, managed_tx).unwrap()));
@@ -9938,6 +11191,68 @@ mod matrice_roles_tests {
         std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600)).unwrap();
         state.project_root_policy = ProjectRootPolicy::load(&policy_path);
         allowed_root
+    }
+
+    #[test]
+    fn spec_066_spawn_docker_refuse_avant_tout_lanceur_hote() {
+        let (shared, config) = etat_nu("docker-no-fallback");
+        let root =
+            std::env::temp_dir().join(format!("bridget-066-docker-spawn-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        {
+            let mut state = shared.lock().unwrap();
+            state
+                .store
+                .bind_project_docker_registration(
+                    "docker-bind",
+                    "project-066",
+                    root.to_str().unwrap(),
+                    ProjectRuntimeBinding {
+                        state: ProjectEnvironmentState::Ready,
+                        policy_id: "fixture".to_string(),
+                        policy_version: 1,
+                        policy_digest: format!("sha256:{}", "a".repeat(64)),
+                        image_reference: format!("sha256:{}", "b".repeat(64)),
+                        resolved_image_id: Some(format!("sha256:{}", "c".repeat(64))),
+                        run_as_uid: 1002,
+                        run_as_gid: 1002,
+                        environment_epoch: 1,
+                        container_id: Some("d".repeat(64)),
+                        last_reason: None,
+                    },
+                    unix_now_secs(),
+                )
+                .unwrap();
+        }
+        let now = unix_now_secs();
+        let response = handle_wrapper_message(
+            "docker-spawn",
+            WrapperToDaemon::SpawnOrder {
+                agent_type: "fixture".to_string(),
+                project: Some(bridget_transport::protocol::ProjectReference {
+                    project_id: "project-066".to_string(),
+                    binding_generation: 1,
+                }),
+                name: Some("fixture-docker".to_string()),
+                cwd: root.display().to_string(),
+                persistent: false,
+                command_id: "docker-spawn-command".to_string(),
+                issued_at: now,
+                deadline_at: now + 60,
+                ownership: None,
+            },
+            &shared,
+        );
+        assert!(matches!(
+            response,
+            Some(DaemonToWrapper::SpawnRejected {
+                reason: SpawnRefusal::DockerRuntimeUnavailable { project_id },
+                ..
+            }) if project_id == "project-066"
+        ));
+        assert!(shared.lock().unwrap().managed_spawns.is_empty());
+        let _ = std::fs::remove_file(config.db_path);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -9986,6 +11301,8 @@ mod matrice_roles_tests {
                 project_id: "project-1".to_string(),
                 requested_root: allowed_root.join("worktree/..").display().to_string(),
                 backend: ProjectBackend::Host,
+                policy_id: None,
+                policy_version: None,
             },
         };
         let response = handle_wrapper_message(connection, request.clone(), &shared);
@@ -10015,6 +11332,8 @@ mod matrice_roles_tests {
                     project_id: "project-2".to_string(),
                     requested_root: allowed_root.display().to_string(),
                     backend: ProjectBackend::Host,
+                    policy_id: None,
+                    policy_version: None,
                 },
             },
             &shared,
@@ -10073,12 +11392,89 @@ mod matrice_roles_tests {
                         project_id: "project-uid".to_string(),
                         requested_root: "/tmp/project-uid".to_string(),
                         backend: ProjectBackend::Host,
+                    policy_id: None,
+                    policy_version: None,
                     },
                 },
                 &shared,
             ),
             Some(DaemonToWrapper::ProjectRegistryOutcome { outcome })
                 if outcome.reason == Some(ProjectRegistryRefusal::PeerUidMismatch)
+        ));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn spec_066_daemon_runtime_status_est_local_et_ne_divulgue_pas_la_racine() {
+        let (shared, config) = etat_nu("project-runtime-status");
+        let connection = "project-runtime-local";
+        {
+            let mut state = shared.lock().unwrap();
+            state
+                .peer_uids
+                .insert(connection.to_string(), unsafe { libc::geteuid() });
+            state
+                .store
+                .bind_project_docker_registration(
+                    "docker-register",
+                    "project-066",
+                    "/srv/private/project-066",
+                    ProjectRuntimeBinding {
+                        state: ProjectEnvironmentState::Absent,
+                        policy_id: "fixture".to_string(),
+                        policy_version: 1,
+                        policy_digest: format!("sha256:{}", "a".repeat(64)),
+                        image_reference: format!("sha256:{}", "b".repeat(64)),
+                        resolved_image_id: None,
+                        run_as_uid: 1002,
+                        run_as_gid: 1002,
+                        environment_epoch: 1,
+                        container_id: None,
+                        last_reason: None,
+                    },
+                    unix_now_secs(),
+                )
+                .unwrap();
+        }
+        let now = unix_now_secs();
+        let response = handle_wrapper_message(
+            connection,
+            WrapperToDaemon::ProjectRuntimeRequest {
+                request: ProjectRuntimeRequest {
+                    contract_version: crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION,
+                    command_id: "runtime-status-1".to_string(),
+                    issued_at: now,
+                    deadline_at: now + 60,
+                    operation: ProjectRuntimeOperation::Status,
+                    project_id: "project-066".to_string(),
+                },
+            },
+            &shared,
+        );
+        assert!(matches!(
+            response,
+            Some(DaemonToWrapper::ProjectRuntimeOutcome { outcome })
+                if outcome.state.as_deref() == Some("absent")
+                    && outcome.binding_generation == Some(1)
+                    && outcome.runtime_policy.is_some()
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "project-runtime-foreign",
+                WrapperToDaemon::ProjectRuntimeRequest {
+                    request: ProjectRuntimeRequest {
+                        contract_version: crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION,
+                        command_id: "runtime-status-foreign".to_string(),
+                        issued_at: now,
+                        deadline_at: now + 60,
+                        operation: ProjectRuntimeOperation::Status,
+                        project_id: "project-066".to_string(),
+                    },
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ProjectRuntimeOutcome { outcome })
+                if outcome.reason == Some(ProjectRuntimeRefusal::PeerUidMismatch)
         ));
         let _ = std::fs::remove_file(config.db_path);
     }
@@ -11159,6 +12555,7 @@ mod presence_tests {
             quarantine_window: 3600,
             retention_days: 7,
             project_root_policy_path: None,
+            project_runtime_policy_path: None,
         };
         let (managed_tx, _managed_rx) = mpsc::channel();
         let mut state = DaemonState::new(&config, managed_tx).unwrap();
@@ -11267,6 +12664,7 @@ mod presence_tests {
             quarantine_window: 3600,
             retention_days: 7,
             project_root_policy_path: None,
+            project_runtime_policy_path: None,
         };
         let _home_lock = HOME_REGISTRY_LOCK.lock().unwrap();
         let (managed_tx, _managed_rx) = mpsc::channel();
@@ -11631,6 +13029,7 @@ mod presence_tests {
             quarantine_window: 3600,
             retention_days: 7,
             project_root_policy_path: None,
+            project_runtime_policy_path: None,
         };
         let (managed_tx, _managed_rx) = mpsc::channel();
         let mut state = DaemonState::new(&config, managed_tx).unwrap();
@@ -11725,6 +13124,7 @@ mod presence_tests {
             quarantine_window: 3600,
             retention_days: 7,
             project_root_policy_path: None,
+            project_runtime_policy_path: None,
         }
     }
 
@@ -11889,6 +13289,7 @@ mod presence_tests {
                     domain: None,
                     project: None,
                     agent_link: None,
+                    runtime_execution: None,
                 },
             );
         }
@@ -11992,6 +13393,7 @@ mod presence_tests {
                     domain: None,
                     project: None,
                     agent_link: None,
+                    runtime_execution: None,
                 },
             );
         }
@@ -12061,6 +13463,7 @@ mod presence_tests {
                 domain: None,
                 project: None,
                 agent_link: None,
+                runtime_execution: None,
             },
         );
         desired.persist(&fleet).unwrap();
@@ -12111,6 +13514,7 @@ mod presence_tests {
                 domain: None,
                 project: None,
                 agent_link: None,
+                runtime_execution: None,
             },
         );
         desired.persist(&fleet).unwrap();
@@ -12187,6 +13591,7 @@ mod presence_tests {
                     domain: None,
                     project: None,
                     agent_link: None,
+                    runtime_execution: None,
                 },
             );
         }
@@ -12237,6 +13642,7 @@ mod presence_tests {
                 domain: None,
                 project: None,
                 agent_link: None,
+                runtime_execution: None,
             },
         );
         desired.persist(&fleet).unwrap();
@@ -12352,6 +13758,7 @@ mod presence_tests {
                     domain: None,
                     project: None,
                     agent_link: None,
+                    runtime_execution: None,
                 },
             );
         }
@@ -17351,6 +18758,7 @@ mod presence_tests {
             quarantine_window: 3600,
             retention_days: 7,
             project_root_policy_path: None,
+            project_runtime_policy_path: None,
         };
         let (managed_tx, _managed_rx) = mpsc::channel();
         let mut state = DaemonState::new(&config, managed_tx).unwrap();
@@ -17739,7 +19147,7 @@ mod presence_tests {
             lease.instance_id.clone(),
             SupervisedProcess {
                 prepared: managed_test_prepared(&lease, &process_root),
-                child,
+                child: SupervisedChild::Host(child),
                 registered: Some(("conn-1".to_string(), "agent-2".to_string())),
                 connected: true,
                 failure_sent: false,
@@ -17823,7 +19231,7 @@ mod presence_tests {
             lease.instance_id.clone(),
             SupervisedProcess {
                 prepared: managed_test_prepared(&lease, &process_root),
-                child,
+                child: SupervisedChild::Host(child),
                 registered: Some(("conn-1".to_string(), "agent-2".to_string())),
                 connected: true,
                 failure_sent: false,
@@ -17939,7 +19347,7 @@ mod presence_tests {
             lease.instance_id.clone(),
             SupervisedProcess {
                 prepared,
-                child,
+                child: SupervisedChild::Host(child),
                 registered: None,
                 connected: false,
                 failure_sent: false,
@@ -18017,6 +19425,7 @@ mod presence_tests {
             quarantine_window: 3600,
             retention_days: 7,
             project_root_policy_path: None,
+            project_runtime_policy_path: None,
         };
         let (managed_tx, managed_rx) = mpsc::channel();
         let mut state = DaemonState::new(&config, managed_tx.clone()).unwrap();
@@ -18339,7 +19748,7 @@ mod presence_tests {
             lease.instance_id.clone(),
             SupervisedProcess {
                 prepared,
-                child,
+                child: SupervisedChild::Host(child),
                 registered: Some(("conn-1".to_string(), "agent-2".to_string())),
                 connected: true,
                 failure_sent: false,
@@ -19076,5 +20485,462 @@ fn spec_068_enfant_sans_lien_ne_notifie_aucun_coordinateur() {
             .is_empty()
     );
     drop(shared);
+    let _ = std::fs::remove_file(config.db_path);
+}
+
+#[cfg(test)]
+#[test]
+fn spec_066_ingress_prive_refuse_sans_reservation_avant_toute_inscription() {
+    let (state, config) = presence_tests::state_with_registered_agent("spec-066-ingress-refuse");
+    let shared = Arc::new(Mutex::new(state));
+    let (daemon_stream, wrapper_stream) = UnixStream::pair().unwrap();
+    let daemon_state = Arc::clone(&shared);
+    let worker = thread::spawn(move || {
+        handle_runtime_ingress_connection(daemon_stream, daemon_state).unwrap();
+    });
+    let mut writer = BufWriter::new(wrapper_stream.try_clone().unwrap());
+    let hello = WrapperToDaemon::RuntimeIngressHello {
+        hello: bridget_transport::protocol::RuntimeIngressHandshake {
+            contract_version: bridget_transport::protocol::RUNTIME_INGRESS_CONTRACT_VERSION,
+            project_id: "project-066".to_string(),
+            binding_generation: 1,
+            container_id: "a".repeat(64),
+            environment_epoch: 1,
+            agent_generation: 1,
+            instance_id: "00000000-0000-4000-8000-000000000066".to_string(),
+        },
+    };
+    writeln!(writer, "{}", encode(&hello).unwrap()).unwrap();
+    writer.flush().unwrap();
+    let mut reader = BufReader::new(wrapper_stream);
+    let mut reply = String::new();
+    reader.read_line(&mut reply).unwrap();
+    assert!(matches!(
+        decode(reply.trim()).unwrap(),
+        DaemonToWrapper::RuntimeIngressRejected {
+            reason: RuntimeIngressRefusal::ReservationMissing
+        }
+    ));
+    drop(reader);
+    drop(writer);
+    worker.join().unwrap();
+    drop(shared);
+    let _ = std::fs::remove_file(config.socket_path);
+    let _ = std::fs::remove_file(config.db_path);
+}
+
+#[cfg(test)]
+#[test]
+fn spec_066_projet_docker_ne_replie_jamais_un_spawn_sur_hote() {
+    let project = bridget_transport::protocol::ProjectReference {
+        project_id: "project-066".to_string(),
+        binding_generation: 1,
+    };
+    assert_eq!(
+        docker_runtime_spawn_refusal(&project, ProjectBackend::Docker),
+        Some(SpawnRefusal::DockerRuntimeUnavailable {
+            project_id: "project-066".to_string(),
+        })
+    );
+    assert_eq!(
+        docker_runtime_spawn_refusal(&project, ProjectBackend::Host),
+        None
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn spec_066_reservation_ingress_refuse_falsification_et_rejeu() {
+    let mut reservations = HashMap::new();
+    let reconnections = HashMap::new();
+    let expectation = crate::project_runtime::RuntimeIngressExpectation {
+        project_id: "project-066".to_string(),
+        binding_generation: 2,
+        container_id: "a".repeat(64),
+        environment_epoch: 3,
+        agent_generation: 4,
+        instance_id: "00000000-0000-4000-8000-000000000066".to_string(),
+        run_as_uid: 1002,
+    };
+    reservations.insert(
+        (expectation.project_id.clone(), expectation.agent_generation),
+        expectation.clone(),
+    );
+    let mut forged = bridget_transport::protocol::RuntimeIngressHandshake {
+        contract_version: bridget_transport::protocol::RUNTIME_INGRESS_CONTRACT_VERSION,
+        project_id: expectation.project_id.clone(),
+        binding_generation: expectation.binding_generation,
+        container_id: expectation.container_id.clone(),
+        environment_epoch: expectation.environment_epoch.saturating_add(1),
+        agent_generation: expectation.agent_generation,
+        instance_id: expectation.instance_id.clone(),
+    };
+    assert_eq!(
+        consume_runtime_ingress_reservation(&mut reservations, &reconnections, &forged, Some(1002)),
+        Err(RuntimeIngressRefusal::EnvironmentEpochStale)
+    );
+    assert_eq!(reservations.len(), 1);
+    forged.environment_epoch = expectation.environment_epoch;
+    assert_eq!(
+        consume_runtime_ingress_reservation(&mut reservations, &reconnections, &forged, Some(1002)),
+        Ok(expectation)
+    );
+    assert_eq!(
+        consume_runtime_ingress_reservation(&mut reservations, &reconnections, &forged, Some(1002)),
+        Err(RuntimeIngressRefusal::ReservationMissing)
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn spec_066_ingress_accepte_uniquement_la_reservation_avant_register() {
+    let (state, config) = presence_tests::state_with_registered_agent("spec-066-ingress-admit");
+    let shared = Arc::new(Mutex::new(state));
+    let expectation = RuntimeIngressExpectation {
+        project_id: "project-066".to_string(),
+        binding_generation: 2,
+        container_id: "a".repeat(64),
+        environment_epoch: 3,
+        agent_generation: 4,
+        instance_id: "00000000-0000-4000-8000-000000000066".to_string(),
+        run_as_uid: unsafe { libc::geteuid() },
+    };
+    shared.lock().unwrap().runtime_ingress_reservations.insert(
+        (expectation.project_id.clone(), expectation.agent_generation),
+        expectation.clone(),
+    );
+    let (daemon_stream, wrapper_stream) = UnixStream::pair().unwrap();
+    let daemon_state = Arc::clone(&shared);
+    let worker = thread::spawn(move || {
+        handle_runtime_ingress_connection(daemon_stream, daemon_state).unwrap();
+    });
+    let read_stream = wrapper_stream.try_clone().unwrap();
+    read_stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    let mut writer = BufWriter::new(wrapper_stream);
+    let hello = WrapperToDaemon::RuntimeIngressHello {
+        hello: bridget_transport::protocol::RuntimeIngressHandshake {
+            contract_version: bridget_transport::protocol::RUNTIME_INGRESS_CONTRACT_VERSION,
+            project_id: expectation.project_id.clone(),
+            binding_generation: expectation.binding_generation,
+            container_id: expectation.container_id.clone(),
+            environment_epoch: expectation.environment_epoch,
+            agent_generation: expectation.agent_generation,
+            instance_id: expectation.instance_id.clone(),
+        },
+    };
+    writeln!(writer, "{}", encode(&hello).unwrap()).unwrap();
+    writer.flush().unwrap();
+    let mut reader = BufReader::new(read_stream);
+    let mut accepted = String::new();
+    reader.read_line(&mut accepted).unwrap();
+    assert!(matches!(
+        decode(accepted.trim()).unwrap(),
+        DaemonToWrapper::RuntimeIngressAccepted {
+            project_id,
+            binding_generation: 2,
+            environment_epoch: 3,
+        } if project_id == "project-066"
+    ));
+    let register = WrapperToDaemon::Register {
+        agent_type: "claude".to_string(),
+        name: Some("runtime-agent-066".to_string()),
+        host: Some("runtime".to_string()),
+        transport: Some("acp".to_string()),
+        channel: ChannelReport::Known("unix".to_string()),
+        mode: Some(PresenceMode::Acp),
+        location: None,
+        os: Some("Linux".to_string()),
+        instance_id: Some("runtime-instance-066".to_string()),
+        domain: None,
+        turn_in_progress: false,
+        journal_available: Some(true),
+    };
+    writeln!(writer, "{}", encode(&register).unwrap()).unwrap();
+    writer.flush().unwrap();
+    let mut registered = String::new();
+    reader.read_line(&mut registered).unwrap();
+    assert!(matches!(
+        decode(registered.trim()).unwrap(),
+        DaemonToWrapper::Registered { name } if name == "runtime-agent-066"
+    ));
+    drop(reader);
+    drop(writer);
+    worker.join().unwrap();
+    drop(shared);
+    let _ = std::fs::remove_file(config.socket_path);
+    let _ = std::fs::remove_file(config.db_path);
+}
+#[cfg(test)]
+#[test]
+fn spec_066_redemarrage_retablit_ingress_sans_dupliquer_l_agent_docker() {
+    let (mut first, config) =
+        presence_tests::state_with_registered_agent("spec-066-runtime-restart");
+    let root = std::env::temp_dir().join(format!("bridget-066-runtime-restart-{}", Uuid::new_v4()));
+    let project_root = root.join("project");
+    let state_root_parent = std::env::temp_dir().join(format!("b066-{}", Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::create_dir_all(&state_root_parent).unwrap();
+    let run_as_uid = unsafe { libc::geteuid() };
+    let run_as_gid = unsafe { libc::getegid() };
+    let policy_config = ProjectRuntimePolicyConfig {
+        contract_version: 1,
+        state_root_parent: state_root_parent.clone(),
+        policies: vec![crate::project_runtime::ProjectRuntimePolicyDefinition {
+            policy_id: "fixture-runtime".to_string(),
+            policy_version: 1,
+            image_reference_kind: crate::project_runtime::ImageReferenceKind::LocalImageId,
+            image_reference: format!("sha256:{}", "a".repeat(64)),
+            run_as_uid,
+            run_as_gid,
+            cpu_limit: 1.0,
+            memory_limit_bytes: 512 * 1024 * 1024,
+            pids_limit: 64,
+            tmpfs: vec!["/tmp".to_string()],
+            network_mode: "bridge".to_string(),
+            runtime_launcher: Some("/usr/local/bin/bridget".to_string()),
+            runtime_executables: vec![crate::project_runtime::RuntimeExecutableDefinition {
+                agent_type: "fixture".to_string(),
+                provider_command: "/usr/local/bin/fixture-agent".to_string(),
+            }],
+        }],
+    };
+    first.project_runtime_policy = Ok(policy_config.clone());
+    let now = unix_timestamp();
+    first
+        .store
+        .bind_project_docker_registration(
+            "runtime-restart-bind",
+            "project-runtime-restart",
+            project_root.to_str().unwrap(),
+            ProjectRuntimeBinding {
+                state: ProjectEnvironmentState::Ready,
+                policy_id: "fixture-runtime".to_string(),
+                policy_version: 1,
+                policy_digest: format!("sha256:{}", "b".repeat(64)),
+                image_reference: format!("sha256:{}", "a".repeat(64)),
+                resolved_image_id: Some(format!("sha256:{}", "a".repeat(64))),
+                run_as_uid,
+                run_as_gid,
+                environment_epoch: 1,
+                container_id: Some("d".repeat(64)),
+                last_reason: None,
+            },
+            now,
+        )
+        .unwrap();
+    let order = FleetSpawnOrder {
+        agent_type: "fixture".to_string(),
+        requested_name: Some("runtime-restart-agent".to_string()),
+        cwd: project_root.clone(),
+        persistent: true,
+        command_id: "runtime-restart-spawn".to_string(),
+        issued_at: now,
+        deadline_at: now + 60,
+        ownership: None,
+        project: Some(bridget_transport::protocol::ProjectReference {
+            project_id: "project-runtime-restart".to_string(),
+            binding_generation: 1,
+        }),
+    };
+    let lease = match first.fleet.request_spawn(&order, now).unwrap() {
+        crate::fleet::SpawnSubmission::Start(lease) => lease,
+        other => panic!("réservation runtime inattendue: {other:?}"),
+    };
+    let definition = AgentRegistry::from_json(
+        r#"{"agents":{"fixture":{"command":"/bin/sh","protocol":"acp","forbidden_env":[],"pass_env":[]}}}"#,
+        "/tmp/spec-066-runtime-restart.json",
+    )
+    .unwrap()
+    .resolved_definition("fixture")
+    .unwrap();
+    first.fleet.mark_starting(&lease, now, &definition).unwrap();
+    first
+        .fleet
+        .record_runtime_execution(
+            &lease,
+            crate::desired_state::ContainerAgentExecution {
+                agent_instance_id: lease.instance_id.clone(),
+                generation: lease.generation,
+                project_id: "project-runtime-restart".to_string(),
+                binding_generation: 1,
+                environment_epoch: 1,
+                container_id: "d".repeat(64),
+                exec_id: Uuid::new_v4().to_string(),
+                cwd: project_root.clone(),
+                state: crate::desired_state::ContainerAgentExecutionState::Starting,
+                provider_identity: "/usr/local/bin/fixture-agent".to_string(),
+            },
+        )
+        .unwrap();
+    assert!(
+        first
+            .fleet
+            .desired_entry("runtime-restart-agent")
+            .unwrap()
+            .and_then(|entry| entry.runtime_execution)
+            .is_some()
+    );
+    drop(first);
+
+    let (managed_tx, _managed_rx) = mpsc::channel();
+    let mut restarted = DaemonState::new(&config, managed_tx).unwrap();
+    restarted.project_runtime_policy = Ok(policy_config);
+    restarted.restore_runtime_ingress_reconnections();
+    let key = ("project-runtime-restart".to_string(), lease.generation);
+    let expectation = restarted
+        .runtime_ingress_reconnections
+        .get(&key)
+        .cloned()
+        .expect("reconnexion Docker restaurée");
+    assert_eq!(expectation.instance_id, lease.instance_id);
+    assert_eq!(
+        restarted.managed_by_instance.get(&lease.instance_id),
+        Some(&lease.command_id)
+    );
+    assert!(
+        state_root_parent
+            .join("project-runtime-restart/runtime/1/bridget.sock")
+            .exists()
+    );
+    assert!(
+        reserve_managed_recoveries(&mut restarted, now + 1)
+            .unwrap()
+            .is_empty(),
+        "un redémarrage ne relance pas un second docker exec"
+    );
+    let hello = bridget_transport::protocol::RuntimeIngressHandshake {
+        contract_version: bridget_transport::protocol::RUNTIME_INGRESS_CONTRACT_VERSION,
+        project_id: expectation.project_id.clone(),
+        binding_generation: expectation.binding_generation,
+        container_id: expectation.container_id.clone(),
+        environment_epoch: expectation.environment_epoch,
+        agent_generation: expectation.agent_generation,
+        instance_id: expectation.instance_id.clone(),
+    };
+    let mut reservations = HashMap::new();
+    assert_eq!(
+        consume_runtime_ingress_reservation(
+            &mut reservations,
+            &restarted.runtime_ingress_reconnections,
+            &hello,
+            Some(run_as_uid),
+        ),
+        Ok(expectation.clone())
+    );
+    assert_eq!(
+        consume_runtime_ingress_reservation(
+            &mut reservations,
+            &restarted.runtime_ingress_reconnections,
+            &hello,
+            Some(run_as_uid),
+        ),
+        Ok(expectation)
+    );
+    drop(restarted);
+    let _ = std::fs::remove_file(config.socket_path);
+    let _ = std::fs::remove_file(config.db_path);
+    let _ = std::fs::remove_dir_all(state_root_parent);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(test)]
+#[test]
+fn spec_066_lifecycle_refuse_l_action_destructive_si_agent_projet_actif() {
+    let (mut state, config) =
+        presence_tests::state_with_registered_agent("spec-066-lifecycle-active");
+    let now = unix_timestamp();
+    let order = FleetSpawnOrder {
+        agent_type: "fixture".to_string(),
+        requested_name: Some("runtime-active-agent".to_string()),
+        cwd: PathBuf::from("/tmp"),
+        persistent: true,
+        command_id: "runtime-active-command".to_string(),
+        issued_at: now,
+        deadline_at: now + 60,
+        ownership: None,
+        project: Some(bridget_transport::protocol::ProjectReference {
+            project_id: "project-runtime-active".to_string(),
+            binding_generation: 1,
+        }),
+    };
+    let lease = match state.fleet.request_spawn(&order, now).unwrap() {
+        crate::fleet::SpawnSubmission::Start(lease) => lease,
+        other => panic!("réservation runtime inattendue: {other:?}"),
+    };
+    let definition = AgentRegistry::from_json(
+        r#"{"agents":{"fixture":{"command":"/bin/sh","protocol":"acp"}}}"#,
+        "/tmp/spec-066-lifecycle-active.json",
+    )
+    .unwrap()
+    .resolved_definition("fixture")
+    .unwrap();
+    state.fleet.mark_starting(&lease, now, &definition).unwrap();
+    state
+        .fleet
+        .register_connected(&lease, &lease.instance_id, now + 1)
+        .unwrap();
+    assert!(project_has_active_agents(
+        &state.fleet,
+        "project-runtime-active"
+    ));
+    state
+        .peer_uids
+        .insert("runtime-control".to_string(), unsafe { libc::geteuid() });
+    state
+        .store
+        .bind_project_docker_registration(
+            "register-runtime-active",
+            "project-runtime-active",
+            "/srv/projects/runtime-active",
+            crate::store::ProjectRuntimeBinding {
+                state: ProjectEnvironmentState::Ready,
+                policy_id: "fixture".to_string(),
+                policy_version: 1,
+                policy_digest: format!("sha256:{}", "a".repeat(64)),
+                image_reference: format!("sha256:{}", "b".repeat(64)),
+                resolved_image_id: None,
+                run_as_uid: 1002,
+                run_as_gid: 1002,
+                environment_epoch: 1,
+                container_id: Some("c".repeat(64)),
+                last_reason: None,
+            },
+            now,
+        )
+        .unwrap();
+    let shared = Arc::new(Mutex::new(state));
+    assert!(matches!(
+        handle_wrapper_message(
+            "runtime-control",
+            WrapperToDaemon::ProjectRuntimeRequest {
+                request: ProjectRuntimeRequest {
+                    contract_version: crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION,
+                    command_id: "remove-runtime-active".to_string(),
+                    issued_at: now,
+                    deadline_at: now + 60,
+                    operation: ProjectRuntimeOperation::Remove,
+                    project_id: "project-runtime-active".to_string(),
+                },
+            },
+            &shared,
+        ),
+        Some(DaemonToWrapper::ProjectRuntimeOutcome { outcome })
+            if outcome.reason == Some(ProjectRuntimeRefusal::EnvironmentBusy)
+    ));
+    let state = match Arc::try_unwrap(shared) {
+        Ok(state) => state
+            .into_inner()
+            .unwrap_or_else(|poison| poison.into_inner()),
+        Err(_) => panic!("aucune autre référence au daemon"),
+    };
+    state.fleet.mark_stopped(&lease.name).unwrap();
+    assert!(!project_has_active_agents(
+        &state.fleet,
+        "project-runtime-active"
+    ));
+    drop(state);
+    let _ = std::fs::remove_file(config.socket_path);
     let _ = std::fs::remove_file(config.db_path);
 }

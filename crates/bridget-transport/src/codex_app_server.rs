@@ -2212,44 +2212,43 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                     // toujours. La réponse négative est volontairement sans
                     // corps fournisseur : le journal garde seulement un code
                     // stable et l'empreinte déjà publique de la méthode.
-                    if value.get("id").is_some() {
-                        if let Some((reply, payload, delegated_reference)) =
+                    if value.get("id").is_some()
+                        && let Some((reply, payload, delegated_reference)) =
                             unsupported_provider_request_response(&value)
-                        {
-                            let message_id = queue
-                                .0
-                                .lock()
-                                .unwrap_or_else(|poison| poison.into_inner())
-                                .active
-                                .as_ref()
-                                .map(|active| active.message_id.clone());
-                            record_or_terminal(
-                                &journal,
+                    {
+                        let message_id = queue
+                            .0
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .active
+                            .as_ref()
+                            .map(|active| active.message_id.clone());
+                        record_or_terminal(
+                            &journal,
+                            &observations,
+                            "provider_request_rejected",
+                            message_id.as_deref(),
+                            payload,
+                        );
+                        if let Err(error) = write_value(&writer, reply) {
+                            push_source(
                                 &observations,
-                                "provider_request_rejected",
-                                message_id.as_deref(),
-                                payload,
+                                raw.clone(),
+                                ManagedEventKind::Error {
+                                    detail: format!(
+                                        "réponse à la requête Codex non prise en charge impossible: {error}"
+                                    ),
+                                },
                             );
-                            if let Err(error) = write_value(&writer, reply) {
-                                push_source(
-                                    &observations,
-                                    raw.clone(),
-                                    ManagedEventKind::Error {
-                                        detail: format!(
-                                            "réponse à la requête Codex non prise en charge impossible: {error}"
-                                        ),
-                                    },
-                                );
-                            } else {
-                                push_source(
-                                    &observations,
-                                    raw.clone(),
-                                    ManagedEventKind::Diagnostic {
-                                        code: "unsupported_provider_request".to_string(),
-                                        reference: delegated_reference,
-                                    },
-                                );
-                            }
+                        } else {
+                            push_source(
+                                &observations,
+                                raw.clone(),
+                                ManagedEventKind::Diagnostic {
+                                    code: "unsupported_provider_request".to_string(),
+                                    reference: delegated_reference,
+                                },
+                            );
                         }
                     }
                     push_source(

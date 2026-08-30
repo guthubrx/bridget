@@ -169,6 +169,8 @@ pub fn prepare_project_registration(
         project_id: request.project_id.clone(),
         requested_root: request.requested_root.clone(),
         backend: ProjectBackend::Host,
+        policy_id: None,
+        policy_version: None,
     };
     let canonical_request = serde_json::to_vec(&bind_request)
         .map_err(|_| ProjectRegistrationError::Invalid("ProjectBindRequest non sérialisable"))?;

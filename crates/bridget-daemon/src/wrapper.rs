@@ -8,8 +8,8 @@ use bridget_transport::journal::{
 };
 use bridget_transport::protocol::{
     DelegatedRuntimeEventFrame, DelegatedRuntimeEventKind, DiskSpaceFact, ExecutionControlCommand,
-    ExecutionControlOperation, ExecutionProviderContext, PresenceMode, ProviderOperation, decode,
-    encode,
+    ExecutionControlOperation, ExecutionProviderContext, PresenceMode, ProviderOperation,
+    RUNTIME_INGRESS_CONTRACT_VERSION, RuntimeIngressHandshake, decode, encode,
 };
 use bridget_transport::{
     AcpOptions, AcpTransport, AttachRefusal, AttachWindow, ChannelReport, ClaudeStreamJsonOptions,
@@ -900,14 +900,104 @@ fn deliver_idempotent_to_interactive(
 }
 
 fn socket_path() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home)
-            .join(".cache")
-            .join("bridget")
-            .join("bridget.sock")
+    socket_path_from(
+        std::env::var_os("BRIDGET_RUNTIME_SOCKET").map(PathBuf::from),
+        std::env::var_os("HOME").map(PathBuf::from),
+    )
+}
+
+/// Le runtime Docker fournit son socket explicitement. Sa présence interdit
+/// toute dérivation depuis HOME: un chemin relatif ferme simplement la
+/// connexion au lieu de retomber sur le socket hôte.
+fn socket_path_from(runtime_socket: Option<PathBuf>, home: Option<PathBuf>) -> PathBuf {
+    if let Some(socket) = runtime_socket {
+        return if socket.is_absolute() {
+            socket
+        } else {
+            PathBuf::from("/run/bridget/runtime/invalid.sock")
+        };
+    }
+    if let Some(home) = home {
+        home.join(".cache").join("bridget").join("bridget.sock")
     } else {
         PathBuf::from("/tmp").join("bridget.sock")
     }
+}
+fn runtime_ingress_required_value(value: Option<&str>, field: &str) -> Result<String, String> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| format!("runtime ingress: {field} absent"))
+}
+
+fn runtime_ingress_handshake_from_values(
+    runtime_socket_configured: bool,
+    project_id: Option<&str>,
+    binding_generation: Option<&str>,
+    container_id: Option<&str>,
+    environment_epoch: Option<&str>,
+    agent_generation: Option<&str>,
+    instance_id: Option<&str>,
+) -> Result<Option<RuntimeIngressHandshake>, String> {
+    if !runtime_socket_configured {
+        return Ok(None);
+    }
+    let project_id = runtime_ingress_required_value(project_id, "project_id")?;
+    let container_id = runtime_ingress_required_value(container_id, "container_id")?;
+    let instance_id = runtime_ingress_required_value(instance_id, "instance_id")?;
+    uuid::Uuid::parse_str(&instance_id)
+        .map_err(|_| "runtime ingress: instance_id invalide".to_string())?;
+
+    let parse_generation = |value: Option<&str>, field: &str| {
+        runtime_ingress_required_value(value, field)?
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| format!("runtime ingress: {field} invalide"))
+    };
+    Ok(Some(RuntimeIngressHandshake {
+        contract_version: RUNTIME_INGRESS_CONTRACT_VERSION,
+        project_id,
+        binding_generation: parse_generation(binding_generation, "binding_generation")?,
+        container_id,
+        environment_epoch: parse_generation(environment_epoch, "environment_epoch")?,
+        agent_generation: parse_generation(agent_generation, "agent_generation")?,
+        instance_id,
+    }))
+}
+
+fn runtime_ingress_handshake_from_environment() -> Result<Option<RuntimeIngressHandshake>, String> {
+    let project_id = std::env::var("BRIDGET_RUNTIME_PROJECT_ID").ok();
+    let binding_generation = std::env::var("BRIDGET_RUNTIME_BINDING_GENERATION").ok();
+    let container_id = std::env::var("BRIDGET_RUNTIME_CONTAINER_ID").ok();
+    let environment_epoch = std::env::var("BRIDGET_RUNTIME_ENVIRONMENT_EPOCH").ok();
+    let agent_generation = std::env::var("BRIDGET_RUNTIME_AGENT_GENERATION").ok();
+    let instance_id = std::env::var("BRIDGET_RUNTIME_INSTANCE_ID").ok();
+    runtime_ingress_handshake_from_values(
+        std::env::var_os("BRIDGET_RUNTIME_SOCKET").is_some(),
+        project_id.as_deref(),
+        binding_generation.as_deref(),
+        container_id.as_deref(),
+        environment_epoch.as_deref(),
+        agent_generation.as_deref(),
+        instance_id.as_deref(),
+    )
+}
+
+/// Une instance lancée dans un runtime de projet conserve l'identité attribuée
+/// par le lease hôte. Sans elle, un wrapper du conteneur ne peut pas rejoindre
+/// la réservation privée qui vient de lui être accordée.
+fn runtime_instance_id_from_environment() -> Result<Option<String>, String> {
+    if runtime_ingress_handshake_from_environment()?.is_none() {
+        return Ok(None);
+    }
+    let instance_id = runtime_ingress_required_value(
+        std::env::var("BRIDGET_RUNTIME_INSTANCE_ID").ok().as_deref(),
+        "instance_id",
+    )?;
+    uuid::Uuid::parse_str(&instance_id)
+        .map_err(|_| "runtime ingress: instance_id invalide".to_string())?;
+    Ok(Some(instance_id))
 }
 
 fn unix_now_secs() -> i64 {
@@ -1416,6 +1506,36 @@ fn connect_and_register_at(
     set_cloexec(&write_stream);
     let mut writer = BufWriter::new(write_stream);
     let mut reader = BufReader::new(read_stream);
+
+    if let Some(hello) = runtime_ingress_handshake_from_environment()? {
+        let request = WrapperToDaemon::RuntimeIngressHello {
+            hello: hello.clone(),
+        };
+        writeln!(
+            writer,
+            "{}",
+            encode(&request).map_err(|error| error.to_string())?
+        )
+        .map_err(|error| error.to_string())?;
+        writer.flush().map_err(|error| error.to_string())?;
+        let mut reply = String::new();
+        reader
+            .read_line(&mut reply)
+            .map_err(|error| error.to_string())?;
+        match decode(reply.trim()).map_err(|error| error.to_string())? {
+            DaemonToWrapper::RuntimeIngressAccepted {
+                project_id,
+                binding_generation,
+                environment_epoch,
+            } if project_id == hello.project_id
+                && binding_generation == hello.binding_generation
+                && environment_epoch == hello.environment_epoch => {}
+            DaemonToWrapper::RuntimeIngressRejected { reason } => {
+                return Err(format!("runtime ingress refusé: {reason:?}"));
+            }
+            other => return Err(format!("runtime ingress réponse inattendue: {other:?}")),
+        }
+    }
 
     let register = WrapperToDaemon::Register {
         agent_type: agent_type.to_string(),
@@ -2980,6 +3100,7 @@ fn launch_acp(
 
 /// Point d'entrée du wrapper supervisé. Le FD `managed-status` est fermé
 /// uniquement après Register, transport ACP, journal et relais initialisés.
+#[allow(clippy::too_many_arguments)]
 fn spawn_managed_session_transport(
     agent_type: &str,
     definition: &crate::registry::AgentDefinition,
@@ -3121,6 +3242,88 @@ pub fn launch_managed_acp(
     result
 }
 
+/// Arrête seulement l'adaptateur associé à une instance runtime attestée.
+/// Le marqueur PID est comparé à sa date de naissance afin d'ignorer un PID
+/// recyclé, et plusieurs marqueurs pour une même instance sont un refus.
+pub fn stop_runtime_acp(instance_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var_os("BRIDGET_RUNTIME_SOCKET").is_none() {
+        return Err("arrêt runtime hors environnement de projet".into());
+    }
+    uuid::Uuid::parse_str(instance_id)
+        .map_err(|_| std::io::Error::other("identifiant d'instance runtime invalide"))?;
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| std::io::Error::other("HOME absent pour l'arrêt runtime"))?;
+    let marker_directory = managed_marker_directory(&socket_path(), &home);
+    let mut selected = None;
+    for entry in std::fs::read_dir(&marker_directory)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if !file_type.is_file() || file_type.is_symlink() {
+            continue;
+        }
+        let raw = std::fs::read_to_string(entry.path())?;
+        if raw.len() > 64 * 1024 {
+            return Err("marqueur runtime trop volumineux".into());
+        }
+        let marker: crate::mcp_identity::AgentPidMarker = match serde_json::from_str(&raw) {
+            Ok(marker) => marker,
+            Err(_) => continue,
+        };
+        if marker.instance_id == instance_id && selected.replace(marker).is_some() {
+            return Err("plusieurs marqueurs pour l'instance runtime".into());
+        }
+    }
+    let Some(marker) = selected else {
+        return Ok(());
+    };
+    if marker.pid <= 1
+        || crate::managed_process::process_birth(marker.pid).ok() != Some(marker.birth)
+    {
+        return Ok(());
+    }
+    let result = unsafe { libc::kill(marker.pid as libc::pid_t, libc::SIGTERM) };
+    if result != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+/// définition persistée est contrôlée avant de remplacer seulement sa commande
+/// par celle attestée dans la politique hôte du runtime.
+pub fn launch_runtime_acp(
+    agent_type: &str,
+    explicit_name: &str,
+    provider_command: &str,
+    resolved_definition: &bridget_transport::ResolvedAgentDefinition,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if runtime_instance_id_from_environment()?.is_none() {
+        return Err("runtime ingress absent du wrapper de projet".into());
+    }
+    let registry = crate::registry::AgentRegistry::from_resolved_with_runtime_command(
+        agent_type,
+        resolved_definition,
+        provider_command,
+    )?;
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or("HOME absent pour le journal de session ACP")?;
+    launch_acp_with_status(
+        agent_type,
+        &[],
+        Some(explicit_name),
+        &registry,
+        &socket_path(),
+        &home,
+        None,
+        Some(&resolved_definition.digest),
+    )
+}
+
 /// Lance un équipier ACP avec ses dépendances de configuration et de chemins
 /// explicites. Le flux de production passe par [`launch_acp`]; cette variante
 /// rend le même chemin vérifiable avec un registre et un daemon temporaires.
@@ -3189,15 +3392,17 @@ fn launch_acp_with_status(
     let effective_name = explicit_name.map(str::to_owned);
     let host = host_name();
     let os = operating_system();
+    let runtime_instance_id = runtime_instance_id_from_environment()?;
     let instance_id = managed_reporter
         .as_ref()
         .map(|reporter| reporter.instance_id().to_string())
+        .or(runtime_instance_id)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let initial_domain = effective_name
         .as_deref()
         .and_then(effective_domain)
         .or_else(derive_domain);
-    let name_state_path = instance_name_state_path(socket, &instance_id);
+    let name_state_path = managed_instance_name_state_path(socket, home, &instance_id);
     if let Some(parent) = name_state_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -3270,7 +3475,7 @@ fn launch_acp_with_status(
     let mut idempotent_deliveries = IdempotentDeliveryTracker::open(home, &instance_id)?;
     let mut execution_bindings = HashMap::new();
     std::fs::write(&name_state_path, &my_name)?;
-    let marker_directory = socket.parent().unwrap().join("agent-pids");
+    let marker_directory = managed_marker_directory(socket, home);
     let adapter_pid = transport.process_id();
     crate::mcp_identity::write_marker(
         &marker_directory,
@@ -3708,6 +3913,31 @@ fn billing_guard_error(variable: &str) -> String {
         "variable d'environnement refusée pour l'équipier ACP : {variable} \
          (utilisez BRIDGET_ALLOW_API_KEY=1 uniquement si vous acceptez la facturation API)"
     )
+}
+
+/// Les sockets du runtime Docker sont montées comme fichiers dans une racine
+/// en lecture seule. Les états du wrapper restent donc sous HOME, qui est le
+/// montage persistant explicitement autorisé par la politique runtime.
+fn managed_wrapper_state_directory(socket: &Path, home: &Path) -> PathBuf {
+    if std::env::var_os("BRIDGET_RUNTIME_SOCKET").is_some() {
+        home.join(".cache/bridget/runtime")
+    } else {
+        socket.parent().unwrap_or(socket).to_path_buf()
+    }
+}
+
+fn managed_instance_name_state_path(socket: &Path, home: &Path, instance_id: &str) -> PathBuf {
+    if std::env::var_os("BRIDGET_RUNTIME_SOCKET").is_some() {
+        managed_wrapper_state_directory(socket, home)
+            .join("agent-names")
+            .join(format!("instance-{instance_id}"))
+    } else {
+        instance_name_state_path(socket, instance_id)
+    }
+}
+
+fn managed_marker_directory(socket: &Path, home: &Path) -> PathBuf {
+    managed_wrapper_state_directory(socket, home).join("agent-pids")
 }
 
 fn instance_name_state_path(socket: &Path, instance_id: &str) -> PathBuf {
@@ -8306,5 +8536,63 @@ mod reconnect_tests {
                     && transition.expected_revision == 2
         ));
         assert!(!bindings.contains_key("message-active"));
+    }
+    #[test]
+    fn spec_066_handshake_runtime_exige_toutes_les_identites() {
+        let handshake = runtime_ingress_handshake_from_values(
+            true,
+            Some("project-066"),
+            Some("2"),
+            Some("aaaaaaaaaaaa"),
+            Some("3"),
+            Some("4"),
+            Some("00000000-0000-4000-8000-000000000066"),
+        )
+        .unwrap();
+        assert!(matches!(
+            handshake,
+            Some(RuntimeIngressHandshake {
+                project_id,
+                binding_generation: 2,
+                environment_epoch: 3,
+                agent_generation: 4,
+                ..
+            }) if project_id == "project-066"
+        ));
+        assert!(
+            runtime_ingress_handshake_from_values(
+                true,
+                Some("project-066"),
+                Some("2"),
+                None,
+                Some("3"),
+                Some("4"),
+                Some("00000000-0000-4000-8000-000000000066"),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            runtime_ingress_handshake_from_values(false, None, None, None, None, None, None)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn spec_066_socket_runtime_est_explicite_et_n_derive_pas_de_home() {
+        assert_eq!(
+            socket_path_from(
+                Some(PathBuf::from("/run/bridget/runtime/bridget.sock")),
+                Some(PathBuf::from("/home/agent")),
+            ),
+            PathBuf::from("/run/bridget/runtime/bridget.sock")
+        );
+        assert_eq!(
+            socket_path_from(
+                Some(PathBuf::from("relative.sock")),
+                Some(PathBuf::from("/home/agent")),
+            ),
+            PathBuf::from("/run/bridget/runtime/invalid.sock")
+        );
     }
 }

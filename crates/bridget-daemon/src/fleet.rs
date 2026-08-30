@@ -5,8 +5,8 @@
 //! `fleet.rs` ne fait aucun lookup idempotent parallèle.
 
 use crate::desired_state::{
-    DesiredAgentLink, DesiredEquipier, DesiredFleet, DesiredLifecycleState, DesiredStateError,
-    DesiredStateStore,
+    ContainerAgentExecution, DesiredAgentLink, DesiredEquipier, DesiredFleet,
+    DesiredLifecycleState, DesiredStateError, DesiredStateStore,
 };
 pub use crate::idempotency::{
     AgentLinkEvent, AgentLinkRecord as AgentLink, AgentLinkState, DelegatedRuntimeEventInput,
@@ -373,6 +373,7 @@ struct ActiveSpawn {
     cwd: PathBuf,
     state: SpawnCommandState,
     resolved_definition: Option<ResolvedAgentDefinition>,
+    runtime_execution: Option<ContainerAgentExecution>,
     link_id: Option<String>,
     ownership: Option<SpawnOwnership>,
     agent_path: Option<String>,
@@ -564,6 +565,7 @@ impl FleetSupervisor {
                 domain: resolved_domain(None, &historical.cwd),
                 project: historical.project,
                 agent_link: None,
+                runtime_execution: None,
             },
         )?;
         self.roster.remember(
@@ -1038,6 +1040,7 @@ impl FleetSupervisor {
                     ownership: order.ownership.clone(),
                     agent_path: link.as_ref().map(|link| link.agent_path.clone()),
                     resolved_definition: command.resolved_definition,
+                    runtime_execution: None,
                 };
                 inner
                     .active_by_name
@@ -1116,6 +1119,79 @@ impl FleetSupervisor {
         Ok(())
     }
 
+    /// Persiste l'exécution Docker avant `docker exec`, afin qu'un redémarrage
+    /// du daemon puisse accepter la reconnexion du wrapper déjà vivant sans
+    /// lancer une seconde génération.
+    pub fn record_runtime_execution(
+        &self,
+        lease: &SpawnLease,
+        execution: ContainerAgentExecution,
+    ) -> Result<(), FleetError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let active = active_for_lease(&inner, lease)?.clone();
+        let project = active
+            .project
+            .as_ref()
+            .ok_or(FleetError::InvalidOrder("exécution runtime sans projet"))?;
+        if active.state != SpawnCommandState::Starting {
+            return Err(FleetError::InvalidTransition {
+                command_id: active.command_id,
+                from: active.state,
+                expected: SpawnCommandState::Starting,
+            });
+        }
+        if execution.agent_instance_id != active.instance_id
+            || execution.generation != active.generation
+            || execution.project_id != project.project_id
+            || execution.binding_generation != project.binding_generation
+            || execution.environment_epoch == 0
+            || execution.container_id.len() != 64
+            || !execution
+                .container_id
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || uuid::Uuid::parse_str(&execution.exec_id).is_err()
+            || execution.provider_identity.is_empty()
+            || execution.state != crate::desired_state::ContainerAgentExecutionState::Starting
+        {
+            return Err(FleetError::InvalidOrder("corrélation runtime invalide"));
+        }
+        self.desired.upsert(
+            active.name.clone(),
+            DesiredEquipier {
+                agent_type: active.agent_type.clone(),
+                cwd: active.cwd.clone(),
+                command_id: active.command_id.clone(),
+                generation: active.generation,
+                created: unix_now().to_string(),
+                persistent: active.persistent,
+                lifecycle_state: DesiredLifecycleState::Running,
+                resolved_definition: active.resolved_definition.clone(),
+                domain: resolved_domain(None, &active.cwd),
+                project: active.project.clone(),
+                agent_link: desired_agent_link(&active),
+                runtime_execution: Some(execution.clone()),
+            },
+        )?;
+        self.roster.remember(
+            active.name.clone(),
+            NamedRosterEntry {
+                agent_type: active.agent_type.clone(),
+                persistent: active.persistent,
+                domain: resolved_domain(None, &active.cwd),
+            },
+        );
+        inner
+            .active_by_command
+            .get_mut(&active.command_id)
+            .expect("la génération a été validée sous le verrou")
+            .runtime_execution = Some(execution);
+        Ok(())
+    }
+
     pub fn register_connected(
         &self,
         lease: &SpawnLease,
@@ -1158,6 +1234,10 @@ impl FleetSupervisor {
                 expected: SpawnCommandState::Starting,
             });
         }
+        let runtime_execution = active.runtime_execution.clone().map(|mut execution| {
+            execution.state = crate::desired_state::ContainerAgentExecutionState::Running;
+            execution
+        });
         self.desired.upsert(
             active.name.clone(),
             DesiredEquipier {
@@ -1172,6 +1252,7 @@ impl FleetSupervisor {
                 resolved_definition: active.resolved_definition.clone(),
                 domain: resolved_domain(None, &active.cwd),
                 project: active.project.clone(),
+                runtime_execution,
             },
         )?;
         self.roster.remember(
@@ -1335,6 +1416,10 @@ impl FleetSupervisor {
             return Ok(());
         };
         let domain = resolved_domain(None, &active.cwd);
+        let runtime_execution = active.runtime_execution.clone().map(|mut execution| {
+            execution.state = crate::desired_state::ContainerAgentExecutionState::Terminal;
+            execution
+        });
         self.desired.upsert(
             active.name.clone(),
             DesiredEquipier {
@@ -1349,6 +1434,7 @@ impl FleetSupervisor {
                 domain: domain.clone(),
                 project: active.project.clone(),
                 agent_link: desired_agent_link(active),
+                runtime_execution,
             },
         )?;
         self.roster.remember(
@@ -1480,6 +1566,7 @@ fn recover_commands(inner: &mut FleetInner, desired: &DesiredFleet) -> Result<()
                     cwd: equipier.cwd.clone(),
                     state: SpawnCommandState::Starting,
                     resolved_definition: command.resolved_definition,
+                    runtime_execution: equipier.runtime_execution.clone(),
                 };
             inner
                 .active_by_name
@@ -2115,6 +2202,7 @@ mod tests {
                         domain: None,
                         project: project.clone(),
                         agent_link: None,
+                        runtime_execution: None,
                     },
                 )
                 .unwrap();

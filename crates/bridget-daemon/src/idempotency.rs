@@ -2562,7 +2562,7 @@ fn delegated_runtime_event_from_row(
         parent_instance_id: row.get(3)?,
         child_instance_id: row.get(4)?,
         child_execution_id: row.get(5)?,
-        kind: DelegatedRuntimeEventKind::from_str(&kind)
+        kind: DelegatedRuntimeEventKind::parse(&kind)
             .ok_or_else(|| to_sql_error(IdempotencyError::InvalidDelegatedRuntimeEvent))?,
         code: row.get(7)?,
         reference: row.get(8)?,

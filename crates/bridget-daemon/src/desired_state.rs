@@ -55,6 +55,33 @@ pub struct DesiredAgentLink {
     pub agent_path: String,
 }
 
+/// Corrélation durable entre une génération Bridget et son `docker exec`.
+/// Aucune commande hôte ni donnée secrète n'est conservée : ce relevé sert
+/// uniquement à rétablir l'ingress privé après redémarrage du daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContainerAgentExecution {
+    pub agent_instance_id: String,
+    pub generation: u64,
+    pub project_id: String,
+    pub binding_generation: u64,
+    pub environment_epoch: u64,
+    pub container_id: String,
+    pub exec_id: String,
+    pub cwd: PathBuf,
+    pub state: ContainerAgentExecutionState,
+    pub provider_identity: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContainerAgentExecutionState {
+    Starting,
+    Running,
+    Terminal,
+    Lost,
+}
+
 /// Entrée durable d'un équipier dont le daemon possède le cycle de vie.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -86,6 +113,9 @@ pub struct DesiredEquipier {
     /// Parent, mandat et rôle issus du lien durable Bridget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_link: Option<DesiredAgentLink>,
+    /// Exécution Docker corrélée, absente pour les agents host historiques.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_execution: Option<ContainerAgentExecution>,
 }
 
 /// Contenu versionné de `fleet.json`.
@@ -520,6 +550,7 @@ mod tests {
             domain: None,
             project: None,
             agent_link: None,
+            runtime_execution: None,
         }
     }
 
