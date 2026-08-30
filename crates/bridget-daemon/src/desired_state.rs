@@ -2,6 +2,7 @@
 
 use bridget_transport::ResolvedAgentDefinition;
 use bridget_transport::fsutil::{AtomicWritePhase, write_private_file_atomic_observed};
+use bridget_transport::protocol::ProjectReference;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -33,6 +34,8 @@ pub struct DesiredAgentLink {
     pub objective_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectReference>,
     pub role: String,
     pub agent_path: String,
 }
@@ -54,6 +57,9 @@ pub struct DesiredEquipier {
     /// Domaine du protocole, persisté pour recomposer l'équipe après crash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
+    /// Projet opaque conservé entre reprise et reconstruction de flotte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectReference>,
     /// Parent, mandat et rôle issus du lien durable Bridget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_link: Option<DesiredAgentLink>,
@@ -412,6 +418,7 @@ mod tests {
             created: "2026-08-22T20:14:00Z".to_string(),
             resolved_definition: None,
             domain: None,
+            project: None,
             agent_link: None,
         }
     }
@@ -574,6 +581,7 @@ mod tests {
             parent_execution_id: Some("execution-parent".to_string()),
             objective_id: Some("objective-1".to_string()),
             delegation_id: Some("delegation-1".to_string()),
+            project: None,
             role: "verification".to_string(),
             agent_path: "instance-parent/instance-child".to_string(),
         });

@@ -640,6 +640,16 @@ struct UiAgentRowV1 {
     agent_type: String,
     host: String,
     transport: String,
+    /// Domaine historique de regroupement. Il n'est jamais une identité ni
+    /// une frontière de sécurité projet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    domain: Option<String>,
+    /// Identité opaque de projet issue du lien durable de spawn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project_id: Option<String>,
+    /// L'absence de liaison est visible séparément, sans réutiliser le
+    /// domaine ni inférer un projet depuis le cwd.
+    project_state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     mode: Option<PresenceMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1302,6 +1312,16 @@ fn compose_agent_rows(
     agents
         .into_iter()
         .map(|agent| {
+            let project_id = agent
+                .agent_link
+                .as_ref()
+                .and_then(|link| link.project.as_ref())
+                .map(|project| project.project_id.clone());
+            let project_state = if project_id.is_some() {
+                "registered"
+            } else {
+                "unregistered"
+            };
             let last = messages
                 .iter()
                 .filter(|message| message.sender == agent.name || message.target == agent.name)
@@ -1335,6 +1355,9 @@ fn compose_agent_rows(
                 agent_type: agent.agent_type,
                 host: agent.host,
                 transport: agent.transport,
+                domain: agent.domain,
+                project_id,
+                project_state,
                 mode: agent.mode,
                 model: agent.model,
                 effort: agent.effort,
@@ -3806,6 +3829,7 @@ mod tests {
             parent_execution_id: Some("execution-parent".to_string()),
             objective_id: Some("objective-1".to_string()),
             delegation_id: Some("delegation-1".to_string()),
+            project: None,
             role: "verification".to_string(),
             agent_path: "parent-instance/active-instance".to_string(),
             state: "open".to_string(),

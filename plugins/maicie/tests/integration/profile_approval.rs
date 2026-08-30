@@ -130,6 +130,7 @@ fn proposal_request(objective_id: Uuid) -> ProfileActivationProposalRequest<'sta
         resolved_definition_digest: DEFINITION_DIGEST,
         context_scope: "objectif:minimal",
         cwd: "/tmp/maicie-profile-approval",
+        project: None,
         persistent: true,
         now: 10,
         spawn_deadline_at: 100,

@@ -37,6 +37,7 @@ fn ownership(
         parent_execution_id: Some("execution-parent".to_string()),
         objective_id: Some("objective-1".to_string()),
         delegation_id: Some("delegation-1".to_string()),
+        project: None,
         role: "verification".to_string(),
         max_children,
         max_depth,
@@ -46,6 +47,7 @@ fn ownership(
 fn order(command_id: &str, name: &str, ownership: Option<SpawnOwnership>) -> SpawnOrder {
     SpawnOrder {
         agent_type: "fixture".to_string(),
+        project: None,
         requested_name: Some(name.to_string()),
         cwd: PathBuf::from("/tmp"),
         persistent: false,

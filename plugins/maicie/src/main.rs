@@ -992,6 +992,7 @@ fn run_profile(arguments: ProfileArgs, migrate: bool) -> Result<String, CliError
                     resolved_definition_digest: &screen.definition_digest,
                     context_scope: &context_scope,
                     cwd: &cwd,
+                    project: None,
                     persistent,
                     now,
                     spawn_deadline_at: deadline_from(now, config.durations.normal_secs)?,

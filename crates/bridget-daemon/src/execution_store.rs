@@ -1,6 +1,8 @@
 //! Persistance durable des soumissions et exécutions Bridget.
 
-use bridget_transport::protocol::{ExecutionProviderContext, UsageAggregate, UsageTokens};
+use bridget_transport::protocol::{
+    ExecutionProviderContext, ProjectReference, UsageAggregate, UsageTokens,
+};
 use rusqlite::{
     Connection, OptionalExtension, Transaction, TransactionBehavior, params, types::Type,
 };
@@ -13,6 +15,9 @@ pub struct ExecutionStore {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionSnapshot {
     pub execution_id: String,
+    /// Liaison figée à l'admission. `None` représente sans ambiguïté les
+    /// exécutions historiques, sans tenter de la déduire du chemin ou du nom.
+    pub project: Option<ProjectReference>,
     pub state: String,
     pub generation: u64,
     pub revision: u64,
@@ -199,14 +204,33 @@ impl ExecutionStore {
         target_agent: &str,
         observed_at: i64,
     ) -> rusqlite::Result<()> {
+        self.record_starting_for_project(
+            submission_id,
+            execution_id,
+            target_agent,
+            None,
+            observed_at,
+        )
+    }
+
+    /// Variante d'admission qui reçoit la référence déjà validée par la
+    /// frontière appelante. Elle ne la reconstruit jamais depuis le runtime.
+    pub fn record_starting_for_project(
+        &self,
+        submission_id: &str,
+        execution_id: &str,
+        target_agent: &str,
+        project: Option<&ProjectReference>,
+        observed_at: i64,
+    ) -> rusqlite::Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
             "INSERT INTO work_submissions (submission_id, message_id, target_agent, origin, intent, references_json, state, accepted_at) VALUES (?1, ?1, ?2, 'system', 'trigger_turn', '[]', 'accepted', ?3) ON CONFLICT(submission_id) DO NOTHING",
             params![submission_id, target_agent, observed_at],
         )?;
         tx.execute(
-            "INSERT INTO executions (execution_id, submission_id, agent_instance_id, generation, state, revision, reason, created_at, updated_at) VALUES (?1, ?2, NULL, 1, 'starting', 0, NULL, ?3, ?3) ON CONFLICT(execution_id) DO NOTHING",
-            params![execution_id, submission_id, observed_at],
+            "INSERT INTO executions (execution_id, submission_id, agent_instance_id, project_id, binding_generation, generation, state, revision, reason, created_at, updated_at) VALUES (?1, ?2, NULL, ?3, ?4, 1, 'starting', 0, NULL, ?5, ?5) ON CONFLICT(execution_id) DO NOTHING",
+            params![execution_id, submission_id, project.map(|value| &value.project_id), project.map(|value| value.binding_generation), observed_at],
         )?;
         tx.commit()
     }
@@ -216,6 +240,26 @@ impl ExecutionStore {
         submission_id: &str,
         execution_id: &str,
         target_agent: &str,
+        observed_at: i64,
+    ) -> rusqlite::Result<bool> {
+        self.admit_starting_for_project(
+            submission_id,
+            execution_id,
+            target_agent,
+            None,
+            observed_at,
+        )
+    }
+
+    /// Admet une remise et fixe sa référence projet optionnelle dans la même
+    /// transaction que l'exécution, donc sans fenêtre de redéduction après un
+    /// redémarrage.
+    pub fn admit_starting_for_project(
+        &self,
+        submission_id: &str,
+        execution_id: &str,
+        target_agent: &str,
+        project: Option<&ProjectReference>,
         observed_at: i64,
     ) -> rusqlite::Result<bool> {
         let tx = self.conn.unchecked_transaction()?;
@@ -228,8 +272,8 @@ impl ExecutionStore {
             return Ok(false);
         }
         tx.execute(
-            "INSERT INTO executions (execution_id, submission_id, agent_instance_id, generation, state, revision, reason, created_at, updated_at) VALUES (?1, ?2, NULL, 1, 'starting', 0, NULL, ?3, ?3)",
-            params![execution_id, submission_id, observed_at],
+            "INSERT INTO executions (execution_id, submission_id, agent_instance_id, project_id, binding_generation, generation, state, revision, reason, created_at, updated_at) VALUES (?1, ?2, NULL, ?3, ?4, 1, 'starting', 0, NULL, ?5, ?5)",
+            params![execution_id, submission_id, project.map(|value| &value.project_id), project.map(|value| value.binding_generation), observed_at],
         )?;
         tx.commit()?;
         Ok(true)
@@ -242,6 +286,19 @@ impl ExecutionStore {
         &self,
         message: &bridget_core::BridgetMessage,
         execution_id: &str,
+        observed_at: i64,
+    ) -> rusqlite::Result<bool> {
+        self.admit_starting_message_for_project(message, execution_id, None, observed_at)
+    }
+
+    /// Variante avec identité projet déjà portée par l'appel public. Le
+    /// message conservé garde son contenu historique; seule l'exécution porte
+    /// la référence structurée.
+    pub fn admit_starting_message_for_project(
+        &self,
+        message: &bridget_core::BridgetMessage,
+        execution_id: &str,
+        project: Option<&ProjectReference>,
         observed_at: i64,
     ) -> rusqlite::Result<bool> {
         let message_json = serde_json::to_string(message)
@@ -271,8 +328,8 @@ impl ExecutionStore {
             return Ok(false);
         }
         tx.execute(
-            "INSERT INTO executions (execution_id, submission_id, agent_instance_id, generation, state, revision, reason, created_at, updated_at) VALUES (?1, ?2, NULL, 1, 'starting', 0, NULL, ?3, ?3)",
-            params![execution_id, message.id, observed_at],
+            "INSERT INTO executions (execution_id, submission_id, agent_instance_id, project_id, binding_generation, generation, state, revision, reason, created_at, updated_at) VALUES (?1, ?2, NULL, ?3, ?4, 1, 'starting', 0, NULL, ?5, ?5)",
+            params![execution_id, message.id, project.map(|value| &value.project_id), project.map(|value| value.binding_generation), observed_at],
         )?;
         tx.commit()?;
         Ok(true)
@@ -838,15 +895,16 @@ impl ExecutionStore {
     ) -> rusqlite::Result<Option<ExecutionSnapshot>> {
         self.conn
             .query_row(
-                "SELECT execution_id, state, generation, revision, created_at FROM executions WHERE execution_id = ?1",
+                "SELECT execution_id, project_id, binding_generation, state, generation, revision, created_at FROM executions WHERE execution_id = ?1",
                 [execution_id],
                 |row| {
                     Ok(ExecutionSnapshot {
                         execution_id: row.get(0)?,
-                        state: row.get(1)?,
-                        generation: row.get(2)?,
-                        revision: row.get(3)?,
-                        created_at: row.get(4)?,
+                        project: project_reference_from_parts(row.get(1)?, row.get(2)?)?,
+                        state: row.get(3)?,
+                        generation: row.get(4)?,
+                        revision: row.get(5)?,
+                        created_at: row.get(6)?,
                     })
                 },
             )
@@ -884,18 +942,19 @@ impl ExecutionStore {
     ) -> rusqlite::Result<Option<ExecutionControlTarget>> {
         self.conn
             .query_row(
-                "SELECT execution.execution_id, execution.state, execution.generation, execution.revision, execution.created_at, submission.target_agent FROM executions execution JOIN work_submissions submission ON submission.submission_id = execution.submission_id WHERE execution.execution_id = ?1",
+                "SELECT execution.execution_id, execution.project_id, execution.binding_generation, execution.state, execution.generation, execution.revision, execution.created_at, submission.target_agent FROM executions execution JOIN work_submissions submission ON submission.submission_id = execution.submission_id WHERE execution.execution_id = ?1",
                 [execution_id],
                 |row| {
                     Ok(ExecutionControlTarget {
                         snapshot: ExecutionSnapshot {
                             execution_id: row.get(0)?,
-                            state: row.get(1)?,
-                            generation: row.get(2)?,
-                            revision: row.get(3)?,
-                            created_at: row.get(4)?,
+                            project: project_reference_from_parts(row.get(1)?, row.get(2)?)?,
+                            state: row.get(3)?,
+                            generation: row.get(4)?,
+                            revision: row.get(5)?,
+                            created_at: row.get(6)?,
                         },
-                        target_agent: row.get(5)?,
+                        target_agent: row.get(7)?,
                     })
                 },
             )
@@ -1062,15 +1121,16 @@ impl ExecutionStore {
         let tx = self.conn.unchecked_transaction()?;
         let current = tx
             .query_row(
-                "SELECT execution_id, state, generation, revision, created_at FROM executions WHERE execution_id = ?1",
+                "SELECT execution_id, project_id, binding_generation, state, generation, revision, created_at FROM executions WHERE execution_id = ?1",
                 [execution_id],
                 |row| {
                     Ok(ExecutionSnapshot {
                         execution_id: row.get(0)?,
-                        state: row.get(1)?,
-                        generation: row.get(2)?,
-                        revision: row.get(3)?,
-                        created_at: row.get(4)?,
+                        project: project_reference_from_parts(row.get(1)?, row.get(2)?)?,
+                        state: row.get(3)?,
+                        generation: row.get(4)?,
+                        revision: row.get(5)?,
+                        created_at: row.get(6)?,
                     })
                 },
             )
@@ -1103,6 +1163,7 @@ impl ExecutionStore {
         }
         let applied = ExecutionSnapshot {
             execution_id: current.execution_id,
+            project: current.project,
             state: next_state.to_string(),
             generation: current.generation,
             revision: expected_revision + 1,
@@ -1153,7 +1214,7 @@ impl ExecutionStore {
             CREATE TABLE IF NOT EXISTS execution_schema_migrations (version INTEGER PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS work_submissions (submission_id TEXT PRIMARY KEY, message_id TEXT NOT NULL UNIQUE, target_agent TEXT NOT NULL, origin TEXT, intent TEXT, references_json TEXT NOT NULL DEFAULT "[]", message_json TEXT, state TEXT NOT NULL CHECK (state IN ("prepared", "accepted", "cancelled")), accepted_at INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS idx_work_submissions_target_state ON work_submissions(target_agent, state, accepted_at);
-            CREATE TABLE IF NOT EXISTS executions (execution_id TEXT PRIMARY KEY, submission_id TEXT NOT NULL, agent_instance_id TEXT, generation INTEGER NOT NULL CHECK (generation > 0), state TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision >= 0), reason TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, FOREIGN KEY (submission_id) REFERENCES work_submissions(submission_id));
+            CREATE TABLE IF NOT EXISTS executions (execution_id TEXT PRIMARY KEY, submission_id TEXT NOT NULL, agent_instance_id TEXT, project_id TEXT, binding_generation INTEGER, generation INTEGER NOT NULL CHECK (generation > 0), state TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision >= 0), reason TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, FOREIGN KEY (submission_id) REFERENCES work_submissions(submission_id));
             CREATE INDEX IF NOT EXISTS idx_executions_submission ON executions(submission_id);
             CREATE TABLE IF NOT EXISTS provider_bindings (execution_id TEXT PRIMARY KEY, provider_kind TEXT NOT NULL, execution_path TEXT NOT NULL, binary_path TEXT, binary_version TEXT, binary_digest TEXT, contract_version TEXT, provider_session_id TEXT, provider_thread_id TEXT, active_turn_id TEXT, capabilities_revision TEXT, observed_at INTEGER NOT NULL, FOREIGN KEY (execution_id) REFERENCES executions(execution_id));
             CREATE TABLE IF NOT EXISTS message_correlations (client_message_id TEXT PRIMARY KEY, submission_id TEXT NOT NULL, delivery_id TEXT, provider_item_id TEXT, provider_thread_id TEXT, provider_turn_id TEXT, visibility_event TEXT, visible_at INTEGER, FOREIGN KEY (submission_id) REFERENCES work_submissions(submission_id));
@@ -1215,8 +1276,35 @@ impl ExecutionStore {
             "INSERT OR IGNORE INTO execution_schema_migrations(version) VALUES (8)",
             [],
         )?;
+        if !execution_column(&tx, "project_id")? {
+            tx.execute_batch("ALTER TABLE executions ADD COLUMN project_id TEXT; ALTER TABLE executions ADD COLUMN binding_generation INTEGER;")?;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO execution_schema_migrations(version) VALUES (9)",
+            [],
+        )?;
         tx.commit()?;
         Ok(())
+    }
+}
+
+fn project_reference_from_parts(
+    project_id: Option<String>,
+    binding_generation: Option<i64>,
+) -> rusqlite::Result<Option<ProjectReference>> {
+    match (project_id, binding_generation) {
+        (None, None) => Ok(None),
+        (Some(project_id), Some(binding_generation)) if binding_generation > 0 => {
+            Ok(Some(ProjectReference {
+                project_id,
+                binding_generation: binding_generation as u64,
+            }))
+        }
+        _ => Err(rusqlite::Error::FromSqlConversionFailure(
+            0,
+            Type::Text,
+            "référence projet d'exécution incomplète".into(),
+        )),
     }
 }
 

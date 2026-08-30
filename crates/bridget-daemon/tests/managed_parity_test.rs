@@ -1407,6 +1407,7 @@ fn spawn_managed(control: &mut Peer, root: &Path, name: &str, command_id: &str, 
         command_id: command_id.to_string(),
         issued_at: now,
         deadline_at: now + 10,
+        project: None,
         ownership: None,
     });
     assert!(matches!(
@@ -1648,6 +1649,7 @@ fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
             command_id: format!("spawn-parity-{run}"),
             issued_at: now,
             deadline_at: now + 8,
+            project: None,
             ownership: None,
         });
         assert!(matches!(
@@ -1707,6 +1709,7 @@ fn matrice_fr008_compare_la_garde_de_facturation() {
         command_id: "spawn-billing".to_string(),
         issued_at: now,
         deadline_at: now + 5,
+        project: None,
         ownership: None,
     });
     assert!(matches!(
@@ -1753,6 +1756,7 @@ fn sc001_vingt_spawns_survivent_a_la_fermeture_du_client_et_repondent() {
             command_id,
             issued_at: now,
             deadline_at: now + 10,
+            project: None,
             ownership: None,
         });
         match ordering_terminal.recv() {

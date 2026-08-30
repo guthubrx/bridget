@@ -287,6 +287,7 @@ fn spawn_order_negocie_le_role_wrapper_sur_sa_connexion_ephemere() {
             command_id: "command-1".to_string(),
             issued_at: 1_700_000_000,
             deadline_at: 1_700_000_600,
+            project: None,
         })
         .unwrap();
     assert!(matches!(

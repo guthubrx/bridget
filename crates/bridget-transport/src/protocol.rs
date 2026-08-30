@@ -383,6 +383,16 @@ pub enum ProjectBindingStatus {
     Unregistered,
 }
 
+/// Référence opaque et durable d'un projet admis. Elle ne contient jamais de
+/// racine hôte, de domaine ou de donnée fournisseur: Bridget peut la propager
+/// sans devenir autorité métier sur le projet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectReference {
+    pub project_id: String,
+    pub binding_generation: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectBindingProjection {
@@ -875,6 +885,12 @@ pub enum SpawnRefusal {
         #[serde(default)]
         requested_from: String,
     },
+    /// Le `cwd` d'un lancement projet ne correspond ni à la racine liée ni à
+    /// un worktree Git rattaché à cette racine. Aucun chemin hôte n'est révélé
+    /// au demandeur.
+    ProjectCwdMismatch {
+        project_id: String,
+    },
     NegotiationFailed {
         detail: String,
     },
@@ -1045,6 +1061,8 @@ pub struct SpawnOwnership {
     pub objective_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectReference>,
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_children: Option<usize>,
@@ -1062,6 +1080,8 @@ pub struct AgentLinkEventFrame {
     pub child_instance_id: String,
     pub state: String,
     pub observed_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectReference>,
 }
 
 /// Catégorie fermée d'un fait runtime d'enfant destiné à son coordinateur.
@@ -1102,6 +1122,8 @@ pub struct DelegatedRuntimeEventFrame {
     pub code: String,
     pub reference: String,
     pub observed_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectReference>,
 }
 
 /// Messages envoyés par le wrapper vers le daemon.
@@ -1256,6 +1278,8 @@ pub enum WrapperToDaemon {
     },
     SpawnOrder {
         agent_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<ProjectReference>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ownership: Option<SpawnOwnership>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2382,6 +2406,10 @@ pub struct AgentLinkUiProjection {
     pub objective_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegation_id: Option<String>,
+    /// Référence projet reçue à l'admission du spawn. Le domaine historique
+    /// reste volontairement un champ distinct de l'annuaire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectReference>,
     pub role: String,
     pub agent_path: String,
     pub state: String,
@@ -3624,11 +3652,19 @@ mod tests {
     fn lifecycle_messages_roundtrip_and_stay_outside_attach() {
         let spawn = WrapperToDaemon::SpawnOrder {
             agent_type: "codex".to_string(),
+            project: Some(ProjectReference {
+                project_id: "project-1".to_string(),
+                binding_generation: 2,
+            }),
             ownership: Some(SpawnOwnership {
                 parent_instance_id: "instance-parent".to_string(),
                 parent_execution_id: Some("execution-parent".to_string()),
                 objective_id: Some("objective-1".to_string()),
                 delegation_id: Some("delegation-1".to_string()),
+                project: Some(ProjectReference {
+                    project_id: "project-1".to_string(),
+                    binding_generation: 2,
+                }),
                 role: "verification".to_string(),
                 max_children: Some(3),
                 max_depth: Some(2),
@@ -3680,6 +3716,10 @@ mod tests {
                 child_instance_id: "child-1".to_string(),
                 state: "orphaned".to_string(),
                 observed_at: 1_788_000_000,
+                project: Some(ProjectReference {
+                    project_id: "project-1".to_string(),
+                    binding_generation: 2,
+                }),
             }],
             through_cursor: Some(42),
             timed_out: false,
@@ -4163,6 +4203,10 @@ mod tests {
                 code: "unsupported_provider_request".to_string(),
                 reference: "sha256:ab12".to_string(),
                 observed_at: 1_788_000_000,
+                project: Some(ProjectReference {
+                    project_id: "project-1".to_string(),
+                    binding_generation: 2,
+                }),
             },
         };
         let wire = encode(&delivery).unwrap();

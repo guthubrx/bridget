@@ -3,7 +3,7 @@ use bridget_daemon::execution_store::{
 };
 use bridget_daemon::{ConditionalTransition, ExecutionStore};
 use bridget_transport::protocol::{
-    ExecutionProviderContext, ProviderObservation, ProviderOperation,
+    ExecutionProviderContext, ProjectReference, ProviderObservation, ProviderOperation,
 };
 use rusqlite::Connection;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[test]
 fn migration_execution_store_est_additive_et_idempotente() {
     let store = ExecutionStore::open_in_memory().expect("magasin en mémoire");
-    assert_eq!(store.schema_version().expect("version"), 8);
+    assert_eq!(store.schema_version().expect("version"), 9);
 }
 
 #[test]
@@ -26,10 +26,10 @@ fn migration_execution_store_garde_les_tables_heritees_et_rejoue_sans_effet() {
         legacy.execute_batch("CREATE TABLE legacy_messages (id TEXT PRIMARY KEY); INSERT INTO legacy_messages VALUES ('m-1');").unwrap();
     }
     let first = ExecutionStore::open(&path).expect("migration additive");
-    assert_eq!(first.schema_version().unwrap(), 8);
+    assert_eq!(first.schema_version().unwrap(), 9);
     drop(first);
     let second = ExecutionStore::open(&path).expect("migration idempotente");
-    assert_eq!(second.schema_version().unwrap(), 8);
+    assert_eq!(second.schema_version().unwrap(), 9);
     drop(second);
     let legacy = Connection::open(&path).unwrap();
     let preserved: i64 = legacy
@@ -50,7 +50,7 @@ fn migration_execution_store_complete_les_lignes_heritees_sans_les_effacer() {
     legacy.execute_batch("CREATE TABLE executions (execution_id TEXT PRIMARY KEY, submission_id TEXT NOT NULL, state TEXT NOT NULL); INSERT INTO executions VALUES ('e-1', 's-1', 'running');").unwrap();
     drop(legacy);
     let store = ExecutionStore::open(&path).expect("migration héritée");
-    assert_eq!(store.schema_version().unwrap(), 8);
+    assert_eq!(store.schema_version().unwrap(), 9);
     drop(store);
     let check = Connection::open(&path).unwrap();
     let revision_columns: i64 = check
@@ -89,6 +89,42 @@ fn reprise_apres_crash_retrouve_les_executions_non_terminales() {
         recovered.recoverable_execution_ids().unwrap(),
         vec!["execution-1"]
     );
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn reference_projet_du_snapshot_survit_au_redemarrage_sans_reduction() {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("bridget-execution-project-{stamp}.db"));
+    let project = ProjectReference {
+        project_id: "project-snapshot".to_string(),
+        binding_generation: 2,
+    };
+    let store = ExecutionStore::open(&path).unwrap();
+    store
+        .record_starting_for_project(
+            "submission-project",
+            "execution-project",
+            "agent-a",
+            Some(&project),
+            42,
+        )
+        .unwrap();
+    drop(store);
+
+    let reopened = ExecutionStore::open(&path).unwrap();
+    assert_eq!(
+        reopened
+            .execution_snapshot("execution-project")
+            .unwrap()
+            .unwrap()
+            .project,
+        Some(project)
+    );
+    drop(reopened);
     std::fs::remove_file(path).unwrap();
 }
 

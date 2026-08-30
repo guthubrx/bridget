@@ -5,6 +5,7 @@
 //! declarees ici et couvertes par les fixtures producteur↔client. Aucun autre
 //! module Maicie ne doit ouvrir le socket Bridget directement.
 
+use bridget_transport::protocol::ProjectReference;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -489,6 +490,8 @@ pub struct SpawnOrder {
     pub command_id: String,
     pub issued_at: i64,
     pub deadline_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectReference>,
 }
 
 /// Reponse publique d'un SpawnOrder.
@@ -956,6 +959,7 @@ impl BridgetClient {
             "command_id": order.command_id,
             "issued_at": order.issued_at,
             "deadline_at": order.deadline_at,
+            "project": order.project,
         }))?;
         Ok(parse_spawn_replay(response, &order.command_id)?.outcome)
     }
@@ -1375,6 +1379,8 @@ struct PersistedSpawnOrder {
     persistent: bool,
     issued_at: i64,
     deadline_at: i64,
+    #[serde(default)]
+    project: Option<ProjectReference>,
 }
 
 fn spawn_command_id(bytes: &[u8]) -> Result<String, BridgetClientError> {
@@ -1389,12 +1395,15 @@ fn spawn_command_id(bytes: &[u8]) -> Result<String, BridgetClientError> {
         || order.cwd.is_empty()
         || order.issued_at <= 0
         || order.deadline_at <= order.issued_at
+        || order.project.as_ref().is_some_and(|project| {
+            project.project_id.trim().is_empty() || project.binding_generation == 0
+        })
     {
         return Err(BridgetClientError::InvalidEnvelope(
             "SpawnOrder persiste invalide".to_string(),
         ));
     }
-    let _ = (order.name, order.persistent);
+    let _ = (order.name, order.persistent, order.project);
     Ok(order.command_id)
 }
 

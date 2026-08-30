@@ -5813,6 +5813,7 @@ mod delegated_runtime_tests {
             code: "unsupported_provider_request".to_string(),
             reference: format!("sha256:{}", "a".repeat(64)),
             observed_at: 1_700_000_000,
+            project: None,
         };
         let message = delegated_runtime_message(&event, "parent-7");
         assert_eq!(message.from, "bridget");

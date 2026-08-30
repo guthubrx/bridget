@@ -180,6 +180,7 @@ fn spawn_order(command_id: &str) -> WrapperToDaemon {
         .as_secs() as i64;
     WrapperToDaemon::SpawnOrder {
         agent_type: "fixture".to_string(),
+        project: None,
         name: Some("capability-fixture".to_string()),
         cwd: "/tmp".to_string(),
         persistent: false,

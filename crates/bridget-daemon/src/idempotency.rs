@@ -5,7 +5,7 @@
 //! public d'une opération idempotente.
 
 use bridget_transport::ResolvedAgentDefinition;
-use bridget_transport::protocol::DelegatedRuntimeEventKind;
+use bridget_transport::protocol::{DelegatedRuntimeEventKind, ProjectReference};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -319,6 +319,7 @@ pub struct AgentLinkRecord {
     pub parent_execution_id: Option<String>,
     pub objective_id: Option<String>,
     pub delegation_id: Option<String>,
+    pub project: Option<ProjectReference>,
     pub role: String,
     pub agent_path: String,
     pub state: AgentLinkState,
@@ -338,6 +339,7 @@ pub struct AgentLinkEvent {
     pub child_instance_id: String,
     pub state: AgentLinkState,
     pub observed_at: i64,
+    pub project: Option<ProjectReference>,
 }
 
 /// Entrée redacted d'un fait runtime observé chez un enfant.
@@ -365,6 +367,7 @@ pub struct DelegatedRuntimeEventRecord {
     pub reference: String,
     pub observed_at: i64,
     pub acknowledged_at: Option<i64>,
+    pub project: Option<ProjectReference>,
 }
 
 #[derive(Debug)]
@@ -767,6 +770,27 @@ impl IdempotencyStore {
                 CREATE INDEX IF NOT EXISTS idx_send_deliveries_kind_key
                     ON send_deliveries(operation_kind, idempotency_key);
                 INSERT INTO idempotency_schema_migrations(version) VALUES (4);",
+            )?;
+        }
+        let project_reference_migration_applied = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 6)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !project_reference_migration_applied {
+            for statement in [
+                "ALTER TABLE agent_links ADD COLUMN project_id TEXT",
+                "ALTER TABLE agent_links ADD COLUMN binding_generation INTEGER",
+                "ALTER TABLE agent_link_events ADD COLUMN project_id TEXT",
+                "ALTER TABLE agent_link_events ADD COLUMN binding_generation INTEGER",
+                "ALTER TABLE delegated_runtime_events ADD COLUMN project_id TEXT",
+                "ALTER TABLE delegated_runtime_events ADD COLUMN binding_generation INTEGER",
+            ] {
+                tx.execute(statement, [])?;
+            }
+            tx.execute(
+                "INSERT INTO idempotency_schema_migrations(version) VALUES (6)",
+                [],
             )?;
         }
         // Une seule copie du DDL : bases neuves, montée v4, et têtes antérieures
@@ -1184,8 +1208,8 @@ impl IdempotencyStore {
             "INSERT INTO agent_links (
                 link_id, parent_instance_id, child_instance_id, parent_execution_id,
                 objective_id, delegation_id, role, agent_path, state, created_at,
-                closed_at, revision
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'reserved', ?9, NULL, 0)
+                closed_at, revision, project_id, binding_generation
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'reserved', ?9, NULL, 0, ?10, ?11)
              ON CONFLICT(child_instance_id) DO NOTHING",
             params![
                 link.link_id,
@@ -1197,6 +1221,12 @@ impl IdempotencyStore {
                 link.role,
                 link.agent_path,
                 link.created_at,
+                link.project.as_ref().map(|project| &project.project_id),
+                link.project
+                    .as_ref()
+                    .map(|project| i64::try_from(project.binding_generation))
+                    .transpose()
+                    .map_err(|_| IdempotencyError::InvalidAgentLink)?,
             ],
         )?;
         if inserted == 0 {
@@ -1204,7 +1234,7 @@ impl IdempotencyStore {
                 .query_row(
                     "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
                             objective_id, delegation_id, role, agent_path, state, created_at,
-                            closed_at, revision
+                            closed_at, revision, project_id, binding_generation
                      FROM agent_links WHERE child_instance_id = ?1",
                     [&link.child_instance_id],
                     agent_link_from_row,
@@ -1232,7 +1262,7 @@ impl IdempotencyStore {
             .query_row(
                 "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
                         objective_id, delegation_id, role, agent_path, state, created_at,
-                        closed_at, revision
+                        closed_at, revision, project_id, binding_generation
                  FROM agent_links WHERE child_instance_id = ?1",
                 [child_instance_id],
                 agent_link_from_row,
@@ -1249,7 +1279,7 @@ impl IdempotencyStore {
             .query_row(
                 "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
                         objective_id, delegation_id, role, agent_path, state, created_at,
-                        closed_at, revision
+                        closed_at, revision, project_id, binding_generation
                  FROM agent_links WHERE link_id = ?1",
                 [link_id],
                 agent_link_from_row,
@@ -1266,7 +1296,7 @@ impl IdempotencyStore {
         let mut statement = self.conn.prepare(
             "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
                     objective_id, delegation_id, role, agent_path, state, created_at,
-                    closed_at, revision
+                    closed_at, revision, project_id, binding_generation
              FROM agent_links
              WHERE parent_instance_id = ?1
                AND state IN ('reserved', 'open', 'transferred')
@@ -1321,7 +1351,8 @@ impl IdempotencyStore {
     ) -> Result<Vec<AgentLinkEvent>, IdempotencyError> {
         let after_cursor = i64::try_from(after_cursor.unwrap_or_default()).unwrap_or(i64::MAX);
         let mut statement = self.conn.prepare(
-            "SELECT cursor, event_id, link_id, parent_instance_id, child_instance_id, state, observed_at
+            "SELECT cursor, event_id, link_id, parent_instance_id, child_instance_id, state, observed_at,
+                    project_id, binding_generation
              FROM agent_link_events
              WHERE parent_instance_id = ?1 AND cursor > ?2
              ORDER BY cursor
@@ -1350,7 +1381,7 @@ impl IdempotencyStore {
             .query_row(
                 "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
                         objective_id, delegation_id, role, agent_path, state, created_at,
-                        closed_at, revision
+                        closed_at, revision, project_id, binding_generation
                  FROM agent_links WHERE child_instance_id = ?1",
                 [&input.child_instance_id],
                 agent_link_from_row,
@@ -1361,8 +1392,9 @@ impl IdempotencyStore {
         tx.execute(
             "INSERT INTO delegated_runtime_events (
                 event_id, link_id, parent_instance_id, child_instance_id,
-                child_execution_id, kind, code, reference, observed_at, acknowledged_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)
+                child_execution_id, kind, code, reference, observed_at, acknowledged_at,
+                project_id, binding_generation
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11)
              ON CONFLICT(event_id) DO NOTHING",
             params![
                 &event_id,
@@ -1374,11 +1406,18 @@ impl IdempotencyStore {
                 &input.code,
                 &input.reference,
                 input.observed_at,
+                link.project.as_ref().map(|project| &project.project_id),
+                link.project
+                    .as_ref()
+                    .map(|project| i64::try_from(project.binding_generation))
+                    .transpose()
+                    .map_err(|_| IdempotencyError::InvalidDelegatedRuntimeEvent)?,
             ],
         )?;
         let event = tx.query_row(
             "SELECT cursor, event_id, link_id, parent_instance_id, child_instance_id,
-                    child_execution_id, kind, code, reference, observed_at, acknowledged_at
+                    child_execution_id, kind, code, reference, observed_at, acknowledged_at,
+                    project_id, binding_generation
              FROM delegated_runtime_events WHERE event_id = ?1",
             [&event_id],
             delegated_runtime_event_from_row,
@@ -1395,7 +1434,8 @@ impl IdempotencyStore {
     ) -> Result<Vec<DelegatedRuntimeEventRecord>, IdempotencyError> {
         let mut statement = self.conn.prepare(
             "SELECT cursor, event_id, link_id, parent_instance_id, child_instance_id,
-                    child_execution_id, kind, code, reference, observed_at, acknowledged_at
+                    child_execution_id, kind, code, reference, observed_at, acknowledged_at,
+                    project_id, binding_generation
              FROM delegated_runtime_events
              WHERE parent_instance_id = ?1 AND acknowledged_at IS NULL
              ORDER BY cursor
@@ -1465,7 +1505,7 @@ impl IdempotencyStore {
             .query_row(
                 "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
                         objective_id, delegation_id, role, agent_path, state, created_at,
-                        closed_at, revision
+                        closed_at, revision, project_id, binding_generation
                  FROM agent_links WHERE link_id = ?1",
                 [link_id],
                 agent_link_from_row,
@@ -1497,7 +1537,7 @@ impl IdempotencyStore {
         let updated = tx.query_row(
             "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
                     objective_id, delegation_id, role, agent_path, state, created_at,
-                    closed_at, revision
+                    closed_at, revision, project_id, binding_generation
              FROM agent_links WHERE link_id = ?1",
             [link_id],
             agent_link_from_row,
@@ -1519,7 +1559,7 @@ impl IdempotencyStore {
             .prepare(
                 "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
                         objective_id, delegation_id, role, agent_path, state, created_at,
-                        closed_at, revision
+                        closed_at, revision, project_id, binding_generation
                  FROM agent_links
                  WHERE parent_instance_id = ?1
                    AND state IN ('reserved', 'open', 'transferred')",
@@ -1563,7 +1603,7 @@ impl IdempotencyStore {
             .query_row(
                 "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
                         objective_id, delegation_id, role, agent_path, state, created_at,
-                        closed_at, revision
+                        closed_at, revision, project_id, binding_generation
                  FROM agent_links WHERE link_id = ?1",
                 [link_id],
                 agent_link_from_row,
@@ -1592,7 +1632,7 @@ impl IdempotencyStore {
         let updated = tx.query_row(
             "SELECT link_id, parent_instance_id, child_instance_id, parent_execution_id,
                     objective_id, delegation_id, role, agent_path, state, created_at,
-                    closed_at, revision
+                    closed_at, revision, project_id, binding_generation
              FROM agent_links WHERE link_id = ?1",
             [link_id],
             agent_link_from_row,
@@ -2375,6 +2415,7 @@ fn agent_link_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentLinkRec
         created_at: row.get(9)?,
         closed_at: row.get(10)?,
         revision: row.get(11)?,
+        project: project_reference_from_parts(row.get(12)?, row.get(13)?)?,
     })
 }
 
@@ -2387,6 +2428,7 @@ fn agent_link_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentL
         child_instance_id: row.get(4)?,
         state: AgentLinkState::from_str(&row.get::<_, String>(5)?).map_err(to_sql_error)?,
         observed_at: row.get(6)?,
+        project: project_reference_from_parts(row.get(7)?, row.get(8)?)?,
     })
 }
 
@@ -2397,8 +2439,9 @@ fn record_agent_link_event(
 ) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT OR IGNORE INTO agent_link_events (
-            event_id, link_id, parent_instance_id, child_instance_id, state, observed_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            event_id, link_id, parent_instance_id, child_instance_id, state, observed_at,
+            project_id, binding_generation
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             format!("{}:{}", link.link_id, link.revision),
             link.link_id,
@@ -2406,6 +2449,12 @@ fn record_agent_link_event(
             link.child_instance_id,
             link.state.as_str(),
             observed_at.max(link.created_at),
+            link.project.as_ref().map(|project| &project.project_id),
+            link.project
+                .as_ref()
+                .map(|project| i64::try_from(project.binding_generation))
+                .transpose()
+                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(7, i64::MAX))?,
         ],
     )?;
     Ok(())
@@ -2428,7 +2477,27 @@ fn delegated_runtime_event_from_row(
         reference: row.get(8)?,
         observed_at: row.get(9)?,
         acknowledged_at: row.get(10)?,
+        project: project_reference_from_parts(row.get(11)?, row.get(12)?)?,
     })
+}
+
+fn project_reference_from_parts(
+    project_id: Option<String>,
+    binding_generation: Option<i64>,
+) -> rusqlite::Result<Option<ProjectReference>> {
+    match (project_id, binding_generation) {
+        (None, None) => Ok(None),
+        (Some(project_id), Some(binding_generation))
+            if !project_id.trim().is_empty() && binding_generation > 0 =>
+        {
+            Ok(Some(ProjectReference {
+                project_id,
+                binding_generation: u64::try_from(binding_generation)
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(1, binding_generation))?,
+            }))
+        }
+        _ => Err(to_sql_error(IdempotencyError::InvalidAgentLink)),
+    }
 }
 
 fn validate_delegated_runtime_event_input(
@@ -4451,6 +4520,91 @@ mod tests {
     }
 
     #[test]
+    fn migration_v6_ajoute_les_references_projet_apres_une_base_deja_en_v5() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-idempotency-v6-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let legacy = Connection::open(&path).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE idempotency_schema_migrations (version INTEGER PRIMARY KEY);
+                 INSERT INTO idempotency_schema_migrations(version) VALUES (2);
+                 INSERT INTO idempotency_schema_migrations(version) VALUES (3);
+                 INSERT INTO idempotency_schema_migrations(version) VALUES (4);
+                 INSERT INTO idempotency_schema_migrations(version) VALUES (5);
+                 CREATE TABLE agent_links (
+                    link_id TEXT PRIMARY KEY,
+                    parent_instance_id TEXT NOT NULL,
+                    child_instance_id TEXT NOT NULL UNIQUE,
+                    parent_execution_id TEXT,
+                    objective_id TEXT,
+                    delegation_id TEXT,
+                    role TEXT NOT NULL,
+                    agent_path TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    closed_at INTEGER,
+                    revision INTEGER NOT NULL
+                 );
+                 CREATE TABLE agent_link_events (
+                    cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT NOT NULL UNIQUE,
+                    link_id TEXT NOT NULL,
+                    parent_instance_id TEXT NOT NULL,
+                    child_instance_id TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    observed_at INTEGER NOT NULL
+                 );
+                 CREATE TABLE delegated_runtime_events (
+                    cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id TEXT NOT NULL UNIQUE,
+                    link_id TEXT NOT NULL,
+                    parent_instance_id TEXT NOT NULL,
+                    child_instance_id TEXT NOT NULL,
+                    child_execution_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    code TEXT NOT NULL,
+                    reference TEXT NOT NULL,
+                    observed_at INTEGER NOT NULL,
+                    acknowledged_at INTEGER
+                 );",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let store = IdempotencyStore::open(&path).unwrap();
+        for table in [
+            "agent_links",
+            "agent_link_events",
+            "delegated_runtime_events",
+        ] {
+            let has_project_id: bool = store
+                .conn
+                .query_row(
+                    &format!(
+                        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name = 'project_id')"
+                    ),
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(has_project_id, "{table} migre project_id");
+        }
+        let has_v6: bool = store
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM idempotency_schema_migrations WHERE version = 6)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_v6);
+        drop(store);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn two_concurrent_reservations_have_one_winner() {
         let db_path =
             std::env::temp_dir().join(format!("bridget-idempotency-{}.db", std::process::id()));
@@ -4489,6 +4643,10 @@ mod tests {
     #[test]
     fn spec_068_faits_runtime_delegues_restent_ordonnes_et_accuses() {
         let mut store = IdempotencyStore::open_in_memory().unwrap();
+        let project = ProjectReference {
+            project_id: "project-068".to_string(),
+            binding_generation: 4,
+        };
         store
             .create_agent_link(&AgentLinkRecord {
                 link_id: "link-068".to_string(),
@@ -4497,6 +4655,7 @@ mod tests {
                 parent_execution_id: Some("execution-parent".to_string()),
                 objective_id: Some("objective-068".to_string()),
                 delegation_id: Some("delegation-068".to_string()),
+                project: Some(project.clone()),
                 role: "worker".to_string(),
                 agent_path: "parent/child".to_string(),
                 state: AgentLinkState::Reserved,
@@ -4505,6 +4664,23 @@ mod tests {
                 revision: 0,
             })
             .unwrap();
+
+        assert_eq!(
+            store
+                .agent_link_events_after("instance-parent", None)
+                .unwrap()
+                .as_slice(),
+            &[AgentLinkEvent {
+                cursor: 1,
+                event_id: "link-068:0".to_string(),
+                link_id: "link-068".to_string(),
+                parent_instance_id: "instance-parent".to_string(),
+                child_instance_id: "instance-child".to_string(),
+                state: AgentLinkState::Reserved,
+                observed_at: NOW,
+                project: Some(project.clone()),
+            }]
+        );
 
         let warning_reference = format!("sha256:{}", "a".repeat(64));
         let failed_reference = format!("sha256:{}", "b".repeat(64));
@@ -4529,6 +4705,8 @@ mod tests {
                 observed_at: NOW + 2,
             })
             .unwrap();
+        assert_eq!(warning.project, Some(project.clone()));
+        assert_eq!(failed.project, Some(project.clone()));
         assert_eq!(
             store
                 .record_delegated_runtime_event(DelegatedRuntimeEventInput {
@@ -4546,6 +4724,11 @@ mod tests {
         let pending = store
             .delegated_runtime_events_for_parent("instance-parent")
             .unwrap();
+        assert!(
+            pending
+                .iter()
+                .all(|event| event.project == Some(project.clone()))
+        );
         assert_eq!(
             pending
                 .iter()

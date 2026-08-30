@@ -37,7 +37,7 @@ use crate::recovery_trace::{
     NamedRosterEntry, NamedRosterStore, RecoveryLossEntry, persist_report, report_path,
     resolved_domain, roster_path,
 };
-pub use bridget_transport::protocol::SpawnOwnership;
+pub use bridget_transport::protocol::{ProjectReference, SpawnOwnership};
 use bridget_transport::{ResolvedAgentDefinition, protocol::ExecutionBudgetOutcome};
 use log::warn;
 use serde::Serialize;
@@ -233,6 +233,7 @@ fn suggested_fleet_quota(quota: usize) -> usize {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpawnOrder {
     pub agent_type: String,
+    pub project: Option<ProjectReference>,
     pub requested_name: Option<String>,
     pub cwd: PathBuf,
     pub persistent: bool,
@@ -250,6 +251,7 @@ pub struct SpawnLease {
     pub generation: u64,
     pub deadline_at: i64,
     pub persistent: bool,
+    pub project: Option<ProjectReference>,
     pub link_id: Option<String>,
     pub ownership: Option<SpawnOwnership>,
     pub agent_path: Option<String>,
@@ -358,6 +360,7 @@ struct ActiveSpawn {
     generation: u64,
     deadline_at: i64,
     persistent: bool,
+    project: Option<ProjectReference>,
     agent_type: String,
     cwd: PathBuf,
     state: SpawnCommandState,
@@ -811,29 +814,34 @@ impl FleetSupervisor {
                     let detail = quota_exceeded_detail(self.config.quota);
                     return terminal_refusal(&mut inner, &key, &command, "quota_exceeded", &detail);
                 }
-                let link =
-                    match reserve_agent_link(&mut inner, &command, order.ownership.as_ref(), now) {
-                        Ok(link) => link,
-                        Err(FleetError::Ownership("quota enfants atteint")) => {
-                            return terminal_refusal(
-                                &mut inner,
-                                &key,
-                                &command,
-                                "children_quota_exceeded",
-                                "nombre maximal d'enfants atteint",
-                            );
-                        }
-                        Err(FleetError::Ownership("profondeur maximale atteinte")) => {
-                            return terminal_refusal(
-                                &mut inner,
-                                &key,
-                                &command,
-                                "depth_exceeded",
-                                "profondeur maximale atteinte",
-                            );
-                        }
-                        Err(error) => return Err(error),
-                    };
+                let link = match reserve_agent_link(
+                    &mut inner,
+                    &command,
+                    order.ownership.as_ref(),
+                    order.project.as_ref(),
+                    now,
+                ) {
+                    Ok(link) => link,
+                    Err(FleetError::Ownership("quota enfants atteint")) => {
+                        return terminal_refusal(
+                            &mut inner,
+                            &key,
+                            &command,
+                            "children_quota_exceeded",
+                            "nombre maximal d'enfants atteint",
+                        );
+                    }
+                    Err(FleetError::Ownership("profondeur maximale atteinte")) => {
+                        return terminal_refusal(
+                            &mut inner,
+                            &key,
+                            &command,
+                            "depth_exceeded",
+                            "profondeur maximale atteinte",
+                        );
+                    }
+                    Err(error) => return Err(error),
+                };
                 if let Err(error) = inner.idempotency.advance_spawn(
                     &key,
                     command.generation,
@@ -862,6 +870,7 @@ impl FleetSupervisor {
                     generation: command.generation,
                     deadline_at: command.deadline_at,
                     persistent: command.persistent,
+                    project: order.project.clone(),
                     agent_type: order.agent_type.clone(),
                     cwd: order.cwd.clone(),
                     state: SpawnCommandState::Reserved,
@@ -1001,6 +1010,7 @@ impl FleetSupervisor {
                     agent_link: desired_agent_link(&active),
                     resolved_definition: active.resolved_definition.clone(),
                     domain: resolved_domain(None, &active.cwd),
+                    project: active.project.clone(),
                 },
             )?;
         }
@@ -1227,6 +1237,7 @@ fn recover_commands(inner: &mut FleetInner, desired: &DesiredFleet) -> Result<()
                     generation: command.generation,
                     deadline_at: command.deadline_at,
                     persistent: true,
+                    project: equipier.project.clone(),
                     link_id: equipier
                         .agent_link
                         .as_ref()
@@ -1289,6 +1300,11 @@ fn validate_order(order: &SpawnOrder) -> Result<(), FleetError> {
     {
         return Err(FleetError::InvalidOrder("propriété parent ou rôle vide"));
     }
+    if let Some(project) = &order.project
+        && (project.project_id.trim().is_empty() || project.binding_generation == 0)
+    {
+        return Err(FleetError::InvalidOrder("référence projet invalide"));
+    }
     Ok(())
 }
 
@@ -1296,6 +1312,7 @@ fn reserve_agent_link(
     inner: &mut FleetInner,
     command: &SpawnCommand,
     ownership: Option<&SpawnOwnership>,
+    project: Option<&ProjectReference>,
     now: i64,
 ) -> Result<Option<AgentLink>, FleetError> {
     let Some(ownership) = ownership else {
@@ -1332,6 +1349,7 @@ fn reserve_agent_link(
         parent_execution_id: ownership.parent_execution_id.clone(),
         objective_id: ownership.objective_id.clone(),
         delegation_id: ownership.delegation_id.clone(),
+        project: project.cloned(),
         role: ownership.role.clone(),
         agent_path: format!("{parent_path}/{child_instance_id}"),
         state: AgentLinkState::Reserved,
@@ -1357,6 +1375,7 @@ fn desired_agent_link(active: &ActiveSpawn) -> Option<DesiredAgentLink> {
         parent_execution_id: ownership.parent_execution_id.clone(),
         objective_id: ownership.objective_id.clone(),
         delegation_id: ownership.delegation_id.clone(),
+        project: active.project.clone(),
         role: ownership.role.clone(),
         agent_path: agent_path.clone(),
     })
@@ -1373,6 +1392,7 @@ fn ownership_from_desired(equipier: &DesiredEquipier) -> Option<SpawnOwnership> 
         parent_execution_id: link.parent_execution_id.clone(),
         objective_id: link.objective_id.clone(),
         delegation_id: link.delegation_id.clone(),
+        project: equipier.project.clone(),
         role: link.role.clone(),
         max_children: None,
         max_depth: None,
@@ -1385,6 +1405,8 @@ struct CanonicalSpawnOrder<'a> {
     requested_name: &'a Option<String>,
     cwd: &'a str,
     persistent: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project: Option<&'a ProjectReference>,
     issued_at: i64,
     deadline_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1402,6 +1424,7 @@ fn canonical_order(order: &SpawnOrder) -> Result<Vec<u8>, FleetError> {
         requested_name: &order.requested_name,
         cwd,
         persistent: order.persistent,
+        project: order.project.as_ref(),
         ownership: order.ownership.as_ref(),
         issued_at: order.issued_at,
         deadline_at: order.deadline_at,
@@ -1435,6 +1458,7 @@ fn lease_from(active: &ActiveSpawn) -> SpawnLease {
         generation: active.generation,
         deadline_at: active.deadline_at,
         persistent: active.persistent,
+        project: active.project.clone(),
         link_id: active.link_id.clone(),
         ownership: active.ownership.clone(),
         agent_path: active.agent_path.clone(),
@@ -1599,6 +1623,7 @@ mod tests {
             command_id: command_id.to_string(),
             issued_at: NOW,
             deadline_at: NOW + 60,
+            project: None,
             ownership: None,
         }
     }
@@ -1696,8 +1721,14 @@ mod tests {
         let root = test_root("recovery-candidates");
         let supervisor = open(&root);
         for (command_id, name) in [("command-z", "zeta"), ("command-a", "alpha")] {
-            let spawn = order(command_id, Some(name), true);
+            let project = (name == "alpha").then(|| ProjectReference {
+                project_id: "project-alpha".to_string(),
+                binding_generation: 2,
+            });
+            let mut spawn = order(command_id, Some(name), true);
+            spawn.project = project.clone();
             let lease = start(&supervisor, &spawn);
+            assert_eq!(lease.project, project);
             supervisor
                 .mark_starting(&lease, NOW, &resolved_test_definition())
                 .unwrap();
@@ -1713,6 +1744,7 @@ mod tests {
                         created: NOW.to_string(),
                         resolved_definition: Some(resolved_test_definition()),
                         domain: None,
+                        project: project.clone(),
                         agent_link: None,
                     },
                 )
@@ -1734,6 +1766,12 @@ mod tests {
                 .iter()
                 .all(|candidate| candidate.lease.persistent)
         );
+        assert!(candidates.iter().any(|candidate| {
+            candidate.lease.name == "alpha"
+                && candidate.lease.project.as_ref().is_some_and(|project| {
+                    project.project_id == "project-alpha" && project.binding_generation == 2
+                })
+        }));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2122,6 +2160,7 @@ mod tests {
                         generation: waiter.generation,
                         deadline_at: waiter.deadline_at,
                         persistent: true,
+                        project: None,
                         link_id: None,
                         ownership: None,
                         agent_path: None,

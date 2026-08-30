@@ -1,7 +1,7 @@
 use maicie::app::{DelegateRequest, DelegateResult, DelegationCandidate, delegate};
 use maicie::config::DurationClasses;
 use maicie::domain::{ClasseDuree, ObjectiveOpeningPermit, SuiteObjective};
-use maicie::domain::{EtatFlux, ExecutionProjection, ExecutionReference};
+use maicie::domain::{EtatFlux, ExecutionProjection, ExecutionReference, ProjectReference};
 use maicie::runtime::{
     RuntimeSignal, execution_projection_from_signal, persist_execution_projection_from_signal,
 };
@@ -56,6 +56,7 @@ fn delegated_store() -> (PathBuf, MaicieStore, Uuid, Uuid) {
 fn reference() -> ExecutionReference {
     ExecutionReference {
         delegation_id: Uuid::new_v4(),
+        project: None,
         submission_id: "submission-064".to_string(),
         execution_id: "execution-064".to_string(),
         agent_instance_id: "agent-instance-064".to_string(),
@@ -115,6 +116,10 @@ fn projection_persistee_ignore_un_curseur_ancien_sans_muter_la_delegation() {
     let mut projection = ExecutionProjection {
         reference: ExecutionReference {
             delegation_id,
+            project: Some(ProjectReference {
+                project_id: "project-persisted".to_string(),
+                binding_generation: 3,
+            }),
             submission_id: "submission-persisted".to_string(),
             execution_id: "execution-persisted".to_string(),
             agent_instance_id: "agent-persisted".to_string(),
@@ -142,6 +147,15 @@ fn projection_persistee_ignore_un_curseur_ancien_sans_muter_la_delegation() {
             .unwrap()
             .runtime_state,
         "running"
+    );
+    assert_eq!(
+        store
+            .execution_projection_for_delegation(delegation_id)
+            .unwrap()
+            .unwrap()
+            .reference
+            .project,
+        projection.reference.project
     );
     drop(store);
     std::fs::remove_dir_all(root).unwrap();
@@ -191,6 +205,7 @@ fn les_faits_runtime_ne_cloturent_ni_ne_rouvrent_une_mission() {
         let projection = ExecutionProjection {
             reference: ExecutionReference {
                 delegation_id,
+                project: None,
                 submission_id: format!("submission-runtime-{index}"),
                 execution_id: format!("execution-runtime-{index}"),
                 agent_instance_id: "agent-runtime-064".to_string(),
@@ -237,6 +252,7 @@ fn consommation_curseur_gap_persiste_une_copie_sans_effet_metier() {
         .remove(0);
     let reference = ExecutionReference {
         delegation_id,
+        project: None,
         submission_id: "submission-consumer".to_string(),
         execution_id: "execution-consumer".to_string(),
         agent_instance_id: "agent-consumer".to_string(),
@@ -276,4 +292,20 @@ fn consommation_curseur_gap_persiste_une_copie_sans_effet_metier() {
     );
     drop(store);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn reference_historique_sans_projet_reste_compatible_au_decodage() {
+    let historical = serde_json::json!({
+        "delegation_id": Uuid::nil(),
+        "submission_id": "submission-historical",
+        "execution_id": "execution-historical",
+        "agent_instance_id": "agent-historical",
+        "provider_kind": "codex",
+        "provider_session_id": null,
+        "provider_turn_id": null,
+        "bound_at": 1726000000
+    });
+    let reference: ExecutionReference = serde_json::from_value(historical).unwrap();
+    assert_eq!(reference.project, None);
 }

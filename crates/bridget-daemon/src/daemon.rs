@@ -47,7 +47,7 @@ use crate::{
     fleet::{FleetConfig, FleetSupervisor, SpawnLease, SpawnOrder as FleetSpawnOrder},
     lifecycle::{
         PreparedSpawn, SourceEnvironment, SpawnDecision, prepare_recovery, source_environment,
-        submit_spawn, submit_spawn_from_resolved,
+        submit_spawn_for_project, submit_spawn_from_resolved,
     },
     managed_process::{
         ManagedIdentity, ManagedLaunch, ManagedMarkerStore, ManagedStatus, ManagedStderrStore,
@@ -1264,6 +1264,7 @@ fn delegated_runtime_frame(
         code: event.code,
         reference: event.reference,
         observed_at: event.observed_at,
+        project: event.project,
     }
 }
 
@@ -2647,6 +2648,7 @@ impl DaemonState {
                     parent_execution_id: summary.link.parent_execution_id,
                     objective_id: summary.link.objective_id,
                     delegation_id: summary.link.delegation_id,
+                    project: summary.link.project,
                     role: summary.link.role,
                     agent_path: summary.link.agent_path,
                     state: summary.link.state.as_str().to_string(),
@@ -2935,6 +2937,7 @@ fn reserve_managed_recoveries(
             issued_at: now,
             deadline_at: now.saturating_add(MANAGED_RECOVERY_DEADLINE_SECS),
             ownership: None,
+            project: equipier.project,
         };
         match submit_spawn_from_resolved(
             &state.fleet,
@@ -6978,6 +6981,7 @@ fn handle_wrapper_message(
                             code: event.code,
                             reference: event.reference,
                             observed_at: event.observed_at,
+                            project: event.project,
                         },
                     },
                 )
@@ -7044,6 +7048,7 @@ fn handle_wrapper_message(
                             child_instance_id: event.child_instance_id,
                             state: event.state.as_str().to_string(),
                             observed_at: event.observed_at,
+                            project: event.project,
                         })
                         .collect(),
                 }),
@@ -7836,6 +7841,7 @@ fn handle_wrapper_message(
         }
         WrapperToDaemon::SpawnOrder {
             agent_type,
+            project,
             name,
             cwd,
             persistent,
@@ -7850,6 +7856,7 @@ fn handle_wrapper_message(
                 requested_name: name,
                 cwd: PathBuf::from(cwd),
                 persistent,
+                project,
                 command_id: command_id.clone(),
                 issued_at,
                 ownership,
@@ -7869,7 +7876,27 @@ fn handle_wrapper_message(
                     .cloned()
                     .unwrap_or_else(|| bridget_core::HOTE_NON_ATTESTE.to_string()),
             };
-            let decision = submit_spawn(
+            let project_root = if let Some(project) = order.project.as_ref() {
+                match st.store.project_binding(&project.project_id) {
+                    Ok(Some(binding))
+                        if binding.state == crate::store::ProjectBindingState::Active
+                            && binding.generation == project.binding_generation =>
+                    {
+                        Some(PathBuf::from(binding.canonical_root))
+                    }
+                    Ok(_) | Err(_) => {
+                        return Some(DaemonToWrapper::SpawnRejected {
+                            command_id,
+                            reason: SpawnRefusal::ProjectCwdMismatch {
+                                project_id: project.project_id.clone(),
+                            },
+                        });
+                    }
+                }
+            } else {
+                None
+            };
+            let decision = submit_spawn_for_project(
                 &st.fleet,
                 &st.registry,
                 &st.source_env,
@@ -7877,6 +7904,7 @@ fn handle_wrapper_message(
                 unix_timestamp(),
                 st.recovering,
                 &hosts,
+                project_root.as_deref(),
             );
             match decision {
                 Ok(SpawnDecision::Ready(prepared)) => {
@@ -9528,11 +9556,13 @@ mod matrice_roles_tests {
                 command_id: "spawn-events-daemon".to_string(),
                 issued_at: 1_788_000_000,
                 deadline_at: 1_788_000_060,
+                project: None,
                 ownership: Some(bridget_transport::protocol::SpawnOwnership {
                     parent_instance_id,
                     parent_execution_id: Some("execution-parent".to_string()),
                     objective_id: Some("objective-1".to_string()),
                     delegation_id: None,
+                    project: None,
                     role: "verification".to_string(),
                     max_children: Some(2),
                     max_depth: Some(3),
@@ -11100,6 +11130,7 @@ mod presence_tests {
             command_id: command_id.to_string(),
             issued_at: now,
             deadline_at: now + 60,
+            project: None,
             ownership: None,
         };
         let lease = match state.fleet.request_spawn(&order, now).unwrap() {
@@ -11286,6 +11317,7 @@ mod presence_tests {
                     created: index.to_string(),
                     resolved_definition: (index != 0).then(recovery_fixture_definition),
                     domain: None,
+                    project: None,
                     agent_link: None,
                 },
             );
@@ -11383,6 +11415,7 @@ mod presence_tests {
                     created: index.to_string(),
                     resolved_definition: (index != 0).then(recovery_fixture_definition),
                     domain: None,
+                    project: None,
                     agent_link: None,
                 },
             );
@@ -11449,6 +11482,7 @@ mod presence_tests {
                 created: "1".to_string(),
                 resolved_definition: Some(recovery_fixture_definition()),
                 domain: None,
+                project: None,
                 agent_link: None,
             },
         );
@@ -11496,6 +11530,7 @@ mod presence_tests {
                 created: "1".to_string(),
                 resolved_definition: Some(recovery_fixture_definition()),
                 domain: None,
+                project: None,
                 agent_link: None,
             },
         );
@@ -11569,6 +11604,7 @@ mod presence_tests {
                     created: index.to_string(),
                     resolved_definition: Some(recovery_fixture_definition()),
                     domain: None,
+                    project: None,
                     agent_link: None,
                 },
             );
@@ -11616,6 +11652,7 @@ mod presence_tests {
                 created: "initial".to_string(),
                 resolved_definition: Some(recovery_fixture_definition()),
                 domain: None,
+                project: None,
                 agent_link: None,
             },
         );
@@ -11727,6 +11764,7 @@ mod presence_tests {
                     created: "initial".to_string(),
                     resolved_definition: Some(recovery_fixture_definition()),
                     domain: None,
+                    project: None,
                     agent_link: None,
                 },
             );
@@ -12038,6 +12076,7 @@ mod presence_tests {
                 command_id: "initial-persistent".to_string(),
                 issued_at: now,
                 deadline_at: now + 20,
+                project: None,
                 ownership: None,
             },
         );
@@ -12173,6 +12212,7 @@ mod presence_tests {
                     command_id: "initial-persistent".to_string(),
                     issued_at: now,
                     deadline_at: now + 20,
+                    project: None,
                     ownership: None,
                 }
             ),
@@ -14987,6 +15027,7 @@ mod presence_tests {
             command_id: "managed-runtime-definition".to_string(),
             issued_at: now,
             deadline_at: now + 60,
+            project: None,
             ownership: None,
         };
         let lease = match state.fleet.request_spawn(&order, now).unwrap() {
@@ -15059,6 +15100,7 @@ mod presence_tests {
             command_id: label.to_string(),
             issued_at: now,
             deadline_at: now + 60,
+            project: None,
             ownership: None,
         };
         let lease = match state.fleet.request_spawn(&order, now).unwrap() {
@@ -16738,6 +16780,7 @@ mod presence_tests {
             generation: 1,
             deadline_at: unix_timestamp() + 60,
             persistent: false,
+            project: None,
             link_id: None,
             ownership: None,
             agent_path: None,
@@ -16758,6 +16801,7 @@ mod presence_tests {
             command_id: command_id.to_string(),
             issued_at: now,
             deadline_at: now + 60,
+            project: None,
             ownership: None,
         };
         let lease = match state.fleet.request_spawn(&order, now).unwrap() {
@@ -18164,6 +18208,7 @@ fn spec_068_daemon_persiste_remet_et_accuse_l_incident_delegue_au_seul_parent() 
             parent_execution_id: Some("parent-execution".to_string()),
             objective_id: None,
             delegation_id: None,
+            project: None,
             role: "worker".to_string(),
             agent_path: "instance-parent/instance-1".to_string(),
             state: AgentLinkState::Reserved,
@@ -18263,6 +18308,7 @@ fn spec_068_register_rejoue_apres_registered_les_incidents_delegues_en_ordre() {
             parent_execution_id: None,
             objective_id: None,
             delegation_id: None,
+            project: None,
             role: "worker".to_string(),
             agent_path: "instance-parent/instance-1".to_string(),
             state: AgentLinkState::Reserved,

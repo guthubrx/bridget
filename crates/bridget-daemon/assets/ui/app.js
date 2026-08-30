@@ -209,6 +209,7 @@
             parent_execution_id: "execution-1",
             objective_id: "objectif-1",
             delegation_id: "delegation-1",
+            project: { project_id: "project-1", binding_generation: 2 },
             role: "verification",
             agent_path: "parent-1/enfant-1",
             state: "open",
@@ -219,6 +220,7 @@
         assert.equal(agent.agent_link.parent_instance_id, "parent-1");
         assert.match(api.ownershipSummary(agent), /parent parent-1/);
         assert.match(api.ownershipSummary(agent), /objectif objectif-1/);
+        assert.match(api.ownershipSummary(agent), /projet project-1 génération 2/);
         assert.match(api.agentHeaderMeta(agent), /2 descendants/);
         assert.equal(api.normalizeAgentRow({ agent_link: { role: "vide" } }).agent_link, null);
       });
@@ -3211,11 +3213,22 @@
       parent_execution_id: optional("parent_execution_id"),
       objective_id: optional("objective_id"),
       delegation_id: optional("delegation_id"),
+      project: normalizeProjectReference(link.project),
       role: link.role,
       agent_path: link.agent_path,
       state: link.state,
       direct_descendants: count("direct_descendants"),
       descendants: count("descendants"),
+    };
+  }
+
+  function normalizeProjectReference(project) {
+    if (!project || typeof project !== "object") return null;
+    if (typeof project.project_id !== "string" || !project.project_id.trim()) return null;
+    if (!Number.isInteger(project.binding_generation) || project.binding_generation <= 0) return null;
+    return {
+      project_id: project.project_id,
+      binding_generation: project.binding_generation,
     };
   }
 
@@ -3247,6 +3260,13 @@
       transport: typeof (agent && agent.transport) === "string" && agent.transport.trim()
         ? agent.transport.trim()
         : null,
+      domain: typeof (agent && agent.domain) === "string" && agent.domain.trim()
+        ? agent.domain.trim()
+        : null,
+      project_id: typeof (agent && agent.project_id) === "string" && agent.project_id.trim()
+        ? agent.project_id.trim()
+        : null,
+      project_state: agent && agent.project_state === "registered" ? "registered" : "unregistered",
       mode: ["tmux", "acp", "cli"].includes(mode) ? mode : null,
       model: typeof (agent && agent.model) === "string" && agent.model.trim()
         ? agent.model.trim()
@@ -3317,6 +3337,7 @@
     if (link.parent_execution_id) parts.push(`exécution ${link.parent_execution_id}`);
     if (link.objective_id) parts.push(`objectif ${link.objective_id}`);
     if (link.delegation_id) parts.push(`délégation ${link.delegation_id}`);
+    if (link.project) parts.push(`projet ${link.project.project_id} génération ${link.project.binding_generation}`);
     if (link.descendants > 0) {
       parts.push(`${link.descendants} descendant${link.descendants > 1 ? "s" : ""}`);
     }
@@ -3330,7 +3351,11 @@
       : `capacité vue il y a ${formatDuration(agent.provider_age_secs * 1000)}`;
     const ownership = ownershipSummary(agent);
     const providerContract = providerSummary(agent);
-    return [agent.connection_state, agent.host, provider, providerContract, details, ownership]
+    const project = agent.project_id
+      ? `projet ${agent.project_id} (${agent.project_state})`
+      : "projet non enregistré";
+    const domain = agent.domain ? `domaine ${agent.domain}` : "domaine non renseigné";
+    return [agent.connection_state, agent.host, project, domain, provider, providerContract, details, ownership]
       .filter(Boolean)
       .join(" · ");
   }

@@ -3,6 +3,7 @@
 //! Les états de ce module décrivent uniquement la coordination. Les faits de
 //! présence, livraison et délai restent détenus par Bridget.
 
+pub use bridget_transport::protocol::ProjectReference;
 use bridget_transport::protocol::{
     COORDINATION_STREAM_VERSION, CoordinationEventKind, DaemonToWrapper, ReviewTarget,
 };
@@ -38,16 +39,6 @@ pub enum ProjectIdentityStatus {
     Active,
     RegistrationConflict,
     Disabled,
-}
-
-/// Référence opaque propagée vers les délégations et exécutions.
-///
-/// Le chemin canonique, le backend et la santé de liaison restent chez Bridget.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProjectReference {
-    pub project_id: String,
-    pub binding_generation: u64,
 }
 
 /// Identité métier durable d'un projet, sans donnée de runtime hôte.
@@ -2646,6 +2637,8 @@ impl SnapshotTransport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionReference {
     pub delegation_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectReference>,
     pub submission_id: String,
     pub execution_id: String,
     pub agent_instance_id: String,

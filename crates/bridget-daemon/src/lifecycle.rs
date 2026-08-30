@@ -20,6 +20,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 const BASELINE_ENV: &[&str] = &["HOME", "PATH", "USER", "LANG", "TMPDIR"];
 const FALLBACK_PATH: &str = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
@@ -132,6 +133,34 @@ pub fn submit_spawn(
     recovering: bool,
     hosts: &SpawnHosts,
 ) -> Result<SpawnDecision, FleetError> {
+    submit_spawn_for_project(
+        supervisor, registry, source, order, now, recovering, hosts, None,
+    )
+}
+
+/// Variante réservée aux admissions dont la référence projet a été résolue
+/// dans le store Bridget. Une référence présente exige cette racine déjà
+/// attestée : elle ne peut pas être redéduite du `cwd` demandé.
+#[allow(clippy::too_many_arguments)]
+pub fn submit_spawn_for_project(
+    supervisor: &FleetSupervisor,
+    registry: &AgentRegistry,
+    source: &SourceEnvironment,
+    order: &SpawnOrder,
+    now: i64,
+    recovering: bool,
+    hosts: &SpawnHosts,
+    canonical_project_root: Option<&Path>,
+) -> Result<SpawnDecision, FleetError> {
+    if let Some(project) = order.project.as_ref() {
+        let matches_root = canonical_project_root
+            .is_some_and(|root| project_cwd_belongs_to_binding(&order.cwd, root));
+        if !matches_root && !supervisor.knows_command(&order.command_id) {
+            return Ok(SpawnDecision::Rejected(SpawnRefusal::ProjectCwdMismatch {
+                project_id: project.project_id.clone(),
+            }));
+        }
+    }
     if recovering && !supervisor.knows_command(&order.command_id) {
         return Ok(SpawnDecision::Rejected(SpawnRefusal::DaemonRecovering));
     }
@@ -188,6 +217,46 @@ pub fn submit_spawn(
             Ok(SpawnDecision::Rejected(SpawnRefusal::IdempotencyExpired))
         }
     }
+}
+
+/// Vérifie localement une appartenance de répertoire sans confiance dans le
+/// chemin déclaré. Une descendance de la racine canonique est admise. Sinon,
+/// les deux répertoires doivent attester le même `git-common-dir`, ce qui
+/// couvre un worktree lié mais refuse tout clone ou dépôt voisin.
+pub fn project_cwd_belongs_to_binding(cwd: &Path, canonical_root: &Path) -> bool {
+    let Ok(cwd) = cwd.canonicalize() else {
+        return false;
+    };
+    let Ok(root) = canonical_root.canonicalize() else {
+        return false;
+    };
+    if cwd.starts_with(&root) {
+        return true;
+    }
+    let Some(root_common_dir) = git_common_dir(&root) else {
+        return false;
+    };
+    let Some(cwd_common_dir) = git_common_dir(&cwd) else {
+        return false;
+    };
+    root_common_dir == cwd_common_dir
+}
+
+fn git_common_dir(path: &Path) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let common_dir = std::str::from_utf8(&output.stdout).ok()?.trim();
+    if common_dir.is_empty() {
+        return None;
+    }
+    PathBuf::from(common_dir).canonicalize().ok()
 }
 
 /// Variante réservée à la reprise d'une entrée persistante déjà connectée :
@@ -453,6 +522,7 @@ fn refusal_record(reason: &SpawnRefusal) -> (&'static str, String) {
         SpawnRefusal::NameActive => "name_active",
         SpawnRefusal::EnvUnfit { .. } => "env_unfit",
         SpawnRefusal::CwdGone { .. } => "cwd_gone",
+        SpawnRefusal::ProjectCwdMismatch { .. } => "project_cwd_mismatch",
         SpawnRefusal::NegotiationFailed { .. } => "negotiation_failed",
         SpawnRefusal::SpawnTimeout => "spawn_timeout",
         SpawnRefusal::QuotaExceeded { .. } => "quota_exceeded",
@@ -504,6 +574,9 @@ fn decision_from_issue(issue: SpawnCommandIssue, quota: usize) -> SpawnDecision 
                     searched_on: String::new(),
                     requested_from: String::new(),
                 },
+                "project_cwd_mismatch" => SpawnRefusal::ProjectCwdMismatch {
+                    project_id: String::new(),
+                },
                 "spawn_timeout" => SpawnRefusal::SpawnTimeout,
                 "quota_exceeded" => SpawnRefusal::QuotaExceeded { limit: quota },
                 "daemon_recovering" => SpawnRefusal::DaemonRecovering,
@@ -521,6 +594,7 @@ mod tests {
     use crate::desired_state::DesiredStateStore;
     use crate::fleet::FleetConfig;
     use std::fs;
+    use std::process::Command;
 
     const NOW: i64 = 2_000_000;
 
@@ -615,7 +689,47 @@ mod tests {
             issued_at: NOW,
             deadline_at: NOW + 10,
             ownership: None,
+            project: None,
         }
+    }
+
+    #[test]
+    fn cwd_projet_accepte_racine_descendante_et_worktree_lie_mais_refuse_un_voisin() {
+        let root = root("project-cwd");
+        let project = root.join("project");
+        let linked = root.join("linked");
+        let foreign = root.join("foreign");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&foreign).unwrap();
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(&project)
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "--initial-branch=main"]);
+        git(&["config", "user.name", "fixture"]);
+        git(&["config", "user.email", "fixture@example.invalid"]);
+        fs::write(project.join("README"), "fixture\n").unwrap();
+        git(&["add", "README"]);
+        git(&["commit", "-m", "fixture"]);
+        git(&["worktree", "add", "--detach", linked.to_str().unwrap()]);
+
+        assert!(
+            project_cwd_belongs_to_binding(&project.join("nested"), &project) == false,
+            "un sous-répertoire inexistant est refusé"
+        );
+        fs::create_dir_all(project.join("nested")).unwrap();
+        assert!(project_cwd_belongs_to_binding(
+            &project.join("nested"),
+            &project
+        ));
+        assert!(project_cwd_belongs_to_binding(&linked, &project));
+        assert!(!project_cwd_belongs_to_binding(&foreign, &project));
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn rejection(decision: SpawnDecision) -> SpawnRefusal {
@@ -835,6 +949,7 @@ mod tests {
                 generation: 1,
                 deadline_at: NOW + 10,
                 persistent: true,
+                project: None,
                 link_id: None,
                 ownership: None,
                 agent_path: None,

@@ -147,6 +147,7 @@ fn refus_de_lancement(socket: &Path, cwd: &Path) -> SpawnRefusal {
         .as_secs() as i64;
     let ordre = WrapperToDaemon::SpawnOrder {
         agent_type: "fixture".to_string(),
+        project: None,
         name: Some("temoin-lance".to_string()),
         cwd: cwd.display().to_string(),
         persistent: false,

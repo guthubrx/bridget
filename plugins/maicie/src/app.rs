@@ -21,10 +21,10 @@ use crate::domain::{
     ActivationOutbox, ApprobationActivation, ClasseDuree, CoutMissionAgent, DecisionCoordination,
     DefinitionCoordination, Delegation, EntreeReductionCoordination, EtatDecision, EtatFlux,
     EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, EvenementCoordination,
-    FaitAppartenanceRepli, FaitReassignation, FraicheurCoordination, ModeObjectif,
-    MotifRefusDelegationLocale, MotifRefusGreffe, ObjectifCoordonne, ObjectiveOpeningPermit,
-    ObjectiveOrigin, OutboxDelegation, PolitiqueReassignation, SnapshotTransport, SourceSnapshot,
-    SuiteObjective, TypeDecision, TypeFaitReassignation,
+    ExecutionReference, FaitAppartenanceRepli, FaitReassignation, FraicheurCoordination,
+    ModeObjectif, MotifRefusDelegationLocale, MotifRefusGreffe, ObjectifCoordonne,
+    ObjectiveOpeningPermit, ObjectiveOrigin, OutboxDelegation, PolitiqueReassignation,
+    SnapshotTransport, SourceSnapshot, SuiteObjective, TypeDecision, TypeFaitReassignation,
 };
 use crate::greffe_service::{GreffeServiceError, apply_guichet_mutation};
 use crate::outbox::{PreparedDelegation, stable_body_hash};
@@ -37,7 +37,7 @@ use crate::store::{
 };
 use bridget_transport::protocol::{
     PROJECT_REGISTRY_CONTRACT_VERSION, ProjectBackend, ProjectBindOutcome, ProjectBindRequest,
-    ReviewTarget,
+    ProjectReference, ReviewTarget,
 };
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -868,6 +868,54 @@ pub enum DelegateError {
     Store(String),
 }
 
+/// Refus local d'une corrélation qui affirmerait deux projets différents.
+/// Cette vérification est pure : elle ne possède aucune transition de mission
+/// et ne transforme donc jamais un fait runtime en décision métier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectCorrelationError {
+    DivergentProject {
+        delegation: ProjectReference,
+        execution: ProjectReference,
+    },
+}
+
+impl fmt::Display for ProjectCorrelationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DivergentProject { .. } => {
+                write!(
+                    formatter,
+                    "délégation et exécution rattachées à des projets divergents"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProjectCorrelationError {}
+
+/// Vérifie un fait de corrélation fourni par l'appelant qui connaît les deux
+/// références. L'absence sur l'un des côtés reste compatible pendant la
+/// migration, mais deux références explicites doivent être identiques.
+pub fn validate_delegation_execution_project(
+    delegation_project: Option<&ProjectReference>,
+    execution: &ExecutionReference,
+) -> Result<(), ProjectCorrelationError> {
+    let Some(delegation_project) = delegation_project else {
+        return Ok(());
+    };
+    let Some(execution_project) = execution.project.as_ref() else {
+        return Ok(());
+    };
+    if delegation_project == execution_project {
+        return Ok(());
+    }
+    Err(ProjectCorrelationError::DivergentProject {
+        delegation: delegation_project.clone(),
+        execution: execution_project.clone(),
+    })
+}
+
 /// Proposition locale d'activation d'un profil absent. Le digest résolu est
 /// fourni par la surface publique Bridget : aucun registre ni fichier Bridget
 /// n'est relu par Maicie pour compléter cette approbation.
@@ -883,6 +931,9 @@ pub struct ProfileActivationProposalRequest<'a> {
     pub resolved_definition_digest: &'a str,
     pub context_scope: &'a str,
     pub cwd: &'a str,
+    /// Référence projet déjà résolue par le registre. L'absence explicite
+    /// maintient la compatibilité des activations historiques.
+    pub project: Option<&'a ProjectReference>,
     pub persistent: bool,
     pub now: i64,
     pub spawn_deadline_at: i64,
@@ -1830,6 +1881,8 @@ struct ApprovedSpawnOrder<'a> {
     command_id: String,
     issued_at: i64,
     deadline_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project: Option<&'a ProjectReference>,
 }
 
 fn validate_profile_activation_proposal(
@@ -1841,6 +1894,9 @@ fn validate_profile_activation_proposal(
         || request.profile_hash.len() != 32
         || request.context_scope.trim().is_empty()
         || request.cwd.trim().is_empty()
+        || request.project.is_some_and(|project| {
+            project.project_id.trim().is_empty() || project.binding_generation == 0
+        })
         || request.reason.trim().is_empty()
         || request.now <= 0
         || request.spawn_deadline_at <= request.now
@@ -1866,6 +1922,7 @@ fn approved_spawn_order_bytes(
         command_id: command_id.to_string(),
         issued_at: request.now,
         deadline_at: request.spawn_deadline_at,
+        project: request.project,
     })
     .map_err(|_| ProfileActivationError::Invalid("SpawnOrder non sérialisable"))
 }
@@ -1900,4 +1957,50 @@ fn hex_nibble(value: u8) -> Result<u8, ProfileActivationError> {
 
 fn profile_activation_store_error(error: StoreError) -> ProfileActivationError {
     ProfileActivationError::Store(error.to_string())
+}
+
+#[cfg(test)]
+mod project_correlation_tests {
+    use super::*;
+
+    fn reference(project: Option<ProjectReference>) -> ExecutionReference {
+        ExecutionReference {
+            delegation_id: Uuid::nil(),
+            project,
+            submission_id: "submission-project".to_string(),
+            execution_id: "execution-project".to_string(),
+            agent_instance_id: "agent-project".to_string(),
+            provider_kind: "codex".to_string(),
+            provider_session_id: None,
+            provider_turn_id: None,
+            bound_at: 1,
+        }
+    }
+
+    #[test]
+    fn divergence_projet_delegation_execution_est_refusee_sans_transition_metier() {
+        let delegation = ProjectReference {
+            project_id: "project-a".to_string(),
+            binding_generation: 1,
+        };
+        let execution = reference(Some(ProjectReference {
+            project_id: "project-b".to_string(),
+            binding_generation: 1,
+        }));
+
+        assert!(matches!(
+            validate_delegation_execution_project(Some(&delegation), &execution),
+            Err(ProjectCorrelationError::DivergentProject { .. })
+        ));
+        assert_eq!(execution.project.as_ref().unwrap().project_id, "project-b");
+    }
+
+    #[test]
+    fn absence_historique_de_reference_reste_compatible() {
+        let delegation = ProjectReference {
+            project_id: "project-a".to_string(),
+            binding_generation: 1,
+        };
+        assert!(validate_delegation_execution_project(Some(&delegation), &reference(None)).is_ok());
+    }
 }

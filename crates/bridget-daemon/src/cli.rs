@@ -601,6 +601,7 @@ fn resolve_spawn_order(
     }
     let order = WrapperToDaemon::SpawnOrder {
         agent_type: parsed.agent_type.clone(),
+        project: None,
         name: parsed.name.clone(),
         cwd: cwd.to_string_lossy().into_owned(),
         persistent: parsed.persistent,
@@ -908,6 +909,9 @@ fn display_spawn_refusal(reason: &SpawnRefusal) -> String {
             format!(
                 "répertoire de travail introuvable sur {searched_on}, demandé depuis {requested_from}"
             )
+        }
+        SpawnRefusal::ProjectCwdMismatch { project_id } => {
+            format!("répertoire de travail hors de la liaison du projet '{project_id}'")
         }
         SpawnRefusal::NegotiationFailed { detail } => format!("négociation échouée: {detail}"),
         SpawnRefusal::SpawnTimeout => "délai de lancement dépassé".to_string(),
@@ -4771,6 +4775,7 @@ mod hook_tests {
             command_id: "command-lost".to_string(),
             issued_at: 100,
             deadline_at: 110,
+            project: None,
             ownership: None,
         };
         for _ in 0..2 {
