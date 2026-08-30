@@ -61,6 +61,7 @@ fn daemon_config(root: &Path) -> DaemonConfig {
         dedup_window: 180,
         quarantine_window: 3_600,
         retention_days: 7,
+        project_root_policy_path: None,
     }
 }
 
