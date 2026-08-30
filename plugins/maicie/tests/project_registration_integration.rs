@@ -1,3 +1,6 @@
+use bridget_transport::protocol::{
+    ProjectBackend, ProjectBindOutcome, ProjectBindStatus, ProjectRegistryRefusal,
+};
 use maicie::domain::ProjectIdentityStatus;
 use maicie::store::{MaicieStore, ProjectRegistrationIntent, ProjectRegistrationState};
 use std::sync::{Arc, Barrier};
@@ -16,6 +19,21 @@ fn registration(
             .into_bytes(),
         created_at: 1_788_000_000,
         retry_until: 1_788_003_600,
+    }
+}
+
+fn active_outcome(command_id: &str, project_id: &str) -> ProjectBindOutcome {
+    ProjectBindOutcome {
+        contract_version: 1,
+        command_id: command_id.to_string(),
+        project_id: project_id.to_string(),
+        status: ProjectBindStatus::Active,
+        binding_generation: Some(4),
+        backend: Some(ProjectBackend::Host),
+        reason: None,
+        existing_project_id: None,
+        existing_binding_generation: None,
+        observed_at: 1_788_000_010,
     }
 }
 
@@ -82,6 +100,111 @@ fn spec_065_intention_registre_est_idempotente_et_deux_intentions_restent_pendin
             .iter()
             .all(|identity| identity.status == ProjectIdentityStatus::PendingBinding)
     );
+    drop(store);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn spec_065_issue_bridget_active_ou_collision_est_durable_par_commande() {
+    let path = std::env::temp_dir().join(format!(
+        "maicie-project-registration-resolution-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let mut store = MaicieStore::open(&path).unwrap();
+    let winner = registration(
+        "project-command-winner",
+        "project-winner",
+        "/srv/projects/a",
+    );
+    store.prepare_project_registration(&winner).unwrap();
+    let active = active_outcome(&winner.command_id, &winner.proposed_project_id);
+
+    let resolved = store.resolve_project_registration(&active).unwrap();
+    assert_eq!(resolved.state, ProjectRegistrationState::Bound);
+    assert_eq!(
+        resolved.resolved_project_id.as_deref(),
+        Some("project-winner")
+    );
+    assert_eq!(resolved.identity.status, ProjectIdentityStatus::Active);
+    assert_eq!(resolved.outcome.as_ref(), Some(&active));
+    assert!(!resolved.outbox_pending);
+    assert_eq!(
+        store.resolve_project_registration(&active).unwrap(),
+        resolved
+    );
+    drop(store);
+
+    let mut store = MaicieStore::open(&path).unwrap();
+    assert_eq!(
+        store
+            .project_registration("project-command-winner")
+            .unwrap(),
+        Some(resolved)
+    );
+
+    let losing = registration("project-command-loser", "project-loser", "/srv/projects/a");
+    store.prepare_project_registration(&losing).unwrap();
+    let collision = ProjectBindOutcome {
+        contract_version: 1,
+        command_id: losing.command_id.clone(),
+        project_id: losing.proposed_project_id.clone(),
+        status: ProjectBindStatus::RegistrationConflict,
+        binding_generation: None,
+        backend: None,
+        reason: Some(ProjectRegistryRefusal::RootAlreadyBound),
+        existing_project_id: Some("project-external".to_string()),
+        existing_binding_generation: Some(4),
+        observed_at: 1_788_000_020,
+    };
+    let conflicted = store.resolve_project_registration(&collision).unwrap();
+    assert_eq!(conflicted.state, ProjectRegistrationState::Failed);
+    assert_eq!(
+        conflicted.identity.status,
+        ProjectIdentityStatus::RegistrationConflict
+    );
+    assert_eq!(
+        conflicted.resolved_project_id.as_deref(),
+        Some("project-external")
+    );
+    assert_eq!(conflicted.outcome.as_ref(), Some(&collision));
+    assert!(!conflicted.outbox_pending);
+
+    let divergent = ProjectBindOutcome {
+        observed_at: collision.observed_at + 1,
+        ..collision.clone()
+    };
+    assert!(matches!(
+        store.resolve_project_registration(&divergent),
+        Err(maicie::store::StoreError::Conflict(_))
+    ));
+
+    let refused = registration(
+        "project-command-refused",
+        "project-refused",
+        "/srv/projects/b",
+    );
+    store.prepare_project_registration(&refused).unwrap();
+    let binding_failed = ProjectBindOutcome {
+        contract_version: 1,
+        command_id: refused.command_id.clone(),
+        project_id: refused.proposed_project_id.clone(),
+        status: ProjectBindStatus::BindingFailed,
+        binding_generation: None,
+        backend: None,
+        reason: Some(ProjectRegistryRefusal::RootMissing),
+        existing_project_id: None,
+        existing_binding_generation: None,
+        observed_at: 1_788_000_030,
+    };
+    let failed = store.resolve_project_registration(&binding_failed).unwrap();
+    assert_eq!(failed.state, ProjectRegistrationState::Failed);
+    assert_eq!(
+        failed.identity.status,
+        ProjectIdentityStatus::PendingBinding,
+        "un refus Bridget ne doit jamais activer l'identité"
+    );
+    assert_eq!(failed.outcome.as_ref(), Some(&binding_failed));
+    assert!(!failed.outbox_pending);
     drop(store);
     let _ = std::fs::remove_file(path);
 }

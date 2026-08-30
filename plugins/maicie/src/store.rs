@@ -36,7 +36,8 @@ use crate::outbox::{
 use crate::review_continuity::StoredReviewVerdict;
 use crate::routines::{EtatOccurrence, EtatRoutine, Routine, RoutineOccurrence};
 use bridget_transport::protocol::{
-    CoordinationEventKind, GuichetOutcome, GuichetReplyPayload, WrapperToDaemon, decode,
+    CoordinationEventKind, GuichetOutcome, GuichetReplyPayload, ProjectBackend, ProjectBindOutcome,
+    ProjectBindStatus, WrapperToDaemon, decode,
 };
 use rusqlite::{
     Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
@@ -141,6 +142,7 @@ pub struct ProjectRegistrationRecord {
     pub resolved_project_id: Option<String>,
     pub retry_until: i64,
     pub outbox_pending: bool,
+    pub outcome: Option<ProjectBindOutcome>,
 }
 
 /// Paramètres figés pour créer l'outbox au déblocage F37 (aucune intention
@@ -616,6 +618,121 @@ impl MaicieStore {
         let record = project_registration_record_from_stored(&tx, stored)?;
         tx.commit().map_err(StoreError::Sql)?;
         Ok(record)
+    }
+
+    /// Relit l'issue durable d'une commande sans accéder au store Bridget.
+    pub fn project_registration(
+        &self,
+        command_id: &str,
+    ) -> Result<Option<ProjectRegistrationRecord>, StoreError> {
+        project_registration_for_command(&self.connection, command_id)?
+            .map(|stored| project_registration_record_from_stored(&self.connection, stored))
+            .transpose()
+    }
+
+    /// Fige l'issue terminale renvoyée par Bridget et ne promeut l'identité
+    /// qu'après une liaison host attestée. Un même résultat est rejouable;
+    /// une issue différente pour la même commande est un conflit durable.
+    pub fn resolve_project_registration(
+        &mut self,
+        outcome: &ProjectBindOutcome,
+    ) -> Result<ProjectRegistrationRecord, StoreError> {
+        validate_project_bind_outcome(outcome)?;
+        let outcome_bytes = serde_json::to_vec(outcome).map_err(StoreError::Json)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let stored = project_registration_for_command(&tx, &outcome.command_id)?
+            .ok_or(StoreError::NotFound("commande projet inconnue"))?;
+        if stored.proposed_project_id != outcome.project_id {
+            return Err(StoreError::EnvelopeMismatch);
+        }
+        if let Some(existing_outcome) = &stored.outcome_json {
+            if existing_outcome != &outcome_bytes {
+                return Err(StoreError::Conflict("issue projet terminale déjà figée"));
+            }
+            let record = project_registration_record_from_stored(&tx, stored)?;
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(record);
+        }
+
+        let mut record = project_registration_record_from_stored(&tx, stored)?;
+        if record.identity.status != ProjectIdentityStatus::PendingBinding {
+            return Err(StoreError::Corrupt(
+                "identité projet non pending sans issue durable",
+            ));
+        }
+        let (state, resolved_project_id, outbox_state) = match outcome.status {
+            ProjectBindStatus::Active => {
+                let generation = outcome
+                    .binding_generation
+                    .ok_or(StoreError::Corrupt("issue active sans génération"))?;
+                record
+                    .identity
+                    .activate(generation, outcome.observed_at)
+                    .map_err(StoreError::Domain)?;
+                persist_project_identity(&tx, &record.identity)?;
+                (
+                    ProjectRegistrationState::Bound,
+                    Some(record.identity.project_id.clone()),
+                    "applied",
+                )
+            }
+            ProjectBindStatus::RegistrationConflict => {
+                record
+                    .identity
+                    .registration_conflict(outcome.observed_at)
+                    .map_err(StoreError::Domain)?;
+                persist_project_identity(&tx, &record.identity)?;
+                (
+                    ProjectRegistrationState::Failed,
+                    outcome.existing_project_id.clone(),
+                    "rejected",
+                )
+            }
+            ProjectBindStatus::BindingFailed => {
+                (ProjectRegistrationState::Failed, None, "rejected")
+            }
+        };
+        let changed = tx
+            .execute(
+                "UPDATE project_registration_commands
+                 SET resolved_project_id = ?1, state = ?2, outcome_json = ?3,
+                     outcome_observed_at = ?4
+                 WHERE command_id = ?5 AND outcome_json IS NULL",
+                params![
+                    resolved_project_id,
+                    project_registration_state_name(state),
+                    outcome_bytes,
+                    outcome.observed_at,
+                    outcome.command_id,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict(
+                "commande projet modifiée concurremment pendant sa résolution",
+            ));
+        }
+        let changed = tx
+            .execute(
+                "UPDATE project_registration_outbox SET state = ?1 WHERE command_id = ?2
+                 AND state IN ('prepared', 'outcome_unknown')",
+                params![outbox_state, outcome.command_id],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Corrupt(
+                "outbox projet absente ou déjà terminale sans issue durable",
+            ));
+        }
+        let stored = project_registration_for_command(&tx, &outcome.command_id)?.ok_or(
+            StoreError::Corrupt("commande projet absente après résolution"),
+        )?;
+        let result = project_registration_record_from_stored(&tx, stored)?;
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(result)
     }
 
     pub fn project_identities(&self) -> Result<Vec<ProjectIdentity>, StoreError> {
@@ -8422,12 +8539,14 @@ fn migrate_to_version(
                      canonical_payload BLOB NOT NULL,
                      proposed_project_id TEXT NOT NULL UNIQUE
                          REFERENCES project_identities(project_id),
-                     resolved_project_id TEXT REFERENCES project_identities(project_id),
+                     resolved_project_id TEXT,
                      requested_root TEXT NOT NULL,
                      state TEXT NOT NULL CHECK(state IN (
                          'prepared', 'binding', 'bound', 'failed', 'expired'
                      )),
-                     retry_until INTEGER NOT NULL
+                     retry_until INTEGER NOT NULL,
+                     outcome_json BLOB,
+                     outcome_observed_at INTEGER
                  );
                  CREATE INDEX IF NOT EXISTS project_registration_commands_pending_idx
                      ON project_registration_commands(state, retry_until, command_id);
@@ -9894,6 +10013,8 @@ struct StoredProjectRegistration {
     requested_root: String,
     state: String,
     retry_until: i64,
+    outcome_json: Option<Vec<u8>>,
+    outcome_observed_at: Option<i64>,
 }
 
 fn project_registration_from_row(
@@ -9907,6 +10028,8 @@ fn project_registration_from_row(
         requested_root: row.get(4)?,
         state: row.get(5)?,
         retry_until: row.get(6)?,
+        outcome_json: row.get(7)?,
+        outcome_observed_at: row.get(8)?,
     })
 }
 
@@ -9917,7 +10040,7 @@ fn project_registration_for_command(
     connection
         .query_row(
             "SELECT command_id, canonical_payload, proposed_project_id, resolved_project_id,
-                    requested_root, state, retry_until
+                    requested_root, state, retry_until, outcome_json, outcome_observed_at
              FROM project_registration_commands WHERE command_id = ?1",
             [command_id],
             project_registration_from_row,
@@ -9946,6 +10069,19 @@ fn project_registration_record_from_stored(
         ));
     }
     let state = ProjectRegistrationState::from_db(&stored.state)?;
+    let outcome: Option<ProjectBindOutcome> = stored
+        .outcome_json
+        .as_deref()
+        .map(|bytes| serde_json::from_slice(bytes).map_err(StoreError::Json))
+        .transpose()?;
+    if outcome.as_ref().is_some_and(|outcome| {
+        outcome.command_id != stored.command_id || outcome.project_id != stored.proposed_project_id
+    }) {
+        return Err(StoreError::Corrupt("issue projet et commande divergentes"));
+    }
+    if outcome.is_some() != stored.outcome_observed_at.is_some() {
+        return Err(StoreError::Corrupt("horodatage issue projet divergent"));
+    }
     let outbox_pending: bool = connection
         .query_row(
             "SELECT EXISTS(
@@ -9964,7 +10100,96 @@ fn project_registration_record_from_stored(
         resolved_project_id: stored.resolved_project_id,
         retry_until: stored.retry_until,
         outbox_pending,
+        outcome,
     })
+}
+
+fn persist_project_identity(
+    connection: &Connection,
+    identity: &ProjectIdentity,
+) -> Result<(), StoreError> {
+    let status = match identity.status {
+        ProjectIdentityStatus::PendingBinding => "pending_binding",
+        ProjectIdentityStatus::Active => "active",
+        ProjectIdentityStatus::RegistrationConflict => "registration_conflict",
+        ProjectIdentityStatus::Disabled => "disabled",
+    };
+    let changed = connection
+        .execute(
+            "UPDATE project_identities SET status = ?1, updated_at = ?2
+             WHERE project_id = ?3 AND registration_command_id = ?4",
+            params![
+                status,
+                identity.updated_at,
+                identity.project_id,
+                identity.registration_command_id,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    if changed != 1 {
+        return Err(StoreError::Corrupt(
+            "identité projet absente à la promotion",
+        ));
+    }
+    Ok(())
+}
+
+fn project_registration_state_name(state: ProjectRegistrationState) -> &'static str {
+    match state {
+        ProjectRegistrationState::Prepared => "prepared",
+        ProjectRegistrationState::Binding => "binding",
+        ProjectRegistrationState::Bound => "bound",
+        ProjectRegistrationState::Failed => "failed",
+        ProjectRegistrationState::Expired => "expired",
+    }
+}
+
+fn validate_project_bind_outcome(outcome: &ProjectBindOutcome) -> Result<(), StoreError> {
+    if outcome.contract_version != 1
+        || outcome.command_id.trim().is_empty()
+        || outcome.project_id.trim().is_empty()
+        || outcome.observed_at < 0
+    {
+        return Err(StoreError::Invalid(
+            "issue d'enregistrement projet invalide",
+        ));
+    }
+    match outcome.status {
+        ProjectBindStatus::Active => {
+            if outcome.binding_generation.unwrap_or_default() == 0
+                || outcome.backend != Some(ProjectBackend::Host)
+                || outcome.reason.is_some()
+                || outcome.existing_project_id.is_some()
+                || outcome.existing_binding_generation.is_some()
+            {
+                return Err(StoreError::Invalid("issue active projet invalide"));
+            }
+        }
+        ProjectBindStatus::RegistrationConflict => {
+            if outcome.binding_generation.is_some()
+                || outcome.backend.is_some()
+                || outcome.reason.is_none()
+                || outcome
+                    .existing_project_id
+                    .as_deref()
+                    .is_none_or(str::is_empty)
+                || outcome.existing_binding_generation.unwrap_or_default() == 0
+            {
+                return Err(StoreError::Invalid("issue collision projet invalide"));
+            }
+        }
+        ProjectBindStatus::BindingFailed => {
+            if outcome.binding_generation.is_some()
+                || outcome.backend.is_some()
+                || outcome.reason.is_none()
+                || outcome.existing_project_id.is_some()
+                || outcome.existing_binding_generation.is_some()
+            {
+                return Err(StoreError::Invalid("issue échec projet invalide"));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_project_registration_intent(
