@@ -180,6 +180,34 @@
         assert.equal(clicked.showNewMessages, false);
       });
 
+      test("puce_nouveaux_messages_persiste_sur_rendu_sans_incrément", () => {
+        const before = {
+          scrollTop: 180,
+          scrollHeight: 1380,
+          clientHeight: 480,
+          pendingCount: 2,
+        };
+        const decision = api.decideScroll(before, { ...before, scrollHeight: 1400 }, 0);
+        assert.equal(decision.scrollTop, 180);
+        assert.equal(decision.pendingCount, 2);
+        assert.equal(decision.showNewMessages, true);
+      });
+
+      test("etat_remise_ui_reste_fonde_sur_la_preuve_disponible", () => {
+        assert.equal(api.deliveryStateLabel("accepted"), "envoi accepté · confirmation en attente");
+        assert.equal(api.deliveryStateLabel("delivered"), "remis à l’agent");
+        assert.equal(api.deliveryStateLabel("dispatched"), "traitement démarré");
+      });
+
+      test("rattrapage_apres_envoi_local_ne_rejoue_que_les_evenements_recents", () => {
+        const pending = new Map([
+          ["d-1", { target: "rc1", acceptedAt: 100, state: "delivered" }],
+        ]);
+        assert.equal(api.hasNewPendingReplayEvent(pending, "rc1", [{ at: 99 }]), false);
+        assert.equal(api.hasNewPendingReplayEvent(pending, "rc1", [{ at: 101 }]), true);
+        assert.equal(api.hasNewPendingReplayEvent(pending, "jc1", [{ at: 101 }]), false);
+      });
+
       test("recherche_hit_caracteres_inattendus_reste_du_texte", () => {
         const hit = {
           id: "x1",
@@ -661,7 +689,7 @@
           .map((name) => fs.readFileSync(path.join(__dirname, name), "utf8"))
           .join("\n");
         assert.doesNotMatch(files, new RegExp("\\bre\\u00e7u(?:e|es|s)?\\b", "i"));
-        assert.match(files, /envoi accepté · remise en cours/);
+        assert.match(files, /envoi accepté · confirmation en attente/);
       });
 
       test("historique_long_et_erreur_fournisseur_restent_lisibles", () => {
@@ -731,8 +759,8 @@
 
       test("message_optimiste_est_rattache_au_record_par_delivery_id", () => {
         const events = [
-          { kind: "message", role: "user", agent: "bridget", text: "ping", at: 10, deliveryId: "D1", messageId: "D1" },
-          { kind: "message", role: "user", agent: "bridget", text: "ping", at: 11, deliveryId: "D2", messageId: "D2" },
+          { kind: "message", role: "user", agent: "bridget", text: "ping", at: 10, deliveryId: "D1", messageId: "D1", status: api.deliveryStateLabel("accepted") },
+          { kind: "message", role: "user", agent: "bridget", text: "ping", at: 11, deliveryId: "D2", messageId: "D2", status: api.deliveryStateLabel("accepted") },
           { kind: "record", agent: "bridget", at: 12, record: { message_id: "D1", session_id: "s", seq: 1, event: "turn_start", payload: { body: "ping" } } },
           { kind: "record", agent: "bridget", at: 13, record: { message_id: "D2", session_id: "s", seq: 2, event: "turn_start", payload: { body: "ping" } } },
         ];
@@ -750,7 +778,7 @@
             at: 10,
             messageId: "message-9afa",
             deliveryId: "message-9afa",
-            status: "envoi accepté · remise en cours",
+            status: api.deliveryStateLabel("accepted"),
           },
           {
             kind: "message",
@@ -2388,7 +2416,7 @@
   function providerRequestRejectedLabel(payload) {
     const code = text(payload && payload.code, "unsupported_provider_request");
     const reference = text(payload && payload.reference, "référence absente");
-    return `Opération Codex non prise en charge. Code : ${code}. Référence : ${reference}. Le fournisseur a reçu un refus explicite.`;
+    return `Opération Codex non prise en charge. Code : ${code}. Référence : ${reference}. Le fournisseur a explicitement refusé cette opération.`;
   }
 
   function journalMessageFact(record) {
@@ -2676,6 +2704,39 @@
     );
   }
 
+  function deliveryStateLabel(state) {
+    if (state === "delivered") return "remis à l’agent";
+    if (state === "dispatched") return "traitement démarré";
+    return "envoi accepté · confirmation en attente";
+  }
+
+  function pendingDeliveryTarget(pending) {
+    return typeof pending === "string" ? pending : text(pending && pending.target);
+  }
+
+  function pendingDeliveryAcceptedAt(pending) {
+    const value = Number(pending && pending.acceptedAt);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function rememberPendingUiMessage(messages, messageId, target, acceptedAt) {
+    if (!messageId) return;
+    messages.set(messageId, { target, acceptedAt, state: "accepted" });
+    while (messages.size > 20) {
+      messages.delete(messages.keys().next().value);
+    }
+  }
+
+  function hasNewPendingReplayEvent(messages, target, events) {
+    const cutoff = Array.from(messages.values())
+      .filter((pending) => pendingDeliveryTarget(pending) === target)
+      .reduce((latest, pending) => Math.max(latest, pendingDeliveryAcceptedAt(pending)), 0);
+    return cutoff > 0 && (events || []).some((event) => {
+      const at = Number(event && event.at);
+      return Number.isFinite(at) && at >= cutoff;
+    });
+  }
+
   function shouldSubmitKey(event) {
     return (
       event &&
@@ -2700,14 +2761,15 @@
 
   function decideScroll(before, after, incomingCount) {
     const keepAtBottom = isAtBottom(before);
+    const pendingCount = keepAtBottom
+      ? 0
+      : Math.max(0, (before.pendingCount || 0) + incomingCount);
     return {
       scrollTop: keepAtBottom
         ? Math.max(0, after.scrollHeight - after.clientHeight)
         : before.scrollTop,
-      showNewMessages: !keepAtBottom && incomingCount > 0,
-      pendingCount: keepAtBottom
-        ? 0
-        : Math.max(0, (before.pendingCount || 0) + incomingCount),
+      showNewMessages: !keepAtBottom && pendingCount > 0,
+      pendingCount,
     };
   }
 
@@ -3779,6 +3841,8 @@
     let source = null;
     let sourceGeneration = 0;
     let replayingJournal = true;
+    let replayRenderTimer = null;
+    let replayIncomingCount = 0;
     let restoredTimer = null;
     let reconnectTimer = null;
     let reconnectAttempts = 0;
@@ -4406,11 +4470,12 @@
     const ingestThreadMessage = (payload, agentName) => {
       const deliveryId = text(payload && payload.delivery_id);
       if (!deliveryId) return false;
-      const pendingTarget = pendingUiMessages.get(deliveryId);
-      if (pendingTarget) {
-        pendingUiMessages.delete(deliveryId);
+      const pending = pendingUiMessages.get(deliveryId);
+      if (pending) {
+        const pendingTarget = pendingDeliveryTarget(pending);
+        pendingUiMessages.set(deliveryId, { ...pending, state: "delivered" });
         if (pendingTarget === state.selectedAgent) {
-          nodes.sendState.textContent = "injecté";
+          nodes.sendState.textContent = deliveryStateLabel("delivered");
         }
       }
       const key = `${agentName}:${deliveryId}`;
@@ -4485,8 +4550,26 @@
       renderThread(1);
     };
 
+    const schedulePendingReplayRender = (accepted) => {
+      if (!hasNewPendingReplayEvent(pendingUiMessages, state.selectedAgent, accepted)) return;
+      replayIncomingCount = Math.max(replayIncomingCount, 1);
+      if (replayRenderTimer) return;
+      replayRenderTimer = windowRef.setTimeout(() => {
+        replayRenderTimer = null;
+        if (!replayingJournal) return;
+        const incomingCount = replayIncomingCount;
+        replayIncomingCount = 0;
+        renderThread(incomingCount);
+      }, 150);
+    };
+
     const closeWatch = () => {
       sourceGeneration += 1;
+      if (replayRenderTimer) {
+        windowRef.clearTimeout(replayRenderTimer);
+        replayRenderTimer = null;
+      }
+      replayIncomingCount = 0;
       if (reconnectTimer) {
         windowRef.clearTimeout(reconnectTimer);
         reconnectTimer = null;
@@ -4517,11 +4600,12 @@
           rememberEventBody(event);
           const record = event.record || {};
           if (record.event === "prompt_dispatched") {
-            const pendingTarget = pendingUiMessages.get(record.message_id);
-            if (pendingTarget) {
-              pendingUiMessages.delete(record.message_id);
+            const pending = pendingUiMessages.get(record.message_id);
+            if (pending) {
+              const pendingTarget = pendingDeliveryTarget(pending);
+              pendingUiMessages.set(record.message_id, { ...pending, state: "dispatched" });
               if (pendingTarget === state.selectedAgent) {
-                nodes.sendState.textContent = "injecté";
+                nodes.sendState.textContent = deliveryStateLabel("dispatched");
               }
             }
           }
@@ -4532,10 +4616,19 @@
           watchStreamEnded = true;
         }
         replayingJournal = processed.decision.replayingJournal;
+        if (replayingJournal) {
+          schedulePendingReplayRender(accepted);
+        }
         if (processed.decision.render) {
-          renderThread(
-            processed.decision.scrollMode === "live" ? accepted.length : 0,
-          );
+          if (replayRenderTimer) {
+            windowRef.clearTimeout(replayRenderTimer);
+            replayRenderTimer = null;
+          }
+          const incomingCount = processed.decision.scrollMode === "live"
+            ? accepted.length
+            : replayIncomingCount;
+          replayIncomingCount = 0;
+          renderThread(incomingCount);
         }
       },
     });
@@ -4661,7 +4754,7 @@
           agent: target,
           text: body,
           at: epochSeconds(payload.issued_at) || Date.now() / 1000,
-          status: "envoi accepté · remise en cours",
+          status: deliveryStateLabel("accepted"),
           messageId: messageId || null,
           deliveryId: messageId || null,
         });
@@ -4692,10 +4785,15 @@
           });
         }
         if (injectionAlreadyObserved) {
-          nodes.sendState.textContent = "injecté";
+          nodes.sendState.textContent = deliveryStateLabel("dispatched");
         } else {
-          pendingUiMessages.set(messageId, target);
-          nodes.sendState.textContent = "envoi accepté · remise en cours";
+          rememberPendingUiMessage(
+            pendingUiMessages,
+            messageId,
+            target,
+            epochSeconds(payload.issued_at) || Date.now() / 1000,
+          );
+          nodes.sendState.textContent = deliveryStateLabel("accepted");
         }
       } catch (error) {
         const labels = {
@@ -4875,6 +4973,8 @@
     appendTimelineBatch,
     explicitSend,
     uiMessageIdentity,
+    deliveryStateLabel,
+    hasNewPendingReplayEvent,
     shouldSubmitKey,
     completeExplicitSend,
     shouldMarkRead,
