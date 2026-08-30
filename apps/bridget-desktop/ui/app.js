@@ -89,7 +89,7 @@ async function disconnectProfile(profile) {
   try {
     await invoke("connection_close", { profile_id: profile.id });
     connectionStates.delete(profile.id); openPanelProfiles.delete(profile.id);
-    if (openPanelProfiles.size === 0) { elements.showProfiles.hidden = true; document.body.classList.remove("panel-view"); }
+    if (openPanelProfiles.size === 0) document.body.classList.remove("panel-view");
     renderActivePanels();
     renderProfiles(); setConnectionMessage(`${profile.label} est déconnecté.`);
   } catch (error) { visibleError(elements.loadError, error); }
@@ -97,7 +97,7 @@ async function disconnectProfile(profile) {
 async function showProfiles() {
   try {
     for (const profileId of [...openPanelProfiles]) await invoke("panel_close", { profile_id: profileId });
-    openPanelProfiles.clear(); elements.showProfiles.hidden = true; document.body.classList.remove("panel-view"); renderActivePanels();
+    openPanelProfiles.clear(); document.body.classList.remove("panel-view"); renderActivePanels();
     setConnectionMessage("Les panneaux sont masqués. Les connexions restent ouvertes jusqu'à leur déconnexion explicite.");
   } catch (error) { visibleError(elements.loadError, error); }
 }
