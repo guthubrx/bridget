@@ -64,3 +64,9 @@
 
 
 - [x] T014 - Compacter l’activité vivante par défaut : dernier acte et décision corrélée, volet « Voir les N actes » persistant pendant le flux, détail technique atténué. Preuve : témoin Node de prévisualisation et 75 tests UI passants.
+
+
+- [x] T015 - Distinguer visuellement transport, remise fournisseur et première
+  activité fournisseur dans `app.js` et `theme.css`. Preuve : le témoin Node
+  couvre les trois phases, 76 tests UI passent ; les points et la bouille sont
+  alignés sur le rail gauche du fil et le libellé de remise reste atténué.

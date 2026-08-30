@@ -1,6 +1,6 @@
 # SPEC-070 - Preuves d'activité et notifications de réponse
 
-**Statut** : Implémentée - validation locale réussie, non livrée
+**Statut** : Implémentée - correctif de remise validé localement, livraison UI en attente
 
 ## Contexte observé
 
@@ -137,3 +137,19 @@ Critères supplémentaires :
 - La zone d’activité est repliée par défaut : elle montre la dernière opération réelle et, si elle existe, sa décision d’autorisation.
 - « Voir les N actes » ouvre le flux complet dans l’ordre ; l’état ouvert persiste pendant les rendus suivants du même tour.
 - Le détail de commande reste disponible mais visuellement atténué pour que l’état et l’action soient lus avant la ligne technique.
+
+## Correctif de remise distincte - 30 août 2026
+
+La remise est désormais visualisée en trois phases qui ne se confondent pas :
+
+- acceptation HTTP : trois points animés, uniquement pendant le transport ;
+- `prompt_dispatched` corrélé : bouille compacte de cet agent et libellé atténué
+  `Remis au fournisseur` ; ce fait confirme la remise au fournisseur, pas une
+  réflexion ni une exécution ;
+- première trace fournisseur (`text`, outil, autorisation ou raisonnement) : la
+  zone active existante prend le relais et montre le dernier acte réel.
+
+Les points et la bouille suivent le même rail gauche que les bulles des agents.
+La bouille de remise reprend son état connu sans le forcer à `busy` : la
+présence visuelle ne prétend donc jamais que le modèle réfléchit avant la
+première trace réelle.

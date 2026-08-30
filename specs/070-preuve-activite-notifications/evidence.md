@@ -62,3 +62,22 @@ pas.
 
 
 Le flux vivant est désormais compact par défaut. Il affiche la dernière commande réellement journalisée, avec son autorisation corrélée si elle existe ; le bouton « Voir les N actes » révèle l’historique complet et reste ouvert pendant les événements suivants. Les détails techniques sont atténués sans être masqués.
+
+
+## Correctif de remise distincte - 30 août 2026
+
+| Commande | Résultat |
+|---|---|
+| `node --test crates/bridget-daemon/assets/ui/app.js` | 76 tests réussis, dont le témoin transport -> `prompt_dispatched` -> activité réelle |
+| `git diff --check` | réussi |
+
+La zone de remise utilise les événements bruts du journal uniquement pour
+reconnaître `prompt_dispatched` corrélé au `message_id` humain. Cette preuve
+suffit à afficher `Remis au fournisseur`, jamais une activité. La projection
+existante reste la seule source de l’état actif : un `turn_start` ou un
+`prompt_dispatched` seul ne crée toujours aucun acte visuel de travail.
+
+La mise en page réutilise les avatars existants, avec une taille réduite et un
+texte atténué. Son conteneur a la même largeur que le timeline, de sorte que les
+points, la bouille de remise et les activités réelles partagent le rail gauche
+des bulles agent.

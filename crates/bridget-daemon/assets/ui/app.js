@@ -215,6 +215,33 @@
         assert.equal(api.pendingDeliveryPulse(pending, "rc1", []), null);
       });
 
+      test("remise_visuelle_distingue_transport_remise_et_activite", () => {
+        const pending = new Map([["m-visuel", { target: "rc1", acceptedAt: 1, state: "accepted" }]]);
+        const transport = api.deliveryVisualState(pending, "rc1", [], []);
+        assert.equal(transport.phase, "transport");
+
+        const dispatched = [{
+          kind: "record",
+          agent: "rc1",
+          at: 11,
+          record: { message_id: "m-visuel", event: "prompt_dispatched", payload: { body: "question" } },
+        }];
+        const beforeActivity = api.projectTimeline(dispatched);
+        assert.equal(beforeActivity.some((entry) => entry.kind === "activity"), false);
+        assert.equal(
+          api.deliveryVisualState(pending, "rc1", dispatched, beforeActivity).phase,
+          "dispatched",
+        );
+
+        const active = [...dispatched, {
+          kind: "record",
+          agent: "rc1",
+          at: 12,
+          record: { message_id: "m-visuel", event: "update", payload: { kind: "command", text: "commande" } },
+        }];
+        assert.equal(api.deliveryVisualState(pending, "rc1", active, api.projectTimeline(active)), null);
+      });
+
       test("activite_live_exige_un_acte_fournisseur_et_s_arrete_au_terminal", () => {
         const base = [
           {
@@ -3656,9 +3683,17 @@
   // La remise est honnête mais n’est pas une activité. Les trois points ne
   // vivent donc que jusqu’au premier acte fournisseur ou au terminal du même
   // message. Une autre activité de l’agent reste visible séparément.
-  function pendingDeliveryPulse(messages, selectedAgent, timeline) {
+  function deliveryVisualState(messages, selectedAgent, events, timeline) {
     if (!(messages instanceof Map) || !selectedAgent) return null;
+    const rawEvents = Array.isArray(events) ? events : [];
     const entries = Array.isArray(timeline) ? timeline : [];
+    const dispatched = new Set(
+      rawEvents
+        .filter((entry) => entry && entry.kind === "record" && entry.record)
+        .filter((entry) => entry.record.event === "prompt_dispatched")
+        .map((entry) => text(entry.record.message_id))
+        .filter(Boolean),
+    );
     const proven = new Set(
       entries
         .filter((entry) => entry && (entry.kind === "activity" || entry.kind === "work"))
@@ -3669,9 +3704,20 @@
       if (pendingDeliveryTarget(pending) !== selectedAgent) continue;
       if (pending && pending.state === "terminal") continue;
       if (proven.has(messageId)) continue;
-      return { messageId, pending };
+      return {
+        messageId,
+        pending,
+        phase: dispatched.has(messageId) ? "dispatched" : "transport",
+      };
     }
     return null;
+  }
+
+  // Compatibilité des consommateurs de la première version visuelle : cette
+  // fonction ne représente que le transport, jamais la remise fournisseur.
+  function pendingDeliveryPulse(messages, selectedAgent, timeline) {
+    const visual = deliveryVisualState(messages, selectedAgent, [], timeline);
+    return visual && visual.phase === "transport" ? visual : null;
   }
 
   function permissionOptionId(option) {
@@ -5026,12 +5072,48 @@
       });
     };
 
-    const renderDeliveryActivity = (entries) => {
-      nodes.deliveryActivity.hidden = !pendingDeliveryPulse(
+    const renderDeliveryActivity = (entries, rawEvents) => {
+      const visual = deliveryVisualState(
         pendingUiMessages,
         state.selectedAgent,
+        rawEvents,
         entries,
       );
+      nodes.deliveryActivity.replaceChildren();
+      nodes.deliveryActivity.hidden = !visual;
+      if (!visual) return;
+
+      if (visual.phase === "transport") {
+        nodes.deliveryActivity.setAttribute(
+          "aria-label",
+          "Message en cours de remise au fournisseur",
+        );
+        const dots = make("span", "delivery-activity__dots");
+        dots.setAttribute("aria-hidden", "true");
+        dots.append(make("i"), make("i"), make("i"));
+        nodes.deliveryActivity.append(dots);
+        return;
+      }
+
+      const agent = state.agents.find((entry) => entry.name === state.selectedAgent) || {
+        name: state.selectedAgent,
+        state: "connected",
+      };
+      const receipt = make("div", "delivery-activity__receipt");
+      const avatar = createAgentAvatar(
+        documentRef,
+        agent,
+        colorForAgent(agent.name),
+        "small",
+        shapeForAgent(agent.name),
+      );
+      avatar.setAttribute("aria-hidden", "true");
+      receipt.append(avatar, make("span", "delivery-activity__receipt-label", "Remis au fournisseur"));
+      nodes.deliveryActivity.setAttribute(
+        "aria-label",
+        "Message remis au fournisseur, en attente d’une trace de l’agent",
+      );
+      nodes.deliveryActivity.append(receipt);
     };
 
     const renderThread = (incomingCount = 0) => {
@@ -5055,7 +5137,7 @@
         timeline.append(make("p", "empty-state", "Les messages de l’agent apparaîtront ici."));
       }
       renderActivity(entries);
-      renderDeliveryActivity(entries);
+      renderDeliveryActivity(entries, state.timelines[state.selectedAgent] || []);
       nodes.thread.replaceChildren(timeline);
       const after = currentMetrics();
       const decision = decideScroll(before, after, incomingCount);
@@ -5635,6 +5717,7 @@
     uiMessageIdentity,
     deliveryStateLabel,
     pendingDeliveryPulse,
+    deliveryVisualState,
     notificationTarget,
     hasNewPendingReplayEvent,
     shouldSubmitKey,
