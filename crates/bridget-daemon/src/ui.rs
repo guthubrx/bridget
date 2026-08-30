@@ -950,6 +950,9 @@ fn serve_connection(
                 .get("agent")
                 .ok_or_else(|| UiError::Protocol("paramètre agent absent".to_string()))?;
             validate_agent(agent)?;
+            if projected_turns(&agent_journal_dir(agent)).is_empty() {
+                return stream_sse_thread_watch(stream, config, agent);
+            }
             let (window, page) = resolve_ui_journal_window(agent, &request.query)?;
             // La vue combinée est la porte d'entrée de la future page : elle
             // raccorde Attach avant de capturer l'instantané, donc aucun delta
@@ -2435,6 +2438,34 @@ fn stream_sse_thread_only(
     Ok(())
 }
 
+/// Garde un watch vivant pour un interlocuteur sans journal de tour, notamment
+/// `humain`. Une tentative Attach serait rejetée comme non enregistrée et
+/// laisserait le client dans une boucle de reconnexion alors que le relais est
+/// disponible.
+fn stream_sse_thread_watch(
+    http: &mut TcpStream,
+    config: &UiRelayConfig,
+    agent: &str,
+) -> Result<(), UiError> {
+    let snapshot = read_snapshot(config, Some(agent))?;
+    write!(
+        http,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
+    )?;
+    http.flush()?;
+    write_relay_state(http, "connected", now_secs())?;
+    let mut seen_thread_ids = HashSet::new();
+    seed_thread_message_ids(&snapshot, &mut seen_thread_ids);
+    write_snapshot_sse(http, &snapshot)?;
+
+    loop {
+        thread::sleep(UI_THREAD_LEDGER_POLL);
+        push_live_thread_messages(http, &config.daemon_socket, agent, &mut seen_thread_ids)?;
+        write!(http, ": keepalive\n\n")?;
+        http.flush()?;
+    }
+}
+
 fn write_snapshot_sse(http: &mut TcpStream, snapshot: &UiSnapshotV1) -> Result<(), UiError> {
     write_sse(http, "snapshot", snapshot)?;
     if let Some(exchanges) = &snapshot.peer_exchanges {
@@ -3877,6 +3908,25 @@ mod tests {
         assert!(
             live_body.contains("load_human_referent_thread("),
             "le chemin vivant doit aussi filtrer avant de borner"
+        );
+    }
+
+    #[test]
+    fn watch_sans_journal_reste_un_flux_vivant() {
+        let source = include_str!("ui.rs");
+        let serve_body = function_body(source, "fn serve_connection(");
+        assert!(
+            serve_body.contains("stream_sse_thread_watch(stream, config, agent)"),
+            "un interlocuteur sans journal ne doit pas tenter Attach"
+        );
+        let watch_body = function_body(source, "fn stream_sse_thread_watch(");
+        assert!(
+            watch_body.contains("push_live_thread_messages("),
+            "le watch humain doit diffuser les nouveaux messages"
+        );
+        assert!(
+            watch_body.contains(": keepalive\\n\\n"),
+            "le watch humain doit rester ouvert entre deux messages"
         );
     }
 
