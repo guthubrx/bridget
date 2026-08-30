@@ -1264,6 +1264,7 @@ fn resolve_cli_agent_name(file_name: Option<&str>, env_name: Option<&str>) -> St
 fn cmd_daemon(args: &[String]) {
     let mut project_root_policy_path = None;
     let mut project_runtime_policy_path = None;
+    let mut project_resource_catalog_path = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -1299,6 +1300,24 @@ fn cmd_daemon(args: &[String]) {
                 }
                 project_runtime_policy_path = Some(path);
             }
+            "--project-resource-catalog" => {
+                if project_resource_catalog_path.is_some() {
+                    eprintln!("bridget daemon: --project-resource-catalog dupliqué");
+                    std::process::exit(2);
+                }
+                index += 1;
+                let Some(path) = args.get(index).map(PathBuf::from) else {
+                    eprintln!(
+                        "bridget daemon: --project-resource-catalog requiert un chemin absolu"
+                    );
+                    std::process::exit(2);
+                };
+                if !path.is_absolute() {
+                    eprintln!("bridget daemon: --project-resource-catalog doit être absolu");
+                    std::process::exit(2);
+                }
+                project_resource_catalog_path = Some(path);
+            }
             option => {
                 eprintln!("bridget daemon: option inconnue {option}");
                 std::process::exit(2);
@@ -1308,6 +1327,7 @@ fn cmd_daemon(args: &[String]) {
     }
     let config = DaemonConfig {
         project_root_policy_path,
+        project_resource_catalog_path,
         project_runtime_policy_path,
         ..DaemonConfig::default()
     };
@@ -2559,6 +2579,7 @@ fn cmd_project_runtime(args: &[String]) {
         deadline_at: issued_at.saturating_add(60),
         operation: command.operation,
         project_id: command.project_id,
+        profile: None,
     };
     match send_control_to_daemon(WrapperToDaemon::ProjectRuntimeRequest { request }) {
         Ok(DaemonToWrapper::ProjectRuntimeOutcome { outcome }) => {
@@ -5614,6 +5635,7 @@ mod idempotency_projection_tests {
             retention_days: 7,
             project_root_policy_path: None,
             project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         };
         std::thread::spawn(move || {
             let _ = daemon::run(config);

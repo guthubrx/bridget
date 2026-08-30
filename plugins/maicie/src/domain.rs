@@ -12,6 +12,10 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
+#[path = "project_profile.rs"]
+pub mod project_profile;
+pub use project_profile::{ProjectProfile, ProjectProfileApproval, ProjectProfileStatus};
+
 pub const MAX_COORDINATION_NODES: usize = 100;
 pub const MAX_COORDINATION_EDGES: usize = 300;
 pub const MAX_FALLBACK_CANDIDATES: usize = 32;

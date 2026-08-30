@@ -1180,6 +1180,7 @@ fn read_project_runtime(
         deadline_at: issued_at.saturating_add(10),
         operation: ProjectRuntimeOperation::Status,
         project_id: project_id.to_string(),
+        profile: None,
     };
     let stream = UnixStream::connect(socket_path).map_err(|_| {
         (

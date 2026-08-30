@@ -13,10 +13,11 @@ use bridget_transport::protocol::{
     ExecutionControlRefusal, IdempotencyIssue, PROJECT_REGISTRY_CONTRACT_VERSION, PresenceMode,
     ProjectAdminOperation, ProjectAdminOutcome, ProjectAdminRequest, ProjectBackend,
     ProjectBindOutcome, ProjectBindRequest, ProjectBindStatus, ProjectBindingProjection,
-    ProjectBindingStatus, ProjectRegistryRefusal, ProjectRuntimeOperation, ProjectRuntimeOutcome,
-    ProjectRuntimeRefusal, ProjectRuntimeRequest, REVIEW_DELEGATE_CONTRACT_VERSION,
-    RelaunchOutcome, RuntimeIngressRefusal, SERVICE_CONTRACT_VERSION, ServiceCapability,
-    ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
+    ProjectBindingStatus, ProjectProfileOutcome, ProjectProfileRefusal, ProjectProfileRequest,
+    ProjectRegistryRefusal, ProjectRuntimeOperation, ProjectRuntimeOutcome, ProjectRuntimeRefusal,
+    ProjectRuntimeRequest, REVIEW_DELEGATE_CONTRACT_VERSION, RelaunchOutcome,
+    RuntimeIngressRefusal, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal,
+    SpawnRefusal, StopOutcome, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
@@ -62,10 +63,11 @@ use crate::{
     project_policy::ProjectRootPolicy,
     project_runtime::{
         CONTAINER_INGRESS_DIRECTORY, DockerCli, DockerRuntimeLaunch, ProjectEnvironment,
-        ProjectEnvironmentState, ProjectMount, ProjectRuntimePolicyConfig, RuntimeIngressEndpoint,
-        RuntimeIngressExpectation, RuntimeIssue, bind_runtime_ingress, prepare_environment,
-        remove_environment, resolve_project_mounts, runtime_state_root, stop_environment,
-        stop_remove_environment,
+        ProjectEnvironmentState, ProjectMount, ProjectProfileRuntimeAdmission,
+        ProjectResourceCatalog, ProjectRuntimePolicyConfig, RuntimeIngressEndpoint,
+        RuntimeIngressExpectation, RuntimeIssue, admit_project_profile_runtime,
+        bind_runtime_ingress, prepare_environment, remove_environment, resolve_project_mounts,
+        runtime_state_root, stop_environment, stop_remove_environment,
     },
     recovery_trace::{
         REASON_ABSENT_FROM_FLEET, REASON_FROZEN_DEFINITION, REASON_NON_PERSISTENT, REASON_QUOTA,
@@ -576,6 +578,8 @@ pub struct DaemonConfig {
     pub project_root_policy_path: Option<PathBuf>,
     /// Docker runtime policy remains optional for historical host projects.
     pub project_runtime_policy_path: Option<PathBuf>,
+    /// Catalogue hôte fermé utilisé uniquement pour les profils projet.
+    pub project_resource_catalog_path: Option<PathBuf>,
 }
 
 impl Default for DaemonConfig {
@@ -592,6 +596,7 @@ impl Default for DaemonConfig {
             retention_days: 7,
             project_root_policy_path: None,
             project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         }
     }
 }
@@ -703,6 +708,11 @@ struct DaemonState {
     project_runtime_policy: Result<ProjectRuntimePolicyConfig, RuntimeIssue>,
     /// Un listener privé par projet et génération Docker, jamais partagé avec
     /// la socket utilisateur du daemon.
+    /// Catalogue de ressources, isolé des routes host historiques.
+    project_resource_catalog: Result<ProjectResourceCatalog, RuntimeIssue>,
+    /// Admission volatile: les chemins hôte ne sortent jamais du daemon et une
+    /// relance après redémarrage exige une nouvelle préparation approuvée.
+    project_profile_admissions: HashMap<(String, u64, u64), ProjectProfileRuntimeAdmission>,
     /// Admissions à usage unique créées avant docker exec. Elles lient le
     /// premier handshake à un environnement attesté et à sa génération.
     runtime_ingress_reservations: HashMap<(String, u64), RuntimeIngressExpectation>,
@@ -2547,6 +2557,10 @@ impl DaemonState {
             Some(path) => ProjectRuntimePolicyConfig::load(path),
             None => Err(RuntimeIssue::PolicyUnavailable),
         };
+        let project_resource_catalog = match config.project_resource_catalog_path.as_deref() {
+            Some(path) => ProjectResourceCatalog::load(path),
+            None => Err(RuntimeIssue::PolicyUnavailable),
+        };
         store.recover_guichet_claims_after_restart()?;
         let idempotency = IdempotencyStore::open(&config.db_path)?;
         let desired = DesiredStateStore::at_path(desired_state_path(config));
@@ -2605,6 +2619,8 @@ impl DaemonState {
             peer_uids: HashMap::new(),
             runtime_ingress_reservations: HashMap::new(),
             project_root_policy,
+            project_resource_catalog,
+            project_profile_admissions: HashMap::new(),
             project_runtime_policy,
             runtime_ingresses: HashMap::new(),
             coordination_subscriptions: HashMap::new(),
@@ -4077,6 +4093,7 @@ fn handle_runtime_ingress_connection(
     if read == 0 || line.len() > 64 * 1024 {
         return Ok(());
     }
+    let mut preflight = false;
     let admission = match decode::<WrapperToDaemon>(line.trim()) {
         Ok(WrapperToDaemon::RuntimeIngressHello { hello }) => {
             let mut guarded = state.lock().unwrap_or_else(|error| error.into_inner());
@@ -4088,6 +4105,14 @@ fn handle_runtime_ingress_connection(
                 peer_uid,
             )
             .map(|expectation| (hello, expectation))
+        }
+        Ok(WrapperToDaemon::RuntimeIngressPreflight { hello }) => {
+            preflight = true;
+            let guarded = state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut reservations = guarded.runtime_ingress_reservations.clone();
+            let reconnections = guarded.runtime_ingress_reconnections.clone();
+            consume_runtime_ingress_reservation(&mut reservations, &reconnections, &hello, peer_uid)
+                .map(|expectation| (hello, expectation))
         }
         _ => Err(RuntimeIngressRefusal::IdentityMismatch),
     };
@@ -4102,7 +4127,7 @@ fn handle_runtime_ingress_connection(
     let mut writer = BufWriter::new(stream.try_clone()?);
     writeln!(writer, "{}", encode(&response)?)?;
     writer.flush()?;
-    if admission.is_err() {
+    if admission.is_err() || preflight {
         return Ok(());
     }
     handle_connection(stream, state)
@@ -4378,6 +4403,24 @@ fn project_registry_admin_failure(
     }
 }
 
+fn project_profile_failure(
+    request: &ProjectProfileRequest,
+    reason: ProjectProfileRefusal,
+    observed_at: i64,
+) -> DaemonToWrapper {
+    DaemonToWrapper::ProjectProfileOutcome {
+        outcome: ProjectProfileOutcome {
+            contract_version: request.proposal.contract_version,
+            command_id: request.proposal.command_id.clone(),
+            project: request.proposal.project.clone(),
+            backend: None,
+            profile: None,
+            reason: Some(reason),
+            observed_at,
+        },
+    }
+}
+
 fn project_runtime_failure(
     request: &ProjectRuntimeRequest,
     reason: ProjectRuntimeRefusal,
@@ -4450,6 +4493,24 @@ fn project_has_active_agents(fleet: &FleetSupervisor, project_id: &str) -> bool 
         .unwrap_or(true)
 }
 
+fn project_runtime_view(
+    policy: &crate::project_runtime::ProjectRuntimePolicy,
+) -> bridget_transport::protocol::ProjectRuntimeView {
+    bridget_transport::protocol::ProjectRuntimeView {
+        policy_id: policy.policy_id.clone(),
+        policy_version: policy.policy_version,
+        policy_digest: policy.digest.clone(),
+        image_reference: policy.image_reference.clone(),
+        run_as_uid: policy.run_as_uid,
+        run_as_gid: policy.run_as_gid,
+        cpu_limit_milli: (policy.cpu_limit * 1000.0).round() as u64,
+        memory_limit_bytes: policy.memory_limit_bytes,
+        pids_limit: policy.pids_limit,
+        tmpfs: policy.tmpfs.clone(),
+        network_mode: policy.network_mode.clone(),
+    }
+}
+
 fn project_environment_from_binding(
     binding: &crate::store::ProjectBinding,
 ) -> Result<ProjectEnvironment, RuntimeIssue> {
@@ -4492,6 +4553,44 @@ fn runtime_binding_from_environment(
     }
 }
 
+fn mark_project_profile_recreate_required(
+    state: &mut DaemonState,
+    environment: &ProjectEnvironment,
+    reason: &str,
+    observed_at: i64,
+) {
+    let resolved_image_id = state
+        .store
+        .project_binding(&environment.project_id)
+        .ok()
+        .flatten()
+        .and_then(|binding| {
+            binding
+                .runtime
+                .and_then(|runtime| runtime.resolved_image_id)
+        });
+    let mut stale = environment.clone();
+    if stale.state.admits_spawn()
+        && stale
+            .transition(
+                ProjectEnvironmentState::RecreateRequired,
+                Some(reason.to_string()),
+            )
+            .is_ok()
+    {
+        let replacement = runtime_binding_from_environment(&stale, resolved_image_id);
+        let _ =
+            state
+                .store
+                .update_project_runtime(&environment.project_id, &replacement, observed_at);
+    }
+    state.project_profile_admissions.retain(|key, _| {
+        key.0 != environment.project_id
+            || key.1 != environment.binding_generation
+            || key.2 != environment.environment_epoch
+    });
+}
+
 fn docker_runtime_spawn_refusal(
     project: &bridget_transport::protocol::ProjectReference,
     backend: ProjectBackend,
@@ -4522,6 +4621,7 @@ fn is_guichet_frame(message: &WrapperToDaemon) -> bool {
         WrapperToDaemon::ServiceHello { .. }
             | WrapperToDaemon::ProjectRegistryRequest { .. }
             | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
+            | WrapperToDaemon::ProjectProfileRequest { .. }
             | WrapperToDaemon::CoordinationSubscribe { .. }
             | WrapperToDaemon::ServiceRequest { .. }
             | WrapperToDaemon::GuichetClaimNext { .. }
@@ -7271,6 +7371,7 @@ fn handle_wrapper_message(
             WrapperToDaemon::ServiceHello { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
+                | WrapperToDaemon::ProjectProfileRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
                 | WrapperToDaemon::GuichetClaim { .. }
@@ -7290,6 +7391,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::GuichetReply { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
+                | WrapperToDaemon::ProjectProfileRequest { .. }
                 | WrapperToDaemon::ProjectRuntimeRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                     if !st.service_negotiations.contains_key(conn_id) =>
@@ -7339,6 +7441,19 @@ fn handle_wrapper_message(
                 {
                     Some(ServiceRefusal::CapabilityRequired)
                 }
+                WrapperToDaemon::ProjectProfileRequest { .. }
+                    if !st
+                        .service_negotiations
+                        .get(conn_id)
+                        .is_some_and(|negotiated| {
+                            negotiated.version == SERVICE_CONTRACT_VERSION
+                                && negotiated
+                                    .capabilities
+                                    .contains(&ServiceCapability::ProjectProfilesV1)
+                        }) =>
+                {
+                    Some(ServiceRefusal::CapabilityRequired)
+                }
                 // MATRICE EXHAUSTIVE — même raison que pour le rôle Client, et
                 // conséquence PIRE ici. Un message non classé y était refusé en
                 // silence : une sonde d'identité posée sur ce rôle rendrait
@@ -7349,6 +7464,7 @@ fn handle_wrapper_message(
                 WrapperToDaemon::ServiceHello { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
+                | WrapperToDaemon::ProjectProfileRequest { .. }
                 | WrapperToDaemon::ProjectRuntimeRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
@@ -7362,6 +7478,7 @@ fn handle_wrapper_message(
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ClientHello { .. }
                 | WrapperToDaemon::RuntimeIngressHello { .. }
+                | WrapperToDaemon::RuntimeIngressPreflight { .. }
                 // Refusé AVANT ce lot aussi : il tombait dans le tiret bas.
                 // La forme change, le sort de ce message ne change pas.
                 | WrapperToDaemon::ServiceRequest { .. }
@@ -7496,8 +7613,10 @@ fn handle_wrapper_message(
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ServiceHello { .. }
                 | WrapperToDaemon::RuntimeIngressHello { .. }
+                | WrapperToDaemon::RuntimeIngressPreflight { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
+                | WrapperToDaemon::ProjectProfileRequest { .. }
                 | WrapperToDaemon::ProjectRuntimeRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::ServiceRequest { .. }
@@ -7571,7 +7690,8 @@ fn handle_wrapper_message(
 
     match msg {
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
-        WrapperToDaemon::RuntimeIngressHello { .. } => {
+        WrapperToDaemon::RuntimeIngressHello { .. }
+        | WrapperToDaemon::RuntimeIngressPreflight { .. } => {
             Some(DaemonToWrapper::RuntimeIngressRejected {
                 reason: RuntimeIngressRefusal::ReservationMissing,
             })
@@ -7865,6 +7985,189 @@ fn handle_wrapper_message(
                 }
             })
         }
+        WrapperToDaemon::ProjectProfileRequest { request } => {
+            let observed_at = unix_now_secs();
+            let proposal = &request.proposal;
+            if proposal.contract_version
+                != bridget_transport::protocol::PROJECT_PROFILE_CONTRACT_VERSION
+                || proposal.validate().is_err()
+            {
+                return Some(project_profile_failure(
+                    &request,
+                    ProjectProfileRefusal::InvalidProfile,
+                    observed_at,
+                ));
+            }
+            let binding = {
+                let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                if st.peer_uids.get(conn_id).copied() != Some(unsafe { libc::geteuid() }) {
+                    return Some(project_profile_failure(
+                        &request,
+                        ProjectProfileRefusal::PeerUidMismatch,
+                        observed_at,
+                    ));
+                }
+                match st.store.project_binding(&proposal.project.project_id) {
+                    Ok(Some(binding)) => binding,
+                    Ok(None) => {
+                        return Some(project_profile_failure(
+                            &request,
+                            ProjectProfileRefusal::ProjectNotFound,
+                            observed_at,
+                        ));
+                    }
+                    Err(_) => {
+                        return Some(project_profile_failure(
+                            &request,
+                            ProjectProfileRefusal::ProjectNotFound,
+                            observed_at,
+                        ));
+                    }
+                }
+            };
+            if binding.state != crate::store::ProjectBindingState::Active
+                || binding.backend != ProjectBackend::Docker
+            {
+                return Some(project_profile_failure(
+                    &request,
+                    ProjectProfileRefusal::ProjectNotDocker,
+                    observed_at,
+                ));
+            }
+            if binding.generation != proposal.binding_generation {
+                return Some(project_profile_failure(
+                    &request,
+                    ProjectProfileRefusal::BindingGenerationMismatch,
+                    observed_at,
+                ));
+            }
+            let Some(runtime) = binding.runtime.as_ref() else {
+                return Some(project_profile_failure(
+                    &request,
+                    ProjectProfileRefusal::RuntimePolicyMismatch,
+                    observed_at,
+                ));
+            };
+            if runtime.policy_version != proposal.runtime_policy_version
+                || runtime.policy_digest != proposal.policy_digest
+            {
+                return Some(project_profile_failure(
+                    &request,
+                    ProjectProfileRefusal::RuntimePolicyMismatch,
+                    observed_at,
+                ));
+            }
+            let runtime_view = {
+                let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                match st.resolve_project_runtime_policy(&runtime.policy_id, runtime.policy_version)
+                {
+                    Ok(policy) if policy.digest == runtime.policy_digest => {
+                        project_runtime_view(&policy)
+                    }
+                    _ => {
+                        return Some(project_profile_failure(
+                            &request,
+                            ProjectProfileRefusal::RuntimePolicyMismatch,
+                            observed_at,
+                        ));
+                    }
+                }
+            };
+            let catalog = {
+                let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                match &st.project_resource_catalog {
+                    Ok(catalog) => catalog.clone(),
+                    Err(_) => {
+                        return Some(project_profile_failure(
+                            &request,
+                            ProjectProfileRefusal::CatalogUnavailable,
+                            observed_at,
+                        ));
+                    }
+                }
+            };
+            let references = proposal
+                .extensions
+                .iter()
+                .chain(&proposal.secrets)
+                .cloned()
+                .collect::<Vec<_>>();
+            let resources = match catalog.resolve_refs(&proposal.project.project_id, &references) {
+                Ok(resources) => resources,
+                Err(_) => {
+                    return Some(project_profile_failure(
+                        &request,
+                        ProjectProfileRefusal::ResourceRejected,
+                        observed_at,
+                    ));
+                }
+            };
+            let resolved_agents = {
+                let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                let mut resolved_agents = Vec::with_capacity(proposal.agents.len());
+                for agent in &proposal.agents {
+                    let definition = match st.registry.resolved_definition(&agent.agent_type) {
+                        Ok(definition) => definition,
+                        Err(_) => {
+                            return Some(project_profile_failure(
+                                &request,
+                                ProjectProfileRefusal::InvalidProfile,
+                                observed_at,
+                            ));
+                        }
+                    };
+                    let Some(model) = definition.capabilities.models.get(&agent.model) else {
+                        return Some(project_profile_failure(
+                            &request,
+                            ProjectProfileRefusal::InvalidProfile,
+                            observed_at,
+                        ));
+                    };
+                    if !model.efforts.iter().any(|effort| effort == &agent.effort)
+                        || !proposal.required_capabilities.iter().all(|required| {
+                            definition.capabilities.execution_paths.contains(required)
+                        })
+                    {
+                        return Some(project_profile_failure(
+                            &request,
+                            ProjectProfileRefusal::InvalidProfile,
+                            observed_at,
+                        ));
+                    }
+                    resolved_agents.push(bridget_transport::protocol::ResolvedProjectAgent {
+                        agent: agent.clone(),
+                        definition,
+                    });
+                }
+                resolved_agents
+            };
+            let profile = match bridget_transport::protocol::ResolvedProjectProfile::from_resolution(
+                proposal.clone(),
+                resources,
+                resolved_agents,
+                runtime_view,
+            ) {
+                Ok(profile) => profile,
+                Err(_) => {
+                    return Some(project_profile_failure(
+                        &request,
+                        ProjectProfileRefusal::InvalidProfile,
+                        observed_at,
+                    ));
+                }
+            };
+            Some(DaemonToWrapper::ProjectProfileOutcome {
+                outcome: ProjectProfileOutcome {
+                    contract_version: bridget_transport::protocol::PROJECT_PROFILE_CONTRACT_VERSION,
+                    command_id: proposal.command_id.clone(),
+                    project: proposal.project.clone(),
+                    backend: Some(ProjectBackend::Docker),
+                    profile: Some(profile),
+                    reason: None,
+                    observed_at,
+                },
+            })
+        }
         WrapperToDaemon::ProjectRuntimeRequest { request } => {
             let observed_at = unix_now_secs();
             if request.contract_version != crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION
@@ -8074,6 +8377,49 @@ fn handle_wrapper_message(
                     }
                 }
             };
+            let mut profile_admission = match request.profile.as_ref() {
+                Some(profile) => {
+                    if profile.proposal.project.project_id != request.project_id
+                        || profile.proposal.binding_generation != binding.generation
+                    {
+                        return Some(project_runtime_failure(
+                            &request,
+                            ProjectRuntimeRefusal::PrepareFailed,
+                            observed_at,
+                        ));
+                    }
+                    let catalog = {
+                        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                        match &st.project_resource_catalog {
+                            Ok(catalog) => catalog.clone(),
+                            Err(_) => {
+                                return Some(project_runtime_failure(
+                                    &request,
+                                    ProjectRuntimeRefusal::PrepareFailed,
+                                    observed_at,
+                                ));
+                            }
+                        }
+                    };
+                    match admit_project_profile_runtime(
+                        &catalog,
+                        &policy,
+                        ProjectBackend::Docker,
+                        profile,
+                    ) {
+                        Ok(admission) => Some(admission),
+                        Err(error) => {
+                            warn!("project profile admission refused: {error}");
+                            return Some(project_runtime_failure(
+                                &request,
+                                ProjectRuntimeRefusal::PrepareFailed,
+                                observed_at,
+                            ));
+                        }
+                    }
+                }
+                None => None,
+            };
             let policy_changed = environment.policy_digest != policy.digest
                 || environment.image_reference != policy.image_reference
                 || environment.run_as_uid != policy.run_as_uid
@@ -8262,6 +8608,12 @@ fn handle_wrapper_message(
                     ));
                 }
             };
+            mounts.extend(
+                profile_admission
+                    .as_ref()
+                    .map(|admission| admission.mounts.clone())
+                    .unwrap_or_default(),
+            );
             let ingress_directory = match ingress_socket.parent() {
                 Some(directory) => directory.to_path_buf(),
                 None => {
@@ -8302,6 +8654,18 @@ fn handle_wrapper_message(
             }
             match inspection {
                 Ok(_) => {
+                    if let Some(admission) = profile_admission.take() {
+                        let key = (
+                            environment.project_id.clone(),
+                            environment.binding_generation,
+                            environment.environment_epoch,
+                        );
+                        let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                        st.project_profile_admissions.retain(|existing, _| {
+                            existing.0 != environment.project_id || existing == &key
+                        });
+                        st.project_profile_admissions.insert(key, admission);
+                    }
                     let current = state
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
@@ -8493,6 +8857,11 @@ fn handle_wrapper_message(
                 capabilities.as_slice(),
                 [] | [ServiceCapability::MaicieGuichet]
                     | [ServiceCapability::ProjectRegistryV1]
+                    | [
+                        ServiceCapability::ProjectRegistryV1,
+                        ServiceCapability::ProjectProfilesV1
+                    ]
+                    | [ServiceCapability::ProjectProfilesV1]
                     | [
                         ServiceCapability::MaicieGuichet,
                         ServiceCapability::ProjectRegistryV1,
@@ -9354,64 +9723,16 @@ fn handle_wrapper_message(
             match decision {
                 Ok(SpawnDecision::Ready(prepared)) => {
                     let stop = Arc::new(ManagedStopControl::new());
-                    let supervisor_command =
-                        if let Some((environment, reservation, execution)) = docker_target {
-                            let expectation = match RuntimeIngressExpectation::from_environment(
-                                &environment,
-                                prepared.lease.generation,
-                                &prepared.lease.instance_id,
-                            ) {
-                                Ok(expectation) => expectation,
-                                Err(error) => {
-                                    let _ = st.fleet.fail(
-                                        &prepared.lease,
-                                        "negotiation_failed",
-                                        error.to_string(),
-                                    );
-                                    return Some(DaemonToWrapper::SpawnRejected {
-                                        command_id,
-                                        reason: SpawnRefusal::DockerRuntimeUnavailable {
-                                            project_id: environment.project_id,
-                                        },
-                                    });
-                                }
-                            };
-                            let resolved_definition_json =
-                                match serde_json::to_string(&prepared.resolved_definition) {
-                                    Ok(definition) => definition,
-                                    Err(error) => {
-                                        let _ = st.fleet.fail(
-                                            &prepared.lease,
-                                            "negotiation_failed",
-                                            error.to_string(),
-                                        );
-                                        return Some(DaemonToWrapper::SpawnRejected {
-                                            command_id,
-                                            reason: SpawnRefusal::NegotiationFailed {
-                                                detail: "définition runtime non sérialisable"
-                                                    .to_string(),
-                                            },
-                                        });
-                                    }
-                                };
-                            let launch = DockerRuntimeLaunch {
-                                reservation,
-                                container_id: expectation.container_id.clone(),
-                                run_as_uid: environment.run_as_uid,
-                                run_as_gid: environment.run_as_gid,
-                                exec_id: Uuid::new_v4().to_string(),
-                                execution,
-                                agent_type: prepared.agent_type.clone(),
-                                agent_name: prepared.lease.name.clone(),
-                                instance_id: prepared.lease.instance_id.clone(),
-                                agent_generation: prepared.lease.generation,
-                                cwd: prepared.cwd.clone(),
-                                resolved_definition_json,
-                            };
-                            if let Err(error) = st.fleet.record_runtime_execution(
-                                &prepared.lease,
-                                launch.durable_execution(),
-                            ) {
+                    let supervisor_command = if let Some((environment, reservation, execution)) =
+                        docker_target
+                    {
+                        let expectation = match RuntimeIngressExpectation::from_environment(
+                            &environment,
+                            prepared.lease.generation,
+                            &prepared.lease.instance_id,
+                        ) {
+                            Ok(expectation) => expectation,
+                            Err(error) => {
                                 let _ = st.fleet.fail(
                                     &prepared.lease,
                                     "negotiation_failed",
@@ -9424,25 +9745,172 @@ fn handle_wrapper_message(
                                     },
                                 });
                             }
-                            st.runtime_ingress_reconnections.insert(
-                                (expectation.project_id.clone(), expectation.agent_generation),
-                                expectation.clone(),
-                            );
-                            st.runtime_ingress_reservations.insert(
-                                (expectation.project_id.clone(), expectation.agent_generation),
-                                expectation,
-                            );
-                            ManagedSupervisorCommand::StartDocker {
-                                prepared: prepared.clone(),
-                                launch,
-                                stop: Arc::clone(&stop),
-                            }
-                        } else {
-                            ManagedSupervisorCommand::Start {
-                                prepared: prepared.clone(),
-                                stop: Arc::clone(&stop),
-                            }
                         };
+                        let resolved_definition_json =
+                            match serde_json::to_string(&prepared.resolved_definition) {
+                                Ok(definition) => definition,
+                                Err(error) => {
+                                    let _ = st.fleet.fail(
+                                        &prepared.lease,
+                                        "negotiation_failed",
+                                        error.to_string(),
+                                    );
+                                    return Some(DaemonToWrapper::SpawnRejected {
+                                        command_id,
+                                        reason: SpawnRefusal::NegotiationFailed {
+                                            detail: "définition runtime non sérialisable"
+                                                .to_string(),
+                                        },
+                                    });
+                                }
+                            };
+                        let profile_process_env = if let Some(admission) = st
+                            .project_profile_admissions
+                            .get(&(
+                                environment.project_id.clone(),
+                                environment.binding_generation,
+                                environment.environment_epoch,
+                            ))
+                            .cloned()
+                        {
+                            if admission.process_env.iter().any(|binding| {
+                                !prepared
+                                    .resolved_definition
+                                    .pass_env
+                                    .contains(&binding.variable)
+                                    || prepared
+                                        .resolved_definition
+                                        .forbidden_env
+                                        .contains(&binding.variable)
+                            }) {
+                                mark_project_profile_recreate_required(
+                                    &mut st,
+                                    &environment,
+                                    "project_profile_agent_definition_changed",
+                                    unix_timestamp(),
+                                );
+                                let _ = st.fleet.fail(
+                                    &prepared.lease,
+                                    "negotiation_failed",
+                                    "process-env absent de l allowlist agent",
+                                );
+                                return Some(DaemonToWrapper::SpawnRejected {
+                                    command_id,
+                                    reason: SpawnRefusal::DockerRuntimeUnavailable {
+                                        project_id: environment.project_id,
+                                    },
+                                });
+                            }
+                            let catalog = match &st.project_resource_catalog {
+                                Ok(catalog) => catalog.clone(),
+                                Err(_) => {
+                                    return Some(DaemonToWrapper::SpawnRejected {
+                                        command_id,
+                                        reason: SpawnRefusal::DockerRuntimeUnavailable {
+                                            project_id: environment.project_id,
+                                        },
+                                    });
+                                }
+                            };
+                            let policy = match st.resolve_project_runtime_policy(
+                                &environment.policy_id,
+                                environment.policy_version,
+                            ) {
+                                Ok(policy) => policy,
+                                Err(_) => {
+                                    return Some(DaemonToWrapper::SpawnRejected {
+                                        command_id,
+                                        reason: SpawnRefusal::DockerRuntimeUnavailable {
+                                            project_id: environment.project_id,
+                                        },
+                                    });
+                                }
+                            };
+                            let refreshed = match admit_project_profile_runtime(
+                                &catalog,
+                                &policy,
+                                ProjectBackend::Docker,
+                                &admission.profile,
+                            ) {
+                                Ok(refreshed)
+                                    if refreshed.resolved_digest == admission.resolved_digest =>
+                                {
+                                    refreshed
+                                }
+                                _ => {
+                                    mark_project_profile_recreate_required(
+                                        &mut st,
+                                        &environment,
+                                        "project_profile_resource_stamp_changed",
+                                        unix_timestamp(),
+                                    );
+                                    let _ = st.fleet.fail(
+                                        &prepared.lease,
+                                        "negotiation_failed",
+                                        "project_profile_resource_stamp_changed",
+                                    );
+                                    return Some(DaemonToWrapper::SpawnRejected {
+                                        command_id,
+                                        reason: SpawnRefusal::DockerRuntimeUnavailable {
+                                            project_id: environment.project_id,
+                                        },
+                                    });
+                                }
+                            };
+                            refreshed.process_env
+                        } else {
+                            Vec::new()
+                        };
+                        let launch = DockerRuntimeLaunch {
+                            reservation,
+                            container_id: expectation.container_id.clone(),
+                            run_as_uid: environment.run_as_uid,
+                            run_as_gid: environment.run_as_gid,
+                            exec_id: Uuid::new_v4().to_string(),
+                            execution,
+                            agent_type: prepared.agent_type.clone(),
+                            agent_name: prepared.lease.name.clone(),
+                            instance_id: prepared.lease.instance_id.clone(),
+                            agent_generation: prepared.lease.generation,
+                            cwd: prepared.cwd.clone(),
+                            resolved_definition_json,
+                            process_env: profile_process_env,
+                        };
+                        if let Err(error) = st
+                            .fleet
+                            .record_runtime_execution(&prepared.lease, launch.durable_execution())
+                        {
+                            let _ = st.fleet.fail(
+                                &prepared.lease,
+                                "negotiation_failed",
+                                error.to_string(),
+                            );
+                            return Some(DaemonToWrapper::SpawnRejected {
+                                command_id,
+                                reason: SpawnRefusal::DockerRuntimeUnavailable {
+                                    project_id: environment.project_id,
+                                },
+                            });
+                        }
+                        st.runtime_ingress_reconnections.insert(
+                            (expectation.project_id.clone(), expectation.agent_generation),
+                            expectation.clone(),
+                        );
+                        st.runtime_ingress_reservations.insert(
+                            (expectation.project_id.clone(), expectation.agent_generation),
+                            expectation,
+                        );
+                        ManagedSupervisorCommand::StartDocker {
+                            prepared: prepared.clone(),
+                            launch,
+                            stop: Arc::clone(&stop),
+                        }
+                    } else {
+                        ManagedSupervisorCommand::Start {
+                            prepared: prepared.clone(),
+                            stop: Arc::clone(&stop),
+                        }
+                    };
                     st.managed_by_instance.insert(
                         prepared.lease.instance_id.clone(),
                         prepared.lease.command_id.clone(),
@@ -11158,6 +11626,7 @@ mod matrice_roles_tests {
             retention_days: 7,
             project_root_policy_path: None,
             project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         };
         let (managed_tx, _managed_rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(DaemonState::new(&config, managed_tx).unwrap()));
@@ -11447,6 +11916,7 @@ mod matrice_roles_tests {
                     deadline_at: now + 60,
                     operation: ProjectRuntimeOperation::Status,
                     project_id: "project-066".to_string(),
+                    profile: None,
                 },
             },
             &shared,
@@ -11469,6 +11939,7 @@ mod matrice_roles_tests {
                         deadline_at: now + 60,
                         operation: ProjectRuntimeOperation::Status,
                         project_id: "project-066".to_string(),
+                        profile: None,
                     },
                 },
                 &shared,
@@ -12556,6 +13027,7 @@ mod presence_tests {
             retention_days: 7,
             project_root_policy_path: None,
             project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         };
         let (managed_tx, _managed_rx) = mpsc::channel();
         let mut state = DaemonState::new(&config, managed_tx).unwrap();
@@ -12665,6 +13137,7 @@ mod presence_tests {
             retention_days: 7,
             project_root_policy_path: None,
             project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         };
         let _home_lock = HOME_REGISTRY_LOCK.lock().unwrap();
         let (managed_tx, _managed_rx) = mpsc::channel();
@@ -13030,6 +13503,7 @@ mod presence_tests {
             retention_days: 7,
             project_root_policy_path: None,
             project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         };
         let (managed_tx, _managed_rx) = mpsc::channel();
         let mut state = DaemonState::new(&config, managed_tx).unwrap();
@@ -13125,6 +13599,7 @@ mod presence_tests {
             retention_days: 7,
             project_root_policy_path: None,
             project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         }
     }
 
@@ -18759,6 +19234,7 @@ mod presence_tests {
             retention_days: 7,
             project_root_policy_path: None,
             project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         };
         let (managed_tx, _managed_rx) = mpsc::channel();
         let mut state = DaemonState::new(&config, managed_tx).unwrap();
@@ -19426,6 +19902,7 @@ mod presence_tests {
             retention_days: 7,
             project_root_policy_path: None,
             project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         };
         let (managed_tx, managed_rx) = mpsc::channel();
         let mut state = DaemonState::new(&config, managed_tx.clone()).unwrap();
@@ -20550,6 +21027,48 @@ fn spec_066_projet_docker_ne_replie_jamais_un_spawn_sur_hote() {
 
 #[cfg(test)]
 #[test]
+fn spec_067_preflight_ingress_ne_consomme_pas_la_reservation() {
+    let expectation = crate::project_runtime::RuntimeIngressExpectation {
+        project_id: "project-067".to_string(),
+        binding_generation: 2,
+        container_id: "a".repeat(64),
+        environment_epoch: 3,
+        agent_generation: 4,
+        instance_id: "00000000-0000-4000-8000-000000000067".to_string(),
+        run_as_uid: 1002,
+    };
+    let hello = bridget_transport::protocol::RuntimeIngressHandshake {
+        contract_version: bridget_transport::protocol::RUNTIME_INGRESS_CONTRACT_VERSION,
+        project_id: expectation.project_id.clone(),
+        binding_generation: expectation.binding_generation,
+        container_id: expectation.container_id.clone(),
+        environment_epoch: expectation.environment_epoch,
+        agent_generation: expectation.agent_generation,
+        instance_id: expectation.instance_id.clone(),
+    };
+    let mut reservations = HashMap::new();
+    reservations.insert(
+        (expectation.project_id.clone(), expectation.agent_generation),
+        expectation.clone(),
+    );
+    let reconnections = HashMap::new();
+    let mut preflight = reservations.clone();
+    assert_eq!(
+        consume_runtime_ingress_reservation(&mut preflight, &reconnections, &hello, Some(1002)),
+        Ok(expectation.clone())
+    );
+    assert!(
+        reservations.contains_key(&(expectation.project_id.clone(), expectation.agent_generation))
+    );
+    assert_eq!(
+        consume_runtime_ingress_reservation(&mut reservations, &reconnections, &hello, Some(1002)),
+        Ok(expectation)
+    );
+    assert!(reservations.is_empty());
+}
+
+#[cfg(test)]
+#[test]
 fn spec_066_reservation_ingress_refuse_falsification_et_rejeu() {
     let mut reservations = HashMap::new();
     let reconnections = HashMap::new();
@@ -20922,6 +21441,7 @@ fn spec_066_lifecycle_refuse_l_action_destructive_si_agent_projet_actif() {
                     deadline_at: now + 60,
                     operation: ProjectRuntimeOperation::Remove,
                     project_id: "project-runtime-active".to_string(),
+                    profile: None,
                 },
             },
             &shared,

@@ -183,6 +183,7 @@ fn policy(image_reference: String, state_root_parent: PathBuf) -> ProjectRuntime
         memory_limit_bytes: 128 * 1024 * 1024,
         pids_limit: 64,
         tmpfs: vec!["/tmp".to_string()],
+        network_mode: "bridge".to_string(),
         runtime_launcher: Some("/usr/local/bin/bridget".to_string()),
         runtime_executables: std::collections::BTreeMap::from([(
             "fixture".to_string(),
@@ -247,6 +248,7 @@ fn launch(
         agent_generation: generation,
         cwd: project_root,
         resolved_definition_json: serde_json::to_string(&definition).expect("définition gelée"),
+        process_env: Vec::new(),
     }
 }
 

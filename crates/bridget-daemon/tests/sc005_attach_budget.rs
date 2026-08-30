@@ -63,6 +63,7 @@ fn daemon_config(root: &Path) -> DaemonConfig {
         retention_days: 7,
         project_root_policy_path: None,
         project_runtime_policy_path: None,
+        project_resource_catalog_path: None,
     }
 }
 

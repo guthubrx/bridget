@@ -14,11 +14,15 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub const PROJECT_RUNTIME_CONTRACT_VERSION: u16 = 1;
+#[path = "project_resources.rs"]
+pub mod project_resources;
+pub use bridget_transport::protocol::PROJECT_RUNTIME_CONTRACT_VERSION;
+pub use project_resources::{ProjectResourceCatalog, ProjectResourceSource};
 pub const CONTAINER_STATE_ROOT: &str = "/var/lib/bridget-project";
 pub const CONTAINER_HOME: &str = "/var/lib/bridget-project/home";
 pub const CONTAINER_INGRESS_DIRECTORY: &str = "/run/bridget/runtime";
 pub const CONTAINER_INGRESS_SOCKET: &str = "/run/bridget/runtime/bridget.sock";
+pub const CONTAINER_PROCESS_ENV_DIRECTORY: &str = "/run/bridget/secrets/process-env";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -330,6 +334,7 @@ pub struct ProjectRuntimePolicy {
     pub memory_limit_bytes: u64,
     pub pids_limit: u32,
     pub tmpfs: Vec<String>,
+    pub network_mode: String,
     pub runtime_launcher: Option<String>,
     pub runtime_executables: BTreeMap<String, String>,
     pub state_root_parent: PathBuf,
@@ -400,6 +405,7 @@ impl ProjectRuntimePolicyConfig {
             memory_limit_bytes: definition.memory_limit_bytes,
             pids_limit: definition.pids_limit,
             tmpfs: definition.tmpfs.clone(),
+            network_mode: definition.network_mode.clone(),
             runtime_launcher: definition.runtime_launcher.clone(),
             runtime_executables: definition
                 .runtime_executables
@@ -432,6 +438,24 @@ impl ProjectRuntimePolicy {
             provider_command: provider_command.clone(),
         })
     }
+}
+/// Digest la politique runtime et les attestations de ressources déjà résolues.
+pub fn project_profile_runtime_digest(
+    policy: &ProjectRuntimePolicy,
+    profile: &bridget_transport::protocol::ResolvedProjectProfile,
+) -> Result<String, RuntimeIssue> {
+    profile
+        .validate()
+        .map_err(|reason| RuntimeIssue::PolicyInvalid(reason.to_string()))?;
+    if profile.proposal.runtime_policy_version != policy.policy_version
+        || profile.proposal.policy_digest != policy.digest
+    {
+        return Err(RuntimeIssue::RuntimePolicyChanged);
+    }
+    let canonical =
+        serde_json::to_vec(&(policy.policy_version, &policy.digest, &profile.resources))
+            .map_err(|error| RuntimeIssue::PolicyInvalid(error.to_string()))?;
+    Ok(format!("sha256:{:x}", Sha256::digest(canonical)))
 }
 
 impl ProjectRuntimePolicyDefinition {
@@ -551,6 +575,150 @@ pub struct ProjectMount {
     pub writable: bool,
 }
 
+/// Métadonnée non secrète transmise au wrapper après admission ingress.
+/// Le chemin désigne un fichier privé déjà monté dans le conteneur.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessEnvBinding {
+    pub variable: String,
+    pub container_file: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectProfileRuntimeAdmission {
+    pub mounts: Vec<ProjectMount>,
+    pub process_env: Vec<ProcessEnvBinding>,
+    pub resolved_digest: String,
+    pub profile: bridget_transport::protocol::ResolvedProjectProfile,
+}
+
+fn process_env_container_file(resource_id: &str) -> String {
+    let digest = Sha256::digest(resource_id.as_bytes());
+    format!("{CONTAINER_PROCESS_ENV_DIRECTORY}/{digest:x}")
+}
+
+/// Résout les références approuvées et ne construit que des montages bind en
+/// lecture seule. Une référence process-env ne constitue jamais un montage Docker.
+pub fn resolve_project_resource_mounts(
+    catalog: &ProjectResourceCatalog,
+    project_id: &str,
+    references: &[bridget_transport::protocol::ProjectResourceRef],
+) -> Result<
+    (
+        Vec<ProjectMount>,
+        Vec<bridget_transport::protocol::ResolvedProjectResource>,
+    ),
+    RuntimeIssue,
+> {
+    let resources = catalog.resolve_refs(project_id, references)?;
+    let mut mounts = Vec::new();
+    for resource in &resources {
+        if resource.reference.kind
+            == bridget_transport::protocol::ProjectResourceKind::SecretProcessEnv
+        {
+            continue;
+        }
+        let source = catalog.source_for(project_id, &resource.reference.source_ref)?;
+        let mount = ProjectMount {
+            host_path: source.canonical_path.clone(),
+            container_path: resource.reference.destination.clone(),
+            writable: false,
+        };
+        validate_mount(&mount)?;
+        mounts.push(mount);
+    }
+    Ok((mounts, resources))
+}
+
+/// Le backend hôte conserve son comportement historique, mais refuse toute
+/// composition nécessitant une ressource Docker.
+pub fn validate_project_profile_backend(
+    backend: bridget_transport::protocol::ProjectBackend,
+    references: &[bridget_transport::protocol::ProjectResourceRef],
+) -> Result<(), RuntimeIssue> {
+    if backend == bridget_transport::protocol::ProjectBackend::Host && !references.is_empty() {
+        return Err(RuntimeIssue::PolicyInvalid(
+            "project_profile_requires_docker".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/**
+ * Admits an approved profile by reattesting every source before Docker creation.
+ * A changed generation or source stamp closes the next spawn without stopping
+ * historical executions.
+ */
+pub fn admit_project_profile_runtime(
+    catalog: &ProjectResourceCatalog,
+    policy: &ProjectRuntimePolicy,
+    backend: bridget_transport::protocol::ProjectBackend,
+    profile: &bridget_transport::protocol::ResolvedProjectProfile,
+) -> Result<ProjectProfileRuntimeAdmission, RuntimeIssue> {
+    profile
+        .validate()
+        .map_err(|reason| RuntimeIssue::PolicyInvalid(reason.to_string()))?;
+    let references = profile
+        .proposal
+        .extensions
+        .iter()
+        .chain(&profile.proposal.secrets)
+        .cloned()
+        .collect::<Vec<_>>();
+    validate_project_profile_backend(backend, &references)?;
+    if profile.proposal.runtime_policy_version != policy.policy_version
+        || profile.proposal.policy_digest != policy.digest
+    {
+        return Err(RuntimeIssue::RuntimePolicyChanged);
+    }
+    let resources = catalog.resolve_refs(&profile.proposal.project.project_id, &references)?;
+    let current = bridget_transport::protocol::ResolvedProjectProfile::from_resolution(
+        profile.proposal.clone(),
+        resources,
+        profile.agents.clone(),
+        profile.runtime.clone(),
+    )
+    .map_err(RuntimeIssue::PolicyInvalid)?;
+    if current.resolved_digest != profile.resolved_digest {
+        return Err(RuntimeIssue::PolicyInvalid(
+            "project_profile_resource_stamp_changed".to_string(),
+        ));
+    }
+    let _runtime_digest = project_profile_runtime_digest(policy, &current)?;
+    let mut mounts = Vec::new();
+    let mut process_env = Vec::new();
+    for resource in &current.resources {
+        let source = catalog.source_for(
+            &current.proposal.project.project_id,
+            &resource.reference.source_ref,
+        )?;
+        let container_path = if resource.reference.kind
+            == bridget_transport::protocol::ProjectResourceKind::SecretProcessEnv
+        {
+            let container_file = process_env_container_file(&resource.reference.resource_id);
+            process_env.push(ProcessEnvBinding {
+                variable: resource.reference.destination.clone(),
+                container_file: container_file.clone(),
+            });
+            container_file
+        } else {
+            resource.reference.destination.clone()
+        };
+        let mount = ProjectMount {
+            host_path: source.canonical_path.clone(),
+            container_path,
+            writable: false,
+        };
+        validate_mount(&mount)?;
+        mounts.push(mount);
+    }
+    Ok(ProjectProfileRuntimeAdmission {
+        mounts,
+        process_env,
+        resolved_digest: current.resolved_digest.clone(),
+        profile: current,
+    })
+}
 /// Endpoint Unix privé monté dans un seul environnement Docker. Son répertoire
 /// est monté en lecture seule: le daemon peut rétablir la socket après un
 /// redémarrage sans changer la vue du conteneur.
@@ -870,6 +1038,7 @@ pub struct DockerRuntimeLaunch {
     pub agent_generation: u64,
     pub cwd: PathBuf,
     pub resolved_definition_json: String,
+    pub process_env: Vec<ProcessEnvBinding>,
 }
 
 impl DockerRuntimeLaunch {
@@ -910,7 +1079,17 @@ impl DockerRuntimeLaunch {
         }
         validate_runtime_executable_path(&self.execution.wrapper_executable)?;
         validate_runtime_executable_path(&self.execution.provider_command)?;
-        Ok(vec![
+        for binding in &self.process_env {
+            if !is_valid_process_env_binding(binding) {
+                return Err(RuntimeIssue::RuntimeLaunchInvalid(
+                    "liaison process-env invalide".to_string(),
+                ));
+            }
+        }
+        let process_env_json = serde_json::to_string(&self.process_env).map_err(|_| {
+            RuntimeIssue::RuntimeLaunchInvalid("liaison process-env invalide".to_string())
+        })?;
+        let mut arguments = vec![
             "exec".to_string(),
             "--user".to_string(),
             format!("{}:{}", self.run_as_uid, self.run_as_gid),
@@ -936,6 +1115,14 @@ impl DockerRuntimeLaunch {
             format!("BRIDGET_RUNTIME_AGENT_GENERATION={}", self.agent_generation),
             "--env".to_string(),
             format!("BRIDGET_RUNTIME_INSTANCE_ID={}", self.instance_id),
+        ];
+        if !self.process_env.is_empty() {
+            arguments.push("--env".to_string());
+            arguments.push(format!(
+                "BRIDGET_RUNTIME_SECRET_ENV_FILES={process_env_json}"
+            ));
+        }
+        arguments.extend([
             self.container_id.clone(),
             self.execution.wrapper_executable.clone(),
             "managed-runtime-wrapper".to_string(),
@@ -943,7 +1130,8 @@ impl DockerRuntimeLaunch {
             self.agent_name.clone(),
             self.execution.provider_command.clone(),
             self.resolved_definition_json.clone(),
-        ])
+        ]);
+        Ok(arguments)
     }
     pub fn durable_execution(&self) -> crate::desired_state::ContainerAgentExecution {
         crate::desired_state::ContainerAgentExecution {
@@ -959,6 +1147,19 @@ impl DockerRuntimeLaunch {
             provider_identity: self.execution.provider_command.clone(),
         }
     }
+}
+
+fn is_valid_process_env_binding(binding: &ProcessEnvBinding) -> bool {
+    !binding.variable.is_empty()
+        && binding
+            .variable
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+        && binding
+            .container_file
+            .starts_with(CONTAINER_PROCESS_ENV_DIRECTORY)
+        && binding.container_file.len() == CONTAINER_PROCESS_ENV_DIRECTORY.len() + 65
+        && binding.container_file.as_bytes()[CONTAINER_PROCESS_ENV_DIRECTORY.len()] == b'/'
 }
 
 fn is_container_id(value: &str) -> bool {
@@ -1985,6 +2186,10 @@ mod tests {
             cwd: PathBuf::from("/workspace/project-066"),
             resolved_definition_json: r#"{"command":"/not-from-host","digest":"frozen"}"#
                 .to_string(),
+            process_env: vec![ProcessEnvBinding {
+                variable: "PROJECT_TOKEN".to_string(),
+                container_file: format!("{CONTAINER_PROCESS_ENV_DIRECTORY}/{}", "a".repeat(64)),
+            }],
         };
 
         let arguments = launch.docker_exec_arguments().unwrap();
@@ -2005,6 +2210,16 @@ mod tests {
                 .any(|pair| { pair == ["--env", "BRIDGET_RUNTIME_AGENT_GENERATION=7"] })
         );
         assert!(arguments.iter().all(|argument| argument != "sh"));
+        assert!(
+            arguments
+                .iter()
+                .any(|argument| argument.contains("PROJECT_TOKEN"))
+        );
+        assert!(
+            arguments
+                .iter()
+                .all(|argument| !argument.contains("S067_SYNTHETIC_SECRET"))
+        );
         assert_eq!(arguments[arguments.len() - 5], "managed-runtime-wrapper");
         assert_eq!(arguments[arguments.len() - 3], "coord-066");
         assert_eq!(

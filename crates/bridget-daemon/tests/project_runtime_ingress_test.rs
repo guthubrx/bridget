@@ -20,6 +20,7 @@ fn policy(state_root_parent: PathBuf) -> ProjectRuntimePolicy {
         memory_limit_bytes: 128 * 1024 * 1024,
         pids_limit: 64,
         tmpfs: vec!["/tmp".to_string()],
+        network_mode: "bridge".to_string(),
         runtime_launcher: None,
         runtime_executables: std::collections::BTreeMap::new(),
         state_root_parent,

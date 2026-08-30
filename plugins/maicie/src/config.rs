@@ -5,6 +5,7 @@
 //! l'utilisateur. La validation est effectuee avant toute ouverture de socket
 //! ou de base SQLite.
 
+use bridget_transport::protocol::ProjectResourceRef;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
@@ -56,6 +57,8 @@ pub struct MaicieConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_project: Option<ReviewProjectConfig>,
     pub profiles: Vec<ProfileConfig>,
+    #[serde(default)]
+    pub project_profiles: Vec<ProjectProfileConfig>,
 }
 
 /// Configuration fermée du dépôt de revue. La carte de criticité n'est jamais
@@ -280,6 +283,25 @@ pub struct ProfileConfig {
     pub spawn_order_ref: String,
 }
 
+/// Composition projet des profils agents déclarés. Les ressources sont des
+/// références opaques et ne peuvent contenir une valeur de secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectProfileConfig {
+    pub id: String,
+    pub project_id: String,
+    pub binding_generation: u64,
+    pub runtime_policy_version: u64,
+    pub policy_digest: String,
+    pub agent_profile_ids: Vec<String>,
+    #[serde(default)]
+    pub extensions: Vec<ProjectResourceRef>,
+    #[serde(default)]
+    pub secrets: Vec<ProjectResourceRef>,
+    #[serde(default)]
+    pub required_capabilities: Vec<String>,
+}
+
 impl MaicieConfig {
     /// Charge puis valide un fichier JSON borne. Aucune valeur par defaut ne
     /// complete silencieusement une configuration incomplete.
@@ -395,7 +417,8 @@ impl MaicieConfig {
         if let Some(review_project) = &self.review_project {
             review_project.validate()?;
         }
-        validate_profiles(&self.profiles)
+        validate_profiles(&self.profiles)?;
+        validate_project_profiles(&self.project_profiles, &self.profiles)
     }
 }
 
@@ -484,6 +507,54 @@ fn validate_profiles(profiles: &[ProfileConfig]) -> Result<(), ConfigError> {
             &profile.tools,
             MAX_TOOLS_PER_PROFILE,
         )?;
+    }
+    Ok(())
+}
+fn validate_project_profiles(
+    project_profiles: &[ProjectProfileConfig],
+    profiles: &[ProfileConfig],
+) -> Result<(), ConfigError> {
+    if project_profiles.len() > MAX_PROFILES {
+        return Err(ConfigError::validation(
+            "project_profiles",
+            "trop de profils projet",
+        ));
+    }
+    let known_agents: HashSet<&str> = profiles.iter().map(|profile| profile.id.as_str()).collect();
+    let mut ids = HashSet::with_capacity(project_profiles.len());
+    for profile in project_profiles {
+        let field = format!("project_profiles.{}", profile.id);
+        validate_slug(&format!("{field}.id"), &profile.id)?;
+        validate_slug(&format!("{field}.project_id"), &profile.project_id)?;
+        if profile.binding_generation == 0
+            || profile.runtime_policy_version == 0
+            || profile.policy_digest.trim().is_empty()
+            || profile.agent_profile_ids.is_empty()
+        {
+            return Err(ConfigError::validation(field, "profil projet incomplet"));
+        }
+        if !ids.insert(profile.id.as_str()) {
+            return Err(ConfigError::validation(
+                "project_profiles",
+                "identifiant duplique",
+            ));
+        }
+        let mut destinations = HashSet::new();
+        for agent_id in &profile.agent_profile_ids {
+            if !known_agents.contains(agent_id.as_str()) {
+                return Err(ConfigError::validation(field, "profil agent inconnu"));
+            }
+        }
+        for resource in profile.extensions.iter().chain(&profile.secrets) {
+            validate_reference(&format!("{field}.source_ref"), &resource.source_ref)?;
+            validate_reference(&format!("{field}.destination"), &resource.destination)?;
+            if resource.resource_id.trim().is_empty()
+                || resource.generation == 0
+                || !destinations.insert(resource.destination.as_str())
+            {
+                return Err(ConfigError::validation(field, "ressource projet invalide"));
+            }
+        }
     }
     Ok(())
 }

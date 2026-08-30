@@ -6,8 +6,9 @@
 //! réconciliateur d'outbox commun : aucun second chemin d'envoi n'existe.
 
 use bridget_transport::protocol::{
-    PROJECT_REGISTRY_CONTRACT_VERSION, ProjectAdminOperation, ProjectAdminRequest,
-    ProjectBindingStatus, ReviewTarget,
+    PROJECT_REGISTRY_CONTRACT_VERSION, PROJECT_RUNTIME_CONTRACT_VERSION, ProjectAdminOperation,
+    ProjectAdminRequest, ProjectBindingStatus, ProjectRuntimeOperation, ProjectRuntimeRequest,
+    ReviewTarget,
 };
 use maicie::MAICIE_IDENTITY;
 use maicie::app::{
@@ -21,13 +22,13 @@ use maicie::app::{
 };
 use maicie::bridget_client::{
     AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits,
-    DaemonIdentity, ProjectRegistryClient,
+    DaemonIdentity, ProjectProfileClient, ProjectRegistryClient,
 };
 use maicie::catalogue::{self, AppendOutcome, CatalogueError, CatalogueJournal};
 use maicie::config::{ConfigError, MaicieConfig};
 use maicie::domain::{
     ClasseDuree, CoutMissionAgent, DecisionCoordination, Delegation, EtatFlux, ObjectifCoordonne,
-    ObjectiveOpeningPermit, SourceSnapshot, SuiteObjective,
+    ObjectiveOpeningPermit, ProjectProfile, ProjectProfileStatus, SourceSnapshot, SuiteObjective,
 };
 use maicie::greffe_service::{
     GreffeServiceError, append_registre_add, apply_delegate, candidates_from,
@@ -100,6 +101,9 @@ fn run(arguments: Vec<String>) -> Result<String, CliError> {
         Command::Objective(objective_args) => run_objective(objective_args, migrate),
         Command::Profile(profile_args) => run_profile(profile_args, migrate),
         Command::Project(project_args) => run_project(project_args, migrate),
+        Command::ProjectProfile(project_profile_args) => {
+            run_project_profile(project_profile_args, migrate)
+        }
         Command::Registre(registre_args) => run_registre(registre_args, migrate),
         Command::Plage(plage_args) => run_plage(plage_args, migrate),
         Command::Routine(routine_args) => run_routine(routine_args, migrate),
@@ -135,6 +139,7 @@ fn mission_projection_config(command: &Command) -> Option<PathBuf> {
         Command::Objective(arguments) => Some(arguments.config.clone()),
         Command::Profile(arguments) => Some(arguments.config.clone()),
         Command::Project(arguments) => Some(arguments.config.clone()),
+        Command::ProjectProfile(arguments) => Some(arguments.config.clone()),
         Command::Registre(arguments) => Some(arguments.config.clone()),
         Command::Plage(arguments) => Some(arguments.config.clone()),
         Command::Routine(arguments) => Some(arguments.config.clone()),
@@ -647,6 +652,223 @@ fn reconcile_pending(
     reconcile_startup_with_limits(store, &config.bridget_socket, limits)
         .map(|_| ())
         .map_err(CliError::Reconcile)
+}
+
+fn run_project_profile(arguments: ProjectProfileArgs, migrate: bool) -> Result<String, CliError> {
+    let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+    let mut store = open_guarded_maicie_store(
+        &arguments.config,
+        &config,
+        BridgetClientLimits::default(),
+        migrate,
+    )?;
+    match arguments.action {
+        ProjectProfileAction::Propose => {
+            let configured = config
+                .project_profiles
+                .iter()
+                .find(|profile| profile.id == arguments.profile_id)
+                .ok_or(CliError::Usage("profil projet inconnu"))?;
+            let now = unix_now()?;
+            let mut candidate = ProjectProfile::from_config(configured, &config.profiles, now)
+                .map_err(|_| CliError::Usage("profil projet invalide"))?;
+            let profile = match store.save_project_profile(&candidate) {
+                Ok(()) => candidate,
+                Err(StoreError::Conflict(_)) => {
+                    let existing = store
+                        .project_profile(&arguments.profile_id)
+                        .map_err(CliError::Store)?
+                        .ok_or(CliError::Usage("profil projet absent apres conflit"))?;
+                    candidate.generation = existing.generation;
+                    let unchanged = candidate
+                        .digest()
+                        .map_err(|_| CliError::Usage("profil projet invalide"))?
+                        == existing
+                            .digest()
+                            .map_err(|_| CliError::Usage("profil projet invalide"))?;
+                    if unchanged && existing.status != ProjectProfileStatus::Stale {
+                        existing
+                    } else {
+                        candidate.generation = existing
+                            .generation
+                            .checked_add(1)
+                            .ok_or(CliError::Usage("generation profil projet epuisee"))?;
+                        store
+                            .replace_project_profile(&candidate)
+                            .map_err(CliError::Store)?;
+                        candidate
+                    }
+                }
+                Err(error) => return Err(CliError::Store(error)),
+            };
+            let profile = if profile.status == ProjectProfileStatus::Proposed {
+                let request = bridget_transport::protocol::ProjectProfileRequest {
+                    proposal: profile
+                        .proposal(Uuid::new_v4().to_string())
+                        .map_err(|_| CliError::Usage("proposition profil projet invalide"))?,
+                };
+                let mut client =
+                    ProjectProfileClient::connect(&config.bridget_socket, store.issuer_scope())
+                        .map_err(CliError::Bridget)?;
+                let outcome = client.resolve(&request).map_err(CliError::Bridget)?;
+                let resolved = outcome
+                    .profile
+                    .ok_or(CliError::Usage("resolution hote du profil refusee"))?;
+                store
+                    .record_project_profile_resolution(
+                        &profile.profile_id,
+                        resolved,
+                        outcome.observed_at,
+                    )
+                    .map_err(CliError::Store)?
+            } else {
+                profile
+            };
+            render_project_profile_view(&profile, None, arguments.json)
+        }
+        ProjectProfileAction::Approve => {
+            let profile = store
+                .project_profile(&arguments.profile_id)
+                .map_err(CliError::Store)?
+                .ok_or(CliError::Usage("profil projet inconnu"))?;
+            let resolved = profile
+                .resolved
+                .clone()
+                .ok_or(CliError::Usage("resolution projet absente"))?;
+            let now = unix_now()?;
+            let approved = match profile.status {
+                ProjectProfileStatus::Resolved => {
+                    confirm_project_profile_approval(&profile)?;
+                    store
+                        .approve_project_profile(
+                            &profile.profile_id,
+                            resolved.resolved_digest.clone(),
+                            now,
+                        )
+                        .map_err(CliError::Store)?
+                        .0
+                }
+                ProjectProfileStatus::Approved => profile,
+                _ => {
+                    return Err(CliError::Usage("profil projet non resolu"));
+                }
+            };
+            let request = ProjectRuntimeRequest {
+                contract_version: PROJECT_RUNTIME_CONTRACT_VERSION,
+                command_id: Uuid::new_v4().to_string(),
+                issued_at: now,
+                deadline_at: now.saturating_add(60),
+                operation: ProjectRuntimeOperation::Recreate,
+                project_id: approved.project_id.clone(),
+                profile: Some(resolved),
+            };
+            let mut client =
+                ProjectProfileClient::connect(&config.bridget_socket, store.issuer_scope())
+                    .map_err(CliError::Bridget)?;
+            let runtime = client
+                .prepare_runtime(&request)
+                .map_err(CliError::Bridget)?;
+            render_project_profile_view(&approved, Some(runtime), arguments.json)
+        }
+    }
+}
+
+fn render_project_profile_view(
+    profile: &ProjectProfile,
+    runtime: Option<bridget_transport::protocol::ProjectRuntimeOutcome>,
+    json: bool,
+) -> Result<String, CliError> {
+    if json {
+        return serde_json::to_string(&serde_json::json!({
+            "profile": profile,
+            "runtime": runtime,
+            "trust_boundary": "Tous les agents du conteneur peuvent lire les secrets du projet.",
+        }))
+        .map_err(|_| CliError::Usage("sortie JSON profil projet indisponible"));
+    }
+    let resolved = profile.resolved.as_ref();
+    let resolved_policy = resolved
+        .map(serde_json::to_string_pretty)
+        .transpose()
+        .map_err(|_| CliError::Usage("vue locale de politique indisponible"))?;
+    let agents = resolved
+        .map(|value| {
+            value
+                .agents
+                .iter()
+                .map(|agent| {
+                    format!(
+                        "{}:{}:{}:{}",
+                        agent.agent.profile_id,
+                        agent.agent.agent_type,
+                        agent.agent.model,
+                        agent.agent.effort
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    let extensions = resolved
+        .map(|value| {
+            value
+                .resources
+                .iter()
+                .filter(|resource| {
+                    resource.reference.kind
+                        == bridget_transport::protocol::ProjectResourceKind::Extension
+                })
+                .map(|resource| resource.reference.resource_id.clone())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    let secrets = resolved
+        .map(|value| {
+            value
+                .resources
+                .iter()
+                .filter(|resource| {
+                    resource.reference.kind
+                        != bridget_transport::protocol::ProjectResourceKind::Extension
+                })
+                .map(|resource| resource.reference.resource_id.clone())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    Ok(format!(
+        "profil_projet={} etat={:?} agents=[{}] extensions=[{}] secrets=[{}]
+ATTENTION: tous les agents du conteneur peuvent lire les secrets du projet.
+digest={}
+resolution_attestee={},",
+        profile.profile_id,
+        profile.status,
+        agents,
+        extensions,
+        secrets,
+        resolved
+            .map(|value| value.resolved_digest.as_str())
+            .unwrap_or("non_resolu"),
+        resolved_policy.as_deref().unwrap_or("non_resolue"),
+    ))
+}
+
+fn confirm_project_profile_approval(profile: &ProjectProfile) -> Result<(), CliError> {
+    let view = render_project_profile_view(profile, None, false)?;
+    println!("{view}");
+    print!("Tapez oui pour approuver ce profil projet localement : ");
+    io::stdout()
+        .flush()
+        .map_err(|_| CliError::Usage("confirmation locale indisponible"))?;
+    let mut confirmation = String::new();
+    io::stdin()
+        .read_line(&mut confirmation)
+        .map_err(|_| CliError::Usage("confirmation locale illisible"))?;
+    if confirmation.trim() != "oui" {
+        return Err(CliError::Usage("approbation locale refusee"));
+    }
+    Ok(())
 }
 
 fn run_project(arguments: ProjectArgs, migrate: bool) -> Result<String, CliError> {
@@ -1215,6 +1437,7 @@ enum Command {
     Objective(ObjectiveArgs),
     Profile(ProfileArgs),
     Project(ProjectArgs),
+    ProjectProfile(ProjectProfileArgs),
     Registre(RegistreArgs),
     Plage(PlageArgs),
     Routine(RoutineArgs),
@@ -1378,6 +1601,20 @@ struct ProjectArgs {
 }
 
 #[derive(Debug)]
+struct ProjectProfileArgs {
+    config: PathBuf,
+    profile_id: String,
+    action: ProjectProfileAction,
+    json: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectProfileAction {
+    Propose,
+    Approve,
+}
+
+#[derive(Debug)]
 enum ProjectAction {
     Register {
         display_name: String,
@@ -1434,6 +1671,7 @@ fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
         "objective" => parse_objective(tail).map(Command::Objective),
         "profile" => parse_profile(tail).map(Command::Profile),
         "project" => parse_project(tail).map(Command::Project),
+        "project-profile" => parse_project_profile(tail).map(Command::ProjectProfile),
         "review-project" => parse_review_project(tail).map(Command::Project),
         "registre" => parse_registre(tail).map(Command::Registre),
         "plage" => parse_plage(tail).map(Command::Plage),
@@ -1444,6 +1682,51 @@ fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
             "commande inconnue : delegate, status, objective, profile, project, review-project, registre, plage, routine, preflight ou migrate",
         )),
     }
+}
+
+fn parse_project_profile(arguments: &[String]) -> Result<ProjectProfileArgs, CliError> {
+    let Some((action, tail)) = arguments.split_first() else {
+        return Err(CliError::Usage(
+            "action project-profile obligatoire : propose ou approve",
+        ));
+    };
+    let mut config = None;
+    let mut profile_id = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < tail.len() {
+        match tail[index].as_str() {
+            "--config" => set_once_path(&mut config, next_value(tail, &mut index, "--config")?)?,
+            "--profile-id" => set_once_string(
+                &mut profile_id,
+                next_value(tail, &mut index, "--profile-id")?,
+                "profile-id",
+            )?,
+            "--json" => {
+                if json {
+                    return Err(CliError::Usage("option --json dupliquee"));
+                }
+                json = true;
+            }
+            _ => return Err(CliError::Usage("option project-profile inconnue")),
+        }
+        index += 1;
+    }
+    let action = match action.as_str() {
+        "propose" => ProjectProfileAction::Propose,
+        "approve" => ProjectProfileAction::Approve,
+        _ => {
+            return Err(CliError::Usage(
+                "action project-profile inconnue : propose ou approve",
+            ));
+        }
+    };
+    Ok(ProjectProfileArgs {
+        config: config.ok_or(CliError::Usage("--config est obligatoire"))?,
+        profile_id: profile_id.ok_or(CliError::Usage("--profile-id est obligatoire"))?,
+        action,
+        json,
+    })
 }
 
 fn parse_project(arguments: &[String]) -> Result<ProjectArgs, CliError> {
@@ -4307,6 +4590,7 @@ mod tests {
             catalogue_path: None,
             coordination_policies: None,
             review_project: None,
+            project_profiles: Vec::new(),
             profiles: Vec::new(),
         };
         let error = match open_store_with_reconciliation(
@@ -4351,6 +4635,7 @@ mod tests {
             catalogue_path: Some(catalogue.clone()),
             coordination_policies: None,
             review_project: None,
+            project_profiles: Vec::new(),
             profiles: Vec::new(),
         };
         fs::write(
@@ -4600,6 +4885,7 @@ mod tests {
             status_capture_budget_ms: None,
             catalogue_path: None,
             coordination_policies: None,
+            project_profiles: Vec::new(),
             review_project: None,
             profiles: vec![ProfileConfig {
                 id: "code-review".to_string(),
@@ -4782,6 +5068,7 @@ mod tests {
             status_capture_budget_ms: None,
             catalogue_path: None,
             coordination_policies: None,
+            project_profiles: Vec::new(),
             review_project: None,
             profiles: profiles.clone(),
         };

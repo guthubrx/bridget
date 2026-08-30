@@ -38,6 +38,18 @@ fn charge_une_configuration_entierement_declarative() {
 }
 
 #[test]
+fn spec_067_charge_un_profil_projet_reference_sans_valeur_secrete() {
+    let body = VALID_CONFIG.replace(
+        "\"profiles\": [{",
+        "\"project_profiles\": [{\"id\":\"runtime\",\"project_id\":\"project-a\",\"binding_generation\":2,\"runtime_policy_version\":3,\"policy_digest\":\"sha256:policy\",\"agent_profile_ids\":[\"prospective\"]}],\n  \"profiles\": [{",
+    );
+    let fixture = Fixture::new("project-profile", &body);
+    let config = MaicieConfig::load(&fixture.path).unwrap();
+    assert_eq!(config.project_profiles[0].project_id, "project-a");
+    assert!(config.project_profiles[0].secrets.is_empty());
+}
+
+#[test]
 fn accepte_un_budget_explicit_de_capture_status_sans_en_inventer_un() {
     let enabled = VALID_CONFIG.replace(
         "\"profiles\": [{",

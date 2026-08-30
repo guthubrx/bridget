@@ -8,6 +8,14 @@ use bridget_core::BridgetMessage;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+#[path = "project_profile_protocol.rs"]
+pub mod project_profile;
+pub use project_profile::{
+    PROJECT_PROFILE_CONTRACT_VERSION, ProjectProfileAgent, ProjectProfileOutcome,
+    ProjectProfileProposal, ProjectProfileRefusal, ProjectProfileRequest, ProjectResourceKind,
+    ProjectResourceRef, ProjectRuntimeView, ResolvedProjectAgent, ResolvedProjectProfile,
+    ResolvedProjectResource,
+};
 /// Rôle négocié au début d'une connexion persistante avec le daemon.
 ///
 /// L'absence de négociation reste implicitement un wrapper pour préserver les
@@ -251,6 +259,7 @@ pub enum ServiceCapability {
     MaicieGuichet,
     /// Registre local Bridget, exclusivement négocié par le service Maicie.
     ProjectRegistryV1,
+    ProjectProfilesV1,
     CoordinationEventsV1,
     /// Relève bornée et cursée des faits 016. La v1 reste disponible pour les
     /// consommateurs qui n'ont besoin que du rejeu initial historique.
@@ -445,6 +454,8 @@ pub struct ProjectAdminOutcome {
 
 /// Opération locale explicitement bornée sur l'environnement Docker d'un projet.
 /// Elle n'accepte ni argument Docker, ni chemin hôte, ni image fournie par l'appelant.
+pub const PROJECT_RUNTIME_CONTRACT_VERSION: u16 = 1;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectRuntimeOperation {
@@ -467,6 +478,8 @@ pub struct ProjectRuntimeRequest {
     pub deadline_at: i64,
     pub operation: ProjectRuntimeOperation,
     pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ResolvedProjectProfile>,
 }
 
 /// Refus fermé du pilote Docker, sans détail de commande ni chemin local.
@@ -1286,6 +1299,7 @@ pub struct DelegatedRuntimeEventFrame {
 /// Messages envoyés par le wrapper vers le daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
     /// Négocie un rôle avant l'usage d'une connexion persistante.
     RoleHandshake {
@@ -1316,6 +1330,10 @@ pub enum WrapperToDaemon {
     ProjectRegistryAdminRequest {
         request: ProjectAdminRequest,
     },
+    #[serde(rename = "project_profile_request")]
+    ProjectProfileRequest {
+        request: ProjectProfileRequest,
+    },
     /// Commande locale du pilote Docker. L'authentification reste fondée sur
     /// le pair Unix observé par le daemon, jamais sur un champ JSON.
     #[serde(rename = "project_runtime_request")]
@@ -1326,6 +1344,11 @@ pub enum WrapperToDaemon {
     /// environnement Docker. Il n'est jamais envoyé sur le socket utilisateur.
     #[serde(rename = "runtime_ingress_hello")]
     RuntimeIngressHello {
+        hello: RuntimeIngressHandshake,
+    },
+    // Verification non consommatrice avant lecture locale dun secret process-env.
+    #[serde(rename = "runtime_ingress_preflight")]
+    RuntimeIngressPreflight {
         hello: RuntimeIngressHandshake,
     },
     /// Ouvre une relève bornée des faits de coordination v2. Le curseur est
@@ -2015,6 +2038,8 @@ pub enum DaemonToWrapper {
     /// Issue corrélée d'une lecture ou mutation administrative du registre.
     #[serde(rename = "project_registry_admin_outcome")]
     ProjectRegistryAdminOutcome { outcome: ProjectAdminOutcome },
+    #[serde(rename = "project_profile_outcome")]
+    ProjectProfileOutcome { outcome: ProjectProfileOutcome },
     /// Issue bornée d'une opération locale d'environnement Docker.
     #[serde(rename = "project_runtime_outcome")]
     ProjectRuntimeOutcome { outcome: ProjectRuntimeOutcome },
@@ -4614,6 +4639,7 @@ mod tests {
             deadline_at: 1_788_000_060,
             operation: ProjectRuntimeOperation::Prepare,
             project_id: "project-066".to_string(),
+            profile: None,
         };
         let wire = encode(&WrapperToDaemon::ProjectRuntimeRequest {
             request: request.clone(),

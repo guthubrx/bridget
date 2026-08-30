@@ -27,6 +27,7 @@ use crate::mission_projection::{
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -64,6 +65,70 @@ const ATTACH_RELAY_IDLE_WAIT: Duration = Duration::from_millis(10);
 /// wrapper (et donc tout le binaire de test) coincé si le worker est bloqué
 /// dans un hook ou un wait non coopératif.
 const ATTACH_RELAY_SHUTDOWN_BOUND: Duration = Duration::from_secs(2);
+const MAX_PROCESS_ENV_BINDINGS: usize = 32;
+const MAX_PROCESS_ENV_VALUE_BYTES: usize = 32 * 1024;
+type ProcessEnvironment = Vec<(OsString, OsString)>;
+type ProcessEnvironmentAdmission = (ProcessEnvironment, Option<OutputRedactionLease>);
+
+/// Lease volatile des valeurs process-env. Elle vit seulement dans le wrapper
+/// et conserve une fenêtre par canal afin de couvrir les fragments de sortie.
+pub struct OutputRedactionLease {
+    patterns: Vec<Vec<u8>>,
+    tails: BTreeMap<String, Vec<u8>>,
+}
+
+impl OutputRedactionLease {
+    pub fn new(patterns: Vec<Vec<u8>>) -> Self {
+        Self {
+            patterns,
+            tails: BTreeMap::new(),
+        }
+    }
+    pub fn redact(&mut self, channel: &str, bytes: &[u8], final_fragment: bool) -> Vec<u8> {
+        let overlap = self
+            .patterns
+            .iter()
+            .map(Vec::len)
+            .max()
+            .unwrap_or(0)
+            .saturating_sub(1);
+        let mut combined = self.tails.remove(channel).unwrap_or_default();
+        combined.extend_from_slice(bytes);
+        for pattern in &self.patterns {
+            if !pattern.is_empty() {
+                redact_bytes_in_place(&mut combined, pattern);
+            }
+        }
+        let retained = if final_fragment {
+            0
+        } else {
+            overlap.min(combined.len())
+        };
+        let output_len = combined.len().saturating_sub(retained);
+        let output = combined.drain(..output_len).collect();
+        if !final_fragment {
+            self.tails.insert(channel.to_string(), combined);
+        }
+        output
+    }
+}
+
+fn redact_bytes_in_place(buffer: &mut [u8], pattern: &[u8]) {
+    if pattern.len() > buffer.len() {
+        return;
+    }
+    let mut start = 0;
+    while let Some(offset) = buffer[start..]
+        .windows(pattern.len())
+        .position(|window| window == pattern)
+    {
+        let begin = start + offset;
+        for byte in &mut buffer[begin..begin + pattern.len()] {
+            *byte = 42;
+        }
+        start = begin + pattern.len();
+    }
+}
 
 /// Contexte reconstruit à chaque naissance d'un équipier géré. Il n'est jamais
 /// persisté : le greffe Maicie et Git restent les seules autorités.
@@ -693,6 +758,7 @@ struct IdempotentDeliveryTracker {
     pending: BTreeMap<String, VecDeque<PendingAcpDispatch>>,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum IdempotentDeliveryAction {
     Inject {
         message: bridget_core::BridgetMessage,
@@ -1478,6 +1544,109 @@ fn connect_and_register(
         domain,
         turn_in_progress,
     )
+}
+
+/// Obtient explicitement ladmission runtime avant de lire un secret process-env.
+/// Cette connexion est jetable: lenregistrement normal refait ensuite son
+/// propre handshake sur la connexion durable du wrapper.
+fn pre_admit_runtime_ingress(socket: &std::path::Path) -> Result<bool, String> {
+    let Some(hello) = runtime_ingress_handshake_from_environment()? else {
+        return Ok(false);
+    };
+    let stream = UnixStream::connect(socket).map_err(|error| error.to_string())?;
+    set_cloexec(&stream);
+    let read_stream = stream.try_clone().map_err(|error| error.to_string())?;
+    set_cloexec(&read_stream);
+    read_stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .map_err(|error| error.to_string())?;
+    let write_stream = stream.try_clone().map_err(|error| error.to_string())?;
+    set_cloexec(&write_stream);
+    let mut reader = BufReader::new(read_stream);
+    let mut writer = BufWriter::new(write_stream);
+    writeln!(
+        writer,
+        "{}",
+        encode(&WrapperToDaemon::RuntimeIngressPreflight {
+            hello: hello.clone()
+        })
+        .map_err(|error| error.to_string())?
+    )
+    .map_err(|error| error.to_string())?;
+    writer.flush().map_err(|error| error.to_string())?;
+    let mut reply = String::new();
+    reader
+        .read_line(&mut reply)
+        .map_err(|error| error.to_string())?;
+    match decode(reply.trim()).map_err(|error| error.to_string())? {
+        DaemonToWrapper::RuntimeIngressAccepted {
+            project_id,
+            binding_generation,
+            environment_epoch,
+        } if project_id == hello.project_id
+            && binding_generation == hello.binding_generation
+            && environment_epoch == hello.environment_epoch =>
+        {
+            Ok(true)
+        }
+        DaemonToWrapper::RuntimeIngressRejected { reason } => {
+            Err(format!("runtime ingress refusé: {reason:?}"))
+        }
+        other => Err(format!("runtime ingress réponse inattendue: {other:?}")),
+    }
+}
+
+fn runtime_process_environment_after_admission(
+    runtime_admitted: bool,
+) -> Result<ProcessEnvironmentAdmission, String> {
+    let Some(encoded) = std::env::var_os("BRIDGET_RUNTIME_SECRET_ENV_FILES") else {
+        return Ok((Vec::new(), None));
+    };
+    if !runtime_admitted {
+        return Err("secret process-env hors runtime admis".to_string());
+    }
+    let encoded = encoded
+        .into_string()
+        .map_err(|_| "liaison process-env invalide".to_string())?;
+    let bindings: Vec<crate::project_runtime::ProcessEnvBinding> =
+        serde_json::from_str(&encoded).map_err(|_| "liaison process-env invalide".to_string())?;
+    if bindings.is_empty() || bindings.len() > MAX_PROCESS_ENV_BINDINGS {
+        return Err("liaison process-env invalide".to_string());
+    }
+    let mut names = HashSet::new();
+    let mut environment = Vec::with_capacity(bindings.len());
+    let mut patterns = Vec::with_capacity(bindings.len());
+    for binding in bindings {
+        let valid_name = !binding.variable.is_empty()
+            && binding
+                .variable
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_');
+        let valid_path = binding
+            .container_file
+            .starts_with(crate::project_runtime::CONTAINER_PROCESS_ENV_DIRECTORY)
+            && binding.container_file.len()
+                == crate::project_runtime::CONTAINER_PROCESS_ENV_DIRECTORY.len() + 65
+            && binding.container_file.as_bytes()
+                [crate::project_runtime::CONTAINER_PROCESS_ENV_DIRECTORY.len()]
+                == b'/';
+        if !valid_name || !valid_path || !names.insert(binding.variable.clone()) {
+            return Err("liaison process-env invalide".to_string());
+        }
+        let metadata = std::fs::symlink_metadata(&binding.container_file)
+            .map_err(|_| "secret process-env indisponible".to_string())?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("secret process-env invalide".to_string());
+        }
+        let value = std::fs::read(&binding.container_file)
+            .map_err(|_| "secret process-env indisponible".to_string())?;
+        if value.len() > MAX_PROCESS_ENV_VALUE_BYTES || value.contains(&0) {
+            return Err("secret process-env invalide".to_string());
+        }
+        patterns.push(value.clone());
+        environment.push((OsString::from(binding.variable), OsString::from_vec(value)));
+    }
+    Ok((environment, Some(OutputRedactionLease::new(patterns))))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3412,8 +3581,17 @@ fn launch_acp_with_status(
         &name_state_path,
         explicit_name.unwrap_or_default().as_bytes(),
     )?;
-    let mcp_environment =
+    let mut mcp_environment =
         managed_adapter_environment(&instance_id, explicit_name, Some(&name_state_path));
+    let process_env_requested = std::env::var_os("BRIDGET_RUNTIME_SECRET_ENV_FILES").is_some();
+    let runtime_admitted = if process_env_requested {
+        pre_admit_runtime_ingress(socket)?
+    } else {
+        false
+    };
+    let (process_environment, mut redaction_lease) =
+        runtime_process_environment_after_admission(runtime_admitted)?;
+    mcp_environment.extend(process_environment);
     let mcp_servers: Vec<serde_json::Value> = definition
         .mcp
         .acp_session
@@ -3537,12 +3715,13 @@ fn launch_acp_with_status(
             consecutive_fast_failures = 0;
         }
         let events = transport.drain_events();
-        let journal_failed = forward_managed_events(
+        let journal_failed = forward_managed_events_with_redaction(
             &writer,
             &my_name,
             events,
             &mut idempotent_deliveries,
             &mut execution_bindings,
+            &mut redaction_lease,
         );
         if journal_failed {
             transport.stop();
@@ -3756,12 +3935,13 @@ fn launch_acp_with_status(
         }
         if !transport.is_alive() {
             let terminal_events = transport.drain_events();
-            let terminal_journal_failed = forward_managed_events(
+            let terminal_journal_failed = forward_managed_events_with_redaction(
                 &writer,
                 &my_name,
                 terminal_events,
                 &mut idempotent_deliveries,
                 &mut execution_bindings,
+                &mut redaction_lease,
             );
             if terminal_journal_failed {
                 transport.stop();
@@ -3896,12 +4076,13 @@ fn launch_acp_with_status(
     // L'EOF peut fermer le transport entre deux itérations : vider une dernière
     // fois les événements terminaux avant Unregister afin que le daemon voie
     // chaque DeliveryRejected (tour actif comme file restante).
-    let _ = forward_managed_events(
+    let _ = forward_managed_events_with_redaction(
         &writer,
         &my_name,
         transport.drain_events(),
         &mut idempotent_deliveries,
         &mut execution_bindings,
+        &mut redaction_lease,
     );
     send_wrapper_message(&writer, WrapperToDaemon::TurnState { in_progress: false });
     send_wrapper_message(&writer, WrapperToDaemon::Unregister);
@@ -4724,12 +4905,42 @@ fn delegated_runtime_message(
     message
 }
 
+#[cfg(test)]
 fn forward_managed_events(
     writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
     my_name: &str,
     events: Vec<ManagedEvent>,
     idempotent_deliveries: &mut IdempotentDeliveryTracker,
     bindings: &mut HashMap<String, ManagedExecutionBinding>,
+) -> bool {
+    forward_managed_events_with_redaction(
+        writer,
+        my_name,
+        events,
+        idempotent_deliveries,
+        bindings,
+        &mut None,
+    )
+}
+
+fn redact_managed_text(
+    redaction: &mut Option<OutputRedactionLease>,
+    channel: &str,
+    value: String,
+) -> String {
+    let Some(lease) = redaction.as_mut() else {
+        return value;
+    };
+    String::from_utf8_lossy(&lease.redact(channel, value.as_bytes(), true)).into_owned()
+}
+
+fn forward_managed_events_with_redaction(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    my_name: &str,
+    events: Vec<ManagedEvent>,
+    idempotent_deliveries: &mut IdempotentDeliveryTracker,
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    redaction: &mut Option<OutputRedactionLease>,
 ) -> bool {
     let mut journal_failed = false;
     for event in events {
@@ -4768,9 +4979,14 @@ fn forward_managed_events(
             }
             ManagedEventKind::TurnFinished {
                 message,
-                response,
-                terminal,
+                mut response,
+                mut terminal,
             } => {
+                response = redact_managed_text(redaction, "provider_response", response);
+                if let ManagedTerminal::Failed { detail } = &mut terminal {
+                    *detail =
+                        redact_managed_text(redaction, "provider_error", std::mem::take(detail));
+                }
                 let message_id = message.id.clone();
                 if !bindings.is_empty() && !bindings.contains_key(&message_id) {
                     warn!("terminal fournisseur ignoré: message hors exécution active");
@@ -4833,6 +5049,7 @@ fn forward_managed_events(
                 }
             }
             ManagedEventKind::DeliveryRejected { message_id, reason } => {
+                let reason = redact_managed_text(redaction, "provider_rejection", reason);
                 if !bindings.is_empty() && !bindings.contains_key(&message_id) {
                     warn!("refus fournisseur ignoré: message hors exécution active");
                     continue;
@@ -4877,6 +5094,7 @@ fn forward_managed_events(
             }
             ManagedEventKind::JournalFailed { detail } => {
                 journal_failed = true;
+                let detail = redact_managed_text(redaction, "provider_journal_error", detail);
                 warn!("arrêt de la session gérée : {detail}");
             }
             ManagedEventKind::PromptDispatched { message_id } => {
@@ -4886,66 +5104,86 @@ fn forward_managed_events(
                     send_wrapper_message(writer, report);
                 }
             }
-            ManagedEventKind::RuntimeObserved { model, effort } => match source {
-                bridget_transport::ManagedEventSource::CodexAppServer => send_wrapper_message(
-                    writer,
-                    WrapperToDaemon::Runtime {
-                        agent: my_name.to_string(),
-                        model,
-                        effort,
-                        source: bridget_transport::protocol::RuntimeSource::CodexAppServer,
-                    },
-                ),
-                bridget_transport::ManagedEventSource::Acp
-                | bridget_transport::ManagedEventSource::ClaudeStreamJson => {
-                    warn!("fait runtime ignoré : source non autorisée")
+            ManagedEventKind::RuntimeObserved {
+                mut model,
+                mut effort,
+            } => {
+                model = redact_managed_text(redaction, "provider_runtime_model", model);
+                effort = effort
+                    .map(|value| redact_managed_text(redaction, "provider_runtime_effort", value));
+                match source {
+                    bridget_transport::ManagedEventSource::CodexAppServer => send_wrapper_message(
+                        writer,
+                        WrapperToDaemon::Runtime {
+                            agent: my_name.to_string(),
+                            model,
+                            effort,
+                            source: bridget_transport::protocol::RuntimeSource::CodexAppServer,
+                        },
+                    ),
+                    bridget_transport::ManagedEventSource::Acp
+                    | bridget_transport::ManagedEventSource::ClaudeStreamJson => {
+                        warn!("fait runtime ignoré : source non autorisée")
+                    }
                 }
-            },
+            }
             ManagedEventKind::RateLimitObserved {
-                window,
-                status,
+                mut window,
+                mut status,
                 resets_at,
                 used_percent,
-            } => match source {
-                bridget_transport::ManagedEventSource::ClaudeStreamJson => send_wrapper_message(
-                    writer,
-                    WrapperToDaemon::RateLimit {
-                        agent: my_name.to_string(),
-                        window,
-                        status,
-                        resets_at,
-                        used_percent,
-                        source: bridget_transport::protocol::RateLimitSource::ClaudeStreamJson,
-                    },
-                ),
-                bridget_transport::ManagedEventSource::CodexAppServer => send_wrapper_message(
-                    writer,
-                    WrapperToDaemon::RateLimit {
-                        agent: my_name.to_string(),
-                        window,
-                        status,
-                        resets_at,
-                        used_percent,
-                        source: bridget_transport::protocol::RateLimitSource::CodexAppServer,
-                    },
-                ),
-                bridget_transport::ManagedEventSource::Acp => {
-                    warn!("fait de limite ignoré : source ACP non autorisée")
+            } => {
+                window = redact_managed_text(redaction, "provider_rate_limit_window", window);
+                status = redact_managed_text(redaction, "provider_rate_limit_status", status);
+                match source {
+                    bridget_transport::ManagedEventSource::ClaudeStreamJson => {
+                        send_wrapper_message(
+                            writer,
+                            WrapperToDaemon::RateLimit {
+                                agent: my_name.to_string(),
+                                window,
+                                status,
+                                resets_at,
+                                used_percent,
+                                source:
+                                    bridget_transport::protocol::RateLimitSource::ClaudeStreamJson,
+                            },
+                        )
+                    }
+                    bridget_transport::ManagedEventSource::CodexAppServer => send_wrapper_message(
+                        writer,
+                        WrapperToDaemon::RateLimit {
+                            agent: my_name.to_string(),
+                            window,
+                            status,
+                            resets_at,
+                            used_percent,
+                            source: bridget_transport::protocol::RateLimitSource::CodexAppServer,
+                        },
+                    ),
+                    bridget_transport::ManagedEventSource::Acp => {
+                        warn!("fait de limite ignoré : source ACP non autorisée")
+                    }
                 }
-            },
-            ManagedEventKind::ModelObserved { model } => match source {
-                bridget_transport::ManagedEventSource::ClaudeStreamJson
-                | bridget_transport::ManagedEventSource::CodexAppServer => send_wrapper_message(
-                    writer,
-                    WrapperToDaemon::ServedModel {
-                        agent: my_name.to_string(),
-                        model,
-                    },
-                ),
-                bridget_transport::ManagedEventSource::Acp => {
-                    warn!("modèle servi ignoré : source ACP non autorisée")
+            }
+            ManagedEventKind::ModelObserved { mut model } => {
+                model = redact_managed_text(redaction, "provider_model", model);
+                match source {
+                    bridget_transport::ManagedEventSource::ClaudeStreamJson
+                    | bridget_transport::ManagedEventSource::CodexAppServer => {
+                        send_wrapper_message(
+                            writer,
+                            WrapperToDaemon::ServedModel {
+                                agent: my_name.to_string(),
+                                model,
+                            },
+                        )
+                    }
+                    bridget_transport::ManagedEventSource::Acp => {
+                        warn!("modèle servi ignoré : source ACP non autorisée")
+                    }
                 }
-            },
+            }
             ManagedEventKind::UsageObserved {
                 input_tokens,
                 output_tokens,
@@ -4981,11 +5219,29 @@ fn forward_managed_events(
                     "user_input_required",
                 ),
             },
-            ManagedEventKind::ProviderContextObserved { identity } => {
+            ManagedEventKind::ProviderContextObserved { mut identity } => {
+                identity.provider_session_id = identity
+                    .provider_session_id
+                    .map(|value| redact_managed_text(redaction, "provider_session_id", value));
+                identity.provider_thread_id = identity
+                    .provider_thread_id
+                    .map(|value| redact_managed_text(redaction, "provider_thread_id", value));
+                identity.active_turn_id = identity
+                    .active_turn_id
+                    .map(|value| redact_managed_text(redaction, "provider_turn_id", value));
+                identity.provider_item_id = identity
+                    .provider_item_id
+                    .map(|value| redact_managed_text(redaction, "provider_item_id", value));
+                identity.capabilities_revision = identity.capabilities_revision.map(|value| {
+                    redact_managed_text(redaction, "provider_capabilities_revision", value)
+                });
                 publish_provider_context(writer, bindings, &identity)
             }
             ManagedEventKind::Update { .. } | ManagedEventKind::Error { .. } => {}
             ManagedEventKind::Diagnostic { code, reference } => {
+                let code = redact_managed_text(redaction, "provider_diagnostic_code", code);
+                let reference =
+                    redact_managed_text(redaction, "provider_diagnostic_reference", reference);
                 publish_delegated_runtime_warning(writer, bindings, code, reference);
             }
         }
@@ -6193,6 +6449,50 @@ mod delegated_runtime_tests {
 mod reconnect_tests {
     use super::*;
 
+    #[test]
+    fn spec_067_redaction_precede_le_sink_durable_des_sorties_structurees() {
+        let secret = "S067_SYNTHETIC_SECRET";
+        let root = mcp_test_root("redaction-structured");
+        std::fs::create_dir_all(&root).unwrap();
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(writer_stream))));
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "instance-redaction").unwrap();
+        let mut redaction = Some(OutputRedactionLease::new(vec![secret.as_bytes().to_vec()]));
+        assert!(!forward_managed_events_with_redaction(
+            &writer,
+            "agent-redaction",
+            vec![ManagedEvent::source_line(
+                bridget_transport::ManagedEventSource::ClaudeStreamJson,
+                secret.as_bytes().to_vec(),
+                ManagedEventKind::ModelObserved {
+                    model: format!("model-{secret}"),
+                },
+            )],
+            &mut tracker,
+            &mut HashMap::new(),
+            &mut redaction,
+        ));
+        let mut line = String::new();
+        BufReader::new(reader_stream).read_line(&mut line).unwrap();
+        assert!(!line.contains(secret));
+        assert!(matches!(
+            decode(line.trim_end()).unwrap(),
+            WrapperToDaemon::ServedModel { model, .. } if model == "model-*********************"
+        ));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec_067_redaction_couvre_fragment_et_canaux_distincts() {
+        let secret = b"S067_SYNTHETIC_SECRET".to_vec();
+        let mut lease = OutputRedactionLease::new(vec![secret.clone()]);
+        let mut stdout = lease.redact("stdout", b"avant-S067_SYN", false);
+        stdout.extend(lease.redact("stdout", b"THETIC_SECRET-apres", true));
+        let stderr = lease.redact("stderr", &secret, true);
+        assert!(!stdout.windows(secret.len()).any(|window| window == secret));
+        assert!(!stderr.windows(secret.len()).any(|window| window == secret));
+        assert!(stdout.contains(&42));
+    }
     #[test]
     fn spec_024_canal_federe_prefere_la_nouvelle_cle_et_lit_l_alias() {
         assert_eq!(

@@ -34,6 +34,7 @@ pub const REQUIRED_GUICHET_CAPABILITY: &str = "maicie_guichet";
 /// Capacité dédiée au registre de projets. Elle est négociée sur le rôle
 /// `service` mais ne réutilise jamais le flux inverse `ServiceRequest`.
 pub const REQUIRED_PROJECT_REGISTRY_CAPABILITY: &str = "project_registry_v1";
+pub const REQUIRED_PROJECT_PROFILE_CAPABILITY: &str = "project_profiles_v1";
 
 /// Capacité cursée de coordination. La v1 pousse un historique sans frontière
 /// de fraîcheur ; Maicie ne la négocie donc jamais pour ses décisions 016.
@@ -387,6 +388,14 @@ pub struct GuichetClient {
 /// cette frontière ne lit donc jamais la base privée de Bridget et ne recrée
 /// pas une commande pendant une reprise.
 pub struct ProjectRegistryClient {
+    connection: WireConnection,
+    deadline: Option<Instant>,
+    limits: BridgetClientLimits,
+}
+
+/// Connexion ponctuelle de Maicie a la resolution hote dun profil projet.
+/// Elle ne transporte aucune valeur secrete et ferme sa socket apres la commande.
+pub struct ProjectProfileClient {
     connection: WireConnection,
     deadline: Option<Instant>,
     limits: BridgetClientLimits,
@@ -1282,6 +1291,93 @@ impl ProjectRegistryClient {
     }
 }
 
+impl ProjectProfileClient {
+    pub fn connect(
+        socket_path: impl AsRef<Path>,
+        issuer_scope: impl Into<String>,
+    ) -> Result<Self, BridgetClientError> {
+        Self::connect_with_limits(socket_path, issuer_scope, BridgetClientLimits::default())
+    }
+
+    pub fn connect_with_limits(
+        socket_path: impl AsRef<Path>,
+        issuer_scope: impl Into<String>,
+        limits: BridgetClientLimits,
+    ) -> Result<Self, BridgetClientError> {
+        validate_limits(limits)?;
+        let issuer_scope = issuer_scope.into();
+        if issuer_scope.len() < 16 || issuer_scope.trim().is_empty() {
+            return Err(BridgetClientError::InvalidEnvelope(
+                "issuer_scope profil projet doit contenir au moins 128 bits opaques".to_string(),
+            ));
+        }
+        let deadline = monotonic_now() + limits.connect_timeout;
+        let mut connection = WireConnection::connect(socket_path.as_ref(), limits, deadline)?;
+        let role =
+            request_raw_with_deadline(&mut connection, &canonical_service_role_handshake()?, None)?;
+        expect_role_accepted(&role, "service")?;
+        let welcome = request_raw_with_deadline(
+            &mut connection,
+            &canonical_project_profile_service_hello(&issuer_scope)?,
+            None,
+        )?;
+        let negotiated = parse_service_welcome(welcome)?;
+        if negotiated.version != GUICHET_CONTRACT_VERSION {
+            return Err(BridgetClientError::VersionUnsupported {
+                requested: GUICHET_CONTRACT_VERSION,
+                received: negotiated.version,
+            });
+        }
+        if !negotiated
+            .capabilities
+            .contains(REQUIRED_PROJECT_PROFILE_CAPABILITY)
+        {
+            return Err(BridgetClientError::CapabilityMissing {
+                capability: REQUIRED_PROJECT_PROFILE_CAPABILITY.to_string(),
+            });
+        }
+        Ok(Self {
+            connection,
+            deadline: None,
+            limits,
+        })
+    }
+
+    pub fn resolve(
+        &mut self,
+        request: &bridget_transport::protocol::ProjectProfileRequest,
+    ) -> Result<bridget_transport::protocol::ProjectProfileOutcome, BridgetClientError> {
+        request
+            .proposal
+            .validate()
+            .map_err(|reason| BridgetClientError::InvalidEnvelope(reason.to_string()))?;
+        let request_bytes = serde_json::to_vec(request).map_err(BridgetClientError::Encode)?;
+        let frame = project_profile_request_frame(&request_bytes)?;
+        let response = match self.deadline {
+            Some(deadline) => self.connection.request_raw_json_until(&frame, deadline),
+            None => self.connection.request_raw_json(&frame),
+        }?;
+        parse_project_profile_outcome(response, &request.proposal.command_id)
+    }
+
+    pub fn prepare_runtime(
+        &mut self,
+        request: &bridget_transport::protocol::ProjectRuntimeRequest,
+    ) -> Result<bridget_transport::protocol::ProjectRuntimeOutcome, BridgetClientError> {
+        let request_bytes = serde_json::to_vec(request).map_err(BridgetClientError::Encode)?;
+        let frame = project_runtime_request_frame(&request_bytes)?;
+        let response = match self.deadline {
+            Some(deadline) => self.connection.request_raw_json_until(&frame, deadline),
+            None => self.connection.request_raw_json(&frame),
+        }?;
+        parse_project_runtime_outcome(response, &request.command_id)
+    }
+
+    pub fn limits(&self) -> BridgetClientLimits {
+        self.limits
+    }
+}
+
 impl CoordinationClient {
     pub fn connect_with_limits_until(
         socket_path: impl AsRef<Path>,
@@ -1537,6 +1633,20 @@ fn canonical_project_registry_service_hello(
     .map_err(BridgetClientError::Encode)
 }
 
+fn canonical_project_profile_service_hello(
+    issuer_scope: &str,
+) -> Result<Vec<u8>, BridgetClientError> {
+    let capabilities = [REQUIRED_PROJECT_PROFILE_CAPABILITY];
+    serde_json::to_vec(&CanonicalServiceHello {
+        kind: "ServiceHello",
+        version: GUICHET_CONTRACT_VERSION,
+        service: "maicie",
+        issuer_scope,
+        capabilities: &capabilities,
+    })
+    .map_err(BridgetClientError::Encode)
+}
+
 fn canonical_coordination_service_hello(issuer_scope: &str) -> Result<Vec<u8>, BridgetClientError> {
     let capabilities = [
         REQUIRED_GUICHET_CAPABILITY,
@@ -1648,7 +1758,44 @@ fn project_registry_admin_request_frame(
     Ok(frame)
 }
 
-/// Connexion attach dont la lecture est la seule source d'evenements runtime.
+// Trame de resolution de profil projet sur le contrat service.
+fn project_profile_request_frame(request_bytes: &[u8]) -> Result<Vec<u8>, BridgetClientError> {
+    let request: bridget_transport::protocol::ProjectProfileRequest =
+        serde_json::from_slice(request_bytes).map_err(|source| BridgetClientError::Decode {
+            line: String::from_utf8_lossy(request_bytes).into_owned(),
+            source,
+        })?;
+    request
+        .proposal
+        .validate()
+        .map_err(|reason| BridgetClientError::InvalidEnvelope(reason.to_string()))?;
+    serde_json::to_vec(&json!({
+        "type": "project_profile_request",
+        "request": request,
+    }))
+    .map_err(BridgetClientError::Encode)
+}
+fn project_runtime_request_frame(request_bytes: &[u8]) -> Result<Vec<u8>, BridgetClientError> {
+    let request: bridget_transport::protocol::ProjectRuntimeRequest =
+        serde_json::from_slice(request_bytes).map_err(|source| BridgetClientError::Decode {
+            line: String::from_utf8_lossy(request_bytes).into_owned(),
+            source,
+        })?;
+    if request.command_id.trim().is_empty()
+        || request.project_id.trim().is_empty()
+        || request.deadline_at < request.issued_at
+    {
+        return Err(BridgetClientError::InvalidEnvelope(
+            "ProjectRuntimeRequest incomplet ou invalide".to_string(),
+        ));
+    }
+    serde_json::to_vec(&json!({
+        "type": "project_runtime_request",
+        "request": request,
+    }))
+    .map_err(BridgetClientError::Encode)
+}
+
 pub struct Subscription {
     connection: WireConnection,
 }
@@ -2227,6 +2374,62 @@ fn parse_project_registry_admin_outcome(
             reason: response.get("reason").cloned().unwrap_or(Value::Null),
         }),
         other => Err(unexpected("project_registry_admin_outcome", other)),
+    }
+}
+
+fn parse_project_runtime_outcome(
+    response: Value,
+    expected_command_id: &str,
+) -> Result<bridget_transport::protocol::ProjectRuntimeOutcome, BridgetClientError> {
+    match response_type(&response)? {
+        "project_runtime_outcome" => {
+            let outcome = response.get("outcome").cloned().ok_or_else(|| {
+                BridgetClientError::Protocol("project runtime outcome missing".to_string())
+            })?;
+            let outcome: bridget_transport::protocol::ProjectRuntimeOutcome =
+                serde_json::from_value(outcome).map_err(|source| BridgetClientError::Decode {
+                    line: response.to_string(),
+                    source,
+                })?;
+            if outcome.command_id != expected_command_id {
+                return Err(BridgetClientError::Protocol(
+                    "project runtime outcome has another command".to_string(),
+                ));
+            }
+            Ok(outcome)
+        }
+        "ServiceRejected" | "ClientRejected" => Err(BridgetClientError::ClientRejected {
+            reason: response.get("reason").cloned().unwrap_or(Value::Null),
+        }),
+        other => Err(unexpected("project_runtime_outcome", other)),
+    }
+}
+
+fn parse_project_profile_outcome(
+    response: Value,
+    expected_command_id: &str,
+) -> Result<bridget_transport::protocol::ProjectProfileOutcome, BridgetClientError> {
+    match response_type(&response)? {
+        "project_profile_outcome" => {
+            let outcome = response.get("outcome").cloned().ok_or_else(|| {
+                BridgetClientError::Protocol("project profile outcome missing".to_string())
+            })?;
+            let outcome: bridget_transport::protocol::ProjectProfileOutcome =
+                serde_json::from_value(outcome).map_err(|source| BridgetClientError::Decode {
+                    line: response.to_string(),
+                    source,
+                })?;
+            if outcome.command_id != expected_command_id {
+                return Err(BridgetClientError::Protocol(
+                    "project profile outcome has another command".to_string(),
+                ));
+            }
+            Ok(outcome)
+        }
+        "ServiceRejected" | "ClientRejected" => Err(BridgetClientError::ClientRejected {
+            reason: response.get("reason").cloned().unwrap_or(Value::Null),
+        }),
+        other => Err(unexpected("project_profile_outcome", other)),
     }
 }
 

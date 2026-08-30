@@ -29,6 +29,7 @@ use crate::domain::{
     TypeNotificationReassignation, identifiant_deterministe, reduire_coordination,
     reduire_ouverture_dependance, reduire_reassignation,
 };
+use crate::domain::{ProjectProfile, ProjectProfileApproval, ProjectProfileStatus};
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
     StoreCommitPhase, stable_body_hash,
@@ -37,7 +38,7 @@ use crate::review_continuity::StoredReviewVerdict;
 use crate::routines::{EtatOccurrence, EtatRoutine, Routine, RoutineOccurrence};
 use bridget_transport::protocol::{
     CoordinationEventKind, GuichetOutcome, GuichetReplyPayload, ProjectBackend, ProjectBindOutcome,
-    ProjectBindStatus, WrapperToDaemon, decode,
+    ProjectBindStatus, ResolvedProjectProfile, WrapperToDaemon, decode,
 };
 use rusqlite::{
     Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
@@ -54,7 +55,7 @@ use uuid::Uuid;
 
 /// Version courante du schéma SQLite. Les oracles de migration doivent lire
 /// cette constante — un littéral en dur meurt à chaque migration.
-pub const SCHEMA_VERSION: i64 = 22;
+pub const SCHEMA_VERSION: i64 = 23;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -3529,6 +3530,170 @@ impl MaicieStore {
             ("consumed", _) => Err(StoreError::Invalid("approbation déjà consommée")),
             _ => Err(StoreError::Corrupt("état de proposition divergent")),
         }
+    }
+
+    /// Persists a proposed project profile before host resolution or local approval.
+    pub fn save_project_profile(&mut self, profile: &ProjectProfile) -> Result<(), StoreError> {
+        if profile.status != ProjectProfileStatus::Proposed {
+            return Err(StoreError::Invalid("project profile must be proposed"));
+        }
+        let payload = serde_json::to_vec(profile).map_err(StoreError::Json)?;
+        let changed = self
+            .connection
+            .execute(
+                "INSERT INTO project_profiles(
+                     profile_id, project_id, state, payload_json, approval_json, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, NULL, ?5)",
+                params![
+                    profile.profile_id,
+                    profile.project_id,
+                    project_profile_status_text(profile.status),
+                    payload,
+                    profile.updated_at,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict("project profile already exists"));
+        }
+        Ok(())
+    }
+
+    // Replaces an obsolete profile proposal atomically. The former local approval
+    // is removed, so a fresh host resolution and local confirmation are required.
+    pub fn replace_project_profile(&mut self, profile: &ProjectProfile) -> Result<(), StoreError> {
+        if profile.status != ProjectProfileStatus::Proposed {
+            return Err(StoreError::Invalid(
+                "project profile replacement must be proposed",
+            ));
+        }
+        let payload = serde_json::to_vec(profile).map_err(StoreError::Json)?;
+        let changed = self.connection.execute(
+            "UPDATE project_profiles
+             SET project_id = ?1, state = ?2, payload_json = ?3, approval_json = NULL, updated_at = ?4
+             WHERE profile_id = ?5",
+            params![
+                profile.project_id,
+                project_profile_status_text(profile.status),
+                payload,
+                profile.updated_at,
+                profile.profile_id,
+            ],
+        ).map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::NotFound("project profile missing"));
+        }
+        Ok(())
+    }
+
+    pub fn project_profile(&self, profile_id: &str) -> Result<Option<ProjectProfile>, StoreError> {
+        let stored: Option<(String, Vec<u8>)> = self
+            .connection
+            .query_row(
+                "SELECT state, payload_json FROM project_profiles WHERE profile_id = ?1",
+                [profile_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        stored
+            .map(|(state, payload)| {
+                let profile: ProjectProfile =
+                    serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+                if project_profile_status_text(profile.status) != state {
+                    return Err(StoreError::Corrupt("project profile state mismatch"));
+                }
+                Ok(profile)
+            })
+            .transpose()
+    }
+
+    pub fn record_project_profile_resolution(
+        &mut self,
+        profile_id: &str,
+        resolved: ResolvedProjectProfile,
+        now: i64,
+    ) -> Result<ProjectProfile, StoreError> {
+        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        let stored: Option<(String, Vec<u8>)> = tx
+            .query_row(
+                "SELECT state, payload_json FROM project_profiles WHERE profile_id = ?1",
+                [profile_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        let Some((state, payload)) = stored else {
+            return Err(StoreError::NotFound("project profile missing"));
+        };
+        let mut profile: ProjectProfile =
+            serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+        if state != "proposed" || profile.status != ProjectProfileStatus::Proposed {
+            return Err(StoreError::Conflict("project profile is not resolvable"));
+        }
+        profile
+            .record_resolution(resolved, now)
+            .map_err(StoreError::Domain)?;
+        let profile_payload = serde_json::to_vec(&profile).map_err(StoreError::Json)?;
+        let changed = tx.execute(
+            "UPDATE project_profiles SET state = ?1, payload_json = ?2, updated_at = ?3 WHERE profile_id = ?4 AND state = ?5",
+            params![project_profile_status_text(profile.status), profile_payload, profile.updated_at, profile.profile_id, "proposed"],
+        ).map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict("project profile changed concurrently"));
+        }
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(profile)
+    }
+
+    pub fn approve_project_profile(
+        &mut self,
+        profile_id: &str,
+        profile_digest: String,
+        now: i64,
+    ) -> Result<(ProjectProfile, ProjectProfileApproval), StoreError> {
+        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        let stored: Option<(String, Vec<u8>)> = tx
+            .query_row(
+                "SELECT state, payload_json FROM project_profiles WHERE profile_id = ?1",
+                [profile_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        let Some((state, payload)) = stored else {
+            return Err(StoreError::NotFound("project profile missing"));
+        };
+        let mut profile: ProjectProfile =
+            serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+        if state != "resolved" || profile.status != ProjectProfileStatus::Resolved {
+            return Err(StoreError::Conflict("project profile is not approvable"));
+        }
+        let approval = profile
+            .approve(profile_digest, now)
+            .map_err(StoreError::Domain)?;
+        let profile_payload = serde_json::to_vec(&profile).map_err(StoreError::Json)?;
+        let approval_payload = serde_json::to_vec(&approval).map_err(StoreError::Json)?;
+        let changed = tx
+            .execute(
+                "UPDATE project_profiles
+                 SET state = ?1, payload_json = ?2, approval_json = ?3, updated_at = ?4
+                 WHERE profile_id = ?5 AND state = ?6",
+                params![
+                    project_profile_status_text(profile.status),
+                    profile_payload,
+                    approval_payload,
+                    profile.updated_at,
+                    profile.profile_id,
+                    "resolved",
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict("project profile changed concurrently"));
+        }
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok((profile, approval))
     }
 
     fn delegations_for(
@@ -8610,6 +8775,24 @@ fn migrate_to_version(
         .map_err(StoreError::Sql)?;
     }
 
+    // v23 : profil projet et approbation locale durables. Les payloads ne
+    // contiennent que references, digests et generations, jamais un secret.
+    if current_version < 23 && target_version >= 23 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS project_profiles (
+                 profile_id TEXT PRIMARY KEY,
+                 project_id TEXT NOT NULL,
+                 state TEXT NOT NULL,
+                 payload_json BLOB NOT NULL,
+                 approval_json BLOB,
+                 updated_at INTEGER NOT NULL CHECK(updated_at >= 0)
+             );
+             CREATE INDEX IF NOT EXISTS project_profiles_project_idx
+                 ON project_profiles(project_id, state, updated_at);",
+        )
+        .map_err(StoreError::Sql)?;
+    }
+
     for version in (current_version + 1)..=target_version {
         tx.execute(
             "INSERT OR IGNORE INTO schema_migrations(version, applied_at)\n\
@@ -9745,6 +9928,17 @@ fn parse_delegation_state(value: &str) -> Result<EtatDelegation, StoreError> {
         .copied()
         .find(|etat| etat.as_sql() == value)
         .ok_or(StoreError::Corrupt("état délégation inconnu"))
+}
+
+fn project_profile_status_text(status: ProjectProfileStatus) -> &'static str {
+    match status {
+        ProjectProfileStatus::Proposed => "proposed",
+        ProjectProfileStatus::Resolved => "resolved",
+        ProjectProfileStatus::Approved => "approved",
+        ProjectProfileStatus::Active => "active",
+        ProjectProfileStatus::Stale => "stale",
+        ProjectProfileStatus::Disabled => "disabled",
+    }
 }
 
 fn parse_outbox_state(value: &str) -> Result<EtatOutboxDelegation, StoreError> {

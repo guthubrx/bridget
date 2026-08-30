@@ -120,6 +120,7 @@ fn spec_065_reprise_apres_crash_et_collision_alias_ne_creent_qu_un_actif() {
         retention_days: 7,
         project_root_policy_path: Some(policy_path),
         project_runtime_policy_path: None,
+        project_resource_catalog_path: None,
     };
     thread::spawn(move || {
         let _ = daemon::run(daemon_config);

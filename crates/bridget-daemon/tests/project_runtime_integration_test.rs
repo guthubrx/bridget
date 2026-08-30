@@ -112,6 +112,7 @@ fn spec_066_prepare_docker_atteste_image_montages_abi_et_limites() {
         memory_limit_bytes: 128 * 1024 * 1024,
         pids_limit: 64,
         tmpfs: vec!["/tmp".to_string()],
+        network_mode: "bridge".to_string(),
         runtime_launcher: None,
         runtime_executables: std::collections::BTreeMap::new(),
         state_root_parent: state_parent,
@@ -269,6 +270,7 @@ fn spec_066_docker_exec_lance_bridget_et_un_fournisseur_de_fixture_isole() {
         memory_limit_bytes: 128 * 1024 * 1024,
         pids_limit: 64,
         tmpfs: vec!["/tmp".to_string()],
+        network_mode: "bridge".to_string(),
         runtime_launcher: Some("/usr/local/bin/bridget".to_string()),
         runtime_executables: std::collections::BTreeMap::from([(
             "fixture".to_string(),
@@ -322,6 +324,7 @@ fn spec_066_docker_exec_lance_bridget_et_un_fournisseur_de_fixture_isole() {
         agent_generation: 7,
         cwd: project_root,
         resolved_definition_json: serde_json::to_string(&definition).unwrap(),
+        process_env: Vec::new(),
     };
 
     let (registered_tx, registered_rx) = std::sync::mpsc::sync_channel(1);
