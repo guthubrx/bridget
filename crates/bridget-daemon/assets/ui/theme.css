@@ -1223,7 +1223,8 @@ code {
   scrollbar-width: thin;
 }
 
-.agent-activity__act {
+.agent-activity__act,
+.agent-activity__summary {
   display: grid;
   grid-template-columns: auto max-content minmax(0, 1fr);
   align-items: center;
@@ -1231,7 +1232,50 @@ code {
   min-height: 1.2rem;
 }
 
-.agent-activity__act::before {
+.agent-activity__details {
+  min-width: 0;
+}
+
+.agent-activity__disclosure {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.agent-activity__disclosure::-webkit-details-marker {
+  display: none;
+}
+
+.agent-activity__disclosure::marker {
+  content: "";
+}
+
+.agent-activity__toggle {
+  flex: 0 0 auto;
+  padding-top: 0.08rem;
+  color: var(--text-secondary);
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
+.agent-activity__toggle::before {
+  display: inline-block;
+  width: 0.9rem;
+  content: "▸";
+}
+
+.agent-activity__details[open] .agent-activity__toggle::before {
+  content: "▾";
+}
+
+.agent-activity__details[open] .agent-activity__stream {
+  margin-top: 0.35rem;
+}
+
+.agent-activity__act::before,
+.agent-activity__summary::before {
   grid-row: 1;
   width: 0.36rem;
   height: 0.36rem;
@@ -1249,30 +1293,48 @@ code {
 .agent-activity__act-detail {
   grid-row: 1;
   min-width: 0;
-  color: var(--text-primary);
+  color: var(--text-secondary);
+  opacity: 0.76;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 0.92em;
   line-height: 1.35;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+  background: transparent;
+  padding: 0;
 }
 
-.agent-activity__act[data-state="active"]::before {
+.agent-activity__resolution {
+  grid-column: 2 / -1;
+  grid-row: 2;
+  color: var(--text-secondary);
+  font-size: 0.9em;
+}
+
+.agent-activity__resolution[data-state="success"] { color: var(--activity-success); }
+.agent-activity__resolution[data-state="error"] { color: var(--activity-error); }
+.agent-activity__resolution[data-state="pending"] { color: var(--activity-pending); }
+
+.agent-activity__act[data-state="active"]::before,
+.agent-activity__summary[data-state="active"]::before {
   background: var(--accent);
   opacity: 0.88;
 }
 
-.agent-activity__act[data-state="pending"]::before {
+.agent-activity__act[data-state="pending"]::before,
+.agent-activity__summary[data-state="pending"]::before {
   background: var(--activity-pending);
   opacity: 0.95;
 }
 
-.agent-activity__act[data-state="success"]::before {
+.agent-activity__act[data-state="success"]::before,
+.agent-activity__summary[data-state="success"]::before {
   background: var(--activity-success);
   opacity: 0.95;
 }
 
-.agent-activity__act[data-state="error"]::before {
+.agent-activity__act[data-state="error"]::before,
+.agent-activity__summary[data-state="error"]::before {
   background: var(--activity-error);
   opacity: 0.95;
 }

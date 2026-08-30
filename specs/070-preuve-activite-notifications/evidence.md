@@ -59,3 +59,6 @@ Le flux vivant affiche : texte progressif dans sa bulle, outils au fil de leurs
 événements journalisés avec le détail réellement journalisé, puis autorisation demandée, accordée ou refusée. Il ne
 fabrique pas de fin ou de sortie d'outil si le fournisseur ne les journalise
 pas.
+
+
+Le flux vivant est désormais compact par défaut. Il affiche la dernière commande réellement journalisée, avec son autorisation corrélée si elle existe ; le bouton « Voir les N actes » révèle l’historique complet et reste ouvert pendant les événements suivants. Les détails techniques sont atténués sans être masqués.

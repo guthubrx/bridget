@@ -61,3 +61,6 @@
   tour actif et corriger le verdict des autorisations. Preuve : 75 témoins Node
   passent, dont le runtime EventSource, la projection d'outils et le journal
   réel `1aecc26942514` projeté en commandes détaillées et autorisations accordées.
+
+
+- [x] T014 - Compacter l’activité vivante par défaut : dernier acte et décision corrélée, volet « Voir les N actes » persistant pendant le flux, détail technique atténué. Preuve : témoin Node de prévisualisation et 75 tests UI passants.

@@ -130,3 +130,10 @@ Critères supplémentaires :
 - Une demande d'autorisation affiche son état réel : demandée, accordée ou
   refusée. Aucun état « attend » ne persiste après une décision journalisée.
 - Chaque acte affiche le détail effectivement journalisé par le fournisseur : commande, outil ou chemin. Il ne fabrique ni sortie ni succès si le fournisseur ne les a pas journalisés.
+
+
+### Correctif de compaction du flux - 30 août 2026
+
+- La zone d’activité est repliée par défaut : elle montre la dernière opération réelle et, si elle existe, sa décision d’autorisation.
+- « Voir les N actes » ouvre le flux complet dans l’ordre ; l’état ouvert persiste pendant les rendus suivants du même tour.
+- Le détail de commande reste disponible mais visuellement atténué pour que l’état et l’action soient lus avant la ligne technique.

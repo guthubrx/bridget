@@ -427,6 +427,14 @@
           "le détail affiché doit être celui, et seulement celui, journalisé par le fournisseur",
         );
         assert.equal(api.liveActivityActDetail(activity.acts[1]), "");
+        const preview = api.activityStreamPreview(activity.acts);
+        assert.equal(preview.count, 2);
+        assert.equal(preview.latest.kind, "approval");
+        assert.equal(preview.display.kind, "command");
+        assert.equal(preview.resolution.kind, "approval");
+        assert.equal(preview.canExpand, true);
+        assert.equal(api.activityStreamToggleLabel(preview.count, false), "Voir les 2 actes");
+        assert.equal(api.activityStreamToggleLabel(preview.count, true), "Réduire les 2 actes");
       });
 
       test("recherche_hit_caracteres_inattendus_reste_du_texte", () => {
@@ -2743,6 +2751,25 @@
     return text(act && act.text);
   }
 
+  function activityStreamPreview(acts) {
+    const stream = Array.isArray(acts) ? acts : [];
+    const latest = stream.length > 0 ? stream[stream.length - 1] : null;
+    const previous = stream.length > 1 ? stream[stream.length - 2] : null;
+    const pairedApproval = latest && latest.kind === "approval" && previous;
+    return {
+      count: stream.length,
+      latest,
+      display: pairedApproval ? previous : latest,
+      resolution: pairedApproval ? latest : null,
+      canExpand: stream.length > 1,
+    };
+  }
+
+  function activityStreamToggleLabel(count, expanded) {
+    if (count <= 1) return "";
+    return expanded ? `Réduire les ${count} actes` : `Voir les ${count} actes`;
+  }
+
   function liveActivityActTone(act) {
     const state = text(act && act.state);
     if (state === "accepted" || state === "completed") return "success";
@@ -4320,6 +4347,7 @@
     const historyStates = new Map();
     const historyConnections = new Map();
     const expandedPeers = new Set();
+    const expandedActivityIds = new Set();
     const seenPeers = new Set();
     const seenThreadMessages = new Set();
     const seenRecords = new Set();
@@ -4949,17 +4977,48 @@
         if (acts.length === 0) {
           content.append(make("span", "agent-activity__label", activity.text));
         } else {
-          const stream = make("ol", "agent-activity__stream");
-          acts.forEach((act) => {
-            const row = make("li", "agent-activity__act");
-            row.dataset.state = liveActivityActTone(act);
-            row.append(make("span", "agent-activity__act-label", liveActivityActLabel(act)));
-            const detail = liveActivityActDetail(act);
-            if (detail) row.append(make("code", "agent-activity__act-detail", detail));
-            stream.append(row);
-          });
-          stream.scrollTop = stream.scrollHeight;
-          content.append(stream);
+          const preview = activityStreamPreview(acts);
+          const previewRow = make("div", "agent-activity__summary");
+          previewRow.dataset.state = liveActivityActTone(preview.display);
+          previewRow.append(make("span", "agent-activity__act-label", liveActivityActLabel(preview.display)));
+          const detail = liveActivityActDetail(preview.display);
+          if (detail) previewRow.append(make("code", "agent-activity__act-detail", detail));
+          if (preview.resolution) {
+            const resolution = make("span", "agent-activity__resolution", liveActivityActLabel(preview.resolution));
+            resolution.dataset.state = liveActivityActTone(preview.resolution);
+            previewRow.append(resolution);
+          }
+          if (!preview.canExpand) {
+            content.append(previewRow);
+          } else {
+            const activityKey = text(activity.messageId, [activity.agent, activity.at].join(":"));
+            const details = make("details", "agent-activity__details");
+            details.open = expandedActivityIds.has(activityKey);
+            const summary = make("summary", "agent-activity__disclosure");
+            const toggle = make(
+              "span",
+              "agent-activity__toggle",
+              activityStreamToggleLabel(preview.count, details.open),
+            );
+            summary.append(previewRow, toggle);
+            const stream = make("ol", "agent-activity__stream");
+            acts.forEach((act) => {
+              const row = make("li", "agent-activity__act");
+              row.dataset.state = liveActivityActTone(act);
+              row.append(make("span", "agent-activity__act-label", liveActivityActLabel(act)));
+              const actDetail = liveActivityActDetail(act);
+              if (actDetail) row.append(make("code", "agent-activity__act-detail", actDetail));
+              stream.append(row);
+            });
+            stream.scrollTop = stream.scrollHeight;
+            details.append(summary, stream);
+            details.addEventListener("toggle", () => {
+              if (details.open) expandedActivityIds.add(activityKey);
+              else expandedActivityIds.delete(activityKey);
+              toggle.textContent = activityStreamToggleLabel(preview.count, details.open);
+            });
+            content.append(details);
+          }
         }
         const block = make("div", "agent-activity__block");
         block.append(avatar, content);
@@ -5616,6 +5675,8 @@
     watchReconnectDelayMs,
     liveActivityActLabel,
     liveActivityActDetail,
+    activityStreamPreview,
+    activityStreamToggleLabel,
     liveActivityActTone,
     shouldScheduleWatchReconnect,
     watchEnvelopeEndsStream,
