@@ -2444,6 +2444,17 @@ impl DaemonState {
         format!("conn-{}", self.conn_counter)
     }
 
+    /// Un redémarrage du daemon ne doit pas transformer une interruption de
+    /// service en arrêt demandé par l’utilisateur. Les wrappers gérés sont
+    /// donc laissés à systemd, puis recréés depuis le fleet persistant au boot.
+    /// `Disconnect` reste réservé aux wrappers externes et aux arrêts explicites.
+    fn notify_wrapper_on_daemon_shutdown(&self, conn_id: &str) -> bool {
+        !self
+            .conn_instances
+            .get(conn_id)
+            .is_some_and(|instance_id| self.managed_by_instance.contains_key(instance_id))
+    }
+
     fn mark_unreachable(&mut self, conn_id: &str) {
         if self.auxiliary_connections.remove(conn_id) {
             self.conn_instances.remove(conn_id);
@@ -3597,9 +3608,12 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         drain_managed_events(&state, &managed_event_rx);
         // Vérifier si shutdown demandé
         if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
-            info!("shutdown demandé — notification des wrappers...");
+            info!("shutdown demandé - notification des wrappers externes...");
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
-            for writer in st.connections.values() {
+            for (conn_id, writer) in &st.connections {
+                if !st.notify_wrapper_on_daemon_shutdown(conn_id) {
+                    continue;
+                }
                 let msg = DaemonToWrapper::Disconnect;
                 if let Ok(json) = encode(&msg)
                     && let Ok(mut w) = writer.lock()
@@ -11303,6 +11317,24 @@ mod presence_tests {
             },
         );
         (state, config)
+    }
+
+    #[test]
+    fn redemarrage_daemon_ne_deconnecte_pas_les_agents_geres() {
+        let (mut state, config) = state_with_registered_agent("restart-managed-connection");
+        assert!(
+            state.notify_wrapper_on_daemon_shutdown("conn-1"),
+            "une connexion non gérée garde le comportement Disconnect existant"
+        );
+
+        state
+            .managed_by_instance
+            .insert("instance-1".to_string(), "managed-restart".to_string());
+        assert!(
+            !state.notify_wrapper_on_daemon_shutdown("conn-1"),
+            "un équipier géré et running doit rester reprenable au prochain boot"
+        );
+        let _ = std::fs::remove_file(config.db_path);
     }
 
     /// Ajoute un expéditeur réellement enregistré dont la connexion reste
