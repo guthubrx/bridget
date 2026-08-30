@@ -919,6 +919,42 @@
         assert.equal(next.agents[0].name, "rc1");
       });
 
+      test("flotte_dynamique_classe_injoignable_sans_rendu_sur_un_age_seul", () => {
+        assert.equal(api.isInactiveAgent({ state: "stopped" }), true);
+        assert.equal(api.isInactiveAgent({ state: "unreachable" }), true);
+        assert.equal(api.isInactiveAgent({ state: "busy" }), false);
+
+        const initial = [{
+          name: "ancien",
+          state: "unreachable",
+          provider_age_secs: 4,
+          progress_age_secs: 8,
+        }, {
+          name: "actif",
+          state: "busy",
+          provider_age_secs: 2,
+          progress_age_secs: 3,
+        }];
+        const agesOnly = initial.map((agent) => ({
+          ...agent,
+          provider_age_secs: agent.provider_age_secs + 5,
+          progress_age_secs: agent.progress_age_secs + 5,
+        }));
+        assert.equal(api.agentRosterSignature(initial), api.agentRosterSignature(agesOnly));
+        assert.notEqual(
+          api.agentRosterSignature(initial),
+          api.agentRosterSignature(initial.map((agent) => (
+            agent.name === "actif" ? { ...agent, state: "stopped" } : agent
+          ))),
+        );
+
+        const next = api.applyReconnectSnapshot(
+          api.createUiState({ selectedAgent: "absent" }),
+          { agents: initial },
+        );
+        assert.equal(next.selectedAgent, "actif");
+      });
+
       test("rattrapage_groupe_preserve_ordre_et_saisie", () => {
         const before = api.createUiState({
           selectedAgent: "cursor3",
@@ -2699,6 +2735,7 @@
 
   const BOTTOM_THRESHOLD_PX = 2;
   const MESSAGE_COLLAPSE_THRESHOLD = 1400;
+  const FLEET_REFRESH_INTERVAL_MS = 5_000;
   const AGENT_PANE_WIDTH_STORAGE_KEY = "bridget.ui.agent-pane-width.v1";
   const AGENT_PANE_MIN_WIDTH_PX = 224;
   const AGENT_PANE_MAX_WIDTH_PX = 560;
@@ -3564,6 +3601,39 @@
       });
   }
 
+  function isInactiveAgent(agent) {
+    const state = text(agent && agent.state).trim().toLowerCase();
+    return state === "stopped" || state === "unreachable";
+  }
+
+  function agentRosterSignature(agents) {
+    return JSON.stringify(normalizeAgents(agents).map((agent) => ({
+      name: agent.name,
+      type: agent.type,
+      host: agent.host,
+      transport: agent.transport,
+      domain: agent.domain,
+      project_id: agent.project_id,
+      project_state: agent.project_state,
+      mode: agent.mode,
+      model: agent.model,
+      effort: agent.effort,
+      persistent: agent.persistent,
+      state: agent.state,
+      connection_state: agent.connection_state,
+      turn_state: agent.turn_state,
+      wait_state: agent.wait_state,
+      queue_depth: agent.queue_depth,
+      continuation_mode: agent.continuation_mode,
+      agent_link: agent.agent_link,
+      provider: agent.provider,
+      last_message_at: agent.last_message_at,
+      last_excerpt: agent.last_excerpt,
+      unread: agent.unread,
+      alerts: agent.alerts,
+    })));
+  }
+
   function normalizeRelaySignal(signal) {
     return ["connected", "reconnecting", "lost"].includes(signal)
       ? signal
@@ -3819,7 +3889,7 @@
       agents,
       selectedAgent: selectedExists
         ? state.selectedAgent
-        : agents.find((agent) => agent.state !== "stopped")?.name || agents[0]?.name || null,
+        : agents.find((agent) => !isInactiveAgent(agent))?.name || agents[0]?.name || null,
       draft: preserveDraft(state.draft),
       viewport: { ...state.viewport },
     };
@@ -5056,6 +5126,8 @@
     let reconnectTimer = null;
     let reconnectAttempts = 0;
     let watchStreamEnded = false;
+    let fleetRefreshTimer = null;
+    let fleetRefreshInFlight = false;
 
     const rootStyle = documentRef.documentElement && documentRef.documentElement.style;
     if (rootStyle && nodes.agentPaneResizer && typeof windowRef.addEventListener === "function") {
@@ -5552,6 +5624,7 @@
       }
     })();
     let appearancePickerAgent = null;
+    let lastAgentsRenderSignature = null;
 
     const colorForAgent = (name) => agentAvatarColor(name, agentAppearances);
     const shapeForAgent = (name) => agentAvatarShape(name, agentAppearances);
@@ -5691,15 +5764,27 @@
 
     const renderAgents = () => {
       const openedName = identityCardAgentName;
-      const active = state.agents.filter((agent) => agent.state !== "stopped");
-      const stopped = state.agents.filter((agent) => agent.state === "stopped");
+      const renderSignature = JSON.stringify([
+        state.selectedAgent,
+        agentAppearances,
+        agentRosterSignature(state.agents),
+      ]);
+      if (renderSignature === lastAgentsRenderSignature) return false;
+      const agentPane = typeof nodes.agentList.closest === "function"
+        ? nodes.agentList.closest(".agent-pane")
+        : nodes.agentList.parentElement;
+      const previousScrollTop = agentPane && Number.isFinite(agentPane.scrollTop)
+        ? agentPane.scrollTop
+        : null;
+      const active = state.agents.filter((agent) => !isInactiveAgent(agent));
+      const stopped = state.agents.filter(isInactiveAgent);
       const activeRows = active.map((agent) => ({ agent, node: renderAgentButton(agent) }));
       const stoppedRows = stopped.map((agent) => ({ agent, node: renderAgentButton(agent) }));
       nodes.agentList.replaceChildren(...activeRows.map((entry) => entry.node));
       nodes.stoppedAgentList.replaceChildren(...stoppedRows.map((entry) => entry.node));
       nodes.stoppedCount.textContent = String(stopped.length);
       nodes.stoppedAgents.hidden = stopped.length === 0;
-      nodes.fleetCount.textContent = String(state.agents.length);
+      nodes.fleetCount.textContent = String(active.length);
       if (openedName) {
         const opened = [...activeRows, ...stoppedRows].find(
           (entry) => entry.agent.name === openedName,
@@ -5710,6 +5795,9 @@
           closeIdentityCard(false);
         }
       }
+      if (previousScrollTop !== null) agentPane.scrollTop = previousScrollTop;
+      lastAgentsRenderSignature = renderSignature;
+      return true;
     };
 
     const renderHeader = () => {
@@ -6199,6 +6287,32 @@
       return through && (agent.last_message_at || 0) <= through ? { ...agent, unread: 0 } : agent;
     });
 
+    const applyFleetSnapshot = (snapshot) => {
+      const previousSelected = state.selectedAgent;
+      const previousAgents = state.agents;
+      state = applyReconnectSnapshot(state, snapshot);
+      state = { ...state, agents: applyReadThrough(state.agents) };
+      const rosterChanged = agentRosterSignature(previousAgents) !== agentRosterSignature(state.agents);
+      const selectionChanged = previousSelected !== state.selectedAgent;
+      if (!rosterChanged && !selectionChanged) return false;
+      renderAgents();
+      const previousSelectedAgent = previousAgents.find((agent) => agent.name === previousSelected);
+      const selectedAgent = state.agents.find((agent) => agent.name === state.selectedAgent);
+      if (
+        selectionChanged
+        || agentRosterSignature(previousSelectedAgent ? [previousSelectedAgent] : [])
+          !== agentRosterSignature(selectedAgent ? [selectedAgent] : [])
+      ) {
+        renderHeader();
+      }
+      if (selectionChanged) {
+        renderThread(0);
+        if (state.selectedAgent) restoreDraft(state.selectedAgent);
+        connectWatch(state.selectedAgent);
+      }
+      return true;
+    };
+
     const ingestThreadMessage = (payload, agentName) => {
       const deliveryId = text(payload && payload.delivery_id);
       if (!deliveryId) return false;
@@ -6321,6 +6435,10 @@
       if (identityCard && typeof identityCard.remove === "function") identityCard.remove();
       if (stopConfirmation && typeof stopConfirmation.remove === "function") {
         stopConfirmation.remove();
+      }
+      if (fleetRefreshTimer !== null && typeof windowRef.clearInterval === "function") {
+        windowRef.clearInterval(fleetRefreshTimer);
+        fleetRefreshTimer = null;
       }
       closeWatch();
       historyConnections.forEach((history) => history.close());
@@ -6453,6 +6571,19 @@
           updateRelay("lost");
         }
       });
+    };
+
+    const refreshFleetRoster = async () => {
+      if (fleetRefreshInFlight || documentRef.visibilityState === "hidden") return;
+      fleetRefreshInFlight = true;
+      try {
+        const scoped = await fetchScopedSnapshot((url) => windowRef.fetch(url), token, null);
+        applyFleetSnapshot(scoped.snapshot);
+      } catch (_error) {
+        // Le watch du fil reste la source de vérité de connexion ; le prochain passage réessaiera.
+      } finally {
+        fleetRefreshInFlight = false;
+      }
     };
 
     const selectAgent = (agentName) => {
@@ -6739,11 +6870,19 @@
         });
     }
 
+    if (typeof windowRef.setInterval === "function") {
+      fleetRefreshTimer = windowRef.setInterval(
+        () => void refreshFleetRoster(),
+        FLEET_REFRESH_INTERVAL_MS,
+      );
+    }
+
     return { close: closeAll };
   }
 
   return Object.freeze({
     MESSAGE_COLLAPSE_THRESHOLD,
+    FLEET_REFRESH_INTERVAL_MS,
     shouldCollapseMessage,
     messagePreview,
     turnFailureLabel,
@@ -6792,6 +6931,8 @@
     scrollToLatest,
     relayBannerState,
     applyReconnectSnapshot,
+    isInactiveAgent,
+    agentRosterSignature,
     agentResourceUrl,
     fetchScopedSnapshot,
     peerExchangeProjection,
