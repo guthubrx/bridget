@@ -1,5 +1,10 @@
 use bridget_transport::protocol::{
-    ProjectBackend, ProjectBindOutcome, ProjectBindStatus, ProjectRegistryRefusal,
+    ProjectBackend, ProjectBindOutcome, ProjectBindRequest, ProjectBindStatus,
+    ProjectRegistryRefusal,
+};
+use maicie::app::{
+    ProjectRegistrationRequest, prepare_project_registration, project_registration_request_bytes,
+    resolve_project_registration,
 };
 use maicie::domain::ProjectIdentityStatus;
 use maicie::store::{MaicieStore, ProjectRegistrationIntent, ProjectRegistrationState};
@@ -205,6 +210,42 @@ fn spec_065_issue_bridget_active_ou_collision_est_durable_par_commande() {
     );
     assert_eq!(failed.outcome.as_ref(), Some(&binding_failed));
     assert!(!failed.outbox_pending);
+    drop(store);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn spec_065_commande_locale_prepare_puis_reprend_exactement_la_liaison() {
+    let path = std::env::temp_dir().join(format!(
+        "maicie-project-command-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let mut store = MaicieStore::open(&path).unwrap();
+    let request = ProjectRegistrationRequest {
+        command_id: "project-command-local".to_string(),
+        project_id: "project-local".to_string(),
+        display_name: "Projet local".to_string(),
+        requested_root: "/srv/projects/local".to_string(),
+        issued_at: 1_788_000_000,
+        deadline_at: 1_788_000_300,
+    };
+    let prepared = prepare_project_registration(&mut store, &request).unwrap();
+    let wire: ProjectBindRequest = serde_json::from_slice(&prepared.canonical_request).unwrap();
+    assert_eq!(wire.command_id, request.command_id);
+    assert_eq!(wire.project_id, request.project_id);
+    assert_eq!(wire.backend, ProjectBackend::Host);
+    assert_eq!(
+        project_registration_request_bytes(&store, &request.command_id).unwrap(),
+        Some(prepared.canonical_request.clone()),
+        "la reprise lit les mêmes octets persistés"
+    );
+    let resolved = resolve_project_registration(
+        &mut store,
+        &active_outcome(&request.command_id, &request.project_id),
+    )
+    .unwrap();
+    assert_eq!(resolved.state, ProjectRegistrationState::Bound);
+    assert_eq!(resolved.identity.status, ProjectIdentityStatus::Active);
     drop(store);
     let _ = std::fs::remove_file(path);
 }

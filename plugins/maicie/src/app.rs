@@ -31,13 +31,18 @@ use crate::outbox::{PreparedDelegation, stable_body_hash};
 pub use crate::store::GuichetLifecycleResult;
 use crate::store::{
     ActivationApprovalRequest, CoordinationCommitPhase, DeferredDispatchParams,
-    DelegateReservation, GuichetProjectionFacts, MaicieStore, ObjectiveSnapshot, StoreError,
-    StoredDelegateResult, StoredGuichetReply,
+    DelegateReservation, GuichetProjectionFacts, MaicieStore, ObjectiveSnapshot,
+    ProjectRegistrationIntent, ProjectRegistrationRecord, StoreError, StoredDelegateResult,
+    StoredGuichetReply,
 };
-use bridget_transport::protocol::ReviewTarget;
+use bridget_transport::protocol::{
+    PROJECT_REGISTRY_CONTRACT_VERSION, ProjectBackend, ProjectBindOutcome, ProjectBindRequest,
+    ReviewTarget,
+};
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fmt;
+use std::path::Path;
 use uuid::Uuid;
 
 /// Fait d'annuaire minimal consommé par la sélection déterministe.
@@ -95,6 +100,115 @@ pub enum DirectMessageHandling {
         record: ConversationRecord,
         help: ConversationHelp,
     },
+}
+
+/// Paramètres déterministes de l'unique action d'enregistrement projet. Les
+/// octets sont construits avant toute I/O puis persistés par le store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRegistrationRequest {
+    pub command_id: String,
+    pub project_id: String,
+    pub display_name: String,
+    pub requested_root: String,
+    pub issued_at: i64,
+    pub deadline_at: i64,
+}
+
+/// Préparation durable de la saga. Le CLI transmet `canonical_request` tel
+/// quel au client Bridget et ne le reconstruit pas pendant un retry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedProjectRegistration {
+    pub record: ProjectRegistrationRecord,
+    pub canonical_request: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectRegistrationError {
+    Invalid(&'static str),
+    Store(String),
+}
+
+impl fmt::Display for ProjectRegistrationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Invalid(detail) => write!(formatter, "enregistrement projet invalide: {detail}"),
+            Self::Store(detail) => write!(
+                formatter,
+                "stockage enregistrement projet impossible: {detail}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ProjectRegistrationError {}
+
+/// Persiste l'intention Maicie et la requête versionnée avant tout appel à
+/// Bridget. Un nouveau lancement avec le même `command_id` retrouve la même
+/// enveloppe, ce qui rend la reprise sûre après un accusé perdu.
+pub fn prepare_project_registration(
+    store: &mut MaicieStore,
+    request: &ProjectRegistrationRequest,
+) -> Result<PreparedProjectRegistration, ProjectRegistrationError> {
+    if request.command_id.trim().is_empty()
+        || request.project_id.trim().is_empty()
+        || request.display_name.trim().is_empty()
+        || request.requested_root.trim().is_empty()
+        || !Path::new(&request.requested_root).is_absolute()
+        || request.issued_at < 0
+        || request.deadline_at < request.issued_at
+    {
+        return Err(ProjectRegistrationError::Invalid(
+            "identifiant, nom, racine absolue et échéance cohérente sont obligatoires",
+        ));
+    }
+    let bind_request = ProjectBindRequest {
+        contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+        command_id: request.command_id.clone(),
+        issued_at: request.issued_at,
+        deadline_at: request.deadline_at,
+        project_id: request.project_id.clone(),
+        requested_root: request.requested_root.clone(),
+        backend: ProjectBackend::Host,
+    };
+    let canonical_request = serde_json::to_vec(&bind_request)
+        .map_err(|_| ProjectRegistrationError::Invalid("ProjectBindRequest non sérialisable"))?;
+    let record = store
+        .prepare_project_registration(&ProjectRegistrationIntent {
+            command_id: request.command_id.clone(),
+            proposed_project_id: request.project_id.clone(),
+            display_name: request.display_name.clone(),
+            requested_root: request.requested_root.clone(),
+            canonical_payload: canonical_request.clone(),
+            created_at: request.issued_at,
+            retry_until: request.deadline_at,
+        })
+        .map_err(|error| ProjectRegistrationError::Store(error.to_string()))?;
+    Ok(PreparedProjectRegistration {
+        record,
+        canonical_request,
+    })
+}
+
+/// Applique uniquement l'issue retournée par Bridget. Cette frontière ne
+/// déduit ni chemin ni statut depuis une base Bridget.
+pub fn resolve_project_registration(
+    store: &mut MaicieStore,
+    outcome: &ProjectBindOutcome,
+) -> Result<ProjectRegistrationRecord, ProjectRegistrationError> {
+    store
+        .resolve_project_registration(outcome)
+        .map_err(|error| ProjectRegistrationError::Store(error.to_string()))
+}
+
+/// Relit les octets d'une commande déjà préparée. Cette opération locale est
+/// la seule voie de reprise : elle ne fabrique jamais une nouvelle intention.
+pub fn project_registration_request_bytes(
+    store: &MaicieStore,
+    command_id: &str,
+) -> Result<Option<Vec<u8>>, ProjectRegistrationError> {
+    store
+        .project_registration_request_bytes(command_id)
+        .map_err(|error| ProjectRegistrationError::Store(error.to_string()))
 }
 
 /// Résultat applicatif d'une relève. Les octets de réponse sont exactement

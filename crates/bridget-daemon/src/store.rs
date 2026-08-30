@@ -2,7 +2,8 @@
 
 use bridget_transport::greffe_authorization::GreffeAuthorizationAttestation;
 use bridget_transport::protocol::{
-    CoordinationEventKind, GuichetLifecycleState, GuichetOutcome, ProjectBackend,
+    CoordinationEventKind, GuichetLifecycleState, GuichetOutcome,
+    PROJECT_REGISTRY_CONTRACT_VERSION, ProjectBackend, ProjectBindOutcome, ProjectBindStatus,
     ProjectRegistryRefusal, ServiceRequestOperation, ServiceRequestPayload,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
@@ -575,7 +576,14 @@ impl Store {
                  UNIQUE (command_id, operation, binding_generation)
              );
              CREATE INDEX IF NOT EXISTS idx_project_audit_events_project_observed
-                 ON project_audit_events(project_id, observed_at, audit_event_id);",
+                 ON project_audit_events(project_id, observed_at, audit_event_id);
+             CREATE TABLE IF NOT EXISTS project_binding_attempts (
+                 command_id TEXT PRIMARY KEY,
+                 project_id TEXT NOT NULL,
+                 canonical_root TEXT NOT NULL,
+                 outcome_json BLOB NOT NULL,
+                 observed_at INTEGER NOT NULL
+             );",
         )
         .map_err(StoreError::Sqlite)?;
         Ok(())
@@ -602,6 +610,121 @@ impl Store {
             )
             .map_err(StoreError::Sqlite)?;
         Ok(())
+    }
+
+    /// Admet une liaison initiale dans une transaction unique avec sa trace
+    /// d'audit. Le résultat est retenu par `command_id` afin qu'un retry après
+    /// crash retrouve exactement l'issue déjà rendue.
+    pub fn bind_project_registration(
+        &mut self,
+        command_id: &str,
+        project_id: &str,
+        canonical_root: &str,
+        observed_at: i64,
+    ) -> Result<ProjectBindOutcome, StoreError> {
+        if command_id.trim().is_empty()
+            || project_id.trim().is_empty()
+            || canonical_root.trim().is_empty()
+            || !Path::new(canonical_root).is_absolute()
+            || observed_at < 0
+        {
+            return Err(StoreError::Invariant("demande de liaison projet invalide"));
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sqlite)?;
+        if let Some(existing) = project_binding_attempt_for_command(&tx, command_id)? {
+            if existing.project_id != project_id || existing.canonical_root != canonical_root {
+                return Err(StoreError::ProjectRegistryRefusal(
+                    ProjectRegistryRefusal::EnvelopeMismatch,
+                ));
+            }
+            let outcome = serde_json::from_slice(&existing.outcome_json)
+                .map_err(|_| StoreError::Invariant("issue liaison projet corrompue"))?;
+            tx.commit().map_err(StoreError::Sqlite)?;
+            return Ok(outcome);
+        }
+
+        let outcome = if let Some(existing) = project_binding_for_project(&tx, project_id)? {
+            if existing.state == ProjectBindingState::Active
+                && existing.canonical_root == canonical_root
+            {
+                project_binding_active_outcome(
+                    command_id,
+                    project_id,
+                    existing.generation,
+                    observed_at,
+                )
+            } else {
+                project_binding_failed_outcome(
+                    command_id,
+                    project_id,
+                    if existing.state == ProjectBindingState::Disabled {
+                        ProjectRegistryRefusal::ProjectDisabled
+                    } else {
+                        ProjectRegistryRefusal::RebindRequired
+                    },
+                    observed_at,
+                )
+            }
+        } else if let Some(existing) = project_binding_for_root(&tx, canonical_root)? {
+            ProjectBindOutcome {
+                contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+                command_id: command_id.to_string(),
+                project_id: project_id.to_string(),
+                status: ProjectBindStatus::RegistrationConflict,
+                binding_generation: None,
+                backend: None,
+                reason: Some(ProjectRegistryRefusal::RootAlreadyBound),
+                existing_project_id: Some(existing.project_id),
+                existing_binding_generation: Some(existing.generation),
+                observed_at,
+            }
+        } else {
+            let binding = ProjectBinding::active(
+                project_id.to_string(),
+                canonical_root.to_string(),
+                ProjectBackend::Host,
+                observed_at,
+            )?;
+            tx.execute(
+                "INSERT INTO project_bindings (
+                     project_id, canonical_root, backend, state, generation,
+                     bound_at, updated_at, last_reason
+                 ) VALUES (?1, ?2, 'host', 'active', 1, ?3, ?3, NULL)",
+                params![project_id, canonical_root, observed_at],
+            )
+            .map_err(StoreError::Sqlite)?;
+            let audit = ProjectAuditEvent::for_mutation(
+                command_id,
+                project_id,
+                ProjectAuditOperation::Register,
+                binding.generation,
+                ProjectAuditOutcome::Applied,
+                None,
+                observed_at,
+            );
+            record_project_audit_event_in_transaction(&tx, &audit)?;
+            project_binding_active_outcome(command_id, project_id, binding.generation, observed_at)
+        };
+        let outcome_json = serde_json::to_vec(&outcome)
+            .map_err(|_| StoreError::Invariant("issue liaison projet non sérialisable"))?;
+        tx.execute(
+            "INSERT INTO project_binding_attempts (
+                 command_id, project_id, canonical_root, outcome_json, observed_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                command_id,
+                project_id,
+                canonical_root,
+                outcome_json,
+                observed_at
+            ],
+        )
+        .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+        Ok(outcome)
     }
 
     pub fn project_binding(&self, project_id: &str) -> Result<Option<ProjectBinding>, StoreError> {
@@ -702,41 +825,13 @@ impl Store {
         &mut self,
         event: &ProjectAuditEvent,
     ) -> Result<bool, StoreError> {
-        event.validate()?;
-        let outcome = serde_json::to_vec(&event.outcome)
-            .map_err(|_| StoreError::Invariant("issue audit projet non sérialisable"))?;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(StoreError::Sqlite)?;
-        let changed = tx
-            .execute(
-                "INSERT INTO project_audit_events (
-                     audit_event_id, command_id, project_id, operation,
-                     binding_generation, outcome_json, previous_root_reference, observed_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                 ON CONFLICT(audit_event_id) DO NOTHING",
-                params![
-                    event.audit_event_id,
-                    event.command_id,
-                    event.project_id,
-                    event.operation.as_db(),
-                    event.binding_generation as i64,
-                    outcome,
-                    event.previous_root_reference,
-                    event.observed_at,
-                ],
-            )
-            .map_err(StoreError::Sqlite)?;
-        if changed == 0 {
-            let existing = project_audit_event_for_id(&tx, &event.audit_event_id)?
-                .ok_or(StoreError::Invariant("audit projet absent après conflit"))?;
-            if existing != *event {
-                return Err(StoreError::Invariant("collision audit projet divergente"));
-            }
-        }
+        let changed = record_project_audit_event_in_transaction(&tx, event)?;
         tx.commit().map_err(StoreError::Sqlite)?;
-        Ok(changed == 1)
+        Ok(changed)
     }
 
     pub fn project_audit_events(
@@ -2271,6 +2366,73 @@ fn project_binding_for_root(
     stored.map(decode_project_binding).transpose()
 }
 
+#[derive(Debug)]
+struct StoredProjectBindingAttempt {
+    project_id: String,
+    canonical_root: String,
+    outcome_json: Vec<u8>,
+}
+
+fn project_binding_attempt_for_command(
+    conn: &Connection,
+    command_id: &str,
+) -> Result<Option<StoredProjectBindingAttempt>, StoreError> {
+    conn.query_row(
+        "SELECT project_id, canonical_root, outcome_json
+         FROM project_binding_attempts WHERE command_id = ?1",
+        [command_id],
+        |row| {
+            Ok(StoredProjectBindingAttempt {
+                project_id: row.get(0)?,
+                canonical_root: row.get(1)?,
+                outcome_json: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(StoreError::Sqlite)
+}
+
+fn project_binding_active_outcome(
+    command_id: &str,
+    project_id: &str,
+    generation: u64,
+    observed_at: i64,
+) -> ProjectBindOutcome {
+    ProjectBindOutcome {
+        contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+        command_id: command_id.to_string(),
+        project_id: project_id.to_string(),
+        status: ProjectBindStatus::Active,
+        binding_generation: Some(generation),
+        backend: Some(ProjectBackend::Host),
+        reason: None,
+        existing_project_id: None,
+        existing_binding_generation: None,
+        observed_at,
+    }
+}
+
+fn project_binding_failed_outcome(
+    command_id: &str,
+    project_id: &str,
+    reason: ProjectRegistryRefusal,
+    observed_at: i64,
+) -> ProjectBindOutcome {
+    ProjectBindOutcome {
+        contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+        command_id: command_id.to_string(),
+        project_id: project_id.to_string(),
+        status: ProjectBindStatus::BindingFailed,
+        binding_generation: None,
+        backend: None,
+        reason: Some(reason),
+        existing_project_id: None,
+        existing_binding_generation: None,
+        observed_at,
+    }
+}
+
 fn project_registry_refusal_name(reason: ProjectRegistryRefusal) -> &'static str {
     match reason {
         ProjectRegistryRefusal::InvalidContract => "invalid_contract",
@@ -2405,6 +2567,42 @@ fn project_audit_event_for_id(
     stored.map(decode_project_audit_event).transpose()
 }
 
+fn record_project_audit_event_in_transaction(
+    connection: &Connection,
+    event: &ProjectAuditEvent,
+) -> Result<bool, StoreError> {
+    event.validate()?;
+    let outcome = serde_json::to_vec(&event.outcome)
+        .map_err(|_| StoreError::Invariant("issue audit projet non sérialisable"))?;
+    let changed = connection
+        .execute(
+            "INSERT INTO project_audit_events (
+                 audit_event_id, command_id, project_id, operation,
+                 binding_generation, outcome_json, previous_root_reference, observed_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(audit_event_id) DO NOTHING",
+            params![
+                event.audit_event_id,
+                event.command_id,
+                event.project_id,
+                event.operation.as_db(),
+                event.binding_generation as i64,
+                outcome,
+                event.previous_root_reference,
+                event.observed_at,
+            ],
+        )
+        .map_err(StoreError::Sqlite)?;
+    if changed == 0 {
+        let existing = project_audit_event_for_id(connection, &event.audit_event_id)?
+            .ok_or(StoreError::Invariant("audit projet absent après conflit"))?;
+        if existing != *event {
+            return Err(StoreError::Invariant("collision audit projet divergente"));
+        }
+    }
+    Ok(changed == 1)
+}
+
 fn project_audit_event_id(
     command_id: &str,
     operation: ProjectAuditOperation,
@@ -2463,6 +2661,7 @@ pub struct LedgerEntry {
 pub enum StoreError {
     Sqlite(rusqlite::Error),
     Invariant(&'static str),
+    ProjectRegistryRefusal(ProjectRegistryRefusal),
     FrameTooLarge { max_frame_bytes: usize },
 }
 
@@ -2471,6 +2670,9 @@ impl std::fmt::Display for StoreError {
         match self {
             StoreError::Sqlite(e) => write!(f, "SQLite: {}", e),
             StoreError::Invariant(detail) => write!(f, "invariant store: {detail}"),
+            StoreError::ProjectRegistryRefusal(reason) => {
+                write!(f, "refus registre projet: {reason:?}")
+            }
             StoreError::FrameTooLarge { max_frame_bytes } => {
                 write!(f, "trame guichet supérieure à {max_frame_bytes} octets")
             }
@@ -3589,6 +3791,49 @@ mod tests {
                 .as_deref()
                 .unwrap_or_default()
                 .contains("/srv/projects/one")
+        );
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn spec_065_enregistrement_projet_est_atomique_rejouable_et_audite() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-project-registration-{}.db",
+            Uuid::new_v4()
+        ));
+        let mut store = Store::open(&path).unwrap();
+
+        let accepted = store
+            .bind_project_registration("command-1", "project-1", "/srv/projects/one", 100)
+            .unwrap();
+        assert_eq!(accepted.status, ProjectBindStatus::Active);
+        assert_eq!(accepted.binding_generation, Some(1));
+        assert_eq!(accepted.backend, Some(ProjectBackend::Host));
+        assert_eq!(
+            store
+                .bind_project_registration("command-1", "project-1", "/srv/projects/one", 101)
+                .unwrap(),
+            accepted,
+            "le rejet après crash relit l'issue initiale exacte"
+        );
+        assert_eq!(store.project_audit_events("project-1").unwrap().len(), 1);
+
+        let collision = store
+            .bind_project_registration("command-2", "project-2", "/srv/projects/one", 102)
+            .unwrap();
+        assert_eq!(collision.status, ProjectBindStatus::RegistrationConflict);
+        assert_eq!(collision.existing_project_id.as_deref(), Some("project-1"));
+        assert_eq!(collision.existing_binding_generation, Some(1));
+
+        let rebind_required = store
+            .bind_project_registration("command-3", "project-1", "/srv/projects/two", 103)
+            .unwrap();
+        assert_eq!(rebind_required.status, ProjectBindStatus::BindingFailed);
+        assert_eq!(
+            rebind_required.reason,
+            Some(ProjectRegistryRefusal::RebindRequired)
         );
 
         drop(store);

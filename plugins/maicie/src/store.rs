@@ -630,6 +630,22 @@ impl MaicieStore {
             .transpose()
     }
 
+    /// Relit les octets immuables de l'outbox de liaison pour rejouer la même
+    /// commande après une interruption, sans construire une seconde intention.
+    pub fn project_registration_request_bytes(
+        &self,
+        command_id: &str,
+    ) -> Result<Option<Vec<u8>>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT canonical_request FROM project_registration_outbox WHERE command_id = ?1",
+                [command_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)
+    }
+
     /// Fige l'issue terminale renvoyée par Bridget et ne promeut l'identité
     /// qu'après une liaison host attestée. Un même résultat est rejouable;
     /// une issue différente pour la même commande est un conflit durable.

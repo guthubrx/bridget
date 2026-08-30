@@ -10,14 +10,16 @@ use bridget_transport::protocol::{
     COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal, ConnectionRole,
     DelegatedRuntimeEventFrame, DiskSpaceFact, ExecutionControlCommand, ExecutionControlOperation,
     ExecutionControlOutcome, ExecutionControlRefusal, IdempotencyIssue,
-    PROJECT_REGISTRY_CONTRACT_VERSION, PresenceMode, ProjectBindOutcome, ProjectBindStatus,
-    ProjectRegistryRefusal, REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION,
-    ServiceCapability, ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
+    PROJECT_REGISTRY_CONTRACT_VERSION, PresenceMode, ProjectBackend, ProjectBindOutcome,
+    ProjectBindRequest, ProjectBindStatus, ProjectRegistryRefusal,
+    REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal,
+    SpawnRefusal, StopOutcome, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -50,6 +52,7 @@ use crate::{
         ManagedIdentity, ManagedLaunch, ManagedMarkerStore, ManagedStatus, ManagedStderrStore,
         ManagedStopResult, RunningManagedChild, spawn_managed_bootstrap_with_stderr,
     },
+    project_policy::ProjectRootPolicy,
     recovery_trace::{
         REASON_ABSENT_FROM_FLEET, REASON_FROZEN_DEFINITION, REASON_NON_PERSISTENT, REASON_QUOTA,
         REASON_RECOVERY_FAILED, RecoveryLossEntry,
@@ -554,6 +557,9 @@ pub struct DaemonConfig {
     pub dedup_window: u64,
     pub quarantine_window: u64,
     pub retention_days: u32,
+    /// Politique de racines explicite. Son absence ne bloque pas le daemon,
+    /// mais ferme les seules mutations du registre projet.
+    pub project_root_policy_path: Option<PathBuf>,
 }
 
 impl Default for DaemonConfig {
@@ -568,6 +574,7 @@ impl Default for DaemonConfig {
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
         }
     }
 }
@@ -663,6 +670,11 @@ struct DaemonState {
     /// La capacité du guichet ne dépend jamais d'un nom déclaré : elle est
     /// attachée à cette négociation de service et disparaît avec la connexion.
     service_negotiations: HashMap<String, NegotiatedService>,
+    /// UID SO_PEERCRED observé à l'acceptation. Il ne vient jamais de JSON.
+    peer_uids: HashMap<String, u32>,
+    /// La politique est chargée une seule fois. Une erreur reste mémorisée et
+    /// n'affecte pas les routes historiques sans ProjectReference.
+    project_root_policy: Result<ProjectRootPolicy, ProjectRegistryRefusal>,
     /// Relevés 016 v2 en cours. Une entrée non fraîche reste volontairement
     /// muette jusqu'à une nouvelle souscription ayant atteint son snapshot.
     coordination_subscriptions: HashMap<String, CoordinationSubscription>,
@@ -2250,6 +2262,10 @@ impl DaemonState {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         std::fs::create_dir_all(config.socket_path.parent().unwrap())?;
         let mut store = Store::open(&config.db_path)?;
+        let project_root_policy = match config.project_root_policy_path.as_deref() {
+            Some(path) => ProjectRootPolicy::load(path),
+            None => Err(ProjectRegistryRefusal::ProjectRootPolicyUnavailable),
+        };
         store.recover_guichet_claims_after_restart()?;
         let idempotency = IdempotencyStore::open(&config.db_path)?;
         let desired = DesiredStateStore::at_path(desired_state_path(config));
@@ -2302,6 +2318,8 @@ impl DaemonState {
             connection_roles: HashMap::new(),
             client_negotiations: HashMap::new(),
             service_negotiations: HashMap::new(),
+            peer_uids: HashMap::new(),
+            project_root_policy,
             coordination_subscriptions: HashMap::new(),
             attach_subscriptions: HashMap::new(),
             attach_views: HashMap::new(),
@@ -3477,6 +3495,7 @@ fn handle_connection(
     stream: UnixStream,
     state: Arc<Mutex<DaemonState>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let peer_uid = unix_peer_uid(&stream).ok();
     let conn_id = state
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -3493,6 +3512,9 @@ fn handle_connection(
             conn_id.clone(),
             Arc::new(Mutex::new(BufWriter::new(push_stream))),
         );
+        if let Some(peer_uid) = peer_uid {
+            st.peer_uids.insert(conn_id.clone(), peer_uid);
+        }
     }
     info!("connexion {} établie", conn_id);
 
@@ -3589,6 +3611,7 @@ fn handle_connection(
         st.connection_roles.remove(&conn_id);
         st.client_negotiations.remove(&conn_id);
         st.service_negotiations.remove(&conn_id);
+        st.peer_uids.remove(&conn_id);
         st.coordination_subscriptions.remove(&conn_id);
         let _ = st.store.release_guichet_claims(&conn_id);
         (writer_opt, removed, controls, views)
@@ -3617,10 +3640,86 @@ fn handle_connection(
     connection_result
 }
 
+#[cfg(target_os = "linux")]
+fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
+    let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut credentials as *mut libc::ucred).cast(),
+            &mut length,
+        )
+    };
+    if result != 0 || length != std::mem::size_of::<libc::ucred>() as libc::socklen_t {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(credentials.uid)
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
+    let mut uid: libc::uid_t = 0;
+    let mut gid: libc::gid_t = 0;
+    let result = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(uid)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
+fn unix_peer_uid(_stream: &UnixStream) -> std::io::Result<u32> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "SO_PEERCRED indisponible sur cette plateforme",
+    ))
+}
+
+fn project_registry_failure(
+    request: ProjectBindRequest,
+    reason: ProjectRegistryRefusal,
+    observed_at: i64,
+) -> DaemonToWrapper {
+    DaemonToWrapper::ProjectRegistryOutcome {
+        outcome: project_registry_failed_outcome(
+            request.contract_version,
+            request.command_id,
+            request.project_id,
+            reason,
+            observed_at,
+        ),
+    }
+}
+
+fn project_registry_failed_outcome(
+    contract_version: u16,
+    command_id: String,
+    project_id: String,
+    reason: ProjectRegistryRefusal,
+    observed_at: i64,
+) -> ProjectBindOutcome {
+    ProjectBindOutcome {
+        contract_version,
+        command_id,
+        project_id,
+        status: ProjectBindStatus::BindingFailed,
+        binding_generation: None,
+        backend: None,
+        reason: Some(reason),
+        existing_project_id: None,
+        existing_binding_generation: None,
+        observed_at,
+    }
+}
+
 fn is_guichet_frame(message: &WrapperToDaemon) -> bool {
     matches!(
         message,
         WrapperToDaemon::ServiceHello { .. }
+            | WrapperToDaemon::ProjectRegistryRequest { .. }
             | WrapperToDaemon::CoordinationSubscribe { .. }
             | WrapperToDaemon::ServiceRequest { .. }
             | WrapperToDaemon::GuichetClaimNext { .. }
@@ -3652,6 +3751,7 @@ fn raw_guichet_frame(line: &str) -> bool {
             matches!(
                 kind.as_str(),
                 "ServiceHello"
+                    | "project_registry_request"
                     | "coordination_subscribe"
                     | "service_request"
                     | "guichet_claim_next"
@@ -6548,29 +6648,91 @@ fn handle_wrapper_message(
 
     match msg {
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
-        // La persistance de la liaison et la preuve SO_PEERCRED arrivent dans
-        // T014. Dès cette fondation, la trame ne traverse toutefois que le
-        // rôle Service après capability exacte, puis répond de façon fermée.
         WrapperToDaemon::ProjectRegistryRequest { request } => {
-            let reason = if request.contract_version != PROJECT_REGISTRY_CONTRACT_VERSION {
-                ProjectRegistryRefusal::ProjectRegistryVersionUnsupported
-            } else {
-                ProjectRegistryRefusal::StoreUnavailable
+            let observed_at = unix_now_secs();
+            if request.contract_version != PROJECT_REGISTRY_CONTRACT_VERSION {
+                return Some(project_registry_failure(
+                    request,
+                    ProjectRegistryRefusal::ProjectRegistryVersionUnsupported,
+                    observed_at,
+                ));
+            }
+            if request.project_id.trim().is_empty() {
+                return Some(project_registry_failure(
+                    request,
+                    ProjectRegistryRefusal::InvalidProjectId,
+                    observed_at,
+                ));
+            }
+            if request.issued_at < 0
+                || request.deadline_at < request.issued_at
+                || observed_at > request.deadline_at
+            {
+                return Some(project_registry_failure(
+                    request,
+                    ProjectRegistryRefusal::IdempotencyExpired,
+                    observed_at,
+                ));
+            }
+            if request.backend != ProjectBackend::Host {
+                return Some(project_registry_failure(
+                    request,
+                    ProjectRegistryRefusal::InvalidContract,
+                    observed_at,
+                ));
+            }
+            let policy = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                if st.peer_uids.get(conn_id).copied() != Some(unsafe { libc::geteuid() }) {
+                    return Some(project_registry_failure(
+                        request,
+                        ProjectRegistryRefusal::PeerUidMismatch,
+                        observed_at,
+                    ));
+                }
+                match &st.project_root_policy {
+                    Ok(policy) => policy.clone(),
+                    Err(reason) => {
+                        return Some(project_registry_failure(request, *reason, observed_at));
+                    }
+                }
             };
-            Some(DaemonToWrapper::ProjectRegistryOutcome {
-                outcome: ProjectBindOutcome {
-                    contract_version: request.contract_version,
-                    command_id: request.command_id,
-                    project_id: request.project_id,
-                    status: ProjectBindStatus::BindingFailed,
-                    binding_generation: None,
-                    backend: None,
-                    reason: Some(reason),
-                    existing_project_id: None,
-                    existing_binding_generation: None,
-                    observed_at: unix_now_secs(),
-                },
-            })
+            let canonical_root = match policy
+                .validate_requested_root(std::path::Path::new(&request.requested_root))
+            {
+                Ok(root) => root,
+                Err(reason) => return Some(project_registry_failure(request, reason, observed_at)),
+            };
+            let outcome = state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .store
+                .bind_project_registration(
+                    &request.command_id,
+                    &request.project_id,
+                    canonical_root.to_string_lossy().as_ref(),
+                    observed_at,
+                )
+                .unwrap_or_else(|error| match error {
+                    StoreError::ProjectRegistryRefusal(reason) => project_registry_failed_outcome(
+                        request.contract_version,
+                        request.command_id.clone(),
+                        request.project_id.clone(),
+                        reason,
+                        observed_at,
+                    ),
+                    other => {
+                        warn!("liaison projet indisponible: {other}");
+                        project_registry_failed_outcome(
+                            request.contract_version,
+                            request.command_id.clone(),
+                            request.project_id.clone(),
+                            ProjectRegistryRefusal::StoreUnavailable,
+                            observed_at,
+                        )
+                    }
+                });
+            Some(DaemonToWrapper::ProjectRegistryOutcome { outcome })
         }
         WrapperToDaemon::DelegatedRuntimeEvent {
             execution_id,
@@ -8912,7 +9074,7 @@ mod matrice_roles_tests {
     use super::*;
     use std::io::{BufRead, BufReader, BufWriter, Write};
     use std::os::unix::fs::PermissionsExt;
-    use std::os::unix::net::UnixListener;
+    use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::PathBuf;
     use std::sync::mpsc;
     use std::thread;
@@ -8978,10 +9140,189 @@ mod matrice_roles_tests {
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
         };
         let (managed_tx, _managed_rx) = mpsc::channel();
         let state = Arc::new(Mutex::new(DaemonState::new(&config, managed_tx).unwrap()));
         (state, config)
+    }
+
+    fn configure_project_policy(state: &mut DaemonState) -> std::path::PathBuf {
+        let fixture_root = state
+            .fixture_root
+            .as_ref()
+            .map(|fixture| fixture.0.clone())
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!(
+                    "bridget-project-policy-{}-{}",
+                    std::process::id(),
+                    Uuid::new_v4()
+                ))
+            });
+        let allowed_root = fixture_root.join("projects");
+        std::fs::create_dir_all(allowed_root.join("worktree")).unwrap();
+        let policy_path = fixture_root.join("project-root-policy.json");
+        std::fs::write(
+            &policy_path,
+            serde_json::json!({
+                "contract_version": 1,
+                "allowed_project_roots": [allowed_root],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        state.project_root_policy = ProjectRootPolicy::load(&policy_path);
+        allowed_root
+    }
+
+    #[test]
+    fn spec_065_daemon_lie_apres_policy_uid_et_negociation_et_rejoue_l_issue() {
+        let (shared, config) = etat_nu("project-registry");
+        let allowed_root = configure_project_policy(&mut shared.lock().unwrap());
+        let connection = "project-registry-service";
+        shared
+            .lock()
+            .unwrap()
+            .peer_uids
+            .insert(connection.to_string(), unsafe { libc::geteuid() });
+        let now = unix_now_secs();
+        assert!(matches!(
+            handle_wrapper_message(
+                connection,
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Service,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Service
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                connection,
+                WrapperToDaemon::ServiceHello {
+                    version: SERVICE_CONTRACT_VERSION,
+                    service: "maicie".to_string(),
+                    issuer_scope: "065_project_registry_0123456789abcdef".to_string(),
+                    capabilities: vec![ServiceCapability::ProjectRegistryV1],
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ServiceWelcome { capabilities, .. })
+                if capabilities == vec![ServiceCapability::ProjectRegistryV1]
+        ));
+        let request = WrapperToDaemon::ProjectRegistryRequest {
+            request: ProjectBindRequest {
+                contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+                command_id: "project-command-1".to_string(),
+                issued_at: now,
+                deadline_at: now + 60,
+                project_id: "project-1".to_string(),
+                requested_root: allowed_root.join("worktree/..").display().to_string(),
+                backend: ProjectBackend::Host,
+            },
+        };
+        let response = handle_wrapper_message(connection, request.clone(), &shared);
+        assert!(matches!(
+            &response,
+            Some(DaemonToWrapper::ProjectRegistryOutcome { outcome })
+                if outcome.status == ProjectBindStatus::Active
+                    && outcome.binding_generation == Some(1)
+                    && outcome.backend == Some(ProjectBackend::Host)
+        ));
+        let first_outcome = match response {
+            Some(DaemonToWrapper::ProjectRegistryOutcome { outcome }) => outcome,
+            other => panic!("issue projet inattendue: {other:?}"),
+        };
+        assert!(matches!(
+            handle_wrapper_message(connection, request, &shared),
+            Some(DaemonToWrapper::ProjectRegistryOutcome { outcome }) if outcome == first_outcome
+        ));
+        let collision = handle_wrapper_message(
+            connection,
+            WrapperToDaemon::ProjectRegistryRequest {
+                request: ProjectBindRequest {
+                    contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+                    command_id: "project-command-2".to_string(),
+                    issued_at: now,
+                    deadline_at: now + 60,
+                    project_id: "project-2".to_string(),
+                    requested_root: allowed_root.display().to_string(),
+                    backend: ProjectBackend::Host,
+                },
+            },
+            &shared,
+        );
+        assert!(matches!(
+            collision,
+            Some(DaemonToWrapper::ProjectRegistryOutcome { outcome })
+                if outcome.status == ProjectBindStatus::RegistrationConflict
+                    && outcome.existing_project_id.as_deref() == Some("project-1")
+                    && outcome.existing_binding_generation == Some(1)
+        ));
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .store
+                .project_audit_events("project-1")
+                .unwrap()
+                .len(),
+            1
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn spec_065_daemon_refuse_la_mutation_projet_sans_uid_pair() {
+        let (shared, config) = etat_nu("project-registry-uid");
+        let connection = "project-registry-no-peer";
+        let now = unix_now_secs();
+        let _ = handle_wrapper_message(
+            connection,
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Service,
+            },
+            &shared,
+        );
+        let _ = handle_wrapper_message(
+            connection,
+            WrapperToDaemon::ServiceHello {
+                version: SERVICE_CONTRACT_VERSION,
+                service: "maicie".to_string(),
+                issuer_scope: "065_project_registry_0123456789abcdef".to_string(),
+                capabilities: vec![ServiceCapability::ProjectRegistryV1],
+            },
+            &shared,
+        );
+        assert!(matches!(
+            handle_wrapper_message(
+                connection,
+                WrapperToDaemon::ProjectRegistryRequest {
+                    request: ProjectBindRequest {
+                        contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+                        command_id: "project-command-uid".to_string(),
+                        issued_at: now,
+                        deadline_at: now + 60,
+                        project_id: "project-uid".to_string(),
+                        requested_root: "/tmp/project-uid".to_string(),
+                        backend: ProjectBackend::Host,
+                    },
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ProjectRegistryOutcome { outcome })
+                if outcome.reason == Some(ProjectRegistryRefusal::PeerUidMismatch)
+        ));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn spec_065_peer_uid_est_lu_sur_la_socket_unix_locale() {
+        let (stream, _peer) = UnixStream::pair().unwrap();
+        assert_eq!(unix_peer_uid(&stream).unwrap(), unsafe { libc::geteuid() });
     }
 
     #[test]
@@ -10051,6 +10392,7 @@ mod presence_tests {
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
         };
         let (managed_tx, _managed_rx) = mpsc::channel();
         let mut state = DaemonState::new(&config, managed_tx).unwrap();
@@ -10158,6 +10500,7 @@ mod presence_tests {
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
         };
         let _home_lock = HOME_REGISTRY_LOCK.lock().unwrap();
         let (managed_tx, _managed_rx) = mpsc::channel();
@@ -10503,6 +10846,7 @@ mod presence_tests {
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
         };
         let (managed_tx, _managed_rx) = mpsc::channel();
         let mut state = DaemonState::new(&config, managed_tx).unwrap();
@@ -10595,6 +10939,7 @@ mod presence_tests {
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
         }
     }
 
@@ -16171,6 +16516,7 @@ mod presence_tests {
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
         };
         let (managed_tx, _managed_rx) = mpsc::channel();
         let mut state = DaemonState::new(&config, managed_tx).unwrap();
@@ -16795,6 +17141,7 @@ mod presence_tests {
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
         };
         let (managed_tx, managed_rx) = mpsc::channel();
         let mut state = DaemonState::new(&config, managed_tx.clone()).unwrap();

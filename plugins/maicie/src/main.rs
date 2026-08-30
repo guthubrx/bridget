@@ -10,12 +10,15 @@ use maicie::MAICIE_IDENTITY;
 use maicie::app::{
     CatalogueReconcileError, DelegateError, DelegateRequest, DelegateResult, DelegationCandidate,
     LocalProfileApproval, ObjectiveError, ProfileActivationError, ProfileActivationProposalRequest,
-    add_participant, approve_profile_activation, delegated_participants,
-    propose_profile_activation, reconcile_catalogue_from_store, remove_participant, status,
-    stored_profile_activation_proposal, summarize,
+    ProjectRegistrationError, ProjectRegistrationRequest, add_participant,
+    approve_profile_activation, delegated_participants, prepare_project_registration,
+    project_registration_request_bytes, propose_profile_activation, reconcile_catalogue_from_store,
+    remove_participant, resolve_project_registration, status, stored_profile_activation_proposal,
+    summarize,
 };
 use maicie::bridget_client::{
-    AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits, DaemonIdentity,
+    AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits,
+    DaemonIdentity, ProjectRegistryClient,
 };
 use maicie::catalogue::{self, AppendOutcome, CatalogueError, CatalogueJournal};
 use maicie::config::{ConfigError, MaicieConfig};
@@ -46,8 +49,8 @@ use maicie::routines::{
 };
 use maicie::runtime::{RuntimeNature, RuntimeObservation, RuntimeSignal, RuntimeSubscription};
 use maicie::store::{
-    CompteursRefusDelegationLocale, MaicieStore, ObjectiveSnapshot, ResourceRangeReservation,
-    SchemaPreflight, StoreError,
+    CompteursRefusDelegationLocale, MaicieStore, ObjectiveSnapshot, ProjectRegistrationState,
+    ResourceRangeReservation, SchemaPreflight, StoreError,
 };
 use maicie::ui_projection::{UiProjectionError, publish_ui_mission_projection_v1};
 use serde::Serialize;
@@ -68,6 +71,7 @@ const EXIT_BRIDGET: u8 = 4;
 const EXIT_DELEGATE: u8 = 5;
 const EXIT_STORE: u8 = 6;
 const MAX_STATUS_RUNTIME_OBSERVATIONS: usize = 256;
+const PROJECT_REGISTRATION_HORIZON_SECS: i64 = 300;
 use maicie::{LOCALITY_GUARD_ISSUER_SCOPE, ROUTINES_ISSUER_SCOPE, STATUS_ISSUER_SCOPE};
 
 fn main() -> ExitCode {
@@ -92,6 +96,7 @@ fn run(arguments: Vec<String>) -> Result<String, CliError> {
         Command::Status(status_args) => run_status(status_args, migrate),
         Command::Objective(objective_args) => run_objective(objective_args, migrate),
         Command::Profile(profile_args) => run_profile(profile_args, migrate),
+        Command::Project(project_args) => run_project(project_args, migrate),
         Command::Registre(registre_args) => run_registre(registre_args, migrate),
         Command::Plage(plage_args) => run_plage(plage_args, migrate),
         Command::Routine(routine_args) => run_routine(routine_args, migrate),
@@ -126,6 +131,7 @@ fn mission_projection_config(command: &Command) -> Option<PathBuf> {
         Command::Status(arguments) => Some(arguments.config.clone()),
         Command::Objective(arguments) => Some(arguments.config.clone()),
         Command::Profile(arguments) => Some(arguments.config.clone()),
+        Command::Project(arguments) => Some(arguments.config.clone()),
         Command::Registre(arguments) => Some(arguments.config.clone()),
         Command::Plage(arguments) => Some(arguments.config.clone()),
         Command::Routine(arguments) => Some(arguments.config.clone()),
@@ -640,6 +646,110 @@ fn reconcile_pending(
         .map_err(CliError::Reconcile)
 }
 
+fn run_project(arguments: ProjectArgs, migrate: bool) -> Result<String, CliError> {
+    let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+    let mut store = open_guarded_maicie_store(
+        &arguments.config,
+        &config,
+        BridgetClientLimits::default(),
+        migrate,
+    )?;
+    let (mut record, canonical_request) = match arguments.action {
+        ProjectAction::Register {
+            display_name,
+            requested_root,
+            project_id,
+            command_id,
+        } => {
+            let issued_at = unix_now()?;
+            let prepared = prepare_project_registration(
+                &mut store,
+                &ProjectRegistrationRequest {
+                    command_id: command_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+                    project_id: project_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+                    display_name,
+                    requested_root,
+                    issued_at,
+                    deadline_at: issued_at + PROJECT_REGISTRATION_HORIZON_SECS,
+                },
+            )
+            .map_err(CliError::ProjectRegistration)?;
+            (prepared.record, prepared.canonical_request)
+        }
+        ProjectAction::Resume { command_id } => {
+            let record = store
+                .project_registration(&command_id)
+                .map_err(CliError::Store)?
+                .ok_or(CliError::Usage("commande project inconnue"))?;
+            let canonical_request = project_registration_request_bytes(&store, &command_id)
+                .map_err(CliError::ProjectRegistration)?
+                .ok_or(CliError::Usage("outbox project absente"))?;
+            (record, canonical_request)
+        }
+    };
+
+    if record.outcome.is_none() {
+        let mut client =
+            ProjectRegistryClient::connect(&config.bridget_socket, store.issuer_scope())
+                .map_err(CliError::Bridget)?;
+        let outcome = client
+            .bind_exact_bytes(&canonical_request)
+            .map_err(CliError::Bridget)?;
+        record = resolve_project_registration(&mut store, &outcome)
+            .map_err(CliError::ProjectRegistration)?;
+    }
+    render_project_registration_output(&record, arguments.json)
+}
+
+#[derive(Serialize)]
+struct ProjectRegistrationOutput<'a> {
+    command_id: &'a str,
+    project_id: &'a str,
+    state: &'static str,
+    resolved_project_id: Option<&'a str>,
+    outcome: Option<&'a bridget_transport::protocol::ProjectBindOutcome>,
+    next_action: &'static str,
+}
+
+fn render_project_registration_output(
+    record: &maicie::store::ProjectRegistrationRecord,
+    json: bool,
+) -> Result<String, CliError> {
+    let state = match record.state {
+        ProjectRegistrationState::Prepared => "prepared",
+        ProjectRegistrationState::Binding => "binding",
+        ProjectRegistrationState::Bound => "bound",
+        ProjectRegistrationState::Failed => "failed",
+        ProjectRegistrationState::Expired => "expired",
+    };
+    let next_action = if record.outcome.is_some() {
+        "none"
+    } else {
+        "project resume --command-id"
+    };
+    let output = ProjectRegistrationOutput {
+        command_id: &record.command_id,
+        project_id: &record.identity.project_id,
+        state,
+        resolved_project_id: record.resolved_project_id.as_deref(),
+        outcome: record.outcome.as_ref(),
+        next_action,
+    };
+    if json {
+        serde_json::to_string(&output)
+            .map_err(|_| CliError::Usage("sortie project JSON indisponible"))
+    } else {
+        Ok(format!(
+            "project command_id={} project_id={} state={} resolved_project_id={} next_action={}",
+            output.command_id,
+            output.project_id,
+            output.state,
+            output.resolved_project_id.unwrap_or("-"),
+            output.next_action,
+        ))
+    }
+}
+
 fn run_delegate(arguments: DelegateArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
     let limits = BridgetClientLimits::default();
@@ -944,6 +1054,7 @@ enum Command {
     Status(StatusArgs),
     Objective(ObjectiveArgs),
     Profile(ProfileArgs),
+    Project(ProjectArgs),
     Registre(RegistreArgs),
     Plage(PlageArgs),
     Routine(RoutineArgs),
@@ -1100,6 +1211,26 @@ struct ProfileArgs {
 }
 
 #[derive(Debug)]
+struct ProjectArgs {
+    config: PathBuf,
+    action: ProjectAction,
+    json: bool,
+}
+
+#[derive(Debug)]
+enum ProjectAction {
+    Register {
+        display_name: String,
+        requested_root: String,
+        project_id: Option<String>,
+        command_id: Option<String>,
+    },
+    Resume {
+        command_id: String,
+    },
+}
+
+#[derive(Debug)]
 enum ProfileAction {
     Propose {
         objective_id: Uuid,
@@ -1124,15 +1255,94 @@ fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
         "status" => parse_status(tail).map(Command::Status),
         "objective" => parse_objective(tail).map(Command::Objective),
         "profile" => parse_profile(tail).map(Command::Profile),
+        "project" => parse_project(tail).map(Command::Project),
         "registre" => parse_registre(tail).map(Command::Registre),
         "plage" => parse_plage(tail).map(Command::Plage),
         "routine" => parse_routine(tail).map(Command::Routine),
         "preflight" => parse_preflight(tail).map(Command::Preflight),
         "migrate" => parse_migrate(tail).map(Command::Migrate),
         _ => Err(CliError::Usage(
-            "commande inconnue : delegate, status, objective, profile, registre, plage, routine, preflight ou migrate",
+            "commande inconnue : delegate, status, objective, profile, project, registre, plage, routine, preflight ou migrate",
         )),
     }
+}
+
+fn parse_project(arguments: &[String]) -> Result<ProjectArgs, CliError> {
+    let Some((action, tail)) = arguments.split_first() else {
+        return Err(CliError::Usage(
+            "action project obligatoire : register ou resume",
+        ));
+    };
+    let mut config = None;
+    let mut display_name = None;
+    let mut requested_root = None;
+    let mut project_id = None;
+    let mut command_id = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < tail.len() {
+        match tail[index].as_str() {
+            "--config" => set_once_path(&mut config, next_value(tail, &mut index, "--config")?)?,
+            "--name" => set_once_string(
+                &mut display_name,
+                next_value(tail, &mut index, "--name")?,
+                "name",
+            )?,
+            "--root" => set_once_string(
+                &mut requested_root,
+                next_value(tail, &mut index, "--root")?,
+                "root",
+            )?,
+            "--project-id" => set_once_string(
+                &mut project_id,
+                next_value(tail, &mut index, "--project-id")?,
+                "project-id",
+            )?,
+            "--command-id" => set_once_string(
+                &mut command_id,
+                next_value(tail, &mut index, "--command-id")?,
+                "command-id",
+            )?,
+            "--json" => {
+                if json {
+                    return Err(CliError::Usage("option --json dupliquée"));
+                }
+                json = true;
+            }
+            _ => return Err(CliError::Usage("option project inconnue")),
+        }
+        index += 1;
+    }
+    let config = config.ok_or(CliError::Usage("--config est obligatoire"))?;
+    let action = match action.as_str() {
+        "register" => ProjectAction::Register {
+            display_name: display_name.ok_or(CliError::Usage("--name est obligatoire"))?,
+            requested_root: requested_root.ok_or(CliError::Usage("--root est obligatoire"))?,
+            project_id,
+            command_id,
+        },
+        "resume" => {
+            if display_name.is_some() || requested_root.is_some() || project_id.is_some() {
+                return Err(CliError::Usage(
+                    "project resume n'accepte ni --name, ni --root, ni --project-id",
+                ));
+            }
+            ProjectAction::Resume {
+                command_id: command_id
+                    .ok_or(CliError::Usage("project resume exige --command-id"))?,
+            }
+        }
+        _ => {
+            return Err(CliError::Usage(
+                "action project inconnue : register ou resume",
+            ));
+        }
+    };
+    Ok(ProjectArgs {
+        config,
+        action,
+        json,
+    })
 }
 
 fn parse_preflight(arguments: &[String]) -> Result<PreflightArgs, CliError> {
@@ -3439,6 +3649,7 @@ enum CliError {
     },
     TargetEligibilityDivergence(String),
     Objective(ObjectiveError),
+    ProjectRegistration(ProjectRegistrationError),
     Store(StoreError),
     Reconcile(ReconcileError),
     Profile(ProfileError),
@@ -3459,6 +3670,7 @@ impl CliError {
             | Self::CatalogueReconcile(CatalogueReconcileError::Store(_)) => EXIT_STORE,
             Self::Reconcile(ReconcileError::Store(_)) => EXIT_STORE,
             Self::Objective(ObjectiveError::Store(_)) => EXIT_STORE,
+            Self::ProjectRegistration(ProjectRegistrationError::Store(_)) => EXIT_STORE,
             Self::ProfileActivation(ProfileActivationError::Store(_)) => EXIT_STORE,
             Self::Routine(RoutineError::Store(_)) => EXIT_STORE,
             Self::CatalogueReconcile(CatalogueReconcileError::Catalogue(_)) => EXIT_CONFIGURATION,
@@ -3471,6 +3683,7 @@ impl CliError {
             | Self::TargetUnavailableState { .. }
             | Self::TargetEligibilityDivergence(_) => EXIT_DELEGATE,
             Self::Objective(_) => EXIT_DELEGATE,
+            Self::ProjectRegistration(_) => EXIT_DELEGATE,
             Self::Profile(_) | Self::ProfileActivation(_) | Self::Routine(_) => EXIT_DELEGATE,
             Self::InstallPublish(_) | Self::Projection(_) => EXIT_STORE,
         }
@@ -3503,6 +3716,8 @@ impl CliError {
             Self::Objective(ObjectiveError::NotFound(_)) => "objective_not_found",
             Self::Objective(ObjectiveError::Store(_)) => "store",
             Self::Objective(ObjectiveError::Invalid(_)) => "objective_invalid",
+            Self::ProjectRegistration(ProjectRegistrationError::Store(_)) => "store",
+            Self::ProjectRegistration(_) => "project_registration_invalid",
             Self::Profile(_) => "profile_invalid",
             Self::ProfileActivation(ProfileActivationError::Store(_)) => "store",
             Self::ProfileActivation(_) => "profile_activation_invalid",
@@ -3572,6 +3787,7 @@ impl fmt::Display for CliError {
                 sanitize_terminal(target)
             ),
             Self::Objective(error) => error.fmt(formatter),
+            Self::ProjectRegistration(error) => error.fmt(formatter),
             Self::Store(error) => error.fmt(formatter),
             Self::Reconcile(error) => error.fmt(formatter),
             Self::Profile(error) => error.fmt(formatter),

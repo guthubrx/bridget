@@ -65,16 +65,7 @@ fn unknown_argument(command: &str, argument: &str) -> String {
 fn validate_zero_arity_command(command: &str, args: &[String]) -> Result<(), String> {
     if matches!(
         command,
-        "daemon"
-            | "mcp"
-            | "discover"
-            | "status"
-            | "version"
-            | "--version"
-            | "-v"
-            | "help"
-            | "--help"
-            | "-h"
+        "mcp" | "discover" | "status" | "version" | "--version" | "-v" | "help" | "--help" | "-h"
     ) && let Some(argument) = args.first()
     {
         return Err(unknown_argument(command, argument));
@@ -127,7 +118,7 @@ pub fn run() {
 
     // --- Sous-commandes daemon / client ---
     match cmd.as_str() {
-        "daemon" => cmd_daemon(),
+        "daemon" => cmd_daemon(&args[2..]),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
         "mcp" => cmd_mcp(),
@@ -1018,8 +1009,38 @@ fn resolve_cli_agent_name(file_name: Option<&str>, env_name: Option<&str>) -> St
     "human".to_string()
 }
 
-fn cmd_daemon() {
-    let config = DaemonConfig::default();
+fn cmd_daemon(args: &[String]) {
+    let mut project_root_policy_path = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--project-root-policy" => {
+                if project_root_policy_path.is_some() {
+                    eprintln!("bridget daemon: --project-root-policy dupliqué");
+                    std::process::exit(2);
+                }
+                index += 1;
+                let Some(path) = args.get(index).map(PathBuf::from) else {
+                    eprintln!("bridget daemon: --project-root-policy requiert un chemin absolu");
+                    std::process::exit(2);
+                };
+                if !path.is_absolute() {
+                    eprintln!("bridget daemon: --project-root-policy doit être absolu");
+                    std::process::exit(2);
+                }
+                project_root_policy_path = Some(path);
+            }
+            option => {
+                eprintln!("bridget daemon: option inconnue {option}");
+                std::process::exit(2);
+            }
+        }
+        index += 1;
+    }
+    let config = DaemonConfig {
+        project_root_policy_path,
+        ..DaemonConfig::default()
+    };
     match daemon::run(config) {
         Ok(_) => {}
         Err(e) => {
@@ -4010,7 +4031,6 @@ mod hook_tests {
     #[test]
     fn commandes_sans_arguments_refusent_le_surplus_qu_elles_recevront_en_production() {
         for command in [
-            "daemon",
             "mcp",
             "discover",
             "status",
@@ -4027,6 +4047,10 @@ mod hook_tests {
             assert!(error.contains("SURPLUS"), "argument absent de {error}");
             assert!(validate_zero_arity_command(command, &[]).is_ok());
         }
+        assert!(
+            validate_zero_arity_command("daemon", &argv(&["--project-root-policy", "/tmp/policy"]))
+                .is_ok()
+        );
         // `ledger` a quitté cette grammaire en recevant `--limit` : il ne doit
         // plus être refusé en amont, sinon l'option n'atteindrait jamais son
         // parseur. Le refus du surplus lui reste dû, mais par `parse_ledger_args`.
@@ -5192,6 +5216,7 @@ mod idempotency_projection_tests {
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
         };
         std::thread::spawn(move || {
             let _ = daemon::run(config);

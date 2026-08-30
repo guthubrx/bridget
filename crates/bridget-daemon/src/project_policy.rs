@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn spec_065_politique_refuse_schema_vide_inconnu_ou_frontiere_large() {
         let fixture = Fixture::new();
-        let daemon_home = std::env::var_os("HOME").map(PathBuf::from);
+        let daemon_home = super::daemon_home();
         let mut invalid_documents = vec![
             json!({"contract_version": 1, "allowed_project_roots": []}),
             json!({"contract_version": 2, "allowed_project_roots": [fixture.allowed]}),
