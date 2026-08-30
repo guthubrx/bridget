@@ -157,10 +157,13 @@ pub fn run() {
         })
     }
 
+    fn main_window(app: &tauri::AppHandle) -> Result<tauri::Window, String> {
+        app.get_window("main")
+            .ok_or_else(|| "La fenêtre Bridget Desktop est indisponible.".to_owned())
+    }
+
     fn arrange_panels(app: &tauri::AppHandle, panels: &PanelRegistry) -> Result<(), String> {
-        let main = app
-            .get_webview_window("main")
-            .ok_or_else(|| "La fenêtre Bridget Desktop est indisponible.".to_owned())?;
+        let main = main_window(app)?;
         let size = main.inner_size().map_err(as_message)?;
         let mut all = panels.panels().cloned().collect::<Vec<_>>();
         all.sort_by(|left, right| left.label.cmp(&right.label));
@@ -381,16 +384,14 @@ pub fn run() {
             let mut panels = state.panels.lock().map_err(as_message)?;
             panels.open(profile_id.clone(), url).map_err(as_message)?
         };
-        let main = app
-            .get_webview_window("main")
-            .ok_or_else(|| "La fenêtre Bridget Desktop est indisponible.".to_owned())?;
+        let main = main_window(&app)?;
         let external_url = panel
             .url
             .parse()
             .map_err(|_| "L'URL du relais local est invalide.")?;
         let child = WebviewBuilder::new(panel.label.clone(), WebviewUrl::External(external_url))
             .on_navigation(|url| url.scheme() == "http" && url.host_str() == Some("127.0.0.1"));
-        if let Err(error) = main.as_ref().window().add_child(
+        if let Err(error) = main.add_child(
             child,
             PhysicalPosition::new(0_i32, 82_i32),
             PhysicalSize::new(1_u32, 1_u32),
@@ -435,7 +436,7 @@ pub fn run() {
                 panels: Mutex::new(PanelRegistry::default()),
             });
             let handle = app.handle().clone();
-            if let Some(main) = app.get_webview_window("main") {
+            if let Some(main) = app.get_window("main") {
                 main.on_window_event(move |event| {
                     if matches!(event, tauri::WindowEvent::Resized(_)) {
                         if let Some(state) = handle.try_state::<DesktopState>() {
