@@ -1,6 +1,6 @@
 # SPEC-070 - Preuves d'activité et notifications de réponse
 
-**Statut** : Implémentée - correctif de remise validé localement, livraison UI en attente
+**Statut** : Livrée en production - relais UI redémarré et assets vérifiés
 
 ## Contexte observé
 

@@ -81,3 +81,14 @@ La mise en page réutilise les avatars existants, avec une taille réduite et un
 texte atténué. Son conteneur a la même largeur que le timeline, de sorte que les
 points, la bouille de remise et les activités réelles partagent le rail gauche
 des bulles agent.
+
+
+## Livraison du relais UI - 30 août 2026
+
+- `main` contient `170785a fix(ui): Distinguer remise et activité`.
+- Le binaire release de `bridget-daemon` a été reconstruit depuis `main`, puis
+  installé dans `/home/moi/.local/bin/bridget`.
+- `bridget-ui.service` a été redémarré et est actif ; les assets servis sur le
+  port local 17888 contiennent `deliveryVisualState` et
+  `delivery-activity__receipt`.
+- Le daemon métier et les agents actifs n’ont pas été redémarrés.
