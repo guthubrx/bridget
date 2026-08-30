@@ -299,6 +299,30 @@
         assert.equal(decision.showNewMessages, true);
       });
 
+      test("pastille_n_incrémente_que_les_nouvelles_bulles_texte_agent", () => {
+        const update = (seq, payload) => ({
+          kind: "record",
+          record: { session_id: "session-1", message_id: "message-1", seq, event: "update", payload },
+        });
+        const command = update(1, { kind: "command", title: "Exécute une commande" });
+        const firstText = update(2, { kind: "text", content: "Première réponse" });
+        const continuedText = update(3, { kind: "text", content: " qui continue" });
+        const nextCommand = update(4, { kind: "tool", tool: "Read" });
+        const resumedText = update(5, { kind: "text", content: "Réponse après l’outil" });
+
+        assert.equal(api.countNewAgentTextSegments([], [command]), 0);
+        assert.equal(api.countNewAgentTextSegments([command], [firstText]), 1);
+        assert.equal(api.countNewAgentTextSegments([command, firstText], [continuedText]), 0);
+        assert.equal(
+          api.countNewAgentTextSegments([command, firstText, continuedText, nextCommand], [resumedText]),
+          1,
+        );
+        const source = fs.readFileSync(__filename, "utf8");
+        assert.match(source, /scheduleLiveRender\(incomingTextCount\)/);
+        assert.doesNotMatch(source, /scheduleLiveRender\(accepted\.length\)/);
+        assert.match(source, /liveIncomingCount \+= Math\.max\(0, Number\(incomingCount\) \|\| 0\)/);
+      });
+
       test("etat_remise_ui_reste_fonde_sur_la_preuve_disponible", () => {
         assert.equal(api.deliveryStateLabel("accepted"), "envoi accepté · confirmation en attente");
         assert.equal(api.deliveryStateLabel("delivered"), "remis à l’agent");
@@ -3478,6 +3502,38 @@
     });
   }
 
+  function countNewAgentTextSegments(events, incoming) {
+    const lastSegmentByTurn = new Map();
+    let count = 0;
+    const consume = (entry, countTextSegment) => {
+      if (!entry || entry.kind !== "record" || !entry.record) return;
+      const record = entry.record;
+      const payload = record.payload && typeof record.payload === "object" ? record.payload : {};
+      const turn = recordKey(record);
+      if (!turn) return;
+      if (record.event === "update") {
+        if (payload.kind === "text") {
+          const content = text(payload.content, text(payload.text));
+          if (!content) return;
+          if (countTextSegment && lastSegmentByTurn.get(turn) !== "text") count += 1;
+          lastSegmentByTurn.set(turn, "text");
+          return;
+        }
+        if (JOURNAL_ACT_KINDS.has(payload.kind)) lastSegmentByTurn.set(turn, "activity");
+        return;
+      }
+      if (
+        (record.event === "provider_request" && isProviderApprovalRequest(payload))
+        || record.event === "permission"
+      ) {
+        lastSegmentByTurn.set(turn, "activity");
+      }
+    };
+    (Array.isArray(events) ? events : []).forEach((entry) => consume(entry, false));
+    (Array.isArray(incoming) ? incoming : []).forEach((entry) => consume(entry, true));
+    return count;
+  }
+
   function shouldSubmitKey(event) {
     return (
       event &&
@@ -5805,11 +5861,13 @@
 
     const applyIncoming = (event) => {
       state = applyWatchEvent(state, event);
-      renderThread(1);
+      renderThread(
+        event && event.kind === "message" && event.role === "agent" && text(event.text) ? 1 : 0,
+      );
     };
 
     const scheduleLiveRender = (incomingCount) => {
-      liveIncomingCount = Math.max(liveIncomingCount, Number(incomingCount) || 1);
+      liveIncomingCount += Math.max(0, Number(incomingCount) || 0);
       if (liveRenderTimer) return;
       liveRenderTimer = windowRef.setTimeout(() => {
         liveRenderTimer = null;
@@ -5868,6 +5926,10 @@
           notifyTerminal(record, event.agent);
           return true;
         });
+        const incomingTextCount = countNewAgentTextSegments(
+          state.timelines[state.selectedAgent] || [],
+          accepted,
+        );
         state = appendTimelineBatch(state, accepted);
         if (processed.streamEnded) {
           watchStreamEnded = true;
@@ -5875,7 +5937,7 @@
         replayingJournal = processed.decision.replayingJournal;
         if (processed.decision.render) {
           if (processed.decision.scrollMode === "live") {
-            scheduleLiveRender(accepted.length);
+            scheduleLiveRender(incomingTextCount);
             return;
           }
           if (liveRenderTimer) {
@@ -5932,7 +5994,7 @@
         try {
           const payload = JSON.parse(message.data);
           if (ingestThreadMessage(payload, agent)) {
-            renderThread(1);
+            renderThread(payload.role === "user" || !text(payload.text) ? 0 : 1);
           }
         } catch (_error) {
           applyIncoming({
@@ -6292,6 +6354,7 @@
     deliveryVisualState,
     notificationTarget,
     hasNewPendingReplayEvent,
+    countNewAgentTextSegments,
     shouldSubmitKey,
     completeExplicitSend,
     shouldMarkRead,
