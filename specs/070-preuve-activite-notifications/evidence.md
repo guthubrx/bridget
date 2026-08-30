@@ -109,3 +109,13 @@ pas en double sous le compositeur.
 Le résumé terminal ne répète plus les actes déjà projetés dans le fil. Les
 détails techniques du lot sont placés sous leur libellé et conservent leurs
 retours à la ligne réels.
+
+
+## Livraison de la séquence texte et outils - 30 août 2026
+
+- `main` contient `3364d90 fix(ui): Ordonner texte et actions`.
+- Le binaire release a été reconstruit depuis `main`, installé dans
+  `/home/moi/.local/bin/bridget`, puis `bridget-ui.service` a été redémarré.
+- Le service est actif et les assets locaux exposent `renderActivityBatch` et
+  `timeline-action-batch`. Le daemon métier et les agents actifs restent
+  inchangés.
