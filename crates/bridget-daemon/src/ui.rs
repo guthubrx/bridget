@@ -31,6 +31,7 @@ const UI_VERSION: u8 = 1;
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
 const MAX_HTTP_BODY_BYTES: usize = 64 * 1024;
 const MAX_UI_AGENT_NAME_BYTES: usize = 100;
+const MAX_UI_COMMAND_ID_BYTES: usize = 160;
 const MAX_UI_SSE_EVENTS: usize = 20_000;
 const MAX_UI_RECONNECT_ATTEMPTS: usize = 50;
 const UI_RECONNECT_DELAY: Duration = Duration::from_millis(100);
@@ -646,6 +647,8 @@ struct UiAgentRowV1 {
     model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     effort: Option<String>,
+    /// Valeur presente si et seulement si le cycle de vie est gere par Bridget.
+    persistent: Option<bool>,
     state: &'static str,
     /// État de connexion public, distinct de l'exécution durable.
     connection_state: &'static str,
@@ -679,6 +682,24 @@ struct UiSendRequestV1 {
     to: String,
     body: String,
     reply: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiStopRequestV1 {
+    version: u8,
+    name: String,
+    command_id: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct UiStopAcceptedV1 {
+    version: u8,
+    name: String,
+    command_id: String,
+    outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    survivors_killed: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -764,7 +785,7 @@ fn serve_connection(
     runtime: &UiRelayRuntime,
 ) -> Result<(), UiError> {
     let request = read_request(stream)?;
-    if request.path == "/v1/send" && request.method != "POST" {
+    if matches!(request.path.as_str(), "/v1/send" | "/v1/agents/stop") && request.method != "POST" {
         return write_text(stream, 405, "méthode non autorisée");
     }
     if request.method != "GET" && request.method != "POST" {
@@ -828,6 +849,18 @@ fn serve_connection(
         ("GET", "/") => write_asset(stream, "text/html; charset=utf-8", UI_INDEX, if_none_match),
         ("POST", "/v1/send") => match post_ui_message(config, runtime, &request.body) {
             Ok(response) => write_json(stream, 202, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("POST", "/v1/agents/stop") => match post_ui_stop(config, &request.body) {
+            Ok(response) => write_json(stream, 200, &response),
             Err((status, code, message)) => write_json(
                 stream,
                 status,
@@ -923,6 +956,137 @@ fn post_ui_message(
     }
     send_ui_message(&config.daemon_socket, request)
         .map_err(|error| (503, "send_failed", error.to_string()))
+}
+
+type UiStopError = (u16, &'static str, String);
+
+fn parse_ui_stop_request(body: &[u8]) -> Result<UiStopRequestV1, UiStopError> {
+    let request: UiStopRequestV1 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "invalid_request",
+            "Demande de décommissionnement invalide.".to_string(),
+        )
+    })?;
+    let command_id_valid = !request.command_id.is_empty()
+        && request.command_id.len() <= MAX_UI_COMMAND_ID_BYTES
+        && request.command_id.bytes().all(is_query_byte);
+    if request.version != UI_VERSION || validate_agent(&request.name).is_err() || !command_id_valid
+    {
+        return Err((
+            400,
+            "invalid_request",
+            "Demande de décommissionnement invalide.".to_string(),
+        ));
+    }
+    Ok(request)
+}
+
+fn validate_ui_stop_target(
+    agents: &[bridget_transport::protocol::AgentInfo],
+    name: &str,
+) -> Result<(), (u16, &'static str)> {
+    let Some(agent) = agents.iter().find(|agent| agent.name == name) else {
+        return Err((404, "agent_not_found"));
+    };
+    if agent.state == "stopped" {
+        return Err((409, "agent_stopped"));
+    }
+    if agent.persistent.is_none() {
+        return Err((409, "agent_not_managed"));
+    }
+    Ok(())
+}
+
+fn map_ui_stop_outcome(
+    request: &UiStopRequestV1,
+    outcome: bridget_transport::protocol::StopOutcome,
+) -> Result<UiStopAcceptedV1, UiStopError> {
+    use bridget_transport::protocol::StopOutcome;
+    match outcome {
+        StopOutcome::Stopped => Ok(UiStopAcceptedV1 {
+            version: UI_VERSION,
+            name: request.name.clone(),
+            command_id: request.command_id.clone(),
+            outcome: "stopped",
+            survivors_killed: None,
+        }),
+        StopOutcome::StoppedForced { survivors_killed } => Ok(UiStopAcceptedV1 {
+            version: UI_VERSION,
+            name: request.name.clone(),
+            command_id: request.command_id.clone(),
+            outcome: "stopped_forced",
+            survivors_killed: Some(survivors_killed),
+        }),
+        StopOutcome::NotManaged => Err((
+            409,
+            "agent_not_managed",
+            "Cet agent n'est pas géré par Bridget.".to_string(),
+        )),
+        StopOutcome::NotFound => Err((
+            404,
+            "agent_not_found",
+            "Cet agent est introuvable.".to_string(),
+        )),
+        StopOutcome::Timeout { .. } => Err((
+            504,
+            "stop_timeout",
+            "Le daemon n'a pas confirmé l'arrêt dans le délai.".to_string(),
+        )),
+    }
+}
+
+fn send_ui_stop(
+    socket_path: &Path,
+    request: &UiStopRequestV1,
+) -> Result<bridget_transport::protocol::StopOutcome, UiError> {
+    let stream = UnixStream::connect(socket_path)?;
+    let read_stream = stream.try_clone()?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::StopOrder {
+            name: request.name.clone(),
+            command_id: request.command_id.clone(),
+        },
+    )?;
+    match read_daemon(&mut reader)? {
+        DaemonToWrapper::StopResult {
+            command_id,
+            outcome,
+        } if command_id == request.command_id => Ok(outcome),
+        response => Err(UiError::Protocol(format!(
+            "StopResult corrélé attendu, reçu {response:?}"
+        ))),
+    }
+}
+
+fn post_ui_stop(config: &UiRelayConfig, body: &[u8]) -> Result<UiStopAcceptedV1, UiStopError> {
+    let request = parse_ui_stop_request(body)?;
+    let agents = read_agent_list(&config.daemon_socket).map_err(|_| {
+        (
+            503,
+            "daemon_unavailable",
+            "Le daemon Bridget est indisponible.".to_string(),
+        )
+    })?;
+    validate_ui_stop_target(&agents, &request.name).map_err(|(status, code)| {
+        let message = match code {
+            "agent_not_managed" => "Cet agent n'est pas géré par Bridget.",
+            "agent_stopped" => "Cet agent est déjà arrêté.",
+            _ => "Cet agent est introuvable.",
+        };
+        (status, code, message.to_string())
+    })?;
+    let outcome = send_ui_stop(&config.daemon_socket, &request).map_err(|_| {
+        (
+            503,
+            "daemon_unavailable",
+            "Le daemon Bridget est indisponible.".to_string(),
+        )
+    })?;
+    map_ui_stop_outcome(&request, outcome)
 }
 
 fn post_ui_search(
@@ -1338,6 +1502,7 @@ fn compose_agent_rows(
                 mode: agent.mode,
                 model: agent.model,
                 effort: agent.effort,
+                persistent: agent.persistent,
                 state: connection_state,
                 connection_state,
                 provider_age_secs: agent.last_seen_secs,
@@ -2229,6 +2394,7 @@ fn status_text(status: u16) -> &'static str {
         409 => "Conflict",
         500 => "Internal Server Error",
         503 => "Service Unavailable",
+        504 => "Gateway Timeout",
         _ => "Error",
     }
 }
@@ -2773,6 +2939,208 @@ mod tests {
             Err((409, "agent_stopped"))
         );
         assert_eq!(validate_ui_recipient(&agents, "vivant"), Ok(()));
+    }
+
+    #[test]
+    fn spec_073_contrat_stop_refuse_version_champs_et_identifiants_invalides() {
+        let valid =
+            parse_ui_stop_request(br#"{"version":1,"name":"agent-1","command_id":"stop-ui-123"}"#)
+                .unwrap();
+        assert_eq!(valid.name, "agent-1");
+        assert_eq!(valid.command_id, "stop-ui-123");
+
+        for body in [
+            br#"{"version":2,"name":"agent-1","command_id":"stop-ui-123"}"#.as_slice(),
+            br#"{"version":1,"name":"agent/1","command_id":"stop-ui-123"}"#.as_slice(),
+            br#"{"version":1,"name":"agent-1","command_id":""}"#.as_slice(),
+            br#"{"version":1,"name":"agent-1","command_id":"stop ui","extra":true}"#.as_slice(),
+        ] {
+            assert_eq!(
+                parse_ui_stop_request(body).unwrap_err().1,
+                "invalid_request"
+            );
+        }
+    }
+
+    #[test]
+    fn spec_073_garde_stop_exige_gestion_attestee_et_agent_actif() {
+        let mut managed = agent_info("managed", "connected");
+        managed.persistent = Some(false);
+        let external = agent_info("external", "connected");
+        let mut stopped = agent_info("stopped", "stopped");
+        stopped.persistent = Some(true);
+        let agents = vec![managed, external, stopped];
+
+        assert_eq!(validate_ui_stop_target(&agents, "managed"), Ok(()));
+        assert_eq!(
+            validate_ui_stop_target(&agents, "external"),
+            Err((409, "agent_not_managed"))
+        );
+        assert_eq!(
+            validate_ui_stop_target(&agents, "stopped"),
+            Err((409, "agent_stopped"))
+        );
+        assert_eq!(
+            validate_ui_stop_target(&agents, "absent"),
+            Err((404, "agent_not_found"))
+        );
+    }
+
+    #[test]
+    fn spec_073_mapping_stop_conserve_tous_les_verdicts() {
+        let request = UiStopRequestV1 {
+            version: UI_VERSION,
+            name: "managed".to_string(),
+            command_id: "stop-ui-123".to_string(),
+        };
+        let clean =
+            map_ui_stop_outcome(&request, bridget_transport::protocol::StopOutcome::Stopped)
+                .unwrap();
+        assert_eq!(clean.outcome, "stopped");
+        assert_eq!(clean.survivors_killed, None);
+        let forced = map_ui_stop_outcome(
+            &request,
+            bridget_transport::protocol::StopOutcome::StoppedForced {
+                survivors_killed: 2,
+            },
+        )
+        .unwrap();
+        assert_eq!(forced.outcome, "stopped_forced");
+        assert_eq!(forced.survivors_killed, Some(2));
+        for (outcome, status, code) in [
+            (
+                bridget_transport::protocol::StopOutcome::NotManaged,
+                409,
+                "agent_not_managed",
+            ),
+            (
+                bridget_transport::protocol::StopOutcome::NotFound,
+                404,
+                "agent_not_found",
+            ),
+            (
+                bridget_transport::protocol::StopOutcome::Timeout {
+                    state: "encore vivant".to_string(),
+                },
+                504,
+                "stop_timeout",
+            ),
+        ] {
+            let error = map_ui_stop_outcome(&request, outcome).unwrap_err();
+            assert_eq!((error.0, error.1), (status, code));
+        }
+    }
+
+    #[test]
+    fn spec_073_relais_stop_transmet_un_seul_stop_order() {
+        let socket_path = std::env::temp_dir().join(format!(
+            "bridget-ui-stop-{}.sock",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::ListAgents
+            ));
+            let mut managed = agent_info("managed", "connected");
+            managed.persistent = Some(false);
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::AgentList {
+                    agents: vec![managed]
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::StopOrder { ref name, ref command_id }
+                    if name == "managed" && command_id == "stop-ui-123"
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::StopResult {
+                    command_id: "stop-ui-123".to_string(),
+                    outcome: bridget_transport::protocol::StopOutcome::Stopped,
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+        });
+        let config = UiRelayConfig {
+            daemon_socket: socket_path.clone(),
+            maicie_config: PathBuf::new(),
+            bind: "127.0.0.1:0".parse().unwrap(),
+            token: "test".to_string(),
+        };
+        let response = post_ui_stop(
+            &config,
+            br#"{"version":1,"name":"managed","command_id":"stop-ui-123"}"#,
+        )
+        .unwrap();
+        assert_eq!(response.outcome, "stopped");
+        server.join().unwrap();
+        let _ = std::fs::remove_file(socket_path);
+    }
+
+    #[test]
+    fn spec_073_relais_refuse_un_agent_non_gere_avant_stop_order() {
+        let socket_path = std::env::temp_dir().join(format!(
+            "bridget-ui-stop-refus-{}.sock",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::ListAgents
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::AgentList {
+                    agents: vec![agent_info("external", "connected")]
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+        });
+        let config = UiRelayConfig {
+            daemon_socket: socket_path.clone(),
+            maicie_config: PathBuf::new(),
+            bind: "127.0.0.1:0".parse().unwrap(),
+            token: "test".to_string(),
+        };
+        let error = post_ui_stop(
+            &config,
+            br#"{"version":1,"name":"external","command_id":"stop-ui-123"}"#,
+        )
+        .unwrap_err();
+        assert_eq!((error.0, error.1), (409, "agent_not_managed"));
+        server.join().unwrap();
+        let _ = std::fs::remove_file(socket_path);
     }
 
     #[test]
@@ -3847,6 +4215,21 @@ mod tests {
         assert_eq!(waiting.mode, None);
         assert_eq!(waiting.model, None);
         assert_eq!(waiting.effort, None);
+    }
+
+    #[test]
+    fn spec_073_projection_ui_conserve_les_trois_etats_de_gestion() {
+        let mut persistent = agent_info("persistent", "connected");
+        persistent.persistent = Some(true);
+        let mut ephemeral = agent_info("ephemeral", "connected");
+        ephemeral.persistent = Some(false);
+        let external = agent_info("external", "connected");
+
+        let rows = compose_agent_rows(vec![persistent, ephemeral, external], &[]);
+
+        assert_eq!(rows[0].persistent, Some(true));
+        assert_eq!(rows[1].persistent, Some(false));
+        assert_eq!(rows[2].persistent, None);
     }
 
     #[test]

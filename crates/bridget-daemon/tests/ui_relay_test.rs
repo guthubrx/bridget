@@ -2,12 +2,14 @@
 
 use bridget_core::BridgetMessage;
 use bridget_daemon::ui::{UiRelay, UiRelayConfig};
-use bridget_transport::protocol::{LedgerScope, PresenceMode, decode, encode};
+use bridget_transport::protocol::{
+    AgentInfo, LedgerScope, PresenceMode, StopOutcome, decode, encode,
+};
 use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -394,6 +396,90 @@ fn response_json(response: &str) -> serde_json::Value {
     serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
 }
 
+fn managed_agent_info(name: &str) -> AgentInfo {
+    serde_json::from_value(serde_json::json!({
+        "name": name,
+        "agent_type": "ui-test",
+        "connection_id": "managed-connection",
+        "host": "test",
+        "transport": "cli",
+        "state": "idle",
+        "last_seen_secs": 0,
+        "reconnect_count": 0,
+        "persistent": false
+    }))
+    .unwrap()
+}
+
+fn spawn_stop_daemon(
+    socket: &Path,
+    expected_name: &'static str,
+    expected_command_id: &'static str,
+    stop_response: DaemonToWrapper,
+) -> thread::JoinHandle<()> {
+    let listener = UnixListener::bind(socket).unwrap();
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode::<WrapperToDaemon>(line.trim()).unwrap(),
+            WrapperToDaemon::Register { .. }
+        ));
+        writeln!(
+            writer,
+            "{}",
+            encode(&DaemonToWrapper::Registered {
+                name: "humain".to_string()
+            })
+            .unwrap()
+        )
+        .unwrap();
+        writer.flush().unwrap();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode::<WrapperToDaemon>(line.trim()).unwrap(),
+            WrapperToDaemon::JournalReady
+        ));
+
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode::<WrapperToDaemon>(line.trim()).unwrap(),
+            WrapperToDaemon::ListAgents
+        ));
+        writeln!(
+            writer,
+            "{}",
+            encode(&DaemonToWrapper::AgentList {
+                agents: vec![managed_agent_info(expected_name)]
+            })
+            .unwrap()
+        )
+        .unwrap();
+        writer.flush().unwrap();
+
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode::<WrapperToDaemon>(line.trim()).unwrap(),
+            WrapperToDaemon::StopOrder { ref name, ref command_id }
+                if name == expected_name && command_id == expected_command_id
+        ));
+        writeln!(writer, "{}", encode(&stop_response).unwrap()).unwrap();
+        writer.flush().unwrap();
+    })
+}
+
 fn read_until(stream: &mut TcpStream, expected: &str) -> String {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -627,6 +713,114 @@ fn get_sur_v1_send_reste_interdit_apres_ouverture_du_post() {
 
     let response = read_response(request(address, "/v1/send?token=jeton-get-send"));
     assert!(response.starts_with("HTTP/1.1 405"), "{response}");
+}
+
+#[test]
+fn spec_073_route_stop_verrouille_methode_jeton_et_version() {
+    let config = UiRelayConfig {
+        daemon_socket: PathBuf::from("/tmp/spec-073-guards-no-daemon.sock"),
+        maicie_config: PathBuf::from("/tmp/spec-073-guards-no-maicie.json"),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-stop-guards".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let method = read_response(request(address, "/v1/agents/stop?token=jeton-stop-guards"));
+    assert!(method.starts_with("HTTP/1.1 405"), "{method}");
+
+    let token = read_response(request_http(
+        address,
+        "POST",
+        "/v1/agents/stop",
+        Some(r#"{"version":1,"name":"managed","command_id":"stop-ui-guards"}"#),
+    ));
+    assert!(token.starts_with("HTTP/1.1 403"), "{token}");
+
+    let version = read_response(request_http(
+        address,
+        "POST",
+        "/v1/agents/stop?token=jeton-stop-guards",
+        Some(r#"{"version":2,"name":"managed","command_id":"stop-ui-guards"}"#),
+    ));
+    assert!(version.starts_with("HTTP/1.1 400"), "{version}");
+    assert_eq!(response_json(&version)["code"], "invalid_request");
+}
+
+#[test]
+fn spec_073_route_stop_relaie_le_verdict_correle() {
+    let root = root("stop-ok");
+    let socket = root.join("stop.sock");
+    let server = spawn_stop_daemon(
+        &socket,
+        "managed",
+        "stop-ui-http-ok",
+        DaemonToWrapper::StopResult {
+            command_id: "stop-ui-http-ok".to_string(),
+            outcome: StopOutcome::Stopped,
+        },
+    );
+    let config = UiRelayConfig {
+        daemon_socket: socket.clone(),
+        maicie_config: write_maicie_config(&root),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-stop-ok".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let response = read_response(request_http(
+        address,
+        "POST",
+        "/v1/agents/stop?token=jeton-stop-ok",
+        Some(r#"{"version":1,"name":"managed","command_id":"stop-ui-http-ok"}"#),
+    ));
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let payload = response_json(&response);
+    assert_eq!(payload["version"], 1);
+    assert_eq!(payload["name"], "managed");
+    assert_eq!(payload["command_id"], "stop-ui-http-ok");
+    assert_eq!(payload["outcome"], "stopped");
+
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn spec_073_route_stop_ferme_l_erreur_de_protocole() {
+    let root = root("stop-protocol");
+    let socket = root.join("stop.sock");
+    let server = spawn_stop_daemon(
+        &socket,
+        "managed",
+        "stop-ui-http-protocol",
+        DaemonToWrapper::AgentList { agents: Vec::new() },
+    );
+    let config = UiRelayConfig {
+        daemon_socket: socket.clone(),
+        maicie_config: write_maicie_config(&root),
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-stop-protocol".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let response = read_response(request_http(
+        address,
+        "POST",
+        "/v1/agents/stop?token=jeton-stop-protocol",
+        Some(r#"{"version":1,"name":"managed","command_id":"stop-ui-http-protocol"}"#),
+    ));
+    assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+    let payload = response_json(&response);
+    assert_eq!(payload["code"], "daemon_unavailable");
+    assert_eq!(payload["message"], "Le daemon Bridget est indisponible.");
+
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
