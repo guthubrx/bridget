@@ -128,6 +128,19 @@
       test("catalogue_runtime_et_mode_couvrent_la_matrice_attestee", () => {
         assert.equal(api.runtimeIdentity("codex-terra").product, "Codex");
         assert.equal(api.runtimeIdentity("claude-native").publisher, "Anthropic");
+        assert.equal(api.runtimeIdentity("anthropic").key, "claude");
+        assert.deepEqual(api.runtimeIdentity("glm"), {
+          key: "glm",
+          product: "GLM",
+          publisher: "Z.AI",
+          logo: "/providers/glm.svg",
+        });
+        assert.deepEqual(api.runtimeIdentity("deepseek"), {
+          key: "deepseek",
+          product: "DeepSeek",
+          publisher: "DeepSeek",
+          logo: "/providers/deepseek.svg",
+        });
         assert.equal(api.runtimeIdentity("gemini-cli").publisher, "Google");
         assert.equal(api.runtimeIdentity("future-runtime").logo, null);
         assert.equal(api.executionModeIdentity("tmux", "unix").label, "TMUX");
@@ -136,6 +149,12 @@
         assert.equal(api.executionModeIdentity("cli", "claude_stream_json").label, "FLUX");
         assert.equal(api.executionModeIdentity("cli", "unix").label, "MODE INCONNU");
         assert.equal(api.executionModeIdentity(null, "codex_app_server").label, "MODE INCONNU");
+      });
+
+      test("composeur_ne_montre_pas_de_metadonnees_techniques_du_relais", () => {
+        const index = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+        assert.doesNotMatch(index, /context-line/);
+        assert.doesNotMatch(index, /Dépôt et branche non fournis par le relais/);
       });
 
       test("position_fiche_identite_reste_dans_la_fenetre", () => {
@@ -2607,6 +2626,18 @@
       publisher: "Anthropic",
       logo: "/providers/claude.svg",
     }),
+    glm: Object.freeze({
+      key: "glm",
+      product: "GLM",
+      publisher: "Z.AI",
+      logo: "/providers/glm.svg",
+    }),
+    deepseek: Object.freeze({
+      key: "deepseek",
+      product: "DeepSeek",
+      publisher: "DeepSeek",
+      logo: "/providers/deepseek.svg",
+    }),
     cursor: Object.freeze({
       key: "cursor",
       product: "Cursor",
@@ -2757,9 +2788,15 @@
     if (normalized === "codex" || normalized.startsWith("codex-")) {
       return { ...RUNTIME_CATALOG.codex };
     }
-    if (normalized === "claude" || normalized === "claude-native") {
+    if (
+      normalized === "anthropic"
+      || normalized === "claude"
+      || normalized === "claude-native"
+    ) {
       return { ...RUNTIME_CATALOG.claude };
     }
+    if (normalized === "glm") return { ...RUNTIME_CATALOG.glm };
+    if (normalized === "deepseek") return { ...RUNTIME_CATALOG.deepseek };
     if (normalized === "cursor") return { ...RUNTIME_CATALOG.cursor };
     if (normalized === "gemini" || normalized === "gemini-cli") {
       return { ...RUNTIME_CATALOG.gemini };
@@ -4685,7 +4722,6 @@
     notificationControl: "notification-control",
     send: "send",
     sendState: "send-state",
-    contextLine: "context-line",
     detailPanel: "detail-panel",
     detailTitle: "detail-title",
     detailContent: "detail-content",
@@ -5760,9 +5796,6 @@
       if (peerProjection.state === "not_computed") {
         nodes.sourceState.textContent = `Traces inter-agents non calculées pour ${watchedAgent}.`;
         nodes.sourceState.dataset.state = "error";
-      }
-      if (snapshot.repository || snapshot.branch) {
-        nodes.contextLine.textContent = `${text(snapshot.repository, "dépôt inconnu")} · ${text(snapshot.branch, "branche inconnue")}`;
       }
       renderAgents();
       renderHeader();

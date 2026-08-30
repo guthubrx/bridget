@@ -53,6 +53,10 @@ pub struct AgentDefinition {
     /// daemon après application de la garde de facturation.
     #[serde(default)]
     pub pass_env: Vec<String>,
+    /// Répertoire de profil Claude Code, non secret, injecté par Bridget.
+    /// Les secrets restent dans settings.json avec droits stricts hors du registre.
+    #[serde(default)]
+    pub claude_config_dir: Option<String>,
     #[serde(default = "default_permissions")]
     pub permissions: String,
     #[serde(default = "default_queue_capacity")]
@@ -195,6 +199,7 @@ impl AgentRegistry {
             protocol: resolved.protocol.clone(),
             forbidden_env: resolved.forbidden_env.clone(),
             pass_env: resolved.pass_env.clone(),
+            claude_config_dir: resolved.claude_config_dir.clone(),
             permissions: resolved.permissions.clone(),
             queue_capacity: resolved.queue_capacity,
             notify_timeout_secs: resolved.notify_timeout_secs,
@@ -205,12 +210,19 @@ impl AgentRegistry {
             capabilities: resolved.capabilities.clone(),
         };
         let expected = resolved_definition(&definition)?;
-        let legacy_digest = expected.digest != resolved.digest
+        let digest_before_profile = definition.claude_config_dir.is_none()
+            && expected.digest != resolved.digest
+            && pre_profile_resolved_digest(&definition)? == resolved.digest;
+        let digest_before_capabilities = definition.claude_config_dir.is_none()
+            && expected.digest != resolved.digest
             && legacy_resolved_digest(&definition)? == resolved.digest;
-        if expected.digest != resolved.digest && !legacy_digest {
+        if expected.digest != resolved.digest
+            && !digest_before_profile
+            && !digest_before_capabilities
+        {
             return Err("digest de la définition figée invalide".to_string());
         }
-        if legacy_digest {
+        if digest_before_capabilities {
             definition.capabilities = legacy_capabilities_for(&definition);
         }
         let source = PathBuf::from("<définition-figée>");
@@ -510,6 +522,7 @@ fn registry_warnings(
         "protocol",
         "forbidden_env",
         "pass_env",
+        "claude_config_dir",
         "permissions",
         "queue_capacity",
         "notify_timeout_secs",
@@ -604,6 +617,24 @@ struct CanonicalResolvedDefinition<'a> {
     protocol: &'a str,
     forbidden_env: &'a [String],
     pass_env: &'a [String],
+    claude_config_dir: Option<&'a str>,
+    permissions: &'a str,
+    queue_capacity: usize,
+    notify_timeout_secs: u64,
+    mcp: CanonicalResolvedMcpDefinition<'a>,
+    capabilities: &'a AdapterCapabilities,
+}
+
+/// Forme de digest publiée avant l'ajout du profil Claude statique. Elle
+/// conserve les capacités L1 et ne peut donc être admise que pour une
+/// définition sans profil, déjà persistée par une version antérieure.
+#[derive(Serialize)]
+struct PreProfileCanonicalResolvedDefinition<'a> {
+    command: &'a str,
+    args: &'a [String],
+    protocol: &'a str,
+    forbidden_env: &'a [String],
+    pass_env: &'a [String],
     permissions: &'a str,
     queue_capacity: usize,
     notify_timeout_secs: u64,
@@ -653,6 +684,27 @@ fn legacy_resolved_digest(definition: &AgentDefinition) -> Result<String, String
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
+fn pre_profile_resolved_digest(definition: &AgentDefinition) -> Result<String, String> {
+    let canonical = PreProfileCanonicalResolvedDefinition {
+        command: &definition.command,
+        args: &definition.args,
+        protocol: &definition.protocol,
+        forbidden_env: &definition.forbidden_env,
+        pass_env: &definition.pass_env,
+        permissions: &definition.permissions,
+        queue_capacity: definition.queue_capacity,
+        notify_timeout_secs: definition.notify_timeout_secs,
+        mcp: CanonicalResolvedMcpDefinition {
+            interactive: &definition.mcp.interactive,
+            acp_session: definition.mcp.acp_session,
+        },
+        capabilities: &definition.capabilities,
+    };
+    let bytes = serde_json::to_vec(&canonical)
+        .map_err(|err| format!("définition pré-profil impossible à sérialiser: {err}"))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
 fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefinition, String> {
     let canonical = CanonicalResolvedDefinition {
         command: &definition.command,
@@ -660,6 +712,7 @@ fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefi
         protocol: &definition.protocol,
         forbidden_env: &definition.forbidden_env,
         pass_env: &definition.pass_env,
+        claude_config_dir: definition.claude_config_dir.as_deref(),
         permissions: &definition.permissions,
         queue_capacity: definition.queue_capacity,
         notify_timeout_secs: definition.notify_timeout_secs,
@@ -678,6 +731,7 @@ fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefi
         protocol: definition.protocol.clone(),
         forbidden_env: definition.forbidden_env.clone(),
         pass_env: definition.pass_env.clone(),
+        claude_config_dir: definition.claude_config_dir.clone(),
         permissions: definition.permissions.clone(),
         queue_capacity: definition.queue_capacity,
         notify_timeout_secs: definition.notify_timeout_secs,
@@ -717,6 +771,26 @@ fn validate_registry(
                 source.display()
             ));
         }
+        if matches!(name.as_str(), "glm" | "deepseek") && definition.claude_config_dir.is_none() {
+            return Err(format!(
+                "registre invalide {}: claude_config_dir requis pour '{name}'",
+                source.display()
+            ));
+        }
+        if let Some(profile) = definition.claude_config_dir.as_deref() {
+            if definition.protocol != "claude_stream_json" {
+                return Err(format!(
+                    "registre invalide {}: claude_config_dir exige claude_stream_json pour '{name}'",
+                    source.display()
+                ));
+            }
+            if !Path::new(profile).is_absolute() {
+                return Err(format!(
+                    "registre invalide {}: claude_config_dir absolu requis pour '{name}'",
+                    source.display()
+                ));
+            }
+        }
         validate_capabilities(name, &definition.capabilities, source)?;
         if !matches!(definition.permissions.as_str(), "allow" | "deny") {
             return Err(format!(
@@ -742,6 +816,17 @@ fn validate_registry(
         if definition.pass_env.len() > MAX_PASS_ENV_ENTRIES {
             return Err(format!(
                 "registre invalide {}: pass_env dépasse {MAX_PASS_ENV_ENTRIES} entrées pour '{name}'",
+                source.display()
+            ));
+        }
+        if definition.claude_config_dir.is_some()
+            && definition
+                .pass_env
+                .iter()
+                .any(|name| name == "CLAUDE_CONFIG_DIR")
+        {
+            return Err(format!(
+                "registre invalide {}: CLAUDE_CONFIG_DIR ne peut pas être hérité pour '{name}'",
                 source.display()
             ));
         }
@@ -871,6 +956,7 @@ fn definition(
         protocol: "acp".to_string(),
         forbidden_env: forbidden_env.iter().map(ToString::to_string).collect(),
         pass_env: pass_env.iter().map(ToString::to_string).collect(),
+        claude_config_dir: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
         notify_timeout_secs: DEFAULT_NOTIFY_TIMEOUT_SECS,
@@ -911,6 +997,7 @@ fn native_claude_definition() -> Result<AgentDefinition, String> {
         .into_iter()
         .map(str::to_string)
         .collect(),
+        claude_config_dir: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
         notify_timeout_secs: DEFAULT_NOTIFY_TIMEOUT_SECS,
@@ -975,6 +1062,7 @@ fn native_codex_definition() -> AgentDefinition {
         .into_iter()
         .map(str::to_string)
         .collect(),
+        claude_config_dir: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
         notify_timeout_secs: DEFAULT_NOTIFY_TIMEOUT_SECS,
@@ -1003,6 +1091,7 @@ fn native_cursor_definition() -> AgentDefinition {
             "ANTHROPIC_API_KEY".to_string(),
         ],
         pass_env: Vec::new(),
+        claude_config_dir: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
         notify_timeout_secs: DEFAULT_NOTIFY_TIMEOUT_SECS,
@@ -1317,6 +1406,72 @@ mod tests {
     }
 
     #[test]
+    fn profil_claude_est_absolu_reserve_au_transport_claude_et_fige_dans_le_digest() {
+        let root = test_root("claude-config-dir");
+        let profile = root.join("profile");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let profile = profile.to_string_lossy().into_owned();
+        let registry = AgentRegistry::from_json(
+            &serde_json::json!({
+                "agents": {
+                    "glm": {
+                        "command": "claude",
+                        "protocol": "claude_stream_json",
+                        "claude_config_dir": profile
+                    }
+                }
+            })
+            .to_string(),
+            "/tmp/agents.json",
+        )
+        .unwrap();
+        let resolved = registry.resolved_definition("glm").unwrap();
+        assert_eq!(
+            resolved.claude_config_dir.as_deref(),
+            Some(profile.as_str())
+        );
+
+        let without_profile = AgentRegistry::from_json(
+            r#"{"agents":{"anthropic":{"command":"claude","protocol":"claude_stream_json"}}}"#,
+            "/tmp/agents.json",
+        )
+        .unwrap()
+        .resolved_definition("anthropic")
+        .unwrap();
+        assert_ne!(resolved.digest, without_profile.digest);
+
+        let missing_profile = AgentRegistry::from_json(
+            r#"{"agents":{"glm":{"command":"claude","protocol":"claude_stream_json"}}}"#,
+            "/tmp/agents.json",
+        )
+        .unwrap_err();
+        assert!(missing_profile.contains("claude_config_dir requis"));
+
+        let relative = AgentRegistry::from_json(
+            r#"{"agents":{"glm":{"command":"claude","protocol":"claude_stream_json","claude_config_dir":"relative"}}}"#,
+            "/tmp/agents.json",
+        )
+        .unwrap_err();
+        assert!(relative.contains("claude_config_dir absolu"));
+
+        let wrong_transport = AgentRegistry::from_json(
+            r#"{"agents":{"cursor":{"command":"cursor-agent","protocol":"acp","claude_config_dir":"/tmp/profile"}}}"#,
+            "/tmp/agents.json",
+        )
+        .unwrap_err();
+        assert!(wrong_transport.contains("claude_stream_json"));
+
+        let inherited = AgentRegistry::from_json(
+            r#"{"agents":{"glm":{"command":"claude","protocol":"claude_stream_json","claude_config_dir":"/tmp/profile","pass_env":["CLAUDE_CONFIG_DIR"]}}}"#,
+            "/tmp/agents.json",
+        )
+        .unwrap_err();
+        assert!(inherited.contains("CLAUDE_CONFIG_DIR"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn definition_figee_historique_reste_reprise_avec_la_capacite_acp_de_migration() {
         let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
         let definition = registry.get("codex").unwrap().clone();
@@ -1327,6 +1482,23 @@ mod tests {
         let decoded: ResolvedAgentDefinition = serde_json::from_value(value).unwrap();
         assert_eq!(decoded.capabilities, AdapterCapabilities::default());
         assert!(AgentRegistry::from_resolved("codex", &decoded).is_ok());
+    }
+
+    #[test]
+    fn definition_figee_avant_profil_conserve_ses_capacites_a_la_reprise() {
+        let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
+        let definition = registry.get("codex").unwrap().clone();
+        let mut before_profile = resolved_definition(&definition).unwrap();
+        before_profile.digest = pre_profile_resolved_digest(&definition).unwrap();
+        let mut value = serde_json::to_value(&before_profile).unwrap();
+        value.as_object_mut().unwrap().remove("claude_config_dir");
+        let decoded: ResolvedAgentDefinition = serde_json::from_value(value).unwrap();
+
+        let restored = AgentRegistry::from_resolved("codex", &decoded).unwrap();
+        assert_eq!(
+            restored.get("codex").unwrap().capabilities,
+            definition.capabilities
+        );
     }
 
     #[test]

@@ -70,6 +70,8 @@ const UI_PROVIDER_OPENAI: &[u8] = include_bytes!("../assets/ui/providers/openai.
 const UI_PROVIDER_CLAUDE: &[u8] = include_bytes!("../assets/ui/providers/claude.svg");
 const UI_PROVIDER_CURSOR: &[u8] = include_bytes!("../assets/ui/providers/cursor.svg");
 const UI_PROVIDER_GEMINI: &[u8] = include_bytes!("../assets/ui/providers/gemini.svg");
+const UI_PROVIDER_GLM: &[u8] = include_bytes!("../assets/ui/providers/glm.svg");
+const UI_PROVIDER_DEEPSEEK: &[u8] = include_bytes!("../assets/ui/providers/deepseek.svg");
 
 #[derive(Debug, Clone)]
 pub struct UiRelayConfig {
@@ -809,6 +811,12 @@ fn serve_connection(
             }
             "/providers/gemini.svg" => {
                 return write_asset(stream, "image/svg+xml", UI_PROVIDER_GEMINI, if_none_match);
+            }
+            "/providers/glm.svg" => {
+                return write_asset(stream, "image/svg+xml", UI_PROVIDER_GLM, if_none_match);
+            }
+            "/providers/deepseek.svg" => {
+                return write_asset(stream, "image/svg+xml", UI_PROVIDER_DEEPSEEK, if_none_match);
             }
             _ => {}
         }
@@ -3754,6 +3762,8 @@ mod tests {
             "\"/providers/claude.svg\"",
             "\"/providers/cursor.svg\"",
             "\"/providers/gemini.svg\"",
+            "\"/providers/glm.svg\"",
+            "\"/providers/deepseek.svg\"",
         ] {
             assert!(
                 serve_body.contains(path),
@@ -3846,6 +3856,8 @@ mod tests {
             ("/providers/claude.svg", UI_PROVIDER_CLAUDE),
             ("/providers/cursor.svg", UI_PROVIDER_CURSOR),
             ("/providers/gemini.svg", UI_PROVIDER_GEMINI),
+            ("/providers/glm.svg", UI_PROVIDER_GLM),
+            ("/providers/deepseek.svg", UI_PROVIDER_DEEPSEEK),
         ] {
             let (relay, address) = spawn_asset_relay();
             let worker = thread::spawn(move || {

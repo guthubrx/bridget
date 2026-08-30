@@ -219,7 +219,6 @@ body:has(.agent-pane-resizer[data-dragging="true"]) {
 .source-state,
 .agent-row p,
 .conversation-header p,
-.context-line,
 .send-state,
 .system-event,
 .date-separator,
@@ -237,7 +236,6 @@ body:has(.agent-pane-resizer[data-dragging="true"]) {
 .agent-row__excerpt,
 .conversation-header p,
 .connection-indicator,
-.context-line,
 .send-state,
 .date-separator,
 .system-event,
@@ -1450,6 +1448,12 @@ code {
   padding: 0;
 }
 
+.agent-activity__details:not([open]) .agent-activity__act-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-activity__resolution {
   grid-column: 2;
   grid-row: 3;
@@ -1635,12 +1639,6 @@ code {
   opacity: 0.35;
 }
 
-.context-line {
-  max-width: 68rem;
-  margin: 0.45rem auto 0;
-  padding: 0 0.35rem;
-  font-size: 0.66rem;
-}
 
 .detail-panel {
   background: var(--surface-raised);

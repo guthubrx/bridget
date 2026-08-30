@@ -17,7 +17,8 @@ use bridget_transport::{ResolvedAgentDefinition, SpawnRefusal};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::os::unix::fs::PermissionsExt;
+use std::fs;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 const BASELINE_ENV: &[&str] = &["HOME", "PATH", "USER", "LANG", "TMPDIR"];
@@ -355,7 +356,44 @@ pub fn build_environment(
             env.insert(name.clone(), value.clone());
         }
     }
+    if let Some(profile) = definition.claude_config_dir.as_deref() {
+        validate_claude_profile_directory(profile)?;
+        env.insert("CLAUDE_CONFIG_DIR".to_string(), OsString::from(profile));
+    }
     Ok(env)
+}
+
+fn validate_claude_profile_directory(profile: &str) -> Result<(), SpawnRefusal> {
+    let path = Path::new(profile);
+    let metadata = fs::symlink_metadata(path).map_err(|err| SpawnRefusal::EnvUnfit {
+        detail: format!("profil Claude indisponible {}: {err}", path.display()),
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(SpawnRefusal::EnvUnfit {
+            detail: format!(
+                "profil Claude invalide {}: répertoire réel requis",
+                path.display()
+            ),
+        });
+    }
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return Err(SpawnRefusal::EnvUnfit {
+            detail: format!(
+                "profil Claude invalide {}: propriétaire inattendu",
+                path.display()
+            ),
+        });
+    }
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(SpawnRefusal::EnvUnfit {
+            detail: format!(
+                "profil Claude invalide {}: permissions {mode:04o}, attendu 0700 ou plus restrictif",
+                path.display()
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Intention : le répertoire du binaire courant est le **premier** élément du
@@ -613,6 +651,34 @@ mod tests {
             Some(directory.as_str()),
             "PATH géré sans préfixe du binaire courant: {path}"
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn profil_claude_prive_ecrase_toute_valeur_ambiante_et_refuse_les_droits_larges() {
+        let root = root("claude-profile");
+        let profile = root.join("profile");
+        fs::create_dir_all(&profile).unwrap();
+        fs::set_permissions(&profile, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut definition = registry("/bin/sh", "claude_stream_json", &[])
+            .get("fixture")
+            .unwrap()
+            .clone();
+        definition.claude_config_dir = Some(profile.to_string_lossy().into_owned());
+        let mut source = source(&root);
+        source.insert("CLAUDE_CONFIG_DIR".to_string(), OsString::from("/ambient"));
+        let env = build_environment(&definition, &source).unwrap();
+        assert_eq!(
+            env.get("CLAUDE_CONFIG_DIR"),
+            Some(&profile.as_os_str().to_owned())
+        );
+
+        fs::set_permissions(&profile, fs::Permissions::from_mode(0o755)).unwrap();
+        let refusal = build_environment(&definition, &source).unwrap_err();
+        assert!(matches!(
+            refusal,
+            SpawnRefusal::EnvUnfit { detail } if detail.contains("attendu 0700")
+        ));
         let _ = fs::remove_dir_all(root);
     }
 

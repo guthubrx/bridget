@@ -2696,6 +2696,7 @@ mod tests {
                 )
                 .to_string(),
             ],
+            provider_kind: "claude".to_string(),
             queue_capacity: 1,
             notify_timeout_secs: 2,
             session_store_root: None,

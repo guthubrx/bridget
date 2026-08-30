@@ -1649,6 +1649,7 @@ mod tests {
             protocol: "acp".to_string(),
             forbidden_env: vec!["API_KEY".to_string()],
             pass_env: Vec::new(),
+            claude_config_dir: None,
             permissions: "allow".to_string(),
             queue_capacity: 32,
             notify_timeout_secs: 600,

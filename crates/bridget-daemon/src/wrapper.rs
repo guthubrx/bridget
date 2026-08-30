@@ -2981,6 +2981,7 @@ fn launch_acp(
 /// Point d'entrée du wrapper supervisé. Le FD `managed-status` est fermé
 /// uniquement après Register, transport ACP, journal et relais initialisés.
 fn spawn_managed_session_transport(
+    agent_type: &str,
     definition: &crate::registry::AgentDefinition,
     native_args: &[String],
     mcp_environment: &[(OsString, OsString)],
@@ -3019,6 +3020,7 @@ fn spawn_managed_session_transport(
             let options = ClaudeStreamJsonOptions {
                 command: definition.command.clone(),
                 args: native_args.to_vec(),
+                provider_kind: agent_type.to_string(),
                 queue_capacity: definition.queue_capacity,
                 notify_timeout_secs: definition.notify_timeout_secs,
                 provider_observation: definition.capabilities.observed.clone(),
@@ -3233,6 +3235,7 @@ fn launch_acp_with_status(
     );
     let inherit_stderr = managed_reporter.is_some();
     let mut transport: Box<dyn ManagedSession> = spawn_managed_session_transport(
+        agent_type,
         definition,
         &native_args,
         &mcp_environment,
@@ -3609,6 +3612,7 @@ fn launch_acp_with_status(
                 break;
             }
             match spawn_managed_session_transport(
+                agent_type,
                 definition,
                 &native_args,
                 &mcp_environment,
@@ -7018,6 +7022,7 @@ mod reconnect_tests {
             protocol: "acp".to_string(),
             forbidden_env: forbidden_env.iter().map(ToString::to_string).collect(),
             pass_env: Vec::new(),
+            claude_config_dir: None,
             permissions: "allow".to_string(),
             queue_capacity: 32,
             notify_timeout_secs: 600,
@@ -7028,6 +7033,51 @@ mod reconnect_tests {
                 observed: None,
             },
         }
+    }
+
+    #[test]
+    fn transport_claude_managed_publie_le_type_fourni_au_wrapper() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-wrapper-provider-kind-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let definition = crate::registry::AgentDefinition {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "while IFS= read -r _; do :; done".to_string(),
+            ],
+            protocol: "claude_stream_json".to_string(),
+            forbidden_env: Vec::new(),
+            pass_env: Vec::new(),
+            claude_config_dir: None,
+            permissions: "allow".to_string(),
+            queue_capacity: 1,
+            notify_timeout_secs: 1,
+            mcp: crate::registry::McpDefinition::default(),
+            capabilities: bridget_transport::AdapterCapabilities::default(),
+        };
+        let transport = spawn_managed_session_transport(
+            "glm",
+            &definition,
+            &definition.args,
+            &[],
+            Vec::new(),
+            false,
+            &root,
+            Some("glm-test".to_string()),
+        )
+        .unwrap();
+        assert!(transport.drain_events().into_iter().any(|event| {
+            matches!(
+                event.kind,
+                ManagedEventKind::ProviderContextObserved { identity }
+                    if identity.provider_kind == "glm"
+            )
+        }));
+        transport.stop();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

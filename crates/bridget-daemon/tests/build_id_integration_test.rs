@@ -182,10 +182,14 @@ fn daemon_et_cli_reels_transmettent_et_comparent_le_build_id() {
     assert!(same_build.status.success());
     let rendu = String::from_utf8_lossy(&same_build.stdout).to_string();
     assert!(rendu.contains("Build-id daemon: daemon-build-test"));
+    let stderr = String::from_utf8_lossy(&same_build.stderr);
+    // L'identité égale ne doit produire aucun avertissement de version. En
+    // revanche l'hôte du banc peut légitimement publier son avertissement
+    // global de capacité disque : il ne dépend ni du daemon isolé ni du
+    // build-id que cette couture vérifie.
     assert!(
-        same_build.stderr.is_empty(),
-        "égalité silencieuse: {:?}",
-        same_build.stderr
+        stderr.lines().all(|line| line.starts_with("WARN disque:")),
+        "égalité avec un avertissement étranger au disque: {stderr:?}"
     );
 
     // La sonde d'identité doit rendre les DEUX valeurs que le daemon atteste,
@@ -239,7 +243,17 @@ fn daemon_et_cli_reels_transmettent_et_comparent_le_build_id() {
     let expected = format!(
         "daemon périmé sur {ici} (daemon-build-test) — client client-build-avance sur {ici} : {remediation}\n"
     );
-    assert_eq!(String::from_utf8_lossy(&different_build.stderr), expected);
+    let stderr = String::from_utf8_lossy(&different_build.stderr);
+    let disk_suffix = stderr
+        .strip_prefix(&expected)
+        .expect("le verdict de build-id doit rester le premier avertissement");
+    assert!(
+        disk_suffix.is_empty()
+            || disk_suffix
+                .lines()
+                .all(|line| line.starts_with("WARN disque:")),
+        "l'avertissement supplémentaire doit être limité au disque: {stderr:?}"
+    );
 
     daemon.stop();
 }

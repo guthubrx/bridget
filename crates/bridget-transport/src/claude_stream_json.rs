@@ -50,6 +50,8 @@ pub struct ClaudeStreamJsonOptions {
     pub command: String,
     /// Arguments de définition, dont l'éventuel `--model` demandé.
     pub args: Vec<String>,
+    /// Type déclaré par le registre, conservé dans les événements et les contextes.
+    pub provider_kind: String,
     pub queue_capacity: usize,
     pub notify_timeout_secs: u64,
     /// Racine durable `~/.cache/bridget/sessions` (même arbre que le journal).
@@ -90,6 +92,7 @@ pub struct ClaudeStreamJsonTransport {
     queue_capacity: usize,
     writer: Writer,
     child: Arc<Mutex<Child>>,
+    provider_kind: String,
     provider_observation: Option<ProviderObservation>,
     events: Arc<Mutex<VecDeque<ManagedEvent>>>,
     journal: Journal,
@@ -152,6 +155,7 @@ impl ClaudeStreamJsonTransport {
         let events = Arc::new(Mutex::new(VecDeque::new()));
         let journal = Arc::new(Mutex::new(None));
         let session_store_handle = Arc::new(Mutex::new(session_store));
+        let provider_kind = options.provider_kind.clone();
         let pinned_model = pinned_model_from_args(&options.args);
         let resume_bootstrap = attempted_resume.map(|attempted_id| ResumeBootstrap {
             attempted_id,
@@ -170,6 +174,7 @@ impl ClaudeStreamJsonTransport {
             alive.clone(),
             journal.clone(),
             session_store_handle.clone(),
+            provider_kind.clone(),
             pinned_model,
             resume_bootstrap,
         );
@@ -186,7 +191,7 @@ impl ClaudeStreamJsonTransport {
             &events,
             ManagedEventKind::ProviderContextObserved {
                 identity: ManagedProviderIdentity {
-                    provider_kind: "claude".to_string(),
+                    provider_kind: provider_kind.clone(),
                     provider_session_id: None,
                     provider_thread_id: None,
                     active_turn_id: None,
@@ -207,6 +212,7 @@ impl ClaudeStreamJsonTransport {
             queue,
             queue_capacity: options.queue_capacity,
             writer,
+            provider_kind,
             provider_observation: options.provider_observation,
             child,
             events,
@@ -355,7 +361,7 @@ impl ManagedSession for ClaudeStreamJsonTransport {
             .as_ref()
             .and_then(ProviderSessionStore::load);
         Some(ManagedProviderIdentity {
-            provider_kind: "claude".to_string(),
+            provider_kind: self.provider_kind.clone(),
             provider_session_id: session_id,
             provider_thread_id: None,
             active_turn_id: None,
@@ -674,6 +680,7 @@ fn spawn_claude_command(
         &ClaudeStreamJsonOptions {
             command: command_path.to_string(),
             args: args.to_vec(),
+            provider_kind: "claude".to_string(),
             queue_capacity: 1,
             notify_timeout_secs: 1,
             provider_observation: None,
@@ -893,6 +900,7 @@ fn spawn_reader(
     alive: Arc<AtomicBool>,
     journal: Journal,
     session_store: SessionStoreHandle,
+    provider_kind: String,
     pinned_model: Option<String>,
     resume_bootstrap: Option<ResumeBootstrap>,
 ) -> thread::JoinHandle<()> {
@@ -935,7 +943,7 @@ fn spawn_reader(
                     raw.clone(),
                     ManagedEventKind::ProviderContextObserved {
                         identity: ManagedProviderIdentity {
-                            provider_kind: "claude".to_string(),
+                            provider_kind: provider_kind.clone(),
                             provider_session_id: Some(session_id),
                             provider_thread_id: None,
                             active_turn_id: None,
@@ -1427,11 +1435,37 @@ mod tests {
                 )
                 .to_string(),
             ],
+            provider_kind: "claude".to_string(),
             queue_capacity: 2,
             notify_timeout_secs: 2,
             provider_observation: None,
             session_store_root: None,
             agent_name: None,
+        }
+    }
+
+    #[test]
+    fn provider_kind_reste_celui_declare_par_le_registre() {
+        for provider_kind in ["claude", "anthropic", "glm", "deepseek"] {
+            let mut configured = options();
+            configured.provider_kind = provider_kind.to_string();
+            let transport = ClaudeStreamJsonTransport::spawn(configured).unwrap();
+            let contexts = transport
+                .drain_events()
+                .into_iter()
+                .filter_map(|event| match event.kind {
+                    ManagedEventKind::ProviderContextObserved { identity } => {
+                        Some(identity.provider_kind)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(contexts, vec![provider_kind.to_string()]);
+            assert_eq!(
+                transport.provider_identity().unwrap().provider_kind,
+                provider_kind
+            );
+            transport.stop();
         }
     }
 
@@ -2353,6 +2387,7 @@ done
         let options = ClaudeStreamJsonOptions {
             command: fake.to_string_lossy().into_owned(),
             args: Vec::new(),
+            provider_kind: "claude".to_string(),
             queue_capacity: 2,
             notify_timeout_secs: 2,
             provider_observation: None,
@@ -2445,6 +2480,7 @@ exit 0
         let options_neuf = ClaudeStreamJsonOptions {
             command: fake.to_string_lossy().into_owned(),
             args: Vec::new(),
+            provider_kind: "claude".to_string(),
             queue_capacity: 2,
             notify_timeout_secs: 2,
             provider_observation: None,
@@ -2461,6 +2497,7 @@ exit 0
         let options_lent = ClaudeStreamJsonOptions {
             command: fake.to_string_lossy().into_owned(),
             args: Vec::new(),
+            provider_kind: "claude".to_string(),
             queue_capacity: 2,
             notify_timeout_secs: 2,
             provider_observation: None,

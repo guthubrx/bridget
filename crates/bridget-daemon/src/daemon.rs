@@ -17042,6 +17042,7 @@ mod presence_tests {
                 protocol: "acp".to_string(),
                 forbidden_env: Vec::new(),
                 pass_env: Vec::new(),
+                claude_config_dir: None,
                 permissions: "allow".to_string(),
                 queue_capacity: 32,
                 notify_timeout_secs: 600,

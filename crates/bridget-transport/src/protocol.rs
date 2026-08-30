@@ -1586,6 +1586,9 @@ pub struct ResolvedAgentDefinition {
     /// persistées ni exposées dans la preuve publique.
     pub pass_env: Vec<String>,
     pub permissions: String,
+    /// Non-secret profile directory passed to the spawn without serializing its secrets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_config_dir: Option<String>,
     pub queue_capacity: usize,
     pub notify_timeout_secs: u64,
     pub mcp: ResolvedMcpDefinition,
@@ -3712,6 +3715,7 @@ mod tests {
                 protocol: "acp".to_string(),
                 forbidden_env: vec!["API_KEY".to_string()],
                 pass_env: vec!["HOME".to_string()],
+                claude_config_dir: None,
                 permissions: "allow".to_string(),
                 queue_capacity: 32,
                 notify_timeout_secs: 600,
