@@ -2,10 +2,11 @@
 
 use bridget_transport::greffe_authorization::GreffeAuthorizationAttestation;
 use bridget_transport::protocol::{
-    CoordinationEventKind, GuichetLifecycleState, GuichetOutcome, ServiceRequestOperation,
-    ServiceRequestPayload,
+    CoordinationEventKind, GuichetLifecycleState, GuichetOutcome, ProjectBackend,
+    ProjectRegistryRefusal, ServiceRequestOperation, ServiceRequestPayload,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -226,6 +227,184 @@ pub struct TrackedRequest {
     pub completed_at: Option<i64>,
 }
 
+/// État technique d'une liaison projet, détenu par Bridget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectBindingState {
+    PendingBinding,
+    Active,
+    Disabled,
+    PathMissing,
+    BindingFailed,
+}
+
+impl ProjectBindingState {
+    fn as_db(self) -> &'static str {
+        match self {
+            Self::PendingBinding => "pending_binding",
+            Self::Active => "active",
+            Self::Disabled => "disabled",
+            Self::PathMissing => "path_missing",
+            Self::BindingFailed => "binding_failed",
+        }
+    }
+
+    fn from_db(value: &str) -> Result<Self, StoreError> {
+        match value {
+            "pending_binding" => Ok(Self::PendingBinding),
+            "active" => Ok(Self::Active),
+            "disabled" => Ok(Self::Disabled),
+            "path_missing" => Ok(Self::PathMissing),
+            "binding_failed" => Ok(Self::BindingFailed),
+            _ => Err(StoreError::Invariant("état de liaison projet inconnu")),
+        }
+    }
+}
+
+/// Liaison technique entre une identité opaque et une racine canonique.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectBinding {
+    pub project_id: String,
+    pub canonical_root: String,
+    pub backend: ProjectBackend,
+    pub state: ProjectBindingState,
+    pub generation: u64,
+    pub bound_at: i64,
+    pub updated_at: i64,
+    pub last_reason: Option<ProjectRegistryRefusal>,
+}
+
+impl ProjectBinding {
+    pub fn active(
+        project_id: String,
+        canonical_root: String,
+        backend: ProjectBackend,
+        observed_at: i64,
+    ) -> Result<Self, StoreError> {
+        let binding = Self {
+            project_id,
+            canonical_root,
+            backend,
+            state: ProjectBindingState::Active,
+            generation: 1,
+            bound_at: observed_at,
+            updated_at: observed_at,
+            last_reason: None,
+        };
+        binding.validate()?;
+        Ok(binding)
+    }
+
+    fn validate(&self) -> Result<(), StoreError> {
+        if self.project_id.trim().is_empty()
+            || self.canonical_root.trim().is_empty()
+            || !Path::new(&self.canonical_root).is_absolute()
+            || self.generation == 0
+            || self.bound_at < 0
+            || self.updated_at < self.bound_at
+        {
+            return Err(StoreError::Invariant("liaison projet invalide"));
+        }
+        Ok(())
+    }
+}
+
+/// Mutation auditée d'une liaison technique.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectAuditOperation {
+    Register,
+    Rebind,
+    Disable,
+    ReviewProjectReconcile,
+}
+
+impl ProjectAuditOperation {
+    fn as_db(self) -> &'static str {
+        match self {
+            Self::Register => "register",
+            Self::Rebind => "rebind",
+            Self::Disable => "disable",
+            Self::ReviewProjectReconcile => "review_project_reconcile",
+        }
+    }
+
+    fn from_db(value: &str) -> Result<Self, StoreError> {
+        match value {
+            "register" => Ok(Self::Register),
+            "rebind" => Ok(Self::Rebind),
+            "disable" => Ok(Self::Disable),
+            "review_project_reconcile" => Ok(Self::ReviewProjectReconcile),
+            _ => Err(StoreError::Invariant("opération audit projet inconnue")),
+        }
+    }
+}
+
+/// Issue fermée d'un événement d'audit, sans contenu de racine.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ProjectAuditOutcome {
+    Applied,
+    Refused { reason: ProjectRegistryRefusal },
+}
+
+/// Trace transactionnelle d'une mutation réelle de liaison.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectAuditEvent {
+    pub audit_event_id: String,
+    pub command_id: String,
+    pub project_id: String,
+    pub operation: ProjectAuditOperation,
+    pub binding_generation: u64,
+    pub outcome: ProjectAuditOutcome,
+    pub previous_root_reference: Option<String>,
+    pub observed_at: i64,
+}
+
+impl ProjectAuditEvent {
+    pub fn for_mutation(
+        command_id: &str,
+        project_id: &str,
+        operation: ProjectAuditOperation,
+        binding_generation: u64,
+        outcome: ProjectAuditOutcome,
+        previous_root: Option<&str>,
+        observed_at: i64,
+    ) -> Self {
+        Self {
+            audit_event_id: project_audit_event_id(command_id, operation, binding_generation),
+            command_id: command_id.to_string(),
+            project_id: project_id.to_string(),
+            operation,
+            binding_generation,
+            outcome,
+            previous_root_reference: previous_root.map(project_root_reference),
+            observed_at,
+        }
+    }
+
+    fn validate(&self) -> Result<(), StoreError> {
+        if self.audit_event_id.trim().is_empty()
+            || self.command_id.trim().is_empty()
+            || self.project_id.trim().is_empty()
+            || self.binding_generation == 0
+            || self.observed_at < 0
+            || self
+                .previous_root_reference
+                .as_deref()
+                .is_some_and(|reference| !is_sha256_reference(reference))
+        {
+            return Err(StoreError::Invariant("événement audit projet invalide"));
+        }
+        if self.audit_event_id
+            != project_audit_event_id(&self.command_id, self.operation, self.binding_generation)
+        {
+            return Err(StoreError::Invariant(
+                "identifiant audit projet non déterministe",
+            ));
+        }
+        Ok(())
+    }
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -367,10 +546,221 @@ impl Store {
                  source TEXT NOT NULL
              );
              CREATE INDEX IF NOT EXISTS idx_usage_samples_agent_ts
-                 ON usage_samples(agent, observed_at);",
+                 ON usage_samples(agent, observed_at);
+             CREATE TABLE IF NOT EXISTS project_bindings (
+                 project_id TEXT PRIMARY KEY,
+                 canonical_root TEXT NOT NULL,
+                 backend TEXT NOT NULL CHECK (backend = 'host'),
+                 state TEXT NOT NULL CHECK (state IN (
+                     'pending_binding', 'active', 'disabled', 'path_missing', 'binding_failed'
+                 )),
+                 generation INTEGER NOT NULL CHECK (generation > 0),
+                 bound_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 last_reason TEXT
+             );
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_project_bindings_live_root
+                 ON project_bindings(canonical_root) WHERE state != 'disabled';
+             CREATE TABLE IF NOT EXISTS project_audit_events (
+                 audit_event_id TEXT PRIMARY KEY,
+                 command_id TEXT NOT NULL,
+                 project_id TEXT NOT NULL,
+                 operation TEXT NOT NULL CHECK (operation IN (
+                     'register', 'rebind', 'disable', 'review_project_reconcile'
+                 )),
+                 binding_generation INTEGER NOT NULL CHECK (binding_generation > 0),
+                 outcome_json BLOB NOT NULL,
+                 previous_root_reference TEXT,
+                 observed_at INTEGER NOT NULL,
+                 UNIQUE (command_id, operation, binding_generation)
+             );
+             CREATE INDEX IF NOT EXISTS idx_project_audit_events_project_observed
+                 ON project_audit_events(project_id, observed_at, audit_event_id);",
         )
         .map_err(StoreError::Sqlite)?;
         Ok(())
+    }
+
+    /// Insère une liaison déjà validée par la frontière daemon.
+    pub fn insert_project_binding(&mut self, binding: &ProjectBinding) -> Result<(), StoreError> {
+        binding.validate()?;
+        self.conn
+            .execute(
+                "INSERT INTO project_bindings (
+                     project_id, canonical_root, backend, state, generation,
+                     bound_at, updated_at, last_reason
+                 ) VALUES (?1, ?2, 'host', ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    binding.project_id,
+                    binding.canonical_root,
+                    binding.state.as_db(),
+                    binding.generation as i64,
+                    binding.bound_at,
+                    binding.updated_at,
+                    binding.last_reason.map(project_registry_refusal_name),
+                ],
+            )
+            .map_err(StoreError::Sqlite)?;
+        Ok(())
+    }
+
+    pub fn project_binding(&self, project_id: &str) -> Result<Option<ProjectBinding>, StoreError> {
+        project_binding_for_project(&self.conn, project_id)
+    }
+
+    pub fn project_binding_for_root(
+        &self,
+        canonical_root: &str,
+    ) -> Result<Option<ProjectBinding>, StoreError> {
+        project_binding_for_root(&self.conn, canonical_root)
+    }
+
+    /// Conserve l'identité de la liaison lorsque le chemin disparaît.
+    pub fn mark_project_binding_path_missing(
+        &mut self,
+        project_id: &str,
+        observed_at: i64,
+    ) -> Result<ProjectBinding, StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sqlite)?;
+        let Some(binding) = project_binding_for_project(&tx, project_id)? else {
+            return Err(StoreError::Invariant("liaison projet absente"));
+        };
+        if observed_at < binding.updated_at {
+            return Err(StoreError::Invariant("observation liaison antérieure"));
+        }
+        if binding.state == ProjectBindingState::Disabled {
+            return Err(StoreError::Invariant("liaison projet désactivée"));
+        }
+        if binding.state != ProjectBindingState::PathMissing {
+            tx.execute(
+                "UPDATE project_bindings
+                 SET state = 'path_missing', updated_at = ?1, last_reason = ?2
+                 WHERE project_id = ?3",
+                params![
+                    observed_at,
+                    project_registry_refusal_name(ProjectRegistryRefusal::RootMissing),
+                    project_id
+                ],
+            )
+            .map_err(StoreError::Sqlite)?;
+        }
+        let updated = project_binding_for_project(&tx, project_id)?
+            .ok_or(StoreError::Invariant("liaison projet disparue"))?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+        Ok(updated)
+    }
+
+    /// Effectue un rebind explicite, sans toucher au contenu de la racine.
+    pub fn rebind_project_binding(
+        &mut self,
+        project_id: &str,
+        canonical_root: &str,
+        observed_at: i64,
+    ) -> Result<ProjectBinding, StoreError> {
+        if canonical_root.trim().is_empty() || !Path::new(canonical_root).is_absolute() {
+            return Err(StoreError::Invariant("racine de rebind invalide"));
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sqlite)?;
+        let Some(binding) = project_binding_for_project(&tx, project_id)? else {
+            return Err(StoreError::Invariant("liaison projet absente"));
+        };
+        if binding.state == ProjectBindingState::Disabled {
+            return Err(StoreError::Invariant("rebind d'une liaison désactivée"));
+        }
+        if observed_at < binding.updated_at {
+            return Err(StoreError::Invariant("rebind antérieur à la liaison"));
+        }
+        if binding.state != ProjectBindingState::Active || binding.canonical_root != canonical_root
+        {
+            let generation = binding
+                .generation
+                .checked_add(1)
+                .ok_or(StoreError::Invariant("génération liaison épuisée"))?;
+            tx.execute(
+                "UPDATE project_bindings
+                 SET canonical_root = ?1, state = 'active', generation = ?2,
+                     bound_at = ?3, updated_at = ?3, last_reason = NULL
+                 WHERE project_id = ?4",
+                params![canonical_root, generation as i64, observed_at, project_id],
+            )
+            .map_err(StoreError::Sqlite)?;
+        }
+        let rebound = project_binding_for_project(&tx, project_id)?
+            .ok_or(StoreError::Invariant("liaison projet disparue"))?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+        Ok(rebound)
+    }
+
+    /// Écrit exactement un audit déterministe pour une mutation effective.
+    pub fn record_project_audit_event(
+        &mut self,
+        event: &ProjectAuditEvent,
+    ) -> Result<bool, StoreError> {
+        event.validate()?;
+        let outcome = serde_json::to_vec(&event.outcome)
+            .map_err(|_| StoreError::Invariant("issue audit projet non sérialisable"))?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sqlite)?;
+        let changed = tx
+            .execute(
+                "INSERT INTO project_audit_events (
+                     audit_event_id, command_id, project_id, operation,
+                     binding_generation, outcome_json, previous_root_reference, observed_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(audit_event_id) DO NOTHING",
+                params![
+                    event.audit_event_id,
+                    event.command_id,
+                    event.project_id,
+                    event.operation.as_db(),
+                    event.binding_generation as i64,
+                    outcome,
+                    event.previous_root_reference,
+                    event.observed_at,
+                ],
+            )
+            .map_err(StoreError::Sqlite)?;
+        if changed == 0 {
+            let existing = project_audit_event_for_id(&tx, &event.audit_event_id)?
+                .ok_or(StoreError::Invariant("audit projet absent après conflit"))?;
+            if existing != *event {
+                return Err(StoreError::Invariant("collision audit projet divergente"));
+            }
+        }
+        tx.commit().map_err(StoreError::Sqlite)?;
+        Ok(changed == 1)
+    }
+
+    pub fn project_audit_events(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ProjectAuditEvent>, StoreError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT audit_event_id, command_id, project_id, operation,
+                        binding_generation, outcome_json, previous_root_reference, observed_at
+                 FROM project_audit_events
+                 WHERE project_id = ?1
+                 ORDER BY observed_at ASC, audit_event_id ASC",
+            )
+            .map_err(StoreError::Sqlite)?;
+        let rows = statement
+            .query_map([project_id], project_audit_event_from_row)
+            .map_err(StoreError::Sqlite)?;
+        rows.map(|row| {
+            row.map_err(StoreError::Sqlite)
+                .and_then(decode_project_audit_event)
+        })
+        .collect()
     }
 
     /// Enregistre un échantillon de consommation attesté. Jamais de zéro inventé
@@ -1795,6 +2185,255 @@ fn now_secs() -> i64 {
         .as_secs() as i64
 }
 
+#[derive(Debug)]
+struct StoredProjectBinding {
+    project_id: String,
+    canonical_root: String,
+    backend: String,
+    state: String,
+    generation: i64,
+    bound_at: i64,
+    updated_at: i64,
+    last_reason: Option<String>,
+}
+
+fn project_binding_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredProjectBinding> {
+    Ok(StoredProjectBinding {
+        project_id: row.get(0)?,
+        canonical_root: row.get(1)?,
+        backend: row.get(2)?,
+        state: row.get(3)?,
+        generation: row.get(4)?,
+        bound_at: row.get(5)?,
+        updated_at: row.get(6)?,
+        last_reason: row.get(7)?,
+    })
+}
+
+fn decode_project_binding(row: StoredProjectBinding) -> Result<ProjectBinding, StoreError> {
+    let backend = match row.backend.as_str() {
+        "host" => ProjectBackend::Host,
+        _ => return Err(StoreError::Invariant("backend projet inconnu")),
+    };
+    let generation = u64::try_from(row.generation)
+        .map_err(|_| StoreError::Invariant("génération liaison invalide"))?;
+    let last_reason = row
+        .last_reason
+        .as_deref()
+        .map(project_registry_refusal_from_name)
+        .transpose()?;
+    let binding = ProjectBinding {
+        project_id: row.project_id,
+        canonical_root: row.canonical_root,
+        backend,
+        state: ProjectBindingState::from_db(&row.state)?,
+        generation,
+        bound_at: row.bound_at,
+        updated_at: row.updated_at,
+        last_reason,
+    };
+    binding.validate()?;
+    Ok(binding)
+}
+
+fn project_binding_for_project(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<Option<ProjectBinding>, StoreError> {
+    let stored = conn
+        .query_row(
+            "SELECT project_id, canonical_root, backend, state, generation,
+                    bound_at, updated_at, last_reason
+             FROM project_bindings WHERE project_id = ?1",
+            [project_id],
+            project_binding_from_row,
+        )
+        .optional()
+        .map_err(StoreError::Sqlite)?;
+    stored.map(decode_project_binding).transpose()
+}
+
+fn project_binding_for_root(
+    conn: &Connection,
+    canonical_root: &str,
+) -> Result<Option<ProjectBinding>, StoreError> {
+    let stored = conn
+        .query_row(
+            "SELECT project_id, canonical_root, backend, state, generation,
+                    bound_at, updated_at, last_reason
+             FROM project_bindings
+             WHERE canonical_root = ?1 AND state != 'disabled'",
+            [canonical_root],
+            project_binding_from_row,
+        )
+        .optional()
+        .map_err(StoreError::Sqlite)?;
+    stored.map(decode_project_binding).transpose()
+}
+
+fn project_registry_refusal_name(reason: ProjectRegistryRefusal) -> &'static str {
+    match reason {
+        ProjectRegistryRefusal::InvalidContract => "invalid_contract",
+        ProjectRegistryRefusal::InvalidProjectId => "invalid_project_id",
+        ProjectRegistryRefusal::InvalidAbsoluteRoot => "invalid_absolute_root",
+        ProjectRegistryRefusal::RootMissing => "root_missing",
+        ProjectRegistryRefusal::RootNotDirectory => "root_not_directory",
+        ProjectRegistryRefusal::RootOutsideAllowedPrefixes => "root_outside_allowed_prefixes",
+        ProjectRegistryRefusal::RootTooBroad => "root_too_broad",
+        ProjectRegistryRefusal::RootAlreadyBound => "root_already_bound",
+        ProjectRegistryRefusal::ProjectAlreadyBoundElsewhere => "project_already_bound_elsewhere",
+        ProjectRegistryRefusal::RebindRequired => "rebind_required",
+        ProjectRegistryRefusal::ProjectDisabled => "project_disabled",
+        ProjectRegistryRefusal::EnvelopeMismatch => "envelope_mismatch",
+        ProjectRegistryRefusal::IdempotencyExpired => "idempotency_expired",
+        ProjectRegistryRefusal::StoreUnavailable => "store_unavailable",
+        ProjectRegistryRefusal::RegistrationConflict => "registration_conflict",
+        ProjectRegistryRefusal::ProjectRegistryCapabilityMissing => {
+            "project_registry_capability_missing"
+        }
+        ProjectRegistryRefusal::ProjectRegistryVersionUnsupported => {
+            "project_registry_version_unsupported"
+        }
+        ProjectRegistryRefusal::LocalOperatorRequired => "local_operator_required",
+        ProjectRegistryRefusal::PeerUidMismatch => "peer_uid_mismatch",
+        ProjectRegistryRefusal::ProjectRootPolicyUnavailable => "project_root_policy_unavailable",
+        ProjectRegistryRefusal::ProjectRootPolicyInvalid => "project_root_policy_invalid",
+        ProjectRegistryRefusal::ProjectRootPolicyPermissionsInvalid => {
+            "project_root_policy_permissions_invalid"
+        }
+    }
+}
+
+fn project_registry_refusal_from_name(value: &str) -> Result<ProjectRegistryRefusal, StoreError> {
+    match value {
+        "invalid_contract" => Ok(ProjectRegistryRefusal::InvalidContract),
+        "invalid_project_id" => Ok(ProjectRegistryRefusal::InvalidProjectId),
+        "invalid_absolute_root" => Ok(ProjectRegistryRefusal::InvalidAbsoluteRoot),
+        "root_missing" => Ok(ProjectRegistryRefusal::RootMissing),
+        "root_not_directory" => Ok(ProjectRegistryRefusal::RootNotDirectory),
+        "root_outside_allowed_prefixes" => Ok(ProjectRegistryRefusal::RootOutsideAllowedPrefixes),
+        "root_too_broad" => Ok(ProjectRegistryRefusal::RootTooBroad),
+        "root_already_bound" => Ok(ProjectRegistryRefusal::RootAlreadyBound),
+        "project_already_bound_elsewhere" => {
+            Ok(ProjectRegistryRefusal::ProjectAlreadyBoundElsewhere)
+        }
+        "rebind_required" => Ok(ProjectRegistryRefusal::RebindRequired),
+        "project_disabled" => Ok(ProjectRegistryRefusal::ProjectDisabled),
+        "envelope_mismatch" => Ok(ProjectRegistryRefusal::EnvelopeMismatch),
+        "idempotency_expired" => Ok(ProjectRegistryRefusal::IdempotencyExpired),
+        "store_unavailable" => Ok(ProjectRegistryRefusal::StoreUnavailable),
+        "registration_conflict" => Ok(ProjectRegistryRefusal::RegistrationConflict),
+        "project_registry_capability_missing" => {
+            Ok(ProjectRegistryRefusal::ProjectRegistryCapabilityMissing)
+        }
+        "project_registry_version_unsupported" => {
+            Ok(ProjectRegistryRefusal::ProjectRegistryVersionUnsupported)
+        }
+        "local_operator_required" => Ok(ProjectRegistryRefusal::LocalOperatorRequired),
+        "peer_uid_mismatch" => Ok(ProjectRegistryRefusal::PeerUidMismatch),
+        "project_root_policy_unavailable" => {
+            Ok(ProjectRegistryRefusal::ProjectRootPolicyUnavailable)
+        }
+        "project_root_policy_invalid" => Ok(ProjectRegistryRefusal::ProjectRootPolicyInvalid),
+        "project_root_policy_permissions_invalid" => {
+            Ok(ProjectRegistryRefusal::ProjectRootPolicyPermissionsInvalid)
+        }
+        _ => Err(StoreError::Invariant("raison liaison projet inconnue")),
+    }
+}
+
+#[derive(Debug)]
+struct StoredProjectAuditEvent {
+    audit_event_id: String,
+    command_id: String,
+    project_id: String,
+    operation: String,
+    binding_generation: i64,
+    outcome_json: Vec<u8>,
+    previous_root_reference: Option<String>,
+    observed_at: i64,
+}
+
+fn project_audit_event_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<StoredProjectAuditEvent> {
+    Ok(StoredProjectAuditEvent {
+        audit_event_id: row.get(0)?,
+        command_id: row.get(1)?,
+        project_id: row.get(2)?,
+        operation: row.get(3)?,
+        binding_generation: row.get(4)?,
+        outcome_json: row.get(5)?,
+        previous_root_reference: row.get(6)?,
+        observed_at: row.get(7)?,
+    })
+}
+
+fn decode_project_audit_event(
+    row: StoredProjectAuditEvent,
+) -> Result<ProjectAuditEvent, StoreError> {
+    let event = ProjectAuditEvent {
+        audit_event_id: row.audit_event_id,
+        command_id: row.command_id,
+        project_id: row.project_id,
+        operation: ProjectAuditOperation::from_db(&row.operation)?,
+        binding_generation: u64::try_from(row.binding_generation)
+            .map_err(|_| StoreError::Invariant("génération audit projet invalide"))?,
+        outcome: serde_json::from_slice(&row.outcome_json)
+            .map_err(|_| StoreError::Invariant("issue audit projet corrompue"))?,
+        previous_root_reference: row.previous_root_reference,
+        observed_at: row.observed_at,
+    };
+    event.validate()?;
+    Ok(event)
+}
+
+fn project_audit_event_for_id(
+    conn: &Connection,
+    audit_event_id: &str,
+) -> Result<Option<ProjectAuditEvent>, StoreError> {
+    let stored = conn
+        .query_row(
+            "SELECT audit_event_id, command_id, project_id, operation,
+                    binding_generation, outcome_json, previous_root_reference, observed_at
+             FROM project_audit_events WHERE audit_event_id = ?1",
+            [audit_event_id],
+            project_audit_event_from_row,
+        )
+        .optional()
+        .map_err(StoreError::Sqlite)?;
+    stored.map(decode_project_audit_event).transpose()
+}
+
+fn project_audit_event_id(
+    command_id: &str,
+    operation: ProjectAuditOperation,
+    binding_generation: u64,
+) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"bridget/project-audit-event/v1");
+    for field in [command_id.as_bytes(), operation.as_db().as_bytes()] {
+        digest.update((field.len() as u64).to_be_bytes());
+        digest.update(field);
+    }
+    digest.update(binding_generation.to_be_bytes());
+    format!("sha256:{:x}", digest.finalize())
+}
+
+fn project_root_reference(root: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"bridget/project-root-reference/v1");
+    digest.update((root.len() as u64).to_be_bytes());
+    digest.update(root.as_bytes());
+    format!("sha256:{:x}", digest.finalize())
+}
+
+fn is_sha256_reference(value: &str) -> bool {
+    value.len() == 71
+        && value.starts_with("sha256:")
+        && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn tracked_request_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrackedRequest> {
     Ok(TrackedRequest {
         id: row.get(0)?,
@@ -2896,6 +3535,62 @@ mod tests {
             median.as_secs_f64() * 1000.0,
             rendered
         );
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn spec_065_liaison_projet_path_missing_rebind_et_audit_deterministe() {
+        let path =
+            std::env::temp_dir().join(format!("bridget-project-binding-{}.db", Uuid::new_v4()));
+        let mut store = Store::open(&path).unwrap();
+        let binding = ProjectBinding::active(
+            "project-1".to_string(),
+            "/srv/projects/one".to_string(),
+            ProjectBackend::Host,
+            100,
+        )
+        .unwrap();
+        store.insert_project_binding(&binding).unwrap();
+
+        let missing = store
+            .mark_project_binding_path_missing("project-1", 101)
+            .unwrap();
+        assert_eq!(missing.state, ProjectBindingState::PathMissing);
+        assert_eq!(missing.generation, 1);
+        assert_eq!(
+            missing.last_reason,
+            Some(ProjectRegistryRefusal::RootMissing)
+        );
+
+        let rebound = store
+            .rebind_project_binding("project-1", "/srv/projects/two", 102)
+            .unwrap();
+        assert_eq!(rebound.state, ProjectBindingState::Active);
+        assert_eq!(rebound.canonical_root, "/srv/projects/two");
+        assert_eq!(rebound.generation, 2);
+
+        let audit = ProjectAuditEvent::for_mutation(
+            "command-rebind",
+            "project-1",
+            ProjectAuditOperation::Rebind,
+            rebound.generation,
+            ProjectAuditOutcome::Applied,
+            Some("/srv/projects/one"),
+            102,
+        );
+        assert!(store.record_project_audit_event(&audit).unwrap());
+        assert!(!store.record_project_audit_event(&audit).unwrap());
+        let audits = store.project_audit_events("project-1").unwrap();
+        assert_eq!(audits, vec![audit]);
+        assert!(
+            !audits[0]
+                .previous_root_reference
+                .as_deref()
+                .unwrap_or_default()
+                .contains("/srv/projects/one")
+        );
+
         drop(store);
         let _ = std::fs::remove_file(path);
     }
