@@ -32,3 +32,30 @@
 - Vérification navigateur automatisée : l'outil de navigation a échoué avant chargement de page, car Chromium Playwright manque à l'emplacement `/Users/moi/Library/Caches/ms-playwright/chromium_headless_shell-1208/chrome-headless-shell-mac-arm64/chrome-headless-shell`.
 - Vérification manuelle de permission de notification et de clic : elle demande un navigateur interactif, après livraison de la branche.
 - Notification navigateur lorsque la page est fermée : hors périmètre de cette SPEC, sans Push API ni service worker.
+
+## Correctif flux vivant - 30 août 2026
+
+| Commande | Résultat |
+|---|---|
+| `node --test crates/bridget-daemon/assets/ui/app.js` | 75 tests réussis |
+| `/home/moi/.cargo/bin/cargo fmt --check` | réussi |
+| `/home/moi/.cargo/bin/cargo build -p bridget-daemon --bin bridget` | réussi, prérequis des tests de présence |
+| `/home/moi/.cargo/bin/cargo test -p bridget-daemon --lib -- --quiet` | 651 réussis, 7 ignorés, après construction du binaire de test |
+| `/home/moi/.cargo/bin/cargo test -p bridget-transport --lib -- --quiet` | réussi avant la compilation de livraison |
+| projection lecture seule du journal `1aecc26942514` | 7 commandes et 7 autorisations accordées projetées chronologiquement |
+
+La première exécution complète du test daemon a échoué sur huit tests de
+présence, avant toute exécution de leur logique, avec « binaire bridget de test
+absent ». La cause a été vérifiée dans `daemon.rs:17009` puis corrigée dans
+l'environnement de test par la construction debug du binaire. Le même test
+ciblé, puis la batterie complète, passent ensuite sans modification Rust.
+
+Le correctif rend les événements liés à un envoi local pendant le rattrapage
+initial avec un temporisateur de rendu de 50 ms côté interface. Les événements
+historiques sans relation avec cet envoi restent groupés : l'ouverture conserve
+donc sa protection contre la reconstruction répétée d'un historique dense.
+
+Le flux vivant affiche : texte progressif dans sa bulle, outils au fil de leurs
+événements journalisés avec le détail réellement journalisé, puis autorisation demandée, accordée ou refusée. Il ne
+fabrique pas de fin ou de sortie d'outil si le fournisseur ne les journalise
+pas.

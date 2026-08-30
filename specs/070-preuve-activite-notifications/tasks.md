@@ -53,3 +53,11 @@
 - [x] T011 - Mettre à jour les critères de validation de `spec.md`, réaliser
   une auto-revue minimalisme et préparer la convergence. Preuve : chaque
   exigence possède une preuve code ou test.
+
+## Correctif flux vivant - P1
+
+- [x] T013 - Faire traverser au rendu les événements postérieurs à l'envoi
+  humain pendant le rattrapage, conserver chronologiquement tous les actes du
+  tour actif et corriger le verdict des autorisations. Preuve : 75 témoins Node
+  passent, dont le runtime EventSource, la projection d'outils et le journal
+  réel `1aecc26942514` projeté en commandes détaillées et autorisations accordées.

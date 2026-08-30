@@ -95,8 +95,6 @@ Critères d'acceptation :
 
 - Notification quand l'application et son navigateur sont entièrement fermés :
   cela demanderait Push API, service worker et un backend de souscription.
-- Exposition de commandes complètes, arguments, variables ou sorties d'outil
-  dans l'indicateur compact.
 - Déduction de l'intention humaine à partir des mots « arrête » ou « urgent ».
 - Refonte esthétique générale de l'interface ou du transport Bridget.
 
@@ -112,3 +110,23 @@ Critères d'acceptation :
 - La convergence est `CONVERGED`, détaillée dans `convergence.md`.
 - La contre-revue adverse est indisponible avec l'émetteur UI actuel, documentée dans `adversarial-review-cartae0-flux.md`.
 - La vérification visuelle automatisée reste bloquée par l'absence de Chromium Playwright local.
+
+## Correctif de flux vivant - 30 août 2026
+
+Le premier incrément compactait l'activité à son dernier événement et retenait
+les événements survenus après un envoi humain pendant le rattrapage initial du
+journal. Cette correction reste dans la même SPEC : elle ne change ni le
+transport, ni l'autorité de Bridget, ni les commandes émises aux fournisseurs.
+
+Critères supplémentaires :
+
+- Un événement journalisé après l'envoi humain traverse le rattrapage et est
+  rendu dans la prochaine fenêtre de rendu de l'interface, sans attendre
+  `SnapshotCaughtUp`.
+- La réponse texte déjà journalisée est rendue progressivement ; l'interface
+  ne la retient pas jusqu'à la fin du tour.
+- L'activité vivante conserve chaque acte réellement journalisé du tour actif,
+  au lieu de n'afficher que le dernier.
+- Une demande d'autorisation affiche son état réel : demandée, accordée ou
+  refusée. Aucun état « attend » ne persiste après une décision journalisée.
+- Chaque acte affiche le détail effectivement journalisé par le fournisseur : commande, outil ou chemin. Il ne fabrique ni sortie ni succès si le fournisseur ne les a pas journalisés.

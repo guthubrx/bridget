@@ -239,7 +239,7 @@
           kind: "record",
           agent: "rc1",
           at: 12,
-          record: { message_id: "m-live", event: "update", payload: { kind: "command", text: "commande secrète" } },
+          record: { message_id: "m-live", event: "update", payload: { kind: "command", text: "commande visible" } },
         }];
         const activity = api.projectTimeline(active).find((entry) => entry.kind === "activity");
         assert.equal(activity.text, "Exécute une commande");
@@ -346,6 +346,87 @@
         assert.equal(api.hasNewPendingReplayEvent(pending, "rc1", [{ at: 99 }]), false);
         assert.equal(api.hasNewPendingReplayEvent(pending, "rc1", [{ at: 101 }]), true);
         assert.equal(api.hasNewPendingReplayEvent(pending, "jc1", [{ at: 101 }]), false);
+      });
+
+
+      test("evenement_posterieur_a_envoi_traverse_le_rattrapage_immediatement", () => {
+        assert.deepEqual(
+          api.decideWatchThreadRender({
+            replayingJournal: true,
+            caughtUp: false,
+            acceptedCount: 1,
+            livePending: true,
+          }),
+          { render: true, scrollMode: "live", replayingJournal: true },
+        );
+        assert.equal(
+          api.decideWatchThreadRender({
+            replayingJournal: true,
+            caughtUp: false,
+            acceptedCount: 1,
+            livePending: false,
+          }).render,
+          false,
+          "le rejeu purement historique reste groupé",
+        );
+      });
+
+      test("activite_live_conserve_tous_les_outils_et_le_verdict_d_autorisation", () => {
+        const events = [
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 10,
+            record: {
+              message_id: "m-live-tools",
+              event: "turn_start",
+              payload: { body: "diagnostic" },
+            },
+          },
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 11,
+            record: {
+              message_id: "m-live-tools",
+              event: "update",
+              payload: { kind: "command", detail: "item/started", text: "commande visible" },
+            },
+          },
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 12,
+            record: {
+              message_id: "m-live-tools",
+              event: "provider_request",
+              payload: { state: "pending", method: "item/commandExecution/requestApproval" },
+            },
+          },
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 13,
+            record: {
+              message_id: "m-live-tools",
+              event: "permission",
+              payload: { decision: "accept", method: "item/commandExecution/requestApproval" },
+            },
+          },
+        ];
+        const activity = api.projectTimeline(events).find((entry) => entry.kind === "activity");
+        assert.ok(activity, "un tour actif doit produire une activité vivante");
+        assert.equal(activity.acts.length, 2);
+        assert.deepEqual(
+          activity.acts.map((act) => api.liveActivityActLabel(act)),
+          ["Exécute une commande", "Autorisation accordée"],
+        );
+        assert.equal(
+          api.liveActivityActDetail(activity.acts[0]),
+          "commande visible",
+          "le détail affiché doit être celui, et seulement celui, journalisé par le fournisseur",
+        );
+        assert.equal(api.liveActivityActDetail(activity.acts[1]), "");
       });
 
       test("recherche_hit_caracteres_inattendus_reste_du_texte", () => {
@@ -2229,6 +2310,49 @@
         assert.equal(decisions.at(-1).replayingJournal, false);
       });
 
+
+      test("runtime_watch_rend_un_evenement_local_pendant_le_rejeu", () => {
+        const FakeES = makeFakeEventSource();
+        const decisions = [];
+        const record = {
+          v: 1,
+          seq: 10,
+          ts: "2026-08-26T07:00:01Z",
+          session_id: "s-live",
+          event: "update",
+          message_id: "m-live",
+          payload: { kind: "command", detail: "item/started", text: "secret" },
+        };
+        const bytes = Buffer.from(`${JSON.stringify(record)}\n`);
+        const runtime = api.createWatchRuntime({
+          token: "t",
+          resumeSeq: new Map(),
+          buffers: new Map(),
+          attestedGaps: new Set(),
+          seenRecords: new Set(),
+          EventSource: FakeES,
+          setTimeout: () => 1,
+          clearTimeout: () => {},
+          shouldRenderLive: (agent, accepted) => agent === "agent" && accepted.length === 1,
+          onJournal: (result) => decisions.push(result.decision),
+        });
+        runtime.open("agent");
+        FakeES.instances[0].emitJournal({
+          event: {
+            type: "JournalFragment",
+            subscription_id: "sub-live",
+            seq: 10,
+            offset: 0,
+            final: true,
+            bytes: bytes.toString("base64"),
+          },
+        });
+        assert.deepEqual(
+          decisions.at(-1),
+          { render: true, scrollMode: "live", replayingJournal: true },
+        );
+      });
+
       test("fragment_jsonl_incomplet_attend_sa_borne_finale", () => {
         const record = { v: 1, seq: 9, ts: "2026-08-25T20:00:00Z", session_id: "s", event: "update", message_id: "m", payload: { kind: "text", content: "é" } };
         const bytes = Buffer.from(`${JSON.stringify(record)}\n`);
@@ -2562,13 +2686,70 @@
     const kind = text(activity && activity.kind);
     if (kind === "text") return "Rédige une réponse";
     if (kind === "reasoning") return "Analyse la demande";
+    if (kind === "approval") {
+      const state = text(activity && activity.state);
+      if (state === "accepted") return "Autorisation accordée";
+      if (state === "refused") return "Autorisation refusée";
+      return "Attend une autorisation";
+    }
     if (kind === "command") return "Exécute une commande";
     if (kind === "file") return "Lit ou modifie un fichier";
     if (kind === "plan") return "Met à jour son plan";
-    if (kind === "approval") return "Attend une autorisation";
     return "Utilise un outil";
   }
 
+
+  function toolActState(payload) {
+    const detail = `${text(payload && payload.detail)} ${text(payload && payload.summary)}`
+      .toLowerCase();
+    if (/fail|error|cancel|abort/.test(detail)) return "failed";
+    if (/complete|finish|succeed|done/.test(detail)) return "completed";
+    return "started";
+  }
+
+  function liveActivityActLabel(act) {
+    const kind = text(act && act.kind);
+    const state = text(act && act.state);
+    if (kind === "approval") {
+      if (state === "accepted") return "Autorisation accordée";
+      if (state === "refused") return "Autorisation refusée";
+      return "Autorisation demandée";
+    }
+    if (kind === "command") {
+      if (state === "completed") return "Commande terminée";
+      if (state === "failed") return "Commande en échec";
+      return "Exécute une commande";
+    }
+    if (kind === "file") {
+      if (state === "completed") return "Opération sur fichier terminée";
+      if (state === "failed") return "Opération sur fichier en échec";
+      return "Lit ou modifie un fichier";
+    }
+    if (kind === "plan") {
+      if (state === "completed") return "Plan mis à jour";
+      if (state === "failed") return "Mise à jour du plan en échec";
+      return "Met à jour le plan";
+    }
+    if (state === "completed") return "Outil terminé";
+    if (state === "failed") return "Outil en échec";
+    return "Utilise un outil";
+  }
+
+  // Le libellé dit la nature de l'acte ; le détail est le texte réellement
+  // journalisé par le fournisseur. Ne jamais le fabriquer : l'absence de
+  // détail est elle-même une information sur ce que le fournisseur a émis.
+  function liveActivityActDetail(act) {
+    if (text(act && act.kind) === "approval") return "";
+    return text(act && act.text);
+  }
+
+  function liveActivityActTone(act) {
+    const state = text(act && act.state);
+    if (state === "accepted" || state === "completed") return "success";
+    if (state === "refused" || state === "failed") return "error";
+    if (state === "pending") return "pending";
+    return "active";
+  }
   function providerRequestRejectedLabel(payload) {
     const code = text(payload && payload.code, "unsupported_provider_request");
     const reference = text(payload && payload.reference, "référence absente");
@@ -3098,11 +3279,25 @@
     return event.type === "End";
   }
 
-  function decideWatchThreadRender({ replayingJournal, caughtUp, acceptedCount = 0 }) {
+  function decideWatchThreadRender({
+    replayingJournal,
+    caughtUp,
+    acceptedCount = 0,
+    livePending = false,
+  }) {
     if (caughtUp) {
       return { render: true, scrollMode: "reset", replayingJournal: false };
     }
     if (replayingJournal) {
+      if (livePending) {
+        return {
+          // Le rejeu historique reste silencieux, mais un événement né après
+          // un envoi local doit être visible sans attendre SnapshotCaughtUp.
+          render: true,
+          scrollMode: "live",
+          replayingJournal: true,
+        };
+      }
       return {
         // Le snapshot SSE a déjà rendu le fil humain. Pendant le rejeu, les
         // fragments sont seulement accumulés : reconstruire 200 kB de DOM à
@@ -3207,6 +3402,7 @@
     EventSource,
     setTimeout,
     clearTimeout,
+    shouldRenderLive = null,
     onJournal = null,
     onRelay = null,
   }) {
@@ -3249,10 +3445,13 @@
         }
       });
       advanceWatchResumeFromEnvelope(resumeSeq, agent, envelope, buffers);
+      const livePending = typeof shouldRenderLive === "function"
+        && shouldRenderLive(agent, accepted) === true;
       const decision = decideWatchThreadRender({
         replayingJournal,
         caughtUp,
         acceptedCount: accepted.length,
+        livePending,
       });
       replayingJournal = decision.replayingJournal;
       const result = {
@@ -3617,6 +3816,43 @@
       return turns.get(key);
     }
 
+
+    function pendingApprovalAct(turn, method = "") {
+      return [...turn.acts].reverse().find((act) =>
+        act.kind === "approval"
+        && act.state === "pending"
+        && (!method || !act.method || act.method === method),
+      );
+    }
+
+    function recordApprovalAct(turn, payload, at, state = "pending") {
+      const method = text(payload && payload.method, text(payload && payload.detail));
+      const existing = pendingApprovalAct(turn, method);
+      const permissionAct = formatPermissionAct(payload);
+      if (existing && state === "pending") return existing;
+      if (existing) {
+        existing.state = state;
+        existing.text = permissionAct.text;
+        existing.detail = permissionAct.detail;
+        existing.at = at;
+        return existing;
+      }
+      const next = {
+        kind: "approval",
+        text: permissionAct.text,
+        detail: permissionAct.detail,
+        method,
+        state,
+        at,
+      };
+      turn.acts.push(next);
+      return next;
+    }
+
+    function isProviderApprovalRequest(payload) {
+      return text(payload && payload.state) === "pending"
+        && /approval|permission/i.test(text(payload && payload.method));
+    }
     ordered.forEach((entry) => {
       if (entry.kind !== "record") {
         const ledgerRound = entry.kind === "peer_exchange"
@@ -3665,6 +3901,12 @@
         turn.promptAt ||= entry.at || epochSeconds(record.ts);
         return;
       }
+      if (record.event === "provider_request" && isProviderApprovalRequest(payload)) {
+        const approval = recordApprovalAct(turn, payload, entry.at);
+        turn.activity = { kind: "approval", state: approval.state, at: entry.at };
+        return;
+      }
+
       if (record.event === "update") {
         if (payload.kind === "text") {
           const content = text(payload.content, text(payload.text));
@@ -3683,13 +3925,32 @@
             ),
           );
           const displayKind = payload.kind === "tool_call" ? "tool" : payload.kind;
-          turn.acts.push({
-            kind: displayKind,
-            text: label,
-            detail: text(payload.detail, text(payload.summary)),
-            at: entry.at,
-          });
-          turn.activity = { kind: displayKind, at: entry.at };
+          if (displayKind === "approval") {
+            const method = text(payload.detail, text(payload.method));
+            let approval = pendingApprovalAct(turn, method);
+            if (!approval) {
+              approval = {
+                kind: "approval",
+                text: label,
+                detail: text(payload.detail, text(payload.summary)),
+                method,
+                state: "pending",
+                at: entry.at,
+              };
+              turn.acts.push(approval);
+            }
+            turn.activity = { kind: "approval", state: approval.state, at: entry.at };
+          } else {
+            const state = toolActState(payload);
+            turn.acts.push({
+              kind: displayKind,
+              text: label,
+              detail: text(payload.detail, text(payload.summary)),
+              state,
+              at: entry.at,
+            });
+            turn.activity = { kind: displayKind, state, at: entry.at };
+          }
         }
         return;
       }
@@ -3703,14 +3964,9 @@
         return;
       }
       if (record.event === "permission") {
-        const permissionAct = formatPermissionAct(payload);
-        turn.acts.push({
-          kind: "approval",
-          text: permissionAct.text,
-          detail: permissionAct.detail,
-          at: entry.at,
-        });
-        turn.activity = { kind: "approval", at: entry.at };
+        const resolved = resolvePermissionDecision(payload);
+        const approval = recordApprovalAct(turn, payload, entry.at, resolved.state);
+        turn.activity = { kind: "approval", state: approval.state, at: entry.at };
         return;
       }
       if (record.event === "turn_end") {
@@ -3793,6 +4049,7 @@
             at: turn.activity.at || turn.startAt,
             messageId: turn.key,
             text: activityLabel(turn.activity),
+            acts: turn.acts.map((act) => ({ ...act })),
           });
         }
         return;
@@ -4081,8 +4338,8 @@
     let source = null;
     let sourceGeneration = 0;
     let replayingJournal = true;
-    let replayRenderTimer = null;
-    let replayIncomingCount = 0;
+    let liveRenderTimer = null;
+    let liveIncomingCount = 0;
     let restoredTimer = null;
     let reconnectTimer = null;
     let reconnectAttempts = 0;
@@ -4671,23 +4928,43 @@
     };
 
     const renderActivity = (entries) => {
-      const activity = [...entries].reverse().find((entry) => entry.kind === "activity");
+      const activities = entries.filter((entry) => entry.kind === "activity");
       nodes.agentActivity.replaceChildren();
-      nodes.agentActivity.hidden = !activity;
-      if (!activity) return;
-      const agent = state.agents.find((entry) => entry.name === activity.agent) || {
-        name: activity.agent,
-        state: "busy",
-      };
-      const avatar = createAgentAvatar(
-        documentRef,
-        { ...agent, state: "busy" },
-        colorForAgent(agent.name),
-        "small",
-        shapeForAgent(agent.name),
-      );
-      avatar.setAttribute("aria-hidden", "true");
-      nodes.agentActivity.append(avatar, make("span", "", activity.text));
+      nodes.agentActivity.hidden = activities.length === 0;
+      activities.forEach((activity) => {
+        const agent = state.agents.find((entry) => entry.name === activity.agent) || {
+          name: activity.agent,
+          state: "busy",
+        };
+        const avatar = createAgentAvatar(
+          documentRef,
+          { ...agent, state: "busy" },
+          colorForAgent(agent.name),
+          "small",
+          shapeForAgent(agent.name),
+        );
+        avatar.setAttribute("aria-hidden", "true");
+        const content = make("div", "agent-activity__content");
+        const acts = Array.isArray(activity.acts) ? activity.acts : [];
+        if (acts.length === 0) {
+          content.append(make("span", "agent-activity__label", activity.text));
+        } else {
+          const stream = make("ol", "agent-activity__stream");
+          acts.forEach((act) => {
+            const row = make("li", "agent-activity__act");
+            row.dataset.state = liveActivityActTone(act);
+            row.append(make("span", "agent-activity__act-label", liveActivityActLabel(act)));
+            const detail = liveActivityActDetail(act);
+            if (detail) row.append(make("code", "agent-activity__act-detail", detail));
+            stream.append(row);
+          });
+          stream.scrollTop = stream.scrollHeight;
+          content.append(stream);
+        }
+        const block = make("div", "agent-activity__block");
+        block.append(avatar, content);
+        nodes.agentActivity.append(block);
+      });
     };
 
     const renderDeliveryActivity = (entries) => {
@@ -4829,26 +5106,24 @@
       renderThread(1);
     };
 
-    const schedulePendingReplayRender = (accepted) => {
-      if (!hasNewPendingReplayEvent(pendingUiMessages, state.selectedAgent, accepted)) return;
-      replayIncomingCount = Math.max(replayIncomingCount, 1);
-      if (replayRenderTimer) return;
-      replayRenderTimer = windowRef.setTimeout(() => {
-        replayRenderTimer = null;
-        if (!replayingJournal) return;
-        const incomingCount = replayIncomingCount;
-        replayIncomingCount = 0;
-        renderThread(incomingCount);
-      }, 150);
+    const scheduleLiveRender = (incomingCount) => {
+      liveIncomingCount = Math.max(liveIncomingCount, Number(incomingCount) || 1);
+      if (liveRenderTimer) return;
+      liveRenderTimer = windowRef.setTimeout(() => {
+        liveRenderTimer = null;
+        const count = liveIncomingCount;
+        liveIncomingCount = 0;
+        renderThread(count);
+      }, 50);
     };
 
     const closeWatch = () => {
       sourceGeneration += 1;
-      if (replayRenderTimer) {
-        windowRef.clearTimeout(replayRenderTimer);
-        replayRenderTimer = null;
+      if (liveRenderTimer) {
+        windowRef.clearTimeout(liveRenderTimer);
+        liveRenderTimer = null;
       }
-      replayIncomingCount = 0;
+      liveIncomingCount = 0;
       if (reconnectTimer) {
         windowRef.clearTimeout(reconnectTimer);
         reconnectTimer = null;
@@ -4873,6 +5148,10 @@
       setTimeout: (...args) => windowRef.setTimeout(...args),
       clearTimeout: (...args) => windowRef.clearTimeout(...args),
       onRelay: (signal) => updateRelay(signal),
+      shouldRenderLive: (agent, accepted) => (
+        agent === state.selectedAgent
+        && hasNewPendingReplayEvent(pendingUiMessages, state.selectedAgent, accepted)
+      ),
       onJournal: (processed) => {
         const accepted = processed.accepted.filter((event) => {
           if (event.kind !== "record") return true;
@@ -4886,19 +5165,17 @@
           watchStreamEnded = true;
         }
         replayingJournal = processed.decision.replayingJournal;
-        if (replayingJournal) {
-          schedulePendingReplayRender(accepted);
-        }
         if (processed.decision.render) {
-          if (replayRenderTimer) {
-            windowRef.clearTimeout(replayRenderTimer);
-            replayRenderTimer = null;
+          if (processed.decision.scrollMode === "live") {
+            scheduleLiveRender(accepted.length);
+            return;
           }
-          const incomingCount = processed.decision.scrollMode === "live"
-            ? accepted.length
-            : replayIncomingCount;
-          replayIncomingCount = 0;
-          renderThread(incomingCount);
+          if (liveRenderTimer) {
+            windowRef.clearTimeout(liveRenderTimer);
+            liveRenderTimer = null;
+          }
+          liveIncomingCount = 0;
+          renderThread(0);
         }
       },
     });
@@ -5337,6 +5614,9 @@
     buildWatchUrl,
     connectWatchSource,
     watchReconnectDelayMs,
+    liveActivityActLabel,
+    liveActivityActDetail,
+    liveActivityActTone,
     shouldScheduleWatchReconnect,
     watchEnvelopeEndsStream,
     decideWatchThreadRender,
