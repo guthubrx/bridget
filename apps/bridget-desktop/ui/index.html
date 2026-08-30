@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bridget Desktop</title>
+    <link rel="stylesheet" href="./theme.css" />
+  </head>
+  <body>
+    <main class="desktop-shell" aria-labelledby="page-title">
+      <header class="page-header">
+        <div class="page-header-row"><div><p class="eyebrow">BRIDGET DESKTOP</p><h1 id="page-title">Vos serveurs Bridget</h1></div><button id="show-profiles" class="secondary" type="button" hidden>Gérer les serveurs</button></div>
+        <p class="lede">Les agents restent sur leurs serveurs. Cette application ouvre seulement des connexions locales chiffrées.</p>
+        <div id="active-panels" class="active-panels" aria-label="Panneaux distants ouverts"></div>
+      </header>
+      <p id="app-status" class="sr-only" aria-live="polite"></p>
+      <p id="connection-status" class="connection-status" aria-live="polite">Choisissez un serveur, puis ouvrez son relais dans une fenêtre isolée.</p>
+      <section class="profiles" aria-labelledby="profiles-title">
+        <div class="section-heading">
+          <div><h2 id="profiles-title">Profils de connexion</h2><p>Un profil ne contient ni mot de passe, ni clé privée, ni jeton du relais.</p></div>
+          <button id="add-profile" type="button">Ajouter un serveur</button>
+        </div>
+        <div id="load-error" class="notice notice-error" hidden role="alert"></div>
+        <div id="empty-state" class="empty-state" hidden><h3>Aucun serveur configuré</h3><p>Ajoutez un serveur SSH ou un relais Bridget local pour commencer.</p></div>
+        <ul id="profiles-list" class="profile-list" aria-label="Profils configurés"></ul>
+      </section>
+    </main>
+    <dialog id="profile-dialog" aria-labelledby="profile-dialog-title">
+      <form id="profile-form" method="dialog" novalidate>
+        <header class="dialog-heading"><div><p class="eyebrow">CONNEXION</p><h2 id="profile-dialog-title">Ajouter un serveur</h2></div><button class="icon-button" id="close-dialog" type="button" aria-label="Fermer">×</button></header>
+        <input id="profile-id" name="profile-id" type="hidden" />
+        <label>Type de connexion<select id="profile-kind" name="kind"><option value="ssh">Serveur SSH</option><option value="local">Relais local sur ce Mac</option></select></label>
+        <label>Nom du serveur<input id="profile-label" name="label" maxlength="96" required autocomplete="off" /></label>
+        <div id="ssh-fields">
+          <label>Hôte<input id="profile-host" name="host" inputmode="url" placeholder="cartae.app" autocomplete="off" /></label>
+          <div class="field-grid"><label>Port SSH<input id="profile-port" name="port" type="number" min="1" max="65535" value="22" inputmode="numeric" /></label><label>Utilisateur SSH<input id="profile-user" name="user" autocomplete="username" placeholder="moi" /></label></div>
+          <fieldset><legend>Identité SSH</legend><label class="choice"><input type="radio" name="identity-source" value="agent" checked /> Utiliser l'agent SSH du Mac</label><label class="choice"><input type="radio" name="identity-source" value="file" /> Référencer un fichier de clé existant</label><label id="identity-file-field" hidden>Chemin absolu de la clé existante<input id="profile-identity-file" name="identity-file" autocomplete="off" spellcheck="false" /></label></fieldset>
+        </div>
+        <label id="local-port-field" hidden>Port du relais local<input id="profile-local-port" name="local-port" type="number" min="1" max="65535" value="17888" inputmode="numeric" /></label>
+        <p id="form-error" class="notice notice-error" hidden role="alert"></p>
+        <footer class="dialog-actions"><button id="cancel-profile" class="secondary" type="button">Annuler</button><button type="submit">Enregistrer</button></footer>
+      </form>
+    </dialog>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

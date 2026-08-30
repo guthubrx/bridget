@@ -1357,3 +1357,81 @@ fn relais_ui_expose_separement_connexion_vitalite_tour_attente_et_file() {
     drop(daemon);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn spec_074_cli_endpoint_lit_l_etat_sans_demarrer_de_relais_ni_divulguer_en_erreur() {
+    let root = root("endpoint-cli");
+    let endpoint_path = root.join(".cache/bridget/ui-endpoint.json");
+    std::fs::create_dir_all(endpoint_path.parent().unwrap()).unwrap();
+    let fixture_token = "fixture-token-074";
+    std::fs::write(
+        &endpoint_path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "port": 17888,
+            "token": fixture_token,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&endpoint_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .args(["ui", "endpoint", "--json"])
+        .env_clear()
+        .env("HOME", &root)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("commande endpoint exécutée");
+    assert!(output.status.success(), "stderr={:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(payload["version"], 1);
+    assert_eq!(payload["port"], 17888);
+    assert_eq!(payload["token"], fixture_token);
+    assert!(
+        String::from_utf8_lossy(&output.stderr).is_empty(),
+        "la lecture nominale ne produit pas de diagnostic"
+    );
+
+    std::fs::remove_file(&endpoint_path).unwrap();
+    let missing = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .args(["ui", "endpoint", "--json"])
+        .env_clear()
+        .env("HOME", &root)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("commande endpoint absente exécutée");
+    assert!(!missing.status.success());
+    assert!(missing.stdout.is_empty(), "aucun contrat partiel en erreur");
+    assert!(
+        !String::from_utf8_lossy(&missing.stderr).contains(fixture_token),
+        "un jeton d'état ne doit jamais fuiter dans une erreur"
+    );
+
+    std::fs::write(
+        &endpoint_path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 99,
+            "port": 17888,
+            "token": fixture_token,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&endpoint_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let invalid = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .args(["ui", "endpoint", "--json"])
+        .env_clear()
+        .env("HOME", &root)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("commande endpoint invalide exécutée");
+    assert!(!invalid.status.success());
+    assert!(invalid.stdout.is_empty(), "aucun contrat partiel en erreur");
+    assert!(
+        !String::from_utf8_lossy(&invalid.stderr).contains(fixture_token),
+        "un jeton d'état invalide ne doit jamais fuiter dans une erreur"
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
