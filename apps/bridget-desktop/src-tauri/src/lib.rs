@@ -531,6 +531,10 @@ pub fn run() {
             .data_store_identifier(browser_data_store_identifier(
                 preferences.browser_profile_generation,
             ))
+            // L'identité de cette surface vient du WebView natif, non de son
+            // URL : WebKit peut restaurer une navigation en retirant son
+            // chemin ou sa query. Le script est injecté avant l'application.
+            .initialization_script("window.__BRIDGET_BROWSER_PANEL__ = true;")
             .on_navigation(|url| {
                 url.scheme() == "https"
                     || (url.scheme() == "http" && url.host_str() == Some("127.0.0.1"))

@@ -7326,6 +7326,7 @@
     if (
       params.get("browser_panel") === "1"
       || windowRef.location.pathname === "/browser-panel"
+      || windowRef.__BRIDGET_BROWSER_PANEL__ === true
     ) return mountBrowserPanel(documentRef, windowRef, token, requestedAgent);
     if (desktopShell) {
       documentRef.body.dataset.desktopShell = "true";
