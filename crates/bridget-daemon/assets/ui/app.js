@@ -2892,6 +2892,31 @@
         assert.equal(turns[5].state, "interrupted");
       });
 
+      test("spec_081_presentation_du_tour_rend_visible_demande_activite_et_reponse", () => {
+        const presentation = api.conversationTurnPresentation({
+          prompt: { kind: "message", role: "user", text: "Lire le rapport" },
+          entries: [
+            { kind: "activity_batch", acts: [{ kind: "command", text: "rg rapport" }] },
+            { kind: "work", durationMs: 2_000 },
+            { kind: "message", role: "agent", text: "Rapport lu." },
+          ],
+        });
+        assert.deepEqual(presentation, {
+          hasPrompt: true,
+          hasAgentResponse: true,
+          hasActivity: true,
+          hasWork: true,
+          accessibleLabel: "Tour : demande humaine, activité de l’agent, travail attesté, réponse de l’agent",
+        });
+        assert.deepEqual(api.conversationTurnPresentation({ entries: [{ kind: "round" }] }), {
+          hasPrompt: false,
+          hasAgentResponse: false,
+          hasActivity: false,
+          hasWork: false,
+          accessibleLabel: "Événement de conversation",
+        });
+      });
+
       function makeFakeEventSource() {
         const urls = [];
         const instances = [];
@@ -5525,6 +5550,31 @@
     });
 
     return turns;
+  }
+
+  // Complexité : O(n), n = entrées déjà bornées d'un seul tour. Cette vue ne
+  // crée aucun fait ; elle donne seulement au DOM les repères de lecture
+  // nécessaires pour distinguer demande, activité et réponse.
+  function conversationTurnPresentation(turn) {
+    const entries = Array.isArray(turn && turn.entries) ? turn.entries : [];
+    const hasPrompt = Boolean(turn && turn.prompt);
+    const hasAgentResponse = entries.some((entry) =>
+      entry && entry.kind === "message" && entry.role !== "user");
+    const hasActivity = entries.some((entry) =>
+      entry && (entry.kind === "activity" || entry.kind === "activity_batch"));
+    const hasWork = entries.some((entry) => entry && entry.kind === "work");
+    const parts = [];
+    if (hasPrompt) parts.push("demande humaine");
+    if (hasActivity) parts.push("activité de l’agent");
+    if (hasWork) parts.push("travail attesté");
+    if (hasAgentResponse) parts.push("réponse de l’agent");
+    return {
+      hasPrompt,
+      hasAgentResponse,
+      hasActivity,
+      hasWork,
+      accessibleLabel: parts.length > 0 ? `Tour : ${parts.join(", ")}` : "Événement de conversation",
+    };
   }
 
   function projectTimeline(events, options = {}) {
@@ -9114,10 +9164,19 @@
     };
 
     const renderMessage = (entry) => {
-      const wrapper = make("article", `message message--${entry.role === "user" ? "user" : "agent"}`);
+      const isUserMessage = entry.role === "user";
+      const wrapper = make("article", `message message--${isUserMessage ? "user" : "agent"}`);
       if (entry.messageId) wrapper.dataset.messageId = entry.messageId;
       wrapper.dataset.messageRole = entry.role;
-      const surface = make("div", entry.role === "user" ? "bubble" : "message-document");
+      const surface = make("div", isUserMessage ? "bubble" : "message-document");
+      if (!isUserMessage) {
+        const agent = state.agents.find((candidate) => candidate.name === entry.agent)
+          || state.agents.find((candidate) => candidate.name === state.selectedAgent);
+        const name = agent ? agentDisplayName(agent) : text(entry.agent, "Agent");
+        const header = make("header", "message-document__header");
+        header.append(make("span", "message-document__eyebrow", `Réponse de ${name}`));
+        surface.append(header);
+      }
       appendMessageContent(surface, entry);
       const meta = make("span", "message-meta", timestamp(entry.at));
       if (entry.status) meta.textContent += ` · ${entry.status}`;
@@ -9655,7 +9714,7 @@
 
     const renderWork = (entry) => {
       const details = make("details", "work-detail");
-      details.append(make("summary", "", `a travaillé ${formatDuration(entry.durationMs)}`));
+      details.append(make("summary", "work-detail__summary", `Travail de l’agent · ${formatDuration(entry.durationMs)}`));
       const reasoning = make("details", "reasoning");
       reasoning.append(make("summary", "", "Délibération"));
       reasoning.append(
@@ -9690,9 +9749,11 @@
     const renderActivityBatch = (entry) => {
       const acts = Array.isArray(entry.acts) ? entry.acts : [];
       const wrapper = make("section", "timeline-action-batch");
+      wrapper.setAttribute("aria-label", "Activité de l’agent");
       if (acts.length === 0) return wrapper;
 
       const preview = activityStreamPreview(acts);
+      const context = make("span", "timeline-action-batch__context", "Activité");
       const previewRow = make("div", "agent-activity__summary");
       previewRow.dataset.state = liveActivityActTone(preview.display);
       previewRow.append(make("span", "agent-activity__act-label", liveActivityActLabel(preview.display)));
@@ -9704,7 +9765,7 @@
         previewRow.append(resolution);
       }
       if (!preview.canExpand) {
-        wrapper.append(previewRow);
+        wrapper.append(context, previewRow);
         return wrapper;
       }
 
@@ -9717,7 +9778,7 @@
         "agent-activity__toggle",
         activityStreamToggleLabel(preview.count, details.open),
       );
-      summary.append(previewRow, toggle);
+      summary.append(context, previewRow, toggle);
       const stream = make("ol", "agent-activity__stream");
       acts.forEach((act) => {
         const row = make("li", "agent-activity__act");
@@ -9889,8 +9950,14 @@
           currentDay = entryDay;
         }
         const turnNode = make("section", "conversation-turn");
+        const presentation = conversationTurnPresentation(turn);
         turnNode.dataset.turnId = turn.key;
         turnNode.dataset.turnState = turn.state;
+        turnNode.dataset.hasPrompt = String(presentation.hasPrompt);
+        turnNode.dataset.hasResponse = String(presentation.hasAgentResponse);
+        turnNode.dataset.hasActivity = String(presentation.hasActivity);
+        turnNode.dataset.hasWork = String(presentation.hasWork);
+        turnNode.setAttribute("aria-label", presentation.accessibleLabel);
         const renderEntry = (entry) => {
           if (entry.kind === "message") turnNode.append(renderMessage(entry));
           else if (entry.kind === "round") turnNode.append(renderRound(entry));
@@ -10875,6 +10942,7 @@
     acceptTimelineEvents,
     projectTimeline,
     deriveConversationTurns,
+    conversationTurnPresentation,
     vigilanceRoundInfo,
     formatPermissionAct,
     JOURNAL_ACT_KINDS,

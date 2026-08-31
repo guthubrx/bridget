@@ -12,15 +12,29 @@ dessous ont été rejouées après l'implémentation le 2026-08-31.
 | `/Users/moi/.cargo/bin/cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml --test desktop_commands --test secrets_and_diagnostics` | succès, 7 tests | snapshot, rechargement natif, navigation externe, absence de capability, secrets |
 | `shasum -a 256 -c SHA256SUMS` depuis `crates/bridget-daemon/assets/ui/vendor` | succès, 5 empreintes | vendor Markdown et coloration |
 | `git diff --check` | succès | espaces et patch |
+| `node crates/bridget-daemon/assets/ui/app.js` après reprise US1 | succès, 112 tests | composition demande, activité, travail et réponse |
+| `/Users/moi/.cargo/bin/cargo fmt --check` après reprise US1 | succès | format Rust |
+| `env TMPDIR=/tmp /Users/moi/.cargo/bin/cargo test -p bridget-daemon ui` | 149 succès, 2 échecs de harnais | les assets UI compilent ; limites temporaires documentées ci-dessous |
+| `env TMPDIR=/tmp /Users/moi/.cargo/bin/cargo test -p bridget-daemon ui::tests::assets_statiques_annoncent_etag_et_revalidation` | succès, 1 test | livraison et revalidation des assets servis par le daemon |
+| `/Users/moi/.cargo/bin/cargo build --release -p bridget-daemon` | succès | binaire release de la reprise US1 |
 
 ## Suite Rust UI complète
 
-`/Users/moi/.cargo/bin/cargo test -p bridget-daemon ui` termine avec 137
-succès et 10 échecs. Les dix échecs sont tous antérieurs à SPEC-081 et ont la
-même cause observée : `path must be shorter than SUN_LEN` avec le worktree
-temporaire `/private/tmp/bridget-project-nav.JNWHqE`. Le test SPEC-081 ciblé
-ci-dessus passe dans ce même worktree. Cette suite n'est donc pas présentée
-comme verte.
+Avec le répertoire temporaire système usuel, la suite ouvre des sockets Unix
+dont le chemin dépasse `SUN_LEN`. Avec `TMPDIR=/tmp`, elle atteint 149 succès,
+mais deux limites de harnais restent observées : une assertion SPEC-080 compare
+la forme logique `/tmp` à la forme canonique `/private/tmp`, et un test de
+présence reçoit `Operation not permitted` en écrivant son état temporaire.
+Ces deux échecs ne proviennent pas des assets JavaScript ou CSS de la reprise
+US1 et ne sont pas présentés comme verts.
+
+## Binaire de validation
+
+Le binaire release de la reprise US1 a été construit dans le worktree isolé.
+Son SHA-256 est
+`4322e26aae5ca17d219dfb0044aa83ef427380f06da0f67f613d1833c2f1ecb3`.
+Il n'est pas encore installé : la validation manuelle ci-dessous reste le
+verrou de fermeture de la SPEC.
 
 ## Validation manuelle restante
 

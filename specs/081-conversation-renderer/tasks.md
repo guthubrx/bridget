@@ -42,6 +42,22 @@
 
 **Checkpoint** : US1 est lisible et testable sans coloration, fichier ou image.
 
+### Reprise de validation visuelle US1
+
+**Constat** : la validation manuelle du 2026-08-31 a confirmé le chargement du
+renderer enrichi, mais a invalidé la lisibilité d'un tour de texte simple : la
+réponse agent sans bulle n'était pas pour autant assez structurée.
+
+- [X] T040 [US1] Ajouter dans `crates/bridget-daemon/assets/ui/app.js` les
+  marqueurs de structure d'un tour et le repère sémantique d'une réponse
+  agent, avec assertions Node sur demande, activité et résultat.
+- [X] T041 [US1] Recomposer dans `crates/bridget-daemon/assets/ui/theme.css`
+  le rythme du fil, le séparateur de tour, le document agent, la bulle humaine
+  et les détails d'activité pour les thèmes clair et sombre.
+- [ ] T042 [US1] Vérifier le scénario texte simple, Markdown et activité dans
+  `quickstart.md`, puis consigner la preuve visuelle réelle avant de refermer
+  US1.
+
 ---
 
 ## Phase 4 - US2 Lire et réutiliser un contenu technique (P1)

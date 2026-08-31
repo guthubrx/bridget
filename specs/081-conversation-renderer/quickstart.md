@@ -10,12 +10,23 @@
 
 ## Fil de conversation
 
-1. Vérifier que la demande humaine est une bulle alignée à droite.
-2. Vérifier que la réponse agent est un document aligné à gauche, sans grande
-   bulle identique à celle de l'humain.
-3. Développer puis replier les activités d'un tour. Le résumé reste visible,
-   l'ordre du fil ne change pas et le brouillon est conservé.
-4. Remonter dans l'historique, provoquer une nouvelle activité et vérifier
+1. Vérifier que la demande humaine est une bulle compacte alignée à droite.
+2. Vérifier que la réponse agent de texte simple est un document aligné à
+   gauche : son libellé « Réponse de … », son filet vertical discret et son
+   horodatage doivent permettre de l'identifier sans la confondre avec une
+   bulle humaine.
+3. Vérifier que deux tours successifs sont séparés par un filet horizontal
+   discret, que ce soit avec une réponse de texte, Markdown ou code. Le tour
+   reste une composition verticale demande, activité éventuelle, réponse.
+4. Développer puis replier les activités d'un tour. Le libellé « Activité » et
+   le résumé restent visibles, l'ordre du fil ne change pas et le brouillon est
+   conservé.
+5. Vérifier qu'un détail « Travail de l'agent » reste distinct de la réponse
+   finale, y compris lorsque le tour est court.
+6. Refaire les vérifications 1 à 5 en thème clair et sombre.
+7. Vérifier sur une fenêtre étroite que le document agent et la bulle humaine
+   ne débordent pas et conservent leur alignement respectif.
+8. Remonter dans l'historique, provoquer une nouvelle activité et vérifier
    que le fil ne revient pas automatiquement en bas. Utiliser le rappel de
    retour au direct.
 

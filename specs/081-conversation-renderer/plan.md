@@ -119,6 +119,20 @@ Préférences locales
    ré-affichage, préserver le brouillon et ajouter un bouton de retour au
    direct quand l'opérateur lit l'historique.
 
+### Lot 2b - Reprise de validation visuelle US1
+
+1. Marquer la structure d'un tour au rendu avec ses faits déjà projetés :
+   demande humaine, activité, travail et réponse agent. Ne pas ajouter de
+   nouveau modèle de données ni de regroupement concurrent.
+2. Donner à la réponse agent une signature documentaire discrète : repère de
+   réponse, rail fin, largeur de lecture stable et méta lisible, sans la
+   transformer en bulle humaine.
+3. Rendre le contour du tour visible par un séparateur fin et un rythme
+   vertical continu. Les activités et le travail restent compacts, mais
+   portent une nature explicite.
+4. Vérifier par assertions de projection, rendu DOM et revue visuelle que le
+   texte simple bénéficie aussi de la composition, pas uniquement Markdown.
+
 ### Lot 3 - Markdown technique et réemploi T3
 
 1. Adapter, avec provenance MIT, l'extraction du langage et du titre de fence

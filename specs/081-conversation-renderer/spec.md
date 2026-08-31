@@ -5,7 +5,7 @@
 
 Spec: 081-conversation-renderer
 Titre: Conversation structurée, Markdown technique et contenus enrichis sûrs
-Statut: Implémentation terminée - validation manuelle en attente
+Statut: In Progress
 Priorité: P1
 
 Résumé:
@@ -17,7 +17,7 @@ Résumé:
 
 **Branche**: `081-conversation-renderer`
 **Créée**: 2026-08-31
-**Statut**: Implémentation terminée - validation manuelle en attente
+**Statut**: In Progress
 **Priorité**: P1
 **Dépendances**: SPEC-069, SPEC-074, SPEC-076, SPEC-080
 
@@ -41,6 +41,13 @@ d'accès implicite.
 L'objectif est de reprendre les qualités de lisibilité observées dans T3 Code,
 dont le code est disponible sous licence MIT, sans recopier aveuglément son
 architecture ni élargir les pouvoirs d'un contenu non fiable.
+
+La première validation manuelle a toutefois invalidé l'acceptation visuelle de
+US1 : le rendu Markdown était bien chargé, mais un texte simple produit une
+réponse agent trop peu délimitée dans un fil large. L'opérateur voit des
+phrases isolées et des vides, au lieu de reconnaître immédiatement le tour,
+son activité et son résultat. Cette reprise complète la composition du tour,
+sans remettre en cause le renderer Markdown ni les frontières de sécurité.
 
 ## Objectifs
 
@@ -103,6 +110,10 @@ successives sans ouvrir les détails techniques inutiles.
 4. **Étant donné** une ronde de vigilance ou un échange inter-agents,
    **quand** il est rendu, **alors** il conserve sa nature distincte et ne se
    fait pas passer pour une réponse humaine ou une réponse d'agent.
+5. **Étant donné** une réponse agent en texte simple dans une conversation
+   large, **quand** l'opérateur la parcourt, **alors** elle est identifiable
+   comme réponse et rattachée visuellement à sa demande sans devenir une
+   bulle identique au message humain ni laisser croire à des messages isolés.
 
 ---
 

@@ -3,6 +3,36 @@
 Ce journal ne consigne que des opérations réellement observées. Il ne contient
 ni secret, ni jeton de relais, ni contenu de conversation de production.
 
+## Reprise US1 - validation manuelle infirmée - 2026-08-31
+
+- Le daemon actif `426b9646ab04` contenait bien le renderer enrichi.
+- La capture de conversation sur texte simple a néanmoins montré que les
+  réponses agents, rendues sans bulle, manquaient d'un repère et d'un contour
+  de tour perceptible. Les fonctionnalités Markdown, code et tableau ne se
+  déclenchent pas sur ce contenu et ne corrigent donc pas cette lecture.
+- La SPEC reste en cours : T040 à T042 reprennent exclusivement la
+  composition visuelle de US1. Aucune preuve visuelle de fermeture n'est
+  déclarée avant un nouveau contrôle manuel.
+- T040 et T041 sont implantées : chaque tour expose ses marqueurs de demande,
+  activité, travail et réponse ; la réponse agent reçoit un libellé et un
+  filet de lecture, tandis que la bulle humaine reste à droite.
+- `node crates/bridget-daemon/assets/ui/app.js` : succès, 112 tests, dont
+  l'assertion de composition US1 ajoutée.
+- `/Users/moi/.cargo/bin/cargo fmt --check` : succès.
+- La suite Rust UI est compilée. Avec `TMPDIR=/tmp`, elle atteint 149 succès
+  et deux échecs de harnais hors périmètre : comparaison `/tmp` contre
+  `/private/tmp` dans SPEC-080, et écriture temporaire refusée dans un test de
+  présence. Sans `TMPDIR` court, les sockets Unix temporaires dépassent la
+  limite `SUN_LEN`. Ces limites ne sont pas masquées par la SPEC.
+- `env TMPDIR=/tmp /Users/moi/.cargo/bin/cargo test -p bridget-daemon
+  ui::tests::assets_statiques_annoncent_etag_et_revalidation` : succès. Le
+  daemon embarque et revalide bien les assets modifiés.
+- `/Users/moi/.cargo/bin/cargo build --release -p bridget-daemon` : succès.
+  Le SHA-256 du binaire de validation est
+  `4322e26aae5ca17d219dfb0044aa83ef427380f06da0f67f613d1833c2f1ecb3`.
+  Il reste isolé dans le worktree tant que la preuve visuelle T042 n'est pas
+  consignée.
+
 ## T004 - Point de départ - 2026-08-31
 
 - `node crates/bridget-daemon/assets/ui/app.js` : succès, 100 tests.
