@@ -4,6 +4,7 @@ pub mod build_identity;
 pub mod build_info;
 pub mod cli;
 mod connection_channel;
+pub mod control_settings;
 pub mod daemon;
 pub mod desired_state;
 pub mod disk_hygiene;

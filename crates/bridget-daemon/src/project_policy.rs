@@ -17,6 +17,28 @@ struct ProjectRootPolicyDocument {
     contract_version: u16,
     policy_generation: u64,
     allowed_project_roots: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_control_receipt: Option<ProjectRootPolicyReceipt>,
+}
+
+/// Reçu compact inclus dans le même document que la politique. Il rend une
+/// répétition réseau identique lisible après l'écriture atomique, sans ouvrir
+/// une seconde base de configuration à synchroniser avec le fichier policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRootPolicyReceipt {
+    pub command_id: String,
+    pub expected_generation: u64,
+    pub resulting_generation: u64,
+    pub allowed_project_roots: Vec<String>,
+    pub observed_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRootPolicyReplacementPreview {
+    pub current_generation: u64,
+    pub current_roots: Vec<PathBuf>,
+    pub requested_roots: Vec<PathBuf>,
 }
 
 /// Racines canoniques explicitement autorisées pour de nouvelles liaisons.
@@ -28,6 +50,7 @@ struct ProjectRootPolicyDocument {
 pub struct ProjectRootPolicy {
     allowed_roots: Vec<PathBuf>,
     generation: u64,
+    last_control_receipt: Option<ProjectRootPolicyReceipt>,
 }
 
 impl ProjectRootPolicy {
@@ -46,6 +69,29 @@ impl ProjectRootPolicy {
         &self.allowed_roots
     }
 
+    pub fn last_control_receipt(&self) -> Option<&ProjectRootPolicyReceipt> {
+        self.last_control_receipt.as_ref()
+    }
+
+    /// Valide une modification sans la persister. La même validation que
+    /// l'écriture est exécutée, ce qui évite un aperçu optimiste mensonger.
+    pub fn preview_replacement(
+        source: &Path,
+        expected_generation: u64,
+        allowed_project_roots: Vec<PathBuf>,
+    ) -> Result<ProjectRootPolicyReplacementPreview, ProjectRegistryRefusal> {
+        let current = Self::load(source)?;
+        if current.generation != expected_generation {
+            return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+        }
+        let requested_roots = validate_replacement_roots(&allowed_project_roots)?;
+        Ok(ProjectRootPolicyReplacementPreview {
+            current_generation: current.generation,
+            current_roots: current.allowed_roots,
+            requested_roots,
+        })
+    }
+
     /// Remplace la politique par une génération suivante, après validation
     /// complète et écriture atomique. Une génération inattendue échoue sans
     /// toucher au fichier courant.
@@ -58,46 +104,60 @@ impl ProjectRootPolicy {
         if current.generation != expected_generation {
             return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
         }
-        let expected_owner = unsafe { libc::geteuid() };
-        let home = daemon_home();
-        let mut seen = BTreeSet::new();
-        for root in &allowed_project_roots {
-            let canonical_root = canonical_directory(root)?;
-            if is_broad_root(&canonical_root, home.as_deref())
-                || canonical_root
-                    .metadata()
-                    .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?
-                    .uid()
-                    != expected_owner
-                || !seen.insert(canonical_root)
-            {
-                return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
-            }
-        }
-        if allowed_project_roots.is_empty() {
-            return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
-        }
-
+        let allowed_project_roots = validate_replacement_roots(&allowed_project_roots)?;
         let document = ProjectRootPolicyDocument {
             contract_version: PROJECT_ROOT_POLICY_CONTRACT_VERSION,
             policy_generation: expected_generation.saturating_add(1),
             allowed_project_roots,
+            last_control_receipt: None,
         };
-        let payload = serde_json::to_vec(&document)
-            .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
-        let temporary = source.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(&temporary)
-            .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
-        file.write_all(&payload)
-            .and_then(|_| file.sync_all())
-            .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
-        std::fs::rename(&temporary, source)
-            .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
+        write_document_atomically(source, &document)?;
+        Self::load(source)
+    }
+
+    /// Variante contrôlée pour l'UI. Une répétition strictement identique du
+    /// même `command_id` retourne le reçu conservé dans la politique; le même
+    /// identifiant avec une autre génération ou d'autres racines est refusé.
+    pub fn replace_atomically_with_receipt(
+        source: &Path,
+        command_id: String,
+        expected_generation: u64,
+        allowed_project_roots: Vec<PathBuf>,
+        observed_at: i64,
+    ) -> Result<Self, ProjectRegistryRefusal> {
+        let current = Self::load(source)?;
+        let requested_roots = validate_replacement_roots(&allowed_project_roots)?;
+        let requested_strings = requested_roots
+            .iter()
+            .map(|root| root.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        if let Some(receipt) = current.last_control_receipt() {
+            if receipt.command_id == command_id {
+                if receipt.expected_generation == expected_generation
+                    && receipt.allowed_project_roots == requested_strings
+                {
+                    return Ok(current);
+                }
+                return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+            }
+        }
+        if current.generation != expected_generation {
+            return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+        }
+        let resulting_generation = expected_generation.saturating_add(1);
+        let document = ProjectRootPolicyDocument {
+            contract_version: PROJECT_ROOT_POLICY_CONTRACT_VERSION,
+            policy_generation: resulting_generation,
+            allowed_project_roots: requested_roots,
+            last_control_receipt: Some(ProjectRootPolicyReceipt {
+                command_id,
+                expected_generation,
+                resulting_generation,
+                allowed_project_roots: requested_strings,
+                observed_at,
+            }),
+        };
+        write_document_atomically(source, &document)?;
         Self::load(source)
     }
 
@@ -148,6 +208,8 @@ impl ProjectRootPolicy {
             return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
         }
 
+        let policy_generation = document.policy_generation;
+        let last_control_receipt = document.last_control_receipt;
         let mut seen = BTreeSet::new();
         let mut allowed_roots = Vec::with_capacity(document.allowed_project_roots.len());
         for root in document.allowed_project_roots {
@@ -167,7 +229,8 @@ impl ProjectRootPolicy {
 
         Ok(Self {
             allowed_roots,
-            generation: document.policy_generation,
+            generation: policy_generation,
+            last_control_receipt,
         })
     }
 
@@ -202,6 +265,54 @@ impl ProjectRootPolicy {
         }
         Ok(canonical_root)
     }
+}
+
+fn validate_replacement_roots(
+    allowed_project_roots: &[PathBuf],
+) -> Result<Vec<PathBuf>, ProjectRegistryRefusal> {
+    if allowed_project_roots.is_empty() {
+        return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+    }
+    let expected_owner = unsafe { libc::geteuid() };
+    let home = daemon_home();
+    let mut seen = BTreeSet::new();
+    let mut canonical_roots = Vec::with_capacity(allowed_project_roots.len());
+    for root in allowed_project_roots {
+        let canonical_root = canonical_directory(root)?;
+        if is_broad_root(&canonical_root, home.as_deref())
+            || canonical_root
+                .metadata()
+                .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?
+                .uid()
+                != expected_owner
+            || !seen.insert(canonical_root.clone())
+        {
+            return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+        }
+        canonical_roots.push(canonical_root);
+    }
+    Ok(canonical_roots)
+}
+
+fn write_document_atomically(
+    source: &Path,
+    document: &ProjectRootPolicyDocument,
+) -> Result<(), ProjectRegistryRefusal> {
+    let payload = serde_json::to_vec(document)
+        .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
+    let temporary = source.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&temporary)
+        .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
+    file.write_all(&payload)
+        .and_then(|_| file.sync_all())
+        .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
+    std::fs::rename(&temporary, source)
+        .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)
 }
 
 fn canonical_directory(root: &Path) -> Result<PathBuf, ProjectRegistryRefusal> {
@@ -436,5 +547,44 @@ mod tests {
         let raw: serde_json::Value =
             serde_json::from_slice(&fs::read(&fixture.policy).unwrap()).unwrap();
         assert_eq!(raw["policy_generation"], 2);
+    }
+
+    #[test]
+    fn spec_080_applique_avec_recu_et_accepte_un_rejeu_identique() {
+        let fixture = Fixture::new();
+        fixture.write_policy(fixture.valid_document());
+        let first = ProjectRootPolicy::replace_atomically_with_receipt(
+            &fixture.policy,
+            "control-1".to_string(),
+            1,
+            vec![fixture.allowed.clone()],
+            100,
+        )
+        .unwrap();
+        assert_eq!(first.generation(), 2);
+        assert_eq!(
+            first.last_control_receipt().unwrap().resulting_generation,
+            2
+        );
+        let replay = ProjectRootPolicy::replace_atomically_with_receipt(
+            &fixture.policy,
+            "control-1".to_string(),
+            1,
+            vec![fixture.allowed.clone()],
+            101,
+        )
+        .unwrap();
+        assert_eq!(replay.generation(), 2);
+        assert_eq!(replay.last_control_receipt().unwrap().observed_at, 100);
+        assert!(
+            ProjectRootPolicy::replace_atomically_with_receipt(
+                &fixture.policy,
+                "control-1".to_string(),
+                2,
+                vec![fixture.allowed.clone()],
+                102,
+            )
+            .is_err()
+        );
     }
 }

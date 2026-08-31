@@ -1,5 +1,6 @@
 const elements = {
   add: document.querySelector("#add-profile"), dialog: document.querySelector("#profile-dialog"), close: document.querySelector("#close-dialog"), cancel: document.querySelector("#cancel-profile"), form: document.querySelector("#profile-form"), list: document.querySelector("#profiles-list"), empty: document.querySelector("#empty-state"), status: document.querySelector("#app-status"), connectionStatus: document.querySelector("#connection-status"), showProfiles: document.querySelector("#show-profiles"), activePanels: document.querySelector("#active-panels"), loadError: document.querySelector("#load-error"), formError: document.querySelector("#form-error"), title: document.querySelector("#profile-dialog-title"), id: document.querySelector("#profile-id"), label: document.querySelector("#profile-label"), host: document.querySelector("#profile-host"), port: document.querySelector("#profile-port"), user: document.querySelector("#profile-user"), identityFileField: document.querySelector("#identity-file-field"), identityFile: document.querySelector("#profile-identity-file"), hostIdentityDialog: document.querySelector("#host-identity-dialog"), hostIdentityServer: document.querySelector("#host-identity-server"), hostIdentityFingerprint: document.querySelector("#host-identity-fingerprint"),
+  showPreferences: document.querySelector("#show-preferences"), preferencesDialog: document.querySelector("#preferences-dialog"), preferencesForm: document.querySelector("#preferences-form"), closePreferences: document.querySelector("#close-preferences"), cancelPreferences: document.querySelector("#cancel-preferences"), preferencesDisplayName: document.querySelector("#preferences-display-name"), preferencesColorScheme: document.querySelector("#preferences-color-scheme"), preferencesTimezone: document.querySelector("#preferences-timezone"), preferencesFontSize: document.querySelector("#preferences-font-size"), preferencesError: document.querySelector("#preferences-error"), desktopVersion: document.querySelector("#desktop-version"), desktopUpdateStatus: document.querySelector("#desktop-update-status"),
 };
 
 let profiles = [];
@@ -136,7 +137,63 @@ async function showProfiles() {
   } catch (error) { visibleError(elements.loadError, error); }
 }
 
+function applyLocalPreferences(preferences) {
+  document.documentElement.dataset.colorScheme = preferences.color_scheme;
+  document.documentElement.style.fontSize = `${preferences.font_size_px}px`;
+  document.querySelector(".product-name span").textContent = preferences.display_name || "client";
+}
+
+function fillPreferencesForm(preferences) {
+  elements.preferencesDisplayName.value = preferences.display_name || "";
+  elements.preferencesColorScheme.value = preferences.color_scheme || "system";
+  elements.preferencesTimezone.value = preferences.timezone || "system";
+  elements.preferencesFontSize.value = String(preferences.font_size_px || 16);
+  clearError(elements.preferencesError);
+}
+
+function localPreferencesDraft() {
+  const timezone = elements.preferencesTimezone.value.trim() || "system";
+  if (timezone !== "system") {
+    try { Intl.DateTimeFormat(undefined, { timeZone: timezone }); }
+    catch (_error) { throw new Error("Le fuseau doit être un identifiant IANA, par exemple Europe/Paris."); }
+  }
+  return {
+    display_name: elements.preferencesDisplayName.value.trim(),
+    color_scheme: elements.preferencesColorScheme.value,
+    timezone,
+    font_size_px: Number(elements.preferencesFontSize.value),
+  };
+}
+
+async function openPreferences() {
+  try {
+    const [preferences, about] = await Promise.all([invoke("preferences_get"), invoke("desktop_about")]);
+    fillPreferencesForm(preferences); applyLocalPreferences(preferences);
+    elements.desktopVersion.textContent = `Version ${about.version}`;
+    elements.desktopUpdateStatus.textContent = about.update_status === "not_configured"
+      ? "Vérification de mise à jour non configurée."
+      : "État de mise à jour indisponible.";
+    elements.preferencesDialog.showModal();
+    window.requestAnimationFrame(() => elements.preferencesDisplayName.focus());
+  } catch (error) { visibleError(elements.loadError, error); }
+}
+
+function closePreferences() { elements.preferencesDialog.close(); }
+
+async function savePreferences(event) {
+  event.preventDefault(); clearError(elements.preferencesError);
+  try {
+    const saved = await invoke("preferences_save", { preferences: localPreferencesDraft() });
+    applyLocalPreferences(saved); closePreferences(); announce("Réglages locaux enregistrés sur ce Mac.");
+  } catch (error) { visibleError(elements.preferencesError, error); }
+}
+
+async function restoreLocalPreferences() {
+  try { applyLocalPreferences(await invoke("preferences_get")); } catch (_error) { /* l'ouverture des serveurs reste disponible */ }
+}
+
 elements.add.addEventListener("click", () => openProfileDialog()); elements.close.addEventListener("click", closeProfileDialog); elements.cancel.addEventListener("click", closeProfileDialog); elements.showProfiles.addEventListener("click", () => void showProfiles()); document.querySelectorAll("input[name='identity-source']").forEach((input) => input.addEventListener("change", syncIdentityField)); elements.form.addEventListener("submit", saveProfile);
+elements.showPreferences.addEventListener("click", () => void openPreferences()); elements.closePreferences.addEventListener("click", closePreferences); elements.cancelPreferences.addEventListener("click", closePreferences); elements.preferencesForm.addEventListener("submit", savePreferences);
 elements.list.addEventListener("click", (event) => { const button = event.target.closest("button[data-action]"); if (!button) return; const profile = profiles.find((candidate) => candidate.id === button.dataset.profileId); if (!profile) return; if (button.dataset.action === "edit") openProfileDialog(profile); if (button.dataset.action === "delete") void deleteProfile(profile); if (button.dataset.action === "connect") void connectProfile(profile); if (button.dataset.action === "open") void openPanel(profile).catch((error) => visibleError(elements.loadError, error)); if (button.dataset.action === "disconnect") void disconnectProfile(profile); });
 
 const eventApi = window.__TAURI__?.event;
@@ -147,4 +204,5 @@ if (eventApi?.listen) void eventApi.listen("connection-state", (event) => {
   if (profile && state.state === "failed") setConnectionMessage(`Le tunnel de ${profile.label} s'est arrêté. Réessayez explicitement si nécessaire.`);
 });
 
+void restoreLocalPreferences();
 void refreshProfiles();

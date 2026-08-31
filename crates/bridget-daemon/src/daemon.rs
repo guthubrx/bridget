@@ -5748,6 +5748,7 @@ fn handle_usage(
     agent: &str,
     tokens: bridget_transport::protocol::UsageTokens,
     source: bridget_transport::protocol::UsageSource,
+    provider_kind: Option<String>,
     execution_id: Option<String>,
     execution_generation: Option<u64>,
     state: &mut DaemonState,
@@ -5762,17 +5763,23 @@ fn handle_usage(
             reason: "horloge indisponible".to_string(),
         };
     }
-    if presence_of_agent(state, agent).is_none() {
+    let Some((registered_provider, observed_model)) = presence_of_agent(state, agent)
+        .map(|presence| (presence.agent_type.clone(), presence.model.clone()))
+    else {
         return DaemonToWrapper::Nack {
             id: "usage".to_string(),
             reason: format!("agent introuvable: {agent}"),
         };
-    }
-    if let Err(error) =
-        state
-            .store
-            .record_usage_sample(agent, observed_at, tokens, &source.to_string())
-    {
+    };
+    let provider_kind = provider_kind.unwrap_or(registered_provider);
+    if let Err(error) = state.store.record_usage_sample(
+        agent,
+        observed_at,
+        tokens,
+        &source.to_string(),
+        Some(provider_kind.as_str()),
+        observed_model.as_deref(),
+    ) {
         return DaemonToWrapper::Nack {
             id: "usage".to_string(),
             reason: format!("ledger usage: {error}"),
@@ -11217,6 +11224,7 @@ fn handle_wrapper_message(
             output_tokens,
             cache_creation_input_tokens,
             cache_read_input_tokens,
+            provider_kind,
             source,
         } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -11229,6 +11237,7 @@ fn handle_wrapper_message(
                     cache_read_input_tokens,
                 },
                 source,
+                provider_kind,
                 execution_id,
                 execution_generation,
                 &mut st,
@@ -18583,6 +18592,7 @@ mod presence_tests {
                 cache_read_input_tokens: 13_907,
             },
             UsageSource::ClaudeStreamJson,
+            None,
             None,
             None,
             &mut state,

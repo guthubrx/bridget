@@ -110,6 +110,30 @@ pub struct LedgerSearchOutcome {
     pub truncated: bool,
 }
 
+/// Agrégat d'usage affichable par le centre de contrôle. Les champs de
+/// fournisseur et de modèle restent absents pour les échantillons hérités :
+/// l'interface doit alors les annoncer comme inconnus, jamais les deviner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageDashboardRow {
+    pub provider_kind: Option<String>,
+    pub model: Option<String>,
+    pub source: String,
+    pub samples: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
+}
+
+impl UsageDashboardRow {
+    pub fn total_tokens(&self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.cache_creation_input_tokens)
+            .saturating_add(self.cache_read_input_tokens)
+    }
+}
+
 /// Requête de guichet validée par le daemon avant toute persistance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuichetDeposit {
@@ -619,6 +643,8 @@ impl Store {
                  output_tokens INTEGER NOT NULL,
                  cache_creation_input_tokens INTEGER NOT NULL,
                  cache_read_input_tokens INTEGER NOT NULL,
+                 provider_kind TEXT,
+                 model TEXT,
                  source TEXT NOT NULL
              );
              CREATE INDEX IF NOT EXISTS idx_usage_samples_agent_ts
@@ -678,6 +704,19 @@ impl Store {
                  outcome_json BLOB NOT NULL,
                  observed_at INTEGER NOT NULL
              );",
+        )
+        .map_err(StoreError::Sqlite)?;
+        // Migration additive : les échantillons historiques restent valides
+        // mais sans fournisseur/modèle attesté. Ne surtout pas les compléter
+        // depuis l'état courant d'un agent.
+        let _ = conn.execute(
+            "ALTER TABLE usage_samples ADD COLUMN provider_kind TEXT",
+            [],
+        );
+        let _ = conn.execute("ALTER TABLE usage_samples ADD COLUMN model TEXT", []);
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_usage_samples_dashboard
+                ON usage_samples(observed_at, provider_kind, model);",
         )
         .map_err(StoreError::Sqlite)?;
         ensure_project_bindings_runtime_schema(conn)?;
@@ -1532,13 +1571,16 @@ impl Store {
         observed_at: i64,
         tokens: bridget_transport::protocol::UsageTokens,
         source: &str,
+        provider_kind: Option<&str>,
+        model: Option<&str>,
     ) -> Result<(), StoreError> {
         self.conn
             .execute(
                 "INSERT INTO usage_samples (
                      agent, observed_at, input_tokens, output_tokens,
-                     cache_creation_input_tokens, cache_read_input_tokens, source
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                     cache_creation_input_tokens, cache_read_input_tokens,
+                     provider_kind, model, source
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     agent,
                     observed_at,
@@ -1546,11 +1588,53 @@ impl Store {
                     tokens.output_tokens as i64,
                     tokens.cache_creation_input_tokens as i64,
                     tokens.cache_read_input_tokens as i64,
+                    provider_kind,
+                    model,
                     source,
                 ],
             )
             .map_err(StoreError::Sqlite)?;
         Ok(())
+    }
+
+    /// Agrège les faits d'usage du serveur dans une fenêtre fermée. Le coût
+    /// n'est pas calculé ici : sans grille de prix versionnée, un montant
+    /// serait une invention comptable.
+    pub fn usage_dashboard_window(
+        &self,
+        from_secs: i64,
+        to_secs: i64,
+    ) -> Result<Vec<UsageDashboardRow>, StoreError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT provider_kind, model, source, COUNT(*),
+                        COALESCE(SUM(input_tokens), 0),
+                        COALESCE(SUM(output_tokens), 0),
+                        COALESCE(SUM(cache_creation_input_tokens), 0),
+                        COALESCE(SUM(cache_read_input_tokens), 0)
+                 FROM usage_samples
+                 WHERE observed_at >= ?1 AND observed_at <= ?2
+                 GROUP BY provider_kind, model, source
+                 ORDER BY provider_kind IS NULL, provider_kind, model IS NULL, model, source",
+            )
+            .map_err(StoreError::Sqlite)?;
+        let rows = statement
+            .query_map(params![from_secs, to_secs], |row| {
+                Ok(UsageDashboardRow {
+                    provider_kind: row.get(0)?,
+                    model: row.get(1)?,
+                    source: row.get(2)?,
+                    samples: row.get::<_, i64>(3)? as u64,
+                    input_tokens: row.get::<_, i64>(4)? as u64,
+                    output_tokens: row.get::<_, i64>(5)? as u64,
+                    cache_creation_input_tokens: row.get::<_, i64>(6)? as u64,
+                    cache_read_input_tokens: row.get::<_, i64>(7)? as u64,
+                })
+            })
+            .map_err(StoreError::Sqlite)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Sqlite)
     }
 
     /// Agrège les échantillons d'un agent dans `[from_secs, to_secs]`.
@@ -4516,6 +4600,8 @@ mod tests {
                     cache_read_input_tokens: 13_907,
                 },
                 "claude-stream-json",
+                Some("claude"),
+                Some("claude-opus-5"),
             )
             .unwrap();
         let aggregate = store
@@ -4528,6 +4614,19 @@ mod tests {
         assert_eq!(aggregate.cache_creation_input_tokens, 40_804);
         assert_eq!(aggregate.cache_read_input_tokens, 13_907);
         assert_eq!(aggregate.facturable_tokens, 40_981);
+        assert_eq!(
+            store.usage_dashboard_window(1, 100).unwrap(),
+            vec![UsageDashboardRow {
+                provider_kind: Some("claude".to_string()),
+                model: Some("claude-opus-5".to_string()),
+                source: "claude-stream-json".to_string(),
+                samples: 1,
+                input_tokens: 2,
+                output_tokens: 175,
+                cache_creation_input_tokens: 40_804,
+                cache_read_input_tokens: 13_907,
+            }]
+        );
         assert_eq!(
             store.aggregate_usage_window("claude-1", 80, 100).unwrap(),
             None

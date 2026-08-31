@@ -4647,14 +4647,18 @@ struct ManagedExecutionBinding {
 /// L usage ne reçoit une ascendance que si le wrapper ne porte qu un seul
 /// tour vivant. Plusieurs bindings rendent l attribution ambiguë : le fait
 /// reste visible par agent, mais ne peut pas consommer un budget d exécution.
-fn usage_execution_identity(
+fn usage_execution_context(
     bindings: &HashMap<String, ManagedExecutionBinding>,
-) -> (Option<String>, Option<u64>) {
+) -> (Option<String>, Option<u64>, Option<String>) {
     if bindings.len() != 1 {
-        return (None, None);
+        return (None, None, None);
     }
     let binding = bindings.values().next().expect("binding unique");
-    (Some(binding.execution_id.clone()), Some(binding.generation))
+    (
+        Some(binding.execution_id.clone()),
+        Some(binding.generation),
+        Some(binding.provider_kind.clone()),
+    )
 }
 /// Publie uniquement une identité fournisseur réellement observée, corrélée aux
 /// exécutions vivantes. L'absence de baseline reste une absence durable : elle
@@ -5302,19 +5306,24 @@ fn forward_managed_events_with_redaction(
                 cache_creation_input_tokens,
                 cache_read_input_tokens,
             } => match source {
-                bridget_transport::ManagedEventSource::ClaudeStreamJson => send_wrapper_message(
-                    writer,
-                    WrapperToDaemon::Usage {
-                        agent: my_name.to_string(),
-                        input_tokens,
-                        output_tokens,
-                        execution_id: usage_execution_identity(bindings).0,
-                        execution_generation: usage_execution_identity(bindings).1,
-                        cache_creation_input_tokens,
-                        cache_read_input_tokens,
-                        source: bridget_transport::protocol::UsageSource::ClaudeStreamJson,
-                    },
-                ),
+                bridget_transport::ManagedEventSource::ClaudeStreamJson => {
+                    let (execution_id, execution_generation, provider_kind) =
+                        usage_execution_context(bindings);
+                    send_wrapper_message(
+                        writer,
+                        WrapperToDaemon::Usage {
+                            agent: my_name.to_string(),
+                            input_tokens,
+                            output_tokens,
+                            execution_id,
+                            execution_generation,
+                            cache_creation_input_tokens,
+                            cache_read_input_tokens,
+                            provider_kind,
+                            source: bridget_transport::protocol::UsageSource::ClaudeStreamJson,
+                        },
+                    )
+                }
                 bridget_transport::ManagedEventSource::Acp
                 | bridget_transport::ManagedEventSource::CodexAppServer => {
                     warn!("fait d'usage ignoré : source ACP/Codex non autorisée pour L4")
@@ -6863,6 +6872,7 @@ mod reconnect_tests {
                 execution_generation: None,
                 cache_creation_input_tokens: 40_804,
                 cache_read_input_tokens: 13_907,
+                provider_kind: None,
                 source: bridget_transport::protocol::UsageSource::ClaudeStreamJson,
             } if agent == "claude-1"
         ));

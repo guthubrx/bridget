@@ -2136,6 +2136,127 @@ code {
   padding: 0 0.1rem 0 4.6rem;
 }
 
+.agent-pane__footer {
+  position: sticky;
+  bottom: -1.15rem;
+  z-index: 2;
+  margin-top: 1rem;
+  padding: 0.7rem 0.1rem 1.15rem;
+  background: linear-gradient(to bottom, transparent, #101010 28%);
+}
+
+.agent-pane__settings {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.6rem;
+  border-radius: 0.62rem;
+  background: transparent;
+  color: var(--agent-pane-secondary);
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+}
+
+.agent-pane__settings:hover,
+.agent-pane__settings:focus-visible {
+  background: var(--agent-pane-hover-surface);
+  color: var(--text-primary);
+}
+
+.control-center {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.control-center__intro,
+.control-center__help,
+.control-center__status,
+.control-center__preview,
+.control-center__empty,
+.usage-dashboard__row span,
+.usage-dashboard__row small {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.79rem;
+  line-height: 1.45;
+}
+
+.control-center__tabs,
+.control-center__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.control-center__tabs .quiet-action[data-active="true"] {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.control-center__categories {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.control-center__category,
+.usage-dashboard__row {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.7rem;
+  border-radius: var(--radius-small);
+  background: var(--card);
+}
+
+.control-center__category strong,
+.usage-dashboard__row strong {
+  font-size: 0.84rem;
+}
+
+.control-center__badge {
+  width: fit-content;
+  margin-top: 0.12rem;
+  color: var(--agent-pane-secondary);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.control-center__roots-label,
+.control-center__period-label {
+  display: grid;
+  gap: 0.42rem;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.control-center__roots,
+.control-center__period-label select {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: var(--radius-small);
+  background: var(--background);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.control-center__roots {
+  min-height: 6rem;
+  padding: 0.6rem;
+  resize: vertical;
+}
+
+.control-center__period-label select {
+  padding: 0.5rem;
+}
+
+.usage-dashboard {
+  display: grid;
+  gap: 0.55rem;
+}
+
 .agent-pane .fleet-count {
   margin-left: auto;
   border-radius: 0.5rem;
