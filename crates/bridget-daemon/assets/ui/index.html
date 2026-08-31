@@ -7,10 +7,15 @@
     <title>Bridget</title>
     <link id="highlight-theme-light" rel="stylesheet" href="/vendor/highlight-github-light.min.css" media="(prefers-color-scheme: light)">
     <link id="highlight-theme-dark" rel="stylesheet" href="/vendor/highlight-github-dark.min.css" media="(prefers-color-scheme: dark)">
+    <link rel="stylesheet" href="/vendor/tabulator.min.css">
     <link rel="stylesheet" href="/theme.css">
     <script src="/vendor/marked.min.js"></script>
     <script src="/vendor/purify.min.js"></script>
     <script src="/vendor/highlight.min.js"></script>
+    <script src="/vendor/echarts.min.js"></script>
+    <script src="/vendor/tabulator.min.js"></script>
+    <script src="/artifact-renderer.js"></script>
+    <script src="/artifact-sandbox-host.js"></script>
     <script type="module" src="/app.js"></script>
   </head>
   <body>
@@ -127,6 +132,10 @@
               <h2 id="selected-agent">Aucun agent</h2>
               <p id="selected-meta">Sélectionnez un agent dans la liste.</p>
             </div>
+          </div>
+          <div class="conversation-layout-controls" aria-label="Disposition">
+            <button id="browser-panel-toggle" type="button" aria-label="Afficher ou masquer le panneau latéral" aria-pressed="false">◧</button>
+            <button id="browser-panel-maximize" type="button" aria-label="Agrandir le panneau latéral" aria-pressed="false">⤢</button>
           </div>
           <span class="connection-indicator" id="connection-indicator">hors ligne</span>
         </header>

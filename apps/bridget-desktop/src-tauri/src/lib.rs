@@ -4,6 +4,8 @@
 //! SPEC-074. La première coque n'accorde des capabilities qu'à son webview
 //! locale; les panneaux distants sont créés avec d'autres labels.
 
+pub mod artifact_cache;
+pub mod artifact_sandbox;
 pub mod connection;
 pub mod fleet;
 pub mod host_identity;
@@ -30,8 +32,8 @@ pub fn run() {
         HostIdentityStatus, HostIdentityTicket, SystemHostKeyCommandRunner, approve_host_identity,
         check_host_identity,
     };
-    use crate::panels::PanelRegistry;
-    use crate::preferences_store::{DesktopPreferences, PreferencesStore};
+    use crate::panels::{PanelRegistry, is_browser_target};
+    use crate::preferences_store::{BrowserPanelStateV1, DesktopPreferences, PreferencesStore};
     use crate::profile::{ConnectionProfile, ProfileDraft};
     use crate::profile_service::ProfileService;
     use crate::profile_store::{ClientIdentityStore, ProfileStore};
@@ -39,7 +41,6 @@ pub fn run() {
     use std::io::{Read, Write};
     use std::net::{Ipv4Addr, SocketAddr, TcpStream};
     use std::path::PathBuf;
-    use std::process::Command;
     use std::sync::Mutex;
     use std::time::Duration;
     use tauri::webview::WebviewBuilder;
@@ -410,6 +411,132 @@ pub fn run() {
         });
     }
 
+    fn browser_data_store_identifier(generation: u64) -> [u8; 16] {
+        let mut identifier = [0_u8; 16];
+        identifier[..8].copy_from_slice(&generation.to_be_bytes());
+        identifier[8..].copy_from_slice(b"bridget!");
+        identifier
+    }
+
+    fn browser_preferences(state: &DesktopState) -> Result<BrowserPanelStateV1, String> {
+        state
+            .preferences
+            .lock()
+            .map_err(as_message)?
+            .load()
+            .map(|preferences| preferences.browser_panel)
+            .map_err(as_message)
+    }
+
+    fn save_browser_preferences(
+        state: &DesktopState,
+        update: impl FnOnce(&mut BrowserPanelStateV1),
+    ) -> Result<BrowserPanelStateV1, String> {
+        let store = state.preferences.lock().map_err(as_message)?;
+        let mut preferences = store.load().map_err(as_message)?;
+        update(&mut preferences.browser_panel);
+        store.save(preferences.clone()).map_err(as_message)?;
+        Ok(preferences.browser_panel)
+    }
+
+    fn open_browser_surface(
+        app: &tauri::AppHandle,
+        state: &DesktopState,
+        target: &str,
+    ) -> Result<(), String> {
+        if !is_browser_target(target) {
+            return Err(
+                "La cible Browser doit être HTTPS ou une publication locale Bridget.".to_owned(),
+            );
+        }
+        let url = target
+            .parse::<tauri::Url>()
+            .map_err(|_| "URL Browser invalide.".to_owned())?;
+        let browser = {
+            let mut panels = state.panels.lock().map_err(as_message)?;
+            panels.open_browser(target).map_err(as_message)?
+        };
+        let preferences =
+            save_browser_preferences(state, |panel| panel.right_panel_visible = true)?;
+        if let Some(webview) = app.get_webview(&browser.label) {
+            webview.navigate(url).map_err(as_message)?;
+            arrange_panels(app, state)?;
+            return Ok(());
+        }
+        let main = main_window(app)?;
+        let child = WebviewBuilder::new(browser.label.clone(), WebviewUrl::External(url))
+            .data_store_identifier(browser_data_store_identifier(
+                preferences.browser_profile_generation,
+            ))
+            .on_navigation(|url| {
+                (url.scheme() == "https" && url.host_str().is_some())
+                    || (url.scheme() == "http" && url.host_str() == Some("127.0.0.1"))
+            });
+        main.add_child(
+            child,
+            PhysicalPosition::new(0_i32, 0_i32),
+            PhysicalSize::new(1_u32, 1_u32),
+        )
+        .map_err(as_message)?;
+        arrange_panels(app, state)
+    }
+
+    fn open_browser_home_surface(
+        app: &tauri::AppHandle,
+        state: &DesktopState,
+    ) -> Result<(), String> {
+        let relay_target = state
+            .panels
+            .lock()
+            .map_err(as_message)?
+            .panels()
+            .next()
+            .map(|panel| panel.url.clone());
+        let target = relay_target
+            .map(|value| {
+                let mut url = value.parse::<tauri::Url>().expect("relais déjà validé");
+                let mut query = url.query().unwrap_or_default().to_owned();
+                if !query.is_empty() {
+                    query.push('&');
+                }
+                query.push_str("browser_panel=1");
+                url.set_query(Some(&query));
+                url.to_string()
+            })
+            .unwrap_or_else(|| "bridget://browser-home".to_owned());
+        let browser = {
+            let mut panels = state.panels.lock().map_err(as_message)?;
+            panels.open_browser(&target).map_err(as_message)?
+        };
+        let preferences =
+            save_browser_preferences(state, |panel| panel.right_panel_visible = true)?;
+        if app.get_webview(&browser.label).is_some() {
+            return arrange_panels(app, state);
+        }
+        let main = main_window(app)?;
+        let initial_url = if target == "bridget://browser-home" {
+            WebviewUrl::App("browser-home.html".into())
+        } else {
+            WebviewUrl::External(target.parse::<tauri::Url>().map_err(as_message)?)
+        };
+        let child = WebviewBuilder::new(browser.label, initial_url)
+            .data_store_identifier(browser_data_store_identifier(
+                preferences.browser_profile_generation,
+            ))
+            .on_navigation(|url| {
+                url.scheme() == "https"
+                    || (url.scheme() == "http" && url.host_str() == Some("127.0.0.1"))
+                    || url.scheme() == "tauri"
+            });
+        main.add_child(
+            child,
+            PhysicalPosition::new(0_i32, 0_i32),
+            PhysicalSize::new(1_u32, 1_u32),
+        )
+        .map_err(as_message)?;
+        arrange_panels(app, state)
+    }
+
     fn close_panel_for_profile(
         app: &tauri::AppHandle,
         state: &DesktopState,
@@ -427,8 +554,7 @@ pub fn run() {
             if let Some(webview) = app.get_webview(&panel.label) {
                 webview.close().map_err(as_message)?;
             }
-            let panels = state.panels.lock().map_err(as_message)?;
-            arrange_panels(app, &panels)?;
+            arrange_panels(app, state)?;
         }
         Ok(())
     }
@@ -486,19 +612,48 @@ pub fn run() {
             .ok_or_else(|| "La fenêtre Bridget Desktop est indisponible.".to_owned())
     }
 
-    fn arrange_panels(app: &tauri::AppHandle, panels: &PanelRegistry) -> Result<(), String> {
+    fn arrange_panels(app: &tauri::AppHandle, state: &DesktopState) -> Result<(), String> {
         let main = main_window(app)?;
         let size = main.inner_size().map_err(as_message)?;
-        let Some(panel) = panels.panels().next() else {
+        let (relay, browser) = {
+            let panels = state.panels.lock().map_err(as_message)?;
+            (panels.panels().next().cloned(), panels.browser().cloned())
+        };
+        let Some(panel) = relay else {
             return Ok(());
         };
+        let browser_preferences = browser_preferences(state)?;
+        let browser_width = if browser_preferences.right_panel_visible && browser.is_some() {
+            size.width
+                .saturating_sub(DESKTOP_SHELL_WIDTH)
+                .clamp(320, 720)
+        } else {
+            0
+        };
+        let relay_width = if browser_preferences.right_panel_maximized && browser_width > 0 {
+            1
+        } else {
+            size.width
+                .saturating_sub(DESKTOP_SHELL_WIDTH + browser_width)
+                .max(1)
+        };
         if let Some(webview) = app.get_webview(&panel.label) {
-            let panel_width = size.width.saturating_sub(DESKTOP_SHELL_WIDTH).max(1);
             webview
                 .set_position(PhysicalPosition::new(DESKTOP_SHELL_WIDTH as i32, 0_i32))
                 .map_err(as_message)?;
             webview
-                .set_size(PhysicalSize::new(panel_width, size.height.max(1)))
+                .set_size(PhysicalSize::new(relay_width, size.height.max(1)))
+                .map_err(as_message)?;
+        }
+        if let Some(browser) = browser
+            && let Some(webview) = app.get_webview(&browser.label)
+        {
+            let browser_x = DESKTOP_SHELL_WIDTH.saturating_add(relay_width) as i32;
+            webview
+                .set_position(PhysicalPosition::new(browser_x, 0_i32))
+                .map_err(as_message)?;
+            webview
+                .set_size(PhysicalSize::new(browser_width.max(1), size.height.max(1)))
                 .map_err(as_message)?;
         }
         Ok(())
@@ -571,6 +726,7 @@ pub fn run() {
             .save(preferences.clone())
             .map_err(as_message)?;
         reload_panels_after_preferences_save(&app, &state);
+        arrange_panels(&app, &state)?;
         Ok(preferences)
     }
 
@@ -806,9 +962,10 @@ pub fn run() {
             .load()
             .map_err(as_message)?;
         let security_script = content_security_script(&preferences)?;
+        let navigation_app = app.clone();
         let child = WebviewBuilder::new(panel.label.clone(), WebviewUrl::External(external_url))
             .initialization_script(security_script)
-            .on_navigation(|url| {
+            .on_navigation(move |url| {
                 if url.scheme() == "http" && url.host_str() == Some("127.0.0.1") {
                     return true;
                 }
@@ -817,9 +974,43 @@ pub fn run() {
                         .query_pairs()
                         .find_map(|(key, value)| (key == "url").then(|| value.into_owned()))
                         .and_then(|value| approved_external_https_url(&value));
-                    if let Some(destination) = destination {
-                        let _ = Command::new("open").arg(destination.as_str()).spawn();
+                    if let Some(destination) = destination
+                        && let Some(state) = navigation_app.try_state::<DesktopState>()
+                    {
+                        let _ = open_browser_surface(&navigation_app, &state, destination.as_str());
                     }
+                }
+                if url.scheme() == "bridget-panel"
+                    && let Some(state) = navigation_app.try_state::<DesktopState>()
+                {
+                    let action = url
+                        .query_pairs()
+                        .find_map(|(key, value)| (key == "action").then(|| value.into_owned()));
+                    let _ = match action.as_deref() {
+                        Some("toggle") => {
+                            let missing_browser = state
+                                .panels
+                                .lock()
+                                .map(|panels| panels.browser().is_none())
+                                .unwrap_or(false);
+                            if missing_browser {
+                                let _ = open_browser_home_surface(&navigation_app, &state);
+                            }
+                            save_browser_preferences(&state, |panel| {
+                                panel.right_panel_visible = if missing_browser {
+                                    true
+                                } else {
+                                    !panel.right_panel_visible
+                                };
+                            })
+                        }
+                        Some("maximize") => save_browser_preferences(&state, |panel| {
+                            panel.right_panel_visible = true;
+                            panel.right_panel_maximized = !panel.right_panel_maximized;
+                        }),
+                        _ => return false,
+                    };
+                    let _ = arrange_panels(&navigation_app, &state);
                 }
                 false
             });
@@ -831,8 +1022,8 @@ pub fn run() {
             state.panels.lock().map_err(as_message)?.close(&panel.label);
             return Err(as_message(error));
         }
+        arrange_panels(&app, &state)?;
         let panels = state.panels.lock().map_err(as_message)?;
-        arrange_panels(&app, &panels)?;
         Ok(PanelView {
             label: panel.label,
             source_id,
@@ -847,6 +1038,53 @@ pub fn run() {
         source_id: String,
     ) -> Result<(), String> {
         close_panel_for_profile(&app, &state, &source_id)
+    }
+
+    /// Commande de la coque locale uniquement. Une page de conversation ne
+    /// reçoit pas de capability IPC et ne peut donc pas l'invoquer elle-même.
+    #[tauri::command(rename_all = "snake_case")]
+    fn browser_open(
+        app: tauri::AppHandle,
+        state: State<'_, DesktopState>,
+        target: String,
+    ) -> Result<(), String> {
+        open_browser_surface(&app, &state, &target)
+    }
+
+    #[tauri::command(rename_all = "snake_case")]
+    fn browser_set_panel_state(
+        app: tauri::AppHandle,
+        state: State<'_, DesktopState>,
+        visible: Option<bool>,
+        maximized: Option<bool>,
+        active_tab: Option<String>,
+    ) -> Result<BrowserPanelStateV1, String> {
+        let panel = save_browser_preferences(&state, |panel| {
+            if let Some(visible) = visible {
+                panel.right_panel_visible = visible;
+            }
+            if let Some(maximized) = maximized {
+                panel.right_panel_maximized = maximized;
+            }
+            if let Some(active_tab) = active_tab {
+                panel.active_tab = active_tab;
+            }
+        })?;
+        arrange_panels(&app, &state)?;
+        Ok(panel)
+    }
+
+    #[tauri::command(rename_all = "snake_case")]
+    fn browser_clear_data(
+        app: tauri::AppHandle,
+        state: State<'_, DesktopState>,
+    ) -> Result<BrowserPanelStateV1, String> {
+        if let Some(webview) = app.get_webview("browser-primary") {
+            webview.clear_all_browsing_data().map_err(as_message)?;
+        }
+        save_browser_preferences(&state, |panel| {
+            panel.browser_profile_generation = panel.browser_profile_generation.saturating_add(1);
+        })
     }
 
     tauri::Builder::default()
@@ -881,9 +1119,8 @@ pub fn run() {
             main.on_window_event(move |event| {
                 if matches!(event, tauri::WindowEvent::Resized(_))
                     && let Some(state) = handle.try_state::<DesktopState>()
-                    && let Ok(panels) = state.panels.lock()
                 {
-                    let _ = arrange_panels(&handle, &panels);
+                    let _ = arrange_panels(&handle, state.inner());
                 }
             });
             Ok(())
@@ -901,7 +1138,10 @@ pub fn run() {
             connection_open,
             connection_close,
             panel_open,
-            panel_close
+            panel_close,
+            browser_open,
+            browser_set_panel_state,
+            browser_clear_data
         ])
         .run(tauri::generate_context!())
         .expect("Bridget Desktop n'a pas pu démarrer");

@@ -1,5 +1,6 @@
 //! Façade MCP stdio. Le protocole daemon reste le seul transport métier.
 
+use crate::artifact_types::{ARTIFACT_CONTRACT_VERSION, ArtifactPublicationV1, ArtifactReceiptV1};
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
     CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, GuichetDelegateMutationStatus,
@@ -634,6 +635,9 @@ fn execute_tool_at_with_scope(
 ) -> Result<Value, ToolError> {
     match name {
         "bridget_send" => execute_send(identity, instance_id, arguments, socket),
+        "bridget_publish_artifact" => {
+            execute_publish_artifact(identity, instance_id, arguments, socket)
+        }
         "bridget_who" => execute_who(identity, instance_id, arguments, socket),
         "bridget_ledger" => execute_ledger(identity, instance_id, arguments, socket),
         "maicie_delegate" => execute_maicie_delegate(identity, instance_id, arguments, socket),
@@ -645,6 +649,55 @@ fn execute_tool_at_with_scope(
         }
         "maicie_request_status" => execute_maicie_request_status(instance_id, arguments, socket),
         _ => Err(ToolError::InvalidParams("outil inconnu".to_string())),
+    }
+}
+
+fn execute_publish_artifact(
+    identity: &str,
+    instance_id: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    let publication: ArtifactPublicationV1 =
+        serde_json::from_value(Value::Object(arguments.clone())).map_err(|error| {
+            ToolError::InvalidParams(format!("contrat d'artefact invalide : {error}"))
+        })?;
+    let canonical_publication = publication.canonical_bytes();
+    let mut connection = registered_connection(identity, instance_id, socket)?;
+    match connection.exchange(&WrapperToDaemon::ArtifactPublish {
+        contract_version: ARTIFACT_CONTRACT_VERSION,
+        canonical_publication,
+    })? {
+        DaemonToWrapper::ArtifactPublicationResult {
+            contract_version,
+            replayed,
+            receipt_json: Some(receipt_json),
+            refusal_code: None,
+            refusal_message: None,
+        } if contract_version == ARTIFACT_CONTRACT_VERSION => {
+            let receipt: ArtifactReceiptV1 =
+                serde_json::from_slice(&receipt_json).map_err(|_| ToolError::Technical {
+                    code: "invalid_artifact_receipt",
+                    message: "Bridget a renvoyé un reçu d'artefact illisible".to_string(),
+                })?;
+            Ok(json!({
+                "status": if replayed { "replayed" } else { "published" },
+                "receipt": receipt,
+            }))
+        }
+        DaemonToWrapper::ArtifactPublicationResult {
+            contract_version,
+            refusal_code: Some(code),
+            refusal_message: Some(message),
+            ..
+        } if contract_version == ARTIFACT_CONTRACT_VERSION => {
+            Ok(json!({ "status": "refused", "code": code, "message": message }))
+        }
+        DaemonToWrapper::ArtifactPublicationResult { .. } => Err(ToolError::Technical {
+            code: "artifact_protocol",
+            message: "Bridget a renvoyé une issue d'artefact incohérente".to_string(),
+        }),
+        other => unexpected_response(other),
     }
 }
 
@@ -1557,6 +1610,42 @@ fn initialize_result() -> Value {
 fn tools() -> Vec<Value> {
     vec![
         json!({
+            "name": "bridget_publish_artifact",
+            "description": "Publier un unique artefact structuré et sourcé. Bridget atteste le projet, la conversation et le tour depuis l'identité connectée. Les formats HTML sont refusés ici et relèvent du contrat HTML sandboxé.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "kind": { "enum": ["chart", "kpi", "table", "timeline", "image", "file"] },
+                    "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+                    "payload": { "type": "object", "description": "Données structurées de l'artefact. Pour image/fichier avec blob, inclure blob_digest SHA-256 et media_type." },
+                    "sources": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "source_kind": { "enum": ["remote", "local_project", "user_supplied", "agent_computed", "restored"] },
+                                "locator": { "type": "string", "minLength": 1 },
+                                "fetched_at": { "type": ["integer", "null"] },
+                                "content_digest": { "type": ["string", "null"], "description": "SHA-256 du contenu source lorsque disponible." },
+                                "citation": { "type": "string", "minLength": 1 },
+                                "units": { "type": ["string", "null"] },
+                                "transformations": { "type": "array", "items": { "type": "string" } },
+                                "access_status": { "enum": ["available", "expired", "unavailable", "blocked", "unknown"] }
+                            },
+                            "required": ["source_kind", "locator", "citation"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "quality_notices": { "type": "array", "items": { "type": "string" } },
+                    "parent_artifact_ref": { "type": ["string", "null"] },
+                    "publication_reason": { "enum": ["initial", "refresh", "restore_changed", "save_interaction"] }
+                },
+                "required": ["idempotency_key", "kind", "title", "payload", "sources", "publication_reason"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
             "name": "bridget_send",
             "description": "Envoyer un message Bridget à un équipier.",
             "inputSchema": {
@@ -1748,7 +1837,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    7
+                    8
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -1774,6 +1863,7 @@ mod tests {
             .collect::<BTreeSet<_>>();
         let expected = [
             "bridget_ledger",
+            "bridget_publish_artifact",
             "bridget_send",
             "bridget_who",
             "maicie_delegate",
@@ -1791,6 +1881,105 @@ mod tests {
                 "l'action humaine {forbidden} ne doit jamais être un outil MCP"
             );
         }
+    }
+
+    #[test]
+    fn publication_d_artefact_transporte_un_contrat_canonique_et_un_recu_atteste() {
+        let socket = test_socket("artifact-publish");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let read_stream = stream.try_clone().unwrap();
+            let mut reader = BufReader::new(read_stream);
+            let mut writer = BufWriter::new(stream);
+            assert!(
+                matches!(read_command(&mut reader), WrapperToDaemon::Register { agent_type, .. } if agent_type == "mcp")
+            );
+            write_command(
+                &mut writer,
+                DaemonToWrapper::Registered {
+                    agent_id: "agent-fixture".to_string(),
+                },
+            );
+            let WrapperToDaemon::ArtifactPublish {
+                contract_version,
+                canonical_publication,
+            } = read_command(&mut reader)
+            else {
+                panic!("publication d'artefact attendue");
+            };
+            assert_eq!(contract_version, ARTIFACT_CONTRACT_VERSION);
+            let publication: ArtifactPublicationV1 =
+                serde_json::from_slice(&canonical_publication).unwrap();
+            assert_eq!(publication.canonical_bytes(), canonical_publication);
+            let receipt = ArtifactReceiptV1 {
+                artifact_ref: "artifact:fixture".to_string(),
+                version_ref: "artifact-version:fixture".to_string(),
+                state: crate::artifact_types::ArtifactState::Published,
+                content_digest: publication.content_digest(),
+                warnings: Vec::new(),
+                conversation_reference: "conversation:project:agent".to_string(),
+                storage_state: crate::artifact_types::ArtifactStorageState::Canonical,
+            };
+            write_command(
+                &mut writer,
+                DaemonToWrapper::ArtifactPublicationResult {
+                    contract_version: ARTIFACT_CONTRACT_VERSION,
+                    replayed: false,
+                    receipt_json: Some(serde_json::to_vec(&receipt).unwrap()),
+                    refusal_code: None,
+                    refusal_message: None,
+                },
+            );
+        });
+        let arguments = serde_json::json!({
+            "idempotency_key": "fixture-artifact-v1",
+            "kind": "kpi",
+            "title": "Latence médiane",
+            "payload": {"value": 17.5, "unit": "ms"},
+            "sources": [{
+                "source_kind": "agent_computed",
+                "locator": "calculation:p50",
+                "citation": "Calcul attesté",
+                "content_digest": "f6c9a81b91f3329113d5b0ab57c2ca9cbbc96cd6b6f4ea8434fb829432533a7a",
+                "transformations": ["médiane p50"]
+            }],
+            "publication_reason": "initial"
+        });
+        let result = execute_tool_at(
+            "agent-fixture",
+            "bridget_publish_artifact",
+            arguments.as_object().unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(result["status"], "published");
+        assert_eq!(result["receipt"]["artifact_ref"], "artifact:fixture");
+        server.join().unwrap();
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
+    fn publication_d_artefact_refuse_les_champs_non_contractuels_avant_connexion() {
+        let socket = test_socket("artifact-invalid");
+        let arguments = serde_json::json!({
+            "idempotency_key": "fixture-artifact-v1",
+            "kind": "kpi",
+            "title": "Latence médiane",
+            "payload": {},
+            "sources": [],
+            "publication_reason": "initial",
+            "project_id": "projet-impose-par-l-appelant"
+        });
+        assert!(matches!(
+            execute_tool_at(
+                "agent-fixture",
+                "bridget_publish_artifact",
+                arguments.as_object().unwrap(),
+                &socket,
+            ),
+            Err(ToolError::InvalidParams(_))
+        ));
     }
 
     #[test]
@@ -1876,7 +2065,7 @@ mod tests {
         let root = test_socket("identity-ascii").with_extension("identity");
         std::fs::create_dir_all(&root).unwrap();
         let name_file = root.join("agent-name");
-        std::fs::write(&name_file, "rc5-test\n").unwrap();
+        std::fs::write(&name_file, "a3d27a89-80d5-4e0f-9b84-cf5523ecb026\n").unwrap();
         let marker_directory = root.join("agent-pids");
         let resolver = || {
             crate::mcp_identity::resolve_identity_with(
@@ -1891,7 +2080,7 @@ mod tests {
         let execute =
             |identity: &crate::mcp_identity::ResolvedIdentity, name: &str, arguments: &Value| {
                 calls.set(calls.get() + 1);
-                assert_eq!(identity.name, "rc5-test");
+                assert_eq!(identity.name, "a3d27a89-80d5-4e0f-9b84-cf5523ecb026");
                 assert_eq!(identity.instance_id, "fixture-instance");
                 assert_eq!(name, "bridget_who");
                 assert_eq!(arguments, &json!({}));

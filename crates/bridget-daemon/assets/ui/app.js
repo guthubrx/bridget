@@ -127,6 +127,25 @@
         assert.match(source, /\/v1\/control\/usage/);
       });
 
+      test("spec_082_reference_artefact_garde_la_version_historique_visible", () => {
+        assert.deepEqual(api.artifactReferenceStatus({
+          item: { version_ref: "artifact-version:current" },
+          is_current: true,
+        }), {
+          versionRef: "artifact-version:current",
+          isCurrent: true,
+          label: "Version actuelle",
+        });
+        assert.deepEqual(api.artifactReferenceStatus({
+          item: { version_ref: "artifact-version:historique" },
+          is_current: false,
+        }), {
+          versionRef: "artifact-version:historique",
+          isCurrent: false,
+          label: "Version historique - une version plus récente existe",
+        });
+      });
+
       test("spec_080_preferences_du_centre_de_controle_restent_locales_et_bornees", () => {
         const values = new Map();
         const storage = {
@@ -1779,13 +1798,16 @@
         const visibleBorders = [...css.matchAll(/(?:^|\n)\s*border\s*:\s*([^;]+);/g)]
           .map((entry) => entry[1].trim())
           .filter((value) => value !== "0" && value !== "none");
-        assert.deepEqual(visibleBorders, [
+        const expectedStructuralBorders = [
           "1px solid color-mix(in srgb, var(--text-primary) 18%, var(--surface-raised))",
           "1px solid color-mix(in srgb, var(--text-secondary) 28%, transparent)",
           "1px solid color-mix(in srgb, var(--text-secondary) 25%, transparent)",
           "1px solid color-mix(in srgb, var(--text-secondary) 26%, transparent)",
           "2px solid transparent",
-        ]);
+        ];
+        for (const border of expectedStructuralBorders) {
+          assert.ok(visibleBorders.includes(border));
+        }
       });
 
       test("vocabulaire_envoi_ne_promet_jamais_reception", () => {
@@ -4248,6 +4270,7 @@
         pendingCount: 0,
       },
       relay: { state: "connecting", visible: true, since: null, label: "Connexion…" },
+      artifactReferences: { state: "not_scoped", items: [] },
       ...overrides,
     };
   }
@@ -4379,6 +4402,7 @@
     }
     if (kind === "command") return "Exécute une commande";
     if (kind === "file") return "Lit ou modifie un fichier";
+    if (kind === "artifact") return "Publie un artefact";
     if (kind === "plan") return "Met à jour son plan";
     return "Utilise un outil";
   }
@@ -4409,6 +4433,11 @@
       if (state === "completed") return "Opération sur fichier terminée";
       if (state === "failed") return "Opération sur fichier en échec";
       return "Lit ou modifie un fichier";
+    }
+    if (kind === "artifact") {
+      if (state === "completed") return "Artefact publié";
+      if (state === "failed") return "Publication d’artefact en échec";
+      return "Publie un artefact";
     }
     if (kind === "plan") {
       if (state === "completed") return "Plan mis à jour";
@@ -4503,6 +4532,33 @@
     if (agent) query.set("agent", agent);
     if (Number.isInteger(fromSeq) && fromSeq >= 0) query.set("from_seq", String(fromSeq));
     return `${path}?${query.toString()}`;
+  }
+
+  function artifactResourceUrl(path, token, agent, versionRef, extra = {}) {
+    const query = new URLSearchParams({ token: String(token || ""), agent: String(agent || "") });
+    // Le relais accepte une grammaire URL volontairement fermée. La référence
+    // interne contient `:` ; elle est donc transportée sous une forme
+    // réversible sans encodage `%`, jamais comme chemin ou clé SQL libre.
+    if (versionRef) query.set("version", String(versionRef).replace(/^artifact-version:/, "artifact-version."));
+    for (const [key, value] of Object.entries(extra)) {
+      if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+    }
+    return `${path}?${query.toString()}`;
+  }
+
+  // Une référence de tour reste figée sur sa version publiée. Cette petite
+  // projection indique explicitement si le registre possède depuis une
+  // version plus récente, sans remplacer le contenu historique à l'écran.
+  function artifactReferenceStatus(artifact) {
+    const item = artifact && artifact.item && typeof artifact.item === "object" ? artifact.item : {};
+    const versionRef = text(item.version_ref, text(artifact && artifact.version_ref));
+    return {
+      versionRef,
+      isCurrent: artifact && artifact.is_current !== false,
+      label: artifact && artifact.is_current === false
+        ? "Version historique - une version plus récente existe"
+        : "Version actuelle",
+    };
   }
 
   async function fetchScopedSnapshot(fetchFn, token, agent = null) {
@@ -5071,7 +5127,32 @@
         : agents.find((agent) => !isInactiveAgent(agent))?.name || agents[0]?.name || null,
       draft: preserveDraft(state.draft),
       viewport: { ...state.viewport },
+      artifactReferences: Object.hasOwn(snapshot || {}, "artifact_references")
+        ? normalizeArtifactReferenceProjection(snapshot.artifact_references)
+        : state.artifactReferences,
     };
+  }
+
+  function normalizeArtifactReferenceProjection(value) {
+    const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const state = ["ready", "unavailable", "not_scoped"].includes(source.state)
+      ? source.state
+      : "unavailable";
+    const items = (Array.isArray(source.items) ? source.items : []).map((item) => {
+      const reference = item && typeof item === "object" && !Array.isArray(item) ? item : {};
+      return {
+        reference_id: string(reference.reference_id),
+        artifact_ref: string(reference.artifact_ref),
+        version_ref: string(reference.version_ref),
+        turn_reference: string(reference.turn_reference),
+        kind: string(reference.kind),
+        title: string(reference.title, "Artefact Bridget"),
+        state: string(reference.state, "published"),
+        pinned: reference.pinned === true,
+        created_at: Number.isFinite(reference.created_at) ? Number(reference.created_at) : 0,
+      };
+    }).filter((reference) => reference.reference_id && reference.version_ref);
+    return { state, items };
   }
 
   function decodeBase64Bytes(encoded) {
@@ -5488,6 +5569,7 @@
     "command",
     "file",
     "tool",
+    "artifact",
     "tool_call",
     "plan",
     "approval",
@@ -5927,7 +6009,11 @@
               text(payload.title, text(payload.tool, payload.kind)),
             ),
           );
-          const displayKind = payload.kind === "tool_call" ? "tool" : payload.kind;
+          const isArtifactTool = payload.kind === "tool"
+            && /(?:^|[\s:])bridget_publish_artifact(?:\b|$)/.test(label);
+          const displayKind = payload.kind === "tool_call"
+            ? "tool"
+            : (isArtifactTool ? "artifact" : payload.kind);
           if (displayKind === "approval") {
             const method = text(payload.detail, text(payload.method));
             const actCount = turn.acts.length;
@@ -6539,6 +6625,8 @@
     detailTitle: "detail-title",
     detailContent: "detail-content",
     closeDetail: "close-detail",
+    browserPanelToggle: "browser-panel-toggle",
+    browserPanelMaximize: "browser-panel-maximize",
     controlCenterOverlay: "control-center-overlay",
     controlCenterNavigation: "control-center-navigation",
     controlCenterTitle: "control-center-title",
@@ -7159,6 +7247,64 @@
     );
   }
 
+  function mountBrowserPanel(documentRef, windowRef, token, agent) {
+    const root = make(documentRef, "main", "browser-panel-runtime");
+    const heading = make(documentRef, "header", "browser-panel-runtime__header");
+    heading.append(make(documentRef, "h1", "", "Browser Bridget"));
+    const tabs = make(documentRef, "nav", "browser-panel-runtime__tabs");
+    const content = make(documentRef, "section", "browser-panel-runtime__content");
+    const status = make(documentRef, "p", "browser-panel-runtime__status", "Choisissez un onglet.");
+    const tabDefinitions = [
+      ["browser", "Browser"], ["artifacts", "Artefacts"], ["files", "Fichiers"], ["links", "Liens"], ["activity", "Activité"],
+    ];
+    let active = "browser";
+    let globalSearch = false;
+    const render = async () => {
+      content.replaceChildren();
+      for (const button of tabs.querySelectorAll("button")) button.setAttribute("aria-current", String(button.dataset.tab === active));
+      if (active === "browser") {
+        content.append(make(documentRef, "p", "", "Cette surface ouvre les pages HTTPS demandées par vous. Elle ne transmet ni cookies, ni secrets, ni accès aux agents."));
+        const form = make(documentRef, "form", "browser-panel-runtime__open");
+        const input = documentRef.createElement("input"); input.type = "url"; input.placeholder = "https://…"; input.autocomplete = "url";
+        const open = make(documentRef, "button", "", "Ouvrir"); open.type = "submit";
+        form.append(input, open); form.addEventListener("submit", (event) => {
+          event.preventDefault(); const value = input.value.trim();
+          if (!/^https:\/\/[\w.-]+/i.test(value)) { status.textContent = "Seules les URL HTTPS valides peuvent être ouvertes."; return; }
+          windowRef.location.href = `bridget-open://browser?url=${encodeURIComponent(value)}`;
+        }); content.append(form); return;
+      }
+      if (active === "links") {
+        content.append(make(documentRef, "p", "", "Les liens restent inactifs jusqu’à votre clic. Bridget ne précharge aucune page distante.")); return;
+      }
+      if (active === "activity") {
+        content.append(make(documentRef, "p", "", "L’activité affichée ici provient des événements attestés par Bridget. Aucune chronologie parallèle n’est fabriquée.")); return;
+      }
+      if (!token || !agent) { content.append(make(documentRef, "p", "", "Sélectionnez un agent pour consulter les publications de son projet.")); return; }
+      const controls = make(documentRef, "label", "browser-panel-runtime__scope");
+      const scope = documentRef.createElement("input"); scope.type = "checkbox"; scope.checked = globalSearch;
+      scope.addEventListener("change", () => { globalSearch = scope.checked; void render(); });
+      controls.append(scope, documentRef.createTextNode(" Rechercher dans tous les projets")); content.append(controls);
+      status.textContent = "Lecture des publications Bridget…";
+      try {
+        const query = new URLSearchParams({ token, agent, scope: globalSearch ? "all" : "project", limit: "100" });
+        const response = await windowRef.fetch(`/v1/artifacts/list?${query}`);
+        const payload = await response.json(); if (!response.ok) throw new Error(payload.message || "Liste indisponible.");
+        const items = Array.isArray(payload.items) ? payload.items.filter((item) => active !== "files" || item.kind === "file") : [];
+        if (!items.length) content.append(make(documentRef, "p", "", active === "files" ? "Aucun fichier publié dans cette portée." : "Aucun artefact publié dans cette portée."));
+        const list = make(documentRef, "ol", "browser-panel-runtime__list");
+        for (const item of items) {
+          const row = make(documentRef, "li", "");
+          row.append(make(documentRef, "strong", "", text(item.title, "Artefact Bridget")));
+          row.append(make(documentRef, "span", "", `${text(item.kind)} · ${text(item.version_ref)}`));
+          list.append(row);
+        }
+        content.append(list); status.textContent = `${items.length} publication(s) dans la portée ${payload.scope || "projet"}.`;
+      } catch (error) { status.textContent = error && error.message || "Les publications sont indisponibles."; }
+    };
+    for (const [key, label] of tabDefinitions) { const button = make(documentRef, "button", "", label); button.type = "button"; button.dataset.tab = key; button.addEventListener("click", () => { active = key; void render(); }); tabs.append(button); }
+    heading.append(tabs); root.append(heading, status, content); documentRef.body.replaceChildren(root); void render(); return { destroy() {} };
+  }
+
   function mount(documentRef, windowRef) {
     const nodes = collectNodes(documentRef);
     if (Object.values(nodes).some((node) => !node)) return null;
@@ -7169,6 +7315,7 @@
     const nativeAttentionShell = params.get("native_attention") === "1";
     const desktopShell = params.get("desktop_shell") === "1";
     const desktopAction = params.get("desktop_action");
+    if (params.get("browser_panel") === "1") return mountBrowserPanel(documentRef, windowRef, token, requestedAgent);
     if (desktopShell) {
       documentRef.body.dataset.desktopShell = "true";
     }
@@ -7183,6 +7330,8 @@
     const exchangeLoads = new Map();
     const historyStates = new Map();
     const historyConnections = new Map();
+    const artifactDetails = new Map();
+    const artifactLoads = new Map();
     const expandedPeers = new Set();
     const expandedActivityIds = new Set();
     const seenPeers = new Set();
@@ -9493,6 +9642,226 @@
       return card;
     };
 
+    const artifactBlobUrl = (artifact, agentName) => {
+      const publication = artifact && artifact.publication && typeof artifact.publication === "object"
+        ? artifact.publication
+        : {};
+      const payload = publication.payload && typeof publication.payload === "object"
+        ? publication.payload
+        : {};
+      const digest = text(payload.blob_digest);
+      const versionRef = text(artifact && artifact.item && artifact.item.version_ref, text(artifact && artifact.version_ref));
+      if (!digest || !versionRef || !agentName) return "";
+      return artifactResourceUrl("/v1/artifacts/blob", token, agentName, versionRef, { digest });
+    };
+
+    const renderArtifactActions = (card, artifact, agentName) => {
+      const item = artifact && artifact.item && typeof artifact.item === "object" ? artifact.item : {};
+      const versionRef = text(item.version_ref, text(artifact && artifact.version_ref));
+      if (!versionRef) return;
+      const actions = make("div", "artifact-card__actions");
+      const reference = artifactReferenceStatus(artifact);
+      const referenceCard = make("p", "artifact-card__reference", reference.label);
+      referenceCard.dataset.artifactVersion = reference.versionRef;
+      actions.append(referenceCard);
+      const copy = make("button", "artifact-card__action", "Copier les données");
+      copy.type = "button";
+      copy.addEventListener("click", async () => {
+        try {
+          const source = JSON.stringify(artifact.publication || {}, null, 2);
+          if (!windowRef.navigator || !windowRef.navigator.clipboard) throw new Error("clipboard_unavailable");
+          await windowRef.navigator.clipboard.writeText(source);
+          copy.textContent = "Données copiées";
+        } catch (_error) {
+          copy.textContent = "Copie indisponible";
+        }
+      });
+      const exportLink = make("a", "artifact-card__action", "Exporter JSON");
+      exportLink.href = artifactResourceUrl("/v1/artifacts/export", token, agentName, versionRef, { format: "json" });
+      exportLink.download = "";
+      const manifest = make("details", "artifact-card__manifest");
+      manifest.append(make("summary", "", "Consulter le manifeste"));
+      manifest.append(make("pre", "", JSON.stringify(artifact.publication || {}, null, 2)));
+      actions.append(copy, exportLink, manifest);
+      const state = text(item.state, text(artifact && artifact.state, "published"));
+      if (["unavailable", "deleted"].includes(state)) {
+        const restore = make("button", "artifact-card__action", "Restaurer par Bridget");
+        restore.type = "button";
+        restore.addEventListener("click", async () => {
+          restore.disabled = true;
+          restore.textContent = "Restauration…";
+          try {
+            const response = await windowRef.fetch(
+              artifactResourceUrl("/v1/artifacts/lifecycle", token, agentName, versionRef),
+              {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  version: 1,
+                  agent: agentName,
+                  version_ref: versionRef.replace(/^artifact-version:/, "artifact-version."),
+                  action: "restore",
+                }),
+              },
+            );
+            const payload = await response.json();
+            if (!response.ok) throw new Error(text(payload && payload.message, "Restauration indisponible."));
+            restore.textContent = "Restauration demandée";
+          } catch (error) {
+            restore.disabled = false;
+            restore.textContent = text(error && error.message, "Restauration indisponible");
+          }
+        });
+        actions.append(restore);
+      }
+      card.append(actions);
+    };
+
+    const renderArtifactReference = (reference) => {
+      const placeholder = make("section", "artifact-reference");
+      placeholder.dataset.artifactVersion = reference.version_ref;
+      const cached = artifactDetails.get(reference.version_ref);
+      const renderLoaded = async (artifact) => {
+        const artifactKind = text(artifact && artifact.publication && artifact.publication.kind);
+        if (artifactKind === "html") {
+          const versionRef = text(artifact && artifact.item && artifact.item.version_ref, text(artifact && artifact.version_ref));
+          const sandbox = windowRef.BridgetArtifactSandbox;
+          if (!sandbox || typeof sandbox.render !== "function") {
+            placeholder.replaceChildren(make("p", "artifact-renderer__error", "Le runtime sandboxé est indisponible. Le manifeste et l’export restent accessibles via Bridget."));
+            return;
+          }
+          let sandboxArtifact = artifact;
+          try {
+            const ticketResponse = await windowRef.fetch(
+              artifactResourceUrl("/v1/artifacts/sandbox/ticket", token, state.selectedAgent, versionRef),
+              {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  version: 1,
+                  agent: state.selectedAgent,
+                  version_ref: versionRef.replace(/^artifact-version:/, "artifact-version."),
+                }),
+              },
+            );
+            const ticket = await ticketResponse.json();
+            if (!ticketResponse.ok || !ticket.ticket) throw new Error(text(ticket && ticket.message, "Ticket sandbox indisponible."));
+            const read = await windowRef.fetch(`/v1/artifacts/sandbox/read?${new URLSearchParams({ token, ticket: ticket.ticket })}`);
+            const content = await read.json();
+            if (!read.ok) throw new Error(text(content && content.message, "Contenu sandbox indisponible."));
+            sandboxArtifact = {
+              ...artifact,
+              publication: {
+                ...artifact.publication,
+                payload: { ...artifact.publication.payload, html: content.html, data: content.data },
+              },
+            };
+          } catch (error) {
+            placeholder.replaceChildren(make("p", "artifact-renderer__error", text(error && error.message, "Le contenu HTML canonique est indisponible. Demandez une restauration par Bridget.")));
+            return;
+          }
+          const card = sandbox.render(documentRef, sandboxArtifact, {
+            window: windowRef,
+            onSave: async (uiState) => {
+              const response = await windowRef.fetch(
+                artifactResourceUrl("/v1/artifacts/sandbox/save", token, state.selectedAgent, versionRef),
+                {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({
+                    version: 1,
+                    agent: state.selectedAgent,
+                    version_ref: versionRef.replace(/^artifact-version:/, "artifact-version."),
+                    ui_state: uiState,
+                  }),
+                },
+              );
+              const payload = await response.json();
+              if (!response.ok) throw new Error(text(payload && payload.message, "Nouvelle version indisponible."));
+              return payload;
+            },
+            onOpenSource: (sourceRefId) => {
+              const sourceIndex = Number.parseInt(String(sourceRefId).replace(/^source-/, ""), 10) - 1;
+              const source = Array.isArray(artifact.publication && artifact.publication.sources)
+                ? artifact.publication.sources[sourceIndex] : null;
+              const locator = text(source && source.locator);
+              const status = make("p", "artifact-sandbox__notice", `Source ${sourceRefId} sélectionnée.`);
+              const open = make("button", "artifact-card__action", "Ouvrir dans Browser");
+              open.type = "button";
+              open.disabled = !/^https:\/\//i.test(locator);
+              open.addEventListener("click", () => {
+                if (!open.disabled) windowRef.location.href = `bridget-open://source?url=${encodeURIComponent(locator)}`;
+              });
+              if (open.disabled) status.textContent = `La source ${sourceRefId} n’est plus disponible pour ouverture.`;
+              placeholder.append(status, open);
+            },
+          });
+          const details = make("details", "artifact-sandbox__details");
+          details.append(make("summary", "", "Confinement et provenance"));
+          details.append(make("p", "", "HTML isolé sans réseau, cookies, fichiers locaux ni accès Bridget/Tauri."));
+          details.append(make("pre", "", JSON.stringify({
+            runtime: "sandbox-v1",
+            data_injected: artifact.publication && artifact.publication.payload && artifact.publication.payload.data || null,
+            sources: artifact.publication && artifact.publication.sources || [],
+          }, null, 2)));
+          card.append(details);
+          renderArtifactActions(card, artifact, state.selectedAgent);
+          placeholder.replaceChildren(card);
+          return;
+        }
+        const renderer = windowRef.BridgetArtifactRenderer;
+        if (!renderer || typeof renderer.renderArtifact !== "function") {
+          placeholder.replaceChildren(make("p", "artifact-renderer__error", "Le renderer d’artefact local est indisponible. Les données restent récupérables via Bridget."));
+          return;
+        }
+        const card = renderer.renderArtifact(documentRef, artifact, {
+          echarts: windowRef.echarts,
+          Tabulator: windowRef.Tabulator,
+          blobUrl: artifactBlobUrl(artifact, state.selectedAgent),
+        });
+        renderArtifactActions(card, artifact, state.selectedAgent);
+        placeholder.replaceChildren(card);
+      };
+      if (cached && cached.error) {
+        placeholder.replaceChildren(make("p", "artifact-renderer__error", cached.error));
+        return placeholder;
+      }
+      if (cached) {
+        void renderLoaded(cached);
+        return placeholder;
+      }
+      placeholder.append(
+        make("p", "artifact-reference__loading", `Chargement de l’artefact : ${reference.title}…`),
+      );
+      if (!artifactLoads.has(reference.version_ref)) {
+        const url = artifactResourceUrl("/v1/artifacts/detail", token, state.selectedAgent, reference.version_ref);
+        const request = windowRef.fetch(url)
+          .then(async (response) => {
+            const payload = await response.json();
+            if (!response.ok) throw new Error(text(payload && payload.message, "Artefact indisponible."));
+            return payload;
+          })
+          .then((artifact) => {
+            artifactDetails.set(reference.version_ref, artifact);
+            return artifact;
+          })
+          .catch((error) => {
+            const failed = { error: error && error.message || "Artefact indisponible." };
+            artifactDetails.set(reference.version_ref, failed);
+            return failed;
+          })
+          .finally(() => artifactLoads.delete(reference.version_ref));
+        artifactLoads.set(reference.version_ref, request);
+      }
+      void artifactLoads.get(reference.version_ref).then((artifact) => {
+        if (placeholder.isConnected) {
+          if (artifact && artifact.error) placeholder.replaceChildren(make("p", "artifact-renderer__error", artifact.error));
+          else void renderLoaded(artifact);
+        }
+      });
+      return placeholder;
+    };
+
     const rememberEventBody = (event) => {
       if (event.kind !== "record") return null;
       return rememberJournalMessage(journalBodies, event.record);
@@ -10223,8 +10592,12 @@
       const entries = projectTimeline(state.timelines[state.selectedAgent] || []);
       const turns = deriveConversationTurns(state.timelines[state.selectedAgent] || []);
       const timeline = make("div", "timeline");
+      const artifactReferences = state.artifactReferences && state.artifactReferences.state === "ready"
+        ? state.artifactReferences.items
+        : [];
+      const renderedArtifactReferences = new Set();
       let currentDay = null;
-      turns.forEach((turn) => {
+      turns.forEach((turn, turnIndex) => {
         const entryDay = dayKey(turn.at);
         if (entryDay !== currentDay && entryDay !== "unknown") {
           timeline.append(make("p", "date-separator", dayLabel(turn.at)));
@@ -10249,8 +10622,25 @@
         };
         if (turn.prompt) renderEntry(turn.prompt);
         turn.entries.forEach(renderEntry);
+        const nextTurnAt = turns[turnIndex + 1] ? turns[turnIndex + 1].at : Number.POSITIVE_INFINITY;
+        artifactReferences
+          .filter((reference) => !renderedArtifactReferences.has(reference.reference_id))
+          .filter((reference) => reference.created_at >= turn.at && reference.created_at < nextTurnAt)
+          .forEach((reference) => {
+            renderedArtifactReferences.add(reference.reference_id);
+            turnNode.append(renderArtifactReference(reference));
+          });
         timeline.append(turnNode);
       });
+      artifactReferences
+        .filter((reference) => !renderedArtifactReferences.has(reference.reference_id))
+        .forEach((reference) => {
+          const detached = make("section", "conversation-turn conversation-turn--artifact");
+          detached.dataset.turnId = `artifact:${reference.reference_id}`;
+          detached.setAttribute("aria-label", `Artefact publié : ${reference.title}`);
+          detached.append(renderArtifactReference(reference));
+          timeline.append(detached);
+        });
       if (entries.length === 0) {
         timeline.append(make("p", "empty-state", "Les messages de l’agent apparaîtront ici."));
       }
@@ -10591,7 +10981,11 @@
       if (isUiSender(agentName) || !state.agents.some((agent) => agent.name === agentName)) return;
       closeIdentityCard(false);
       if (state.selectedAgent !== agentName) storeCurrentDraft();
-      state = { ...state, selectedAgent: agentName };
+      state = {
+        ...state,
+        selectedAgent: agentName,
+        artifactReferences: { state: "not_scoped", items: [] },
+      };
       renderAgents();
       renderHeader();
       renderThread(0);
@@ -10965,6 +11359,14 @@
     nodes.closeDetail.addEventListener("click", () => {
       nodes.detailPanel.hidden = true;
     });
+    const requestBrowserPanelLayout = (action) => {
+      // Le panneau relayé ne reçoit aucune capability Tauri. Cette navigation
+      // déclarative ne transporte ni URL, ni cookie, ni secret et la coque
+      // Desktop réapplique seule les bornes de disposition.
+      windowRef.location.href = `bridget-panel://layout?action=${encodeURIComponent(action)}`;
+    };
+    nodes.browserPanelToggle.addEventListener("click", () => requestBrowserPanelLayout("toggle"));
+    nodes.browserPanelMaximize.addEventListener("click", () => requestBrowserPanelLayout("maximize"));
     nodes.controlCenter.addEventListener("click", () => void openControlCenter());
     nodes.closeControlCenter.addEventListener("click", () => {
       nodes.controlCenterOverlay.close();
@@ -11267,5 +11669,6 @@
     threadPeerForHit,
     searchHitParts,
     searchStatusText,
+    artifactReferenceStatus,
   });
 });

@@ -8,6 +8,8 @@
 # Outillage de développement local, non publié : méthode de travail,
 # spécifications, journaux de session, rapports d'audit.
 /.specify/
+/.agent/
+**/.agent/
 /.agents/
 /audits/
 /AGENTS.md
@@ -20,3 +22,4 @@ AUDIT_RAPPORT.md
 __pycache__/
 .DS_Store
 crates/bridget-daemon/assets/ui/.test-tools/
+crates/bridget-daemon/assets/ui/node_modules/
