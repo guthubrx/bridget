@@ -299,6 +299,19 @@
         assert.equal(api.formatAgentRelativeTime(1_000_000 - 8 * 86_400, 1_000_000), "la semaine dernière");
       });
 
+      test("normalisation_agent_reste_idempotente_pour_la_liste_et_la_selection", () => {
+        const firstPass = api.normalizeAgentRow({
+          agent_id: "550e8400-e29b-41d4-a716-4466554400f0",
+          state: "alive",
+        });
+        const secondPass = api.normalizeAgentRow(firstPass);
+        assert.equal(secondPass.name, "550e8400-e29b-41d4-a716-4466554400f0");
+        assert.deepEqual(
+          api.normalizeAgents([firstPass, secondPass]).map((agent) => agent.name),
+          ["550e8400-e29b-41d4-a716-4466554400f0", "550e8400-e29b-41d4-a716-4466554400f0"],
+        );
+      });
+
       test("identite_runtime_repose_sur_les_faits_et_jamais_sur_le_nom", () => {
         const cursor = api.normalizeAgentRow({
           name: "agent-claude-flux",
@@ -4630,7 +4643,7 @@
       ? agent.mode.trim().toLowerCase()
       : "";
     return {
-      name: text(agent && agent.agent_id, "agent inconnu"),
+      name: text(agent && agent.agent_id, text(agent && agent.name, "agent inconnu")),
       type: text(agent && agent.type, "type inconnu"),
       profile: normalizeAgentProfile(agent && agent.profile),
       host: text(agent && agent.host, "machine inconnue"),
