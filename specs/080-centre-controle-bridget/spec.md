@@ -108,6 +108,7 @@ Comme opérateur, je veux une colonne Projets consacrée aux projets, afin d'ajo
 5. Les initiales et la couleur sont des préférences de présentation locales à cette interface. Elles ne modifient ni le dossier, ni les agents, ni une politique serveur.
 6. La colonne peut être repliée : elle conserve alors les icônes des projets et les actions restent atteignables au clic droit ou au clavier.
 7. Aucun bouton textuel « Réglages » ou « Retirer » global ne reste au pied de la colonne Projets.
+8. `+` et `Importer` ouvrent un dialogue de prévisualisation. La création ou l'import n'est confirmé qu'après validation de la racine autorisée et inscription durable au registre de projets.
 
 ## User Story 2 - Régler les préférences du Mac - P1
 
@@ -202,6 +203,7 @@ Comme opérateur, je veux voir si une version plus récente de Bridget est dispo
 - FR-8028: La colonne Projets DOIT être limitée à l'ajout, l'import, le filtrage, le repli et les actions contextuelles sur un projet. Elle ne DOIT PAS proposer un second accès global aux réglages du serveur.
 - FR-8029: Chaque projet DOIT posséder une présentation locale avec initiales et couleur validées. Cette présentation NE DOIT produire aucune écriture vers le serveur.
 - FR-8030: Les actions de retrait et de personnalisation d'un projet DOIVENT être rattachées au menu contextuel de ce projet, pas à un pied de colonne ambigu.
+- FR-8031: Les actions d'ajout, d'import, de retrait, de réactivation et de reconnexion d'un projet DOIVENT emprunter les routes versionnées du relais et la capacité locale `ProjectRegistryV1`. Elles ne DOIVENT pas simuler un catalogue de coordinateurs ni utiliser une route absente.
 - FR-8027: Une perte de connexion, une réponse invalide, une capacité retirée ou une erreur de validation DOIVENT conserver la dernière valeur confirmée et fournir une erreur actionnable.
 - FR-8028: Les préférences locales DOIVENT être versionnées, validées et tolérer un stockage corrompu ou indisponible.
 

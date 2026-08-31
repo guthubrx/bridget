@@ -19,8 +19,15 @@ Statut : tranche de centre de contrôle et navigation Projets déployées sur le
 - « Toute la flotte » porte le sous-titre « Tous projets confondus ». Chaque projet a une tuile carrée légèrement arrondie avec une ou deux initiales et une couleur.
 - Le bouton `…`, le clic droit et `Maj + F10` ouvrent un menu par projet. Celui-ci permet de retirer le projet sans toucher au dossier ni à Git, ou d'ouvrir l'overlay de personnalisation.
 - Les initiales et la couleur sont stockées dans le WebView, avec l'étiquette « Cette interface ». Elles ne déclenchent aucune route serveur et ne prétendent pas être une politique de projet.
-- Les racines autorisées et le coordinateur des nouveaux projets restent dans la section Serveur du centre de contrôle. La roue basse est donc l'unique entrée des réglages globaux et serveur.
+- Les racines autorisées restent dans la section Serveur du centre de contrôle. Un coordinateur n'est pas un réglage du registre de projets et n'est donc jamais inventé dans cette surface. La roue basse est l'unique entrée des réglages globaux et serveur.
 - La marge haute de la colonne réserve les boutons macOS. En mode replié, seules les tuiles restent visibles et leurs actions restent accessibles au clic droit ou au clavier.
+
+## Correctif du cycle de vie des projets
+
+- Les boutons `+` et `Importer` ouvrent un dialogue Bridget compact, au lieu d'un prompt natif. Le dialogue charge les racines autorisées, prévisualise l'opération, puis n'affiche le bouton de confirmation qu'après acceptation du serveur.
+- Le relais expose maintenant `GET /v1/projects`, `POST /v1/projects/confirm`, `POST /v1/projects/disable`, `POST /v1/projects/activate` et `POST /v1/projects/rebind`. Ces routes négocient la capacité `ProjectRegistryV1` sur la socket locale du daemon, elles ne publient pas de chemin hôte sur le réseau.
+- Une création revalide la politique juste avant l'écriture, crée uniquement le dossier confirmé, initialise Git seulement avec l'accord explicite et inscrit ensuite le projet dans le registre durable. Un refus du registre ne supprime jamais automatiquement le dossier créé ni le contenu d'un projet importé.
+- L'ancienne interface attendait un catalogue de coordinateurs et des routes qui n'existaient pas. Cette attente a été supprimée plutôt que simulée : le coordinateur relève du projet ou de l'exécution, pas de l'ajout au registre.
 
 ## Portage de finition T3 Code
 
@@ -57,6 +64,7 @@ Le binaire release courant a été construit depuis un clone propre de `main`, i
 | `cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml --test desktop_commands` | PASS - 2 tests ciblés |
 | `cargo test -p bridget-daemon --test ui_relay_test` sur le serveur | PASS - 25 tests, 0 échec |
 | `cargo build --release -p bridget-daemon` sur le serveur | PASS - binaire déployé |
+| `cargo test -p bridget-daemon spec_080_confirmation_ui_cree_puis_enregistre_le_projet_dans_le_registre --lib` sur le serveur | PASS - création bornée et liaison au registre |
 
 
 ## Correctif des actions de cartes Desktop

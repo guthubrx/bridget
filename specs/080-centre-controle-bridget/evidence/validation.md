@@ -29,6 +29,13 @@ Le test UI vérifie que le centre contient l'overlay, la roue de bas de barre, l
 
 Le test UI couvre aussi la séparation de portées dans la navigation Projets : l'ancien pied global `Réglages / Retirer` est absent, l'overlay de présentation du projet est présent, les préférences d'initiales et de couleurs sont tolérantes aux valeurs invalides et restent locales, la colonne repliée conserve la liste d'icônes, et `Commande + virgule` ouvre le même centre de contrôle.
 
+## Correctif des actions Ajouter et Importer
+
+- Cause observée : l'interface attendait `coordinator_options` et une route `POST /v1/projects/confirm` absents du relais. Les clics ne pouvaient donc ni ouvrir un parcours utile ni inscrire un projet.
+- Correctif : le dialogue local prévisualise puis confirme la création ou l'import. Le relais liste et inscrit les projets par la capacité `ProjectRegistryV1`, revalide les racines et expose aussi les actions de retrait, réactivation et reconnexion.
+- `cargo test -p bridget-daemon spec_080_confirmation_ui_cree_puis_enregistre_le_projet_dans_le_registre --lib` : PASS. Le test simule le registre, exige la négociation de capacité, vérifie la racine canonique et atteste que le dossier est créé uniquement après la prévisualisation.
+- `cargo fmt --check`, `cargo test -p bridget-daemon --test ui_relay_test` et `cargo build --release -p bridget-daemon` ont passé dans le clone propre du commit `cb327e2e9e3c84b9e44c44b84be085f0e32c0a7f`.
+
 ## Correctif des actions Desktop
 
 - La délégation de clic du listing de profils couvre Connecter, Réessayer, Ouvrir, Déconnecter, Modifier et Retirer.
