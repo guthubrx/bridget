@@ -485,56 +485,26 @@ pub fn run() {
         app: &tauri::AppHandle,
         state: &DesktopState,
     ) -> Result<(), String> {
-        let relay_target = state
-            .panels
-            .lock()
-            .map_err(as_message)?
-            .panels()
-            .next()
-            .map(|panel| panel.url.clone());
-        let target = relay_target
-            .map(|value| {
-                let mut url = value.parse::<tauri::Url>().expect("relais déjà validé");
-                // Une route dédiée évite de confondre cette surface avec une
-                // conversation lorsque WebKit rétablit ou réécrit une query.
-                // Le jeton du relais reste dans la query existante.
-                url.set_path("/browser-panel");
-                url.to_string()
-            })
-            .unwrap_or_else(|| "bridget://browser-home".to_owned());
+        // La page d'accueil du Browser appartient au client Desktop. Elle ne
+        // doit jamais charger le rendu de conversation du relais, faute de
+        // quoi un WebView indisponible ou filtré pouvait se transformer en
+        // second fil de discussion. Les navigations HTTPS explicites passent
+        // ensuite par `open_browser_surface`, dans ce même WebView isolé.
+        let target = "bridget://browser-home";
         let browser = {
             let mut panels = state.panels.lock().map_err(as_message)?;
-            panels.open_browser(&target).map_err(as_message)?
+            panels.open_browser(target).map_err(as_message)?
         };
         let preferences =
             save_browser_preferences(state, |panel| panel.right_panel_visible = true)?;
-        if let Some(webview) = app.get_webview(&browser.label) {
-            // Un WebView latéral peut survivre à une fermeture visuelle, ou
-            // avoir précédemment affiché une URL HTTPS. Dans les deux cas,
-            // l'ouvrir à nouveau doit ramener la surface Browser Bridget,
-            // jamais conserver une seconde conversation dans le volet.
-            if target != "bridget://browser-home" {
-                let url = target
-                    .parse::<tauri::Url>()
-                    .map_err(|_| "URL Browser Bridget invalide.".to_owned())?;
-                webview.navigate(url).map_err(as_message)?;
-            }
+        if app.get_webview(&browser.label).is_some() {
             return arrange_panels(app, state);
         }
         let main = main_window(app)?;
-        let initial_url = if target == "bridget://browser-home" {
-            WebviewUrl::App("browser-home.html".into())
-        } else {
-            WebviewUrl::External(target.parse::<tauri::Url>().map_err(as_message)?)
-        };
-        let child = WebviewBuilder::new(browser.label, initial_url)
+        let child = WebviewBuilder::new(browser.label, WebviewUrl::App("browser-home.html".into()))
             .data_store_identifier(browser_data_store_identifier(
                 preferences.browser_profile_generation,
             ))
-            // L'identité de cette surface vient du WebView natif, non de son
-            // URL : WebKit peut restaurer une navigation en retirant son
-            // chemin ou sa query. Le script est injecté avant l'application.
-            .initialization_script("window.__BRIDGET_BROWSER_PANEL__ = true;")
             .on_navigation(|url| {
                 url.scheme() == "https"
                     || (url.scheme() == "http" && url.host_str() == Some("127.0.0.1"))

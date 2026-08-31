@@ -25,15 +25,11 @@ fn navigation_browser_reste_https_ou_publication_locale_et_le_panneau_est_unique
 }
 
 #[test]
-fn surface_browser_existante_est_rechargee_vers_le_mode_browser_bridget() {
+fn accueil_browser_est_local_et_ne_peut_pas_dupliquer_la_conversation_distante() {
     let backend = include_str!("../src/lib.rs");
-    let relay = include_str!("../../../../crates/bridget-daemon/src/ui.rs");
 
-    assert!(backend.contains("if let Some(webview) = app.get_webview(&browser.label)"));
-    assert!(backend.contains("webview.navigate(url).map_err(as_message)?;"));
-    assert!(backend.contains("jamais conserver une seconde conversation dans le volet"));
-    assert!(backend.contains("url.set_path(\"/browser-panel\");"));
-    assert!(backend.contains("window.__BRIDGET_BROWSER_PANEL__ = true;"));
+    assert!(backend.contains("La page d'accueil du Browser appartient au client Desktop"));
+    assert!(backend.contains("WebviewUrl::App(\"browser-home.html\".into())"));
+    assert!(backend.contains("second fil de discussion"));
     assert!(backend.contains("open_browser_home_surface(&app, &state)?;"));
-    assert!(relay.contains("(\"GET\", \"/browser-panel\")"));
 }
