@@ -15,11 +15,12 @@ use bridget_transport::protocol::{
     ProjectAdminOperation, ProjectAdminOutcome, ProjectAdminRequest, ProjectBackend,
     ProjectBindOutcome, ProjectBindRequest, ProjectBindStatus, ProjectBindingProjection,
     ProjectBindingStatus, ProjectProfileOutcome, ProjectProfileRefusal, ProjectProfileRequest,
-    ProjectRegistryRefusal, ProjectRoundOperation, ProjectRoundOutcome, ProjectRoundProjection,
-    ProjectRoundRefusal, ProjectRoundRequest, ProjectRuntimeOperation, ProjectRuntimeOutcome,
-    ProjectRuntimeRefusal, ProjectRuntimeRequest, REVIEW_DELEGATE_CONTRACT_VERSION,
-    RelaunchOutcome, RuntimeIngressRefusal, SERVICE_CONTRACT_VERSION, ServiceCapability,
-    ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
+    ProjectRegistryRefusal, ProjectRoundDispatchState, ProjectRoundOperation, ProjectRoundOutcome,
+    ProjectRoundProjection, ProjectRoundRefusal, ProjectRoundRequest, ProjectRuntimeOperation,
+    ProjectRuntimeOutcome, ProjectRuntimeRefusal, ProjectRuntimeRequest,
+    REVIEW_DELEGATE_CONTRACT_VERSION, RelaunchOutcome, RuntimeIngressRefusal,
+    SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal, SpawnRefusal, StopOutcome, decode,
+    encode,
 };
 use bridget_transport::protocol::{
     PROJECT_ROUND_INTERVAL_SECS, ProjectReference, ProjectRoundDispatchOutcome,
@@ -4745,6 +4746,24 @@ fn project_round_message_id(project: &ProjectReference, occurrence_at: i64) -> S
     format!("round-{:x}", digest.finalize())
 }
 
+fn project_round_dispatch_state(issue: &IdempotencyIssue) -> ProjectRoundDispatchState {
+    match issue {
+        IdempotencyIssue::Accepted { .. }
+        | IdempotencyIssue::OutcomeUnknown {
+            delivery_id: Some(_),
+            ..
+        } => ProjectRoundDispatchState::Deposited,
+        IdempotencyIssue::OutcomeUnknown {
+            delivery_id: None, ..
+        } => ProjectRoundDispatchState::Indeterminate,
+        IdempotencyIssue::Rejected { .. }
+        | IdempotencyIssue::Orphaned { .. }
+        | IdempotencyIssue::EnvelopeMismatch
+        | IdempotencyIssue::IdempotencyExpired
+        | IdempotencyIssue::InvalidIssuedAt => ProjectRoundDispatchState::Refused,
+    }
+}
+
 fn unregistered_project_round_projection(
     project_id: String,
     observed_at: i64,
@@ -4757,6 +4776,9 @@ fn unregistered_project_round_projection(
         enabled: false,
         revision: 0,
         updated_at: observed_at,
+        last_occurrence_at: None,
+        last_dispatch_state: None,
+        last_dispatch_observed_at: None,
     }
 }
 
@@ -8701,6 +8723,21 @@ fn handle_wrapper_message(
                 }
             };
             let _ = execute_controls(controls);
+            let dispatch_state = project_round_dispatch_state(&issue);
+            if let Err(error) = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .store
+                .record_project_round_dispatch(
+                    &request.project.project_id,
+                    request.project.binding_generation,
+                    request.occurrence_at,
+                    dispatch_state,
+                    observed_at,
+                )
+            {
+                warn!("observation du dispatch de ronde indisponible: {error}");
+            }
             Some(DaemonToWrapper::ProjectRoundDispatchOutcome {
                 outcome: ProjectRoundDispatchOutcome {
                     contract_version: request.contract_version,
@@ -20190,6 +20227,17 @@ mod presence_tests {
                 .unwrap()
                 .expect("exécution de ronde");
             assert_eq!(snapshot.project, Some(request.project.clone()));
+            let policy = state
+                .store
+                .project_round_policy_for_project("project-079", now)
+                .unwrap()
+                .unwrap();
+            assert_eq!(policy.last_occurrence_at, Some(occurrence_at));
+            assert_eq!(
+                policy.last_dispatch_state,
+                Some(ProjectRoundDispatchState::Deposited)
+            );
+            assert!(policy.last_dispatch_observed_at.is_some_and(|at| at >= now));
         }
 
         let replay = handle_wrapper_message(

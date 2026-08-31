@@ -7,9 +7,10 @@ use bridget_transport::protocol::{
     PROJECT_REGISTRY_CONTRACT_VERSION, PROJECT_ROUND_POLICY_CONTRACT_VERSION,
     ProjectAdminOperation, ProjectAdminOutcome, ProjectAuditOperationKind, ProjectAuditOutcomeKind,
     ProjectAuditProjection, ProjectBackend, ProjectBindOutcome, ProjectBindStatus,
-    ProjectBindingProjection, ProjectBindingStatus, ProjectRegistryRefusal, ProjectRoundOperation,
-    ProjectRoundOutcome, ProjectRoundProjection, ProjectRoundRefusal,
-    ProjectRuntimePolicyReference, ServiceRequestOperation, ServiceRequestPayload,
+    ProjectBindingProjection, ProjectBindingStatus, ProjectRegistryRefusal,
+    ProjectRoundDispatchState, ProjectRoundOperation, ProjectRoundOutcome, ProjectRoundProjection,
+    ProjectRoundRefusal, ProjectRuntimePolicyReference, ServiceRequestOperation,
+    ServiceRequestPayload,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
@@ -716,6 +717,11 @@ impl Store {
                  revision INTEGER NOT NULL CHECK (revision > 0),
                  updated_at INTEGER NOT NULL,
                  command_id TEXT NOT NULL,
+                 last_occurrence_at INTEGER,
+                 last_dispatch_state TEXT CHECK (
+                     last_dispatch_state IN ('deposited', 'refused', 'indeterminate')
+                 ),
+                 last_dispatch_observed_at INTEGER,
                  PRIMARY KEY (project_id, binding_generation)
              );
              CREATE TABLE IF NOT EXISTS project_round_commands (
@@ -740,6 +746,21 @@ impl Store {
             [],
         );
         let _ = conn.execute("ALTER TABLE usage_samples ADD COLUMN model TEXT", []);
+        // Migration additive SPEC-081 : l'absence des trois colonnes signifie
+        // simplement qu'aucun passage n'a encore été observé.
+        let _ = conn.execute(
+            "ALTER TABLE project_round_policies ADD COLUMN last_occurrence_at INTEGER",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE project_round_policies ADD COLUMN last_dispatch_state TEXT
+             CHECK (last_dispatch_state IN ('deposited', 'refused', 'indeterminate'))",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE project_round_policies ADD COLUMN last_dispatch_observed_at INTEGER",
+            [],
+        );
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_usage_samples_dashboard
                 ON usage_samples(observed_at, provider_kind, model);",
@@ -1442,6 +1463,61 @@ impl Store {
             .into_iter()
             .filter(|policy| policy.active && policy.configured && policy.enabled)
             .collect())
+    }
+
+    /// Enregistre en O(1) le dernier dispatch admis sur la génération exacte.
+    /// Une occurrence plus ancienne est un no-op afin qu'un rejeu retardé ne
+    /// puisse jamais faire régresser l'observation présentée à l'opérateur.
+    pub fn record_project_round_dispatch(
+        &mut self,
+        project_id: &str,
+        binding_generation: u64,
+        occurrence_at: i64,
+        state: ProjectRoundDispatchState,
+        observed_at: i64,
+    ) -> Result<(), StoreError> {
+        if project_id.trim().is_empty()
+            || binding_generation == 0
+            || binding_generation > i64::MAX as u64
+            || occurrence_at < 0
+            || observed_at < occurrence_at
+        {
+            return Err(StoreError::Invariant("observation de ronde invalide"));
+        }
+        let exists = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM project_round_policies
+                 WHERE project_id = ?1 AND binding_generation = ?2",
+                params![project_id, binding_generation as i64],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(StoreError::Sqlite)?
+            .is_some();
+        if !exists {
+            return Err(StoreError::ProjectRoundRefusal(
+                ProjectRoundRefusal::PolicyDisabled,
+            ));
+        }
+        self.conn
+            .execute(
+                "UPDATE project_round_policies
+                 SET last_occurrence_at = ?1,
+                     last_dispatch_state = ?2,
+                     last_dispatch_observed_at = ?3
+                 WHERE project_id = ?4 AND binding_generation = ?5
+                   AND (last_occurrence_at IS NULL OR last_occurrence_at <= ?1)",
+                params![
+                    occurrence_at,
+                    project_round_dispatch_state_name(state),
+                    observed_at,
+                    project_id,
+                    binding_generation as i64
+                ],
+            )
+            .map_err(StoreError::Sqlite)?;
+        Ok(())
     }
 
     /// Applique une décision de ronde épinglée à la génération active et
@@ -3700,6 +3776,26 @@ fn project_round_operation_name(operation: ProjectRoundOperation) -> &'static st
     }
 }
 
+fn project_round_dispatch_state_name(state: ProjectRoundDispatchState) -> &'static str {
+    match state {
+        ProjectRoundDispatchState::Deposited => "deposited",
+        ProjectRoundDispatchState::Refused => "refused",
+        ProjectRoundDispatchState::Indeterminate => "indeterminate",
+    }
+}
+
+fn parse_project_round_dispatch_state(
+    value: Option<String>,
+) -> Result<Option<ProjectRoundDispatchState>, StoreError> {
+    match value.as_deref() {
+        None => Ok(None),
+        Some("deposited") => Ok(Some(ProjectRoundDispatchState::Deposited)),
+        Some("refused") => Ok(Some(ProjectRoundDispatchState::Refused)),
+        Some("indeterminate") => Ok(Some(ProjectRoundDispatchState::Indeterminate)),
+        Some(_) => Err(StoreError::Invariant("état de dispatch de ronde corrompu")),
+    }
+}
+
 fn project_round_projection(
     conn: &Connection,
     binding: &ProjectBinding,
@@ -3707,7 +3803,9 @@ fn project_round_projection(
 ) -> Result<ProjectRoundProjection, StoreError> {
     let stored = conn
         .query_row(
-            "SELECT enabled, revision, updated_at
+            "SELECT enabled, revision, updated_at,
+                    last_occurrence_at, last_dispatch_state,
+                    last_dispatch_observed_at
              FROM project_round_policies
              WHERE project_id = ?1 AND binding_generation = ?2",
             params![binding.project_id, binding.generation as i64],
@@ -3716,15 +3814,49 @@ fn project_round_projection(
                     row.get::<_, bool>(0)?,
                     row.get::<_, u64>(1)?,
                     row.get::<_, i64>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
                 ))
             },
         )
         .optional()
         .map_err(StoreError::Sqlite)?;
     let active = binding.state == ProjectBindingState::Active;
-    let (configured, enabled, revision, updated_at) = match stored {
-        Some((enabled, revision, updated_at)) => (true, active && enabled, revision, updated_at),
-        None => (false, false, 0, binding.updated_at.min(observed_at)),
+    let (
+        configured,
+        enabled,
+        revision,
+        updated_at,
+        last_occurrence_at,
+        last_dispatch_state,
+        last_dispatch_observed_at,
+    ) = match stored {
+        Some((
+            enabled,
+            revision,
+            updated_at,
+            last_occurrence_at,
+            last_dispatch_state,
+            last_dispatch_observed_at,
+        )) => (
+            true,
+            active && enabled,
+            revision,
+            updated_at,
+            last_occurrence_at,
+            parse_project_round_dispatch_state(last_dispatch_state)?,
+            last_dispatch_observed_at,
+        ),
+        None => (
+            false,
+            false,
+            0,
+            binding.updated_at.min(observed_at),
+            None,
+            None,
+            None,
+        ),
     };
     Ok(ProjectRoundProjection {
         project_id: binding.project_id.clone(),
@@ -3734,6 +3866,9 @@ fn project_round_projection(
         enabled,
         revision,
         updated_at,
+        last_occurrence_at,
+        last_dispatch_state,
+        last_dispatch_observed_at,
     })
 }
 
@@ -5498,6 +5633,111 @@ mod tests {
             )
             .unwrap();
         assert_eq!(inactive.reason, Some(ProjectRoundRefusal::ProjectInactive));
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn spec_081_dernier_dispatch_ronde_est_monotone_et_isole_par_generation() {
+        use bridget_transport::protocol::ProjectRoundDispatchState;
+
+        let path =
+            std::env::temp_dir().join(format!("bridget-project-round-081-{}.db", Uuid::new_v4()));
+        let mut store = Store::open(&path).unwrap();
+        store
+            .bind_project_registration("register-round-081", "project-081", "/srv/081", 100)
+            .unwrap();
+        store
+            .apply_project_round_mutation(
+                "round-enable-081",
+                ProjectRoundOperation::Enable,
+                "project-081",
+                1,
+                101,
+            )
+            .unwrap();
+
+        store
+            .record_project_round_dispatch(
+                "project-081",
+                1,
+                840,
+                ProjectRoundDispatchState::Deposited,
+                850,
+            )
+            .unwrap();
+        store
+            .record_project_round_dispatch(
+                "project-081",
+                1,
+                420,
+                ProjectRoundDispatchState::Refused,
+                851,
+            )
+            .unwrap();
+        let projection = store
+            .project_round_policy_for_project("project-081", 852)
+            .unwrap()
+            .unwrap();
+        assert_eq!(projection.last_occurrence_at, Some(840));
+        assert_eq!(
+            projection.last_dispatch_state,
+            Some(ProjectRoundDispatchState::Deposited)
+        );
+        assert_eq!(projection.last_dispatch_observed_at, Some(850));
+
+        store
+            .rebind_project_binding("project-081", "/srv/081-rebound", 900)
+            .unwrap();
+        let rebound = store
+            .project_round_policy_for_project("project-081", 901)
+            .unwrap()
+            .unwrap();
+        assert_eq!(rebound.binding_generation, Some(2));
+        assert!(!rebound.configured);
+        assert_eq!(rebound.last_occurrence_at, None);
+        assert_eq!(rebound.last_dispatch_state, None);
+        assert_eq!(rebound.last_dispatch_observed_at, None);
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn spec_081_migre_une_table_de_politique_079_sans_reecriture() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-project-round-migration-081-{}.db",
+            Uuid::new_v4()
+        ));
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE project_round_policies (
+                    project_id TEXT NOT NULL,
+                    binding_generation INTEGER NOT NULL,
+                    enabled INTEGER NOT NULL,
+                    revision INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    command_id TEXT NOT NULL,
+                    PRIMARY KEY (project_id, binding_generation)
+                );",
+            )
+            .unwrap();
+        drop(connection);
+
+        let store = Store::open(&path).unwrap();
+        let columns = store
+            .conn
+            .prepare("PRAGMA table_info(project_round_policies)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(columns.contains(&"last_occurrence_at".to_string()));
+        assert!(columns.contains(&"last_dispatch_state".to_string()));
+        assert!(columns.contains(&"last_dispatch_observed_at".to_string()));
 
         drop(store);
         let _ = std::fs::remove_file(path);
