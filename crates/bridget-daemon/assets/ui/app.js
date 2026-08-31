@@ -7038,16 +7038,23 @@
     const renderAgentProfileEditor = (agent, profile) => {
       nodes.detailPanel.dataset.mode = "profile";
       nodes.detailPanel.dataset.exchangeKey = "";
-      nodes.detailTitle.textContent = `Réglages de ${profile.display_name}`;
+      nodes.detailTitle.textContent = "Réglages de " + profile.display_name;
 
+      let persistedProfile = profile;
       let selectedShape = profile.avatar.shape;
       let selectedColor = profile.avatar.color;
+      let profileSaveTimer = null;
+      let profileSaveInFlight = false;
+      let profileSaveQueued = false;
+      let attentionSaveInFlight = false;
+      let attentionSaveQueued = false;
+
       const form = make("form", "agent-profile-editor");
       form.noValidate = true;
       const intro = make(
         "p",
         "agent-profile-editor__intro",
-        "Ces réglages sont partagés par toutes les fenêtres Bridget.",
+        "Les modifications sont enregistrées automatiquement.",
       );
       const nameField = make("label", "agent-profile-editor__field");
       nameField.append(make("span", "agent-profile-editor__label", "Nom affiché"));
@@ -7073,13 +7080,6 @@
         "Séparez les étiquettes par une virgule ou appuyez sur Entrée.",
       );
       labelsHelp.id = "agent-profile-label-help";
-      labelsInput.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter") return;
-        event.preventDefault();
-        const start = labelsInput.selectionStart || labelsInput.value.length;
-        const end = labelsInput.selectionEnd || start;
-        labelsInput.setRangeText(", ", start, end, "end");
-      });
 
       const appearance = make("section", "agent-profile-editor__appearance");
       appearance.append(make("span", "agent-profile-editor__label", "Apparence"));
@@ -7090,8 +7090,11 @@
       colorOptions.setAttribute("role", "group");
       colorOptions.setAttribute("aria-label", "Choisir la couleur de l’agent");
       const refreshAppearanceSelection = () => {
+        const selectedHex = PROFILE_AVATAR_COLORS[selectedColor] || PROFILE_AVATAR_COLORS.blue;
         shapeOptions.querySelectorAll("button").forEach((button) => {
           button.setAttribute("aria-pressed", String(button.dataset.shape === selectedShape));
+          const preview = button.querySelector(".agent-avatar");
+          if (preview) setStyleVariable(preview, "--avatar-color", selectedHex);
         });
         colorOptions.querySelectorAll("button").forEach((button) => {
           button.setAttribute("aria-pressed", String(button.dataset.color === selectedColor));
@@ -7101,7 +7104,7 @@
         const shapeButton = make("button", "agent-appearance-shape");
         shapeButton.type = "button";
         shapeButton.dataset.shape = shape;
-        shapeButton.setAttribute("aria-label", `Choisir la forme ${AGENT_AVATAR_SHAPE_LABELS[shape]}`);
+        shapeButton.setAttribute("aria-label", "Choisir la forme " + AGENT_AVATAR_SHAPE_LABELS[shape]);
         const preview = createAgentAvatar(
           documentRef,
           { ...agent, profile: { ...agent.profile, avatar: { shape, color: selectedColor } }, state: "alive" },
@@ -7111,10 +7114,6 @@
         );
         preview.setAttribute("aria-hidden", "true");
         shapeButton.append(preview);
-        shapeButton.addEventListener("click", () => {
-          selectedShape = shape;
-          refreshAppearanceSelection();
-        });
         shapeOptions.append(shapeButton);
       }
       for (const [color, hex] of Object.entries(PROFILE_AVATAR_COLORS)) {
@@ -7122,11 +7121,7 @@
         colorButton.type = "button";
         colorButton.dataset.color = color;
         setStyleVariable(colorButton, "--appearance-color", hex);
-        colorButton.setAttribute("aria-label", `Choisir la couleur ${color}`);
-        colorButton.addEventListener("click", () => {
-          selectedColor = color;
-          refreshAppearanceSelection();
-        });
+        colorButton.setAttribute("aria-label", "Choisir la couleur " + color);
         colorOptions.append(colorButton);
       }
       appearance.append(shapeOptions, colorOptions);
@@ -7170,13 +7165,11 @@
       const application = make(
         "p",
         "agent-profile-editor__application",
-        `Consigne : ${instructionStatusLabel(profile.instruction_state && profile.instruction_state.status)}.`,
+        "Consigne : " + instructionStatusLabel(profile.instruction_state && profile.instruction_state.status) + ".",
       );
       application.dataset.status = profile.instruction_state && profile.instruction_state.status || "unknown";
       const saveState = make("p", "agent-profile-editor__save-state", "");
       saveState.setAttribute("role", "status");
-      const save = make("button", "primary-action", "Enregistrer");
-      save.type = "submit";
       form.append(
         intro,
         nameField,
@@ -7187,23 +7180,48 @@
         attentionField,
         application,
         saveState,
-        save,
       );
-      form.addEventListener("submit", async (event) => {
-        event.preventDefault();
-        save.disabled = true;
+
+      const profileDraft = () => ({
+        ...persistedProfile,
+        display_name: nameInput.value.trim(),
+        labels: labelsInput.value
+          .split(",")
+          .map((label) => label.trim())
+          .filter(Boolean),
+        avatar: { shape: selectedShape, color: selectedColor },
+        instructions: instructions.value,
+      });
+      const redrawProfileDraft = () => {
+        const draft = profileDraft();
+        applyProfileDetail(agent.name, draft);
+        return draft;
+      };
+      const clearScheduledProfileSave = () => {
+        if (profileSaveTimer === null) return;
+        windowRef.clearTimeout(profileSaveTimer);
+        profileSaveTimer = null;
+      };
+      const persistProfile = async () => {
+        clearScheduledProfileSave();
+        if (profileSaveInFlight) {
+          profileSaveQueued = true;
+          return;
+        }
+        profileSaveInFlight = true;
+        const draft = redrawProfileDraft();
         saveState.textContent = "Enregistrement…";
         try {
-          const response = await windowRef.fetch(buildAgentProfileUrl(token, profile.profile_ref), {
+          const response = await windowRef.fetch(buildAgentProfileUrl(token, persistedProfile.profile_ref), {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               version: 1,
-              expected_revision: profile.revision,
-              display_name: nameInput.value,
-              labels: [labelsInput.value],
-              avatar: { shape: selectedShape, color: selectedColor },
-              instructions: instructions.value,
+              expected_revision: persistedProfile.revision,
+              display_name: draft.display_name,
+              labels: draft.labels,
+              avatar: draft.avatar,
+              instructions: draft.instructions,
             }),
           });
           let payload = {};
@@ -7211,19 +7229,97 @@
           if (!response.ok || !payload.profile) {
             throw new Error(payload.code || "profile_save_failed");
           }
-          const currentAgent = applyProfileDetail(agent.name, payload.profile) || agent;
-          await saveAttentionPreference(
-            payload.profile.profile_ref,
-            Object.fromEntries(preferenceInputs.map(([key, input]) => [key, input.checked])),
-          );
-          renderAgentProfileEditor(currentAgent, payload.profile);
-          saveState.textContent = "Profil enregistré.";
+          persistedProfile = payload.profile;
+          if (profileSaveQueued || profileSaveTimer !== null) {
+            redrawProfileDraft();
+          } else {
+            applyProfileDetail(agent.name, payload.profile);
+          }
+          application.textContent = "Consigne : "
+            + instructionStatusLabel(payload.profile.instruction_state && payload.profile.instruction_state.status)
+            + ".";
+          application.dataset.status = payload.profile.instruction_state
+            && payload.profile.instruction_state.status || "unknown";
+          saveState.textContent = "Enregistré.";
+        } catch (error) {
+          saveState.textContent = profileErrorLabel(error && error.message);
+        } finally {
+          profileSaveInFlight = false;
+          if (profileSaveQueued) {
+            profileSaveQueued = false;
+            void persistProfile();
+          }
+        }
+      };
+      const scheduleProfileSave = (immediate = false) => {
+        redrawProfileDraft();
+        clearScheduledProfileSave();
+        if (immediate) {
+          void persistProfile();
+          return;
+        }
+        profileSaveTimer = windowRef.setTimeout(() => {
+          profileSaveTimer = null;
+          void persistProfile();
+        }, 500);
+      };
+      const attentionDraft = () => Object.fromEntries(
+        preferenceInputs.map(([key, input]) => [key, input.checked]),
+      );
+      const persistAttention = async () => {
+        if (attentionSaveInFlight) {
+          attentionSaveQueued = true;
+          return;
+        }
+        attentionSaveInFlight = true;
+        saveState.textContent = "Enregistrement…";
+        try {
+          await saveAttentionPreference(persistedProfile.profile_ref, attentionDraft());
+          saveState.textContent = "Enregistré.";
         } catch (error) {
           saveState.textContent = error && error.message === "attention_save_failed"
-            ? "Profil enregistré. Les notifications seront à réessayer."
+            ? "Impossible d’enregistrer les notifications."
             : profileErrorLabel(error && error.message);
-          save.disabled = false;
+        } finally {
+          attentionSaveInFlight = false;
+          if (attentionSaveQueued) {
+            attentionSaveQueued = false;
+            void persistAttention();
+          }
         }
+      };
+
+      labelsInput.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        const start = labelsInput.selectionStart || labelsInput.value.length;
+        const end = labelsInput.selectionEnd || start;
+        labelsInput.setRangeText(", ", start, end, "end");
+        scheduleProfileSave();
+      });
+      [nameInput, labelsInput, instructions].forEach((input) => {
+        input.addEventListener("input", () => scheduleProfileSave());
+      });
+      shapeOptions.querySelectorAll("button").forEach((button) => {
+        button.addEventListener("click", () => {
+          selectedShape = button.dataset.shape;
+          refreshAppearanceSelection();
+          scheduleProfileSave(true);
+        });
+      });
+      colorOptions.querySelectorAll("button").forEach((button) => {
+        button.addEventListener("click", () => {
+          selectedColor = button.dataset.color;
+          refreshAppearanceSelection();
+          scheduleProfileSave(true);
+        });
+      });
+      preferenceInputs.forEach(([, input]) => {
+        input.addEventListener("change", () => { void persistAttention(); });
+      });
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        scheduleProfileSave(true);
       });
       nodes.detailContent.replaceChildren(form);
       nodes.detailPanel.hidden = false;
