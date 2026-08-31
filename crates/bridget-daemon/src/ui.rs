@@ -1731,6 +1731,7 @@ fn read_usage_dashboard(
         })?
         .into_iter()
         .map(|row| UiUsageDashboardRowV1 {
+            total_tokens: row.total_tokens(),
             provider_kind: row.provider_kind,
             model: row.model,
             source: row.source,
@@ -1739,7 +1740,6 @@ fn read_usage_dashboard(
             output_tokens: row.output_tokens,
             cache_creation_input_tokens: row.cache_creation_input_tokens,
             cache_read_input_tokens: row.cache_read_input_tokens,
-            total_tokens: row.total_tokens(),
             cost_estimate_microunits: None,
         })
         .collect();
