@@ -42,12 +42,13 @@ Les contrôles restent des éléments HTML natifs et accessibles. Seule leur pr�
 
 ## Déploiement attesté
 
-Le binaire release courant a été construit depuis un clone propre de `main`, installé dans /home/moi/.local/bin/bridget, puis les services utilisateur ont été redémarrés le 2026-08-31 à 08:40:41 UTC :
+Le binaire release courant a été construit depuis un clone propre de `main`, installé dans /home/moi/.local/bin/bridget, puis les services utilisateur ont été redémarrés le 2026-08-31 à 09:29:20 UTC :
 
-- `bridget-daemon.service` : actif, PID 2454451 ;
-- `bridget-ui.service` : actif, PID 2454452 ;
-- SHA-256 du binaire installé : `c524953a081441b30e8f73c78554789777d64328a877a35a01658d9348115f5e`.
-- Les assets servis par le relais contiennent la navigation Projets et l'overlay de présentation.
+- `bridget-daemon.service` : actif, PID 2531711 ;
+- `bridget-ui.service` : actif après le même redémarrage ;
+- SHA-256 du binaire installé : `732f10d4dd2f0322f39323bccf04d864aade3262fed3f012a3fc600750c92d83`.
+- Les assets servis par le relais contiennent la navigation Projets et l'overlay de création ou d'import.
+- Les appels authentifiés `GET /v1/projects/settings` et `GET /v1/projects` répondent tous deux `200` après redémarrage, avec respectivement une racine autorisée et un projet inscrit.
 
 ## Preuves automatisées
 

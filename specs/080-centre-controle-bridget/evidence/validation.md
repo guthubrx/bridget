@@ -5,10 +5,11 @@ Date : 2026-08-31
 ## Relais effectivement déployé
 
 - Build : `cargo build --release -p bridget-daemon` réussi.
-- Installation : `/home/moi/.local/bin/bridget` SHA-256 `c524953a081441b30e8f73c78554789777d64328a877a35a01658d9348115f5e`.
-- Services utilisateur : `bridget-daemon.service` et `bridget-ui.service` actifs depuis 08:40:41 UTC.
-- Build et test réalisés dans le clone propre `/tmp/bridget-spec080.9DPe4s` du commit `c485f1c39994432f4561dd1357250420ecc766e4`.
-- Le relais sert les marqueurs `project-presentation-overlay` et `Navigation des projets` après redémarrage.
+- Installation : `/home/moi/.local/bin/bridget` SHA-256 `732f10d4dd2f0322f39323bccf04d864aade3262fed3f012a3fc600750c92d83`.
+- Services utilisateur : `bridget-daemon.service` et `bridget-ui.service` actifs depuis 09:29:20 UTC.
+- Build et test réalisés dans le clone propre `/tmp/bridget-project-validation-cb327e2` du commit `cb327e2e9e3c84b9e44c44b84be085f0e32c0a7f`.
+- Le relais sert les marqueurs `project-presentation-overlay`, `project-onboarding-overlay` et `Navigation des projets` après redémarrage.
+- Les routes authentifiées `GET /v1/projects/settings` et `GET /v1/projects` répondent `200`, avec une racine autorisée et un projet inscrit.
 
 ## Contrôles automatisés
 
