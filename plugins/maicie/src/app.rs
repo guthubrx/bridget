@@ -215,6 +215,20 @@ pub fn project_registration_request_bytes(
 
 /// Répercute dans l'autorité métier Maicie une désactivation déjà attestée par
 /// Bridget. Cette transition ne touche ni dépôt, ni worktree, ni exécution.
+pub fn activate_project_identity(
+    store: &mut MaicieStore,
+    project_id: &str,
+    binding_generation: u64,
+    observed_at: i64,
+) -> Result<(), ProjectRegistrationError> {
+    store
+        .activate_project_identity(project_id, binding_generation, observed_at)
+        .map(|_| ())
+        .map_err(|error| ProjectRegistrationError::Store(error.to_string()))
+}
+
+/// Répercute dans l autorité métier Maicie une désactivation déjà attestée par
+/// Bridget. Cette transition ne touche ni dépôt, ni worktree, ni exécution.
 pub fn disable_project_identity(
     store: &mut MaicieStore,
     project_id: &str,

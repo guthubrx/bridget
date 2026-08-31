@@ -96,3 +96,22 @@ Recherche exécutée : UiSnapshotV1, ProjectRootPolicy, ProjectAdminRequest,
 ProjectRegistrationRequest, lifecycle.rs, wrapper.rs et app.js. Aucun équivalent
 de project_workspace.rs n’existait. Les créations 076 restent limitées à une
 prévisualisation pure et aux extensions identifiées ci-dessus.
+
+## Rejeu après implémentation - 2026-08-31
+
+**Tête analysée**: branche session-076-interface-projets-coordinateur sur la
+base 4ad487e, avant commit de la tranche.
+
+| Ajout ou extension | Recherche rejouée | Décision |
+|---|---|---|
+| Verrou de politique | flock déjà utilisé par greffe_policy_refresh, greffe_authorization, receipt_store | RÉUTILISER le même mécanisme Unix, fichier privé et lien unique. |
+| Empreinte de découverte | SHA-256 déjà dépendance directe et diagnostics Git fixes existants | ÉTENDRE localement, sans shell ni persistance de contenu. |
+| Onboarding UI durable | aucun registre UI existant | CRÉER un document privé de projection, jamais une nouvelle identité projet. |
+| Options découverte | AgentRegistry et définitions résolues existants | DÉRIVER Codex et Claude sous restrictions, ne pas proposer Cursor. |
+| Navigation projets | UiSnapshotV1 et app.js existants | ÉTENDRE le flux déjà rafraîchi, sans polling projet séparé. |
+
+Aucune dépendance, base de données, serveur HTTP, canal MCP ou abstraction
+transverse supplémentaire n'a été créé. Le verrou de politique est justifié
+par la course de génération autrement observable entre deux mises à jour UI.
+
+| Dernier audit dans la projection projet | ProjectAuditEvent et ProjectBindingProjection existants | ETENDRE avec une synthese transport reduite, sans nouveau store UI ni journal | PASS |

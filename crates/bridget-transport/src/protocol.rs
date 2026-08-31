@@ -393,6 +393,7 @@ pub enum ProjectAdminOperation {
     Status,
     Rebind,
     Disable,
+    Activate,
     ReviewProjectReconcile,
 }
 
@@ -436,10 +437,45 @@ pub struct ProjectReference {
     pub binding_generation: u64,
 }
 
+/// Synthèse non sensible du dernier audit durable d une liaison projet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectAuditOperationKind {
+    Register,
+    Rebind,
+    Activate,
+    Disable,
+    ReviewProjectReconcile,
+}
+
+/// Issue fermée de la synthèse d audit publiée au relais administratif local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectAuditOutcomeKind {
+    Applied,
+    Refused,
+}
+
+/// Dernier fait d audit d une liaison, sans command_id ni référence de racine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectAuditProjection {
+    pub operation: ProjectAuditOperationKind,
+    pub outcome: ProjectAuditOutcomeKind,
+    pub binding_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProjectRegistryRefusal>,
+    pub observed_at: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectBindingProjection {
     pub project_id: String,
+    /// Racine canonique exposée uniquement par les surfaces administratives locales.
+    /// Elle ne transite jamais par MCP ni par une API réseau générale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_root: Option<String>,
     pub state: ProjectBindingStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding_generation: Option<u64>,
@@ -449,6 +485,9 @@ pub struct ProjectBindingProjection {
     pub runtime_policy: Option<ProjectRuntimePolicyReference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<ProjectRegistryRefusal>,
+    /// Dernier audit durable, réservé à la projection administrative locale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_audit: Option<ProjectAuditProjection>,
     pub observed_at: i64,
 }
 
@@ -4785,11 +4824,13 @@ mod tests {
             operation: ProjectAdminOperation::Rebind,
             bindings: vec![ProjectBindingProjection {
                 project_id: "project-winner".to_string(),
+                canonical_root: None,
                 state: ProjectBindingStatus::Active,
                 binding_generation: Some(2),
                 backend: Some(ProjectBackend::Host),
                 runtime_policy: None,
                 reason: None,
+                last_audit: None,
                 observed_at: 1_787_997_603,
             }],
             reason: None,

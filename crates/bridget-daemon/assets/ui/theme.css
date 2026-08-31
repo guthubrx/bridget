@@ -17,6 +17,7 @@
   --radius-small: 0.75rem;
   --radius-medium: 1.25rem;
   --radius-large: 1.75rem;
+  --project-pane-width: 12.5rem;
   --agent-pane-width: 20rem;
   --agent-pane-resizer-width: 0.5rem;
   --detail-panel-width: min(38rem, 42vw);
@@ -85,6 +86,7 @@ input:focus-visible,
 .workspace {
   display: grid;
   grid-template-columns:
+    var(--project-pane-width)
     var(--agent-pane-width)
     var(--agent-pane-resizer-width)
     minmax(0, 1fr);
@@ -95,10 +97,108 @@ input:focus-visible,
 
 .workspace:has(.detail-panel:not([hidden])) {
   grid-template-columns:
+    var(--project-pane-width)
     var(--agent-pane-width)
     var(--agent-pane-resizer-width)
     minmax(0, 1fr)
     var(--detail-panel-width);
+}
+
+.workspace:has(.project-pane[data-collapsed="true"]) {
+  grid-template-columns: 2.85rem var(--agent-pane-width) var(--agent-pane-resizer-width) minmax(0, 1fr);
+}
+
+.workspace:has(.project-pane[data-collapsed="true"]):has(.detail-panel:not([hidden])) {
+  grid-template-columns: 2.85rem var(--agent-pane-width) var(--agent-pane-resizer-width) minmax(0, 1fr) var(--detail-panel-width);
+}
+
+.project-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.7rem 0.5rem;
+  background: #0d0d0d;
+}
+
+.project-pane__header,
+.project-pane__actions,
+.project-pane__footer {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.project-pane__header strong {
+  overflow: hidden;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.project-pane__actions {
+  margin-left: auto;
+}
+
+.project-pane button {
+  border-radius: 0.45rem;
+  color: var(--text-secondary);
+}
+
+.project-pane__actions button,
+.project-pane__footer button,
+#project-collapse {
+  padding: 0.34rem 0.42rem;
+  font-size: 0.75rem;
+}
+
+.project-list {
+  display: grid;
+  min-height: 0;
+  gap: 0.18rem;
+  overflow: auto;
+}
+
+.project-row {
+  display: grid;
+  gap: 0.1rem;
+  width: 100%;
+  padding: 0.5rem;
+  text-align: left;
+}
+
+.project-row:hover,
+.project-row[aria-current="true"] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-primary);
+}
+
+.project-row__name {
+  overflow: hidden;
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-row__state,
+.project-row__path,
+.project-list__error {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-pane__footer {
+  margin-top: auto;
+}
+
+.project-pane[data-collapsed="true"] .project-pane__header strong,
+.project-pane[data-collapsed="true"] .project-pane__actions,
+.project-pane[data-collapsed="true"] .project-list,
+.project-pane[data-collapsed="true"] .project-pane__footer {
+  display: none;
 }
 
 .agent-pane-resizer {

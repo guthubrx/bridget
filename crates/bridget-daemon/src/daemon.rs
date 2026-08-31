@@ -821,6 +821,8 @@ enum ManagedStopTarget {
 
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ManagedSupervisorCommand {
+    /// Arrêt explicite du superviseur, indépendant des clones du canal encore vivants.
+    Shutdown,
     Start {
         prepared: PreparedSpawn,
         stop: Arc<ManagedStopControl>,
@@ -1740,6 +1742,24 @@ impl SupervisedChild {
             }
         }
     }
+
+    fn request_daemon_shutdown(
+        &mut self,
+    ) -> Result<(), crate::managed_process::ManagedProcessError> {
+        match self {
+            Self::Host(child) => child.request_group_termination(),
+            Self::Runtime { .. } => self.stop().map(|_| ()),
+        }
+    }
+
+    fn reap_daemon_shutdown(
+        &mut self,
+    ) -> Result<bool, crate::managed_process::ManagedProcessError> {
+        match self {
+            Self::Host(child) => child.reap_terminated_group(),
+            Self::Runtime { child, .. } => Ok(child.try_wait()?.is_some()),
+        }
+    }
 }
 
 struct SupervisedProcess {
@@ -1750,6 +1770,47 @@ struct SupervisedProcess {
     failure_sent: bool,
     stop: Arc<ManagedStopControl>,
     stop_attempted: bool,
+}
+
+/// Éteint toute la flotte hôte en deux phases, afin de ne pas additionner le
+/// délai d'arrêt de chaque groupe lorsque le daemon reçoit son propre arrêt.
+/// Les groupes qui résistent restent marqués pour la réconciliation suivante.
+fn shutdown_active_managed_processes(active: &mut HashMap<String, SupervisedProcess>) {
+    for process in active.values_mut() {
+        if let Err(error) = process.child.request_daemon_shutdown() {
+            warn!(
+                "arrêt daemon: signal du groupe {} impossible: {error}",
+                process.prepared.lease.name
+            );
+        }
+    }
+
+    let deadline = Instant::now() + MANAGED_STOP_FORCED_GRACE;
+    loop {
+        let mut survivors = Vec::new();
+        for process in active.values_mut() {
+            match process.child.reap_daemon_shutdown() {
+                Ok(true) => {}
+                Ok(false) => survivors.push(process.prepared.lease.name.clone()),
+                Err(error) => {
+                    warn!(
+                        "arrêt daemon: état du groupe {} illisible: {error}",
+                        process.prepared.lease.name
+                    );
+                    survivors.push(process.prepared.lease.name.clone());
+                }
+            }
+        }
+        if survivors.is_empty() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            warn!("arrêt daemon: groupes encore vivants après SIGTERM: {survivors:?}");
+            break;
+        }
+        thread::sleep(MANAGED_STOP_POLL);
+    }
+    active.clear();
 }
 
 pub(crate) fn spawn_managed_supervisor_thread(
@@ -1782,6 +1843,10 @@ pub(crate) fn spawn_managed_supervisor_thread(
         let mut active = HashMap::<String, SupervisedProcess>::new();
         loop {
             match commands.recv_timeout(Duration::from_millis(50)) {
+                Ok(ManagedSupervisorCommand::Shutdown) => {
+                    shutdown_active_managed_processes(&mut active);
+                    return;
+                }
                 Ok(command) => handle_managed_command(
                     command,
                     &fleet,
@@ -1792,9 +1857,16 @@ pub(crate) fn spawn_managed_supervisor_thread(
                     executable_override.as_ref(),
                 ),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    shutdown_active_managed_processes(&mut active);
+                    return;
+                }
             }
             while let Ok(command) = commands.try_recv() {
+                if matches!(&command, ManagedSupervisorCommand::Shutdown) {
+                    shutdown_active_managed_processes(&mut active);
+                    return;
+                }
                 handle_managed_command(
                     command,
                     &fleet,
@@ -1826,6 +1898,9 @@ fn handle_managed_command(
     executable_override: Option<&PathBuf>,
 ) {
     match command {
+        ManagedSupervisorCommand::Shutdown => {
+            shutdown_active_managed_processes(active);
+        }
         ManagedSupervisorCommand::Start { prepared, stop } => {
             let identity = ManagedIdentity {
                 instance_id: prepared.lease.instance_id.clone(),
@@ -4888,11 +4963,13 @@ fn unregistered_project_projection(
 ) -> ProjectBindingProjection {
     ProjectBindingProjection {
         project_id,
+        canonical_root: None,
         state: ProjectBindingStatus::Unregistered,
         binding_generation: None,
         backend: None,
         runtime_policy: None,
         reason: None,
+        last_audit: None,
         observed_at,
     }
 }
@@ -8263,6 +8340,7 @@ fn handle_wrapper_message(
                 request.operation,
                 ProjectAdminOperation::Rebind
                     | ProjectAdminOperation::Disable
+                    | ProjectAdminOperation::Activate
                     | ProjectAdminOperation::ReviewProjectReconcile
             );
             let policy = if mutation {
@@ -8293,7 +8371,9 @@ fn handle_wrapper_message(
                 None
             };
             let canonical_root = match request.operation {
-                ProjectAdminOperation::Rebind | ProjectAdminOperation::ReviewProjectReconcile => {
+                ProjectAdminOperation::Activate
+                | ProjectAdminOperation::Rebind
+                | ProjectAdminOperation::ReviewProjectReconcile => {
                     let Some(root) = request.requested_root.as_deref() else {
                         return Some(project_registry_admin_failure(
                             &request,
@@ -8352,7 +8432,8 @@ fn handle_wrapper_message(
                             observed_at,
                         })
                 }
-                ProjectAdminOperation::Rebind
+                ProjectAdminOperation::Activate
+                | ProjectAdminOperation::Rebind
                 | ProjectAdminOperation::Disable
                 | ProjectAdminOperation::ReviewProjectReconcile => state
                     .lock()

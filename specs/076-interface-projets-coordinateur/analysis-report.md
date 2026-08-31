@@ -1,65 +1,44 @@
 # Analyse inter-artefacts - SPEC-076
 
-**Date**: 2026-08-30
-**Méthode**: analyse manuelle documentée.
+**Date**: 2026-08-31
+**Base analysee**: branche session-076-interface-projets-coordinateur sur 4ad487e.
 
-## Contexte d'exécution
+## Resultat
 
-La primitive SpecKit Analyze n'est pas disponible dans ce dépôt car le dossier
-.specify est volontairement absent. La synchronisation qui le créerait a été
-explicitement interdite par l'utilisateur. L'analyse compare donc directement
-spec.md, plan.md, tasks.md, les artefacts de conception et le code de la tête
-de référence.
+| Axe | Verdict | Preuve |
+|---|---|---|
+| Autorite projet | PASS | Maicie conserve identite, Bridget conserve liaison et audit, interface sans store metier. |
+| Racines et concurrence | PASS | Politique versionnee, ecriture atomique et course de generation testee. |
+| Creation et import | PASS | Previsualisation pure, Git explicite, reprise sans fusion ni ecrasement. |
+| Reactivation et retrait | PASS | Activate typee, audit conserve, disable non destructif et reprise explicite. |
+| Projection UI | PASS | Identite, liaison, dernier audit et agents ProjectReference dans le snapshot existant. |
+| Coordinateur | PASS | Instantane durable, digest, upstream explicite et aucune substitution. |
+| Decouverte | PASS | Definitions derivees restreintes, duree bornee, confirmation et empreinte avant apres. |
+| Frontiere locale | PASS | Relais loopback existant, jeton UI et contrats UID pair consommes. |
+| Secrets et profils | PASS | Aucune route UI ne modifie profil, extension ou secret. |
 
-## Passage 1 - Findings et corrections appliquées
+## Tests retenus
 
-| ID | Sévérité | Constat vérifié | Correction appliquée |
-|---|---|---|---|
-| A-01 | HIGH | FR-036 limitait les mutations à une interface locale authentifiée sans préciser le lien avec Bridget Desktop ni l'interdiction d'écoute réseau. | FR-037, plan et contrat imposent loopback serveur et tunnel SSH attesté par SPEC-074 uniquement. |
-| A-02 | HIGH | La réactivation est demandée par US3 et US5, mais ProjectIdentity::activate refuse actuellement l'état Disabled et Bridget refuse une liaison désactivée. | FR-038, modèle, contrat, quickstart, T030 et T031 imposent une mutation typée, idempotente, auditée et sans seconde identité. |
-| A-03 | MEDIUM | Maicie exige display_name, alors que la SPEC refuse un nom projet concurrent. | FR-039 et T021 imposent la dérivation unique depuis le nom de dossier, sans champ éditable ni alias UI. |
-| A-04 | MEDIUM | FR-035 exclut les approbations SPEC-067, sans oracle de test nommé. | T013 inclut le refus ou l'absence démontrée de ces opérations. |
+- SPEC-076 : 20 passes.
+- Daemon unitaire complet : 743 passes, 7 ignores.
+- Maicie project : 12 passes. Transport runtime : 2 passes. Interface JavaScript : 93 passes.
+- Format et Clippy workspace : PASS.
+- Workspace complet : ECHEC uniquement dans managed_parity_test, 6 passes et 4 echecs reproductibles.
 
-## Passage 2 - Résultat après corrections
+Les echecs concernent une empreinte de corpus FR-008, deux attentes de prompt
+MCP Codex et le nettoyage de six groupes managed-wrapper. Ils etaient connus
+avant les derniers changements 076 et leurs sources directes ne sont pas dans
+le diff de la SPEC. Ils empechent neanmoins le verdict global CONVERGED.
 
-Aucun conflit restant entre le périmètre fonctionnel, les frontières techniques
-et les tâches. Les concepts nouveaux sont justifiés par une absence vérifiée
-dans la tête de référence :
+## Findings ouverts
 
-- projection UI de projets : extension de UiSnapshotV1, pas de second store;
-- intentions UI Maicie : extension de la saga ProjectRegistry, sans accès direct
-  au store Maicie;
-- réactivation : extension explicite des transitions SPEC-065, pas une
-  réinterprétation silencieuse de disable;
-- configuration coordinateur : projection des autorités SPEC-066, SPEC-067,
-  SPEC-072 et SPEC-075, sans les dupliquer.
-
-## Couverture
-
-| Groupe d'exigences | Tâches de preuve ou d'implémentation |
-|---|---|
-| FR-001 à FR-007 - dossier et racines | T010 à T015, T031 |
-| FR-008 à FR-015 - création, import, reconnexion | T020 à T025, T030 à T035 |
-| FR-016 à FR-019 - configuration attestée | T014, T015, T040, T041 |
-| FR-020 à FR-028 - coordinateur et découverte | T040 à T046 |
-| FR-029 à FR-034 - navigation et retrait | T050 à T053 |
-| FR-035 - absence d'approbation | T013 |
-| FR-036 à FR-037 - surface UI locale bornée | T003, T013, T051, T052 |
-| FR-038 - réactivation idempotente | T030, T031, T033, T053 |
-| FR-039 - nom métier issu du dossier | T020, T021, T024 |
-
-## Métriques
-
-- Exigences fonctionnelles : 39
-- Tâches : 42
-- Exigences couvertes : 39/39 - 100 %
-- Findings CRITICAL restants : 0
-- Ambiguïtés matérielles restantes : 0
-- Tests exécutés : 0 - aucune implémentation n'est autorisée tant que les gates
-  de dépendances ne sont pas levées.
+1. T062 : tests workspace non verts.
+2. T063 : validation manuelle utilisateur non recueillie.
+3. T066 : contre-revue adverse indisponible depuis ce canal.
+4. T067 : Converge depend des trois points precedents.
 
 ## Verdict
 
-**PASS_DOCUMENTATION_ONLY**. Les artefacts sont cohérents pour une future
-implémentation. Ce verdict ne vaut ni autorisation de coder ni preuve runtime.
-La première tâche non cochée reste T001.
+**PASS_IMPLEMENTATION_TARGETED_VALIDATION**. Aucun finding CRITICAL dans le
+perimetre SPEC-076. La livraison reste suspendue jusqu a la resolution ou
+acceptation explicite des findings ouverts.

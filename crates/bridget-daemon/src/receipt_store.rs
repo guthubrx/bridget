@@ -696,7 +696,9 @@ mod tests {
                 let opened =
                     ReceiptStore::open(&root, "instance_012_cccccccccccc", ReceiptQuota::default());
                 barrier.wait();
-                opened.is_ok()
+                let accepted = opened.is_ok();
+                drop(opened);
+                accepted
             }));
         }
         barrier.wait();
@@ -706,9 +708,10 @@ mod tests {
             .filter(|opened| *opened)
             .count();
         assert_eq!(opened_count, 1);
-        assert!(
-            ReceiptStore::open(&root, "instance_012_cccccccccccc", ReceiptQuota::default()).is_ok()
-        );
+        match ReceiptStore::open(&root, "instance_012_cccccccccccc", ReceiptQuota::default()) {
+            Ok(store) => drop(store),
+            Err(error) => panic!("le verrou doit être libéré après les deux handles: {error}"),
+        }
         let _ = fs::remove_dir_all(root);
     }
 

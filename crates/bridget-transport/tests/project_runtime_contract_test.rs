@@ -38,11 +38,13 @@ fn spec_066_docker_contract_is_additive_for_host_history() {
     };
     let projection = ProjectBindingProjection {
         project_id: "project-a".to_string(),
+        canonical_root: Some("/srv/a".to_string()),
         state: ProjectBindingStatus::Active,
         binding_generation: Some(1),
         backend: Some(ProjectBackend::Docker),
         runtime_policy: Some(policy.clone()),
         reason: None,
+        last_audit: None,
         observed_at: 3,
     };
     let decoded = serde_json::from_str::<ProjectBindingProjection>(

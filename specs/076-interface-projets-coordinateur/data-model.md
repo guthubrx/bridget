@@ -107,3 +107,26 @@ La réactivation utilise une transition métier typée de `disabled` vers
 `active`, suivie d'une liaison active validée et d'un audit idempotent.
 Les états identitaires, runtime, profil et cycle de vie restent les autorités
 des spécifications dont ils proviennent.
+
+## Réalisation v1 - 2026-08-31
+
+La projection durable effectivement écrite par SPEC-076 est un document privé
+local au relais, voisin de la politique de racines. Il contient, par projet,
+le chemin canonique, le mode create ou import, le verdict Git, la configuration
+complète attestée du coordinateur, son nom courant, son état, le dernier motif
+et le DiscoveryRun éventuel. Ses permissions sont 0600 et son schéma est fermé.
+
+Le DiscoveryRun persiste aussi baseline_fingerprint et completion_fingerprint.
+Ces empreintes SHA-256 ne conservent ni contenu de fichier, ni secret, ni liste
+lisible de fichiers. Elles couvrent les métadonnées de l'arbre sans suivre les
+liens symboliques ainsi que le résultat Git status. Une différence finale
+bascule la découverte en failed et interdit sa poursuite sans nouvelle décision
+humaine.
+
+Les valeurs par défaut restent dans un document privé distinct. Elles ne sont
+lues qu'à la création d'un nouvel onboarding et ne réécrivent jamais une
+configuration coordinateur déjà durable.
+
+La vue UI publie enfin le dernier audit de liaison sous forme reduite :
+operation, issue, generation et instant. Cette vue reste derivee de
+ProjectAuditEvent et ne constitue pas un historique concurrent.

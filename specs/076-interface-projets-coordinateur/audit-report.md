@@ -1,38 +1,26 @@
-# Audit manuel - SPEC-076
+# Audit de realisation - SPEC-076
 
-**Date**: 2026-08-30
-**Nature**: audit documentaire. Aucun code SPEC-076 n'existe à auditer.
+**Date**: 2026-08-31
+**Portee**: diff de session-076-interface-projets-coordinateur et preuves executees sur le serveur.
 
-## Écarts spec, plan, tâches, code
+| Frontiere | Verdict | Constat |
+|---|---|---|
+| Relais UI | PASS | Loopback et jeton existants, routes projet sous le relais local. |
+| Mutations metier | PASS | Maicie typee, aucun acces UI direct a son store. |
+| Racines | PASS | Canonicalisation, permissions, symlinks, generation et verrou. |
+| Dossier et Git | PASS | Creation sans ecrasement, import non destructif, diagnostic Git sans contenu. |
+| Historique | PASS | Disable et Activate conservent identite, liaison et audit. |
+| Projection | PASS | Dernier audit non sensible et liens agents explicites dans le snapshot UI. |
+| Coordinateur | PASS | Configuration durable et attestee, upstream distinct, aucune substitution. |
+| Decouverte | PASS | Lecture seule, borne humaine, empreintes avant apres et aucun fichier memoire. |
+| Secrets et profils | PASS | Aucune route UI de modification ou approbation. |
 
-Les 39 exigences sont couvertes par les 42 tâches. Les écarts avec le code
-actuel sont explicitement des travaux futurs, non des implémentations
-silencieuses :
+## Validation globale non fermee
 
-- aucune route UI projet, ni projection de liste de projets, n'existe encore;
-- la politique de racines est chargée au démarrage et ne fournit pas encore le
-  reload attesté attendu;
-- la réactivation disabled vers active n'existe pas encore dans les autorités
-  SPEC-065;
-- l'environnement, les profils et le cycle de vie requis dépendent
-  respectivement de SPEC-066, SPEC-067 et SPEC-075.
+cargo fmt et Clippy workspace passent. cargo test --workspace echoue sur quatre
+tests de managed_parity_test : corpus FR-008, deux prompts MCP Codex et
+nettoyage de processus. Le dernier echec laisse six managed-wrapper issus du
+test, identifies comme processus de test et non termines sans accord explicite.
 
-## Tests
-
-Aucun test n'a été lancé : le premier gate T001 échoue, donc exécuter une
-compilation ou des tests ne constituerait pas une preuve de SPEC-076.
-
-## Risques constitutionnels
-
-- pas de second registre, store navigateur global, shell libre ou API réseau
-  générique prévu;
-- la synchronisation .specify reste dérogée à la demande explicite de
-  l'utilisateur;
-- aucune livraison ni mutation de production n'a été effectuée;
-- la contre-revue inter-fournisseur est indisponible pour cette session humaine
-  et est tracée séparément.
-
-## Verdict
-
-**BLOCKED_BEFORE_IMPLEMENTATION**. La correction suivante recommandée est de
-lever les dépendances formelles, pas de commencer une implémentation partielle.
+La contre-revue adverse et la validation manuelle utilisateur restent aussi
+ouvertes. Aucun deploiement ne peut donc etre annonce comme valide.

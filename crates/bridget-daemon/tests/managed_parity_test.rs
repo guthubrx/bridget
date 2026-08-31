@@ -104,7 +104,7 @@ for line in sys.stdin:
                 "protocol": "acp",
                 "permissions": "allow",
                 "queue_capacity": 8,
-                "notify_timeout_secs": 2,
+                "notify_timeout_secs": 6,
                 "forbidden_env": ["OPENAI_API_KEY", "CODEX_API_KEY"],
                 "pass_env": ["PARITY_SINGLE_TURN"]
             }
@@ -143,14 +143,14 @@ impl InteractivePromptSession {
         serde_json::from_slice(&fs::read(&self.done).unwrap()).unwrap()
     }
 
-    fn finish_without_mcp(self) {
+    fn finish_after_bootstrap_rejection(self) {
         assert!(
             self.bootstrap_rejected.exists(),
             "le faux Codex n'a pas refusé l'amorçage muté"
         );
         assert!(
             !self.done.exists(),
-            "le corpus MCP a été exécuté malgré l'amorçage muté"
+            "le corpus de session a été exécuté malgré l'amorçage muté"
         );
         fs::write(&self.release, b"release").unwrap();
         let output = self.child.wait_with_output().unwrap();
@@ -161,7 +161,7 @@ impl InteractivePromptSession {
         );
         assert!(
             !self.done.exists(),
-            "le corpus MCP a été exécuté après le refus de l'amorçage"
+            "le corpus de session a été exécuté après le refus de l'amorçage"
         );
     }
 }
@@ -207,11 +207,10 @@ if os.environ["BRIDGET_REQUIRE_RESUME_BOOTSTRAP"] == "1":
         "",
     )
     if os.environ["BRIDGET_MUTATE_RESUME_BOOTSTRAP"] == "1":
-        prompt = prompt.replace("ALL_TOOLS", "OUTILS_ABSENTS")
+        prompt = prompt.replace("binaire `bridget`", "BINAIRE_BRIDGET_ABSENT")
     required = (
-        "Cherche mcp__bridget__* dans ALL_TOOLS via functions.exec",
-        "appelle tools.mcp__bridget__bridget_send avec in_reply_to",
-        "Utilise le shell bridget seulement si cette recherche ne rend aucun outil.",
+        "Utilise uniquement le binaire `bridget` disponible dans PATH",
+        "N'essaie pas de rechercher ni d'appeler `mcp__bridget__*`",
     )
     if not all(instruction in prompt for instruction in required):
         with open(os.environ["BRIDGET_PROMPT_BOOTSTRAP_REJECTED"], "w") as signal:
@@ -449,9 +448,8 @@ elif command == "delete-buffer":
         );
         let actual = &arguments[bootstrap];
         assert!(actual.contains(name), "identité absente de l'amorçage");
-        assert!(actual.contains("mcp__bridget__*"));
-        assert!(actual.contains("tools.mcp__bridget__bridget_send"));
-        assert!(actual.contains("shell bridget"));
+        assert!(actual.contains("binaire `bridget`"));
+        assert!(actual.contains("N'essaie pas de rechercher"));
     } else {
         let actual = arguments
             .iter()
@@ -1054,8 +1052,25 @@ fn receive_replies(peer: &mut Peer, expected_ids: &[String]) -> Vec<String> {
         match peer.recv() {
             DaemonToWrapper::Deliver(message) => {
                 let in_reply_to = message.in_reply_to.as_deref().unwrap_or_default();
-                assert_eq!(in_reply_to, expected_ids[replies.len()]);
-                replies.push(message.body);
+                if in_reply_to.is_empty() {
+                    assert_eq!(
+                        message.from, "bridget",
+                        "message non corrélé inattendu pendant l'attente d'une réponse: {message:?}"
+                    );
+                    assert!(
+                        message
+                            .body
+                            .starts_with("Échec de livraison de la demande #"),
+                        "notification Bridget non reconnue pendant l'attente d'une réponse: {message:?}"
+                    );
+                } else {
+                    assert_eq!(
+                        in_reply_to,
+                        expected_ids[replies.len()],
+                        "réponse corrélée à une autre demande: {message:?}"
+                    );
+                    replies.push(message.body);
+                }
             }
             DaemonToWrapper::DeliverIdempotent {
                 delivery_id,
@@ -1064,7 +1079,11 @@ fn receive_replies(peer: &mut Peer, expected_ids: &[String]) -> Vec<String> {
                 ..
             } => {
                 let in_reply_to = message.in_reply_to.as_deref().unwrap_or_default();
-                assert_eq!(in_reply_to, expected_ids[replies.len()]);
+                assert_eq!(
+                    in_reply_to,
+                    expected_ids[replies.len()],
+                    "réponse idempotente sans corrélation exploitable: {message:?}"
+                );
                 replies.push(message.body);
                 peer.send(&WrapperToDaemon::DeliverAcked {
                     delivery_id,
@@ -1533,7 +1552,7 @@ fn prompt_reduit_rejoue_le_corpus_dans_la_meme_session() {
 }
 
 #[test]
-fn reprise_codex_rejoue_la_panne_mcp_et_clot_les_demandes_liees() {
+fn reprise_codex_utilise_le_client_bridget_et_clot_les_demandes_liees() {
     let _serial = MANAGED_BENCH_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1559,7 +1578,7 @@ fn reprise_codex_rejoue_la_panne_mcp_et_clot_les_demandes_liees() {
 }
 
 #[test]
-fn reprise_codex_sans_amorcage_ne_decouvre_pas_mcp() {
+fn reprise_codex_sans_client_bridget_refuse_le_corpus_de_session() {
     let _serial = MANAGED_BENCH_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1579,7 +1598,7 @@ fn reprise_codex_sans_amorcage_ne_decouvre_pas_mcp() {
     let mut peer = Peer::register(&daemon.socket, "prompt-mutation-sender");
     wait_agent(&mut peer, name);
 
-    let request_id = send_tracked_with_timeout(&mut peer, name, "MUTATION-NO-MCP", 30);
+    let request_id = send_tracked_with_timeout(&mut peer, name, "MUTATION-BOOTSTRAP-REJETE", 30);
     peer.send(&WrapperToDaemon::ListRequests {
         sender: peer.name.clone(),
         limit: 20,
@@ -1594,7 +1613,7 @@ fn reprise_codex_sans_amorcage_ne_decouvre_pas_mcp() {
         }
         other => panic!("liste des demandes mutées inattendue: {other:?}"),
     }
-    session.finish_without_mcp();
+    session.finish_after_bootstrap_rejection();
 
     daemon.stop();
     proxy.stop();

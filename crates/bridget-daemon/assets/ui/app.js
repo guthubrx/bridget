@@ -5629,6 +5629,13 @@
   }
 
   const UI_NODE_IDS = Object.freeze({
+    projectPane: "project-pane",
+    projectCollapse: "project-collapse",
+    projectList: "project-list",
+    projectNew: "project-new",
+    projectImport: "project-import",
+    projectSettings: "project-settings",
+    projectRemove: "project-remove",
     agentList: "agent-list",
     stoppedAgentList: "stopped-agent-list",
     stoppedAgents: "stopped-agents",
@@ -6034,6 +6041,9 @@
     };
     applyControlCenterPreferences(documentRef, controlPreferences);
     let state = createUiState({ selectedAgent: requestedAgent });
+    let projects = [];
+    let selectedProjectId = null;
+    let projectSettingsSnapshot = null;
     const pendingUiMessages = new Map();
     const notifiedTerminalIds = new Set();
     const attentionEvents = new Map();
@@ -6109,12 +6119,12 @@
         if (typeof resizer.setPointerCapture === "function") {
           resizer.setPointerCapture(dragPointerId);
         }
-        applyAgentPaneWidth(event.clientX, false);
+        applyAgentPaneWidth(event.clientX - (nodes.projectPane.getBoundingClientRect().width || 0), false);
         event.preventDefault();
       });
       resizer.addEventListener("pointermove", (event) => {
         if (event.pointerId !== dragPointerId) return;
-        applyAgentPaneWidth(event.clientX, false);
+        applyAgentPaneWidth(event.clientX - (nodes.projectPane.getBoundingClientRect().width || 0), false);
         event.preventDefault();
       });
       resizer.addEventListener("pointerup", finishResize);
@@ -7328,6 +7338,299 @@
       return shell;
     };
 
+    const projectUrl = (path) => path + "?token=" + encodeURIComponent(token);
+    const requestProject = async (path, options = {}) => {
+      const response = await windowRef.fetch(projectUrl(path), options);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || "Projet indisponible.");
+      return payload;
+    };
+    const projectAgentId = (agent) => (
+      agent && agent.agent_link && agent.agent_link.project
+        ? String(agent.agent_link.project.project_id || "") : ""
+    );
+    const renderProjects = () => {
+      nodes.projectList.replaceChildren();
+      const all = make("button", "project-row", "Toute la flotte");
+      all.type = "button";
+      all.dataset.selected = String(selectedProjectId === null);
+      all.setAttribute("aria-current", String(selectedProjectId === null));
+      all.addEventListener("click", () => {
+        selectedProjectId = null;
+        lastAgentsRenderSignature = null;
+        renderProjects();
+        renderAgents();
+      });
+      nodes.projectList.append(all);
+      nodes.projectRemove.disabled = !selectedProjectId;
+      projects.forEach((project) => {
+        const button = make("button", "project-row");
+        button.type = "button";
+        button.dataset.selected = String(project.project_id === selectedProjectId);
+        button.setAttribute("aria-current", String(project.project_id === selectedProjectId));
+        button.title = project.canonical_path;
+        button.append(
+          make("strong", "project-row__name", project.display_name),
+          make("span", "project-row__state", projectStatusLabel(project)),
+          make("span", "project-row__path", project.canonical_path),
+        );
+        button.addEventListener("click", () => {
+          if (project.discovery_state === "awaiting_confirmation") {
+            if (!windowRef.confirm("Le compte rendu intermédiaire est attendu. Autoriser un nouveau créneau de découverte en lecture seule ?")) return;
+            const duration = Number(windowRef.prompt("Nouveau créneau : 10, 30, 60 ou 120 minutes", "10"));
+            if (![10, 30, 60, 120].includes(duration)) {
+              nodes.sourceState.textContent = "Durée de découverte invalide.";
+              nodes.sourceState.dataset.state = "error";
+              return;
+            }
+            void requestProject("/v1/projects/discovery/continue", {
+              method: "POST", headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                version: 1, command_id: "project-discovery-continue-" + Date.now(),
+                project_id: project.project_id, discovery_minutes: duration,
+              }),
+            }).then(async () => {
+              await refreshProjects();
+              selectedProjectId = project.project_id;
+              renderProjects();
+            }).catch((error) => {
+              nodes.sourceState.textContent = error.message;
+              nodes.sourceState.dataset.state = "error";
+            });
+            return;
+          }
+          if (project.state === "path_missing") {
+            const root = windowRef.prompt(
+              "Le dossier précédent est introuvable. Indique le nouveau dossier existant sous une racine autorisée :",
+              "",
+            );
+            if (!root) return;
+            if (!windowRef.confirm("Reconnecter explicitement ce projet à " + root + " ? Aucun dossier ne sera déplacé.")) return;
+            void requestProject("/v1/projects/rebind", {
+              method: "POST", headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                version: 1, command_id: "project-rebind-" + Date.now(),
+                project_id: project.project_id, root,
+              }),
+            }).then(async () => {
+              await refreshProjects();
+              selectedProjectId = project.project_id;
+              renderProjects();
+              lastAgentsRenderSignature = null;
+              renderAgents();
+            }).catch((error) => {
+              nodes.sourceState.textContent = error.message;
+              nodes.sourceState.dataset.state = "error";
+            });
+            return;
+          }
+          if (project.state === "disabled") {
+            if (!windowRef.confirm("Réactiver ce projet sans toucher à son dossier ni à son historique ?")) return;
+            void requestProject("/v1/projects/activate", {
+              method: "POST", headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                version: 1, command_id: "project-reactivate-" + Date.now(),
+                project_id: project.project_id, root: project.canonical_path,
+              }),
+            }).then(async () => {
+              await refreshProjects();
+              selectedProjectId = project.project_id;
+              renderProjects();
+              lastAgentsRenderSignature = null;
+              renderAgents();
+            }).catch((error) => {
+              nodes.sourceState.textContent = error.message;
+              nodes.sourceState.dataset.state = "error";
+            });
+            return;
+          }
+          selectedProjectId = project.project_id;
+          lastAgentsRenderSignature = null;
+          renderProjects();
+          renderAgents();
+          const coordinator = project.coordinator || state.agents.find((agent) => projectAgentId(agent) === project.project_id)?.name;
+          if (coordinator) selectAgent(coordinator);
+        });
+        nodes.projectList.append(button);
+      });
+    };
+    const refreshProjects = async () => {
+      const payload = await requestProject("/v1/projects");
+      projects = Array.isArray(payload.projects) ? payload.projects : [];
+      if (selectedProjectId && !projects.some((project) => project.project_id === selectedProjectId)) {
+        selectedProjectId = null;
+      }
+      renderProjects();
+      lastAgentsRenderSignature = null;
+      renderAgents();
+    };
+    const applyProjectSnapshot = (snapshot) => {
+      if (!snapshot || !Array.isArray(snapshot.projects)) return false;
+      const before = JSON.stringify(projects);
+      projects = snapshot.projects;
+      if (selectedProjectId && !projects.some((project) => project.project_id === selectedProjectId)) {
+        selectedProjectId = null;
+      }
+      if (before === JSON.stringify(projects)) return false;
+      renderProjects();
+      lastAgentsRenderSignature = null;
+      return true;
+    };
+    const coordinatorLabel = (choice) => choice.provider_id + " / " + choice.model_id + " - " + choice.permissions;
+    const projectStateLabel = (state) => {
+      if (state === "active") return "actif";
+      if (state === "disabled") return "retiré";
+      if (state === "path_missing") return "dossier introuvable";
+      return "indisponible";
+    };
+    const projectStatusLabel = (project) => {
+      const coordinator = project.coordinator_state ? "coordinateur : " + project.coordinator_state : null;
+      const discovery = project.discovery_state ? "découverte : " + project.discovery_state : null;
+      const audit = project.last_audit ? "audit : " + project.last_audit.operation + " " + project.last_audit.outcome : null;
+      return [projectStateLabel(project.state), coordinator, discovery, audit].filter(Boolean).join(" - ");
+    };
+    const selectCoordinator = (settings, title) => {
+      const choices = Array.isArray(settings.coordinator_options) ? settings.coordinator_options : [];
+      if (choices.length === 0) throw new Error("Aucun coordinateur compatible et lecture seule n'est disponible.");
+      const configured = settings.default_coordinator || {};
+      const defaultIndex = choices.findIndex((choice) => (
+        choice.agent_type === configured.agent_type
+        && choice.model_id === configured.model_id
+        && (choice.efforts || []).includes(configured.effort)
+      ));
+      const description = choices.map((choice, index) => (
+        String(index + 1) + ". " + choice.launcher_id + " / " + choice.provider_id
+        + " / " + choice.model_id + " / " + choice.permissions
+      )).join("\n");
+      const rawIndex = windowRef.prompt(title + "\n" + description, String(defaultIndex >= 0 ? defaultIndex + 1 : 1));
+      if (rawIndex === null) return null;
+      const index = Number(rawIndex) - 1;
+      if (!Number.isInteger(index) || index < 0 || index >= choices.length) {
+        throw new Error("Choix de coordinateur invalide.");
+      }
+      const choice = choices[index];
+      const efforts = Array.isArray(choice.efforts) && choice.efforts.length ? choice.efforts : ["default"];
+      const defaultEffort = (
+        index === defaultIndex && efforts.includes(configured.effort)
+          ? configured.effort : efforts[0]
+      );
+      const effort = windowRef.prompt(
+        "Niveau d'effort pour " + choice.model_id + " : " + efforts.join(", "),
+        defaultEffort,
+      );
+      if (effort === null) return null;
+      if (!efforts.includes(effort)) throw new Error("Niveau d'effort invalide.");
+      return { choice, effort };
+    };
+    const beginProject = async (mode) => {
+      try {
+        projectSettingsSnapshot = await requestProject("/v1/projects/settings");
+        const roots = projectSettingsSnapshot.allowed_project_roots || [];
+        if (roots.length === 0 || !projectSettingsSnapshot.configuration_available) {
+          throw new Error("Définissez une racine et un coordinateur dans les réglages.");
+        }
+        const root = mode === "create"
+          ? windowRef.prompt("Racine autorisée :\n" + roots.join("\n"), roots[0])
+          : windowRef.prompt("Dossier existant à importer :", roots[0]);
+        if (!root) return;
+        const folder = mode === "create" ? windowRef.prompt("Nom du nouveau dossier :", "") : null;
+        if (mode === "create" && !folder) return;
+        const coordinator = selectCoordinator(
+          projectSettingsSnapshot,
+          "Configuration du coordinateur initial (outil / upstream / modèle / permissions)",
+        );
+        if (!coordinator) return;
+        const preview = await requestProject("/v1/projects/preview", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ version: 1, mode, root, folder_name: folder || undefined }),
+        });
+        const git = windowRef.confirm("Initialiser Git si nécessaire ?");
+        const durationRaw = windowRef.prompt("Découverte en lecture seule : 10, 30, 60 ou 120 minutes", "10");
+        const duration = Number(durationRaw);
+        const recap = "Dossier : " + preview.canonical_path + "\nGit : " + (git ? "oui" : "non")
+          + "\nCoordinateur : " + coordinatorLabel(coordinator.choice) + "\nEffort : " + coordinator.effort
+          + "\nDurée : " + duration + " minutes";
+        if (!windowRef.confirm(recap + "\n\nConfirmer la création/import ?")) return;
+        const confirmed = await requestProject("/v1/projects/confirm", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            version: 1, command_id: "project-ui-" + Date.now() + "-" + Math.random().toString(16).slice(2),
+            mode, root, folder_name: folder || undefined, initialize_git: git,
+            agent_type: coordinator.choice.agent_type, model_id: coordinator.choice.model_id,
+            effort: coordinator.effort, discovery_minutes: duration,
+          }),
+        });
+        await refreshProjects();
+        selectedProjectId = confirmed.project_id;
+        renderProjects();
+        lastAgentsRenderSignature = null;
+        renderAgents();
+        if (confirmed.coordinator) selectAgent(confirmed.coordinator);
+      } catch (error) {
+        nodes.sourceState.textContent = error.message;
+        nodes.sourceState.dataset.state = "error";
+      }
+    };
+    const updateProjectRoots = async () => {
+      try {
+        const settings = await requestProject("/v1/projects/settings");
+        const current = (settings.allowed_project_roots || []).join("\n");
+        const value = windowRef.prompt("Une racine autorisée par ligne :", current);
+        if (value === null) return;
+        const allowed_project_roots = value.split("\n").map((entry) => entry.trim()).filter(Boolean);
+        const coordinator = selectCoordinator(
+          settings,
+          "Valeur par défaut des futurs coordinateurs (les projets existants ne changent pas)",
+        );
+        if (!coordinator) return;
+        await requestProject("/v1/projects/settings", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            version: 1, command_id: "project-settings-" + Date.now(),
+            expected_generation: settings.policy_generation, allowed_project_roots,
+            default_coordinator: {
+              agent_type: coordinator.choice.agent_type,
+              model_id: coordinator.choice.model_id,
+              effort: coordinator.effort,
+            },
+          }),
+        });
+        nodes.sourceState.textContent = "Racines projet mises à jour.";
+        nodes.sourceState.dataset.state = "ready";
+      } catch (error) {
+        nodes.sourceState.textContent = error.message;
+        nodes.sourceState.dataset.state = "error";
+      }
+    };
+    const setProjectPaneCollapsed = (collapsed) => {
+      nodes.projectPane.dataset.collapsed = String(collapsed);
+      nodes.projectCollapse.setAttribute("aria-expanded", String(!collapsed));
+      nodes.projectCollapse.textContent = collapsed ? "›" : "‹";
+    };
+    nodes.projectNew.addEventListener("click", () => { void beginProject("create"); });
+    nodes.projectImport.addEventListener("click", () => { void beginProject("import"); });
+    nodes.projectSettings.addEventListener("click", () => { void updateProjectRoots(); });
+    nodes.projectRemove.addEventListener("click", () => {
+      const project = projects.find((entry) => entry.project_id === selectedProjectId);
+      if (!project) return;
+      if (!windowRef.confirm("Retirer " + project.display_name + " de Bridget ? Son dossier, Git et historique seront conservés.")) return;
+      void requestProject("/v1/projects/disable", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ version: 1, command_id: "project-disable-" + Date.now(), project_id: project.project_id }),
+      }).then(async () => {
+        selectedProjectId = null;
+        await refreshProjects();
+        renderProjects();
+      }).catch((error) => {
+        nodes.sourceState.textContent = error.message;
+        nodes.sourceState.dataset.state = "error";
+      });
+    });
+    nodes.projectCollapse.addEventListener("click", () => {
+      setProjectPaneCollapsed(nodes.projectPane.dataset.collapsed !== "true");
+    });
+    setProjectPaneCollapsed(false);
+
     const renderAgents = () => {
       const openedName = identityCardAgentName;
       const openedAnchorRect = identityCardAnchorRect;
@@ -7335,6 +7638,7 @@
         state.selectedAgent,
         agentSidebarPreferences,
         agentRosterSignature(state.agents),
+        selectedProjectId,
       ]);
       if (renderSignature === lastAgentsRenderSignature) return false;
       const agentPane = typeof nodes.agentList.closest === "function"
@@ -7343,7 +7647,10 @@
       const previousScrollTop = agentPane && Number.isFinite(agentPane.scrollTop)
         ? agentPane.scrollTop
         : null;
-      const projection = agentSidebarProjection(state.agents, agentSidebarPreferences);
+      const scopedAgents = selectedProjectId
+        ? state.agents.filter((agent) => projectAgentId(agent) === selectedProjectId)
+        : state.agents;
+      const projection = agentSidebarProjection(scopedAgents, agentSidebarPreferences);
       const activeRows = projection.active.map(
         (agent) => ({ agent, node: renderAgentButton(agent) }),
       );
@@ -8207,13 +8514,14 @@
     });
 
     const applyFleetSnapshot = (snapshot) => {
+      const projectsChanged = applyProjectSnapshot(snapshot);
       const previousSelected = state.selectedAgent;
       const previousAgents = state.agents;
       state = applyReconnectSnapshot(state, snapshot);
       state = { ...state, agents: applyReadThrough(state.agents) };
       const rosterChanged = agentRosterSignature(previousAgents) !== agentRosterSignature(state.agents);
       const selectionChanged = previousSelected !== state.selectedAgent;
-      if (!rosterChanged && !selectionChanged) return false;
+      if (!rosterChanged && !selectionChanged) return projectsChanged;
       renderAgents();
       const previousSelectedAgent = previousAgents.find((agent) => agent.name === previousSelected);
       const selectedAgent = state.agents.find((agent) => agent.name === state.selectedAgent);
@@ -8269,6 +8577,7 @@
     };
 
     const applySnapshotPayload = (snapshot, watchedAgent) => {
+      applyProjectSnapshot(snapshot);
       const previousSelected = state.selectedAgent;
       state = applyReconnectSnapshot(state, snapshot);
       state = { ...state, agents: applyReadThrough(state.agents) };
@@ -8932,6 +9241,7 @@
     });
 
     renderRelay();
+    renderProjects();
     renderAgents();
     renderHeader();
     renderThread(0);

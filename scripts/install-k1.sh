@@ -645,11 +645,12 @@ write_systemd_maicie_releve() {
   may_write "$MAICIE_RELEVE_SERVICE" "systemd maicie.releve" || return 0
   cat >"$MAICIE_RELEVE_SERVICE" <<EOF
 [Unit]
-Description=Maicie guichet releve (pull-only)
+Description=Maicie relève et dispatcher global des rondes
 
 [Service]
 Type=oneshot
 ExecStart=${MAICIE_SUIVI_BIN}
+ExecStart=${BRIDGET_BIN} project-round dispatch
 Environment=RUST_LOG=info
 Environment=HOME=${HOME}
 Environment=PATH=${HOME}/.local/bin:/usr/bin:/bin

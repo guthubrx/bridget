@@ -100,7 +100,7 @@ fn spec_065_reprise_apres_crash_et_collision_alias_ne_creent_qu_un_actif() {
     std::fs::write(
         &policy_path,
         format!(
-            "{{\"contract_version\":1,\"allowed_project_roots\":[\"{}\"]}}",
+            "{{\"contract_version\":1,\"policy_generation\":1,\"allowed_project_roots\":[\"{}\"]}}",
             allowed_root.display()
         ),
     )

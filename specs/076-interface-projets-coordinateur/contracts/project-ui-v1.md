@@ -58,3 +58,26 @@ divergent est refusé. Une panne après création de dossier ou liaison laisse u
 Chaque mutation produit un audit non sensible : type, project_id, génération,
 issue, instant et prochaine action. Les événements système conversationnels
 sont des projections de ces verdicts, jamais une seconde vérité.
+
+## Routes réalisées v1
+
+- GET /v1/projects/settings : racines, génération, options attestées et défaut.
+- POST /v1/projects/settings : génération attendue, racines et défaut futur.
+- GET /v1/projects : projection des projets et de leurs états coordinateur.
+- POST /v1/projects/preview et /v1/projects/confirm : création ou import.
+- POST /v1/projects/disable, /rebind et /activate : transitions explicites.
+- POST /v1/projects/discovery/continue : nouveau créneau seulement après la
+  borne précédente et confirmation humaine.
+
+Les corps d'écriture sont fermés, versionnés et refusent les command_id
+invalide. Les routes ne comprennent ni profil, ni extension, ni secret, ni
+commande libre. La liste projets est aussi portée par le snapshot UI existant,
+sans boucle de polling dédiée.
+
+## Extension de projection realisee
+
+La projection de chaque projet porte aussi le dernier ProjectAuditEvent sous
+forme reduite : operation, issue, generation et instant. Elle ne contient ni
+command_id, ni racine precedente, ni contenu. Les agents restent filtres
+uniquement par ProjectReference explicite ; un agent historique sans ce fait
+reste visible dans Toute la flotte et non enregistre dans un projet.
