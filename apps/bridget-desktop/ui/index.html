@@ -40,7 +40,14 @@
         <nav><ul id="fleet-sources" aria-label="Sources et projets"></ul></nav>
         <footer>
           <button id="manage-servers" type="button" class="quiet">Gérer les serveurs</button>
-          <button id="show-preferences" type="button" class="icon-settings" aria-label="Ouvrir les réglages">⚙</button>
+          <div class="settings-launcher-wrap">
+            <button id="show-preferences" type="button" class="icon-settings" aria-label="Ouvrir le menu des paramètres" aria-expanded="false" aria-controls="settings-launcher">⚙</button>
+            <div id="settings-launcher" class="settings-launcher" role="menu" aria-label="Accès aux paramètres" hidden>
+              <button type="button" role="menuitem" data-open-settings-section="general">Paramètres de l’application</button>
+              <button type="button" role="menuitem" data-open-settings-section="servers">Serveurs et connexions</button>
+              <button type="button" role="menuitem" data-open-settings-section="usage">Usage</button>
+            </div>
+          </div>
         </footer>
       </aside>
       <section class="fleet-agents-pane" aria-label="Flotte d'agents">
@@ -80,24 +87,38 @@
         <footer class="dialog-actions"><button value="cancel" class="secondary" type="submit" autofocus>Annuler</button><button value="approve" type="submit">Approuver l'identité</button></footer>
       </form>
     </dialog>
-    <dialog id="preferences-dialog" aria-labelledby="preferences-title">
-      <form id="preferences-form" method="dialog" novalidate>
-        <header class="dialog-heading"><div><p class="eyebrow">CET ORDINATEUR</p><h2 id="preferences-title">Réglages Bridget</h2></div><button class="icon-button" id="close-preferences" type="button" aria-label="Fermer">×</button></header>
-        <p class="field-help">Ces préférences restent sur cet ordinateur. Elles ne sont jamais envoyées aux serveurs reliés ni à leurs agents.</p>
-        <label>Nom affiché<input id="preferences-display-name" maxlength="96" autocomplete="name" placeholder="Optionnel" /></label>
-        <label>Thème<select id="preferences-color-scheme"><option value="system">Système</option><option value="dark">Sombre</option><option value="light">Clair</option></select></label>
-        <label>Fuseau d’affichage<input id="preferences-timezone" maxlength="64" autocomplete="off" spellcheck="false" value="system" placeholder="system ou Europe/Paris" /><span class="field-help">Utilisez « system » ou un identifiant IANA, par exemple Europe/Paris. Le fuseau du serveur n’est pas modifié.</span></label>
-        <label>Taille de police<select id="preferences-font-size"><option value="13">13 px</option><option value="14">14 px</option><option value="15">15 px</option><option value="16">16 px</option><option value="17">17 px</option><option value="18">18 px</option><option value="20">20 px</option><option value="22">22 px</option><option value="24">24 px</option></select></label>
-        <fieldset class="content-security"><legend>Contenus conversationnels</legend><p class="field-help">Ces autorisations s'appliquent à ce Mac uniquement. Un message ne peut jamais les activer, lancer une commande ni modifier le serveur.</p><label class="choice"><input id="preferences-external-links" type="checkbox" /> Ouvrir les liens HTTPS externes après un clic explicite</label><label class="choice"><input id="preferences-file-references" type="checkbox" /> Prévisualiser les fichiers autorisés du projet</label><label class="choice"><input id="preferences-remote-images" type="checkbox" /> Charger les images HTTPS distantes après mon geste explicite</label></fieldset>
-        <section class="desktop-about" aria-labelledby="desktop-about-title"><h3 id="desktop-about-title">À propos</h3><p id="desktop-version">Version inconnue.</p><p id="desktop-update-status">Vérification de mise à jour non configurée.</p></section>
-        <p id="preferences-error" class="notice notice-error" hidden role="alert"></p>
-        <footer class="dialog-actions"><button id="cancel-preferences" class="secondary" type="button">Annuler</button><button type="submit">Enregistrer</button></footer>
-      </form>
-    </dialog>
-    <dialog id="server-dialog" aria-labelledby="server-dialog-title">
-      <header class="dialog-heading"><div><p class="eyebrow">SOURCES</p><h2 id="server-dialog-title">Gérer les serveurs</h2></div><button class="icon-button" type="button" onclick="this.closest('dialog').close()" aria-label="Fermer">×</button></header>
-      <ul id="server-list" class="server-list"></ul>
-      <footer class="dialog-actions"><button id="add-server" type="button">Ajouter un serveur</button><button class="secondary" type="button" onclick="this.closest('dialog').close()">Fermer</button></footer>
+    <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+      <header class="dialog-heading settings-dialog-heading"><div><p class="eyebrow">CET ORDINATEUR</p><h2 id="settings-title">Paramètres</h2></div><button class="icon-button" id="close-preferences" type="button" aria-label="Fermer">×</button></header>
+      <div class="settings-layout">
+        <nav class="settings-sidebar" aria-label="Sections des paramètres">
+          <button type="button" data-settings-section="general" aria-current="true">Application</button>
+          <button type="button" data-settings-section="servers">Serveurs et connexions</button>
+          <button type="button" data-settings-section="usage">Usage</button>
+        </nav>
+        <div class="settings-sections">
+          <section id="settings-general" data-settings-panel="general" aria-labelledby="settings-general-title">
+            <header class="settings-section-heading"><p class="eyebrow">APPLICATION</p><h2 id="settings-general-title">Paramètres de l’application</h2><p>Ces préférences restent sur cet ordinateur. Elles ne sont jamais envoyées aux serveurs reliés ni à leurs agents.</p></header>
+            <form id="preferences-form" novalidate>
+              <label>Nom affiché<input id="preferences-display-name" maxlength="96" autocomplete="name" placeholder="Optionnel" /></label>
+              <label>Thème<select id="preferences-color-scheme"><option value="system">Système</option><option value="dark">Sombre</option><option value="light">Clair</option></select></label>
+              <label>Fuseau d’affichage<input id="preferences-timezone" maxlength="64" autocomplete="off" spellcheck="false" value="system" placeholder="system ou Europe/Paris" /><span class="field-help">Utilisez « system » ou un identifiant IANA, par exemple Europe/Paris. Le fuseau du serveur n’est pas modifié.</span></label>
+              <label>Taille de police<select id="preferences-font-size"><option value="13">13 px</option><option value="14">14 px</option><option value="15">15 px</option><option value="16">16 px</option><option value="17">17 px</option><option value="18">18 px</option><option value="20">20 px</option><option value="22">22 px</option><option value="24">24 px</option></select></label>
+              <fieldset class="content-security"><legend>Contenus conversationnels</legend><p class="field-help">Ces autorisations s'appliquent à ce Mac uniquement. Un message ne peut jamais les activer, lancer une commande ni modifier le serveur.</p><label class="choice"><input id="preferences-external-links" type="checkbox" /> Ouvrir les liens HTTPS externes après un clic explicite</label><label class="choice"><input id="preferences-file-references" type="checkbox" /> Prévisualiser les fichiers autorisés du projet</label><label class="choice"><input id="preferences-remote-images" type="checkbox" /> Charger les images HTTPS distantes après mon geste explicite</label></fieldset>
+              <section class="desktop-about" aria-labelledby="desktop-about-title"><h3 id="desktop-about-title">À propos</h3><p id="desktop-version">Version inconnue.</p><p id="desktop-update-status">Vérification de mise à jour non configurée.</p></section>
+              <p id="preferences-error" class="notice notice-error" hidden role="alert"></p>
+              <footer class="dialog-actions"><button id="cancel-preferences" class="secondary" type="button">Annuler</button><button type="submit">Enregistrer</button></footer>
+            </form>
+          </section>
+          <section id="settings-servers" data-settings-panel="servers" aria-labelledby="settings-servers-title" hidden>
+            <header class="settings-section-heading"><p class="eyebrow">CONNEXIONS</p><h2 id="settings-servers-title">Serveurs et connexions</h2><p>Les accès sont enregistrés sur cet ordinateur. Les secrets et jetons ne sont jamais stockés dans Bridget Desktop.</p></header>
+            <ul id="server-list" class="server-list" aria-label="Serveurs configurés"></ul>
+            <footer class="dialog-actions"><button id="add-server" type="button">Ajouter un serveur</button></footer>
+          </section>
+          <section id="settings-usage" data-settings-panel="usage" aria-labelledby="settings-usage-title" hidden>
+            <header class="settings-section-heading"><p class="eyebrow">USAGE</p><h2 id="settings-usage-title">Usage</h2><p>Cette section est prête à recevoir des données attestées. Aucun quota, coût ou consommation n’est affiché tant que Bridget ne peut pas le prouver.</p></header>
+          </section>
+        </div>
+      </div>
     </dialog>
     <dialog id="target-dialog" aria-labelledby="target-title">
       <header class="dialog-heading"><div><p class="eyebrow">PROJETS</p><h2 id="target-title">Choisir une source</h2></div><button id="close-target" class="icon-button" type="button" aria-label="Fermer">×</button></header>

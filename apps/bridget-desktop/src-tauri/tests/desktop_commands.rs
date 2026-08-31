@@ -59,6 +59,25 @@ fn la_flotte_desktop_reutilise_la_chrome_sombre_et_ne_cree_que_deux_volets() {
 }
 
 #[test]
+fn le_centre_de_parametres_reunit_application_serveurs_et_usage() {
+    let markup = include_str!("../../ui/index.html");
+    let frontend = include_str!("../../ui/fleet-app.js");
+    let stylesheet = include_str!("../../ui/fleet-desktop.css");
+
+    assert!(markup.contains("id=\"settings-launcher\""));
+    assert!(markup.contains("id=\"settings-dialog\""));
+    assert!(markup.contains("data-settings-section=\"general\""));
+    assert!(markup.contains("data-settings-section=\"servers\""));
+    assert!(markup.contains("data-settings-section=\"usage\""));
+    assert!(markup.contains("id=\"settings-usage\""));
+    assert!(!markup.contains("id=\"preferences-dialog\""));
+    assert!(!markup.contains("id=\"server-dialog\""));
+    assert!(frontend.contains("openSettings(\"servers\")"));
+    assert!(stylesheet.contains(".settings-dialog"));
+    assert!(stylesheet.contains(".settings-layout"));
+}
+
+#[test]
 fn flotte_desktop_ne_restitue_ni_secret_ni_chemin_d_origine() {
     let backend = include_str!("../src/lib.rs");
     let fleet = include_str!("../src/fleet.rs");

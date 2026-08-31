@@ -14,7 +14,8 @@ const elements = {
   createProject: document.querySelector("#create-project"),
   importProject: document.querySelector("#import-project"),
   manageServers: document.querySelector("#manage-servers"),
-  serverDialog: document.querySelector("#server-dialog"),
+  settingsLauncher: document.querySelector("#settings-launcher"),
+  settingsDialog: document.querySelector("#settings-dialog"),
   serverList: document.querySelector("#server-list"),
   addServer: document.querySelector("#add-server"),
   profileDialog: document.querySelector("#profile-dialog"),
@@ -33,7 +34,6 @@ const elements = {
   hostDialog: document.querySelector("#host-identity-dialog"),
   hostServer: document.querySelector("#host-identity-server"),
   hostFingerprint: document.querySelector("#host-identity-fingerprint"),
-  preferencesDialog: document.querySelector("#preferences-dialog"),
   showPreferences: document.querySelector("#show-preferences"),
   preferencesForm: document.querySelector("#preferences-form"),
   closePreferences: document.querySelector("#close-preferences"),
@@ -440,17 +440,40 @@ async function restoreManagedConnections() {
   }
 }
 
-async function openPreferences() {
-  preferences = await invoke("preferences_get");
-  elements.preferencesDisplayName.value = preferences.display_name || "";
-  elements.preferencesColorScheme.value = preferences.color_scheme || "system";
-  elements.preferencesTimezone.value = preferences.timezone || "system";
-  elements.preferencesFontSize.value = String(preferences.font_size_px || 16);
-  const content = preferences.content_security || {};
-  elements.preferencesExternalLinks.checked = content.external_links === true;
-  elements.preferencesFileReferences.checked = content.file_references === true;
-  elements.preferencesRemoteImages.checked = content.remote_images === true;
-  elements.preferencesDialog.showModal();
+function closeSettingsLauncher() {
+  elements.settingsLauncher.hidden = true;
+  elements.showPreferences.setAttribute("aria-expanded", "false");
+}
+
+function selectSettingsSection(section) {
+  const selected = ["general", "servers", "usage"].includes(section) ? section : "general";
+  document.querySelectorAll("[data-settings-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.settingsPanel !== selected;
+  });
+  document.querySelectorAll("[data-settings-section]").forEach((button) => {
+    button.setAttribute("aria-current", String(button.dataset.settingsSection === selected));
+  });
+  return selected;
+}
+
+async function openSettings(section = "general") {
+  try {
+    closeSettingsLauncher();
+    preferences = await invoke("preferences_get");
+    elements.preferencesDisplayName.value = preferences.display_name || "";
+    elements.preferencesColorScheme.value = preferences.color_scheme || "system";
+    elements.preferencesTimezone.value = preferences.timezone || "system";
+    elements.preferencesFontSize.value = String(preferences.font_size_px || 16);
+    const content = preferences.content_security || {};
+    elements.preferencesExternalLinks.checked = content.external_links === true;
+    elements.preferencesFileReferences.checked = content.file_references === true;
+    elements.preferencesRemoteImages.checked = content.remote_images === true;
+    const selected = selectSettingsSection(section);
+    if (selected === "servers") await renderServers();
+    if (!elements.settingsDialog.open) elements.settingsDialog.showModal();
+  } catch (error) {
+    announce(error.message || String(error));
+  }
 }
 
 elements.global.addEventListener("click", () => {
@@ -467,10 +490,7 @@ elements.addSort.addEventListener("click", async () => {
 });
 elements.createProject.addEventListener("click", () => beginProject("create_project"));
 elements.importProject.addEventListener("click", () => beginProject("import_project"));
-elements.manageServers.addEventListener("click", async () => {
-  await renderServers();
-  elements.serverDialog.showModal();
-});
+elements.manageServers.addEventListener("click", () => void openSettings("servers"));
 elements.addServer.addEventListener("click", () => openProfileDialog());
 elements.closeProfile.addEventListener("click", () => elements.profileDialog.close());
 elements.cancelProfile.addEventListener("click", () => elements.profileDialog.close());
@@ -501,9 +521,29 @@ elements.profileForm.addEventListener("submit", async (event) => {
     elements.profileError.hidden = false;
   }
 });
-elements.showPreferences.addEventListener("click", () => void openPreferences());
-elements.closePreferences.addEventListener("click", () => elements.preferencesDialog.close());
-elements.cancelPreferences.addEventListener("click", () => elements.preferencesDialog.close());
+elements.showPreferences.addEventListener("click", (event) => {
+  event.stopPropagation();
+  const willOpen = elements.settingsLauncher.hidden;
+  elements.settingsLauncher.hidden = !willOpen;
+  elements.showPreferences.setAttribute("aria-expanded", String(willOpen));
+});
+document.querySelectorAll("[data-open-settings-section]").forEach((button) => {
+  button.addEventListener("click", () => void openSettings(button.dataset.openSettingsSection));
+});
+document.querySelectorAll("[data-settings-section]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const selected = selectSettingsSection(button.dataset.settingsSection);
+    if (selected === "servers") await renderServers();
+  });
+});
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".settings-launcher-wrap")) closeSettingsLauncher();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !elements.settingsLauncher.hidden) closeSettingsLauncher();
+});
+elements.closePreferences.addEventListener("click", () => elements.settingsDialog.close());
+elements.cancelPreferences.addEventListener("click", () => elements.settingsDialog.close());
 elements.preferencesForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
@@ -520,7 +560,7 @@ elements.preferencesForm.addEventListener("submit", async (event) => {
       },
     };
     await savePreferences();
-    elements.preferencesDialog.close();
+    elements.settingsDialog.close();
     render();
   } catch (error) {
     elements.preferencesError.textContent = error.message || String(error);

@@ -706,3 +706,271 @@ button.quiet,
 #fleet-shell .fleet-conversation-placeholder {
   display: none;
 }
+
+/* Centre de contrôle : les connexions et réglages sont des sections d'une
+   même surface, jamais une série de petites boîtes à largeur contrainte. */
+#fleet-shell .settings-launcher-wrap {
+  position: relative;
+  margin-left: auto;
+}
+
+#fleet-shell .settings-launcher {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.45rem);
+  z-index: 30;
+  display: grid;
+  width: 13.5rem;
+  gap: 0.18rem;
+  padding: 0.32rem;
+  border: 1px solid var(--fleet-line);
+  border-radius: 0.7rem;
+  background: #181818;
+  box-shadow: 0 0.9rem 2.4rem rgb(0 0 0 / 46%);
+}
+
+#fleet-shell .settings-launcher[hidden] {
+  display: none;
+}
+
+#fleet-shell .settings-launcher button {
+  width: 100%;
+  min-height: 2.1rem;
+  padding: 0.38rem 0.48rem;
+  color: var(--fleet-text);
+  font-size: 0.76rem;
+  font-weight: 610;
+  text-align: left;
+}
+
+#fleet-shell .settings-launcher button:hover,
+#fleet-shell .settings-launcher button:focus-visible {
+  background: var(--fleet-surface-hover);
+}
+
+dialog.settings-dialog {
+  width: min(54rem, calc(100vw - 3rem));
+  max-height: min(43rem, calc(100dvh - 3rem));
+  overflow: hidden;
+  border-color: #303030;
+  border-radius: 0.85rem;
+  color: var(--fleet-text);
+  background: #111;
+  box-shadow: 0 1.4rem 4.4rem rgb(0 0 0 / 52%);
+}
+
+.settings-dialog::backdrop {
+  background: rgb(0 0 0 / 68%);
+}
+
+.settings-dialog-heading {
+  min-height: 4.2rem;
+  padding: 0.9rem 1.1rem;
+  border-bottom: 1px solid var(--fleet-line);
+}
+
+.settings-dialog-heading .eyebrow,
+.settings-section-heading .eyebrow {
+  margin: 0 0 0.16rem;
+  color: var(--fleet-muted);
+  font-size: 0.65rem;
+  font-weight: 720;
+  letter-spacing: 0.08em;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 12.25rem minmax(0, 1fr);
+  min-height: 30rem;
+  max-height: calc(min(43rem, 100dvh - 3rem) - 4.2rem);
+}
+
+.settings-sidebar {
+  display: grid;
+  align-content: start;
+  gap: 0.16rem;
+  padding: 0.7rem 0.52rem;
+  border-right: 1px solid var(--fleet-line);
+  background: #0d0d0d;
+}
+
+.settings-sidebar button {
+  min-height: 2.2rem;
+  padding: 0.42rem 0.54rem;
+  border: 0;
+  border-radius: 0.52rem;
+  color: var(--fleet-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 620;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-sidebar button:hover,
+.settings-sidebar button:focus-visible,
+.settings-sidebar button[aria-current]:not([aria-current="false"]) {
+  outline: none;
+  color: var(--fleet-text);
+  background: var(--fleet-surface-hover);
+}
+
+.settings-sections {
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.settings-sections > section {
+  min-width: 0;
+  padding: 1.35rem 1.45rem 1.5rem;
+}
+
+.settings-section-heading {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 1.25rem;
+}
+
+.settings-section-heading h2 {
+  color: var(--fleet-text);
+  font-size: 1.18rem;
+  font-weight: 710;
+  letter-spacing: -0.02em;
+}
+
+.settings-section-heading > p:not(.eyebrow) {
+  max-width: 38rem;
+  margin: 0;
+  color: var(--fleet-muted);
+  font-size: 0.8rem;
+  line-height: 1.48;
+}
+
+.settings-dialog #preferences-form {
+  display: grid;
+  gap: 0.85rem;
+  padding: 0;
+}
+
+.settings-dialog label,
+.settings-dialog fieldset {
+  color: var(--fleet-text);
+}
+
+.settings-dialog input,
+.settings-dialog select {
+  border-color: #353535;
+  background: #0a0a0a;
+}
+
+.settings-dialog .desktop-about {
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--fleet-line);
+}
+
+.settings-dialog .desktop-about h3 {
+  margin: 0;
+  color: var(--fleet-text);
+  font-size: 0.84rem;
+}
+
+.settings-dialog .desktop-about p {
+  margin: 0.25rem 0 0;
+  color: var(--fleet-muted);
+  font-size: 0.76rem;
+}
+
+.settings-dialog .server-list {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.settings-dialog .server-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.8rem;
+  align-items: center;
+  padding: 0.8rem 0;
+  border-bottom: 1px solid var(--fleet-line);
+}
+
+.settings-dialog .server-list li > div:first-child {
+  min-width: 0;
+}
+
+.settings-dialog .server-list strong,
+.settings-dialog .server-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-dialog .server-list strong {
+  color: var(--fleet-text);
+}
+
+.settings-dialog .server-list small {
+  color: var(--fleet-muted);
+}
+
+.settings-dialog .server-list li > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.settings-dialog button:not(.icon-button) {
+  border: 1px solid #383838;
+  border-radius: 0.46rem;
+  padding: 0.4rem 0.55rem;
+  color: var(--fleet-text);
+  background: #242424;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.settings-dialog button:not(.icon-button):hover,
+.settings-dialog button:not(.icon-button):focus-visible {
+  outline: none;
+  border-color: #575757;
+  background: #303030;
+}
+
+.settings-dialog .dialog-actions {
+  margin-top: 1rem;
+}
+
+@media (max-width: 640px) {
+  dialog.settings-dialog {
+    width: calc(100vw - 1.5rem);
+  }
+
+  .settings-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-sidebar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border-right: 0;
+    border-bottom: 1px solid var(--fleet-line);
+  }
+
+  .settings-sidebar button {
+    min-width: 0;
+    font-size: 0.68rem;
+    text-align: center;
+  }
+
+  .settings-dialog .server-list li {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-dialog .server-list li > div:last-child {
+    justify-content: flex-start;
+  }
+}
