@@ -6,7 +6,7 @@
 
 Les tâches T010 à T013 sont réalisées dans le relais : structure de l'overlay, navigation locale, roue basse, styles accessibles, tests Node et portage de finition T3. Leur résultat est décrit dans `implementation.md` et les preuves dans `evidence/validation.md`.
 
-T041 reste volontairement ouverte : aucune validation visuelle humaine ne peut être remplacée par une capture ambiguë. Le paquet macOS reste à reconstruire avant de cocher le parcours direct par profil.
+T041 reste volontairement ouverte : aucune validation visuelle humaine ne peut être remplacée par une capture ambiguë. Le paquet macOS est maintenant construit et signé localement, mais la copie ouverte dans /Applications n'est pas écrasée sans choix explicite.
 
 Les coches de la première tranche ne valent pas acceptation produit. La SPEC reste ouverte jusqu'à la vérification visuelle du parcours complet sur le relais réellement servi.
 
@@ -100,7 +100,7 @@ Test indépendant: une version inconnue ou source indisponible reste informative
 
 - [ ] T036 [P] [US6] Ajouter les tests de projection maintenance et de non-divulgation dans `crates/bridget-daemon/src/ui.rs` et `apps/bridget-desktop/src-tauri/tests/secrets_and_diagnostics.rs`.
 - [ ] T037 [US6] Exposer une projection lecture seule de version, capacité et diagnostic borné dans `crates/bridget-daemon/src/ui.rs`.
-- [ ] T038 [US6] Ajouter les vues Mises à jour et Diagnostics dans `crates/bridget-daemon/assets/ui/app.js`, `index.html` et `theme.css`, sans bouton d'installation ou de redémarrage.
+- [x] T038 [US6] Ajouter les vues Mises à jour et Diagnostics dans `crates/bridget-daemon/assets/ui/app.js`, `index.html` et `theme.css`, sans bouton d'installation ou de redémarrage.
 
 ## Phase 9 - Finition et preuves transverses
 

@@ -1,7 +1,7 @@
 # Implémentation - SPEC-080 Centre de contrôle Bridget
 
 Date : 2026-08-31
-Statut : tranche de centre de contrôle déployée sur le relais. La SPEC reste ouverte tant que la validation visuelle humaine et le paquet macOS renouvelé ne sont pas réalisés.
+Statut : tranche de centre de contrôle déployée sur le relais et paquet macOS construit. La SPEC reste ouverte tant que la validation visuelle humaine et le remplacement explicite de l'application macOS en cours ne sont pas réalisés.
 
 ## Résultat présent dans le relais déployé
 
@@ -25,18 +25,18 @@ Les contrôles restent des éléments HTML natifs et accessibles. Seule leur pr�
 
 ## Déploiement attesté
 
-Le binaire release courant a été construit depuis ce worktree, installé dans `/home/moi/.local/bin/bridget`, puis les services ont été redémarrés le 2026-08-31 à 07:03:08 UTC :
+Le binaire release courant a été construit depuis ce worktree, installé dans /home/moi/.local/bin/bridget, puis les services utilisateur ont été redémarrés le 2026-08-31 à 07:12:31 UTC :
 
-- `bridget-daemon.service` : actif, PID 2263491 ;
-- `bridget-ui.service` : actif, PID 2263492 ;
-- SHA-256 du binaire installé : `1ebce05302baee7131369f87549f6951c09a49c4a2ba73ff25a8a30f8e32f12f`.
+- `bridget-daemon.service` : actif, PID 2280068 ;
+- `bridget-ui.service` : actif, PID 2280069 ;
+- SHA-256 du binaire installé : `1ea5b75d3b4f5f670c0b939ea09e5ce45728ca434ee4e5ddab1525ed87cf99f9`.
 
 ## Preuves automatisées
 
 | Commande | Résultat |
 |---|---|
 | `node --check crates/bridget-daemon/assets/ui/app.js` | PASS |
-| `node crates/bridget-daemon/assets/ui/app.js` | PASS - 95 tests, 0 échec |
+| `node crates/bridget-daemon/assets/ui/app.js` | PASS - 97 tests, 0 échec |
 | `cargo fmt --check` | PASS |
 | `cargo test -p bridget-daemon spec_080 --lib` | PASS - 2 tests ciblés |
 | `cargo build --release -p bridget-daemon` | PASS |
@@ -44,10 +44,17 @@ Le binaire release courant a été construit depuis ce worktree, installé dans 
 | `cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml panels` | PASS - 1 test ciblé |
 | `git diff --check` | PASS |
 
-Le test Desktop signale un avertissement préexistant : import `Path` inutilisé dans `preferences_store.rs`. Il ne provient pas des changements de finition et ne bloque pas les tests ciblés.
+
+## Paquet macOS construit
+
+- Bundle : `Bridget.app`, construit depuis le commit `02052f9` avec `cargo-tauri build --bundles app`.
+- Manifeste : nom affiché et nom de bundle `Bridget`, identifiant `app.cartae.bridget-desktop`, version `0.1.0`.
+- Signature : signature ad hoc vérifiée par `codesign --verify --deep --strict`. Le paquet n'est pas notarisé Apple, ce qui est attendu pour cette distribution interne.
+- Copie prête sans écrasement : `/Users/moi/Downloads/Bridget.app`.
+- La copie `/Applications/Bridget.app` demeure active et n'est pas remplacée tant que l'opérateur ne l'a pas fermée et ne l'a pas demandé.
 
 ## Limites explicites avant clôture
 
-- Le paquet `/Applications/Bridget.app` n'est pas encore reconstruit et remplacé. Le raccourci direct de réglages par profil ne doit donc pas être annoncé comme installé.
+- Le paquet est reconstruit et disponible dans `/Users/moi/Downloads/Bridget.app`, mais la copie `/Applications/Bridget.app` n'est pas encore remplacée car elle était ouverte au moment de la livraison.
 - La validation humaine de la vue Typographie après le portage T3 reste requise. Aucun résultat de clic ou de capture externe ambiguë n'est compté comme acceptation.
 - Les coûts restent indisponibles sans tarifs versionnés. Les filtres avancés, la courbe quotidienne et les autres réglages serveur écrits restent des tâches non cochées dans `tasks.md`.

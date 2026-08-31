@@ -1,7 +1,7 @@
 # Audit d'implémentation - SPEC-080
 
 Date : 2026-08-31
-Verdict : PASS pour les contrôles automatisés et le relais déployé. La clôture reste bloquée uniquement par la validation visuelle humaine de la finition et le renouvellement du paquet macOS.
+Verdict : PASS pour les contrôles automatisés, le relais déployé et la construction du paquet macOS. La clôture reste bloquée uniquement par la validation visuelle humaine de la finition et le remplacement explicite de l'application macOS ouverte.
 
 ## Conformité constatée
 
@@ -21,11 +21,11 @@ Verdict : PASS pour les contrôles automatisés et le relais déployé. La clôt
 
 ## Qualité et preuves
 
-- PASS : 95 tests JavaScript de l'interface, 2 tests Rust ciblés du daemon et 1 test ciblé Desktop passent.
+- PASS : 97 tests JavaScript de l'interface, 2 tests Rust ciblés du daemon et 1 test ciblé Desktop passent.
 - PASS : formatage Rust, construction release, contrôles syntaxiques JavaScript et `git diff --check` passent.
 - PASS : le port de styles est contrôlé par le test UI : grille de réglage, largeurs des deux sélecteurs et bordure de contrôle sont explicitement attendues.
 - NON PRÉTENDU : aucune validation visuelle utilisateur n'est enregistrée pour la version de finition nouvellement servie.
 
 ## Risque restant et sortie
 
-Le risque restant est uniquement esthétique et de livraison native : vérifier l'overlay ouvert sur Bridget, puis reconstruire et installer le paquet macOS. Les limites fonctionnelles non livrées de la SPEC, dont tarification datée et autres écritures serveur, restent signalées dans les tâches plutôt que déclarées terminées.
+Le risque restant est uniquement esthétique et de livraison native : vérifier l'overlay ouvert sur Bridget, puis remplacer explicitement l'application macOS après sa fermeture avec le bundle déjà construit. Les limites fonctionnelles non livrées de la SPEC, dont tarification datée et autres écritures serveur, restent signalées dans les tâches plutôt que déclarées terminées.

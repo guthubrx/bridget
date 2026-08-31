@@ -34,7 +34,7 @@ réel des éléments suivants :
 
 Le centre doit reprendre la grammaire visuelle de réglages de T3 Code pour les lignes, la typographie, les libellés, sous-titres, contrôles et aperçus. Bridget conserve ses fonds, ses gris, son accent et son overlay. Une approximation utilisant des contrôles système bruts ou des cartes génériques ne satisfait pas FR-8001 à FR-8004.
 
-La SPEC reste ouverte tant que la version de finition servie n'a pas été examinée par l'opérateur et tant que le paquet macOS portant l'accès direct par profil n'est pas renouvelé. Les éléments non réalisés, notamment tarification datée et réglages serveur supplémentaires, restent explicitement non livrés.
+La SPEC reste ouverte tant que la version de finition servie n'a pas été examinée par l'opérateur et tant que le paquet macOS construit n'a pas été installé par choix explicite, après fermeture de l'application en cours. Les éléments non réalisés, notamment tarification datée et réglages serveur supplémentaires, restent explicitement non livrés.
 
 ## Contexte
 
