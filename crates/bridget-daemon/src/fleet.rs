@@ -867,7 +867,7 @@ impl FleetSupervisor {
         order: &SpawnOrder,
         now: i64,
     ) -> Result<SpawnSubmission, FleetError> {
-        self.request_spawn_with_policy(order, now, None)
+        self.request_spawn_with_policy(order, now, None, false)
     }
 
     /// Réserve une nouvelle génération sous un nom arrêté déjà présent dans
@@ -886,7 +886,7 @@ impl FleetSupervisor {
         if entry.lifecycle_state != DesiredLifecycleState::Stopped {
             return Err(FleetError::InvalidOrder("agent de relance non arrêté"));
         }
-        self.request_spawn_with_policy(order, now, Some(DesiredLifecycleState::Stopped))
+        self.request_spawn_with_policy(order, now, Some(DesiredLifecycleState::Stopped), true)
     }
 
     /// Réserve une nouvelle génération de reprise sous une entrée persistante
@@ -908,7 +908,7 @@ impl FleetSupervisor {
                 "agent de reprise non persistant ou non actif",
             ));
         }
-        self.request_spawn_with_policy(order, now, Some(DesiredLifecycleState::Running))
+        self.request_spawn_with_policy(order, now, Some(DesiredLifecycleState::Running), true)
     }
 
     fn request_spawn_with_policy(
@@ -916,8 +916,9 @@ impl FleetSupervisor {
         order: &SpawnOrder,
         now: i64,
         allowed_existing_state: Option<DesiredLifecycleState>,
+        accept_legacy_durable_name: bool,
     ) -> Result<SpawnSubmission, FleetError> {
-        validate_order(order)?;
+        validate_order(order, accept_legacy_durable_name)?;
         let canonical = canonical_order(order)?;
         let mut inner = self
             .inner
@@ -1602,7 +1603,7 @@ fn recover_commands(inner: &mut FleetInner, desired: &DesiredFleet) -> Result<()
     Ok(())
 }
 
-fn validate_order(order: &SpawnOrder) -> Result<(), FleetError> {
+fn validate_order(order: &SpawnOrder, accept_legacy_durable_name: bool) -> Result<(), FleetError> {
     if order.agent_type.trim().is_empty() {
         return Err(FleetError::InvalidOrder("type vide"));
     }
@@ -1620,7 +1621,7 @@ fn validate_order(order: &SpawnOrder) -> Result<(), FleetError> {
     let Some(agent_id) = order.requested_name.as_deref() else {
         return Err(FleetError::InvalidOrder("agent_id de spawn absent"));
     };
-    if validate_agent_id(agent_id).is_err() {
+    if validate_agent_id(agent_id).is_err() && !accept_legacy_durable_name {
         return Err(FleetError::InvalidOrder("agent_id de spawn invalide"));
     }
     if let Some(ownership) = &order.ownership
