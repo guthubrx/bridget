@@ -142,6 +142,11 @@
         assert.match(stylesheet, /typography-settings__controls select:last-child[\s\S]*width: 5\.5rem/);
         assert.match(stylesheet, /border: 1px solid color-mix\(in srgb, var\(--text-secondary\) 26%, transparent\)/);
         assert.match(stylesheet, /\.agent-pane__footer[\s\S]*padding: 0\.9rem 0\.1rem 0\.15rem/);
+        assert.match(stylesheet, /\.agent-pane[\s\S]*font-family: var\(--bridget-interface-font\)/);
+        assert.match(stylesheet, /button,[\s\S]*textarea,[\s\S]*input,[\s\S]*select\s*\{[\s\S]*font: inherit;/);
+        assert.match(stylesheet, /\.agent-activity__act-detail[\s\S]*font-family: var\(--bridget-monospace-font\)/);
+        assert.match(stylesheet, /\.control-center-overlay__content[\s\S]*scrollbar-color:/);
+        assert.doesNotMatch(markup, /id="thread"[\s\S]*tabindex="0"/);
       });
 
       test("spec_080_navigation_projet_separe_cycle_de_vie_et_reglages_globaux", () => {
@@ -1595,10 +1600,11 @@
           .map((entry) => entry[1].trim())
           .filter((value) => value !== "0" && value !== "none");
         assert.deepEqual(visibleBorders, [
-          "1px solid color-mix(in srgb, var(--text-secondary) 24%, transparent)",
+          "1px solid color-mix(in srgb, var(--text-primary) 18%, var(--surface-raised))",
           "1px solid color-mix(in srgb, var(--text-secondary) 28%, transparent)",
           "1px solid color-mix(in srgb, var(--text-secondary) 25%, transparent)",
           "1px solid color-mix(in srgb, var(--text-secondary) 26%, transparent)",
+          "2px solid transparent",
         ]);
       });
 
@@ -6597,7 +6603,7 @@
             intro,
             makeRow(
               "Police d’interface",
-              "Utilisée dans les conversations, les menus et les réglages.",
+              "Utilisée dans toute l’interface : projets, agents, conversations, menus et réglages.",
               interfaceControls,
               interfacePreview,
             ),
@@ -9469,6 +9475,7 @@
       }
     };
 
+    let notificationPermissionError = false;
     const updateNotificationControl = () => {
       const NotificationApi = windowRef.Notification;
       if (!NotificationApi || typeof NotificationApi.requestPermission !== "function") {
@@ -9477,6 +9484,11 @@
         return;
       }
       const permission = NotificationApi.permission;
+      if (notificationPermissionError && permission !== "granted" && permission !== "denied") {
+        nodes.notificationControl.disabled = false;
+        nodes.notificationControl.textContent = "Réessayer l’activation";
+        return;
+      }
       nodes.notificationControl.disabled = permission === "denied";
       nodes.notificationControl.textContent = permission === "granted"
         ? "Notifications activées"
@@ -9486,7 +9498,14 @@
     const requestNotificationPermission = async () => {
       const NotificationApi = windowRef.Notification;
       if (!NotificationApi || typeof NotificationApi.requestPermission !== "function") return;
-      try { await NotificationApi.requestPermission(); } catch (_error) { /* permission refusée */ }
+      notificationPermissionError = false;
+      nodes.notificationControl.disabled = true;
+      nodes.notificationControl.textContent = "Activation…";
+      try {
+        await NotificationApi.requestPermission();
+      } catch (_error) {
+        notificationPermissionError = true;
+      }
       updateNotificationControl();
     };
 

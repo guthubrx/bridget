@@ -47,7 +47,8 @@ body {
 
 button,
 textarea,
-input {
+input,
+select {
   border: 0;
   color: inherit;
   font: inherit;
@@ -2633,7 +2634,7 @@ code {
   --agent-pane-secondary: #a6a6a6;
   padding: 0 0.65rem 1.15rem;
   background: #101010;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  font-family: var(--bridget-interface-font);
 }
 
 .agent-pane__header {
@@ -3295,7 +3296,7 @@ code {
 }
 
 .control-center-overlay {
-  border: 1px solid color-mix(in srgb, var(--text-secondary) 24%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 18%, var(--surface-raised));
   border-radius: 0.52rem;
 }
 
@@ -3491,6 +3492,43 @@ code {
 .typography-preview--mono,
 .typography-preview--mono code {
   font-family: var(--bridget-monospace-font);
+}
+
+.agent-activity__act-detail,
+code {
+  font-family: var(--bridget-monospace-font);
+}
+
+.control-center-overlay__navigation,
+.control-center-overlay__content {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-secondary) 52%, transparent) transparent;
+}
+
+.control-center-overlay__navigation::-webkit-scrollbar,
+.control-center-overlay__content::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.control-center-overlay__navigation::-webkit-scrollbar-track,
+.control-center-overlay__content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.control-center-overlay__navigation::-webkit-scrollbar-thumb,
+.control-center-overlay__content::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 52%, transparent);
+  background-clip: padding-box;
+}
+
+.control-center-overlay__navigation:hover::-webkit-scrollbar-thumb,
+.control-center-overlay__navigation:focus-within::-webkit-scrollbar-thumb,
+.control-center-overlay__content:hover::-webkit-scrollbar-thumb,
+.control-center-overlay__content:focus-within::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--text-secondary) 72%, transparent);
 }
 
 .message-body pre code {

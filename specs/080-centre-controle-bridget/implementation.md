@@ -120,3 +120,10 @@ Le binaire release courant a été construit depuis le checkout isolé du commit
 - Le paquet corrigé doit être installé dans `/Applications/Bridget.app` seulement après fermeture explicite de l'instance en cours, puis validé visuellement avec Loin et Carte.
 - La validation humaine de la vue Typographie après le portage T3 reste requise. Aucun résultat de clic ou de capture externe ambiguë n'est compté comme acceptation.
 - Les coûts restent indisponibles sans tarifs versionnés. Les filtres avancés, la courbe quotidienne et les autres réglages serveur écrits restent des tâches non cochées dans `tasks.md`.
+
+## Correctif de l'overlay, des polices et des notifications
+
+- La bordure bleue était l'indicateur `:focus-visible` de `#thread`, rendu focalisable par `tabindex="0"`. Le fil est une région de lecture et non un contrôle : le tabindex a été retiré sans modifier les raccourcis des boutons ou champs.
+- La bordure du centre de contrôle reste une seule ligne de 1 px et ses ascenseurs sont restreints à la navigation et au contenu du centre. Ils s'adaptent aux variables de texte du thème clair ou sombre.
+- `--bridget-interface-font` est désormais aussi hérité par la barre des agents et les contrôles HTML. Le réglage typographique agit donc hors conversations. `--bridget-monospace-font` reste appliqué aux extraits de code et activités techniques.
+- Le panneau distant du Desktop reçoit une capability séparée, limitée à `notification:allow-is-permission-granted` et `notification:allow-request-permission`, sur l'URL de boucle locale uniquement. Une erreur d'autorisation explicite laisse un bouton de nouvel essai au lieu d'un clic silencieux.
