@@ -7,6 +7,7 @@
 use crate::mission_projection::{
     MissionProjectionV1, read_public_mission_projection_v1, retain_living_objectives,
 };
+use crate::project_policy::ProjectRootPolicy;
 use bridget_core::{BridgetMessage, MessageOrigin};
 use bridget_transport::journal::valid_events;
 use bridget_transport::protocol::{
@@ -79,6 +80,9 @@ const UI_PROVIDER_DEEPSEEK: &[u8] = include_bytes!("../assets/ui/providers/deeps
 pub struct UiRelayConfig {
     pub daemon_socket: PathBuf,
     pub maicie_config: PathBuf,
+    /// Même document que celui remis au daemon. Son absence laisse la flotte
+    /// lisible mais ferme toutes les routes d'administration des projets.
+    pub project_root_policy_path: Option<PathBuf>,
     pub bind: SocketAddr,
     pub token: String,
 }
@@ -231,6 +235,7 @@ impl UiRelayConfig {
         Ok(Self {
             daemon_socket,
             maicie_config,
+            project_root_policy_path: None,
             bind: SocketAddr::from((Ipv4Addr::LOCALHOST, endpoint.port)),
             token: endpoint.token,
         })
@@ -511,7 +516,19 @@ impl UiRelay {
 /// Lance `bridget ui`. Port et jeton sont stables d'un redémarrage à l'autre
 /// (état local hors dépôt). Le jeton ne figure jamais dans le HTML servi.
 pub fn run(daemon_socket: PathBuf, maicie_config: PathBuf) -> Result<(), UiError> {
-    let config = UiRelayConfig::loopback(daemon_socket, maicie_config)?;
+    run_with_project_root_policy(daemon_socket, maicie_config, None)
+}
+
+/// Variante de lancement qui associe explicitement l'UI au même document de
+/// racines que le daemon. Sans ce chemin, les routes de projet échoueront
+/// fermées et le reste de l'interface demeure disponible.
+pub fn run_with_project_root_policy(
+    daemon_socket: PathBuf,
+    maicie_config: PathBuf,
+    project_root_policy_path: Option<PathBuf>,
+) -> Result<(), UiError> {
+    let mut config = UiRelayConfig::loopback(daemon_socket, maicie_config)?;
+    config.project_root_policy_path = project_root_policy_path;
     let relay = UiRelay::bind_with_attested_channel(
         config,
         crate::connection_channel::attested_connection_channel(),
@@ -776,6 +793,51 @@ struct UiProjectRuntimeV1 {
     last_reason: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct UiProjectSettingsV1 {
+    version: u8,
+    policy_generation: u64,
+    allowed_project_roots: Vec<String>,
+    configuration_available: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiProjectRootsUpdateV1 {
+    version: u8,
+    command_id: String,
+    expected_generation: u64,
+    allowed_project_roots: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct UiProjectRootsUpdateAcceptedV1 {
+    version: u8,
+    command_id: String,
+    policy_generation: u64,
+    allowed_project_roots: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiProjectPreviewRequestV1 {
+    version: u8,
+    mode: String,
+    root: String,
+    #[serde(default)]
+    folder_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct UiProjectPreviewV1 {
+    version: u8,
+    mode: &'static str,
+    canonical_path: String,
+    display_name: String,
+    git: &'static str,
+    git_initialization_proposed: bool,
+}
+
 #[derive(Serialize)]
 struct UiRecoveryLossV1 {
     name: String,
@@ -930,6 +992,44 @@ fn serve_connection(
                 .get("project")
                 .ok_or_else(|| UiError::Protocol("paramètre project absent".to_string()))?;
             match read_project_runtime(&config.daemon_socket, project_id) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("GET", "/v1/projects/settings") => match read_project_settings(config) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("POST", "/v1/projects/preview") => match post_project_preview(config, &request.body) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("POST", "/v1/projects/settings") => {
+            match post_project_roots_update(config, &request.body) {
                 Ok(response) => write_json(stream, 200, &response),
                 Err((status, code, message)) => write_json(
                     stream,
@@ -1151,6 +1251,168 @@ fn map_ui_stop_outcome(
             "Le daemon n'a pas confirmé l'arrêt dans le délai.".to_string(),
         )),
     }
+}
+
+fn read_project_settings(
+    config: &UiRelayConfig,
+) -> Result<UiProjectSettingsV1, (u16, &'static str, String)> {
+    let Some(source) = config.project_root_policy_path.as_deref() else {
+        return Err((
+            409,
+            "project_settings_unavailable",
+            "Les racines projet ne sont pas configurées pour ce relais.".to_string(),
+        ));
+    };
+    let policy = ProjectRootPolicy::load(source).map_err(|_| {
+        (
+            409,
+            "project_settings_unavailable",
+            "La politique de racines n est pas disponible ou valide.".to_string(),
+        )
+    })?;
+    Ok(UiProjectSettingsV1 {
+        version: UI_VERSION,
+        policy_generation: policy.generation(),
+        allowed_project_roots: policy
+            .allowed_roots()
+            .iter()
+            .map(|root| root.to_string_lossy().into_owned())
+            .collect(),
+        configuration_available: true,
+    })
+}
+
+fn post_project_roots_update(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiProjectRootsUpdateAcceptedV1, (u16, &'static str, String)> {
+    let request: UiProjectRootsUpdateV1 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "invalid_request",
+            "Réglages projet invalides.".to_string(),
+        )
+    })?;
+    let valid_command_id = !request.command_id.is_empty()
+        && request.command_id.len() <= MAX_UI_COMMAND_ID_BYTES
+        && request.command_id.bytes().all(is_query_byte);
+    if request.version != UI_VERSION || !valid_command_id {
+        return Err((
+            400,
+            "invalid_request",
+            "Réglages projet invalides.".to_string(),
+        ));
+    }
+    let Some(source) = config.project_root_policy_path.as_deref() else {
+        return Err((
+            409,
+            "project_settings_unavailable",
+            "Les racines projet ne sont pas configurées pour ce relais.".to_string(),
+        ));
+    };
+    let roots = request
+        .allowed_project_roots
+        .iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    let policy = ProjectRootPolicy::replace_atomically(source, request.expected_generation, roots)
+        .map_err(|_| {
+            (
+                409,
+                "project_settings_refused",
+                "Les racines ou leur génération ont été refusées.".to_string(),
+            )
+        })?;
+    Ok(UiProjectRootsUpdateAcceptedV1 {
+        version: UI_VERSION,
+        command_id: request.command_id,
+        policy_generation: policy.generation(),
+        allowed_project_roots: policy
+            .allowed_roots()
+            .iter()
+            .map(|root| root.to_string_lossy().into_owned())
+            .collect(),
+    })
+}
+
+fn post_project_preview(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiProjectPreviewV1, (u16, &'static str, String)> {
+    use crate::project_workspace::{GitDiagnostic, ProjectFolderMode, ProjectPreview};
+
+    let request: UiProjectPreviewRequestV1 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "invalid_request",
+            "Prévisualisation projet invalide.".to_string(),
+        )
+    })?;
+    if request.version != UI_VERSION || request.root.is_empty() {
+        return Err((
+            400,
+            "invalid_request",
+            "Prévisualisation projet invalide.".to_string(),
+        ));
+    }
+    let Some(source) = config.project_root_policy_path.as_deref() else {
+        return Err((
+            409,
+            "project_settings_unavailable",
+            "Les racines projet ne sont pas configurées pour ce relais.".to_string(),
+        ));
+    };
+    let policy = ProjectRootPolicy::load(source).map_err(|_| {
+        (
+            409,
+            "project_settings_unavailable",
+            "La politique de racines est indisponible.".to_string(),
+        )
+    })?;
+    let preview = match request.mode.as_str() {
+        "create" => {
+            let Some(folder_name) = request.folder_name.as_deref() else {
+                return Err((
+                    400,
+                    "invalid_request",
+                    "Le nom du dossier projet est obligatoire.".to_string(),
+                ));
+            };
+            ProjectPreview::create(&policy, Path::new(&request.root), folder_name)
+        }
+        "import" => {
+            if request.folder_name.is_some() {
+                return Err((
+                    400,
+                    "invalid_request",
+                    "Un import n accepte pas de nom de dossier.".to_string(),
+                ));
+            }
+            ProjectPreview::import(&policy, Path::new(&request.root))
+        }
+        _ => {
+            return Err((400, "invalid_request", "Mode projet inconnu.".to_string()));
+        }
+    }
+    .map_err(|error| (409, "project_preview_refused", error.to_string()))?;
+    let mode = match preview.mode {
+        ProjectFolderMode::Create => "create",
+        ProjectFolderMode::Import => "import",
+    };
+    let git = match preview.git {
+        GitDiagnostic::Absent => "absent",
+        GitDiagnostic::Clean => "clean",
+        GitDiagnostic::Modified => "modified",
+        GitDiagnostic::Worktree => "worktree",
+    };
+    Ok(UiProjectPreviewV1 {
+        version: UI_VERSION,
+        mode,
+        canonical_path: preview.canonical_path.to_string_lossy().into_owned(),
+        display_name: preview.display_name,
+        git,
+        git_initialization_proposed: preview.git_initialization_proposed,
+    })
 }
 
 fn read_project_runtime(
@@ -3076,6 +3338,7 @@ mod tests {
         let config = UiRelayConfig {
             daemon_socket: socket_path.clone(),
             maicie_config: PathBuf::new(),
+            project_root_policy_path: None,
             bind: "127.0.0.1:0".parse().unwrap(),
             token: "test".to_string(),
         };
@@ -3331,6 +3594,7 @@ mod tests {
         let config = UiRelayConfig {
             daemon_socket: socket_path.clone(),
             maicie_config: PathBuf::new(),
+            project_root_policy_path: None,
             bind: "127.0.0.1:0".parse().unwrap(),
             token: "test".to_string(),
         };
@@ -3373,6 +3637,7 @@ mod tests {
         let config = UiRelayConfig {
             daemon_socket: PathBuf::from("/tmp/ui-ne-doit-pas-etre-ouvert.sock"),
             maicie_config: PathBuf::from("/tmp/ui-ne-doit-pas-etre-ouvert.json"),
+            project_root_policy_path: None,
             bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             token: "jeton-test".to_string(),
         };
@@ -3397,6 +3662,7 @@ mod tests {
         let config = UiRelayConfig {
             daemon_socket: PathBuf::from("/tmp/ui-page-ne-doit-pas-etre-ouvert.sock"),
             maicie_config: PathBuf::from("/tmp/ui-page-ne-doit-pas-etre-ouvert.json"),
+            project_root_policy_path: None,
             bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             token: "jeton-page".to_string(),
         };
@@ -3682,6 +3948,7 @@ mod tests {
         let config = UiRelayConfig {
             daemon_socket: socket_path.clone(),
             maicie_config: PathBuf::new(),
+            project_root_policy_path: None,
             bind: "127.0.0.1:0".parse().unwrap(),
             token: "test".to_string(),
         };
@@ -3726,6 +3993,7 @@ mod tests {
         let config = UiRelayConfig {
             daemon_socket: socket_path.clone(),
             maicie_config: PathBuf::new(),
+            project_root_policy_path: None,
             bind: "127.0.0.1:0".parse().unwrap(),
             token: "test".to_string(),
         };
@@ -3851,6 +4119,7 @@ mod tests {
         let config = UiRelayConfig {
             daemon_socket: PathBuf::from("/tmp/ui-port-pris.sock"),
             maicie_config: PathBuf::from("/tmp/ui-port-pris.json"),
+            project_root_policy_path: None,
             bind: SocketAddr::from((Ipv4Addr::LOCALHOST, occupied)),
             token: "jeton-port-pris".to_string(),
         };
@@ -4485,6 +4754,7 @@ mod tests {
         let config = UiRelayConfig {
             daemon_socket: socket,
             maicie_config: root.join("maicie.json"),
+            project_root_policy_path: None,
             bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             token: "jeton-search".to_string(),
         };
@@ -4518,6 +4788,7 @@ mod tests {
         let config = UiRelayConfig {
             daemon_socket: root.join("bridget.sock"),
             maicie_config: root.join("maicie.json"),
+            project_root_policy_path: None,
             bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             token: "jeton-search".to_string(),
         };
@@ -4583,6 +4854,7 @@ mod tests {
         let config = UiRelayConfig {
             daemon_socket: root.join("bridget.sock"),
             maicie_config: root.join("maicie.json"),
+            project_root_policy_path: None,
             bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             token: "jeton-trunc".to_string(),
         };
@@ -4668,6 +4940,7 @@ mod tests {
         let config = UiRelayConfig {
             daemon_socket: PathBuf::from("/tmp/ui-cache-ne-doit-pas-ouvrir.sock"),
             maicie_config: PathBuf::from("/tmp/ui-cache-ne-doit-pas-ouvrir.json"),
+            project_root_policy_path: None,
             bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
             token: "jeton-cache".to_string(),
         };
@@ -4879,6 +5152,109 @@ mod tests {
         assert_eq!(rows[2].persistent, None);
     }
 
+    #[test]
+    fn spec_076_reglages_racines_sont_versions_et_atomiques() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-076-ui-settings-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let projects = root.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let policy_path = root.join("project-root-policy.json");
+        std::fs::write(
+            &policy_path,
+            serde_json::to_vec(&serde_json::json!({
+                "contract_version": 1,
+                "policy_generation": 1,
+                "allowed_project_roots": [projects],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let config = UiRelayConfig {
+            daemon_socket: root.join("bridget.sock"),
+            maicie_config: root.join("maicie.json"),
+            project_root_policy_path: Some(policy_path.clone()),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "test".to_string(),
+        };
+
+        let initial = read_project_settings(&config).unwrap();
+        assert_eq!(initial.policy_generation, 1);
+        let request = serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "command_id": "settings-1",
+            "expected_generation": 1,
+            "allowed_project_roots": initial.allowed_project_roots,
+        }))
+        .unwrap();
+        let updated = post_project_roots_update(&config, &request).unwrap();
+        assert_eq!(updated.policy_generation, 2);
+        assert!(post_project_roots_update(&config, &request).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_076_previsualisation_ui_n_ecrit_rien_et_refuse_le_conflit() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-076-ui-preview-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let projects = root.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let policy_path = root.join("project-root-policy.json");
+        std::fs::write(
+            &policy_path,
+            serde_json::to_vec(&serde_json::json!({
+                "contract_version": 1,
+                "policy_generation": 1,
+                "allowed_project_roots": [projects],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let config = UiRelayConfig {
+            daemon_socket: root.join("bridget.sock"),
+            maicie_config: root.join("maicie.json"),
+            project_root_policy_path: Some(policy_path),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "test".to_string(),
+        };
+        let preview = post_project_preview(
+            &config,
+            &serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "mode": "create",
+                "root": projects,
+                "folder_name": "nouveau",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(preview.mode, "create");
+        assert!(!std::path::Path::new(&preview.canonical_path).exists());
+        assert!(preview.git_initialization_proposed);
+        assert!(
+            post_project_preview(
+                &config,
+                &serde_json::to_vec(&serde_json::json!({
+                    "version": 1,
+                    "mode": "create",
+                    "root": projects,
+                    "folder_name": "../interdit",
+                }))
+                .unwrap(),
+            )
+            .is_err()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
     #[test]
     fn logos_runtime_sont_servis_comme_assets_svg_revalides() {
         for (path, expected) in [

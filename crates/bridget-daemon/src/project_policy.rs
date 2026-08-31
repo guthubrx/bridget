@@ -1,20 +1,21 @@
 //! Politique hôte fermée des racines pouvant être liées à un projet.
 
 use bridget_transport::protocol::ProjectRegistryRefusal;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::ffi::{CStr, OsStr};
 use std::fs::OpenOptions;
+use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 const PROJECT_ROOT_POLICY_CONTRACT_VERSION: u16 = 1;
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProjectRootPolicyDocument {
     contract_version: u16,
+    policy_generation: u64,
     allowed_project_roots: Vec<PathBuf>,
 }
 
@@ -26,11 +27,78 @@ struct ProjectRootPolicyDocument {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectRootPolicy {
     allowed_roots: Vec<PathBuf>,
+    generation: u64,
 }
 
 impl ProjectRootPolicy {
     pub fn load(source: &Path) -> Result<Self, ProjectRegistryRefusal> {
         Self::load_for_owner(source, unsafe { libc::geteuid() }, daemon_home().as_deref())
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Racines déjà canoniques admises par le document hôte. Cette projection
+    /// est réservée au relais local authentifié : elle ne sert jamais à
+    /// valider une mutation sans repasser par `validate_requested_root`.
+    pub fn allowed_roots(&self) -> &[PathBuf] {
+        &self.allowed_roots
+    }
+
+    /// Remplace la politique par une génération suivante, après validation
+    /// complète et écriture atomique. Une génération inattendue échoue sans
+    /// toucher au fichier courant.
+    pub fn replace_atomically(
+        source: &Path,
+        expected_generation: u64,
+        allowed_project_roots: Vec<PathBuf>,
+    ) -> Result<Self, ProjectRegistryRefusal> {
+        let current = Self::load(source)?;
+        if current.generation != expected_generation {
+            return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+        }
+        let expected_owner = unsafe { libc::geteuid() };
+        let home = daemon_home();
+        let mut seen = BTreeSet::new();
+        for root in &allowed_project_roots {
+            let canonical_root = canonical_directory(root)?;
+            if is_broad_root(&canonical_root, home.as_deref())
+                || canonical_root
+                    .metadata()
+                    .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?
+                    .uid()
+                    != expected_owner
+                || !seen.insert(canonical_root)
+            {
+                return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+            }
+        }
+        if allowed_project_roots.is_empty() {
+            return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+        }
+
+        let document = ProjectRootPolicyDocument {
+            contract_version: PROJECT_ROOT_POLICY_CONTRACT_VERSION,
+            policy_generation: expected_generation.saturating_add(1),
+            allowed_project_roots,
+        };
+        let payload = serde_json::to_vec(&document)
+            .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
+        let temporary = source.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&temporary)
+            .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
+        file.write_all(&payload)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
+        std::fs::rename(&temporary, source)
+            .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
+        Self::load(source)
     }
 
     fn load_for_owner(
@@ -74,6 +142,7 @@ impl ProjectRootPolicy {
         let document: ProjectRootPolicyDocument = serde_json::from_str(&content)
             .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
         if document.contract_version != PROJECT_ROOT_POLICY_CONTRACT_VERSION
+            || document.policy_generation == 0
             || document.allowed_project_roots.is_empty()
         {
             return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
@@ -96,7 +165,10 @@ impl ProjectRootPolicy {
             allowed_roots.push(canonical_root);
         }
 
-        Ok(Self { allowed_roots })
+        Ok(Self {
+            allowed_roots,
+            generation: document.policy_generation,
+        })
     }
 
     /// Canonicalise une racine candidate et vérifie qu'elle reste sous une
@@ -207,6 +279,7 @@ mod tests {
         fn valid_document(&self) -> serde_json::Value {
             json!({
                 "contract_version": 1,
+                "policy_generation": 1,
                 "allowed_project_roots": [self.allowed],
             })
         }
@@ -337,5 +410,31 @@ mod tests {
             policy.validate_requested_root(&outside_alias),
             Err(ProjectRegistryRefusal::RootOutsideAllowedPrefixes)
         );
+    }
+
+    #[test]
+    fn spec_076_politique_avance_generation_atomiquement() {
+        let fixture = Fixture::new();
+        fixture.write_policy(fixture.valid_document());
+
+        let reloaded = ProjectRootPolicy::replace_atomically(
+            &fixture.policy,
+            1,
+            vec![fixture.allowed.clone()],
+        )
+        .unwrap();
+
+        assert_eq!(reloaded.generation(), 2);
+        assert_eq!(
+            ProjectRootPolicy::replace_atomically(
+                &fixture.policy,
+                1,
+                vec![fixture.allowed.clone()]
+            ),
+            Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid)
+        );
+        let raw: serde_json::Value =
+            serde_json::from_slice(&fs::read(&fixture.policy).unwrap()).unwrap();
+        assert_eq!(raw["policy_generation"], 2);
     }
 }

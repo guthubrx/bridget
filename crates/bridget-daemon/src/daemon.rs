@@ -701,9 +701,10 @@ struct DaemonState {
     service_negotiations: HashMap<String, NegotiatedService>,
     /// UID SO_PEERCRED observé à l'acceptation. Il ne vient jamais de JSON.
     peer_uids: HashMap<String, u32>,
-    /// La politique est chargée une seule fois. Une erreur reste mémorisée et
-    /// n'affecte pas les routes historiques sans ProjectReference.
+    /// La dernière politique valide est conservée. Avant une mutation, le daemon
+    /// recharge le fichier si une génération valide est disponible.
     project_root_policy: Result<ProjectRootPolicy, ProjectRegistryRefusal>,
+    project_root_policy_path: Option<PathBuf>,
     /// Docker policy failure cannot change historical host behavior.
     project_runtime_policy: Result<ProjectRuntimePolicyConfig, RuntimeIssue>,
     /// Un listener privé par projet et génération Docker, jamais partagé avec
@@ -2618,6 +2619,7 @@ impl DaemonState {
             service_negotiations: HashMap::new(),
             peer_uids: HashMap::new(),
             runtime_ingress_reservations: HashMap::new(),
+            project_root_policy_path: config.project_root_policy_path.clone(),
             project_root_policy,
             project_resource_catalog,
             project_profile_admissions: HashMap::new(),
@@ -7875,13 +7877,18 @@ fn handle_wrapper_message(
                     | ProjectAdminOperation::ReviewProjectReconcile
             );
             let policy = if mutation {
-                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                 if st.peer_uids.get(conn_id).copied() != Some(unsafe { libc::geteuid() }) {
                     return Some(project_registry_admin_failure(
                         &request,
                         ProjectRegistryRefusal::PeerUidMismatch,
                         observed_at,
                     ));
+                }
+                if let Some(path) = st.project_root_policy_path.as_deref()
+                    && let Ok(reloaded) = ProjectRootPolicy::load(path)
+                {
+                    st.project_root_policy = Ok(reloaded);
                 }
                 match &st.project_root_policy {
                     Ok(policy) => Some(policy.clone()),
@@ -11652,6 +11659,7 @@ mod matrice_roles_tests {
             &policy_path,
             serde_json::json!({
                 "contract_version": 1,
+                "policy_generation": 1,
                 "allowed_project_roots": [allowed_root],
             })
             .to_string(),

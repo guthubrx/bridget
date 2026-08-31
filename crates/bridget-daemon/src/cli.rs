@@ -188,7 +188,10 @@ fn cmd_mcp() {
 
 #[derive(Debug, PartialEq, Eq)]
 enum UiCommand {
-    Serve { maicie_config: PathBuf },
+    Serve {
+        maicie_config: PathBuf,
+        project_root_policy_path: Option<PathBuf>,
+    },
     EndpointJson,
 }
 
@@ -204,6 +207,7 @@ fn parse_ui_command(args: &[String]) -> Result<UiCommand, String> {
     }
 
     let mut maicie_config = None;
+    let mut project_root_policy_path = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -212,6 +216,26 @@ fn parse_ui_command(args: &[String]) -> Result<UiCommand, String> {
                 maicie_config = args.get(index).map(PathBuf::from);
                 if maicie_config.is_none() {
                     return Err("bridget ui: --maicie-config requiert un chemin absolu".to_string());
+                }
+            }
+            "--project-root-policy" => {
+                if project_root_policy_path.is_some() {
+                    return Err("bridget ui: --project-root-policy dupliqué".to_string());
+                }
+                index += 1;
+                project_root_policy_path = args.get(index).map(PathBuf::from);
+                if project_root_policy_path.is_none() {
+                    return Err(
+                        "bridget ui: --project-root-policy requiert un chemin absolu".to_string(),
+                    );
+                }
+                if !project_root_policy_path
+                    .as_ref()
+                    .is_some_and(|path| path.is_absolute())
+                {
+                    return Err(
+                        "bridget ui: le chemin --project-root-policy doit être absolu".to_string(),
+                    );
                 }
             }
             option => {
@@ -225,7 +249,10 @@ fn parse_ui_command(args: &[String]) -> Result<UiCommand, String> {
     if !maicie_config.is_absolute() {
         return Err("bridget ui: le chemin --maicie-config doit être absolu".to_string());
     }
-    Ok(UiCommand::Serve { maicie_config })
+    Ok(UiCommand::Serve {
+        maicie_config,
+        project_root_policy_path,
+    })
 }
 
 fn render_ui_endpoint_json(endpoint: &crate::ui::UiEndpoint) -> String {
@@ -239,8 +266,15 @@ fn render_ui_endpoint_json(endpoint: &crate::ui::UiEndpoint) -> String {
 
 fn cmd_ui(args: &[String]) {
     match parse_ui_command(args) {
-        Ok(UiCommand::Serve { maicie_config }) => {
-            if let Err(error) = crate::ui::run(socket_path(), maicie_config) {
+        Ok(UiCommand::Serve {
+            maicie_config,
+            project_root_policy_path,
+        }) => {
+            if let Err(error) = crate::ui::run_with_project_root_policy(
+                socket_path(),
+                maicie_config,
+                project_root_policy_path,
+            ) {
                 eprintln!("bridget ui: {error}");
                 std::process::exit(1);
             }

@@ -616,6 +616,7 @@ fn loopback_rend_snapshot_et_relaie_un_fragment_attach_d_un_agent_vivant() {
     let config = UiRelayConfig {
         daemon_socket: socket,
         maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-couture".to_string(),
     };
@@ -688,6 +689,7 @@ fn requete_loopback_sans_jeton_est_refusee() {
     let config = UiRelayConfig {
         daemon_socket: PathBuf::from("/tmp/ui-inaccessible.sock"),
         maicie_config: PathBuf::from("/tmp/maicie-inaccessible.json"),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "secret".to_string(),
     };
@@ -704,6 +706,7 @@ fn get_sur_v1_send_reste_interdit_apres_ouverture_du_post() {
     let config = UiRelayConfig {
         daemon_socket: PathBuf::from("/tmp/ui-get-send-ne-doit-pas-ouvrir.sock"),
         maicie_config: PathBuf::from("/tmp/ui-get-send-ne-doit-pas-ouvrir.json"),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-get-send".to_string(),
     };
@@ -720,6 +723,7 @@ fn spec_073_route_stop_verrouille_methode_jeton_et_version() {
     let config = UiRelayConfig {
         daemon_socket: PathBuf::from("/tmp/spec-073-guards-no-daemon.sock"),
         maicie_config: PathBuf::from("/tmp/spec-073-guards-no-maicie.json"),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-stop-guards".to_string(),
     };
@@ -764,6 +768,7 @@ fn spec_073_route_stop_relaie_le_verdict_correle() {
     let config = UiRelayConfig {
         daemon_socket: socket.clone(),
         maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-stop-ok".to_string(),
     };
@@ -801,6 +806,7 @@ fn spec_073_route_stop_ferme_l_erreur_de_protocole() {
     let config = UiRelayConfig {
         daemon_socket: socket.clone(),
         maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-stop-protocol".to_string(),
     };
@@ -828,6 +834,7 @@ fn post_v1_send_corps_vide_rend_le_code_ferme_invalid_body() {
     let config = UiRelayConfig {
         daemon_socket: PathBuf::from("/tmp/ui-invalid-body-ne-doit-pas-ouvrir.sock"),
         maicie_config: PathBuf::from("/tmp/ui-invalid-body-ne-doit-pas-ouvrir.json"),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-invalid-body".to_string(),
     };
@@ -854,6 +861,7 @@ fn post_v1_send_valide_repond_202_et_livre_un_identifiant_non_vide() {
     let config = UiRelayConfig {
         daemon_socket: socket,
         maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-send-ok".to_string(),
     };
@@ -901,6 +909,7 @@ fn post_v1_send_reply_true_cree_une_demande_suivie() {
     let config = UiRelayConfig {
         daemon_socket: socket,
         maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-send-reply".to_string(),
     };
@@ -966,6 +975,7 @@ fn post_v1_send_destinataire_inconnu_refuse_sans_archiver() {
     let config = UiRelayConfig {
         daemon_socket: socket,
         maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-send-unknown".to_string(),
     };
@@ -1007,6 +1017,7 @@ fn snapshot_compose_la_ligne_agent_avec_les_faits_du_ledger() {
     let config = UiRelayConfig {
         daemon_socket: socket,
         maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-agent-row".to_string(),
     };
@@ -1042,6 +1053,7 @@ fn relais_sert_les_trois_assets_hors_du_source_rust() {
     let config = UiRelayConfig {
         daemon_socket: PathBuf::from("/tmp/ui-assets-ne-doit-pas-ouvrir.sock"),
         maicie_config: PathBuf::from("/tmp/ui-assets-ne-doit-pas-ouvrir.json"),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-assets".to_string(),
     };
@@ -1069,6 +1081,7 @@ fn watch_annonce_reconnecting_puis_connected_apres_coupure_daemon() {
     let config = UiRelayConfig {
         daemon_socket: socket.clone(),
         maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-reprise".to_string(),
     };
@@ -1129,6 +1142,7 @@ fn snapshot_sans_agent_omet_les_pairs_et_watch_agent_les_projette() {
     let config = UiRelayConfig {
         daemon_socket: socket,
         maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-peer".to_string(),
     };
@@ -1196,6 +1210,7 @@ fn watch_pousse_thread_message_sortant_apres_ouverture() {
     let config = UiRelayConfig {
         daemon_socket: socket,
         maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-live".to_string(),
     };
@@ -1308,6 +1323,7 @@ fn relais_ui_expose_separement_connexion_vitalite_tour_attente_et_file() {
     let config = UiRelayConfig {
         daemon_socket: socket,
         maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-execution".to_string(),
     };
