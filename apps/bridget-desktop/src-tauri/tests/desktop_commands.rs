@@ -64,6 +64,15 @@ fn la_coque_desktop_ne_garde_que_le_filtre_sources() {
 }
 
 #[test]
+fn les_agents_arretes_restent_accessibles_dans_le_volet_relais() {
+    let stylesheet = include_str!("../../../../crates/bridget-daemon/assets/ui/theme.css");
+
+    assert!(stylesheet.contains(".agent-pane {\n  overflow-x: hidden;\n  overflow-y: auto;\n}"));
+    assert!(stylesheet.contains(".agent-pane .agent-list {\n  flex: 0 0 auto;\n"));
+    assert!(stylesheet.contains(".stopped-agents,\n.hidden-agents"));
+}
+
+#[test]
 fn le_menu_desktop_restitue_le_centre_de_controle_existant_sans_le_remplacer() {
     let markup = include_str!("../../ui/index.html");
     let frontend = include_str!("../../ui/fleet-app.js");

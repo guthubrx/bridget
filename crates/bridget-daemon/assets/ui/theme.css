@@ -3418,13 +3418,14 @@ code {
 
 /* Centre de contrôle : modal local, distinct des détails d'une conversation. */
 .agent-pane {
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .agent-pane .agent-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
+  flex: 0 0 auto;
+  min-height: auto;
+  overflow: visible;
   align-content: start;
   grid-auto-rows: min-content;
 }

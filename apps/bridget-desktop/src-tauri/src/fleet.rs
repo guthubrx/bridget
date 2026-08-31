@@ -126,6 +126,7 @@ struct RemoteSnapshot {
 
 #[derive(Deserialize)]
 struct RemoteAgent {
+    #[serde(alias = "agent_id")]
     name: String,
     #[serde(default)]
     profile: Option<RemoteProfile>,
@@ -345,5 +346,36 @@ mod tests {
         assert_eq!(agent.avatar_color, "teal");
         assert_eq!(agent.labels, ["coordination", "projet"]);
         assert_eq!(agent.last_excerpt.as_deref(), Some("La revue est prête."));
+    }
+
+    #[test]
+    fn projection_accepte_l_identifiant_opaque_du_contrat_courant() {
+        let source = FleetSourceInput {
+            source_id: "one".into(),
+            label: "One".into(),
+            kind: SourceKind::Ssh,
+            connection_state: "connected".into(),
+        };
+        let projection = project_source(
+            source,
+            br#"{
+              "version": 1,
+              "agents": [{
+                "agent_id": "550e8400-e29b-41d4-a716-4466554400f0",
+                "state": "stopped",
+                "profile": {
+                  "display_name": "Bridget",
+                  "avatar": { "shape": "round", "color": "blue" }
+                }
+              }]
+            }"#,
+            br#"{ "version": 1, "projects": [] }"#,
+        )
+        .expect("le contrat opaque courant doit être projetable");
+
+        let agent = projection.agents.first().expect("agent projeté");
+        assert_eq!(agent.name, "550e8400-e29b-41d4-a716-4466554400f0");
+        assert_eq!(agent.display_name, "Bridget");
+        assert_eq!(agent.state, "stopped");
     }
 }

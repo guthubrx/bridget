@@ -432,8 +432,8 @@ window.__TAURI__?.event?.listen("connection-state", (event) => {
 try {
   preferences = await invoke("preferences_get");
   applyPreferences();
+  await restoreManagedConnections();
   await refreshFleet();
-  void restoreManagedConnections();
 } catch (error) {
   announce(error.message || String(error));
 }

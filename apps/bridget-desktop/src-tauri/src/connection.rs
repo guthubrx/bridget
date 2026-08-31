@@ -684,7 +684,8 @@ mod tests {
         assert!(panel_url.contains("agent=coordinateur%20%2F%20projet"));
         assert!(panel_url.contains("project_id=projet%20bleu"));
         assert!(panel_url.contains("desktop_action=create_project"));
-        let settings_url = desktop_panel_url(39002, &endpoint, client_id, None, None, Some("settings"));
+        let settings_url =
+            desktop_panel_url(39002, &endpoint, client_id, None, None, Some("settings"));
         assert!(settings_url.contains("desktop_shell=1"));
         assert!(settings_url.contains("view=settings"));
         assert!(!settings_url.contains("desktop_action="));
