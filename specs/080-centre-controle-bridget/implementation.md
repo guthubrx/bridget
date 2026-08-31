@@ -1,7 +1,7 @@
 # Implémentation - SPEC-080 Centre de contrôle Bridget
 
 Date : 2026-08-31
-Statut : tranche de centre de contrôle déployée sur le relais et paquet macOS construit. La SPEC reste ouverte tant que la validation visuelle humaine et le remplacement explicite de l'application macOS en cours ne sont pas réalisés.
+Statut : tranche de centre de contrôle et navigation Projets déployées sur le relais. La SPEC reste ouverte tant que la validation visuelle humaine et le remplacement explicite de l'application macOS en cours ne sont pas réalisés.
 
 ## Résultat présent dans le relais déployé
 
@@ -35,18 +35,19 @@ Les contrôles restent des éléments HTML natifs et accessibles. Seule leur pr�
 
 ## Déploiement attesté
 
-Le binaire release courant a été construit depuis ce worktree, installé dans /home/moi/.local/bin/bridget, puis les services utilisateur ont été redémarrés le 2026-08-31 à 07:12:31 UTC :
+Le binaire release courant a été construit depuis un clone propre de `main`, installé dans /home/moi/.local/bin/bridget, puis les services utilisateur ont été redémarrés le 2026-08-31 à 08:40:41 UTC :
 
-- `bridget-daemon.service` : actif, PID 2280068 ;
-- `bridget-ui.service` : actif, PID 2280069 ;
-- SHA-256 du binaire installé : `1ea5b75d3b4f5f670c0b939ea09e5ce45728ca434ee4e5ddab1525ed87cf99f9`.
+- `bridget-daemon.service` : actif, PID 2454451 ;
+- `bridget-ui.service` : actif, PID 2454452 ;
+- SHA-256 du binaire installé : `c524953a081441b30e8f73c78554789777d64328a877a35a01658d9348115f5e`.
+- Les assets servis par le relais contiennent la navigation Projets et l'overlay de présentation.
 
 ## Preuves automatisées
 
 | Commande | Résultat |
 |---|---|
 | `node --check crates/bridget-daemon/assets/ui/app.js` | PASS |
-| `node crates/bridget-daemon/assets/ui/app.js` | PASS - 97 tests, 0 échec |
+| `node crates/bridget-daemon/assets/ui/app.js` | PASS - 98 tests, 0 échec |
 | `cargo fmt --check` | PASS |
 | `cargo test -p bridget-daemon spec_080 --lib` | PASS - 2 tests ciblés |
 | `cargo build --release -p bridget-daemon` | PASS |
@@ -54,6 +55,8 @@ Le binaire release courant a été construit depuis ce worktree, installé dans 
 | `cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml panels` | PASS - 1 test ciblé |
 | `git diff --check` | PASS |
 | `cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml --test desktop_commands` | PASS - 2 tests ciblés |
+| `cargo test -p bridget-daemon --test ui_relay_test` sur le serveur | PASS - 25 tests, 0 échec |
+| `cargo build --release -p bridget-daemon` sur le serveur | PASS - binaire déployé |
 
 
 ## Correctif des actions de cartes Desktop

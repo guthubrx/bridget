@@ -5,19 +5,23 @@ Date : 2026-08-31
 ## Relais effectivement déployé
 
 - Build : `cargo build --release -p bridget-daemon` réussi.
-- Installation : `/home/moi/.local/bin/bridget` SHA-256 `1ea5b75d3b4f5f670c0b939ea09e5ce45728ca434ee4e5ddab1525ed87cf99f9`.
-- Services utilisateur : `bridget-daemon.service` et `bridget-ui.service` actifs depuis 07:12:31 UTC.
+- Installation : `/home/moi/.local/bin/bridget` SHA-256 `c524953a081441b30e8f73c78554789777d64328a877a35a01658d9348115f5e`.
+- Services utilisateur : `bridget-daemon.service` et `bridget-ui.service` actifs depuis 08:40:41 UTC.
+- Build et test réalisés dans le clone propre `/tmp/bridget-spec080.9DPe4s` du commit `c485f1c39994432f4561dd1357250420ecc766e4`.
+- Le relais sert les marqueurs `project-presentation-overlay` et `Navigation des projets` après redémarrage.
 
 ## Contrôles automatisés
 
 - `node --check crates/bridget-daemon/assets/ui/app.js` : PASS.
-- `node crates/bridget-daemon/assets/ui/app.js` : PASS, 97 tests, 0 échec.
+- `node crates/bridget-daemon/assets/ui/app.js` : PASS, 98 tests, 0 échec.
 - `cargo fmt --check` : PASS.
 - `cargo test -p bridget-daemon spec_080 --lib` : PASS, 2 tests.
 - `node --check apps/bridget-desktop/ui/app.js` : PASS.
 - `cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml panels` : PASS, 1 test.
 - `git diff --check` : PASS.
 - `cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml --test desktop_commands` : PASS, 2 tests.
+- `cargo test -p bridget-daemon --test ui_relay_test` sur le serveur : PASS, 25 tests, 0 échec.
+- `cargo build --release -p bridget-daemon` sur le serveur : PASS, binaire installé puis services redémarrés.
 
 ## Régression de finition couverte
 
