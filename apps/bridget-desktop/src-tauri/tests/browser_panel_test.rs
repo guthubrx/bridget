@@ -34,5 +34,6 @@ fn surface_browser_existante_est_rechargee_vers_le_mode_browser_bridget() {
     assert!(backend.contains("jamais conserver une seconde conversation dans le volet"));
     assert!(backend.contains("url.set_path(\"/browser-panel\");"));
     assert!(backend.contains("window.__BRIDGET_BROWSER_PANEL__ = true;"));
+    assert!(backend.contains("open_browser_home_surface(&app, &state)?;"));
     assert!(relay.contains("(\"GET\", \"/browser-panel\")"));
 }

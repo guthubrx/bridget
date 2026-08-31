@@ -1034,6 +1034,13 @@ pub fn run() {
             state.panels.lock().map_err(as_message)?.close(&panel.label);
             return Err(as_message(error));
         }
+        // Le choix de garder le Browser ouvert est une préférence durable,
+        // alors que son WebView disparaît à l'arrêt du processus. On le
+        // recrée donc avec la conversation plutôt que de laisser un état
+        // « visible » sans surface réelle.
+        if browser_preferences(&state)?.right_panel_visible {
+            open_browser_home_surface(&app, &state)?;
+        }
         arrange_panels(&app, &state)?;
         let panels = state.panels.lock().map_err(as_message)?;
         Ok(PanelView {
