@@ -16,11 +16,13 @@ use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
 use bridget_transport::journal::valid_events;
 use bridget_transport::protocol::{
     AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
-    LedgerMessage, LedgerScope, PROJECT_REGISTRY_CONTRACT_VERSION, PresenceMode,
-    ProjectAdminOperation, ProjectAdminRequest, ProjectBackend, ProjectBindRequest,
-    ProjectBindStatus, ProjectBindingProjection, ProjectBindingStatus, ProjectRuntimeOperation,
-    ProjectRuntimeRefusal, ProjectRuntimeRequest, SERVICE_CONTRACT_VERSION, ServiceCapability,
-    decode, encode,
+    LedgerMessage, LedgerScope, PROJECT_REGISTRY_CONTRACT_VERSION, PROJECT_ROUND_INTERVAL_SECS,
+    PROJECT_ROUND_POLICY_CONTRACT_VERSION, PresenceMode, ProjectAdminOperation,
+    ProjectAdminRequest, ProjectBackend, ProjectBindRequest, ProjectBindStatus,
+    ProjectBindingProjection, ProjectBindingStatus, ProjectRoundDispatchState,
+    ProjectRoundOperation, ProjectRoundOutcome, ProjectRoundProjection, ProjectRoundRefusal,
+    ProjectRoundRequest, ProjectRuntimeOperation, ProjectRuntimeRefusal, ProjectRuntimeRequest,
+    SERVICE_CONTRACT_VERSION, ServiceCapability, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
 use serde::{Deserialize, Serialize};
@@ -940,6 +942,42 @@ struct UiProjectListEntryV1 {
     display_name: String,
     canonical_path: String,
     state: &'static str,
+    binding_generation: u64,
+    round: UiProjectRoundV1,
+}
+
+#[derive(Debug, Serialize)]
+struct UiProjectRoundV1 {
+    configured: bool,
+    enabled: bool,
+    revision: u64,
+    updated_at: i64,
+    interval_secs: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_occurrence_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_dispatch_state: Option<ProjectRoundDispatchState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_dispatch_observed_at: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiProjectRoundRequestV1 {
+    version: u8,
+    command_id: String,
+    project_id: String,
+    binding_generation: u64,
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct UiProjectRoundAcceptedV1 {
+    version: u8,
+    command_id: String,
+    project_id: String,
+    binding_generation: u64,
+    round: UiProjectRoundV1,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1447,6 +1485,18 @@ fn serve_connection(
             ),
         },
         ("POST", "/v1/projects/confirm") => match post_project_confirm(config, &request.body) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("POST", "/v1/projects/round") => match post_project_round(config, &request.body) {
             Ok(response) => write_json(stream, 200, &response),
             Err((status, code, message)) => write_json(
                 stream,
@@ -2360,6 +2410,131 @@ fn open_project_registry_service(
     }
 }
 
+fn open_project_round_client(
+    socket_path: &Path,
+) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>), UiProjectError> {
+    let stream =
+        UnixStream::connect(socket_path).map_err(|_| project_round_service_unavailable())?;
+    let read_stream = stream
+        .try_clone()
+        .map_err(|_| project_round_service_unavailable())?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Client,
+        },
+    )
+    .map_err(|_| project_round_service_unavailable())?;
+    if !matches!(
+        read_daemon(&mut reader).map_err(|_| project_round_service_unavailable())?,
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client
+        }
+    ) {
+        return Err(project_round_service_unavailable());
+    }
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: crate::mcp::issuer_scope("bridget-ui-project-round"),
+            capabilities: vec![ClientCapability::ProjectRoundPolicyV1],
+        },
+    )
+    .map_err(|_| project_round_service_unavailable())?;
+    match read_daemon(&mut reader).map_err(|_| project_round_service_unavailable())? {
+        DaemonToWrapper::ClientWelcome { capabilities, .. }
+            if capabilities.contains(&ClientCapability::ProjectRoundPolicyV1) =>
+        {
+            Ok((reader, writer))
+        }
+        _ => Err(project_round_service_unavailable()),
+    }
+}
+
+fn project_round_service_unavailable() -> UiProjectError {
+    (
+        503,
+        "round_service_unavailable",
+        "Le contrôle de ronde n’est pas disponible sur ce serveur.".to_string(),
+    )
+}
+
+fn project_round_refusal(reason: ProjectRoundRefusal) -> UiProjectError {
+    match reason {
+        ProjectRoundRefusal::ProjectNotFound => (
+            404,
+            "project_not_found",
+            "Ce projet n’existe plus dans Bridget.".to_string(),
+        ),
+        ProjectRoundRefusal::ProjectInactive => (
+            409,
+            "project_inactive",
+            "La ronde ne peut être modifiée que pour un projet actif.".to_string(),
+        ),
+        ProjectRoundRefusal::BindingGenerationMismatch => (
+            409,
+            "binding_generation_mismatch",
+            "Le projet a été reconnecté. Actualisez son état avant de modifier la ronde."
+                .to_string(),
+        ),
+        ProjectRoundRefusal::EnvelopeMismatch => (
+            409,
+            "round_command_conflict",
+            "Cette commande a déjà été utilisée avec une autre demande.".to_string(),
+        ),
+        ProjectRoundRefusal::PolicyDisabled => (
+            409,
+            "round_policy_disabled",
+            "La politique de ronde n’est pas active pour cette génération.".to_string(),
+        ),
+        ProjectRoundRefusal::InvalidRequest | ProjectRoundRefusal::IdempotencyExpired => (
+            400,
+            "invalid_request",
+            "La demande de ronde est invalide ou expirée.".to_string(),
+        ),
+        ProjectRoundRefusal::InvalidContract
+        | ProjectRoundRefusal::PeerUidMismatch
+        | ProjectRoundRefusal::StoreUnavailable => project_round_service_unavailable(),
+    }
+}
+
+fn request_project_round(
+    socket_path: &Path,
+    command_id: String,
+    operation: ProjectRoundOperation,
+    project_id: Option<String>,
+    binding_generation: Option<u64>,
+) -> Result<ProjectRoundOutcome, UiProjectError> {
+    let (mut reader, mut writer) = open_project_round_client(socket_path)?;
+    let now = now_secs();
+    let request = ProjectRoundRequest {
+        contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+        command_id,
+        issued_at: now,
+        deadline_at: now.saturating_add(10),
+        operation,
+        project_id,
+        binding_generation,
+    };
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::ProjectRoundRequest { request },
+    )
+    .map_err(|_| project_round_service_unavailable())?;
+    let DaemonToWrapper::ProjectRoundOutcome { outcome } =
+        read_daemon(&mut reader).map_err(|_| project_round_service_unavailable())?
+    else {
+        return Err(project_round_service_unavailable());
+    };
+    if let Some(reason) = outcome.reason {
+        return Err(project_round_refusal(reason));
+    }
+    Ok(outcome)
+}
+
 fn read_projects(socket_path: &Path) -> Result<UiProjectListV1, UiProjectError> {
     let (mut reader, mut writer) = open_project_registry_service(socket_path)?;
     let now = now_secs();
@@ -2393,11 +2568,26 @@ fn read_projects(socket_path: &Path) -> Result<UiProjectListV1, UiProjectError> 
             "La liste des projets a été refusée par le serveur.".to_string(),
         ));
     }
-    let mut projects = outcome
-        .bindings
+    let rounds = request_project_round(
+        socket_path,
+        format!("ui-project-round-list-{}", uuid::Uuid::new_v4()),
+        ProjectRoundOperation::List,
+        None,
+        None,
+    )?;
+    let mut rounds_by_project = rounds
+        .policies
         .into_iter()
-        .filter_map(ui_project_list_entry)
-        .collect::<Vec<_>>();
+        .map(|policy| (policy.project_id.clone(), policy))
+        .collect::<HashMap<_, _>>();
+    // Complexité O(p) : chaque liaison et chaque politique est visitée une fois.
+    let mut projects = Vec::new();
+    for binding in outcome.bindings {
+        let policy = rounds_by_project.remove(&binding.project_id);
+        if let Some(project) = ui_project_list_entry(binding, policy)? {
+            projects.push(project);
+        }
+    }
     projects.sort_by(|left, right| left.display_name.cmp(&right.display_name));
     Ok(UiProjectListV1 {
         version: UI_VERSION,
@@ -2405,8 +2595,32 @@ fn read_projects(socket_path: &Path) -> Result<UiProjectListV1, UiProjectError> 
     })
 }
 
-fn ui_project_list_entry(binding: ProjectBindingProjection) -> Option<UiProjectListEntryV1> {
-    let canonical_path = binding.canonical_root?;
+fn ui_project_list_entry(
+    binding: ProjectBindingProjection,
+    policy: Option<ProjectRoundProjection>,
+) -> Result<Option<UiProjectListEntryV1>, UiProjectError> {
+    let Some(canonical_path) = binding.canonical_root else {
+        return Ok(None);
+    };
+    let binding_generation = binding
+        .binding_generation
+        .ok_or_else(project_round_service_unavailable)?;
+    let policy = policy.ok_or_else(project_round_service_unavailable)?;
+    if policy.project_id != binding.project_id
+        || policy.binding_generation != Some(binding_generation)
+        || policy.active != (binding.state == ProjectBindingStatus::Active)
+    {
+        return Err(project_round_service_unavailable());
+    }
+    let has_no_dispatch = policy.last_occurrence_at.is_none()
+        && policy.last_dispatch_state.is_none()
+        && policy.last_dispatch_observed_at.is_none();
+    let has_complete_dispatch = policy.last_occurrence_at.is_some()
+        && policy.last_dispatch_state.is_some()
+        && policy.last_dispatch_observed_at.is_some();
+    if !has_no_dispatch && !has_complete_dispatch {
+        return Err(project_round_service_unavailable());
+    }
     let display_name = Path::new(&canonical_path)
         .file_name()
         .and_then(|name| name.to_str())
@@ -2421,11 +2635,88 @@ fn ui_project_list_entry(binding: ProjectBindingProjection) -> Option<UiProjectL
         ProjectBindingStatus::BindingFailed => "binding_failed",
         ProjectBindingStatus::Unregistered => "unregistered",
     };
-    Some(UiProjectListEntryV1 {
+    Ok(Some(UiProjectListEntryV1 {
         project_id: binding.project_id,
         display_name,
         canonical_path,
         state,
+        binding_generation,
+        round: ui_project_round(policy),
+    }))
+}
+
+fn ui_project_round(policy: ProjectRoundProjection) -> UiProjectRoundV1 {
+    UiProjectRoundV1 {
+        configured: policy.configured,
+        enabled: policy.enabled,
+        revision: policy.revision,
+        updated_at: policy.updated_at,
+        interval_secs: PROJECT_ROUND_INTERVAL_SECS,
+        last_occurrence_at: policy.last_occurrence_at,
+        last_dispatch_state: policy.last_dispatch_state,
+        last_dispatch_observed_at: policy.last_dispatch_observed_at,
+    }
+}
+
+fn parse_ui_project_round_request(body: &[u8]) -> Result<UiProjectRoundRequestV1, UiProjectError> {
+    let request: UiProjectRoundRequestV1 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "invalid_request",
+            "Action de ronde invalide.".to_string(),
+        )
+    })?;
+    let valid_command_id = request.version == UI_VERSION
+        && !request.command_id.trim().is_empty()
+        && request.command_id.len() <= MAX_UI_COMMAND_ID_BYTES
+        && request.command_id.bytes().all(is_query_byte);
+    let valid_project_id = !request.project_id.trim().is_empty()
+        && request.project_id.len() <= 128
+        && request
+            .project_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+    if !valid_command_id || !valid_project_id || request.binding_generation == 0 {
+        return Err((
+            400,
+            "invalid_request",
+            "Action de ronde invalide.".to_string(),
+        ));
+    }
+    Ok(request)
+}
+
+fn post_project_round(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiProjectRoundAcceptedV1, UiProjectError> {
+    let request = parse_ui_project_round_request(body)?;
+    let operation = if request.enabled {
+        ProjectRoundOperation::Enable
+    } else {
+        ProjectRoundOperation::Disable
+    };
+    let outcome = request_project_round(
+        &config.daemon_socket,
+        request.command_id.clone(),
+        operation,
+        Some(request.project_id.clone()),
+        Some(request.binding_generation),
+    )?;
+    let Some(policy) = outcome.policies.into_iter().next() else {
+        return Err(project_round_service_unavailable());
+    };
+    if policy.project_id != request.project_id
+        || policy.binding_generation != Some(request.binding_generation)
+    {
+        return Err(project_round_service_unavailable());
+    }
+    Ok(UiProjectRoundAcceptedV1 {
+        version: UI_VERSION,
+        command_id: request.command_id,
+        project_id: request.project_id,
+        binding_generation: request.binding_generation,
+        round: ui_project_round(policy),
     })
 }
 
@@ -2612,7 +2903,21 @@ fn post_project_admin(
             "Le registre a refusé cette action sur le projet.".to_string(),
         ));
     }
-    let Some(project) = outcome.bindings.into_iter().find_map(ui_project_list_entry) else {
+    let Some(binding) = outcome.bindings.into_iter().next() else {
+        return Err((
+            409,
+            "project_action_refused",
+            "Le registre n’a pas confirmé l’état du projet.".to_string(),
+        ));
+    };
+    let round = request_project_round(
+        &config.daemon_socket,
+        format!("ui-project-round-status-{}", uuid::Uuid::new_v4()),
+        ProjectRoundOperation::Status,
+        Some(binding.project_id.clone()),
+        None,
+    )?;
+    let Some(project) = ui_project_list_entry(binding, round.policies.into_iter().next())? else {
         return Err((
             409,
             "project_action_refused",
@@ -6916,6 +7221,298 @@ mod tests {
             expected_root.display().to_string()
         );
         assert!(expected_root.is_dir(), "le dossier confirmé doit être créé");
+        server.join().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_081_relais_valide_et_confirme_la_mutation_de_ronde() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-081-ui-round-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("bridget.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client
+                }
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::ClientHello { capabilities, .. }
+                    if capabilities == vec![ClientCapability::ProjectRoundPolicyV1]
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "spec-081".to_string(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: vec![ClientCapability::ProjectRoundPolicyV1],
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            let WrapperToDaemon::ProjectRoundRequest { request } =
+                decode::<WrapperToDaemon>(line.trim()).unwrap()
+            else {
+                panic!("mutation de ronde attendue");
+            };
+            assert_eq!(request.operation, ProjectRoundOperation::Enable);
+            assert_eq!(request.project_id.as_deref(), Some("project-081"));
+            assert_eq!(request.binding_generation, Some(3));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::ProjectRoundOutcome {
+                    outcome: ProjectRoundOutcome {
+                        contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+                        command_id: request.command_id,
+                        operation: request.operation,
+                        policies: vec![ProjectRoundProjection {
+                            project_id: "project-081".to_string(),
+                            binding_generation: Some(3),
+                            active: true,
+                            configured: true,
+                            enabled: true,
+                            revision: 4,
+                            updated_at: now_secs(),
+                            last_occurrence_at: Some(840),
+                            last_dispatch_state: Some(ProjectRoundDispatchState::Deposited),
+                            last_dispatch_observed_at: Some(850),
+                        }],
+                        reason: None,
+                        observed_at: now_secs(),
+                    },
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+        });
+        let config = UiRelayConfig {
+            daemon_socket: socket,
+            maicie_config: root.join("maicie.json"),
+            project_root_policy_path: None,
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "test".to_string(),
+        };
+        let accepted = post_project_round(
+            &config,
+            br#"{"version":1,"command_id":"round-ui-081","project_id":"project-081","binding_generation":3,"enabled":true}"#,
+        )
+        .unwrap();
+        assert_eq!(accepted.project_id, "project-081");
+        assert_eq!(accepted.binding_generation, 3);
+        assert!(accepted.round.enabled);
+        assert_eq!(accepted.round.last_occurrence_at, Some(840));
+        server.join().unwrap();
+
+        assert!(parse_ui_project_round_request(
+            br#"{"version":1,"command_id":"round-ui-081","project_id":"project-081","binding_generation":3,"enabled":true,"provider":"codex"}"#
+        )
+        .is_err());
+        assert!(parse_ui_project_round_request(
+            br#"{"version":1,"command_id":"round-ui-081","project_id":"project-081","binding_generation":0,"enabled":true}"#
+        )
+        .is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_081_jointure_ronde_exige_projet_generation_et_etat_coherents() {
+        let binding = ProjectBindingProjection {
+            project_id: "project-081".to_string(),
+            canonical_root: Some("/srv/project-081".to_string()),
+            state: ProjectBindingStatus::Active,
+            binding_generation: Some(3),
+            backend: Some(ProjectBackend::Host),
+            runtime_policy: None,
+            reason: None,
+            last_audit: None,
+            observed_at: 900,
+        };
+        let policy = ProjectRoundProjection {
+            project_id: "project-081".to_string(),
+            binding_generation: Some(3),
+            active: true,
+            configured: true,
+            enabled: true,
+            revision: 2,
+            updated_at: 850,
+            last_occurrence_at: None,
+            last_dispatch_state: None,
+            last_dispatch_observed_at: None,
+        };
+
+        let project = ui_project_list_entry(binding.clone(), Some(policy.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(project.binding_generation, 3);
+        assert!(project.round.enabled);
+        assert_eq!(project.round.interval_secs, PROJECT_ROUND_INTERVAL_SECS);
+
+        let missing = ui_project_list_entry(binding.clone(), None).unwrap_err();
+        assert_eq!(missing.1, "round_service_unavailable");
+
+        let mut stale = policy.clone();
+        stale.binding_generation = Some(2);
+        let mismatch = ui_project_list_entry(binding.clone(), Some(stale)).unwrap_err();
+        assert_eq!(mismatch.1, "round_service_unavailable");
+
+        let mut partial = policy;
+        partial.last_occurrence_at = Some(840);
+        let incomplete = ui_project_list_entry(binding, Some(partial)).unwrap_err();
+        assert_eq!(incomplete.1, "round_service_unavailable");
+
+        assert_eq!(
+            project_round_refusal(ProjectRoundRefusal::ProjectInactive).1,
+            "project_inactive"
+        );
+        assert_eq!(
+            project_round_refusal(ProjectRoundRefusal::BindingGenerationMismatch).1,
+            "binding_generation_mismatch"
+        );
+    }
+
+    #[test]
+    fn spec_081_perte_de_reponse_ronde_reste_une_indisponibilite_fermee() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-081-ui-round-loss-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("bridget.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "spec-081".to_string(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: vec![ClientCapability::ProjectRoundPolicyV1],
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::ProjectRoundRequest { .. }
+            ));
+            // La connexion disparaît avant tout verdict: aucun état n'est confirmé.
+        });
+        let error = request_project_round(
+            &socket,
+            "round-ui-loss-081".to_string(),
+            ProjectRoundOperation::Enable,
+            Some("project-081".to_string()),
+            Some(3),
+        )
+        .unwrap_err();
+        assert_eq!(error.0, 503);
+        assert_eq!(error.1, "round_service_unavailable");
+        server.join().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_081_capacite_ronde_absente_ne_fabrique_pas_un_etat() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-081-ui-round-capability-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("bridget.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "spec-081".to_string(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: Vec::new(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+        });
+        let error = open_project_round_client(&socket).unwrap_err();
+        assert_eq!(error.0, 503);
+        assert_eq!(error.1, "round_service_unavailable");
         server.join().unwrap();
         let _ = std::fs::remove_dir_all(root);
     }

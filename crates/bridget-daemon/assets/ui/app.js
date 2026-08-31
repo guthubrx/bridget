@@ -177,6 +177,68 @@
         assert.match(stylesheet, /\.agent-pane__settings > span:first-child\s*\{[\s\S]*font-size: 1\.6rem;/);
       });
 
+      test("spec_081_ronde_projet_reste_confirmee_accessible_et_generique", () => {
+        const project = {
+          project_id: "project-081",
+          display_name: "Bridget",
+          state: "active",
+          binding_generation: 3,
+          round: {
+            configured: true,
+            enabled: true,
+            revision: 2,
+            updated_at: 1_788_160_000,
+            interval_secs: 420,
+            last_occurrence_at: 1_788_159_780,
+            last_dispatch_state: "deposited",
+            last_dispatch_observed_at: 1_788_159_792,
+          },
+        };
+        assert.deepEqual(api.projectRoundView(project), {
+          enabled: true,
+          actionDisabled: false,
+          rowLabel: "actif · ronde activée",
+          stateLabel: "Ronde activée",
+          lastLabel: "Dernier passage déposé",
+          nextLabel: "Prochain cycle global dans 7 min au plus",
+        });
+        const confirmedBeforeMutation = JSON.stringify(project);
+        assert.deepEqual(api.buildProjectRoundMutation(project, "round-command-081"), {
+          version: 1,
+          command_id: "round-command-081",
+          project_id: "project-081",
+          binding_generation: 3,
+          enabled: false,
+        });
+        assert.equal(JSON.stringify(project), confirmedBeforeMutation);
+        assert.deepEqual(api.projectRoundView({
+          ...project,
+          state: "disabled",
+          round: { ...project.round, enabled: false },
+        }), {
+          enabled: false,
+          actionDisabled: true,
+          rowLabel: "retiré",
+          stateLabel: "Ronde indisponible",
+          lastLabel: "Dernier passage déposé",
+          nextLabel: null,
+        });
+        const source = fs.readFileSync(__filename, "utf8");
+        assert.match(source, /role", "menuitemcheckbox"/);
+        assert.match(source, /aria-checked/);
+        assert.match(source, /aria-busy/);
+        assert.match(source, /\/v1\/projects\/round/);
+        const mutationHandlerStart = source.lastIndexOf('round.addEventListener("click"');
+        const mutationHandler = source.slice(
+          mutationHandlerStart,
+          source.indexOf('const customize = make("button"', mutationHandlerStart),
+        );
+        assert.match(mutationHandler, /\.then\(async \(\) => \{\s*await refreshProjects\(\)/);
+        assert.doesNotMatch(mutationHandler, /projects\s*=|project\.round\s*=|roundView\.enabled\s*=/);
+        const roundSource = api.projectRoundView.toString() + api.buildProjectRoundMutation.toString();
+        assert.doesNotMatch(roundSource, /(claude|codex|cursor|gemini)/i);
+      });
+
       test("apparence_agent_stable_et_etat_visuel_honnete", () => {
         assert.equal(api.agentAvatarShape("jc1"), api.agentAvatarShape("jc1"));
         assert.equal(api.agentAvatarShape("jc1", { jc1: { shape: "cloud" } }), "cloud");
@@ -5957,6 +6019,45 @@
     };
   }
 
+  function projectStateLabel(state) {
+    if (state === "active") return "actif";
+    if (state === "disabled") return "retiré";
+    if (state === "path_missing") return "dossier introuvable";
+    return "indisponible";
+  }
+
+  function projectRoundView(project) {
+    const round = project && project.round && typeof project.round === "object" ? project.round : {};
+    const enabled = project && project.state === "active" && round.enabled === true;
+    const actionDisabled = !project || project.state !== "active" || !(Number(project.binding_generation) > 0);
+    const lastLabels = {
+      deposited: "Dernier passage déposé",
+      refused: "Dernier passage refusé",
+      indeterminate: "Dernier passage indéterminé",
+    };
+    const intervalMinutes = Math.max(1, Math.ceil(Number(round.interval_secs || 420) / 60));
+    return {
+      enabled,
+      actionDisabled,
+      rowLabel: enabled ? "actif · ronde activée" : projectStateLabel(project && project.state),
+      stateLabel: actionDisabled
+        ? "Ronde indisponible"
+        : enabled ? "Ronde activée" : "Ronde désactivée",
+      lastLabel: lastLabels[round.last_dispatch_state] || "Aucun passage connu",
+      nextLabel: enabled ? `Prochain cycle global dans ${intervalMinutes} min au plus` : null,
+    };
+  }
+
+  function buildProjectRoundMutation(project, commandId) {
+    return {
+      version: 1,
+      command_id: String(commandId || ""),
+      project_id: String(project && project.project_id || ""),
+      binding_generation: Number(project && project.binding_generation || 0),
+      enabled: !projectRoundView(project).enabled,
+    };
+  }
+
   function readProjectPresentationPreferences(storage) {
     try {
       const raw = storage && storage.getItem(PROJECT_PRESENTATION_PREFERENCES_KEY);
@@ -7643,6 +7744,58 @@
       menu.setAttribute("aria-label", `Actions pour ${project.display_name}`);
       const heading = make("div", "project-context-menu__heading");
       heading.append(createProjectAvatar(project), make("strong", null, project.display_name));
+      const roundView = projectRoundView(project);
+      const round = make("button", "project-context-menu__item project-context-menu__item--toggle");
+      round.type = "button";
+      round.setAttribute("role", "menuitemcheckbox");
+      round.setAttribute("aria-checked", String(roundView.enabled));
+      round.setAttribute("aria-busy", "false");
+      round.disabled = roundView.actionDisabled;
+      round.append(
+        make("span", "project-context-menu__item-label", "Ronde de vigilance"),
+        make(
+          "span",
+          "project-context-menu__round-state",
+          roundView.actionDisabled ? "Indisponible" : roundView.enabled ? "Activée" : "Désactivée",
+        ),
+      );
+      const roundDetail = make("div", "project-context-menu__round-detail");
+      const roundState = make("p", null, roundView.stateLabel);
+      const lastPassage = make("p", null, roundView.lastLabel);
+      const occurrenceAt = Number(project.round && project.round.last_occurrence_at);
+      if (occurrenceAt > 0) {
+        lastPassage.textContent += ` · ${formatLocalTime(occurrenceAt, controlTimezone())}`;
+      }
+      const nextPassage = make("p", null, roundView.nextLabel || (
+        project.state === "active"
+          ? (project.round && project.round.configured ? "Aucun prochain passage planifié" : "Non configurée pour cette liaison")
+          : "Projet inactif"
+      ));
+      roundDetail.append(roundState, lastPassage, nextPassage);
+      round.addEventListener("click", () => {
+        if (roundView.actionDisabled) return;
+        round.disabled = true;
+        round.setAttribute("aria-busy", "true");
+        roundState.textContent = roundView.enabled ? "Désactivation en cours…" : "Activation en cours…";
+        const mutation = buildProjectRoundMutation(project, "project-round-" + Date.now());
+        void requestProject("/v1/projects/round", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(mutation),
+        }).then(async () => {
+          await refreshProjects();
+          closeProjectContextMenu(false);
+        }).catch((error) => {
+          round.disabled = false;
+          round.setAttribute("aria-busy", "false");
+          roundState.textContent = roundView.stateLabel;
+          const errorMessage = String(error && error.message || "Modification de la ronde impossible.");
+          nextPassage.textContent = errorMessage;
+          nextPassage.dataset.state = "error";
+          nodes.sourceState.textContent = errorMessage;
+          nodes.sourceState.dataset.state = "error";
+        });
+      });
       const customize = make("button", "project-context-menu__item", "Personnaliser l’icône");
       customize.type = "button";
       customize.setAttribute("role", "menuitem");
@@ -7657,12 +7810,21 @@
         closeProjectContextMenu(false);
         removeProject(project);
       });
-      menu.append(heading, customize, make("div", "project-context-menu__separator"), remove);
+      menu.append(
+        heading,
+        round,
+        roundDetail,
+        make("div", "project-context-menu__separator"),
+        customize,
+        make("div", "project-context-menu__separator"),
+        remove,
+      );
       documentRef.body.append(menu);
       projectContextMenu = menu;
       projectContextTrigger = trigger;
       positionProjectContextMenu(anchor || trigger.getBoundingClientRect());
-      customize.focus();
+      if (round.disabled) customize.focus();
+      else round.focus();
     };
     const renderProjects = () => {
       nodes.projectList.replaceChildren();
@@ -7823,14 +7985,8 @@
       lastAgentsRenderSignature = null;
       return true;
     };
-    const projectStateLabel = (state) => {
-      if (state === "active") return "actif";
-      if (state === "disabled") return "retiré";
-      if (state === "path_missing") return "dossier introuvable";
-      return "indisponible";
-    };
     const projectStatusLabel = (project) => {
-      return projectStateLabel(project.state);
+      return projectRoundView(project).rowLabel;
     };
     const closeProjectOnboarding = () => {
       const dialog = nodes.projectOnboardingOverlay;
@@ -9835,6 +9991,8 @@
     applyControlCenterPreferences,
     controlCenterRouteForSearch,
     projectInitials,
+    projectRoundView,
+    buildProjectRoundMutation,
     defaultProjectPresentation,
     normalizeProjectPresentation,
     readProjectPresentationPreferences,
