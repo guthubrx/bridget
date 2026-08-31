@@ -107,7 +107,7 @@ async function verifyHostIdentity(profile) {
 function setConnectionMessage(message) { elements.connectionStatus.textContent = message; announce(message); }
 async function openPanel(profile, view = null) {
   const panel = await invoke("panel_open", view ? { profile_id: profile.id, view } : { profile_id: profile.id });
-  openPanelProfiles.add(panel.profile_id); document.body.classList.add("panel-view"); elements.showProfiles.hidden = false; renderActivePanels();
+  openPanelProfiles.clear(); openPanelProfiles.add(panel.profile_id); document.body.classList.add("panel-view"); elements.showProfiles.hidden = false; renderActivePanels();
   setConnectionMessage(view === "settings"
     ? `Les réglages de ${profile.label} sont affichés dans un panneau local isolé.`
     : `${profile.label} est affiché dans un panneau local isolé.`);

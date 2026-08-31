@@ -29,12 +29,20 @@ Le test UI vérifie que le centre contient l'overlay, la roue de bas de barre, l
 - Le test Desktop statique atteste les six branches et les appels `connectProfile` et `openServerSettings`.
 - Sonde SSH des arguments de production : `moi@cartae.app:2222` réussit. Le profil Carte enregistré en `Moi` est refusé par SSH et doit devenir `moi` après fermeture de l'application.
 
+## Correctif de duplication des panneaux et de l'icône
+
+- Cause confirmée : deux WebViews enfants étaient autorisées et redimensionnées à `largeur / nombre de panneaux`. Avec Loin et Carte ouverts, la fenêtre affichait donc deux interfaces reliées côte à côte.
+- Le registre Desktop est limité à un panneau. Toute ouverture ferme le panneau visible avant de créer le suivant, sans fermer le tunnel SSH associé.
+- `cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml panels` : PASS, 1 test.
+- `cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml --test two_panels` : PASS, 1 test.
+- `cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml --test desktop_commands` : PASS, 3 tests.
+- Le bundle macOS reconstruit contient `CFBundleIconFile=icon.icns` et `Contents/Resources/icon.icns`; sa signature ad hoc passe `codesign --verify --deep --strict`.
+
 ## Paquet macOS attesté
 
-- Bundle construit depuis `b48bfb3` : `/Users/moi/Downloads/Bridget.app`.
+- Bundle reconstruit avec un seul panneau distant et l'icône Bridget intégrée.
 - Manifeste vérifié : `CFBundleDisplayName=Bridget`, `CFBundleName=Bridget`, `CFBundleIdentifier=app.cartae.bridget-desktop`.
 - Intégrité locale : `codesign --verify --deep --strict` passe après signature ad hoc.
-- La copie active `/Applications/Bridget.app` n'a pas été écrasée et ne contient donc pas encore ce correctif.
 
 ## Vérification manuelle restante
 
@@ -43,6 +51,6 @@ Le test UI vérifie que le centre contient l'overlay, la roue de bas de barre, l
 3. Vérifier les titres, sous-titres, deux sélecteurs alignés à droite et les aperçus sous les lignes.
 4. Changer puis restaurer une préférence locale, et vérifier qu'aucune mutation serveur n'est déclenchée.
 5. Vérifier la page Serveur sans appliquer de réglage, puis Usage et facturation sans supposer un coût absent.
-6. Fermer Bridget, corriger le profil Carte de `Moi` vers `moi`, demander le remplacement explicite de `/Applications/Bridget.app` par le bundle corrigé, puis vérifier le raccourci de réglages par profil.
+6. Fermer Bridget, vérifier que Carte utilise `moi`, installer le bundle corrigé dans `/Applications/Bridget.app`, reconnecter Loin puis Carte et vérifier qu'un seul panneau pleine largeur reste visible et que l'icône Bridget est présente dans le Dock.
 
 Aucune validation visuelle ambiguë, aucun clic non confirmé et aucune opération de serveur non demandée ne sont comptés comme preuve d'acceptation.

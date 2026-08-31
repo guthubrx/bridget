@@ -283,6 +283,26 @@ pub fn run() {
         Ok(())
     }
 
+    fn close_open_panels(app: &tauri::AppHandle, state: &DesktopState) -> Result<(), String> {
+        let panels = {
+            let mut panels = state.panels.lock().map_err(as_message)?;
+            let labels = panels
+                .panels()
+                .map(|panel| panel.label.clone())
+                .collect::<Vec<_>>();
+            labels
+                .into_iter()
+                .filter_map(|label| panels.close(&label))
+                .collect::<Vec<_>>()
+        };
+        for panel in panels {
+            if let Some(webview) = app.get_webview(&panel.label) {
+                webview.close().map_err(as_message)?;
+            }
+        }
+        Ok(())
+    }
+
     fn close_connection_for_profile(
         app: &tauri::AppHandle,
         state: &DesktopState,
@@ -319,23 +339,16 @@ pub fn run() {
     fn arrange_panels(app: &tauri::AppHandle, panels: &PanelRegistry) -> Result<(), String> {
         let main = main_window(app)?;
         let size = main.inner_size().map_err(as_message)?;
-        let mut all = panels.panels().cloned().collect::<Vec<_>>();
-        all.sort_by(|left, right| left.label.cmp(&right.label));
-        if all.is_empty() {
+        let Some(panel) = panels.panels().next() else {
             return Ok(());
-        }
-        let count = u32::try_from(all.len()).map_err(|_| "Trop de panneaux ouverts.")?;
-        let width = (size.width / count).max(1);
-        let height = size.height.max(1);
-        for (index, panel) in all.into_iter().enumerate() {
-            if let Some(webview) = app.get_webview(&panel.label) {
-                webview
-                    .set_position(PhysicalPosition::new((index as u32 * width) as i32, 0_i32))
-                    .map_err(as_message)?;
-                webview
-                    .set_size(PhysicalSize::new(width, height))
-                    .map_err(as_message)?;
-            }
+        };
+        if let Some(webview) = app.get_webview(&panel.label) {
+            webview
+                .set_position(PhysicalPosition::new(0_i32, 0_i32))
+                .map_err(as_message)?;
+            webview
+                .set_size(PhysicalSize::new(size.width.max(1), size.height.max(1)))
+                .map_err(as_message)?;
         }
         Ok(())
     }
@@ -571,6 +584,7 @@ pub fn run() {
         } else {
             relay
         };
+        close_open_panels(&app, &state)?;
         let panel = {
             let mut panels = state.panels.lock().map_err(as_message)?;
             panels.open(profile_id.clone(), url).map_err(as_message)?

@@ -34,3 +34,14 @@ fn les_actions_de_carte_sont_delegatees_au_listing_de_profils() {
     assert!(frontend.contains("void connectProfile(profile)"));
     assert!(frontend.contains("void openServerSettings(profile)"));
 }
+
+#[test]
+fn un_seul_serveur_est_affiche_a_la_fois() {
+    let frontend = include_str!("../../ui/app.js");
+    let backend = include_str!("../src/lib.rs");
+    assert!(
+        frontend.contains("openPanelProfiles.clear(); openPanelProfiles.add(panel.profile_id)")
+    );
+    assert!(backend.contains("close_open_panels(&app, &state)?;"));
+    assert!(backend.contains("PhysicalSize::new(size.width.max(1), size.height.max(1))"));
+}

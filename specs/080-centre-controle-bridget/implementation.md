@@ -52,16 +52,22 @@ Le binaire release courant a été construit depuis ce worktree, installé dans 
 - Le test `desktop_commands::les_actions_de_carte_sont_delegatees_au_listing_de_profils` atteste les six branches d'action et échoue si la délégation ou les appels Connecter et Réglages disparaissent.
 - La sonde SSH avec les arguments exacts de Bridget atteste que `moi@cartae.app:2222` est joignable. Le profil local Carte contient encore `Moi` et devra être corrigé en `moi` après fermeture de Bridget, afin de ne pas faire réécrire l'état en mémoire.
 
+## Correctif de panneau unique et d'icône macOS
+
+- La fenêtre affichait deux copies du panneau lorsque deux profils étaient ouverts : le registre autorisait deux WebViews enfants et `arrange_panels` partageait la largeur de la fenêtre entre elles. Les deux serveurs aboutissaient au même relais, d'où deux interfaces visuellement identiques.
+- Bridget conserve désormais un seul panneau distant. L'ouverture d'un serveur ferme le panneau précédent et affiche le nouveau sur toute la fenêtre, sans fermer les tunnels déjà établis.
+- Le registre est limité à un panneau et les tests couvrent la limite, la fermeture du panneau précédent et le rendu pleine largeur.
+- `bridget.svg` est converti en `apps/bridget-desktop/src-tauri/icons/icon.icns`, déclaré dans `tauri.conf.json` et contrôlé dans le bundle macOS. Le paquet contient désormais `Contents/Resources/icon.icns` et `CFBundleIconFile=icon.icns`.
+
 ## Paquet macOS construit
 
-- Bundle : `Bridget.app`, reconstruit depuis le commit `b48bfb3` avec `cargo-tauri build --bundles app`.
+- Bundle : `Bridget.app`, reconstruit avec `cargo tauri build --bundles app` après le correctif de panneau unique et l'intégration de l'icône.
 - Manifeste : nom affiché et nom de bundle `Bridget`, identifiant `app.cartae.bridget-desktop`, version `0.1.0`.
+- Icône : `CFBundleIconFile=icon.icns` et `Contents/Resources/icon.icns` sont présents dans le bundle.
 - Signature : signature ad hoc vérifiée par `codesign --verify --deep --strict`. Le paquet n'est pas notarisé Apple, ce qui est attendu pour cette distribution interne.
-- Copie prête sans écrasement de l'application active : `/Users/moi/Downloads/Bridget.app`.
-- La copie `/Applications/Bridget.app` reste active et contient la version antérieure tant que l'opérateur ne l'a pas fermée et n'a pas demandé son remplacement.
 
 ## Limites explicites avant clôture
 
-- Le paquet corrigé est disponible dans `/Users/moi/Downloads/Bridget.app`, mais la copie `/Applications/Bridget.app` n'est pas encore remplacée car elle est ouverte.
+- Le paquet corrigé doit être installé dans `/Applications/Bridget.app` seulement après fermeture explicite de l'instance en cours, puis validé visuellement avec Loin et Carte.
 - La validation humaine de la vue Typographie après le portage T3 reste requise. Aucun résultat de clic ou de capture externe ambiguë n'est compté comme acceptation.
 - Les coûts restent indisponibles sans tarifs versionnés. Les filtres avancés, la courbe quotidienne et les autres réglages serveur écrits restent des tâches non cochées dans `tasks.md`.
