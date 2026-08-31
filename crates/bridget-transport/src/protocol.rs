@@ -1483,6 +1483,16 @@ pub enum WrapperToDaemon {
         issuer_scope: String,
         capabilities: Vec<ClientCapability>,
     },
+    /// Publication d'un artefact déjà sérialisé canoniquement. Le daemon
+    /// déduit le principal, le projet et le contexte de conversation de la
+    /// connexion wrapper observée, jamais de cette charge utile.
+    #[serde(rename = "artifact_publish")]
+    ArtifactPublish {
+        #[serde(rename = "v")]
+        contract_version: u8,
+        #[serde(with = "base64_bytes")]
+        canonical_publication: Vec<u8>,
+    },
     /// Négocie le contrat du service Maicie, uniquement après RoleAccepted(Service).
     ServiceHello {
         version: u16,
@@ -2196,6 +2206,21 @@ pub enum DaemonToWrapper {
     RuntimeIngressRejected { reason: RuntimeIngressRefusal },
     /// Le rôle demandé est accepté pour cette connexion.
     RoleAccepted { role: ConnectionRole },
+    /// Issue terminale et attestée d'une publication d'artefact. Les détails
+    /// techniques restent volontairement bornés : un appelant reçoit soit le
+    /// reçu signé par Bridget, soit un code et un message sûrs à afficher.
+    #[serde(rename = "artifact_publication_result")]
+    ArtifactPublicationResult {
+        #[serde(rename = "v")]
+        contract_version: u8,
+        replayed: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        receipt_json: Option<Vec<u8>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refusal_code: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refusal_message: Option<String>,
+    },
     /// Contrat et capacités réellement négociés avec un client public.
     ClientWelcome {
         version: u16,

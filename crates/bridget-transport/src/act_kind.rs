@@ -85,6 +85,12 @@ pub enum JournalUpdateKind {
     Command,
     File,
     Tool,
+    /// Publication attestée d'un artefact Bridget.
+    ///
+    /// Les pilotes qui ne savent journaliser qu'un appel d'outil continuent
+    /// d'émettre `tool`. La projection UI reconnaît également ce chemin et
+    /// l'affiche comme une publication, sans inventer une seconde timeline.
+    Artifact,
     /// Héritage Cursor / ACP d'avant le kind canonique `tool` (78d57dc).
     ///
     /// **Accepté en écriture** tant que des journaux ou fixtures legacy
@@ -107,6 +113,7 @@ impl JournalUpdateKind {
         Self::Command,
         Self::File,
         Self::Tool,
+        Self::Artifact,
         Self::ToolCallLegacy,
         Self::Plan,
         Self::Approval,
@@ -118,6 +125,7 @@ impl JournalUpdateKind {
         Self::Command,
         Self::File,
         Self::Tool,
+        Self::Artifact,
         Self::ToolCallLegacy,
         Self::Plan,
         Self::Approval,
@@ -129,6 +137,7 @@ impl JournalUpdateKind {
             Self::Command => "command",
             Self::File => "file",
             Self::Tool => "tool",
+            Self::Artifact => "artifact",
             Self::ToolCallLegacy => "tool_call",
             Self::Plan => "plan",
             Self::Approval => "approval",

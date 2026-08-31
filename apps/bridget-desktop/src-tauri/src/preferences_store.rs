@@ -10,7 +10,10 @@ use std::io::Write;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-const FORMAT_VERSION: u8 = 3;
+const FORMAT_VERSION: u8 = 5;
+pub const ARTIFACT_CACHE_SCOPE_LABEL: &str = "Ce Mac";
+pub const DEFAULT_ARTIFACT_CACHE_MAX_BYTES: u64 = 1024 * 1024 * 1024;
+pub const DEFAULT_ARTIFACT_CACHE_MAX_AGE_DAYS: u32 = 30;
 
 /// Autorisations d affichage strictement locales. Elles ne sont ni un jeton,
 /// ni une permission de tunnel, ni une capacité qu un serveur peut élargir.
@@ -20,6 +23,37 @@ pub struct ContentSecurityPreferences {
     pub external_links: bool,
     pub file_references: bool,
     pub remote_images: bool,
+}
+
+/// État de présentation du panneau droit, strictement local à ce Mac.
+/// Les cookies et autres secrets du WebView ne font jamais partie de ce type.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserPanelStateV1 {
+    pub right_panel_visible: bool,
+    pub right_panel_maximized: bool,
+    pub active_tab: String,
+    pub browser_session_mode: String,
+    pub browser_profile_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_project_scope: Option<String>,
+    /// Permet à Bridget de récupérer explicitement une source, jamais au
+    /// renderer de conversation ou au cadre sandboxé de le faire directement.
+    pub external_content_fetch_enabled: bool,
+}
+
+impl Default for BrowserPanelStateV1 {
+    fn default() -> Self {
+        Self {
+            right_panel_visible: false,
+            right_panel_maximized: false,
+            active_tab: "browser".to_owned(),
+            browser_session_mode: "persistent".to_owned(),
+            browser_profile_generation: 0,
+            last_project_scope: None,
+            external_content_fetch_enabled: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -39,6 +73,8 @@ pub struct DesktopPreferences {
     #[serde(default)]
     pub content_security: ContentSecurityPreferences,
     #[serde(default)]
+    pub browser_panel: BrowserPanelStateV1,
+    #[serde(default)]
     pub pinned_agent_keys: Vec<String>,
     #[serde(default)]
     pub unpinned_coordinator_keys: Vec<String>,
@@ -46,6 +82,19 @@ pub struct DesktopPreferences {
     pub sort_criteria: Vec<FleetSortCriterion>,
     #[serde(default)]
     pub collapsed_group_keys: Vec<String>,
+    /// Copie locale évictible. Bridget serveur conserve les contenus canoniques.
+    #[serde(default = "default_artifact_cache_max_bytes")]
+    pub artifact_cache_max_bytes: u64,
+    #[serde(default = "default_artifact_cache_max_age_days")]
+    pub artifact_cache_max_age_days: u32,
+}
+
+fn default_artifact_cache_max_bytes() -> u64 {
+    DEFAULT_ARTIFACT_CACHE_MAX_BYTES
+}
+
+fn default_artifact_cache_max_age_days() -> u32 {
+    DEFAULT_ARTIFACT_CACHE_MAX_AGE_DAYS
 }
 
 impl Default for DesktopPreferences {
@@ -56,10 +105,13 @@ impl Default for DesktopPreferences {
             timezone: "system".to_string(),
             font_size_px: 16,
             content_security: ContentSecurityPreferences::default(),
+            browser_panel: BrowserPanelStateV1::default(),
             pinned_agent_keys: Vec::new(),
             unpinned_coordinator_keys: Vec::new(),
             sort_criteria: Vec::new(),
             collapsed_group_keys: Vec::new(),
+            artifact_cache_max_bytes: DEFAULT_ARTIFACT_CACHE_MAX_BYTES,
+            artifact_cache_max_age_days: DEFAULT_ARTIFACT_CACHE_MAX_AGE_DAYS,
         }
     }
 }
@@ -124,7 +176,12 @@ impl PreferencesStore {
             Err(_) => return Ok(DesktopPreferences::default()),
         };
         match value.get("version").and_then(serde_json::Value::as_u64) {
-            Some(version) if version == u64::from(FORMAT_VERSION) || version == 2 => {
+            Some(version)
+                if version == u64::from(FORMAT_VERSION)
+                    || version == 4
+                    || version == 3
+                    || version == 2 =>
+            {
                 let document: PreferencesDocument = match serde_json::from_value(value) {
                     Ok(document) => document,
                     Err(_) => return Ok(DesktopPreferences::default()),
@@ -260,6 +317,9 @@ fn validate(preferences: &DesktopPreferences) -> Result<(), PreferencesStoreErro
                 "source" | "state" | "project" | "activity" | "name"
             ) && matches!(criterion.direction.as_str(), "asc" | "desc")
         });
+    let valid_artifact_cache = (64 * 1024 * 1024..=64 * 1024 * 1024 * 1024)
+        .contains(&preferences.artifact_cache_max_bytes)
+        && (1..=3_650).contains(&preferences.artifact_cache_max_age_days);
     if valid_name
         && valid_scheme
         && valid_timezone
@@ -268,11 +328,26 @@ fn validate(preferences: &DesktopPreferences) -> Result<(), PreferencesStoreErro
         && valid_collection(&preferences.unpinned_coordinator_keys)
         && valid_collection(&preferences.collapsed_group_keys)
         && valid_sort_criteria
+        && valid_artifact_cache
+        && valid_browser_panel(&preferences.browser_panel)
     {
         Ok(())
     } else {
         Err(PreferencesStoreError::InvalidPreferences)
     }
+}
+
+fn valid_browser_panel(panel: &BrowserPanelStateV1) -> bool {
+    let project_scope_valid = panel.last_project_scope.as_ref().is_none_or(|scope| {
+        !scope.trim().is_empty() && scope.len() <= 128 && !scope.chars().any(char::is_control)
+    });
+    matches!(
+        panel.active_tab.as_str(),
+        "browser" | "artifacts" | "files" | "links" | "activity"
+    ) && matches!(
+        panel.browser_session_mode.as_str(),
+        "persistent" | "ephemeral"
+    ) && project_scope_valid
 }
 
 #[cfg(test)]
@@ -294,6 +369,7 @@ mod tests {
                 file_references: false,
                 remote_images: true,
             },
+            browser_panel: BrowserPanelStateV1::default(),
             pinned_agent_keys: vec!["remote:coord".to_string()],
             unpinned_coordinator_keys: vec!["local:coord".to_string()],
             sort_criteria: vec![FleetSortCriterion {
@@ -301,6 +377,8 @@ mod tests {
                 direction: "desc".to_string(),
             }],
             collapsed_group_keys: vec!["source:Cartae".to_string()],
+            artifact_cache_max_bytes: 2 * 1024 * 1024 * 1024,
+            artifact_cache_max_age_days: 45,
         };
         store.save(preferences.clone()).unwrap();
         assert_eq!(store.load().unwrap(), preferences);
@@ -365,6 +443,46 @@ mod tests {
         assert!(loaded.content_security.file_references);
         assert!(loaded.pinned_agent_keys.is_empty());
         assert!(loaded.sort_criteria.is_empty());
+        assert_eq!(
+            loaded.artifact_cache_max_bytes,
+            DEFAULT_ARTIFACT_CACHE_MAX_BYTES
+        );
+        assert_eq!(
+            loaded.artifact_cache_max_age_days,
+            DEFAULT_ARTIFACT_CACHE_MAX_AGE_DAYS
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cache_artefact_est_local_borne_et_migre_depuis_v3() {
+        let root = std::env::temp_dir().join(format!("bridget-preferences-{}", Uuid::new_v4()));
+        let path = root.join("preferences.json");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            &path,
+            br#"{ "version": 3, "preferences": { "display_name": "", "color_scheme": "system", "timezone": "system", "font_size_px": 16 } }"#,
+        )
+        .unwrap();
+        let store = PreferencesStore::new(&path);
+        let preferences = store.load().unwrap();
+        assert_eq!(ARTIFACT_CACHE_SCOPE_LABEL, "Ce Mac");
+        assert_eq!(
+            preferences.artifact_cache_max_bytes,
+            DEFAULT_ARTIFACT_CACHE_MAX_BYTES
+        );
+        assert_eq!(
+            preferences.artifact_cache_max_age_days,
+            DEFAULT_ARTIFACT_CACHE_MAX_AGE_DAYS
+        );
+        assert!(
+            store
+                .save(DesktopPreferences {
+                    artifact_cache_max_bytes: 1,
+                    ..DesktopPreferences::default()
+                })
+                .is_err()
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

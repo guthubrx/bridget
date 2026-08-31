@@ -40,6 +40,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::artifact_policy::ArtifactPolicy;
+use crate::artifact_service::{ArtifactService, ArtifactServiceError};
+use crate::artifact_store::{ArtifactPersistResult, ArtifactPublicationContext};
+use crate::artifact_types::{ARTIFACT_CONTRACT_VERSION, ArtifactPublicationV1};
 use crate::execution_store::{
     ConditionalTransition, ControlCommandStatus, ControlReservation, ExecutionRecoveryOutcome,
     ExecutionStore, ExecutionUsageSample, ProviderBindingOutcome,
@@ -609,6 +613,24 @@ impl Default for DaemonConfig {
     }
 }
 
+impl DaemonConfig {
+    /// Racine des contenus canoniques, distincte du cache de sockets et logs.
+    ///
+    /// `BRIDGET_ARTIFACT_ROOT` fournit un override opérateur, uniquement
+    /// absolu. L'absence d'override choisit le répertoire de données durable
+    /// de Bridget, jamais `~/.cache/bridget`.
+    pub fn canonical_artifact_root(&self) -> Result<PathBuf, String> {
+        if let Some(raw) = std::env::var_os("BRIDGET_ARTIFACT_ROOT") {
+            let path = PathBuf::from(raw);
+            if !path.is_absolute() {
+                return Err("BRIDGET_ARTIFACT_ROOT doit être un chemin absolu".to_string());
+            }
+            return Ok(path);
+        }
+        Ok(dirs_data().join("bridget").join("artifacts"))
+    }
+}
+
 fn dirs_cache() -> PathBuf {
     let cache_dir = if let Ok(home) = std::env::var("HOME") {
         PathBuf::from(home).join(".cache").join("bridget")
@@ -638,6 +660,22 @@ fn dirs_cache() -> PathBuf {
     cache_dir
 }
 
+fn dirs_data() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join("Library/Application Support");
+        }
+    }
+    if let Some(path) = std::env::var_os("XDG_DATA_HOME") {
+        return PathBuf::from(path);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".local").join("share");
+    }
+    PathBuf::from("/tmp").join("bridget-data")
+}
+
 fn desired_state_path(config: &DaemonConfig) -> PathBuf {
     crate::desired_state::path_for_daemon_db(&config.db_path)
 }
@@ -663,6 +701,9 @@ struct DaemonState {
     /// fédéré ne peut pas les déduire, ni confondre deux redémarrages locaux.
     host: String,
     db_path: PathBuf,
+    /// Racine privée des contenus publiés par cette instance. Elle est
+    /// distincte du cache Desktop et ne sort jamais dans une réponse MCP.
+    artifact_root: PathBuf,
     /// Valeur éphémère créée une fois pour ce démarrage. Elle rend observable
     /// le remplacement d'un daemon même quand hôte, base et build sont égaux.
     instance_id: String,
@@ -2633,6 +2674,9 @@ impl DaemonState {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         std::fs::create_dir_all(config.socket_path.parent().unwrap())?;
         let mut store = Store::open(&config.db_path)?;
+        let artifact_root = config
+            .canonical_artifact_root()
+            .map_err(std::io::Error::other)?;
         let project_root_policy = match config.project_root_policy_path.as_deref() {
             Some(path) => ProjectRootPolicy::load(path),
             None => Err(ProjectRegistryRefusal::ProjectRootPolicyUnavailable),
@@ -2661,6 +2705,7 @@ impl DaemonState {
             fixture_root: None,
             host: crate::build_info::local_host(),
             db_path: config.db_path.clone(),
+            artifact_root,
             instance_id: Uuid::new_v4().to_string(),
             router: Router::new(),
             circuit_breaker: CircuitBreaker::new(
@@ -7795,6 +7840,31 @@ fn prune_agent_presence(state: &mut DaemonState, name: &str) {
     state.presences.retain(|_, presence| presence.name != name);
 }
 
+fn artifact_publication_success(
+    receipt: crate::artifact_types::ArtifactReceiptV1,
+    replayed: bool,
+) -> DaemonToWrapper {
+    DaemonToWrapper::ArtifactPublicationResult {
+        contract_version: ARTIFACT_CONTRACT_VERSION,
+        replayed,
+        receipt_json: Some(
+            serde_json::to_vec(&receipt).expect("le reçu d'artefact est sérialisable"),
+        ),
+        refusal_code: None,
+        refusal_message: None,
+    }
+}
+
+fn artifact_publication_refusal(code: &str, message: &str) -> DaemonToWrapper {
+    DaemonToWrapper::ArtifactPublicationResult {
+        contract_version: ARTIFACT_CONTRACT_VERSION,
+        replayed: false,
+        receipt_json: None,
+        refusal_code: Some(code.to_string()),
+        refusal_message: Some(message.to_string()),
+    }
+}
+
 /// Traite un message wrapper et retourne une réponse optionnelle.
 fn handle_wrapper_message(
     conn_id: &str,
@@ -7999,6 +8069,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ClientHello { .. }
+                | WrapperToDaemon::ArtifactPublish { .. }
                 | WrapperToDaemon::ProjectRoundRequest { .. }
                 | WrapperToDaemon::ProjectRoundDispatch { .. }
                 | WrapperToDaemon::RuntimeIngressHello { .. }
@@ -8153,6 +8224,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ServiceHello { .. }
+                | WrapperToDaemon::ArtifactPublish { .. }
                 | WrapperToDaemon::RuntimeIngressHello { .. }
                 | WrapperToDaemon::RuntimeIngressPreflight { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
@@ -8236,6 +8308,114 @@ fn handle_wrapper_message(
         | WrapperToDaemon::RuntimeIngressPreflight { .. } => {
             Some(DaemonToWrapper::RuntimeIngressRejected {
                 reason: RuntimeIngressRefusal::ReservationMissing,
+            })
+        }
+        WrapperToDaemon::ArtifactPublish {
+            contract_version,
+            canonical_publication,
+        } => {
+            if contract_version != ARTIFACT_CONTRACT_VERSION {
+                return Some(artifact_publication_refusal(
+                    "invalid_contract",
+                    "Version de contrat d'artefact non prise en charge.",
+                ));
+            }
+            let publication =
+                match serde_json::from_slice::<ArtifactPublicationV1>(&canonical_publication) {
+                    Ok(publication) if publication.canonical_bytes() == canonical_publication => {
+                        publication
+                    }
+                    Ok(_) => {
+                        return Some(artifact_publication_refusal(
+                            "invalid_payload",
+                            "La publication d'artefact doit être sérialisée canoniquement.",
+                        ));
+                    }
+                    Err(_) => {
+                        return Some(artifact_publication_refusal(
+                            "invalid_payload",
+                            "La publication d'artefact ne respecte pas le contrat attendu.",
+                        ));
+                    }
+                };
+            let (context, database_path, artifact_root) = {
+                let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                let Some(agent_name) = st.conn_names.get(conn_id).cloned() else {
+                    return Some(artifact_publication_refusal(
+                        "identity_unavailable",
+                        "La publication exige une identité d'agent enregistrée.",
+                    ));
+                };
+                let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
+                    return Some(artifact_publication_refusal(
+                        "identity_unavailable",
+                        "La publication exige une instance d'agent attestée.",
+                    ));
+                };
+                let Some(project) = st.fleet.project_for_agent(&agent_name) else {
+                    return Some(artifact_publication_refusal(
+                        "project_context_unavailable",
+                        "Cet agent n'est rattaché à aucun projet actif.",
+                    ));
+                };
+                let binding_matches = st
+                    .store
+                    .project_binding(&project.project_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|binding| {
+                        binding.state == crate::store::ProjectBindingState::Active
+                            && binding.generation == project.binding_generation
+                    });
+                if !binding_matches {
+                    return Some(artifact_publication_refusal(
+                        "project_binding_unavailable",
+                        "La liaison de projet n'est plus active ou n'est plus cohérente.",
+                    ));
+                }
+                let project_id = project.project_id;
+                let context = ArtifactPublicationContext {
+                    conversation_reference: format!("conversation:{project_id}:{agent_name}"),
+                    project_id,
+                    turn_reference: format!("turn:{}:{}", instance_id, publication.idempotency_key),
+                    created_by: format!("agent:{agent_name}"),
+                    origin_instance: format!("instance:{instance_id}"),
+                    observed_at: unix_timestamp(),
+                };
+                (context, st.db_path.clone(), st.artifact_root.clone())
+            };
+            let result =
+                ArtifactService::open(&database_path, &artifact_root, ArtifactPolicy::default())
+                    .and_then(|mut service| service.publish(context, publication));
+            Some(match result {
+                Ok(ArtifactPersistResult::Created(receipt)) => {
+                    artifact_publication_success(receipt, false)
+                }
+                Ok(ArtifactPersistResult::Replayed(receipt)) => {
+                    artifact_publication_success(receipt, true)
+                }
+                Err(ArtifactServiceError::PolicyBlocked) => artifact_publication_refusal(
+                    "publication_capacity_reached",
+                    "Le quota de contenus publiés est atteint. Aucun contenu existant n'a été supprimé.",
+                ),
+                Err(ArtifactServiceError::BlobUnavailable) => artifact_publication_refusal(
+                    "blob_unavailable",
+                    "Le contenu binaire annoncé n'est pas présent dans le magasin privé Bridget.",
+                ),
+                Err(ArtifactServiceError::Interrupted) => artifact_publication_refusal(
+                    "publication_interrupted",
+                    "La publication a été interrompue avant validation. Aucun artefact partiel n'a été créé.",
+                ),
+                Err(ArtifactServiceError::Validation(_)) => artifact_publication_refusal(
+                    "publication_refused",
+                    "La publication ne respecte pas les règles d'artefact et de provenance.",
+                ),
+                Err(ArtifactServiceError::Store(_) | ArtifactServiceError::BlobStore(_)) => {
+                    artifact_publication_refusal(
+                        "storage_unavailable",
+                        "Bridget ne peut pas enregistrer cet artefact pour le moment.",
+                    )
+                }
             })
         }
         WrapperToDaemon::ProjectRegistryRequest { request } => {
@@ -20337,6 +20517,123 @@ mod presence_tests {
         drop(target_reader);
         drop(shared);
         let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn publication_artefact_est_attestee_par_l_agent_et_le_projet_actif() {
+        let base = std::env::temp_dir().join(format!(
+            "bridget-artifact-publication-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let registry_home = base.join("home");
+        std::fs::create_dir_all(registry_home.join(".config/bridget")).unwrap();
+        let registry_file = registry_home.join(".config/bridget/agents.json");
+        std::fs::write(
+            &registry_file,
+            r#"{"agents":{"fixture":{"command":"/bin/sh","protocol":"acp","forbidden_env":[],"pass_env":[]}}}"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&registry_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let config = DaemonConfig {
+            socket_path: base.join("bridget.sock"),
+            db_path: base.join("bridget.db"),
+            log_path: base.join("daemon.log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+            project_root_policy_path: None,
+            project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
+        };
+        let _home_lock = HOME_REGISTRY_LOCK.lock().unwrap();
+        let previous_home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", &registry_home) };
+        let (managed_tx, _managed_rx) = mpsc::channel();
+        let state_result = DaemonState::new(&config, managed_tx);
+        if let Some(home) = previous_home {
+            unsafe { std::env::set_var("HOME", home) };
+        } else {
+            unsafe { std::env::remove_var("HOME") };
+        }
+        let mut state = state_result.unwrap();
+        let agent_id = "a3d27a89-80d5-4e0f-9b84-cf5523ecb026";
+        let now = unix_timestamp();
+        state
+            .conn_names
+            .insert("conn-1".to_string(), agent_id.to_string());
+        state
+            .conn_instances
+            .insert("conn-1".to_string(), "instance-artifact".to_string());
+        state.artifact_root = config.db_path.with_extension("artifacts");
+        state
+            .store
+            .bind_project_registration(
+                "register-artifact-project",
+                "project-artifact",
+                "/srv/projects/artifact",
+                now,
+            )
+            .unwrap();
+        let order = FleetSpawnOrder {
+            agent_type: "fixture".to_string(),
+            requested_name: Some(agent_id.to_string()),
+            cwd: PathBuf::from("/srv/projects/artifact"),
+            persistent: false,
+            project: Some(ProjectReference {
+                project_id: "project-artifact".to_string(),
+                binding_generation: 1,
+            }),
+            command_id: "spawn-artifact-agent".to_string(),
+            issued_at: now,
+            deadline_at: now + 60,
+            ownership: None,
+        };
+        assert!(matches!(
+            state.fleet.request_spawn(&order, now).unwrap(),
+            crate::fleet::SpawnSubmission::Start(_)
+        ));
+        let publication: ArtifactPublicationV1 = serde_json::from_str(include_str!(
+            "../tests/fixtures/artifacts/chart-external-v1.json"
+        ))
+        .unwrap();
+        let shared = Arc::new(Mutex::new(state));
+        let response = handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::ArtifactPublish {
+                contract_version: ARTIFACT_CONTRACT_VERSION,
+                canonical_publication: publication.canonical_bytes(),
+            },
+            &shared,
+        );
+        assert!(matches!(
+            response,
+            Some(DaemonToWrapper::ArtifactPublicationResult {
+                receipt_json: Some(_),
+                refusal_code: None,
+                ..
+            })
+        ));
+        let response = handle_wrapper_message(
+            "conn-1",
+            WrapperToDaemon::ArtifactPublish {
+                contract_version: ARTIFACT_CONTRACT_VERSION,
+                canonical_publication: publication.canonical_bytes(),
+            },
+            &shared,
+        );
+        assert!(matches!(
+            response,
+            Some(DaemonToWrapper::ArtifactPublicationResult {
+                replayed: true,
+                receipt_json: Some(_),
+                ..
+            })
+        ));
+        drop(shared);
+        let _ = std::fs::remove_dir_all(base);
     }
 
     /// ré-annonce un tour ouvert via Register. Sans `turn_in_progress=true`,

@@ -464,6 +464,18 @@ impl FleetSupervisor {
             .clone()
     }
 
+    /// Retourne uniquement le binding de projet de l'agent actuellement
+    /// supervisé. Cette lecture mémoire est l'attestation qui lie une
+    /// publication à son projet : aucun wrapper ne peut l'indiquer lui-même.
+    pub(crate) fn project_for_agent(&self, agent_name: &str) -> Option<ProjectReference> {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let command_id = inner.active_by_name.get(agent_name)?;
+        inner.active_by_command.get(command_id)?.project.clone()
+    }
+
     /// Consultation mémoire sans second lookup SQLite. Utilisée pendant la
     /// phase Recovering : une clé connue doit conserver son chemin de rejeu,
     /// tandis qu'une clé neuve est refusée sans créer d'état opérationnel.

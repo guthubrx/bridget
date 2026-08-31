@@ -40,12 +40,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const UI_VERSION: u8 = 1;
 const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
-const MAX_HTTP_BODY_BYTES: usize = 64 * 1024;
+const MAX_HTTP_BODY_BYTES: usize = 192 * 1024;
 const MAX_UI_AGENT_NAME_BYTES: usize = 100;
 const MAX_UI_COMMAND_ID_BYTES: usize = 160;
 const MAX_UI_SSE_EVENTS: usize = 20_000;
 const MAX_UI_RECONNECT_ATTEMPTS: usize = 50;
 const MAX_UI_FILE_PREVIEW_BYTES: u64 = 256 * 1024;
+const MAX_UI_ARTIFACT_RESPONSE_BYTES: usize = 512 * 1024;
+const MAX_UI_ARTIFACT_EXPORT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_UI_ARTIFACT_PAGE_ROWS: usize = 100;
+const UI_SANDBOX_TICKET_TTL: Duration = Duration::from_secs(60);
 const UI_RECONNECT_DELAY: Duration = Duration::from_millis(100);
 /// La rétention des présences côté daemon s'appuie sur `link_seen`, rafraîchi
 /// par le heartbeat. Une présence qui ne bat pas est donc jetée au bout de
@@ -76,10 +80,15 @@ pub const DEFAULT_UI_PORT: u16 = 17888;
 const UI_ENDPOINT_STATE_VERSION: u8 = 1;
 const UI_INDEX: &[u8] = include_bytes!("../assets/ui/index.html");
 const UI_SCRIPT: &[u8] = include_bytes!("../assets/ui/app.js");
+const UI_ARTIFACT_RENDERER: &[u8] = include_bytes!("../assets/ui/artifact-renderer.js");
+const UI_ARTIFACT_SANDBOX_HOST: &[u8] = include_bytes!("../assets/ui/artifact-sandbox-host.js");
 const UI_THEME: &[u8] = include_bytes!("../assets/ui/theme.css");
 const UI_MARKED: &[u8] = include_bytes!("../assets/ui/vendor/marked.min.js");
 const UI_PURIFY: &[u8] = include_bytes!("../assets/ui/vendor/purify.min.js");
 const UI_HIGHLIGHT: &[u8] = include_bytes!("../assets/ui/vendor/highlight.min.js");
+const UI_ECHARTS: &[u8] = include_bytes!("../assets/ui/vendor/echarts.min.js");
+const UI_TABULATOR: &[u8] = include_bytes!("../assets/ui/vendor/tabulator.min.js");
+const UI_TABULATOR_CSS: &[u8] = include_bytes!("../assets/ui/vendor/tabulator.min.css");
 const UI_HIGHLIGHT_GITHUB_DARK: &[u8] =
     include_bytes!("../assets/ui/vendor/highlight-github-dark.min.css");
 const UI_HIGHLIGHT_GITHUB_LIGHT: &[u8] =
@@ -285,10 +294,19 @@ impl From<std::io::Error> for UiError {
 struct UiRelayRuntime {
     human_presence: Mutex<Option<UiHumanPresence>>,
     human_presence_channel: Option<String>,
+    sandbox_tickets: Mutex<HashMap<String, UiArtifactSandboxTicketV1>>,
 }
 
 struct UiHumanPresence {
     alive: Arc<AtomicBool>,
+}
+
+#[derive(Clone)]
+struct UiArtifactSandboxTicketV1 {
+    project_id: String,
+    agent: String,
+    version_ref: String,
+    expires_at: Instant,
 }
 
 impl UiRelayRuntime {
@@ -296,7 +314,41 @@ impl UiRelayRuntime {
         Self {
             human_presence: Mutex::new(None),
             human_presence_channel,
+            sandbox_tickets: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn issue_sandbox_ticket(
+        &self,
+        project_id: String,
+        agent: String,
+        version_ref: String,
+    ) -> String {
+        let ticket = uuid::Uuid::new_v4().simple().to_string();
+        let mut tickets = self
+            .sandbox_tickets
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        tickets.retain(|_, value| value.expires_at > Instant::now());
+        tickets.insert(
+            ticket.clone(),
+            UiArtifactSandboxTicketV1 {
+                project_id,
+                agent,
+                version_ref,
+                expires_at: Instant::now() + UI_SANDBOX_TICKET_TTL,
+            },
+        );
+        ticket
+    }
+
+    fn resolve_sandbox_ticket(&self, ticket: &str) -> Option<UiArtifactSandboxTicketV1> {
+        let mut tickets = self
+            .sandbox_tickets
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        tickets.retain(|_, value| value.expires_at > Instant::now());
+        tickets.get(ticket).cloned()
     }
 
     fn ensure_human_presence(&self, socket_path: &Path) -> Result<(), UiError> {
@@ -567,10 +619,34 @@ struct UiSnapshotV1 {
     /// Absentes hors focus ; présentes (éventuellement vides) dès qu'un agent est ciblé.
     #[serde(skip_serializing_if = "Option::is_none")]
     thread_messages: Option<Vec<UiThreadMessageV1>>,
+    /// Références de versions exactes publiées dans le fil de l'agent focal.
+    /// Les données complètes restent derrière une route relayée, afin de ne
+    /// pas gonfler le snapshot ni exposer les chemins canoniques.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    artifact_references: Option<UiArtifactReferenceProjectionV1>,
     open_requests: Vec<bridget_transport::protocol::RequestInfo>,
     missions: MissionProjectionV1,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     recovery_losses: Vec<UiRecoveryLossV1>,
+}
+
+#[derive(Debug, Serialize)]
+struct UiArtifactReferenceProjectionV1 {
+    state: &'static str,
+    items: Vec<UiArtifactReferenceV1>,
+}
+
+#[derive(Debug, Serialize)]
+struct UiArtifactReferenceV1 {
+    reference_id: String,
+    artifact_ref: String,
+    version_ref: String,
+    turn_reference: String,
+    kind: crate::artifact_types::ArtifactKind,
+    title: String,
+    state: crate::artifact_types::ArtifactState,
+    pinned: bool,
+    created_at: i64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -910,6 +986,87 @@ struct UiSendErrorV1 {
 }
 
 #[derive(Debug, Serialize)]
+struct UiArtifactListV1 {
+    version: u8,
+    scope: &'static str,
+    items: Vec<crate::artifact_store::ArtifactListItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiArtifactShareRequestV1 {
+    version: u8,
+    agent: String,
+    version_ref: String,
+    target_agent: String,
+}
+
+#[derive(Debug, Serialize)]
+struct UiArtifactShareAcceptedV1 {
+    version: u8,
+    reference_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiArtifactLifecycleRequestV1 {
+    version: u8,
+    agent: String,
+    version_ref: String,
+    action: String,
+    #[serde(default)]
+    pinned: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct UiArtifactLifecycleAcceptedV1 {
+    version: u8,
+    action: String,
+    artifact_ref: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiArtifactSandboxSaveRequestV1 {
+    version: u8,
+    agent: String,
+    version_ref: String,
+    ui_state: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+struct UiArtifactSandboxSaveAcceptedV1 {
+    version: u8,
+    artifact_ref: String,
+    version_ref: String,
+    parent_version_ref: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiArtifactSandboxTicketRequestV1 {
+    version: u8,
+    agent: String,
+    version_ref: String,
+}
+
+#[derive(Debug, Serialize)]
+struct UiArtifactSandboxTicketAcceptedV1 {
+    version: u8,
+    ticket: String,
+    expires_in_seconds: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct UiArtifactSandboxReadV1 {
+    version: u8,
+    artifact_ref: String,
+    version_ref: String,
+    html: String,
+    data: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
 struct UiRelayStateV1 {
     version: u8,
     kind: &'static str,
@@ -1142,6 +1299,39 @@ struct UiFilePreviewV1 {
     sha256: String,
 }
 
+#[derive(Debug, Serialize)]
+struct UiArtifactDetailV1 {
+    version: u8,
+    item: crate::artifact_store::ArtifactListItem,
+    is_current: bool,
+    publication: crate::artifact_types::ArtifactPublicationV1,
+    content_digest: String,
+    payload_digest: String,
+    provenance_digest: String,
+    parent_version_ref: Option<String>,
+    quality_notices: Vec<String>,
+    publication_reason: String,
+}
+
+#[derive(Debug, Serialize)]
+struct UiArtifactDataPageV1 {
+    version: u8,
+    version_ref: String,
+    offset: usize,
+    limit: usize,
+    has_more: bool,
+    data: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+struct UiArtifactMetricsV1 {
+    version: u8,
+    canonical_blob_bytes: u64,
+    publication_failures: u64,
+    restored_versions: u64,
+    evictions: u64,
+}
+
 #[derive(Serialize)]
 struct UiRecoveryLossV1 {
     display_name: String,
@@ -1197,6 +1387,22 @@ fn serve_connection(
                     if_none_match,
                 );
             }
+            "/artifact-renderer.js" => {
+                return write_asset(
+                    stream,
+                    "application/javascript; charset=utf-8",
+                    UI_ARTIFACT_RENDERER,
+                    if_none_match,
+                );
+            }
+            "/artifact-sandbox-host.js" => {
+                return write_asset(
+                    stream,
+                    "application/javascript; charset=utf-8",
+                    UI_ARTIFACT_SANDBOX_HOST,
+                    if_none_match,
+                );
+            }
             "/theme.css" => {
                 return write_asset(stream, "text/css; charset=utf-8", UI_THEME, if_none_match);
             }
@@ -1221,6 +1427,30 @@ fn serve_connection(
                     stream,
                     "application/javascript; charset=utf-8",
                     UI_HIGHLIGHT,
+                    if_none_match,
+                );
+            }
+            "/vendor/echarts.min.js" => {
+                return write_asset(
+                    stream,
+                    "application/javascript; charset=utf-8",
+                    UI_ECHARTS,
+                    if_none_match,
+                );
+            }
+            "/vendor/tabulator.min.js" => {
+                return write_asset(
+                    stream,
+                    "application/javascript; charset=utf-8",
+                    UI_TABULATOR,
+                    if_none_match,
+                );
+            }
+            "/vendor/tabulator.min.css" => {
+                return write_asset(
+                    stream,
+                    "text/css; charset=utf-8",
+                    UI_TABULATOR_CSS,
                     if_none_match,
                 );
             }
@@ -1623,6 +1853,166 @@ fn serve_connection(
         ("POST", "/v1/search") => match post_ui_search(config, &request.body) {
             Ok(response) => write_json(stream, 200, &response),
             Err((status, message)) => write_text(stream, status, message),
+        },
+        ("GET", "/v1/artifacts/list") => match read_artifact_list(config, &request.query, false) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("GET", "/v1/artifacts/search") => match read_artifact_list(config, &request.query, true) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("GET", "/v1/artifacts/metrics") => match read_artifact_metrics(config, &request.query) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("POST", "/v1/artifacts/share") => match post_artifact_share(config, &request.body) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("POST", "/v1/artifacts/lifecycle") => {
+            match post_artifact_lifecycle(config, &request.body) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("POST", "/v1/artifacts/sandbox/save") => {
+            match post_artifact_sandbox_save(config, &request.body) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("POST", "/v1/artifacts/sandbox/ticket") => {
+            match post_artifact_sandbox_ticket(config, runtime, &request.body) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("GET", "/v1/artifacts/sandbox/read") => {
+            match read_artifact_sandbox_ticket(config, runtime, request.query.get("ticket")) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("GET", "/v1/artifacts/detail") => {
+            match read_artifact_detail(
+                config,
+                request.query.get("agent"),
+                request.query.get("version"),
+            ) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("GET", "/v1/artifacts/data") => match read_artifact_data_page(config, &request.query) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("GET", "/v1/artifacts/export") => match artifact_export(config, &request.query) {
+            Ok((content_type, bytes, filename)) => {
+                write_binary(stream, 200, content_type, &bytes, Some(&filename))
+            }
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("GET", "/v1/artifacts/blob") => match read_artifact_blob(config, &request.query) {
+            Ok((content_type, bytes)) => write_binary(stream, 200, content_type, &bytes, None),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
         },
         ("GET", "/v1/snapshot") => {
             let focus_agent = request.query.get("agent").map(String::as_str);
@@ -3705,6 +4095,983 @@ fn ledger_db_path_for_socket(socket_path: &Path) -> PathBuf {
     socket_path.with_extension("db")
 }
 
+/// Déduit le seul projet lisible dans le contexte d'un agent depuis la
+/// projection attestée du daemon. Aucune route d'artefact n'accepte de projet
+/// fourni par le navigateur.
+fn artifact_project_for_agent(
+    agents: &[bridget_transport::protocol::AgentInfo],
+    agent: &str,
+) -> Option<String> {
+    agents
+        .iter()
+        .find(|candidate| candidate.agent_id == agent)
+        .and_then(|candidate| candidate.agent_link.as_ref())
+        .and_then(|link| link.project.as_ref())
+        .map(|project| project.project_id.clone())
+}
+
+fn read_artifact_references(
+    config: &UiRelayConfig,
+    agents: &[bridget_transport::protocol::AgentInfo],
+    agent: &str,
+) -> UiArtifactReferenceProjectionV1 {
+    let Some(project_id) = artifact_project_for_agent(agents, agent) else {
+        return UiArtifactReferenceProjectionV1 {
+            state: "not_scoped",
+            items: Vec::new(),
+        };
+    };
+    let conversation_reference = format!("conversation:{project_id}:{agent}");
+    let Ok(store) = crate::artifact_store::ArtifactStore::open(&ledger_db_path_for_socket(
+        &config.daemon_socket,
+    )) else {
+        return UiArtifactReferenceProjectionV1 {
+            state: "unavailable",
+            items: Vec::new(),
+        };
+    };
+    let Ok(references) =
+        store.list_conversation_references(&project_id, &conversation_reference, 200)
+    else {
+        return UiArtifactReferenceProjectionV1 {
+            state: "unavailable",
+            items: Vec::new(),
+        };
+    };
+    UiArtifactReferenceProjectionV1 {
+        state: "ready",
+        items: references
+            .into_iter()
+            .map(|reference| UiArtifactReferenceV1 {
+                reference_id: reference.reference_id,
+                artifact_ref: reference.artifact_ref,
+                version_ref: reference.version_ref,
+                turn_reference: reference.turn_reference,
+                kind: reference.kind,
+                title: reference.title,
+                state: reference.state,
+                pinned: reference.pinned,
+                created_at: reference.version_created_at,
+            })
+            .collect(),
+    }
+}
+
+type UiArtifactError = (u16, &'static str, String);
+
+fn artifact_version_from_query(value: Option<&str>) -> Result<String, UiArtifactError> {
+    let Some(value) = value else {
+        return Err((
+            400,
+            "artifact_version_missing",
+            "Version d’artefact absente.".to_string(),
+        ));
+    };
+    // La grammaire volontairement restrictive de l'URL relayée n'accepte pas
+    // `:`. Les références canoniques utilisent ce caractère, donc la vue les
+    // transporte sous la forme réversible `artifact-version.<uuid>` et ne
+    // laisse jamais passer une chaîne arbitraire vers SQLite.
+    let Some(suffix) = value.strip_prefix("artifact-version.") else {
+        return Err((
+            400,
+            "artifact_version_invalid",
+            "Version d’artefact invalide.".to_string(),
+        ));
+    };
+    if suffix.is_empty()
+        || suffix.len() > 128
+        || !suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err((
+            400,
+            "artifact_version_invalid",
+            "Version d’artefact invalide.".to_string(),
+        ));
+    }
+    Ok(format!("artifact-version:{suffix}"))
+}
+
+fn artifact_ui_scope(
+    config: &UiRelayConfig,
+    agent: Option<&String>,
+) -> Result<(String, String), UiArtifactError> {
+    let Some(agent) = agent else {
+        return Err((
+            400,
+            "artifact_agent_missing",
+            "Agent requis pour consulter un artefact.".to_string(),
+        ));
+    };
+    validate_agent(agent).map_err(|_| {
+        (
+            400,
+            "artifact_agent_invalid",
+            "Agent d’artefact invalide.".to_string(),
+        )
+    })?;
+    let facts = read_bridget_snapshot(&config.daemon_socket).map_err(|_| {
+        (
+            503,
+            "artifact_scope_unavailable",
+            "Le contexte projet Bridget est temporairement indisponible.".to_string(),
+        )
+    })?;
+    let Some(project_id) = artifact_project_for_agent(&facts.agents, agent) else {
+        return Err((
+            403,
+            "artifact_project_unavailable",
+            "Cet agent n’est rattaché à aucun projet actif.".to_string(),
+        ));
+    };
+    Ok((project_id, agent.clone()))
+}
+
+fn open_artifact_store_for_ui(
+    config: &UiRelayConfig,
+) -> Result<crate::artifact_store::ArtifactStore, UiArtifactError> {
+    crate::artifact_store::ArtifactStore::open(&ledger_db_path_for_socket(&config.daemon_socket))
+        .map_err(|_| {
+            (
+                503,
+                "artifact_store_unavailable",
+                "Le magasin d’artefacts est temporairement indisponible.".to_string(),
+            )
+        })
+}
+
+fn read_artifact_detail(
+    config: &UiRelayConfig,
+    agent: Option<&String>,
+    version: Option<&String>,
+) -> Result<UiArtifactDetailV1, UiArtifactError> {
+    let (project_id, _) = artifact_ui_scope(config, agent)?;
+    let version_ref = artifact_version_from_query(version.map(String::as_str))?;
+    let store = open_artifact_store_for_ui(config)?;
+    let detail = store
+        .version_detail(&project_id, &version_ref)
+        .map_err(|_| {
+            (
+                503,
+                "artifact_detail_unavailable",
+                "Le détail de l’artefact est momentanément indisponible.".to_string(),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                404,
+                "artifact_not_found",
+                "Cette version d’artefact est introuvable dans le projet de l’agent.".to_string(),
+            )
+        })?;
+    Ok(UiArtifactDetailV1 {
+        version: UI_VERSION,
+        item: detail.item,
+        is_current: detail.is_current,
+        publication: detail.publication,
+        content_digest: detail.content_digest,
+        payload_digest: detail.payload_digest,
+        provenance_digest: detail.provenance_digest,
+        parent_version_ref: detail.parent_version_ref,
+        quality_notices: detail.quality_notices,
+        publication_reason: detail.publication_reason,
+    })
+}
+
+fn artifact_list_limit(query: &HashMap<String, String>) -> Result<usize, UiArtifactError> {
+    query
+        .get("limit")
+        .map(|value| value.parse::<usize>())
+        .transpose()
+        .map_err(|_| {
+            (
+                400,
+                "artifact_list_invalid",
+                "Limite de liste d’artefacts invalide.".to_string(),
+            )
+        })
+        .map(|value| value.unwrap_or(50).clamp(1, 100))
+}
+
+fn read_artifact_list(
+    config: &UiRelayConfig,
+    query: &HashMap<String, String>,
+    is_search: bool,
+) -> Result<UiArtifactListV1, UiArtifactError> {
+    let agent = query.get("agent");
+    let (project_id, _) = artifact_ui_scope(config, agent)?;
+    let limit = artifact_list_limit(query)?;
+    let requested_scope = query.get("scope").map(String::as_str).unwrap_or("project");
+    let projects = match requested_scope {
+        "project" => vec![project_id],
+        "all" => {
+            let facts = read_bridget_snapshot(&config.daemon_socket).map_err(|_| {
+                (
+                    503,
+                    "artifact_scope_unavailable",
+                    "La portée globale Bridget est momentanément indisponible.".to_string(),
+                )
+            })?;
+            let mut scoped = facts
+                .agents
+                .iter()
+                .filter_map(|candidate| {
+                    candidate
+                        .agent_link
+                        .as_ref()
+                        .and_then(|link| link.project.as_ref())
+                        .map(|project| project.project_id.clone())
+                })
+                .collect::<Vec<_>>();
+            scoped.sort();
+            scoped.dedup();
+            if scoped.is_empty() {
+                return Err((
+                    403,
+                    "artifact_global_scope_empty",
+                    "Aucun projet actif n’est disponible pour la recherche globale.".to_string(),
+                ));
+            }
+            scoped
+        }
+        _ => {
+            return Err((
+                400,
+                "artifact_scope_invalid",
+                "Portée d’artefacts invalide.".to_string(),
+            ));
+        }
+    };
+    let search_query = query.get("query").map(String::as_str).unwrap_or_default();
+    let store = open_artifact_store_for_ui(config)?;
+    let mut items = Vec::new();
+    for scoped_project in &projects {
+        let mut page = if is_search {
+            store.search_project(scoped_project, search_query, limit, None)
+        } else {
+            store.list_project(scoped_project, limit, None)
+        }
+        .map_err(|_| {
+            (
+                503,
+                "artifact_list_unavailable",
+                "La liste des artefacts est momentanément indisponible.".to_string(),
+            )
+        })?;
+        items.append(&mut page);
+    }
+    items.sort_by(|left, right| {
+        right
+            .version_created_at
+            .cmp(&left.version_created_at)
+            .then_with(|| left.version_ref.cmp(&right.version_ref))
+    });
+    items.truncate(limit);
+    Ok(UiArtifactListV1 {
+        version: UI_VERSION,
+        scope: if requested_scope == "all" {
+            "all"
+        } else {
+            "project"
+        },
+        items,
+    })
+}
+
+fn post_artifact_share(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiArtifactShareAcceptedV1, UiArtifactError> {
+    let request: UiArtifactShareRequestV1 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "artifact_share_invalid",
+            "Demande de partage d’artefact invalide.".to_string(),
+        )
+    })?;
+    if request.version != UI_VERSION {
+        return Err((
+            400,
+            "artifact_share_invalid",
+            "Version de demande de partage invalide.".to_string(),
+        ));
+    }
+    validate_agent(&request.target_agent).map_err(|_| {
+        (
+            400,
+            "artifact_share_target_invalid",
+            "Destinataire de partage invalide.".to_string(),
+        )
+    })?;
+    let (project_id, _) = artifact_ui_scope(config, Some(&request.agent))?;
+    let version_ref = artifact_version_from_query(Some(&request.version_ref))?;
+    let reference_id = open_artifact_store_for_ui(config)?
+        .share_with_agent(
+            &project_id,
+            &version_ref,
+            &request.target_agent,
+            "operator:ui",
+            now_secs(),
+        )
+        .map_err(|_| {
+            (
+                404,
+                "artifact_share_not_found",
+                "Cette version ne peut pas être partagée depuis le projet actif.".to_string(),
+            )
+        })?;
+    Ok(UiArtifactShareAcceptedV1 {
+        version: UI_VERSION,
+        reference_id,
+    })
+}
+
+fn open_artifact_service_for_ui(
+    config: &UiRelayConfig,
+) -> Result<crate::artifact_service::ArtifactService, UiArtifactError> {
+    // Le daemon dérive la racine canonique de sa base (`*.db` ->
+    // `*.artifacts`). Le relais doit reprendre exactement cette dérivation
+    // depuis sa socket, jamais celle d'un autre profil Desktop par défaut.
+    let database_path = ledger_db_path_for_socket(&config.daemon_socket);
+    let artifact_root = database_path.with_extension("artifacts");
+    crate::artifact_service::ArtifactService::open(
+        &database_path,
+        &artifact_root,
+        crate::artifact_policy::ArtifactPolicy::default(),
+    )
+    .map_err(|_| {
+        (
+            503,
+            "artifact_service_unavailable",
+            "Le service d’artefacts est temporairement indisponible.".to_string(),
+        )
+    })
+}
+
+fn read_artifact_metrics(
+    config: &UiRelayConfig,
+    query: &HashMap<String, String>,
+) -> Result<UiArtifactMetricsV1, UiArtifactError> {
+    // La portée agent est vérifiée même si les compteurs ne contiennent aucun
+    // contenu sensible : le relais n'est jamais une API de métriques anonyme.
+    let _ = artifact_ui_scope(config, query.get("agent"))?;
+    let metrics = open_artifact_service_for_ui(config)?
+        .persisted_metrics()
+        .map_err(artifact_service_error_response)?;
+    Ok(UiArtifactMetricsV1 {
+        version: UI_VERSION,
+        canonical_blob_bytes: metrics.canonical_blob_bytes,
+        publication_failures: metrics.publication_failures,
+        restored_versions: metrics.restored_versions,
+        evictions: metrics.evictions,
+    })
+}
+
+fn artifact_service_error_response(
+    error: crate::artifact_service::ArtifactServiceError,
+) -> UiArtifactError {
+    match error {
+        crate::artifact_service::ArtifactServiceError::BlobUnavailable => (
+            409,
+            "artifact_blob_missing",
+            "Le contenu canonique est absent. Vous pouvez réessayer une restauration par Bridget."
+                .to_string(),
+        ),
+        crate::artifact_service::ArtifactServiceError::Interrupted => (
+            409,
+            "artifact_operation_interrupted",
+            "L’opération a été interrompue avant toute nouvelle version. Vous pouvez demander à l’agent de reprendre."
+                .to_string(),
+        ),
+        crate::artifact_service::ArtifactServiceError::PolicyBlocked => (
+            409,
+            "artifact_quota_blocked",
+            "La conservation canonique est bloquée par son quota.".to_string(),
+        ),
+        crate::artifact_service::ArtifactServiceError::Validation(_) => (
+            400,
+            "artifact_validation_refused",
+            "L’action d’artefact a été refusée par sa validation.".to_string(),
+        ),
+        crate::artifact_service::ArtifactServiceError::Store(_) => (
+            409,
+            "artifact_lifecycle_conflict",
+            "L’action ne peut pas être appliquée à cette version.".to_string(),
+        ),
+        crate::artifact_service::ArtifactServiceError::BlobStore(_) => (
+            503,
+            "artifact_storage_unavailable",
+            "Le stockage canonique est temporairement indisponible.".to_string(),
+        ),
+    }
+}
+
+fn post_artifact_lifecycle(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiArtifactLifecycleAcceptedV1, UiArtifactError> {
+    let request: UiArtifactLifecycleRequestV1 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "artifact_lifecycle_invalid",
+            "Action d’artefact invalide.".to_string(),
+        )
+    })?;
+    if request.version != UI_VERSION {
+        return Err((
+            400,
+            "artifact_lifecycle_invalid",
+            "Version d’action d’artefact invalide.".to_string(),
+        ));
+    }
+    let (project_id, _) = artifact_ui_scope(config, Some(&request.agent))?;
+    let version_ref = artifact_version_from_query(Some(&request.version_ref))?;
+    let store = open_artifact_store_for_ui(config)?;
+    let artifact_ref = store
+        .artifact_ref_for_version(&project_id, &version_ref)
+        .map_err(|_| {
+            (
+                503,
+                "artifact_lifecycle_unavailable",
+                "L’action d’artefact est momentanément indisponible.".to_string(),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                404,
+                "artifact_not_found",
+                "Cette version est introuvable dans le projet actif.".to_string(),
+            )
+        })?;
+    drop(store);
+    match request.action.as_str() {
+        "pin" | "unpin" => {
+            let pinned = request.pinned.unwrap_or(request.action.as_str() == "pin");
+            open_artifact_service_for_ui(config)?
+                .set_pinned(&project_id, &artifact_ref, pinned)
+                .map_err(artifact_service_error_response)?;
+        }
+        "delete" => {
+            open_artifact_service_for_ui(config)?
+                .soft_delete(&project_id, &artifact_ref, now_secs())
+                .map_err(artifact_service_error_response)?;
+        }
+        "restore" => {
+            open_artifact_service_for_ui(config)?
+                .restore(&project_id, &artifact_ref)
+                .map_err(artifact_service_error_response)?;
+        }
+        _ => {
+            return Err((
+                400,
+                "artifact_lifecycle_invalid",
+                "Action d’artefact inconnue.".to_string(),
+            ));
+        }
+    }
+    Ok(UiArtifactLifecycleAcceptedV1 {
+        version: UI_VERSION,
+        action: request.action,
+        artifact_ref,
+    })
+}
+
+fn sandbox_state_is_safe(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(values) => values.iter().all(|(key, value)| {
+            !key.to_ascii_lowercase().contains("url") && sandbox_state_is_safe(value)
+        }),
+        serde_json::Value::Array(values) => values.iter().all(sandbox_state_is_safe),
+        serde_json::Value::String(value) => !["http:", "https:", "file:"]
+            .iter()
+            .any(|prefix| value.starts_with(prefix)),
+        _ => true,
+    }
+}
+
+fn post_artifact_sandbox_ticket(
+    config: &UiRelayConfig,
+    runtime: &UiRelayRuntime,
+    body: &[u8],
+) -> Result<UiArtifactSandboxTicketAcceptedV1, UiArtifactError> {
+    let request: UiArtifactSandboxTicketRequestV1 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "artifact_sandbox_ticket_invalid",
+            "Demande de lecture sandbox invalide.".to_owned(),
+        )
+    })?;
+    if request.version != UI_VERSION {
+        return Err((
+            400,
+            "artifact_sandbox_ticket_invalid",
+            "Version de lecture sandbox invalide.".to_owned(),
+        ));
+    }
+    let (project_id, agent) = artifact_ui_scope(config, Some(&request.agent))?;
+    let version_ref = artifact_version_from_query(Some(&request.version_ref))?;
+    let detail = read_artifact_detail(config, Some(&agent), Some(&request.version_ref))?;
+    if detail.publication.kind != crate::artifact_types::ArtifactKind::Html {
+        return Err((
+            409,
+            "artifact_sandbox_kind_invalid",
+            "Cette version n’est pas un artefact HTML sandboxé.".to_owned(),
+        ));
+    }
+    Ok(UiArtifactSandboxTicketAcceptedV1 {
+        version: UI_VERSION,
+        ticket: runtime.issue_sandbox_ticket(project_id, agent, version_ref),
+        expires_in_seconds: UI_SANDBOX_TICKET_TTL.as_secs(),
+    })
+}
+
+fn read_artifact_sandbox_ticket(
+    config: &UiRelayConfig,
+    runtime: &UiRelayRuntime,
+    ticket: Option<&String>,
+) -> Result<UiArtifactSandboxReadV1, UiArtifactError> {
+    let Some(ticket) = ticket else {
+        return Err((
+            400,
+            "artifact_sandbox_ticket_missing",
+            "Ticket sandbox absent.".to_owned(),
+        ));
+    };
+    if ticket.len() != 32 || !ticket.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err((
+            400,
+            "artifact_sandbox_ticket_invalid",
+            "Ticket sandbox invalide.".to_owned(),
+        ));
+    }
+    let ticket = runtime.resolve_sandbox_ticket(ticket).ok_or_else(|| {
+        (
+            410,
+            "artifact_sandbox_ticket_expired",
+            "Le ticket sandbox a expiré. Rechargez l’artefact via Bridget.".to_owned(),
+        )
+    })?;
+    let (current_project_id, _) = artifact_ui_scope(config, Some(&ticket.agent))?;
+    if current_project_id != ticket.project_id {
+        return Err((
+            403,
+            "artifact_sandbox_scope_changed",
+            "La portée projet a changé. Rechargez l’artefact via Bridget.".to_owned(),
+        ));
+    }
+    let detail = read_artifact_detail(config, Some(&ticket.agent), Some(&ticket.version_ref))?;
+    if detail.publication.kind != crate::artifact_types::ArtifactKind::Html {
+        return Err((
+            409,
+            "artifact_sandbox_kind_invalid",
+            "Cette version n’est pas un artefact HTML sandboxé.".to_owned(),
+        ));
+    }
+    let html = detail
+        .publication
+        .payload
+        .get("html")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            (
+                409,
+                "artifact_sandbox_content_missing",
+                "Le contenu HTML canonique est indisponible. Demandez une restauration par Bridget."
+                    .to_owned(),
+            )
+        })?;
+    let data = detail
+        .publication
+        .payload
+        .get("data")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    Ok(UiArtifactSandboxReadV1 {
+        version: UI_VERSION,
+        artifact_ref: detail.item.artifact_ref,
+        version_ref: ticket.version_ref,
+        html: html.to_owned(),
+        data,
+    })
+}
+
+fn post_artifact_sandbox_save(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiArtifactSandboxSaveAcceptedV1, UiArtifactError> {
+    let request: UiArtifactSandboxSaveRequestV1 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "artifact_sandbox_save_invalid",
+            "Sauvegarde sandbox invalide.".to_owned(),
+        )
+    })?;
+    if request.version != UI_VERSION
+        || serde_json::to_vec(&request.ui_state).map_or(true, |state| state.len() > 128 * 1024)
+        || !sandbox_state_is_safe(&request.ui_state)
+    {
+        return Err((
+            400,
+            "artifact_sandbox_save_invalid",
+            "L’état sandbox est invalide ou dépasse 128 Kio.".to_owned(),
+        ));
+    }
+    let (project_id, agent) = artifact_ui_scope(config, Some(&request.agent))?;
+    let parent_version_ref = artifact_version_from_query(Some(&request.version_ref))?;
+    let detail = read_artifact_detail(config, Some(&agent), Some(&parent_version_ref))?;
+    if detail.publication.kind != crate::artifact_types::ArtifactKind::Html {
+        return Err((
+            409,
+            "artifact_sandbox_kind_invalid",
+            "Seul un artefact HTML sandboxé peut enregistrer cet état.".to_owned(),
+        ));
+    }
+    let store = open_artifact_store_for_ui(config)?;
+    let artifact_ref = store
+        .artifact_ref_for_version(&project_id, &parent_version_ref)
+        .map_err(|_| {
+            (
+                503,
+                "artifact_sandbox_unavailable",
+                "Le registre d’artefacts est indisponible.".to_owned(),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                404,
+                "artifact_not_found",
+                "Cette version est introuvable.".to_owned(),
+            )
+        })?;
+    drop(store);
+    let mut publication = detail.publication;
+    publication.idempotency_key = format!("ui-html-save-{}", uuid::Uuid::new_v4().simple());
+    publication
+        .payload
+        .as_object_mut()
+        .ok_or_else(|| {
+            (
+                409,
+                "artifact_sandbox_payload_invalid",
+                "Le manifeste HTML est invalide.".to_owned(),
+            )
+        })?
+        .insert("ui_state".to_owned(), request.ui_state);
+    let persisted = open_artifact_service_for_ui(config)?
+        .save_html_interaction(
+            crate::artifact_store::ArtifactPublicationContext {
+                project_id,
+                conversation_reference: format!("conversation:ui:{agent}"),
+                turn_reference: format!("turn:ui-html-save:{}", uuid::Uuid::new_v4().simple()),
+                created_by: "operator:ui".to_owned(),
+                origin_instance: "instance:ui".to_owned(),
+                observed_at: now_secs(),
+            },
+            &artifact_ref,
+            publication,
+        )
+        .map_err(artifact_service_error_response)?;
+    let receipt = match persisted {
+        crate::artifact_store::ArtifactPersistResult::Created(receipt)
+        | crate::artifact_store::ArtifactPersistResult::Replayed(receipt) => receipt,
+    };
+    Ok(UiArtifactSandboxSaveAcceptedV1 {
+        version: UI_VERSION,
+        artifact_ref: receipt.artifact_ref,
+        version_ref: receipt.version_ref,
+        parent_version_ref,
+    })
+}
+
+fn artifact_page_bounds(
+    query: &HashMap<String, String>,
+) -> Result<(usize, usize), UiArtifactError> {
+    let offset = query
+        .get("offset")
+        .map(|value| value.parse::<usize>())
+        .transpose()
+        .map_err(|_| {
+            (
+                400,
+                "artifact_page_invalid",
+                "Pagination d’artefact invalide.".to_string(),
+            )
+        })?
+        .unwrap_or(0);
+    let limit = query
+        .get("limit")
+        .map(|value| value.parse::<usize>())
+        .transpose()
+        .map_err(|_| {
+            (
+                400,
+                "artifact_page_invalid",
+                "Pagination d’artefact invalide.".to_string(),
+            )
+        })?
+        .unwrap_or(MAX_UI_ARTIFACT_PAGE_ROWS)
+        .clamp(1, MAX_UI_ARTIFACT_PAGE_ROWS);
+    Ok((offset, limit))
+}
+
+fn read_artifact_data_page(
+    config: &UiRelayConfig,
+    query: &HashMap<String, String>,
+) -> Result<UiArtifactDataPageV1, UiArtifactError> {
+    let detail = read_artifact_detail(config, query.get("agent"), query.get("version"))?;
+    let (offset, limit) = artifact_page_bounds(query)?;
+    let mut data = detail.publication.payload.clone();
+    let mut has_more = false;
+    if detail.publication.kind == crate::artifact_types::ArtifactKind::Table {
+        if let Some(object) = data.as_object_mut() {
+            if let Some(rows) = object
+                .get("rows")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+            {
+                has_more = offset.saturating_add(limit) < rows.len();
+                object.insert(
+                    "rows".to_string(),
+                    serde_json::Value::Array(rows.into_iter().skip(offset).take(limit).collect()),
+                );
+            }
+        }
+    }
+    if serde_json::to_vec(&data)
+        .map_err(|_| {
+            (
+                500,
+                "artifact_serialization",
+                "Données d’artefact illisibles.".to_string(),
+            )
+        })?
+        .len()
+        > MAX_UI_ARTIFACT_RESPONSE_BYTES
+    {
+        return Err((
+            413,
+            "artifact_data_too_large",
+            "Les données dépassent la limite de consultation. Exportez la version ou réduisez la sélection.".to_string(),
+        ));
+    }
+    Ok(UiArtifactDataPageV1 {
+        version: UI_VERSION,
+        version_ref: detail.item.version_ref,
+        offset,
+        limit,
+        has_more,
+        data,
+    })
+}
+
+fn csv_escape(value: &serde_json::Value) -> String {
+    let raw = match value {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::String(value) => value.clone(),
+        value => value.to_string(),
+    };
+    format!("\"{}\"", raw.replace('"', "\"\""))
+}
+
+fn artifact_export(
+    config: &UiRelayConfig,
+    query: &HashMap<String, String>,
+) -> Result<(&'static str, Vec<u8>, String), UiArtifactError> {
+    let detail = read_artifact_detail(config, query.get("agent"), query.get("version"))?;
+    let format = query.get("format").map(String::as_str).unwrap_or("json");
+    let suffix = detail
+        .item
+        .version_ref
+        .strip_prefix("artifact-version:")
+        .unwrap_or("version");
+    let (content_type, bytes, filename) = if format == "json" {
+        (
+            "application/json; charset=utf-8",
+            serde_json::to_vec_pretty(&detail).map_err(|_| {
+                (
+                    500,
+                    "artifact_serialization",
+                    "Export d’artefact illisible.".to_string(),
+                )
+            })?,
+            format!("bridget-artifact-{suffix}.json"),
+        )
+    } else if format == "csv"
+        && detail.publication.kind == crate::artifact_types::ArtifactKind::Table
+    {
+        let payload = detail.publication.payload.as_object().ok_or_else(|| {
+            (
+                400,
+                "artifact_csv_invalid",
+                "Table d’artefact invalide.".to_string(),
+            )
+        })?;
+        let columns = payload
+            .get("columns")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                (
+                    400,
+                    "artifact_csv_invalid",
+                    "Colonnes de table absentes.".to_string(),
+                )
+            })?;
+        let rows = payload
+            .get("rows")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                (
+                    400,
+                    "artifact_csv_invalid",
+                    "Lignes de table absentes.".to_string(),
+                )
+            })?;
+        let column_keys = columns
+            .iter()
+            .enumerate()
+            .map(|(index, value)| match value {
+                serde_json::Value::String(value) => (value.clone(), value.clone()),
+                serde_json::Value::Object(object) => {
+                    let key = object
+                        .get("key")
+                        .or_else(|| object.get("field"))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let label = object
+                        .get("label")
+                        .or_else(|| object.get("title"))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(&key)
+                        .to_string();
+                    (
+                        if key.is_empty() {
+                            format!("column_{}", index + 1)
+                        } else {
+                            key
+                        },
+                        label,
+                    )
+                }
+                _ => (
+                    format!("column_{}", index + 1),
+                    format!("Colonne {}", index + 1),
+                ),
+            })
+            .collect::<Vec<_>>();
+        let mut csv = String::new();
+        csv.push_str(
+            &column_keys
+                .iter()
+                .map(|(_, label)| format!("\"{}\"", label.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        for row in rows {
+            csv.push('\n');
+            let values = row.as_object();
+            csv.push_str(
+                &column_keys
+                    .iter()
+                    .map(|(key, _)| {
+                        values
+                            .and_then(|value| value.get(key))
+                            .map(csv_escape)
+                            .unwrap_or_else(|| "\"\"".to_string())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+        }
+        (
+            "text/csv; charset=utf-8",
+            csv.into_bytes(),
+            format!("bridget-artifact-{suffix}.csv"),
+        )
+    } else {
+        return Err((
+            400,
+            "artifact_export_format",
+            "Ce format d’export n’est pas disponible pour cet artefact.".to_string(),
+        ));
+    };
+    if bytes.len() > MAX_UI_ARTIFACT_EXPORT_BYTES {
+        return Err((
+            413,
+            "artifact_export_too_large",
+            "Cet export dépasse la limite du relais. Utilisez une exportation paginée.".to_string(),
+        ));
+    }
+    Ok((content_type, bytes, filename))
+}
+
+fn read_artifact_blob(
+    config: &UiRelayConfig,
+    query: &HashMap<String, String>,
+) -> Result<(&'static str, Vec<u8>), UiArtifactError> {
+    let (project_id, _) = artifact_ui_scope(config, query.get("agent"))?;
+    let version_ref = artifact_version_from_query(query.get("version").map(String::as_str))?;
+    let Some(digest) = query.get("digest") else {
+        return Err((
+            400,
+            "artifact_blob_missing",
+            "Blob d’artefact absent.".to_string(),
+        ));
+    };
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err((
+            400,
+            "artifact_blob_invalid",
+            "Blob d’artefact invalide.".to_string(),
+        ));
+    }
+    let store = open_artifact_store_for_ui(config)?;
+    let blob = store
+        .version_blob(&project_id, &version_ref, digest)
+        .map_err(|_| {
+            (
+                503,
+                "artifact_blob_unavailable",
+                "Blob d’artefact indisponible.".to_string(),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                404,
+                "artifact_blob_not_found",
+                "Blob introuvable dans cette version.".to_string(),
+            )
+        })?;
+    let bytes = std::fs::read(&blob.canonical_path).map_err(|_| {
+        (
+            404,
+            "artifact_blob_missing",
+            "Le blob canonique est absent. Vous pouvez le restaurer.".to_string(),
+        )
+    })?;
+    if bytes.len() as u64 != blob.byte_length
+        || crate::artifact_types::sha256_hex(&bytes) != blob.digest
+    {
+        return Err((
+            409,
+            "artifact_blob_corrupt",
+            "Le blob canonique est corrompu. Aucun aperçu n’est affiché.".to_string(),
+        ));
+    }
+    let content_type = match blob.media_type.as_str() {
+        "image/png" => "image/png",
+        "image/jpeg" => "image/jpeg",
+        "image/webp" => "image/webp",
+        "image/gif" => "image/gif",
+        "application/pdf" => "application/pdf",
+        "text/plain" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    };
+    Ok((content_type, bytes))
+}
+
 fn validate_ui_recipient(
     agents: &[bridget_transport::protocol::AgentInfo],
     recipient: &str,
@@ -3998,6 +5365,8 @@ fn read_snapshot(
     focus_agent: Option<&str>,
 ) -> Result<UiSnapshotV1, UiError> {
     let facts = read_bridget_snapshot(&config.daemon_socket)?;
+    let artifact_references =
+        focus_agent.map(|agent| read_artifact_references(config, &facts.agents, agent));
     let mut agent_ids = facts
         .agents
         .iter()
@@ -4041,6 +5410,7 @@ fn read_snapshot(
         alert_thresholds: UiAlertThresholdsV1::default(),
         peer_exchanges,
         thread_messages,
+        artifact_references,
         open_requests: facts.open_requests,
         missions,
         recovery_losses,
@@ -5093,6 +6463,27 @@ fn write_json<T: Serialize>(stream: &mut TcpStream, status: u16, value: &T) -> R
     Ok(())
 }
 
+fn write_binary(
+    stream: &mut TcpStream,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+    filename: Option<&str>,
+) -> Result<(), UiError> {
+    let disposition = filename
+        .map(|name| format!("Content-Disposition: attachment; filename=\"{name}\"\r\n"))
+        .unwrap_or_default();
+    write!(
+        stream,
+        "HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n{disposition}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+        status_text(status),
+        body.len(),
+    )?;
+    stream.write_all(body)?;
+    stream.flush()?;
+    Ok(())
+}
+
 fn status_text(status: u16) -> &'static str {
     match status {
         200 => "OK",
@@ -5103,6 +6494,7 @@ fn status_text(status: u16) -> &'static str {
         404 => "Not Found",
         405 => "Method Not Allowed",
         409 => "Conflict",
+        413 => "Payload Too Large",
         500 => "Internal Server Error",
         503 => "Service Unavailable",
         504 => "Gateway Timeout",
@@ -5131,6 +6523,185 @@ mod tests {
             "reconnect_count": 0
         }))
         .unwrap()
+    }
+
+    fn agent_info_in_project(
+        name: &str,
+        project_id: &str,
+    ) -> bridget_transport::protocol::AgentInfo {
+        let mut agent = agent_info(name, "connected");
+        agent.agent_link = Some(bridget_transport::protocol::AgentLinkUiProjection {
+            link_id: "link:test".to_string(),
+            parent_instance_id: "instance:parent".to_string(),
+            parent_execution_id: None,
+            objective_id: None,
+            delegation_id: None,
+            project: Some(bridget_transport::protocol::ProjectReference {
+                project_id: project_id.to_string(),
+                binding_generation: 1,
+            }),
+            role: "worker".to_string(),
+            agent_path: name.to_string(),
+            state: "active".to_string(),
+            direct_descendants: 0,
+            descendants: 0,
+        });
+        agent
+    }
+
+    #[test]
+    fn relais_artefact_pagine_exporte_et_refuse_la_version_d_un_autre_projet() {
+        let test_id = uuid::Uuid::new_v4().simple().to_string();
+        let root = std::env::temp_dir().join(format!("bui-artifact-{}", &test_id[..8]));
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("bridget.sock");
+        let db = ledger_db_path_for_socket(&socket);
+        let artifacts = root.join("artifacts");
+        let mut service = crate::artifact_service::ArtifactService::open(
+            &db,
+            &artifacts,
+            crate::artifact_policy::ArtifactPolicy::default(),
+        )
+        .unwrap();
+        let mut publication: crate::artifact_types::ArtifactPublicationV1 = serde_json::from_str(
+            include_str!("../tests/fixtures/artifacts/chart-external-v1.json"),
+        )
+        .unwrap();
+        publication.kind = crate::artifact_types::ArtifactKind::Table;
+        publication.payload = serde_json::json!({
+            "columns": ["id", "label"],
+            "rows": [
+                {"id": 1, "label": "un"}, {"id": 2, "label": "deux"},
+                {"id": 3, "label": "trois"}, {"id": 4, "label": "quatre"}
+            ]
+        });
+        let receipt = match service
+            .publish(
+                crate::artifact_store::ArtifactPublicationContext {
+                    project_id: "project:relay-one".to_string(),
+                    conversation_reference: "conversation:project:relay-one:agent-relay"
+                        .to_string(),
+                    turn_reference: "turn:relay-one".to_string(),
+                    created_by: "agent:relay".to_string(),
+                    origin_instance: "instance:relay".to_string(),
+                    observed_at: 1_800_000_000,
+                },
+                publication,
+            )
+            .unwrap()
+        {
+            crate::artifact_store::ArtifactPersistResult::Created(receipt) => receipt,
+            crate::artifact_store::ArtifactPersistResult::Replayed(_) => panic!("création relay"),
+        };
+        let mut other: crate::artifact_types::ArtifactPublicationV1 = serde_json::from_str(
+            include_str!("../tests/fixtures/artifacts/chart-external-v1.json"),
+        )
+        .unwrap();
+        other.idempotency_key = "fixture-ui-relay-other".to_string();
+        let other_receipt = match service
+            .publish(
+                crate::artifact_store::ArtifactPublicationContext {
+                    project_id: "project:relay-two".to_string(),
+                    conversation_reference: "conversation:project:relay-two:agent-other"
+                        .to_string(),
+                    turn_reference: "turn:relay-two".to_string(),
+                    created_by: "agent:other".to_string(),
+                    origin_instance: "instance:other".to_string(),
+                    observed_at: 1_800_000_001,
+                },
+                other,
+            )
+            .unwrap()
+        {
+            crate::artifact_store::ArtifactPersistResult::Created(receipt) => receipt,
+            crate::artifact_store::ArtifactPersistResult::Replayed(_) => panic!("création autre"),
+        };
+        drop(service);
+
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..4 {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(
+                    decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                    WrapperToDaemon::ListAgents
+                ));
+                writeln!(
+                    writer,
+                    "{}",
+                    encode(&DaemonToWrapper::AgentList {
+                        agents: vec![agent_info_in_project("agent-relay", "project:relay-one")]
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                writer.flush().unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(
+                    decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                    WrapperToDaemon::LedgerProjection { .. }
+                ));
+                writeln!(
+                    writer,
+                    "{}",
+                    encode(&DaemonToWrapper::LedgerProjection {
+                        messages: Vec::new(),
+                        requests: Vec::new(),
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                writer.flush().unwrap();
+            }
+        });
+        let config = UiRelayConfig {
+            daemon_socket: socket.clone(),
+            maicie_config: root.join("maicie.json"),
+            project_root_policy_path: None,
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "artifact-relay".to_string(),
+        };
+        let wire_version = receipt
+            .version_ref
+            .replace("artifact-version:", "artifact-version.");
+        let mut query = HashMap::from([
+            ("agent".to_string(), "agent-relay".to_string()),
+            ("version".to_string(), wire_version),
+            ("offset".to_string(), "1".to_string()),
+            ("limit".to_string(), "2".to_string()),
+        ]);
+        let page = read_artifact_data_page(&config, &query).unwrap();
+        assert_eq!(page.offset, 1);
+        assert!(page.has_more);
+        assert_eq!(page.data["rows"].as_array().unwrap().len(), 2);
+        query.insert("format".to_string(), "csv".to_string());
+        let (content_type, csv, _) = artifact_export(&config, &query).unwrap();
+        assert_eq!(content_type, "text/csv; charset=utf-8");
+        assert!(String::from_utf8(csv).unwrap().contains("trois"));
+        let metrics = read_artifact_metrics(
+            &config,
+            &HashMap::from([("agent".to_string(), "agent-relay".to_string())]),
+        )
+        .unwrap();
+        assert_eq!(metrics.canonical_blob_bytes, 0);
+        assert_eq!(metrics.publication_failures, 0);
+        query.insert(
+            "version".to_string(),
+            other_receipt
+                .version_ref
+                .replace("artifact-version:", "artifact-version."),
+        );
+        assert!(matches!(
+            read_artifact_detail(&config, query.get("agent"), query.get("version")),
+            Err((404, "artifact_not_found", _))
+        ));
+        server.join().unwrap();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn ledger_message(id: &str, ts: i64, sender: &str, target: &str) -> LedgerMessage {
@@ -7988,5 +9559,22 @@ mod tests {
             attention_error_response(AgentProfileError::Invalid("consigne interne"));
         assert_eq!(code, "invalid_attention");
         assert!(!message.contains("consigne interne"));
+    }
+
+    #[test]
+    fn ticket_sandbox_est_court_et_lie_a_sa_portee() {
+        let runtime = UiRelayRuntime::new(None);
+        let ticket = runtime.issue_sandbox_ticket(
+            "project:test".to_owned(),
+            "agent-test".to_owned(),
+            "artifact-version:test".to_owned(),
+        );
+        let resolved = runtime
+            .resolve_sandbox_ticket(&ticket)
+            .expect("ticket présent");
+        assert_eq!(resolved.project_id, "project:test");
+        assert_eq!(resolved.agent, "agent-test");
+        assert_eq!(resolved.version_ref, "artifact-version:test");
+        assert!(runtime.resolve_sandbox_ticket("0").is_none());
     }
 }

@@ -38,7 +38,11 @@ fn un_seul_serveur_est_affiche_a_la_fois() {
     assert!(frontend.contains("source_id: sourceId"));
     assert!(backend.contains("close_open_panels(&app, &state)?;"));
     assert!(backend.contains("const DESKTOP_SHELL_WIDTH: u32 = 200;"));
-    assert!(backend.contains("PhysicalSize::new(panel_width, size.height.max(1))"));
+    assert!(backend.contains("PhysicalSize::new(relay_width, size.height.max(1))"));
+    assert!(backend.contains("PhysicalSize::new(browser_width.max(1), size.height.max(1))"));
+    assert!(
+        backend.contains("WebviewBuilder::new(browser.label.clone(), WebviewUrl::External(url))")
+    );
 }
 
 #[test]

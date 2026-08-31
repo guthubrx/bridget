@@ -11,9 +11,18 @@ pub struct Panel {
     pub url: String,
 }
 
+/// Enfant WebView opérateur. Il ne compte pas comme un second panneau de
+/// relais : le registre reste propriétaire de la régie visuelle unique.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BrowserPanel {
+    pub label: String,
+    pub target: String,
+}
+
 #[derive(Default)]
 pub struct PanelRegistry {
     panels: HashMap<String, Panel>,
+    browser: Option<BrowserPanel>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -21,6 +30,7 @@ pub enum PanelError {
     LimitReached,
     DuplicateProfile,
     InvalidRelayUrl,
+    InvalidBrowserUrl,
 }
 
 impl std::fmt::Display for PanelError {
@@ -29,6 +39,9 @@ impl std::fmt::Display for PanelError {
             Self::LimitReached => "Un seul panneau peut être affiché à la fois.",
             Self::DuplicateProfile => "Ce profil est déjà affiché.",
             Self::InvalidRelayUrl => "Un panneau doit viser uniquement son relais local.",
+            Self::InvalidBrowserUrl => {
+                "Le Browser accepte seulement HTTPS ou une publication locale Bridget."
+            }
         })
     }
 }
@@ -73,6 +86,27 @@ impl PanelRegistry {
     pub fn panels(&self) -> impl Iterator<Item = &Panel> {
         self.panels.values()
     }
+
+    pub fn browser(&self) -> Option<&BrowserPanel> {
+        self.browser.as_ref()
+    }
+
+    pub fn open_browser(&mut self, target: impl Into<String>) -> Result<BrowserPanel, PanelError> {
+        let target = target.into();
+        if !is_browser_target(&target) {
+            return Err(PanelError::InvalidBrowserUrl);
+        }
+        let browser = BrowserPanel {
+            label: "browser-primary".to_owned(),
+            target,
+        };
+        self.browser = Some(browser.clone());
+        Ok(browser)
+    }
+
+    pub fn clear_browser(&mut self) -> Option<BrowserPanel> {
+        self.browser.take()
+    }
 }
 
 pub fn is_loopback_relay_url(value: &str) -> bool {
@@ -85,9 +119,27 @@ pub fn is_loopback_relay_url(value: &str) -> bool {
     port.parse::<u16>().is_ok_and(|port| port != 0) && path.starts_with("?token=") && path.len() > 7
 }
 
+pub fn is_browser_target(value: &str) -> bool {
+    if value == "bridget://browser-home" {
+        return true;
+    }
+    let Ok(url) = url::Url::parse(value) else {
+        return false;
+    };
+    match url.scheme() {
+        "https" => {
+            url.host_str().is_some() && url.username().is_empty() && url.password().is_none()
+        }
+        "http" => url.host_str() == Some("127.0.0.1"),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{MAXIMUM_OPEN_PANELS, PanelError, PanelRegistry, is_loopback_relay_url};
+    use super::{
+        MAXIMUM_OPEN_PANELS, PanelError, PanelRegistry, is_browser_target, is_loopback_relay_url,
+    };
     #[test]
     fn un_seul_panneau_est_autorise_et_url_hors_loopback_refusee() {
         let mut registry = PanelRegistry::default();
@@ -111,5 +163,21 @@ mod tests {
             PanelRegistry::default().open("bad", "https://example.com/?token=fixture"),
             Err(PanelError::InvalidRelayUrl)
         ));
+    }
+
+    #[test]
+    fn browser_unique_reste_dans_la_meme_regie_et_refuse_file() {
+        let mut registry = PanelRegistry::default();
+        assert!(is_browser_target("https://example.com/page"));
+        assert!(is_browser_target("http://127.0.0.1:39001/artifact"));
+        assert!(!is_browser_target("file:///tmp/secret"));
+        assert!(matches!(
+            registry.open_browser("file:///tmp/secret"),
+            Err(PanelError::InvalidBrowserUrl)
+        ));
+        let browser = registry.open_browser("https://example.com").unwrap();
+        assert_eq!(browser.label, "browser-primary");
+        assert_eq!(registry.browser().unwrap().target, "https://example.com");
+        assert_eq!(registry.clear_browser().unwrap().label, "browser-primary");
     }
 }

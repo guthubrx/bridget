@@ -36,6 +36,10 @@ const elements = {
   preferencesExternalLinks: document.querySelector("#preferences-external-links"),
   preferencesFileReferences: document.querySelector("#preferences-file-references"),
   preferencesRemoteImages: document.querySelector("#preferences-remote-images"),
+  preferencesArtifactCacheMaxBytes: document.querySelector("#preferences-artifact-cache-max-bytes"),
+  preferencesArtifactCacheMaxAgeDays: document.querySelector("#preferences-artifact-cache-max-age-days"),
+  preferencesBrowserSessionMode: document.querySelector("#preferences-browser-session-mode"),
+  preferencesExternalContentFetch: document.querySelector("#preferences-external-content-fetch"),
   preferencesError: document.querySelector("#preferences-error"),
   targetDialog: document.querySelector("#target-dialog"),
   targetChoices: document.querySelector("#target-choices"),
@@ -322,6 +326,11 @@ async function openSettings(section = "general") {
     elements.preferencesExternalLinks.checked = content.external_links === true;
     elements.preferencesFileReferences.checked = content.file_references === true;
     elements.preferencesRemoteImages.checked = content.remote_images === true;
+    elements.preferencesArtifactCacheMaxBytes.value = String(preferences.artifact_cache_max_bytes || 1073741824);
+    elements.preferencesArtifactCacheMaxAgeDays.value = String(preferences.artifact_cache_max_age_days || 30);
+    const browserPanel = preferences.browser_panel || {};
+    elements.preferencesBrowserSessionMode.value = browserPanel.browser_session_mode || "persistent";
+    elements.preferencesExternalContentFetch.checked = browserPanel.external_content_fetch_enabled === true;
     const selected = selectSettingsSection(section);
     if (selected === "servers") await renderServers();
     if (!elements.settingsDialog.open) elements.settingsDialog.showModal();
@@ -414,6 +423,13 @@ elements.preferencesForm.addEventListener("submit", async (event) => {
         external_links: elements.preferencesExternalLinks.checked,
         file_references: elements.preferencesFileReferences.checked,
         remote_images: elements.preferencesRemoteImages.checked,
+      },
+      artifact_cache_max_bytes: Number(elements.preferencesArtifactCacheMaxBytes.value),
+      artifact_cache_max_age_days: Number(elements.preferencesArtifactCacheMaxAgeDays.value),
+      browser_panel: {
+        ...(preferences.browser_panel || {}),
+        browser_session_mode: elements.preferencesBrowserSessionMode.value,
+        external_content_fetch_enabled: elements.preferencesExternalContentFetch.checked,
       },
     };
     await savePreferences();

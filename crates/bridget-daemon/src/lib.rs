@@ -1,4 +1,10 @@
 pub mod agent_profile;
+pub mod artifact_blob_store;
+pub mod artifact_fetch;
+pub mod artifact_policy;
+pub mod artifact_service;
+pub mod artifact_store;
+pub mod artifact_types;
 pub mod attach;
 pub mod build_identity;
 pub mod build_info;
