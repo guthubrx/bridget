@@ -37,9 +37,10 @@ Il est installé dans `/Users/moi/.local/bin/bridget`. La sauvegarde récupérab
 est `/Users/moi/.local/bin/bridget.before-conversation-composition-20260831-144000`.
 
 Le LaunchAgent `com.bridget.daemon` a été relancé. `bridget status` observe le
-daemon en ligne, avec le build-id `0abc763db94e`, qui correspond à la tête
-déployée de `main`. La validation visuelle manuelle T042 reste le verrou de
-fermeture de la SPEC.
+daemon en ligne, avec le build-id `0abc763db94e`, issu du commit de composition
+du code. Le commit `5c07934` qui suit ne modifie que cette attestation et ne
+nécessite donc pas de nouveau binaire. La validation visuelle manuelle T042
+reste le verrou de fermeture de la SPEC.
 
 ## Validation manuelle restante
 
