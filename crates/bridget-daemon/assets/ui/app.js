@@ -5665,6 +5665,7 @@
     projectNew: "project-new",
     projectImport: "project-import",
     projectPresentationOverlay: "project-presentation-overlay",
+    projectOnboardingOverlay: "project-onboarding-overlay",
     agentList: "agent-list",
     stoppedAgentList: "stopped-agent-list",
     stoppedAgents: "stopped-agents",
@@ -6674,32 +6675,16 @@
             });
             const defaults = controlSection(
               "Nouveaux projets",
-              "Le coordinateur ci-dessous sera proposé lors de la création ou de l'import d'un projet. Les projets déjà enregistrés ne changent pas.",
+              "Les projets sont liés au registre local après une prévisualisation explicite. Les projets déjà enregistrés ne changent pas.",
               "Serveur relié",
             );
-            const defaultsStatus = make("p", "control-center__status", "Lecture de la configuration des nouveaux projets…");
-            defaultsStatus.setAttribute("role", "status");
-            const configureDefaults = make("button", "secondary", "Configurer le coordinateur par défaut");
-            configureDefaults.type = "button";
-            configureDefaults.hidden = true;
-            configureDefaults.addEventListener("click", () => { void updateDefaultCoordinator(); });
-            defaults.append(defaultsStatus, configureDefaults);
+            const defaultsStatus = make(
+              "p",
+              "control-center__status",
+              "Le choix d’un agent coordinateur n’est pas un réglage du registre de projets. Bridget n’affiche donc pas de faux catalogue de coordinateurs.",
+            );
+            defaults.append(defaultsStatus);
             section.append(defaults);
-            void requestProject("/v1/projects/settings").then((settings) => {
-              const configured = settings.default_coordinator || {};
-              const choice = (settings.coordinator_options || []).find((entry) => (
-                entry.agent_type === configured.agent_type
-                && entry.model_id === configured.model_id
-                && (entry.efforts || []).includes(configured.effort)
-              ));
-              defaultsStatus.textContent = choice
-                ? `Actuel : ${coordinatorLabel(choice)} - effort ${configured.effort}.`
-                : "Aucun coordinateur par défaut attesté pour les nouveaux projets.";
-              configureDefaults.hidden = !settings.configuration_available;
-            }).catch(() => {
-              defaultsStatus.textContent = "La configuration des nouveaux projets est indisponible.";
-              defaultsStatus.dataset.state = "error";
-            });
           } catch (_error) {
             status.textContent = "Les réglages de ce serveur sont indisponibles. Aucune valeur locale n'a été remplacée.";
             status.dataset.state = "error";
@@ -7783,7 +7768,6 @@
       lastAgentsRenderSignature = null;
       return true;
     };
-    const coordinatorLabel = (choice) => choice.provider_id + " / " + choice.model_id + " - " + choice.permissions;
     const projectStateLabel = (state) => {
       if (state === "active") return "actif";
       if (state === "disabled") return "retiré";
@@ -7791,118 +7775,212 @@
       return "indisponible";
     };
     const projectStatusLabel = (project) => {
-      const coordinator = project.coordinator_state ? "coordinateur : " + project.coordinator_state : null;
-      const discovery = project.discovery_state ? "découverte : " + project.discovery_state : null;
-      const audit = project.last_audit ? "audit : " + project.last_audit.operation + " " + project.last_audit.outcome : null;
-      return [projectStateLabel(project.state), coordinator, discovery, audit].filter(Boolean).join(" - ");
+      return projectStateLabel(project.state);
     };
-    const selectCoordinator = (settings, title) => {
-      const choices = Array.isArray(settings.coordinator_options) ? settings.coordinator_options : [];
-      if (choices.length === 0) throw new Error("Aucun coordinateur compatible et lecture seule n'est disponible.");
-      const configured = settings.default_coordinator || {};
-      const defaultIndex = choices.findIndex((choice) => (
-        choice.agent_type === configured.agent_type
-        && choice.model_id === configured.model_id
-        && (choice.efforts || []).includes(configured.effort)
-      ));
-      const description = choices.map((choice, index) => (
-        String(index + 1) + ". " + choice.launcher_id + " / " + choice.provider_id
-        + " / " + choice.model_id + " / " + choice.permissions
-      )).join("\n");
-      const rawIndex = windowRef.prompt(title + "\n" + description, String(defaultIndex >= 0 ? defaultIndex + 1 : 1));
-      if (rawIndex === null) return null;
-      const index = Number(rawIndex) - 1;
-      if (!Number.isInteger(index) || index < 0 || index >= choices.length) {
-        throw new Error("Choix de coordinateur invalide.");
-      }
-      const choice = choices[index];
-      const efforts = Array.isArray(choice.efforts) && choice.efforts.length ? choice.efforts : ["default"];
-      const defaultEffort = (
-        index === defaultIndex && efforts.includes(configured.effort)
-          ? configured.effort : efforts[0]
-      );
-      const effort = windowRef.prompt(
-        "Niveau d'effort pour " + choice.model_id + " : " + efforts.join(", "),
-        defaultEffort,
-      );
-      if (effort === null) return null;
-      if (!efforts.includes(effort)) throw new Error("Niveau d'effort invalide.");
-      return { choice, effort };
+    const closeProjectOnboarding = () => {
+      const dialog = nodes.projectOnboardingOverlay;
+      if (dialog && dialog.open) dialog.close();
     };
-    const beginProject = async (mode) => {
+    const showProjectOnboardingMessage = (title, message, returnFocus) => {
+      const dialog = nodes.projectOnboardingOverlay;
+      dialog.replaceChildren();
+      const shell = make("section", "project-onboarding-overlay__shell");
+      const header = make("header", "project-onboarding-overlay__header");
+      const heading = make("div");
+      heading.append(
+        make("p", "project-onboarding-overlay__eyebrow", "PROJETS"),
+        make("h2", null, title),
+      );
+      const close = make("button", "quiet-action", "Fermer");
+      close.type = "button";
+      close.addEventListener("click", closeProjectOnboarding);
+      header.append(heading, close);
+      shell.append(header, make("p", "project-onboarding-overlay__intro", message));
+      dialog.append(shell);
+      dialog.returnFocus = returnFocus;
+      if (!dialog.open) dialog.showModal();
+      close.focus();
+    };
+    const beginProject = async (mode, returnFocus) => {
       try {
         projectSettingsSnapshot = await requestProject("/v1/projects/settings");
         const roots = projectSettingsSnapshot.allowed_project_roots || [];
         if (roots.length === 0 || !projectSettingsSnapshot.configuration_available) {
-          throw new Error("Définissez une racine et un coordinateur dans les réglages.");
+          throw new Error("Aucune racine de projets n’est autorisée par ce serveur. Ouvrez Réglages, puis Serveur.");
         }
-        const root = mode === "create"
-          ? windowRef.prompt("Racine autorisée :\n" + roots.join("\n"), roots[0])
-          : windowRef.prompt("Dossier existant à importer :", roots[0]);
-        if (!root) return;
-        const folder = mode === "create" ? windowRef.prompt("Nom du nouveau dossier :", "") : null;
-        if (mode === "create" && !folder) return;
-        const coordinator = selectCoordinator(
-          projectSettingsSnapshot,
-          "Configuration du coordinateur initial (outil / upstream / modèle / permissions)",
+        const dialog = nodes.projectOnboardingOverlay;
+        dialog.replaceChildren();
+        const form = make("form", "project-onboarding-overlay__shell");
+        form.noValidate = true;
+        const header = make("header", "project-onboarding-overlay__header");
+        const heading = make("div");
+        const title = mode === "create" ? "Nouveau projet" : "Importer un projet";
+        heading.append(
+          make("p", "project-onboarding-overlay__eyebrow", "PROJETS"),
+          make("h2", null, title),
         );
-        if (!coordinator) return;
-        const preview = await requestProject("/v1/projects/preview", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ version: 1, mode, root, folder_name: folder || undefined }),
-        });
-        const git = windowRef.confirm("Initialiser Git si nécessaire ?");
-        const durationRaw = windowRef.prompt("Découverte en lecture seule : 10, 30, 60 ou 120 minutes", "10");
-        const duration = Number(durationRaw);
-        const recap = "Dossier : " + preview.canonical_path + "\nGit : " + (git ? "oui" : "non")
-          + "\nCoordinateur : " + coordinatorLabel(coordinator.choice) + "\nEffort : " + coordinator.effort
-          + "\nDurée : " + duration + " minutes";
-        if (!windowRef.confirm(recap + "\n\nConfirmer la création/import ?")) return;
-        const confirmed = await requestProject("/v1/projects/confirm", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            version: 1, command_id: "project-ui-" + Date.now() + "-" + Math.random().toString(16).slice(2),
-            mode, root, folder_name: folder || undefined, initialize_git: git,
-            agent_type: coordinator.choice.agent_type, model_id: coordinator.choice.model_id,
-            effort: coordinator.effort, discovery_minutes: duration,
-          }),
-        });
-        await refreshProjects();
-        selectedProjectId = confirmed.project_id;
-        renderProjects();
-        lastAgentsRenderSignature = null;
-        renderAgents();
-        if (confirmed.coordinator) selectAgent(confirmed.coordinator);
-      } catch (error) {
-        nodes.sourceState.textContent = error.message;
-        nodes.sourceState.dataset.state = "error";
-      }
-    };
-    const updateDefaultCoordinator = async () => {
-      try {
-        const settings = await requestProject("/v1/projects/settings");
-        const coordinator = selectCoordinator(
-          settings,
-          "Valeur par défaut des futurs coordinateurs (les projets existants ne changent pas)",
+        const close = make("button", "quiet-action", "Fermer");
+        close.type = "button";
+        close.addEventListener("click", closeProjectOnboarding);
+        header.append(heading, close);
+        const intro = make(
+          "p",
+          "project-onboarding-overlay__intro",
+          mode === "create"
+            ? "Le serveur créera uniquement le dossier confirmé, sous une racine déjà autorisée."
+            : "Le dossier existant doit être sous une racine déjà autorisée. Aucun contenu n’est modifié avant confirmation.",
         );
-        if (!coordinator) return;
-        await requestProject("/v1/projects/settings", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            version: 1, command_id: "project-settings-" + Date.now(),
-            expected_generation: settings.policy_generation,
-            allowed_project_roots: settings.allowed_project_roots || [],
-            default_coordinator: {
-              agent_type: coordinator.choice.agent_type,
-              model_id: coordinator.choice.model_id,
-              effort: coordinator.effort,
-            },
-          }),
+        const rootField = make("label", "project-onboarding-overlay__field", mode === "create" ? "Racine autorisée" : "Dossier existant");
+        let rootControl;
+        if (mode === "create") {
+          rootControl = documentRef.createElement("select");
+          roots.forEach((root) => {
+            const option = documentRef.createElement("option");
+            option.value = root;
+            option.textContent = root;
+            rootControl.append(option);
+          });
+        } else {
+          rootControl = documentRef.createElement("input");
+          rootControl.type = "text";
+          rootControl.value = roots[0];
+          rootControl.spellcheck = false;
+          rootControl.setAttribute("list", "project-onboarding-roots");
+          const list = documentRef.createElement("datalist");
+          list.id = "project-onboarding-roots";
+          roots.forEach((root) => {
+            const option = documentRef.createElement("option");
+            option.value = root;
+            list.append(option);
+          });
+          rootField.append(list);
+        }
+        rootControl.required = true;
+        rootField.append(rootControl);
+        let folderControl = null;
+        if (mode === "create") {
+          const folderField = make("label", "project-onboarding-overlay__field", "Nom du dossier");
+          folderControl = documentRef.createElement("input");
+          folderControl.type = "text";
+          folderControl.placeholder = "mon-projet";
+          folderControl.autocomplete = "off";
+          folderControl.required = true;
+          folderField.append(folderControl);
+          form.append(header, intro, rootField, folderField);
+        } else {
+          form.append(header, intro, rootField);
+        }
+        const status = make("p", "project-onboarding-overlay__status", "Choisissez le dossier, puis prévisualisez l’opération.");
+        status.setAttribute("role", "status");
+        const previewCard = make("div", "project-onboarding-overlay__preview");
+        previewCard.hidden = true;
+        const initializeGit = documentRef.createElement("input");
+        initializeGit.type = "checkbox";
+        initializeGit.checked = false;
+        initializeGit.disabled = true;
+        const gitLabel = make("label", "project-onboarding-overlay__checkbox");
+        gitLabel.append(initializeGit, make("span", null, "Initialiser Git si nécessaire"));
+        previewCard.append(gitLabel);
+        const actions = make("div", "project-onboarding-overlay__actions");
+        const previewAction = make("button", "secondary", "Prévisualiser");
+        previewAction.type = "button";
+        const confirmAction = make("button", null, mode === "create" ? "Créer le projet" : "Importer le projet");
+        confirmAction.type = "submit";
+        confirmAction.disabled = true;
+        actions.append(previewAction, confirmAction);
+        form.append(status, previewCard, actions);
+        let preview = null;
+        const clearPreview = () => {
+          preview = null;
+          confirmAction.disabled = true;
+          previewCard.hidden = true;
+          initializeGit.checked = false;
+          initializeGit.disabled = true;
+          status.textContent = "Choisissez le dossier, puis prévisualisez l’opération.";
+        };
+        rootControl.addEventListener("input", clearPreview);
+        if (folderControl) folderControl.addEventListener("input", clearPreview);
+        previewAction.addEventListener("click", async () => {
+          const root = rootControl.value.trim();
+          const folder = folderControl ? folderControl.value.trim() : null;
+          if (!root || (mode === "create" && !folder)) {
+            status.textContent = mode === "create" ? "Choisissez une racine et un nom de dossier." : "Indiquez le dossier existant à importer.";
+            status.dataset.state = "error";
+            return;
+          }
+          previewAction.disabled = true;
+          status.dataset.state = "loading";
+          status.textContent = "Vérification du dossier par le serveur…";
+          try {
+            preview = await requestProject("/v1/projects/preview", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ version: 1, mode, root, folder_name: folder || undefined }),
+            });
+            previewCard.replaceChildren(
+              make("strong", null, preview.display_name),
+              make("span", null, preview.canonical_path),
+              make("span", null, `Git : ${preview.git === "absent" ? "absent" : preview.git}`),
+              gitLabel,
+            );
+            initializeGit.checked = Boolean(preview.git_initialization_proposed);
+            initializeGit.disabled = !preview.git_initialization_proposed;
+            previewCard.hidden = false;
+            confirmAction.disabled = false;
+            status.dataset.state = "ready";
+            status.textContent = "Prévisualisation validée. La confirmation réalisera l’opération.";
+          } catch (error) {
+            preview = null;
+            confirmAction.disabled = true;
+            previewCard.hidden = true;
+            status.dataset.state = "error";
+            status.textContent = error.message || "Le serveur a refusé la prévisualisation.";
+          } finally {
+            previewAction.disabled = false;
+          }
         });
-        nodes.sourceState.textContent = "Coordinateur par défaut des nouveaux projets mis à jour.";
-        nodes.sourceState.dataset.state = "ready";
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          if (!preview) return;
+          const root = rootControl.value.trim();
+          const folder = folderControl ? folderControl.value.trim() : null;
+          confirmAction.disabled = true;
+          previewAction.disabled = true;
+          status.dataset.state = "loading";
+          status.textContent = "Enregistrement durable du projet…";
+          try {
+            const confirmed = await requestProject("/v1/projects/confirm", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                version: 1,
+                command_id: "project-ui-" + Date.now() + "-" + Math.random().toString(16).slice(2),
+                mode,
+                root,
+                folder_name: folder || undefined,
+                initialize_git: Boolean(initializeGit.checked),
+              }),
+            });
+            selectedProjectId = confirmed.project_id;
+            await refreshProjects();
+            closeProjectOnboarding();
+            nodes.sourceState.textContent = `${confirmed.display_name} est enregistré dans Bridget.`;
+            nodes.sourceState.dataset.state = "ready";
+          } catch (error) {
+            status.dataset.state = "error";
+            status.textContent = error.message || "Le projet n’a pas pu être enregistré.";
+            confirmAction.disabled = false;
+          } finally {
+            previewAction.disabled = false;
+          }
+        });
+        dialog.append(form);
+        dialog.returnFocus = returnFocus;
+        if (!dialog.open) dialog.showModal();
+        (folderControl || rootControl).focus();
       } catch (error) {
-        nodes.sourceState.textContent = error.message;
+        showProjectOnboardingMessage("Projet indisponible", error.message || "Les réglages de projets sont indisponibles.", returnFocus);
+        nodes.sourceState.textContent = error.message || "Les réglages de projets sont indisponibles.";
         nodes.sourceState.dataset.state = "error";
       }
     };
@@ -7911,14 +7989,19 @@
       nodes.projectCollapse.setAttribute("aria-expanded", String(!collapsed));
       nodes.projectCollapse.textContent = collapsed ? "›" : "‹";
     };
-    nodes.projectNew.addEventListener("click", () => { void beginProject("create"); });
-    nodes.projectImport.addEventListener("click", () => { void beginProject("import"); });
+    nodes.projectNew.addEventListener("click", () => { void beginProject("create", nodes.projectNew); });
+    nodes.projectImport.addEventListener("click", () => { void beginProject("import", nodes.projectImport); });
     nodes.projectCollapse.addEventListener("click", () => {
       setProjectPaneCollapsed(nodes.projectPane.dataset.collapsed !== "true");
     });
     nodes.projectPresentationOverlay.addEventListener("close", () => {
       const returnFocus = nodes.projectPresentationOverlay.returnFocus;
       nodes.projectPresentationOverlay.returnFocus = null;
+      if (canFocus(returnFocus)) returnFocus.focus();
+    });
+    nodes.projectOnboardingOverlay.addEventListener("close", () => {
+      const returnFocus = nodes.projectOnboardingOverlay.returnFocus;
+      nodes.projectOnboardingOverlay.returnFocus = null;
       if (canFocus(returnFocus)) returnFocus.focus();
     });
     if (typeof documentRef.addEventListener === "function") {
@@ -9561,6 +9644,11 @@
       nodes.sourceState.dataset.state = "error";
       return { close: closeAll };
     }
+
+    void refreshProjects().catch((error) => {
+      nodes.sourceState.textContent = error.message || "La liste des projets est indisponible.";
+      nodes.sourceState.dataset.state = "error";
+    });
 
     if (requestedAgent) {
       connectWatch(requestedAgent);

@@ -16,8 +16,11 @@ use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
 use bridget_transport::journal::valid_events;
 use bridget_transport::protocol::{
     AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
-    LedgerMessage, LedgerScope, PresenceMode, ProjectRuntimeOperation, ProjectRuntimeRefusal,
-    ProjectRuntimeRequest, decode, encode,
+    LedgerMessage, LedgerScope, PresenceMode, ProjectAdminOperation, ProjectAdminRequest,
+    ProjectBackend, ProjectBindStatus, ProjectBindRequest, ProjectBindingProjection,
+    ProjectBindingStatus,
+    ProjectRuntimeOperation, ProjectRuntimeRefusal, ProjectRuntimeRequest,
+    PROJECT_REGISTRY_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION, ServiceCapability, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
 use serde::{Deserialize, Serialize};
@@ -925,6 +928,56 @@ struct UiProjectSettingsV1 {
     configuration_available: bool,
 }
 
+#[derive(Debug, Serialize)]
+struct UiProjectListV1 {
+    version: u8,
+    projects: Vec<UiProjectListEntryV1>,
+}
+
+#[derive(Debug, Serialize)]
+struct UiProjectListEntryV1 {
+    project_id: String,
+    display_name: String,
+    canonical_path: String,
+    state: &'static str,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiProjectConfirmRequestV1 {
+    version: u8,
+    command_id: String,
+    mode: String,
+    root: String,
+    #[serde(default)]
+    folder_name: Option<String>,
+    initialize_git: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct UiProjectConfirmedV1 {
+    version: u8,
+    project_id: String,
+    display_name: String,
+    canonical_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiProjectAdminRequestV1 {
+    version: u8,
+    command_id: String,
+    project_id: String,
+    #[serde(default)]
+    root: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct UiProjectAdminAcceptedV1 {
+    version: u8,
+    project: UiProjectListEntryV1,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UiProjectRootsUpdateV1 {
@@ -1301,6 +1354,18 @@ fn serve_connection(
                 },
             ),
         },
+        ("GET", "/v1/projects") => match read_projects(&config.daemon_socket) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
         ("GET", "/v1/control/settings") => match read_server_control_settings(config) {
             Ok(response) => write_json(stream, 200, &response),
             Err((status, code, message)) => write_json(
@@ -1381,6 +1446,62 @@ fn serve_connection(
                 },
             ),
         },
+        ("POST", "/v1/projects/confirm") => {
+            match post_project_confirm(config, &request.body) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("POST", "/v1/projects/disable") => {
+            match post_project_admin(config, &request.body, ProjectAdminOperation::Disable) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("POST", "/v1/projects/activate") => {
+            match post_project_admin(config, &request.body, ProjectAdminOperation::Activate) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("POST", "/v1/projects/rebind") => {
+            match post_project_admin(config, &request.body, ProjectAdminOperation::Rebind) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
         ("POST", "/v1/projects/settings") => {
             match post_project_roots_update(config, &request.body) {
                 Ok(response) => write_json(stream, 200, &response),
@@ -2083,53 +2204,15 @@ fn post_project_preview(
             "Prévisualisation projet invalide.".to_string(),
         )
     })?;
-    if request.version != UI_VERSION || request.root.is_empty() {
-        return Err((
-            400,
-            "invalid_request",
-            "Prévisualisation projet invalide.".to_string(),
-        ));
+    if request.version != UI_VERSION {
+        return Err((400, "invalid_request", "Prévisualisation projet invalide.".to_string()));
     }
-    let Some(source) = config.project_root_policy_path.as_deref() else {
-        return Err((
-            409,
-            "project_settings_unavailable",
-            "Les racines projet ne sont pas configurées pour ce relais.".to_string(),
-        ));
-    };
-    let policy = ProjectRootPolicy::load(source).map_err(|_| {
-        (
-            409,
-            "project_settings_unavailable",
-            "La politique de racines est indisponible.".to_string(),
-        )
-    })?;
-    let preview = match request.mode.as_str() {
-        "create" => {
-            let Some(folder_name) = request.folder_name.as_deref() else {
-                return Err((
-                    400,
-                    "invalid_request",
-                    "Le nom du dossier projet est obligatoire.".to_string(),
-                ));
-            };
-            ProjectPreview::create(&policy, Path::new(&request.root), folder_name)
-        }
-        "import" => {
-            if request.folder_name.is_some() {
-                return Err((
-                    400,
-                    "invalid_request",
-                    "Un import n accepte pas de nom de dossier.".to_string(),
-                ));
-            }
-            ProjectPreview::import(&policy, Path::new(&request.root))
-        }
-        _ => {
-            return Err((400, "invalid_request", "Mode projet inconnu.".to_string()));
-        }
-    }
-    .map_err(|error| (409, "project_preview_refused", error.to_string()))?;
+    let preview = resolve_project_preview(
+        config,
+        &request.mode,
+        &request.root,
+        request.folder_name.as_deref(),
+    )?;
     let mode = match preview.mode {
         ProjectFolderMode::Create => "create",
         ProjectFolderMode::Import => "import",
@@ -2147,6 +2230,382 @@ fn post_project_preview(
         display_name: preview.display_name,
         git,
         git_initialization_proposed: preview.git_initialization_proposed,
+    })
+}
+
+fn resolve_project_preview(
+    config: &UiRelayConfig,
+    mode: &str,
+    root: &str,
+    folder_name: Option<&str>,
+) -> Result<crate::project_workspace::ProjectPreview, (u16, &'static str, String)> {
+    use crate::project_workspace::ProjectPreview;
+
+    if root.trim().is_empty() {
+        return Err((400, "invalid_request", "La racine du projet est obligatoire.".to_string()));
+    }
+    let Some(source) = config.project_root_policy_path.as_deref() else {
+        return Err((
+            409,
+            "project_settings_unavailable",
+            "Les racines projet ne sont pas configurées pour ce relais.".to_string(),
+        ));
+    };
+    let policy = ProjectRootPolicy::load(source).map_err(|_| {
+        (
+            409,
+            "project_settings_unavailable",
+            "La politique de racines est indisponible.".to_string(),
+        )
+    })?;
+    match mode {
+        "create" => {
+            let Some(folder_name) = folder_name else {
+                return Err((
+                    400,
+                    "invalid_request",
+                    "Le nom du dossier projet est obligatoire.".to_string(),
+                ));
+            };
+            ProjectPreview::create(&policy, Path::new(root), folder_name)
+        }
+        "import" => {
+            if folder_name.is_some() {
+                return Err((
+                    400,
+                    "invalid_request",
+                    "Un import n accepte pas de nom de dossier.".to_string(),
+                ));
+            }
+            ProjectPreview::import(&policy, Path::new(root))
+        }
+        _ => {
+            return Err((400, "invalid_request", "Mode projet inconnu.".to_string()));
+        }
+    }
+    .map_err(|error| (409, "project_preview_refused", error.to_string()))
+}
+
+type UiProjectError = (u16, &'static str, String);
+
+fn project_daemon_unavailable() -> UiProjectError {
+    (
+        503,
+        "daemon_unavailable",
+        "Le daemon Bridget est indisponible.".to_string(),
+    )
+}
+
+fn open_project_registry_service(
+    socket_path: &Path,
+) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>), UiProjectError> {
+    let stream = UnixStream::connect(socket_path).map_err(|_| project_daemon_unavailable())?;
+    let read_stream = stream
+        .try_clone()
+        .map_err(|_| project_daemon_unavailable())?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Service,
+        },
+    )
+    .map_err(|_| project_daemon_unavailable())?;
+    match read_daemon(&mut reader).map_err(|_| project_daemon_unavailable())? {
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Service,
+        } => {}
+        _ => {
+            return Err((
+                503,
+                "project_service_unavailable",
+                "Le registre de projets n’a pas accepté la session locale.".to_string(),
+            ));
+        }
+    }
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::ServiceHello {
+            version: SERVICE_CONTRACT_VERSION,
+            service: "maicie".to_string(),
+            issuer_scope: crate::mcp::issuer_scope("bridget-ui-project-registry"),
+            capabilities: vec![ServiceCapability::ProjectRegistryV1],
+        },
+    )
+    .map_err(|_| project_daemon_unavailable())?;
+    match read_daemon(&mut reader).map_err(|_| project_daemon_unavailable())? {
+        DaemonToWrapper::ServiceWelcome { capabilities, .. }
+            if capabilities.contains(&ServiceCapability::ProjectRegistryV1) =>
+        {
+            Ok((reader, writer))
+        }
+        _ => Err((
+            503,
+            "project_service_unavailable",
+            "Le registre de projets n’est pas disponible sur ce serveur.".to_string(),
+        )),
+    }
+}
+
+fn read_projects(socket_path: &Path) -> Result<UiProjectListV1, UiProjectError> {
+    let (mut reader, mut writer) = open_project_registry_service(socket_path)?;
+    let now = now_secs();
+    let request = ProjectAdminRequest {
+        contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+        command_id: format!("ui-project-list-{}", uuid::Uuid::new_v4()),
+        issued_at: now,
+        deadline_at: now.saturating_add(10),
+        operation: ProjectAdminOperation::List,
+        project_id: None,
+        requested_root: None,
+    };
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::ProjectRegistryAdminRequest { request },
+    )
+    .map_err(|_| project_daemon_unavailable())?;
+    let DaemonToWrapper::ProjectRegistryAdminOutcome { outcome } =
+        read_daemon(&mut reader).map_err(|_| project_daemon_unavailable())?
+    else {
+        return Err((
+            503,
+            "project_service_unavailable",
+            "Le registre de projets a renvoyé une réponse inattendue.".to_string(),
+        ));
+    };
+    if outcome.reason.is_some() {
+        return Err((
+            409,
+            "project_list_refused",
+            "La liste des projets a été refusée par le serveur.".to_string(),
+        ));
+    }
+    let mut projects = outcome
+        .bindings
+        .into_iter()
+        .filter_map(ui_project_list_entry)
+        .collect::<Vec<_>>();
+    projects.sort_by(|left, right| left.display_name.cmp(&right.display_name));
+    Ok(UiProjectListV1 {
+        version: UI_VERSION,
+        projects,
+    })
+}
+
+fn ui_project_list_entry(binding: ProjectBindingProjection) -> Option<UiProjectListEntryV1> {
+    let canonical_path = binding.canonical_root?;
+    let display_name = Path::new(&canonical_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&binding.project_id)
+        .to_string();
+    let state = match binding.state {
+        ProjectBindingStatus::Active => "active",
+        ProjectBindingStatus::Disabled => "disabled",
+        ProjectBindingStatus::PathMissing => "path_missing",
+        ProjectBindingStatus::PendingBinding => "pending_binding",
+        ProjectBindingStatus::BindingFailed => "binding_failed",
+        ProjectBindingStatus::Unregistered => "unregistered",
+    };
+    Some(UiProjectListEntryV1 {
+        project_id: binding.project_id,
+        display_name,
+        canonical_path,
+        state,
+    })
+}
+
+fn post_project_confirm(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiProjectConfirmedV1, UiProjectError> {
+    use crate::project_workspace::ProjectFolderMode;
+    use std::process::Command;
+
+    let request: UiProjectConfirmRequestV1 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "invalid_request",
+            "Confirmation de projet invalide.".to_string(),
+        )
+    })?;
+    if request.version != UI_VERSION
+        || request.command_id.trim().is_empty()
+        || request.command_id.len() > MAX_UI_COMMAND_ID_BYTES
+        || !request.command_id.bytes().all(is_query_byte)
+    {
+        return Err((
+            400,
+            "invalid_request",
+            "Confirmation de projet invalide.".to_string(),
+        ));
+    }
+    let preview = resolve_project_preview(
+        config,
+        &request.mode,
+        &request.root,
+        request.folder_name.as_deref(),
+    )?;
+    let created_directory = matches!(preview.mode, ProjectFolderMode::Create);
+    if created_directory {
+        std::fs::create_dir(&preview.canonical_path).map_err(|error| {
+            (
+                409,
+                "project_create_refused",
+                format!("Le dossier du projet n’a pas pu être créé : {error}"),
+            )
+        })?;
+    }
+    if request.initialize_git && preview.git_initialization_proposed {
+        let initialized = Command::new("git")
+            .arg("init")
+            .arg("--quiet")
+            .arg(&preview.canonical_path)
+            .status()
+            .map_err(|error| {
+                (
+                    503,
+                    "git_unavailable",
+                    format!("Git n’a pas pu initialiser le projet : {error}"),
+                )
+            })?;
+        if !initialized.success() {
+            return Err((
+                409,
+                "git_initialization_refused",
+                "Git a refusé l’initialisation du projet.".to_string(),
+            ));
+        }
+    }
+    let (mut reader, mut writer) = open_project_registry_service(&config.daemon_socket)?;
+    let now = now_secs();
+    let project_id = format!("project-{}", uuid::Uuid::new_v4().simple());
+    let bind = ProjectBindRequest {
+        contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+        command_id: request.command_id,
+        issued_at: now,
+        deadline_at: now.saturating_add(30),
+        project_id: project_id.clone(),
+        requested_root: preview.canonical_path.to_string_lossy().into_owned(),
+        backend: ProjectBackend::Host,
+        policy_id: None,
+        policy_version: None,
+    };
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::ProjectRegistryRequest { request: bind },
+    )
+    .map_err(|_| project_daemon_unavailable())?;
+    let DaemonToWrapper::ProjectRegistryOutcome { outcome } =
+        read_daemon(&mut reader).map_err(|_| project_daemon_unavailable())?
+    else {
+        return Err((
+            503,
+            "project_service_unavailable",
+            "Le registre de projets a renvoyé une réponse inattendue.".to_string(),
+        ));
+    };
+    if outcome.status != ProjectBindStatus::Active || outcome.reason.is_some() {
+        let context = if created_directory {
+            " Le dossier créé est conservé, sans suppression automatique."
+        } else {
+            " Aucun contenu du dossier importé n’a été modifié par Bridget."
+        };
+        return Err((
+            409,
+            "project_registration_refused",
+            format!("Le registre a refusé le projet.{context}"),
+        ));
+    }
+    Ok(UiProjectConfirmedV1 {
+        version: UI_VERSION,
+        project_id,
+        display_name: preview.display_name,
+        canonical_path: preview.canonical_path.to_string_lossy().into_owned(),
+    })
+}
+
+fn post_project_admin(
+    config: &UiRelayConfig,
+    body: &[u8],
+    operation: ProjectAdminOperation,
+) -> Result<UiProjectAdminAcceptedV1, UiProjectError> {
+    let request: UiProjectAdminRequestV1 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "invalid_request",
+            "Action de projet invalide.".to_string(),
+        )
+    })?;
+    let valid_command_id = request.version == UI_VERSION
+        && !request.command_id.trim().is_empty()
+        && request.command_id.len() <= MAX_UI_COMMAND_ID_BYTES
+        && request.command_id.bytes().all(is_query_byte);
+    let valid_project_id = !request.project_id.trim().is_empty()
+        && request.project_id.len() <= 128
+        && request
+            .project_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+    let needs_root = matches!(
+        operation,
+        ProjectAdminOperation::Activate | ProjectAdminOperation::Rebind
+    );
+    if !valid_command_id
+        || !valid_project_id
+        || (needs_root && request.root.as_deref().is_none_or(|root| root.trim().is_empty()))
+        || (!needs_root && request.root.is_some())
+    {
+        return Err((
+            400,
+            "invalid_request",
+            "Action de projet invalide.".to_string(),
+        ));
+    }
+    let (mut reader, mut writer) = open_project_registry_service(&config.daemon_socket)?;
+    let now = now_secs();
+    let request = ProjectAdminRequest {
+        contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+        command_id: request.command_id,
+        issued_at: now,
+        deadline_at: now.saturating_add(30),
+        operation,
+        project_id: Some(request.project_id),
+        requested_root: request.root,
+    };
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::ProjectRegistryAdminRequest { request },
+    )
+    .map_err(|_| project_daemon_unavailable())?;
+    let DaemonToWrapper::ProjectRegistryAdminOutcome { outcome } =
+        read_daemon(&mut reader).map_err(|_| project_daemon_unavailable())?
+    else {
+        return Err((
+            503,
+            "project_service_unavailable",
+            "Le registre de projets a renvoyé une réponse inattendue.".to_string(),
+        ));
+    };
+    if outcome.reason.is_some() {
+        return Err((
+            409,
+            "project_action_refused",
+            "Le registre a refusé cette action sur le projet.".to_string(),
+        ));
+    }
+    let Some(project) = outcome.bindings.into_iter().find_map(ui_project_list_entry) else {
+        return Err((
+            409,
+            "project_action_refused",
+            "Le registre n’a pas confirmé l’état du projet.".to_string(),
+        ));
+    };
+    Ok(UiProjectAdminAcceptedV1 {
+        version: UI_VERSION,
+        project,
     })
 }
 
@@ -6305,6 +6764,136 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn spec_080_confirmation_ui_cree_puis_enregistre_le_projet_dans_le_registre() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-080-ui-confirm-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let projects = root.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let policy_path = root.join("project-root-policy.json");
+        std::fs::write(
+            &policy_path,
+            serde_json::to_vec(&serde_json::json!({
+                "contract_version": 1,
+                "policy_generation": 1,
+                "allowed_project_roots": [projects],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let socket = root.join("bridget.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let expected_root = projects.join("atelier");
+        let expected_root_for_server = expected_root.clone();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Service
+                }
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Service
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::ServiceHello { capabilities, .. }
+                    if capabilities == vec![ServiceCapability::ProjectRegistryV1]
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::ServiceWelcome {
+                    version: SERVICE_CONTRACT_VERSION,
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 30,
+                    capabilities: vec![ServiceCapability::ProjectRegistryV1],
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            let WrapperToDaemon::ProjectRegistryRequest { request } =
+                decode::<WrapperToDaemon>(line.trim()).unwrap()
+            else {
+                panic!("la confirmation doit appeler le registre de projets");
+            };
+            assert_eq!(
+                request.requested_root,
+                expected_root_for_server.display().to_string()
+            );
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::ProjectRegistryOutcome {
+                    outcome: bridget_transport::protocol::ProjectBindOutcome {
+                        contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+                        command_id: request.command_id,
+                        project_id: request.project_id,
+                        status: ProjectBindStatus::Active,
+                        binding_generation: Some(1),
+                        backend: Some(ProjectBackend::Host),
+                        runtime_policy: None,
+                        reason: None,
+                        existing_project_id: None,
+                        existing_binding_generation: None,
+                        observed_at: now_secs(),
+                    },
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+        });
+        let config = UiRelayConfig {
+            daemon_socket: socket,
+            maicie_config: root.join("maicie.json"),
+            project_root_policy_path: Some(policy_path),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "test".to_string(),
+        };
+        let confirmed = post_project_confirm(
+            &config,
+            &serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "command_id": "project-ui-confirm-1",
+                "mode": "create",
+                "root": projects,
+                "folder_name": "atelier",
+                "initialize_git": false,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(confirmed.display_name, "atelier");
+        assert_eq!(confirmed.canonical_path, expected_root.display().to_string());
+        assert!(expected_root.is_dir(), "le dossier confirmé doit être créé");
+        server.join().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn logos_runtime_sont_servis_comme_assets_svg_revalides() {
         for (path, expected) in [
