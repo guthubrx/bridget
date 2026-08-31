@@ -87,7 +87,7 @@ pub fn is_loopback_relay_url(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_loopback_relay_url, MAXIMUM_OPEN_PANELS, PanelError, PanelRegistry};
+    use super::{MAXIMUM_OPEN_PANELS, PanelError, PanelRegistry, is_loopback_relay_url};
     #[test]
     fn un_seul_panneau_est_autorise_et_url_hors_loopback_refusee() {
         let mut registry = PanelRegistry::default();

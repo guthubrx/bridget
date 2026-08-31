@@ -4158,6 +4158,25 @@ code {
   width: auto;
   height: auto;
   background: transparent;
+
+/* La coque native Desktop garde Sources et flotte à gauche. Le relais reste
+   propriétaire de la seule conversation visible dans son enfant WebView. */
+body[data-desktop-shell="true"] .workspace,
+body[data-desktop-shell="true"] .workspace:has(.detail-panel:not([hidden])),
+body[data-desktop-shell="true"] .workspace:has(.project-pane[data-collapsed="true"]),
+body[data-desktop-shell="true"] .workspace:has(.project-pane[data-collapsed="true"]):has(.detail-panel:not([hidden])) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body[data-desktop-shell="true"] .project-pane,
+body[data-desktop-shell="true"] .agent-pane,
+body[data-desktop-shell="true"] .agent-pane-resizer {
+  display: none;
+}
+
+body[data-desktop-shell="true"] .conversation {
+  grid-column: 1;
+}
   color: var(--text-primary);
   font-size: 1.6rem;
 }

@@ -5,12 +5,13 @@
 //! locale; les panneaux distants sont créés avec d'autres labels.
 
 pub mod connection;
+pub mod fleet;
 pub mod host_identity;
 pub mod panels;
+pub mod preferences_store;
 pub mod profile;
 pub mod profile_service;
 pub mod profile_store;
-pub mod preferences_store;
 pub mod ssh;
 
 #[cfg(target_os = "macos")]
@@ -18,17 +19,21 @@ pub mod ssh;
 pub fn run() {
     use crate::connection::{
         ConnectionStatus, HttpRelayProbe, RemoteTransport, SshRemoteTransport,
-        attention_request_path, attention_state_request_path, connect_remote, desktop_relay_url,
-        mark_tunnel_lost,
+        attention_request_path, attention_state_request_path, connect_remote, desktop_panel_url,
+        discover_local_endpoint, fleet_projects_path, fleet_snapshot_path, mark_tunnel_lost,
+    };
+    use crate::fleet::{
+        DesktopFleetSnapshotV1, FleetSourceInput, LOCAL_SOURCE_ID, LOCAL_SOURCE_LABEL, SourceKind,
+        project_source, source_without_snapshot, unavailable_source,
     };
     use crate::host_identity::{
         HostIdentityStatus, HostIdentityTicket, SystemHostKeyCommandRunner, approve_host_identity,
         check_host_identity,
     };
     use crate::panels::PanelRegistry;
+    use crate::preferences_store::{DesktopPreferences, PreferencesStore};
     use crate::profile::{ConnectionProfile, ProfileDraft};
     use crate::profile_service::ProfileService;
-    use crate::preferences_store::{DesktopPreferences, PreferencesStore};
     use crate::profile_store::{ClientIdentityStore, ProfileStore};
     use std::collections::{HashMap, HashSet};
     use std::io::{Read, Write};
@@ -52,10 +57,19 @@ pub fn run() {
         notified_attention_events: Mutex<HashSet<String>>,
     }
 
+    const DESKTOP_SHELL_WIDTH: u32 = 520;
+
     struct ActiveConnection {
         session: crate::profile::ConnectionSession,
         transport: Option<SshRemoteTransport>,
         local_port: u16,
+    }
+
+    #[derive(Clone)]
+    struct FleetReadTarget {
+        input: FleetSourceInput,
+        local_port: u16,
+        endpoint: crate::profile::RelayEndpoint,
     }
 
     #[derive(Debug, serde::Deserialize)]
@@ -76,7 +90,7 @@ pub fn run() {
     #[derive(serde::Serialize)]
     struct PanelView {
         label: String,
-        profile_id: String,
+        source_id: String,
         open_panels: usize,
     }
 
@@ -168,6 +182,90 @@ pub fn run() {
             return Err(());
         }
         Ok(response[header_end..].to_vec())
+    }
+
+    fn fleet_connection_state(state: &crate::profile::ConnectionState) -> String {
+        match state {
+            crate::profile::ConnectionState::Disconnected => "disconnected",
+            crate::profile::ConnectionState::ConnectingSsh => "connecting",
+            crate::profile::ConnectionState::AwaitingHostApproval => "awaiting_host_approval",
+            crate::profile::ConnectionState::OpeningTunnel => "opening_tunnel",
+            crate::profile::ConnectionState::CheckingRelay => "checking_relay",
+            crate::profile::ConnectionState::Connected => "connected",
+            crate::profile::ConnectionState::Reconnecting => "reconnecting",
+            crate::profile::ConnectionState::Failed => "failed",
+            crate::profile::ConnectionState::Closed => "closed",
+        }
+        .to_owned()
+    }
+
+    fn read_fleet_target(target: FleetReadTarget) -> crate::fleet::SourceProjection {
+        let snapshot_path = fleet_snapshot_path(&target.endpoint);
+        let snapshot = match request_relay_json(target.local_port, "GET", &snapshot_path, None) {
+            Ok(body) => body,
+            Err(_) => {
+                return unavailable_source(
+                    target.input,
+                    "La lecture de cette source est indisponible.",
+                );
+            }
+        };
+        let projects_path = fleet_projects_path(&target.endpoint);
+        let projects = match request_relay_json(target.local_port, "GET", &projects_path, None) {
+            Ok(body) => body,
+            Err(_) => {
+                return source_without_snapshot(
+                    target.input,
+                    Some("La liste des projets de cette source est indisponible.".to_owned()),
+                );
+            }
+        };
+        match project_source(target.input.clone(), &snapshot, &projects) {
+            Ok(projection) => projection,
+            Err(error) => source_without_snapshot(
+                FleetSourceInput {
+                    source_id: target.input.source_id,
+                    label: target.input.label,
+                    kind: target.input.kind,
+                    connection_state: "failed".to_owned(),
+                },
+                Some(error.to_string()),
+            ),
+        }
+    }
+
+    fn connected_remote_targets(
+        profiles: &[ConnectionProfile],
+        sessions: &HashMap<String, ActiveConnection>,
+    ) -> (Vec<FleetReadTarget>, Vec<crate::fleet::SourceProjection>) {
+        let mut targets = Vec::new();
+        let mut inactive = Vec::new();
+        for profile in profiles {
+            let input = FleetSourceInput {
+                source_id: profile.id().to_owned(),
+                label: profile.label().to_owned(),
+                kind: SourceKind::Ssh,
+                connection_state: sessions
+                    .get(profile.id())
+                    .map(|active| fleet_connection_state(&active.session.state))
+                    .unwrap_or_else(|| "disconnected".to_owned()),
+            };
+            let active = sessions.get(profile.id());
+            if let Some(active) = active
+                .filter(|active| active.session.state == crate::profile::ConnectionState::Connected)
+            {
+                if let Some(endpoint) = active.session.endpoint().cloned() {
+                    targets.push(FleetReadTarget {
+                        input,
+                        local_port: active.local_port,
+                        endpoint,
+                    });
+                    continue;
+                }
+            }
+            inactive.push(source_without_snapshot(input, None));
+        }
+        (targets, inactive)
     }
 
     fn read_attention(
@@ -382,11 +480,12 @@ pub fn run() {
             return Ok(());
         };
         if let Some(webview) = app.get_webview(&panel.label) {
+            let panel_width = size.width.saturating_sub(DESKTOP_SHELL_WIDTH).max(1);
             webview
-                .set_position(PhysicalPosition::new(0_i32, 0_i32))
+                .set_position(PhysicalPosition::new(DESKTOP_SHELL_WIDTH as i32, 0_i32))
                 .map_err(as_message)?;
             webview
-                .set_size(PhysicalSize::new(size.width.max(1), size.height.max(1)))
+                .set_size(PhysicalSize::new(panel_width, size.height.max(1)))
                 .map_err(as_message)?;
         }
         Ok(())
@@ -460,6 +559,43 @@ pub fn run() {
             .map_err(as_message)?;
         reload_panels_after_preferences_save(&app, &state);
         Ok(preferences)
+    }
+
+    /// Agrège des copies de sessions déjà établies. Aucun verrou n'est conservé
+    /// pendant les lectures HTTP des relais, afin qu'une source lente n'empêche
+    /// ni une autre source ni la fermeture d'un tunnel.
+    #[tauri::command(rename_all = "snake_case")]
+    fn fleet_snapshot(state: State<'_, DesktopState>) -> Result<DesktopFleetSnapshotV1, String> {
+        let profiles = state
+            .profiles
+            .lock()
+            .map_err(as_message)?
+            .list()
+            .map_err(as_message)?;
+        let (targets, mut projections) = {
+            let sessions = state.sessions.lock().map_err(as_message)?;
+            connected_remote_targets(&profiles, &sessions)
+        };
+        projections.extend(targets.into_iter().map(read_fleet_target));
+
+        // La source locale n'existe dans la réponse que si le relais est
+        // réellement joignable et que sa flotte peut être lue.
+        if let Ok(endpoint) = discover_local_endpoint() {
+            let local = read_fleet_target(FleetReadTarget {
+                input: FleetSourceInput {
+                    source_id: LOCAL_SOURCE_ID.to_owned(),
+                    label: LOCAL_SOURCE_LABEL.to_owned(),
+                    kind: SourceKind::Local,
+                    connection_state: "connected".to_owned(),
+                },
+                local_port: endpoint.port,
+                endpoint,
+            });
+            if local.source.error.is_none() {
+                projections.push(local);
+            }
+        }
+        Ok(DesktopFleetSnapshotV1::from_sources(projections))
     }
 
     #[tauri::command(rename_all = "snake_case")]
@@ -606,29 +742,43 @@ pub fn run() {
     fn panel_open(
         app: tauri::AppHandle,
         state: State<'_, DesktopState>,
-        profile_id: String,
-        view: Option<String>,
+        source_id: String,
+        agent_name: Option<String>,
+        desktop_action: Option<String>,
     ) -> Result<PanelView, String> {
-        let relay = {
+        let (local_port, endpoint) = if source_id == LOCAL_SOURCE_ID {
+            let endpoint = discover_local_endpoint()
+                .map_err(|_| "Le relais de cet ordinateur est indisponible.".to_owned())?;
+            let path = fleet_snapshot_path(&endpoint);
+            request_relay_json(endpoint.port, "GET", &path, None)
+                .map_err(|_| "Le relais de cet ordinateur ne répond pas.".to_owned())?;
+            (endpoint.port, endpoint)
+        } else {
             let sessions = state.sessions.lock().map_err(as_message)?;
             let active = sessions
-                .get(&profile_id)
+                .get(&source_id)
                 .ok_or_else(|| "Ce serveur n'est pas encore connecté.".to_owned())?;
+            if active.session.state != crate::profile::ConnectionState::Connected {
+                return Err("Ce serveur n'est pas encore connecté.".to_owned());
+            }
             let endpoint = active
                 .session
                 .endpoint()
+                .cloned()
                 .ok_or_else(|| "Le relais connecté ne fournit pas d'endpoint.".to_owned())?;
-            desktop_relay_url(active.local_port, endpoint, &state.client_id)
+            (active.local_port, endpoint)
         };
-        let url = if view.as_deref() == Some("settings") {
-            format!("{relay}&view=settings")
-        } else {
-            relay
-        };
+        let url = desktop_panel_url(
+            local_port,
+            &endpoint,
+            &state.client_id,
+            agent_name.as_deref(),
+            desktop_action.as_deref(),
+        );
         close_open_panels(&app, &state)?;
         let panel = {
             let mut panels = state.panels.lock().map_err(as_message)?;
-            panels.open(profile_id.clone(), url).map_err(as_message)?
+            panels.open(source_id.clone(), url).map_err(as_message)?
         };
         let main = main_window(&app)?;
         let external_url = panel
@@ -671,7 +821,7 @@ pub fn run() {
         arrange_panels(&app, &panels)?;
         Ok(PanelView {
             label: panel.label,
-            profile_id,
+            source_id,
             open_panels: panels.panels().count(),
         })
     }
@@ -680,9 +830,9 @@ pub fn run() {
     fn panel_close(
         app: tauri::AppHandle,
         state: State<'_, DesktopState>,
-        profile_id: String,
+        source_id: String,
     ) -> Result<(), String> {
-        close_panel_for_profile(&app, &state, &profile_id)
+        close_panel_for_profile(&app, &state, &source_id)
     }
 
     tauri::Builder::default()
@@ -729,6 +879,7 @@ pub fn run() {
             profile_delete,
             preferences_get,
             preferences_save,
+            fleet_snapshot,
             desktop_about,
             host_identity_check,
             host_identity_approve,

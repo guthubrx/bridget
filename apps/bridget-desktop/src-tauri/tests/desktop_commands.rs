@@ -16,39 +16,41 @@ fn le_frontend_ne_peut_pas_fournir_de_commande_url_ou_secret_libre() {
 
 #[test]
 fn les_actions_de_carte_sont_delegatees_au_listing_de_profils() {
-    let frontend = include_str!("../../ui/app.js");
-    assert!(frontend.contains("elements.list.addEventListener(\"click\""));
-    for action in [
-        "edit",
-        "delete",
-        "connect",
-        "open",
-        "disconnect",
-    ] {
-        assert!(
-            frontend.contains(&format!("button.dataset.action === \"{action}\"")),
-            "action de carte absente : {action}"
-        );
-    }
-    assert!(frontend.contains("void connectProfile(profile)"));
-    assert!(!frontend.contains("data-action=\"settings\""));
-    assert!(!frontend.contains("openServerSettings"));
+    let frontend = include_str!("../../ui/fleet-app.js");
+    assert!(frontend.contains("invoke(\"fleet_snapshot\")"));
+    assert!(frontend.contains("void openAgent(agent)"));
+    assert!(frontend.contains("void openProjectAction(source.source_id, pendingProjectAction)"));
+    assert!(frontend.contains("await invoke(\"connection_close\""));
+    assert!(frontend.contains("await connectProfile(profile)"));
+    assert!(frontend.contains("source_id: agent.source_id"));
+    assert!(frontend.contains("desktop_action: action"));
 }
 
 #[test]
 fn un_seul_serveur_est_affiche_a_la_fois() {
-    let frontend = include_str!("../../ui/app.js");
+    let frontend = include_str!("../../ui/fleet-app.js");
     let backend = include_str!("../src/lib.rs");
-    assert!(
-        frontend.contains("openPanelProfiles.clear(); openPanelProfiles.add(panel.profile_id)")
-    );
+    assert!(frontend.contains("source_id: agent.source_id"));
     assert!(backend.contains("close_open_panels(&app, &state)?;"));
-    assert!(backend.contains("PhysicalSize::new(size.width.max(1), size.height.max(1))"));
+    assert!(backend.contains("const DESKTOP_SHELL_WIDTH: u32 = 520;"));
+    assert!(backend.contains("PhysicalSize::new(panel_width, size.height.max(1))"));
+}
+
+#[test]
+fn flotte_desktop_ne_restitue_ni_secret_ni_chemin_d_origine() {
+    let backend = include_str!("../src/lib.rs");
+    let fleet = include_str!("../src/fleet.rs");
+    assert!(backend.contains("fn fleet_snapshot"));
+    assert!(backend.contains("connected_remote_targets(&profiles, &sessions)"));
+    assert!(backend.contains("if local.source.error.is_none()"));
+    assert!(fleet.contains("pub struct DesktopFleetSnapshotV1"));
+    assert!(fleet.contains("canonical_path_n_est_pas_un_champ_de_sortie"));
+    assert!(!fleet.contains("canonical_path: String"));
 }
 
 #[test]
 fn les_reglages_de_contenu_restent_locaux_et_sans_capability_de_panneau() {
-    let frontend = include_str!("../../ui/app.js");
+    let frontend = include_str!("../../ui/fleet-app.js");
     let markup = include_str!("../../ui/index.html");
     let backend = include_str!("../src/lib.rs");
 
