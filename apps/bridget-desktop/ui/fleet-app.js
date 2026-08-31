@@ -228,6 +228,11 @@ function renderAgentList(agents) {
   for (const agent of agents) {
     const item = document.createElement("li");
     const card = button("", "agent-card", () => void openAgent(agent));
+    const layout = document.createElement("span");
+    layout.className = "agent-card__layout";
+    layout.append(createFleetAgentAvatar(agent));
+    const content = document.createElement("span");
+    content.className = "agent-card__content";
     const name = document.createElement("strong");
     name.textContent = agent.display_name || agent.name;
     const origin = document.createElement("small");
@@ -236,13 +241,57 @@ function renderAgentList(agents) {
     details.textContent = agent.wait_state === "waiting" || (agent.alerts || []).length
       ? "À traiter"
       : agent.state || "Inconnu";
-    card.append(name, origin, details);
+    content.append(name, origin);
+    if ((agent.labels || []).length > 0) {
+      const labels = document.createElement("span");
+      labels.className = "fleet-agent-labels";
+      agent.labels.slice(0, 2).forEach((label) => {
+        const chip = document.createElement("span");
+        chip.className = "fleet-agent-label";
+        chip.textContent = label;
+        labels.append(chip);
+      });
+      content.append(labels);
+    }
+    content.append(details);
+    if (agent.last_excerpt) {
+      const excerpt = document.createElement("span");
+      excerpt.className = "agent-card__excerpt";
+      excerpt.textContent = agent.last_excerpt;
+      content.append(excerpt);
+    }
+    layout.append(content);
+    card.append(layout);
+    const menu = button("⋯", "agent-menu", () => void openAgentMenu(agent));
+    menu.setAttribute("aria-label", `Ouvrir les actions de ${agent.display_name || agent.name}`);
+    menu.setAttribute("aria-haspopup", "menu");
     const pin = button(effectivePinned(agent) ? "★" : "☆", "pin-agent", () => void togglePin(agent));
     pin.setAttribute("aria-label", effectivePinned(agent) ? "Désépingler" : "Épingler");
-    item.append(card, pin);
+    item.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      void openAgentMenu(agent);
+    });
+    item.append(card, menu, pin);
     list.append(item);
   }
   return list;
+}
+
+function createFleetAgentAvatar(agent) {
+  const colors = {
+    white: "#e2e3e5", brown: "#b08962", red: "#d64e55", orange: "#d98b2b",
+    amber: "#e6a23c", green: "#49b46c", teal: "#4bafa0", blue: "#3f7fe0",
+    purple: "#6e48c7", pink: "#c33680", gray: "#a5a6aa",
+  };
+  const shapes = new Set(["round", "soft-square", "pill", "triangle", "hexagon", "cloud", "drop", "pebble"]);
+  const avatar = document.createElement("span");
+  avatar.className = "fleet-agent-avatar";
+  avatar.dataset.shape = shapes.has(agent.avatar_shape) ? agent.avatar_shape : "round";
+  avatar.dataset.state = agent.state || "unknown";
+  avatar.style.setProperty("--fleet-avatar-color", colors[agent.avatar_color] || colors.blue);
+  avatar.setAttribute("aria-hidden", "true");
+  avatar.append(document.createElement("span"));
+  return avatar;
 }
 
 function renderGroup(group, collapsed, depth = 0) {
@@ -304,6 +353,19 @@ async function openAgent(agent) {
   try {
     await invoke("panel_open", { source_id: agent.source_id, agent_name: agent.name });
     announce(`${agent.display_name || agent.name} est ouvert depuis ${agent.source_label}.`);
+  } catch (error) {
+    announce(error.message || String(error));
+  }
+}
+
+async function openAgentMenu(agent) {
+  try {
+    await invoke("panel_open", {
+      source_id: agent.source_id,
+      agent_name: agent.name,
+      desktop_action: "agent_menu",
+    });
+    announce(`Les actions de ${agent.display_name || agent.name} sont ouvertes sur ${agent.source_label}.`);
   } catch (error) {
     announce(error.message || String(error));
   }

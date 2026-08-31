@@ -76,6 +76,9 @@ pub struct DesktopFleetAgent {
     pub source_label: String,
     pub name: String,
     pub display_name: String,
+    pub labels: Vec<String>,
+    pub avatar_shape: String,
+    pub avatar_color: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -86,6 +89,8 @@ pub struct DesktopFleetAgent {
     pub alerts: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_message_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_excerpt: Option<String>,
     pub unread: usize,
     pub is_coordinator: bool,
 }
@@ -135,14 +140,36 @@ struct RemoteAgent {
     #[serde(default)]
     last_message_at: Option<i64>,
     #[serde(default)]
+    last_excerpt: Option<String>,
+    #[serde(default)]
     unread: usize,
     #[serde(default)]
     agent_link: Option<RemoteAgentLink>,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 struct RemoteProfile {
+    #[serde(default)]
     display_name: String,
+    #[serde(default)]
+    labels: Vec<String>,
+    #[serde(default)]
+    avatar: RemoteAvatar,
+}
+
+#[derive(Deserialize)]
+struct RemoteAvatar {
+    shape: String,
+    color: String,
+}
+
+impl Default for RemoteAvatar {
+    fn default() -> Self {
+        Self {
+            shape: "round".to_owned(),
+            color: "gray".to_owned(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -205,6 +232,7 @@ pub fn project_source(
         .agents
         .into_iter()
         .map(|agent| {
+            let profile = agent.profile.unwrap_or_default();
             let project_name = agent
                 .project_id
                 .as_deref()
@@ -213,11 +241,14 @@ pub fn project_source(
                 key: format!("{}:{}", input.source_id, agent.name),
                 source_id: input.source_id.clone(),
                 source_label: input.label.clone(),
-                display_name: agent
-                    .profile
-                    .map(|profile| profile.display_name)
-                    .filter(|name| !name.trim().is_empty())
-                    .unwrap_or_else(|| agent.name.clone()),
+                display_name: if profile.display_name.trim().is_empty() {
+                    agent.name.clone()
+                } else {
+                    profile.display_name.clone()
+                },
+                labels: profile.labels,
+                avatar_shape: profile.avatar.shape,
+                avatar_color: profile.avatar.color,
                 name: agent.name,
                 project_id: agent.project_id,
                 project_name,
@@ -225,6 +256,7 @@ pub fn project_source(
                 wait_state: agent.wait_state,
                 alerts: agent.alerts,
                 last_message_at: agent.last_message_at,
+                last_excerpt: agent.last_excerpt,
                 unread: agent.unread,
                 is_coordinator: agent
                     .agent_link
@@ -280,5 +312,38 @@ mod tests {
             serde_json::to_string(&DesktopFleetSnapshotV1::from_sources(vec![projection])).unwrap();
         assert!(!encoded.contains("canonical_path"));
         assert!(!encoded.contains("/private"));
+    }
+
+    #[test]
+    fn projection_conserve_l_identite_visuelle_et_le_resume_de_l_agent() {
+        let source = FleetSourceInput {
+            source_id: "one".into(),
+            label: "One".into(),
+            kind: SourceKind::Ssh,
+            connection_state: "connected".into(),
+        };
+        let projection = project_source(
+            source,
+            br#"{
+              "version": 1,
+              "agents": [{
+                "name": "coord",
+                "profile": {
+                  "display_name": "Coordination",
+                  "labels": ["coordination", "projet"],
+                  "avatar": { "shape": "cloud", "color": "teal" }
+                },
+                "last_excerpt": "La revue est pr\u00eate."
+              }]
+            }"#,
+            br#"{ "version": 1, "projects": [] }"#,
+        )
+        .unwrap();
+
+        let agent = projection.agents.first().unwrap();
+        assert_eq!(agent.avatar_shape, "cloud");
+        assert_eq!(agent.avatar_color, "teal");
+        assert_eq!(agent.labels, ["coordination", "projet"]);
+        assert_eq!(agent.last_excerpt.as_deref(), Some("La revue est prête."));
     }
 }

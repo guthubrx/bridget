@@ -17,13 +17,20 @@ fn le_frontend_ne_peut_pas_fournir_de_commande_url_ou_secret_libre() {
 #[test]
 fn les_actions_de_carte_sont_delegatees_au_listing_de_profils() {
     let frontend = include_str!("../../ui/fleet-app.js");
+    let connection = include_str!("../src/connection.rs");
+    let remote_ui = include_str!("../../../../crates/bridget-daemon/assets/ui/app.js");
     assert!(frontend.contains("invoke(\"fleet_snapshot\")"));
     assert!(frontend.contains("void openAgent(agent)"));
+    assert!(frontend.contains("void openAgentMenu(agent)"));
+    assert!(frontend.contains("item.addEventListener(\"contextmenu\""));
+    assert!(frontend.contains("fleet-agent-avatar"));
     assert!(frontend.contains("void openPanelAction(source.source_id, pendingPanelAction)"));
     assert!(frontend.contains("await invoke(\"connection_close\""));
     assert!(frontend.contains("await connectProfile(profile)"));
     assert!(frontend.contains("source_id: agent.source_id"));
     assert!(frontend.contains("desktop_action: action"));
+    assert!(connection.contains("\"agent_menu\" if agent_name.is_some()"));
+    assert!(remote_ui.contains("params.get(\"agent_menu\") === \"1\""));
 }
 
 #[test]

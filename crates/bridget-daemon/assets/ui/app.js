@@ -69,6 +69,7 @@
         assert.match(source, /desktopAction === "import_project"/);
         assert.match(source, /const openControlCenter = \(initialRoute = "general"\) =>/);
         assert.match(source, /params\.get\("view"\) === "usage" \? "usage" : "general"/);
+        assert.match(source, /params\.get\("agent_menu"\) === "1"/);
         assert.match(stylesheet, /body\[data-desktop-shell="true"\] \.project-pane/);
         assert.match(stylesheet, /body\[data-desktop-shell="true"\] \.agent-pane/);
         assert.match(stylesheet, /body\[data-desktop-shell="true"\] \.conversation/);
@@ -7043,6 +7044,7 @@
     const params = new URLSearchParams(windowRef.location.search);
     const token = params.get("token") || "";
     const requestedAgent = params.get("agent");
+    const requestedAgentMenu = params.get("agent_menu") === "1";
     const nativeAttentionShell = params.get("native_attention") === "1";
     const desktopShell = params.get("desktop_shell") === "1";
     const desktopAction = params.get("desktop_action");
@@ -7102,6 +7104,7 @@
     };
     applyControlCenterPreferences(documentRef, controlPreferences);
     let state = createUiState({ selectedAgent: isUiSender(requestedAgent) ? null : requestedAgent });
+    let pendingRequestedAgentMenu = requestedAgentMenu && requestedAgent ? requestedAgent : null;
     let projects = [];
     let selectedProjectId = null;
     let projectSettingsSnapshot = null;
@@ -9128,6 +9131,15 @@
       nodes.hiddenCount.textContent = String(projection.hidden.length);
       nodes.hiddenAgents.hidden = projection.hidden.length === 0;
       nodes.fleetCount.textContent = String(projection.activeTotal);
+      if (pendingRequestedAgentMenu) {
+        const target = [...activeRows, ...stoppedRows, ...hiddenRows].find(
+          (entry) => entry.agent.name === pendingRequestedAgentMenu,
+        );
+        if (target) {
+          pendingRequestedAgentMenu = null;
+          openIdentityCard(target.agent, target.node.identityActionButton, true);
+        }
+      }
       if (openedName) {
         const opened = [...activeRows, ...stoppedRows, ...hiddenRows].find(
           (entry) => entry.agent.name === openedName,

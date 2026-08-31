@@ -652,7 +652,7 @@ button.quiet,
 
 #fleet-shell .fleet-agent-list li {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 2rem;
+  grid-template-columns: minmax(0, 1fr) 2rem 2rem;
   gap: 0.08rem;
 }
 
@@ -691,10 +691,97 @@ button.quiet,
   font-size: 0.72rem;
 }
 
+#fleet-shell .agent-card__layout {
+  display: grid;
+  grid-template-columns: 2.4rem minmax(0, 1fr);
+  align-items: start;
+  gap: 0.5rem;
+}
+
+#fleet-shell .agent-card__content {
+  display: grid;
+  min-width: 0;
+  gap: 0.1rem;
+}
+
+#fleet-shell .fleet-agent-avatar {
+  position: relative;
+  display: grid;
+  width: 2.2rem;
+  height: 2.2rem;
+  place-items: center;
+}
+
+#fleet-shell .fleet-agent-avatar::before {
+  position: absolute;
+  inset: -0.12rem;
+  border: 2px solid #50bd78;
+  border-radius: 50%;
+  content: "";
+}
+
+#fleet-shell .fleet-agent-avatar > span {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--fleet-avatar-color);
+}
+
+#fleet-shell .fleet-agent-avatar > span::before,
+#fleet-shell .fleet-agent-avatar > span::after {
+  position: absolute;
+  top: 39%;
+  width: 13%;
+  height: 25%;
+  border-radius: 50%;
+  background: #101215;
+  content: "";
+}
+
+#fleet-shell .fleet-agent-avatar > span::before { left: 31%; transform: rotate(-12deg); }
+#fleet-shell .fleet-agent-avatar > span::after { right: 31%; transform: rotate(12deg); }
+#fleet-shell .fleet-agent-avatar[data-shape="round"] > span { border-radius: 50%; }
+#fleet-shell .fleet-agent-avatar[data-shape="soft-square"] > span { border-radius: 34%; }
+#fleet-shell .fleet-agent-avatar[data-shape="pill"] > span { border-radius: 48%; }
+#fleet-shell .fleet-agent-avatar[data-shape="triangle"] > span { clip-path: polygon(50% 2%, 97% 88%, 88% 98%, 12% 98%, 3% 88%); }
+#fleet-shell .fleet-agent-avatar[data-shape="hexagon"] > span { clip-path: polygon(50% 1%, 92% 24%, 92% 76%, 50% 99%, 8% 76%, 8% 24%); }
+#fleet-shell .fleet-agent-avatar[data-shape="cloud"] > span { clip-path: polygon(9% 76%, 0 59%, 8% 43%, 23% 39%, 27% 20%, 43% 11%, 57% 18%, 68% 10%, 85% 18%, 91% 35%, 100% 50%, 93% 72%, 76% 83%, 26% 86%); }
+#fleet-shell .fleet-agent-avatar[data-shape="drop"] > span { clip-path: polygon(50% 1%, 89% 44%, 89% 67%, 78% 87%, 60% 99%, 40% 99%, 22% 87%, 11% 67%, 11% 44%); }
+#fleet-shell .fleet-agent-avatar[data-shape="pebble"] > span { border-radius: 52% 38% 46% 41% / 43% 52% 39% 56%; }
+#fleet-shell .fleet-agent-avatar[data-state="stopped"]::before { border-color: #70737a; }
+#fleet-shell .fleet-agent-avatar[data-state="stopped"] > span { filter: grayscale(1); opacity: 0.38; }
+#fleet-shell .fleet-agent-avatar[data-state="stopped"] > span::before,
+#fleet-shell .fleet-agent-avatar[data-state="stopped"] > span::after { top: 56%; height: 7%; }
+
+#fleet-shell .fleet-agent-labels {
+  display: flex;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+#fleet-shell .fleet-agent-label {
+  max-width: 7rem;
+  padding: 0.06rem 0.28rem;
+  border: 1px solid var(--fleet-line);
+  border-radius: 999px;
+  color: var(--fleet-muted);
+  font-size: 0.62rem;
+  line-height: 1.15;
+}
+
+#fleet-shell .agent-menu,
 #fleet-shell .pin-agent {
   align-self: stretch;
   color: var(--fleet-muted);
   font-size: 1rem;
+}
+
+#fleet-shell .agent-menu:hover,
+#fleet-shell .agent-menu:focus-visible {
+  color: var(--fleet-text);
+  background: var(--fleet-surface-hover);
 }
 
 #fleet-shell .pin-agent:hover,
