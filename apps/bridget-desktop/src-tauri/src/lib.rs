@@ -865,12 +865,11 @@ pub fn run() {
             main.set_focus().map_err(as_message)?;
 
             main.on_window_event(move |event| {
-                if matches!(event, tauri::WindowEvent::Resized(_)) {
-                    if let Some(state) = handle.try_state::<DesktopState>() {
-                        if let Ok(panels) = state.panels.lock() {
-                            let _ = arrange_panels(&handle, &panels);
-                        }
-                    }
+                if matches!(event, tauri::WindowEvent::Resized(_))
+                    && let Some(state) = handle.try_state::<DesktopState>()
+                    && let Ok(panels) = state.panels.lock()
+                {
+                    let _ = arrange_panels(&handle, &panels);
                 }
             });
             Ok(())
