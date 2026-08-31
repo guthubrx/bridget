@@ -1,6 +1,6 @@
 const elements = {
   add: document.querySelector("#add-profile"), dialog: document.querySelector("#profile-dialog"), close: document.querySelector("#close-dialog"), cancel: document.querySelector("#cancel-profile"), form: document.querySelector("#profile-form"), list: document.querySelector("#profiles-list"), empty: document.querySelector("#empty-state"), status: document.querySelector("#app-status"), connectionStatus: document.querySelector("#connection-status"), showProfiles: document.querySelector("#show-profiles"), activePanels: document.querySelector("#active-panels"), loadError: document.querySelector("#load-error"), formError: document.querySelector("#form-error"), title: document.querySelector("#profile-dialog-title"), id: document.querySelector("#profile-id"), label: document.querySelector("#profile-label"), host: document.querySelector("#profile-host"), port: document.querySelector("#profile-port"), user: document.querySelector("#profile-user"), identityFileField: document.querySelector("#identity-file-field"), identityFile: document.querySelector("#profile-identity-file"), hostIdentityDialog: document.querySelector("#host-identity-dialog"), hostIdentityServer: document.querySelector("#host-identity-server"), hostIdentityFingerprint: document.querySelector("#host-identity-fingerprint"),
-  showPreferences: document.querySelector("#show-preferences"), preferencesDialog: document.querySelector("#preferences-dialog"), preferencesForm: document.querySelector("#preferences-form"), closePreferences: document.querySelector("#close-preferences"), cancelPreferences: document.querySelector("#cancel-preferences"), preferencesDisplayName: document.querySelector("#preferences-display-name"), preferencesColorScheme: document.querySelector("#preferences-color-scheme"), preferencesTimezone: document.querySelector("#preferences-timezone"), preferencesFontSize: document.querySelector("#preferences-font-size"), preferencesError: document.querySelector("#preferences-error"), desktopVersion: document.querySelector("#desktop-version"), desktopUpdateStatus: document.querySelector("#desktop-update-status"),
+  showPreferences: document.querySelector("#show-preferences"), preferencesDialog: document.querySelector("#preferences-dialog"), preferencesForm: document.querySelector("#preferences-form"), closePreferences: document.querySelector("#close-preferences"), cancelPreferences: document.querySelector("#cancel-preferences"), preferencesDisplayName: document.querySelector("#preferences-display-name"), preferencesColorScheme: document.querySelector("#preferences-color-scheme"), preferencesTimezone: document.querySelector("#preferences-timezone"), preferencesFontSize: document.querySelector("#preferences-font-size"), preferencesExternalLinks: document.querySelector("#preferences-external-links"), preferencesFileReferences: document.querySelector("#preferences-file-references"), preferencesRemoteImages: document.querySelector("#preferences-remote-images"), preferencesError: document.querySelector("#preferences-error"), desktopVersion: document.querySelector("#desktop-version"), desktopUpdateStatus: document.querySelector("#desktop-update-status"),
 };
 
 let profiles = [];
@@ -152,6 +152,10 @@ function fillPreferencesForm(preferences) {
   elements.preferencesColorScheme.value = preferences.color_scheme || "system";
   elements.preferencesTimezone.value = preferences.timezone || "system";
   elements.preferencesFontSize.value = String(preferences.font_size_px || 16);
+  const content = preferences.content_security || {};
+  elements.preferencesExternalLinks.checked = content.external_links === true;
+  elements.preferencesFileReferences.checked = content.file_references === true;
+  elements.preferencesRemoteImages.checked = content.remote_images === true;
   clearError(elements.preferencesError);
 }
 
@@ -166,6 +170,11 @@ function localPreferencesDraft() {
     color_scheme: elements.preferencesColorScheme.value,
     timezone,
     font_size_px: Number(elements.preferencesFontSize.value),
+    content_security: {
+      external_links: elements.preferencesExternalLinks.checked,
+      file_references: elements.preferencesFileReferences.checked,
+      remote_images: elements.preferencesRemoteImages.checked,
+    },
   };
 }
 
