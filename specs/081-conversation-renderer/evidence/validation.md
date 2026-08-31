@@ -28,13 +28,18 @@ présence reçoit `Operation not permitted` en écrivant son état temporaire.
 Ces deux échecs ne proviennent pas des assets JavaScript ou CSS de la reprise
 US1 et ne sont pas présentés comme verts.
 
-## Binaire de validation
+## Binaire de validation et déploiement
 
-Le binaire release de la reprise US1 a été construit dans le worktree isolé.
-Son SHA-256 est
+Le binaire release de la reprise US1 a été construit dans le worktree isolé,
+puis installé après sauvegarde du binaire précédent. Son SHA-256 est
 `4322e26aae5ca17d219dfb0044aa83ef427380f06da0f67f613d1833c2f1ecb3`.
-Il n'est pas encore installé : la validation manuelle ci-dessous reste le
-verrou de fermeture de la SPEC.
+Il est installé dans `/Users/moi/.local/bin/bridget`. La sauvegarde récupérable
+est `/Users/moi/.local/bin/bridget.before-conversation-composition-20260831-144000`.
+
+Le LaunchAgent `com.bridget.daemon` a été relancé. `bridget status` observe le
+daemon en ligne, avec le build-id `0abc763db94e`, qui correspond à la tête
+déployée de `main`. La validation visuelle manuelle T042 reste le verrou de
+fermeture de la SPEC.
 
 ## Validation manuelle restante
 

@@ -30,8 +30,12 @@ ni secret, ni jeton de relais, ni contenu de conversation de production.
 - `/Users/moi/.cargo/bin/cargo build --release -p bridget-daemon` : succès.
   Le SHA-256 du binaire de validation est
   `4322e26aae5ca17d219dfb0044aa83ef427380f06da0f67f613d1833c2f1ecb3`.
-  Il reste isolé dans le worktree tant que la preuve visuelle T042 n'est pas
-  consignée.
+  Le binaire a été installé dans `/Users/moi/.local/bin/bridget` après une
+  sauvegarde récupérable dans
+  `/Users/moi/.local/bin/bridget.before-conversation-composition-20260831-144000`.
+  Le LaunchAgent `com.bridget.daemon` a été relancé et le status atteste le
+  build-id `0abc763db94e`. T042 reste ouverte uniquement pour le contrôle
+  visuel manuel.
 
 ## T004 - Point de départ - 2026-08-31
 
