@@ -752,6 +752,25 @@
         assert.equal(decision.showNewMessages, true);
       });
 
+      test("spec_081_ancre_lecture_reste_sur_le_meme_tour_lors_d_une_activite", () => {
+        const rects = api.SPEC_081_CONVERSATION_FIXTURES.readingTurns.map((turn, index) => ({
+          id: turn.messageId,
+          top: 80 + index * 128,
+          bottom: 80 + (index + 1) * 128,
+        }));
+        const anchor = api.readingAnchorFromTurnRects(500, rects);
+        assert.deepEqual(anchor, { id: "spec-081-reading-4", offset: -36 });
+        assert.equal(
+          api.restoredReadingScrollTop(960, 500, 600, anchor),
+          1096,
+        );
+        const draft = api.preserveDraft(api.createDraft("ne pas perdre", 3, 8, true));
+        assert.equal(draft.value, "ne pas perdre");
+        assert.equal(draft.selectionStart, 3);
+        assert.equal(draft.selectionEnd, 8);
+        assert.equal(draft.focused, true);
+      });
+
       test("pastille_n_incrémente_que_les_nouvelles_bulles_texte_agent", () => {
         const update = (seq, payload) => ({
           kind: "record",
@@ -2633,6 +2652,71 @@
         assert.equal(root.textContent.includes("|---|"), false);
       });
 
+      test("spec_081_fences_t3_reprises_restent_identifiables_et_passives", () => {
+        assert.equal(api.extractFenceLanguage("language-typescript"), "typescript");
+        assert.equal(api.extractFenceLanguage("language-langage-inconnu"), "langage-inconnu");
+        assert.equal(api.extractFenceTitle('typescript fichier="src/exemple.ts"'), "src/exemple.ts");
+        assert.equal(api.extractFenceTitle("python api.py"), "api.py");
+        assert.deepEqual(
+          api.extractCodeFenceMetadata([
+            '```typescript fichier="src/exemple.ts"',
+            "const valeur = 1;",
+            "```",
+            "```langage-inconnu inconnu.ext",
+            "texte brut",
+            "```",
+          ].join("\n")),
+          [
+            { language: "typescript", title: "src/exemple.ts" },
+            { language: "langage-inconnu", title: "inconnu.ext" },
+          ],
+        );
+        assert.deepEqual(api.highlightCodeText("const x = 1", "langage-inconnu", null), {
+          language: "langage-inconnu", html: null, highlighted: false,
+        });
+      });
+
+      test("spec_081_blocs_techniques_copient_exactement_code_et_table", () => {
+        const engines = loadMarkdownEngines();
+        const source = [
+          '```typescript fichier="src/exemple.ts"',
+          "const valeur = 1;",
+          "```",
+          "",
+          "| État | Valeur |",
+          "| --- | --- |",
+          "| prêt | oui |",
+        ].join("\n");
+        const root = api.renderMessageMarkdown(engines.document, source, {
+          parse: engines.parse,
+          purify: engines.purify,
+        });
+        assert.equal(root.querySelector(".code-block__title").textContent, "src/exemple.ts");
+        assert.equal(root.querySelector(".code-block code").textContent, "const valeur = 1;\n");
+        assert.equal(root.querySelectorAll(".message-copy").length, 3);
+        const rows = api.markdownTableRows(root.querySelector("table"));
+        assert.equal(api.serializeTableRowsMarkdown(rows), "| État | Valeur |\n| --- | --- |\n| prêt | oui |");
+        assert.equal(api.serializeTableRowsCsv(rows), '"État","Valeur"\n"prêt","oui"');
+        assert.equal(api.messageDomHasForbiddenSurface(root), false);
+      });
+
+      test("spec_081_theme_colorateur_suit_le_theme_bridget", () => {
+        const links = {
+          "highlight-theme-light": { media: "" },
+          "highlight-theme-dark": { media: "" },
+        };
+        const documentRef = { getElementById: (id) => links[id] || null };
+        api.applyHighlightTheme(documentRef, api.normalizeControlCenterPreferences({ colorScheme: "dark" }));
+        assert.equal(links["highlight-theme-light"].media, "not all");
+        assert.equal(links["highlight-theme-dark"].media, "all");
+        api.applyHighlightTheme(documentRef, api.normalizeControlCenterPreferences({ colorScheme: "light" }));
+        assert.equal(links["highlight-theme-light"].media, "all");
+        assert.equal(links["highlight-theme-dark"].media, "not all");
+        const markup = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+        assert.match(markup, /id="highlight-theme-light"/);
+        assert.match(markup, /vendor\/highlight\.min\.js/);
+      });
+
       test("message_markdown_pas_de_lien_ni_image_actifs", () => {
         const engines = loadMarkdownEngines();
         const root = api.renderMessageMarkdown(
@@ -2645,6 +2729,37 @@
         assert.equal(tags.has("IMG"), false);
         assert.equal(api.messageDomHasForbiddenSurface(root), false);
         assert.match(root.textContent, /evil\.example|clic|img/i);
+      });
+
+      test("spec_081_contenu_reference_reste_inactif_sans_opt_in", () => {
+        const engines = loadMarkdownEngines();
+        const root = api.renderMessageMarkdown(
+          engines.document,
+          "[site](https://example.test/doc) ![photo](https://example.test/a.png) /srv/projet/README.md",
+          { parse: engines.parse, purify: engines.purify },
+        );
+        assert.equal(root.querySelectorAll("a, img").length, 0);
+        assert.equal(root.querySelectorAll(".content-reference").length, 3);
+        assert.equal(root.querySelectorAll(".content-reference__blocked").length, 3);
+        assert.equal(root.querySelectorAll(".content-reference__action").length, 0);
+        assert.equal(api.messageDomHasForbiddenSurface(root), false);
+      });
+
+      test("spec_081_contenu_reference_n_est_activable_que_par_geste_fiable", () => {
+        const engines = loadMarkdownEngines();
+        const root = api.renderMessageMarkdown(
+          engines.document,
+          "![photo](https://example.test/a.png)",
+          {
+            parse: engines.parse,
+            purify: engines.purify,
+            contentSecurity: { remoteImages: true },
+          },
+        );
+        const action = root.querySelector(".content-reference__action");
+        assert.ok(action);
+        action.dispatchEvent(new engines.window.MouseEvent("click", { bubbles: true }));
+        assert.equal(root.querySelectorAll("img").length, 0);
       });
 
       test("message_markdown_sauts_de_ligne_simples_deviennent_br", () => {
@@ -2663,6 +2778,118 @@
           ? null
           : engines.window.marked.parse("ligne un\nligne deux", { async: false, breaks: false });
         assert.equal(/<br\s*\/?>/i.test(String(glued)), false);
+      });
+
+      test("spec_081_fixtures_couvrent_tours_markdown_et_contenus_non_fiables", () => {
+        const fixture = api.SPEC_081_CONVERSATION_FIXTURES;
+        assert.equal(fixture.turns.length, 5);
+        assert.equal(new Set(fixture.turns.map((turn) => turn.messageId)).size, 5);
+        assert.match(fixture.markdown, /```typescript fichier=src\/exemple\.ts/);
+        assert.match(fixture.markdown, /\| État \| Valeur \|/);
+        assert.match(fixture.hostile, /javascript:/i);
+        assert.match(fixture.references.externalLink, /^https:\/\//);
+        assert.match(fixture.references.projectFile, /^\//);
+        assert.match(fixture.references.remoteImage, /^https:\/\//);
+      });
+
+      test("spec_081_preferences_de_contenu_restent_sures_et_locales", () => {
+        const values = new Map();
+        const storage = {
+          getItem: (key) => values.get(key) || null,
+          setItem: (key, value) => values.set(key, value),
+        };
+        assert.deepEqual(api.defaultContentSecurityPreferences(), {
+          externalLinks: false,
+          fileReferences: false,
+          remoteImages: false,
+        });
+        assert.deepEqual(api.normalizeContentSecurityPreferences({
+          externalLinks: true, fileReferences: "true", remoteImages: 1,
+        }), {
+          externalLinks: true, fileReferences: false, remoteImages: false,
+        });
+        storage.setItem(api.CONTENT_SECURITY_PREFERENCES_KEY, "invalide");
+        assert.deepEqual(api.readContentSecurityPreferences(storage), api.defaultContentSecurityPreferences());
+        assert.deepEqual(api.writeContentSecurityPreferences(storage, {
+          externalLinks: true, fileReferences: true, remoteImages: true,
+        }), {
+          externalLinks: true, fileReferences: true, remoteImages: true,
+        });
+        assert.deepEqual(api.readDesktopContentSecurityPreferences({
+          __BRIDGET_CONTENT_SECURITY__: { externalLinks: true, fileReferences: false, remoteImages: true },
+        }), {
+          externalLinks: true, fileReferences: false, remoteImages: true,
+        });
+        assert.equal(api.readDesktopContentSecurityPreferences({}), null);
+        const source = fs.readFileSync(__filename, "utf8");
+        const mountStart = source.indexOf("function mount(");
+        const mountEnd = source.indexOf("return Object.freeze", mountStart);
+        assert.equal(
+          source.slice(mountStart, mountEnd).includes("bridget-content-security-updated"),
+          false,
+        );
+      });
+
+      test("spec_081_classificateur_refuse_les_references_actives_ou_ambiguës", () => {
+        assert.deepEqual(api.classifyContentReference("https://example.test/aide"), {
+          kind: "external_link", value: "https://example.test/aide",
+        });
+        assert.deepEqual(api.classifyContentReference("https://example.test/aperçu.png", { expected: "image" }), {
+          kind: "remote_image", value: "https://example.test/aper%C3%A7u.png",
+        });
+        assert.deepEqual(api.classifyContentReference("/projets/bridget/README.md"), {
+          kind: "project_file", value: "/projets/bridget/README.md",
+        });
+        for (const candidate of [
+          "javascript:alert(1)", "data:text/html,bonjour", "file:///etc/passwd",
+          "https://example.test/actif.svg", "docs/README.md", "//example.test/x",
+        ]) {
+          assert.equal(api.classifyContentReference(candidate, { expected: "image" }).kind, "blocked");
+        }
+        assert.deepEqual(
+          api.extractContentReferences("[site](https://example.test/doc) ![photo](https://example.test/a.png) /srv/projet/src/main.rs"),
+          [
+            { key: "remote_image:https://example.test/a.png", kind: "remote_image", value: "https://example.test/a.png", label: "photo" },
+            { key: "external_link:https://example.test/doc", kind: "external_link", value: "https://example.test/doc", label: "site" },
+            { key: "project_file:/srv/projet/src/main.rs", kind: "project_file", value: "/srv/projet/src/main.rs", label: "Fichier du projet" },
+          ],
+        );
+        assert.equal(
+          api.buildFilePreviewUrl("/srv/projet/src/main.rs", "jeton +"),
+          "/v1/content/file-preview?path=%2Fsrv%2Fprojet%2Fsrc%2Fmain.rs&token=jeton+%2B",
+        );
+      });
+
+      test("spec_081_projection_de_tours_conserve_ordre_et_dedoublonnage", () => {
+        const records = [
+          { event: "turn_start", message_id: "tour-a", payload: { body: "Première demande" } },
+          { event: "update", message_id: "tour-a", payload: { kind: "text", content: "Réponse avant acte." } },
+          { event: "update", message_id: "tour-a", payload: { kind: "command", text: "cargo test" } },
+          { event: "update", message_id: "tour-a", payload: { kind: "text", content: "Réponse après acte." } },
+          { event: "turn_end", message_id: "tour-a", payload: {} },
+          { event: "turn_start", message_id: "tour-b", payload: { body: "Seconde demande" } },
+          { event: "error", message_id: "tour-b", payload: { terminal_kind: "turn_failed", code: "refused" } },
+          { event: "turn_start", message_id: "tour-c", payload: { body: "Troisième demande" } },
+          { event: "turn_start", message_id: "tour-d", payload: { body: "Quatrième demande" } },
+          { event: "update", message_id: "tour-d", payload: { kind: "text", content: "Toujours en cours." } },
+        ].map((record, index) => ({
+          kind: "record", agent: "bridget", at: index + 1,
+          record: { ...record, seq: index + 1, ts: `2026-08-31T10:00:0${index}Z`, session_id: "spec-081" },
+        }));
+        const turns = api.deriveConversationTurns(records.concat([
+          { kind: "peer_exchange", agent: "bridget", at: 10, peer: "relecteur", count: 1 },
+          { kind: "system", agent: "bridget", at: 11, text: "Interrompu par le relais." },
+        ]));
+        assert.equal(turns.length, 6);
+        assert.equal(turns[0].prompt.text, "Première demande");
+        assert.equal(turns[0].entries.filter((entry) => entry.kind === "message").length, 2);
+        assert.equal(turns[0].state, "completed");
+        assert.equal(turns[1].prompt.text, "Seconde demande");
+        assert.equal(turns[1].state, "failed");
+        assert.equal(turns[2].state, "open");
+        assert.equal(turns[3].state, "active");
+        assert.equal(turns[4].state, "peer");
+        assert.equal(turns[5].state, "interrupted");
       });
 
       function makeFakeEventSource() {
@@ -4603,6 +4830,22 @@
     };
   }
 
+  function readingAnchorFromTurnRects(viewportTop, turnRects, threshold = 8) {
+    for (const turn of turnRects || []) {
+      if (!turn || !turn.id || !Number.isFinite(turn.top) || !Number.isFinite(turn.bottom)) continue;
+      if (turn.bottom <= viewportTop + threshold) continue;
+      return { id: turn.id, offset: turn.top - viewportTop };
+    }
+    return null;
+  }
+
+  function restoredReadingScrollTop(currentScrollTop, viewportTop, targetTop, anchor) {
+    if (!anchor || !Number.isFinite(currentScrollTop) || !Number.isFinite(viewportTop) || !Number.isFinite(targetTop)) {
+      return null;
+    }
+    return Math.max(0, currentScrollTop + targetTop - viewportTop - anchor.offset);
+  }
+
   function relayBannerState(previous, signal, since) {
     if (signal === "connected") {
       if (previous.state === "reconnecting" || previous.state === "lost") {
@@ -5236,6 +5479,54 @@
       && entry.delivery_ids.every((id) => roundDeliveryIds.has(id));
   }
 
+  // Projection de lecture seulement : `projectTimeline` reste l'autorité qui
+  // décode le journal. Ce regroupement n'invente aucun fait supplémentaire.
+  function deriveConversationTurns(events, options = {}) {
+    const entries = projectTimeline(events, options);
+    const turns = [];
+    const byMessage = new Map();
+
+    function keyFor(entry, index) {
+      const messageId = text(entry && entry.messageId);
+      if (messageId) return `message:${messageId}`;
+      return `orphan:${text(entry && entry.agent, "inconnu")}:${Number(entry && entry.at) || 0}:${index}`;
+    }
+
+    function createTurn(key, entry) {
+      const turn = {
+        key,
+        agent: text(entry && entry.agent),
+        at: Number(entry && entry.at) || 0,
+        prompt: null,
+        entries: [],
+        state: "open",
+      };
+      turns.push(turn);
+      if (text(entry && entry.messageId)) byMessage.set(key, turn);
+      return turn;
+    }
+
+    entries.forEach((entry, index) => {
+      const key = keyFor(entry, index);
+      let turn = byMessage.get(key);
+      if (entry.kind === "message" && entry.role === "user") {
+        if (!turn) turn = createTurn(key, entry);
+        if (!turn.prompt) turn.prompt = entry;
+        return;
+      }
+      if (!turn) turn = createTurn(key, entry);
+      turn.entries.push(entry);
+      if (entry.kind === "work") turn.state = turn.prompt && turn.prompt.failure ? "failed" : "completed";
+      else if (entry.kind === "activity" || entry.kind === "activity_batch") turn.state = "active";
+      else if (entry.kind === "round") turn.state = "round";
+      else if (entry.kind === "peer_exchange") turn.state = "peer";
+      else if (entry.kind === "system") turn.state = "interrupted";
+      else if (entry.kind === "message" && entry.failure) turn.state = "failed";
+    });
+
+    return turns;
+  }
+
   function projectTimeline(events, options = {}) {
     const ordered = (Array.isArray(events) ? events : [])
       .map((event, index) => ({ ...event, __order: index }))
@@ -5657,7 +5948,7 @@
   const MESSAGE_MARKDOWN_TAGS = Object.freeze([
     "DIV", "P", "STRONG", "EM", "B", "I", "CODE", "PRE", "UL", "OL", "LI",
     "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "BR", "SPAN",
-    "BLOCKQUOTE", "H1", "H2", "H3", "H4", "H5", "H6", "HR",
+    "BLOCKQUOTE", "H1", "H2", "H3", "H4", "H5", "H6", "HR", "SECTION", "HEADER", "ARTICLE", "BUTTON",
   ]);
 
   const MESSAGE_PURIFY_CONFIG = Object.freeze({
@@ -5666,7 +5957,7 @@
       "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td",
       "blockquote", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "span",
     ]),
-    ALLOWED_ATTR: Object.freeze([]),
+    ALLOWED_ATTR: Object.freeze(["class"]),
     FORBID_TAGS: Object.freeze([
       "a", "img", "picture", "source", "video", "audio", "iframe", "object",
       "embed", "form", "input", "button", "script", "style", "link", "meta",
@@ -5678,6 +5969,221 @@
     ALLOW_DATA_ATTR: false,
     ALLOW_UNKNOWN_PROTOCOLS: false,
   });
+
+  const SPEC_081_CONVERSATION_FIXTURES = Object.freeze({
+    turns: Object.freeze([
+      Object.freeze({ messageId: "spec-081-turn-1", state: "completed" }),
+      Object.freeze({ messageId: "spec-081-turn-2", state: "open" }),
+      Object.freeze({ messageId: "spec-081-turn-3", state: "failed" }),
+      Object.freeze({ messageId: "spec-081-turn-4", state: "interrupted" }),
+      Object.freeze({ messageId: "spec-081-turn-5", state: "peer" }),
+    ]),
+    readingTurns: Object.freeze(
+      Array.from({ length: 20 }, (_, index) => Object.freeze({
+        messageId: `spec-081-reading-${index + 1}`,
+        state: index === 19 ? "active" : "completed",
+      })),
+    ),
+    markdown: [
+      "```typescript fichier=src/exemple.ts",
+      "const état = 'lisible';",
+      "```",
+      "",
+      "| État | Valeur |",
+      "| --- | --- |",
+      "| prêt | oui |",
+    ].join("\n"),
+    hostile: "[mauvais](javascript:alert(1)) <img src=x onerror=alert(1)>",
+    references: Object.freeze({
+      externalLink: "https://example.test/documentation",
+      projectFile: "/workspace/bridget/README.md",
+      remoteImage: "https://example.test/aperçu.png",
+    }),
+  });
+
+  const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
+  const FENCE_TITLE_ATTR_REGEX = /(?:^|\s)(?:title|file(?:name)?|fichier)=(?:"([^"]+)"|'([^']+)'|(\S+))/i;
+  const FENCE_FILENAME_TOKEN_REGEX = /^[\w@][\w@./-]*\.[A-Za-z0-9]+$/;
+
+  // Adapté de ChatMarkdown.tsx de T3 Code (MIT) : extraction lisible du
+  // langage et du titre de fence, sans reprendre sa pile React ni Shiki.
+  function extractFenceLanguage(value) {
+    const match = String(value || "").match(CODE_FENCE_LANGUAGE_REGEX);
+    const raw = match ? match[1] : String(value || "").trim().split(/\s+/)[0] || "text";
+    return raw === "gitignore" ? "ini" : raw.toLocaleLowerCase("en-US");
+  }
+
+  function extractFenceTitle(meta) {
+    const source = String(meta || "").trim();
+    if (!source) return null;
+    const attrMatch = FENCE_TITLE_ATTR_REGEX.exec(source);
+    const title = attrMatch && (attrMatch[1] || attrMatch[2] || attrMatch[3]);
+    if (title) return title;
+    return source.split(/\s+/).find((candidate) => FENCE_FILENAME_TOKEN_REGEX.test(candidate)) || null;
+  }
+
+  function extractCodeFenceMetadata(source) {
+    const fences = [];
+    const lines = String(source == null ? "" : source).split("\n");
+    let fenceOpen = false;
+    for (const line of lines) {
+      const match = /^```([^\s`]*)\s*(.*)$/.exec(line);
+      if (!match) continue;
+      if (fenceOpen) {
+        fenceOpen = false;
+        continue;
+      }
+      fenceOpen = true;
+      const language = extractFenceLanguage(match[1] || "text");
+      fences.push({ language, title: extractFenceTitle(match[2]) });
+    }
+    return fences;
+  }
+
+  function highlightCodeText(source, language, highlighter) {
+    const textSource = String(source == null ? "" : source);
+    if (!highlighter || typeof highlighter.highlight !== "function") {
+      return { highlighted: false, html: null, language: language || "text" };
+    }
+    try {
+      if (typeof highlighter.getLanguage === "function" && !highlighter.getLanguage(language)) {
+        return { highlighted: false, html: null, language: language || "text" };
+      }
+      return {
+        highlighted: true,
+        html: String(highlighter.highlight(textSource, { language, ignoreIllegals: true }).value || ""),
+        language,
+      };
+    } catch (_error) {
+      return { highlighted: false, html: null, language: language || "text" };
+    }
+  }
+
+  function markdownTableRows(table) {
+    return [...(table && table.querySelectorAll ? table.querySelectorAll("tr") : [])]
+      .map((row) => [...row.querySelectorAll("th, td")].map((cell) => String(cell.textContent || "").trim()));
+  }
+
+  function serializeTableRowsMarkdown(rows) {
+    const normalized = Array.isArray(rows) ? rows.filter((row) => Array.isArray(row) && row.length > 0) : [];
+    if (normalized.length === 0) return "";
+    const width = Math.max(...normalized.map((row) => row.length));
+    const escape = (value) => String(value == null ? "" : value).replace(/\|/g, "\\|").replace(/\n/g, " ");
+    const line = (row) => `| ${Array.from({ length: width }, (_, index) => escape(row[index])).join(" | ")} |`;
+    return [line(normalized[0]), `| ${Array.from({ length: width }, () => "---").join(" | ")} |`, ...normalized.slice(1).map(line)].join("\n");
+  }
+
+  function serializeTableRowsCsv(rows) {
+    const quote = (value) => `"${String(value == null ? "" : value).replace(/"/g, '""')}"`;
+    return (Array.isArray(rows) ? rows : []).map((row) => (Array.isArray(row) ? row.map(quote).join(",") : "")).join("\n");
+  }
+
+  async function copyTextWithFeedback(button, value, windowRef) {
+    const originalLabel = button.textContent;
+    const clipboard = windowRef && windowRef.navigator && windowRef.navigator.clipboard;
+    try {
+      if (!clipboard || typeof clipboard.writeText !== "function") throw new Error("clipboard_unavailable");
+      await clipboard.writeText(String(value == null ? "" : value));
+      button.textContent = "Copié";
+      button.dataset.copyState = "success";
+    } catch (_error) {
+      button.textContent = "Copie impossible";
+      button.dataset.copyState = "error";
+    }
+    const timer = windowRef && typeof windowRef.setTimeout === "function" ? windowRef.setTimeout : setTimeout;
+    timer(() => {
+      button.textContent = originalLabel;
+      delete button.dataset.copyState;
+    }, 1600);
+  }
+
+  function makeCopyButton(documentRef, label, value, windowRef) {
+    const button = documentRef.createElement("button");
+    button.type = "button";
+    button.className = "message-copy";
+    button.textContent = label;
+    button.setAttribute("aria-label", label);
+    button.addEventListener("click", () => { void copyTextWithFeedback(button, value, windowRef); });
+    return button;
+  }
+
+  function enhanceCodeBlocks(documentRef, root, source, options = {}) {
+    if (!root.querySelectorAll || !documentRef || !documentRef.createElement) return;
+    const metadata = extractCodeFenceMetadata(source);
+    const highlighter = options.highlighter || (typeof globalThis !== "undefined" ? globalThis.hljs : null);
+    const windowRef = options.window || documentRef.defaultView;
+    [...root.querySelectorAll("pre > code")].forEach((code, index) => {
+      const meta = metadata[index] || { language: "text", title: null };
+      const original = String(code.textContent || "");
+      const result = highlightCodeText(original, meta.language, highlighter);
+      if (result.highlighted && result.html !== null) {
+        // Le HTML ne provient que du colorateur embarqué, vérifié par empreinte.
+        code.innerHTML = result.html;
+        code.classList.add("hljs");
+      }
+      code.dataset.language = result.language;
+      const pre = code.parentElement;
+      if (!pre || !pre.parentElement) return;
+      const block = documentRef.createElement("section");
+      block.className = "code-block";
+      block.dataset.wrap = documentRef.documentElement && documentRef.documentElement.dataset.controlWordWrap === "false" ? "false" : "true";
+      const header = documentRef.createElement("header");
+      header.className = "code-block__header";
+      const title = documentRef.createElement("span");
+      title.className = "code-block__title";
+      title.textContent = meta.title || result.language || "texte";
+      const controls = documentRef.createElement("div");
+      controls.className = "code-block__controls";
+      const wrap = documentRef.createElement("button");
+      wrap.type = "button";
+      wrap.className = "code-block__wrap";
+      wrap.textContent = block.dataset.wrap === "true" ? "Sans retour" : "Retour à la ligne";
+      wrap.addEventListener("click", () => {
+        block.dataset.wrap = block.dataset.wrap === "true" ? "false" : "true";
+        wrap.textContent = block.dataset.wrap === "true" ? "Sans retour" : "Retour à la ligne";
+      });
+      controls.append(wrap, makeCopyButton(documentRef, "Copier", original, windowRef));
+      header.append(title, controls);
+      pre.classList.add("code-block__body");
+      // Il faut d'abord remplacer <pre> dans son parent d'origine. Une fois
+      // déplacé dans `block`, son parent devient `block` et remplacer le nœud
+      // par son propre ancêtre déclenche une HierarchyRequestError (jsdom et
+      // WebKit ont tous les deux raison de le refuser).
+      const parent = pre.parentElement;
+      parent.replaceChild(block, pre);
+      block.append(header, pre);
+    });
+  }
+
+  function enhanceTables(documentRef, root, options = {}) {
+    if (!root.querySelectorAll || !documentRef || !documentRef.createElement) return;
+    const windowRef = options.window || documentRef.defaultView;
+    [...root.querySelectorAll("table")].forEach((table) => {
+      const parent = table.parentElement;
+      if (!parent) return;
+      const rows = markdownTableRows(table);
+      const wrapper = documentRef.createElement("section");
+      wrapper.className = "message-table";
+      const header = documentRef.createElement("header");
+      header.className = "message-table__header";
+      header.append(
+        documentRef.createElement("span"),
+        makeCopyButton(documentRef, "Copier Markdown", serializeTableRowsMarkdown(rows), windowRef),
+        makeCopyButton(documentRef, "Copier CSV", serializeTableRowsCsv(rows), windowRef),
+      );
+      header.firstChild.textContent = "Tableau";
+      const scroll = documentRef.createElement("div");
+      scroll.className = "message-table__scroll";
+      parent.replaceChild(wrapper, table);
+      scroll.append(table);
+      wrapper.append(header, scroll);
+    });
+  }
+
+  function enhanceMessageMarkdown(documentRef, root, source, options) {
+    enhanceCodeBlocks(documentRef, root, source, options);
+    enhanceTables(documentRef, root, options);
+  }
 
   function resolveMarkedParse(override) {
     if (typeof override === "function") return override;
@@ -5737,12 +6243,17 @@
     if (!options.skipSanitize) assertMessageHtmlSafe(clean);
     const root = documentRef.createElement("div");
     root.className = "message-body";
-    if (typeof root.setHTML === "function") {
-      root.setHTML(clean);
-    } else {
-      // HTML déjà passé par DOMPurify — seul point d'innerHTML du fil.
-      root.innerHTML = clean;
-    }
+    // HTML déjà passé par DOMPurify. Ce seul point d'insertion conserve les
+    // classes `language-*` nécessaires au colorateur local.
+    root.innerHTML = clean;
+    enhanceMessageMarkdown(documentRef, root, source, options);
+    renderContentReferences(
+      documentRef,
+      root,
+      source,
+      options.contentSecurity || defaultContentSecurityPreferences(),
+      options,
+    );
     return root;
   }
 
@@ -5764,7 +6275,7 @@
         : Object.keys(node.attributes || {});
       for (const name of names) {
         const lower = String(name).toLowerCase();
-        if (lower === "class") continue;
+        if (lower === "class" || lower === "type" || lower.startsWith("aria-") || lower.startsWith("data-")) continue;
         return true;
       }
     }
@@ -5830,6 +6341,7 @@
   });
 
   const CONTROL_CENTER_PREFERENCES_KEY = "bridget.control-center.preferences.v1";
+  const CONTENT_SECURITY_PREFERENCES_KEY = "bridget.content-security.v1";
   const PROJECT_PRESENTATION_PREFERENCES_KEY = "bridget.project-presentation.preferences.v1";
   const PROJECT_PRESENTATION_COLORS = Object.freeze([
     "#4e7cf6", "#43a878", "#c86fbe", "#d58a52", "#8a70e8", "#4c9eb8",
@@ -5875,6 +6387,7 @@
     { key: "appearance", label: "Apparence", keywords: ["thème", "clair", "sombre", "système"] },
     { key: "time", label: "Date et heure", keywords: ["fuseau", "timezone", "iana", "heure"] },
     { key: "typography", label: "Typographie", keywords: ["police", "taille", "lisibilité"] },
+    { key: "content-security", label: "Sécurité du contenu", keywords: ["liens", "fichiers", "images", "sécurité", "contenu"] },
     { key: "server", label: "Serveur", keywords: ["projets", "racines", "capacité", "configuration"] },
     { key: "usage", label: "Usage et facturation", keywords: ["jetons", "tokens", "coût", "fournisseur", "billing"] },
     { key: "updates", label: "Mises à jour", keywords: ["version", "release", "mise à jour"] },
@@ -5892,6 +6405,201 @@
       monospaceFontSizePx: 13,
       wordWrap: true,
     };
+  }
+
+  function defaultContentSecurityPreferences() {
+    return { externalLinks: false, fileReferences: false, remoteImages: false };
+  }
+
+  function normalizeContentSecurityPreferences(value) {
+    const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    return {
+      externalLinks: source.externalLinks === true,
+      fileReferences: source.fileReferences === true,
+      remoteImages: source.remoteImages === true,
+    };
+  }
+
+  function readContentSecurityPreferences(storage) {
+    try {
+      const raw = storage && storage.getItem(CONTENT_SECURITY_PREFERENCES_KEY);
+      return raw ? normalizeContentSecurityPreferences(JSON.parse(raw)) : defaultContentSecurityPreferences();
+    } catch (_error) {
+      return defaultContentSecurityPreferences();
+    }
+  }
+
+  function readDesktopContentSecurityPreferences(windowRef) {
+    const snapshot = windowRef && windowRef.__BRIDGET_CONTENT_SECURITY__;
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return null;
+    return normalizeContentSecurityPreferences(snapshot);
+  }
+
+  function writeContentSecurityPreferences(storage, value) {
+    const preferences = normalizeContentSecurityPreferences(value);
+    try {
+      storage && storage.setItem(CONTENT_SECURITY_PREFERENCES_KEY, JSON.stringify(preferences));
+    } catch (_error) {
+      // Le comportement reste sûr même sans stockage local disponible.
+    }
+    return preferences;
+  }
+
+  function classifyContentReference(value, options = {}) {
+    const candidate = String(value == null ? "" : value).trim();
+    const expected = options && options.expected === "image" ? "image" : "auto";
+    const blocked = { kind: "blocked", value: "" };
+    if (!candidate || candidate.length > 4096 || /[\u0000-\u001f]/.test(candidate)) return blocked;
+    if (/^(?:javascript|data|vbscript|file):/i.test(candidate) || candidate.startsWith("//")) return blocked;
+    if (candidate.startsWith("/")) {
+      return expected === "image" ? blocked : { kind: "project_file", value: candidate };
+    }
+    let target;
+    try { target = new URL(candidate); } catch (_error) { return blocked; }
+    if (target.protocol !== "https:" || target.username || target.password) return blocked;
+    const pathname = target.pathname.toLocaleLowerCase("en-US");
+    if (pathname.endsWith(".svg")) return blocked;
+    if (expected === "image") {
+      return /\.(?:apng|avif|gif|jpe?g|png|webp)$/i.test(pathname)
+        ? { kind: "remote_image", value: target.href }
+        : blocked;
+    }
+    return { kind: "external_link", value: target.href };
+  }
+
+  function extractContentReferences(source) {
+    const found = [];
+    const textSource = String(source == null ? "" : source);
+    const add = (value, expected, label) => {
+      const reference = classifyContentReference(value, { expected });
+      if (reference.kind === "blocked") return;
+      const key = `${reference.kind}:${reference.value}`;
+      if (found.some((entry) => entry.key === key)) return;
+      found.push({ ...reference, key, label: String(label || "").trim().slice(0, 160) });
+    };
+    const imagePattern = /!\[([^\]]{0,160})\]\(([^\s)]+)(?:\s+['"][^)]*['"])?\)/g;
+    for (const match of textSource.matchAll(imagePattern)) add(match[2], "image", match[1]);
+    const linkPattern = /(^|[^!])\[([^\]]{0,160})\]\(([^\s)]+)(?:\s+['"][^)]*['"])?\)/gm;
+    for (const match of textSource.matchAll(linkPattern)) add(match[3], "auto", match[2]);
+    const projectPathPattern = /(?:^|[\s(])((?:\/[A-Za-z0-9._+-]+){1,32}(?:\.[A-Za-z0-9._+-]+)?)(?=$|[\s),.;:])/gm;
+    for (const match of textSource.matchAll(projectPathPattern)) add(match[1], "auto", "Fichier du projet");
+    return found;
+  }
+
+  function buildFilePreviewUrl(pathname, token) {
+    const query = new URLSearchParams({ path: String(pathname || "") });
+    if (token) query.set("token", String(token));
+    return `/v1/content/file-preview?${query.toString()}`;
+  }
+
+  function renderContentReferences(documentRef, root, source, preferences, options = {}) {
+    if (!documentRef || !documentRef.createElement) return;
+    const references = extractContentReferences(source);
+    if (references.length === 0) return;
+    const allowed = normalizeContentSecurityPreferences(preferences);
+    const windowRef = options.window || documentRef.defaultView;
+    const list = documentRef.createElement("section");
+    list.className = "content-references";
+    list.setAttribute("aria-label", "Contenus référencés");
+    for (const reference of references) {
+      const card = documentRef.createElement("article");
+      card.className = "content-reference";
+      card.dataset.kind = reference.kind;
+      const title = documentRef.createElement("strong");
+      const label = reference.label || (reference.kind === "project_file" ? "Fichier du projet" : "Contenu référencé");
+      title.textContent = label;
+      const detail = documentRef.createElement("span");
+      detail.textContent = reference.kind === "external_link"
+        ? "Lien HTTPS externe"
+        : reference.kind === "remote_image"
+          ? "Image HTTPS distante"
+          : "Aperçu de fichier du projet";
+      card.append(title, detail);
+      const enabled = reference.kind === "external_link"
+        ? allowed.externalLinks
+        : reference.kind === "remote_image"
+          ? allowed.remoteImages
+          : allowed.fileReferences;
+      if (!enabled) {
+        const blocked = documentRef.createElement("p");
+        blocked.className = "content-reference__blocked";
+        blocked.textContent = "Bloqué par vos réglages locaux.";
+        card.append(blocked);
+        list.append(card);
+        continue;
+      }
+      const action = documentRef.createElement("button");
+      action.type = "button";
+      action.className = "content-reference__action";
+      action.textContent = reference.kind === "external_link"
+        ? "Ouvrir dans le navigateur"
+        : reference.kind === "remote_image"
+          ? "Charger l’image"
+          : "Prévisualiser";
+      action.addEventListener("click", async (event) => {
+        if (!event.isTrusted) return;
+        if (reference.kind === "external_link") {
+          if (windowRef && windowRef.__BRIDGET_DESKTOP_SHELL__ === true) {
+            windowRef.location.href = `bridget-open://external?url=${encodeURIComponent(reference.value)}`;
+          } else if (windowRef && typeof windowRef.open === "function") {
+            const opened = windowRef.open(reference.value, "_blank", "noopener,noreferrer");
+            if (opened) opened.opener = null;
+          }
+          return;
+        }
+        if (reference.kind === "remote_image") {
+          const image = documentRef.createElement("img");
+          image.className = "content-reference__image";
+          image.alt = reference.label || "Image distante chargée sur demande";
+          image.loading = "lazy";
+          image.referrerPolicy = "no-referrer";
+          image.src = reference.value;
+          action.replaceWith(image);
+          return;
+        }
+        if (typeof options.previewProjectFile !== "function") return;
+        action.disabled = true;
+        action.textContent = "Prévisualisation…";
+        try {
+          const preview = await options.previewProjectFile(reference.value);
+          if (
+            preview
+            && preview.encoding === "base64"
+            && /^image\/(?:png|jpeg|gif|webp|avif)$/i.test(String(preview.media_type || ""))
+            && windowRef
+            && typeof windowRef.atob === "function"
+            && typeof windowRef.Blob === "function"
+            && windowRef.URL
+            && typeof windowRef.URL.createObjectURL === "function"
+          ) {
+            const decoded = windowRef.atob(String(preview.content || ""));
+            const bytes = Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+            const blob = new windowRef.Blob([bytes], { type: preview.media_type });
+            const image = documentRef.createElement("img");
+            const objectUrl = windowRef.URL.createObjectURL(blob);
+            image.className = "content-reference__image";
+            image.alt = preview.path || reference.label || "Aperçu d’image de projet";
+            image.src = objectUrl;
+            image.addEventListener("load", () => windowRef.URL.revokeObjectURL(objectUrl), { once: true });
+            image.addEventListener("error", () => windowRef.URL.revokeObjectURL(objectUrl), { once: true });
+            card.append(image);
+            action.remove();
+            return;
+          }
+          const output = documentRef.createElement("pre");
+          output.className = "content-reference__preview";
+          output.textContent = String(preview && preview.content || "");
+          card.append(output);
+          action.remove();
+        } catch (_error) {
+          action.disabled = false;
+          action.textContent = "Aperçu refusé";
+        }
+      });
+      card.append(action);
+      list.append(card);
+    }
+    root.append(list);
   }
 
   function controlFontOption(options, value, fallback = "system") {
@@ -5954,6 +6662,23 @@
     return preferences;
   }
 
+  function resolvedControlScheme(preferences, windowRef) {
+    if (preferences.colorScheme !== "system") return preferences.colorScheme;
+    const media = windowRef && typeof windowRef.matchMedia === "function"
+      ? windowRef.matchMedia("(prefers-color-scheme: light)")
+      : null;
+    return media && media.matches ? "light" : "dark";
+  }
+
+  function applyHighlightTheme(documentRef, preferences, windowRef) {
+    if (!documentRef || typeof documentRef.getElementById !== "function") return;
+    const light = documentRef.getElementById("highlight-theme-light");
+    const dark = documentRef.getElementById("highlight-theme-dark");
+    const scheme = resolvedControlScheme(preferences, windowRef);
+    if (light) light.media = scheme === "light" ? "all" : "not all";
+    if (dark) dark.media = scheme === "dark" ? "all" : "not all";
+  }
+
   function applyControlCenterPreferences(documentRef, value) {
     const preferences = normalizeControlCenterPreferences(value);
     const root = documentRef && documentRef.documentElement;
@@ -5974,6 +6699,7 @@
         root.style.fontSize = String(preferences.fontSizePx) + "px";
       }
     }
+    applyHighlightTheme(documentRef, preferences, typeof window !== "undefined" ? window : null);
     return preferences;
   }
 
@@ -6263,6 +6989,9 @@
     })();
     const readThrough = new Map(Object.entries(agentSidebarPreferences.readThrough));
     let controlPreferences = readControlCenterPreferences(windowRef.localStorage);
+    let desktopContentSecurity = readDesktopContentSecurityPreferences(windowRef);
+    let contentSecurityPreferences = desktopContentSecurity
+      || readContentSecurityPreferences(windowRef.localStorage);
     const controlTimezone = () => controlPreferences.timezone === "system"
       ? undefined
       : controlPreferences.timezone;
@@ -6722,6 +7451,52 @@
             ),
             status,
           );
+          body.append(section);
+          return;
+        }
+
+        if (entry.key === "content-security") {
+          const desktopManaged = desktopContentSecurity !== null;
+          const section = controlSection(
+            "Sécurité du contenu",
+            desktopManaged
+              ? "Ces choix sont pilotés par Bridget Desktop pour ce Mac. Un serveur relié, un agent et un message ne peuvent pas les modifier."
+              : "Ces choix restent dans ce navigateur local. Un serveur relié, un agent et un message ne peuvent pas les modifier.",
+            "Cette interface",
+          );
+          const status = make(
+            "p",
+            "control-center__status",
+            desktopManaged
+              ? "Modifiez ces autorisations dans les réglages de Bridget Desktop."
+              : "Les nouvelles installations et une remise à zéro partent avec les trois autorisations désactivées.",
+          );
+          status.setAttribute("role", "status");
+          const options = [
+            ["externalLinks", "Liens externes HTTPS", "Ouvre le navigateur système seulement après votre clic explicite."],
+            ["fileReferences", "Fichiers de projet", "Demande au relais un aperçu borné et en lecture seule d'un chemin autorisé."],
+            ["remoteImages", "Images distantes HTTPS", "Charge une image raster sans référent seulement après votre clic explicite."],
+          ];
+          for (const [key, title, copy] of options) {
+            const setting = controlSetting(title, copy, "Cette interface");
+            const control = documentRef.createElement("input");
+            control.type = "checkbox";
+            control.checked = contentSecurityPreferences[key] === true;
+            control.disabled = desktopManaged;
+            control.setAttribute("aria-label", title);
+            control.addEventListener("change", () => {
+              if (desktopManaged) return;
+              contentSecurityPreferences = writeContentSecurityPreferences(windowRef.localStorage, {
+                ...contentSecurityPreferences,
+                [key]: control.checked,
+              });
+              renderThread(0);
+              status.textContent = "Autorisation locale appliquée. Elle ne traverse pas le tunnel.";
+            });
+            setting.append(control);
+            section.append(setting);
+          }
+          section.append(status);
           body.append(section);
           return;
         }
@@ -8309,39 +9084,51 @@
       nodes.send.disabled = !agent || nodes.draft.value.trim().length === 0;
     };
 
-    const appendMessageContent = (bubble, entry) => {
+    const appendMessageContent = (surface, entry) => {
+      const render = (value) => renderMessageMarkdown(documentRef, value, {
+        contentSecurity: contentSecurityPreferences,
+        window: windowRef,
+        previewProjectFile: async (pathname) => {
+          if (!token) throw new Error("preview_unavailable");
+          const response = await windowRef.fetch(buildFilePreviewUrl(pathname, token));
+          let payload = {};
+          try { payload = await response.json(); } catch (_error) { /* réponse illisible */ }
+          if (!response.ok || typeof payload.content !== "string") throw new Error("preview_refused");
+          return payload;
+        },
+      });
       if (!shouldCollapseMessage(entry.text)) {
-        bubble.append(renderMessageMarkdown(document, entry.text));
+        surface.append(render(entry.text));
         return;
       }
-      bubble.append(make("p", "message-preview", messagePreview(entry.text)));
+      surface.append(make("p", "message-preview", messagePreview(entry.text)));
       const details = make("details", "message-expanded");
       details.append(make("summary", "", "Afficher le message complet"));
       let expanded = false;
       details.addEventListener("toggle", () => {
         if (!details.open || expanded) return;
-        details.append(renderMessageMarkdown(document, entry.text));
+        details.append(render(entry.text));
         expanded = true;
       });
-      bubble.append(details);
+      surface.append(details);
     };
 
     const renderMessage = (entry) => {
       const wrapper = make("article", `message message--${entry.role === "user" ? "user" : "agent"}`);
       if (entry.messageId) wrapper.dataset.messageId = entry.messageId;
       wrapper.dataset.messageRole = entry.role;
-      const bubble = make("div", "bubble");
-      appendMessageContent(bubble, entry);
+      const surface = make("div", entry.role === "user" ? "bubble" : "message-document");
+      appendMessageContent(surface, entry);
       const meta = make("span", "message-meta", timestamp(entry.at));
       if (entry.status) meta.textContent += ` · ${entry.status}`;
-      bubble.append(meta);
+      surface.append(meta);
       if (entry.failure) {
         const details = make("details", "message-failure message-expanded");
         details.append(make("summary", "", "Voir le détail de l’échec"));
         details.append(make("p", "", turnFailureDetail(entry.failure, entry.failure.reference)));
-        bubble.append(details);
+        surface.append(details);
       }
-      wrapper.append(bubble);
+      wrapper.append(surface);
       return wrapper;
     };
 
@@ -8358,7 +9145,10 @@
       }
       const details = make("details", "round-card__technical");
       details.append(make("summary", "", "Voir la consigne technique"));
-      details.append(renderMessageMarkdown(document, entry.text));
+      details.append(renderMessageMarkdown(documentRef, entry.text, {
+        contentSecurity: contentSecurityPreferences,
+        window: windowRef,
+      }));
       card.append(details);
       return card;
     };
@@ -9062,23 +9852,56 @@
       nodes.deliveryActivity.append(receipt);
     };
 
+    const captureReadingAnchor = () => {
+      if (typeof nodes.thread.querySelectorAll !== "function" || typeof nodes.thread.getBoundingClientRect !== "function") return null;
+      const viewport = nodes.thread.getBoundingClientRect();
+      const rects = [...nodes.thread.querySelectorAll("[data-turn-id]")]
+        .filter((node) => typeof node.getBoundingClientRect === "function")
+        .map((node) => ({ id: node.dataset.turnId, ...node.getBoundingClientRect() }));
+      return readingAnchorFromTurnRects(viewport.top, rects);
+    };
+
+    const restoreReadingAnchor = (anchor) => {
+      if (!anchor || typeof nodes.thread.querySelectorAll !== "function" || typeof nodes.thread.getBoundingClientRect !== "function") return null;
+      const target = [...nodes.thread.querySelectorAll("[data-turn-id]")]
+        .find((node) => node.dataset.turnId === anchor.id);
+      if (!target || typeof target.getBoundingClientRect !== "function") return null;
+      const viewport = nodes.thread.getBoundingClientRect();
+      return restoredReadingScrollTop(
+        nodes.thread.scrollTop,
+        viewport.top,
+        target.getBoundingClientRect().top,
+        anchor,
+      );
+    };
+
     const renderThread = (incomingCount = 0) => {
       const before = currentMetrics();
+      const readingAnchor = isAtBottom(before) ? null : captureReadingAnchor();
       const entries = projectTimeline(state.timelines[state.selectedAgent] || []);
+      const turns = deriveConversationTurns(state.timelines[state.selectedAgent] || []);
       const timeline = make("div", "timeline");
       let currentDay = null;
-      entries.forEach((entry) => {
-        const entryDay = dayKey(entry.at);
+      turns.forEach((turn) => {
+        const entryDay = dayKey(turn.at);
         if (entryDay !== currentDay && entryDay !== "unknown") {
-          timeline.append(make("p", "date-separator", dayLabel(entry.at)));
+          timeline.append(make("p", "date-separator", dayLabel(turn.at)));
           currentDay = entryDay;
         }
-        if (entry.kind === "message") timeline.append(renderMessage(entry));
-        else if (entry.kind === "round") timeline.append(renderRound(entry));
-        else if (entry.kind === "peer_exchange") timeline.append(renderPeer(entry));
-        else if (entry.kind === "activity_batch") timeline.append(renderActivityBatch(entry));
-        else if (entry.kind === "work") timeline.append(renderWork(entry));
-        else if (entry.kind === "system") timeline.append(make("p", "system-event", entry.text));
+        const turnNode = make("section", "conversation-turn");
+        turnNode.dataset.turnId = turn.key;
+        turnNode.dataset.turnState = turn.state;
+        const renderEntry = (entry) => {
+          if (entry.kind === "message") turnNode.append(renderMessage(entry));
+          else if (entry.kind === "round") turnNode.append(renderRound(entry));
+          else if (entry.kind === "peer_exchange") turnNode.append(renderPeer(entry));
+          else if (entry.kind === "activity_batch") turnNode.append(renderActivityBatch(entry));
+          else if (entry.kind === "work") turnNode.append(renderWork(entry));
+          else if (entry.kind === "system") turnNode.append(make("p", "system-event", entry.text));
+        };
+        if (turn.prompt) renderEntry(turn.prompt);
+        turn.entries.forEach(renderEntry);
+        timeline.append(turnNode);
       });
       if (entries.length === 0) {
         timeline.append(make("p", "empty-state", "Les messages de l’agent apparaîtront ici."));
@@ -9088,12 +9911,14 @@
       nodes.thread.replaceChildren(timeline);
       const after = currentMetrics();
       const decision = decideScroll(before, after, incomingCount);
-      nodes.thread.scrollTop = decision.scrollTop;
+      const restoredScrollTop = restoreReadingAnchor(readingAnchor);
+      const scrollTop = restoredScrollTop === null ? decision.scrollTop : restoredScrollTop;
+      nodes.thread.scrollTop = scrollTop;
       state = {
         ...state,
         viewport: {
           ...after,
-          scrollTop: decision.scrollTop,
+          scrollTop,
           showNewMessages: decision.showNewMessages,
           pendingCount: decision.pendingCount,
         },
@@ -9975,6 +10800,8 @@
     isAtBottom,
     decideScroll,
     scrollToLatest,
+    readingAnchorFromTurnRects,
+    restoredReadingScrollTop,
     relayBannerState,
     applyReconnectSnapshot,
     isInactiveAgent,
@@ -9984,10 +10811,22 @@
     usageDashboardProjection,
     formatTokenCount,
     CONTROL_CENTER_NAVIGATION,
+    CONTENT_SECURITY_PREFERENCES_KEY,
+    defaultContentSecurityPreferences,
+    normalizeContentSecurityPreferences,
+    readContentSecurityPreferences,
+    readDesktopContentSecurityPreferences,
+    writeContentSecurityPreferences,
+    classifyContentReference,
+    extractContentReferences,
+    buildFilePreviewUrl,
+    renderContentReferences,
     defaultControlCenterPreferences,
     normalizeControlCenterPreferences,
     readControlCenterPreferences,
     writeControlCenterPreferences,
+    resolvedControlScheme,
+    applyHighlightTheme,
     applyControlCenterPreferences,
     controlCenterRouteForSearch,
     projectInitials,
@@ -10035,11 +10874,21 @@
     decideWatchThreadRender,
     acceptTimelineEvents,
     projectTimeline,
+    deriveConversationTurns,
     vigilanceRoundInfo,
     formatPermissionAct,
     JOURNAL_ACT_KINDS,
     peerLabel,
     formatDuration,
+    extractFenceLanguage,
+    extractFenceTitle,
+    extractCodeFenceMetadata,
+    highlightCodeText,
+    markdownTableRows,
+    serializeTableRowsMarkdown,
+    serializeTableRowsCsv,
+    enhanceCodeBlocks,
+    enhanceTables,
     renderMessageMarkdown,
     sanitizeMessageHtml,
     parseMessageMarkdown,
@@ -10048,6 +10897,7 @@
     messageDomHasForbiddenSurface,
     MESSAGE_MARKDOWN_TAGS,
     MESSAGE_PURIFY_CONFIG,
+    SPEC_081_CONVERSATION_FIXTURES,
     collectNodes,
     mount,
     buildSearchRequest,

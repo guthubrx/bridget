@@ -45,6 +45,7 @@ const MAX_UI_AGENT_NAME_BYTES: usize = 100;
 const MAX_UI_COMMAND_ID_BYTES: usize = 160;
 const MAX_UI_SSE_EVENTS: usize = 20_000;
 const MAX_UI_RECONNECT_ATTEMPTS: usize = 50;
+const MAX_UI_FILE_PREVIEW_BYTES: u64 = 256 * 1024;
 const UI_RECONNECT_DELAY: Duration = Duration::from_millis(100);
 /// La rétention des présences côté daemon s'appuie sur `link_seen`, rafraîchi
 /// par le heartbeat. Une présence qui ne bat pas est donc jetée au bout de
@@ -78,6 +79,11 @@ const UI_SCRIPT: &[u8] = include_bytes!("../assets/ui/app.js");
 const UI_THEME: &[u8] = include_bytes!("../assets/ui/theme.css");
 const UI_MARKED: &[u8] = include_bytes!("../assets/ui/vendor/marked.min.js");
 const UI_PURIFY: &[u8] = include_bytes!("../assets/ui/vendor/purify.min.js");
+const UI_HIGHLIGHT: &[u8] = include_bytes!("../assets/ui/vendor/highlight.min.js");
+const UI_HIGHLIGHT_GITHUB_DARK: &[u8] =
+    include_bytes!("../assets/ui/vendor/highlight-github-dark.min.css");
+const UI_HIGHLIGHT_GITHUB_LIGHT: &[u8] =
+    include_bytes!("../assets/ui/vendor/highlight-github-light.min.css");
 const UI_PROVIDER_OPENAI: &[u8] = include_bytes!("../assets/ui/providers/openai.svg");
 const UI_PROVIDER_CLAUDE: &[u8] = include_bytes!("../assets/ui/providers/claude.svg");
 const UI_PROVIDER_CURSOR: &[u8] = include_bytes!("../assets/ui/providers/cursor.svg");
@@ -1124,6 +1130,17 @@ struct UiUsageDashboardRowV1 {
     cost_estimate_microunits: Option<u64>,
 }
 
+#[derive(Debug, Serialize)]
+struct UiFilePreviewV1 {
+    version: u8,
+    path: String,
+    media_type: &'static str,
+    encoding: &'static str,
+    content: String,
+    truncated: bool,
+    sha256: String,
+}
+
 #[derive(Serialize)]
 struct UiRecoveryLossV1 {
     name: String,
@@ -1198,6 +1215,30 @@ fn serve_connection(
                     if_none_match,
                 );
             }
+            "/vendor/highlight.min.js" => {
+                return write_asset(
+                    stream,
+                    "application/javascript; charset=utf-8",
+                    UI_HIGHLIGHT,
+                    if_none_match,
+                );
+            }
+            "/vendor/highlight-github-dark.min.css" => {
+                return write_asset(
+                    stream,
+                    "text/css; charset=utf-8",
+                    UI_HIGHLIGHT_GITHUB_DARK,
+                    if_none_match,
+                );
+            }
+            "/vendor/highlight-github-light.min.css" => {
+                return write_asset(
+                    stream,
+                    "text/css; charset=utf-8",
+                    UI_HIGHLIGHT_GITHUB_LIGHT,
+                    if_none_match,
+                );
+            }
             "/providers/openai.svg" => {
                 return write_asset(stream, "image/svg+xml", UI_PROVIDER_OPENAI, if_none_match);
             }
@@ -1224,6 +1265,20 @@ fn serve_connection(
     }
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/") => write_asset(stream, "text/html; charset=utf-8", UI_INDEX, if_none_match),
+        ("GET", "/v1/content/file-preview") => {
+            match read_content_file_preview(config, request.query.get("path").map(String::as_str)) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
         ("GET", path) if path.starts_with("/v1/agent-profiles/") => {
             match get_agent_profile(config, profile_ref_from_path(path)) {
                 Ok(response) => write_json(stream, 200, &response),
@@ -2058,6 +2113,199 @@ fn read_project_settings(
             .map(|root| root.to_string_lossy().into_owned())
             .collect(),
         configuration_available: true,
+    })
+}
+
+fn content_preview_media_type(path: &Path) -> Option<(&'static str, &'static str)> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    match extension.as_str() {
+        "txt" | "log" | "toml" | "yaml" | "yml" | "ini" | "cfg" | "conf" => {
+            Some(("text/plain", "utf8"))
+        }
+        "md" | "markdown" => Some(("text/markdown", "utf8")),
+        "rs" => Some(("text/rust", "utf8")),
+        "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" => Some(("text/javascript", "utf8")),
+        "json" => Some(("application/json", "utf8")),
+        "html" | "htm" | "css" | "py" | "sh" | "zsh" | "bash" | "sql" | "xml" => {
+            Some(("text/plain", "utf8"))
+        }
+        "png" => Some(("image/png", "base64")),
+        "jpg" | "jpeg" => Some(("image/jpeg", "base64")),
+        "gif" => Some(("image/gif", "base64")),
+        "webp" => Some(("image/webp", "base64")),
+        "avif" => Some(("image/avif", "base64")),
+        _ => None,
+    }
+}
+
+fn base64_standard(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = *chunk.get(1).unwrap_or(&0);
+        let third = *chunk.get(2).unwrap_or(&0);
+        output.push(TABLE[(first >> 2) as usize] as char);
+        output.push(TABLE[((first & 0x03) << 4 | (second >> 4)) as usize] as char);
+        output.push(if chunk.len() > 1 {
+            TABLE[((second & 0x0f) << 2 | (third >> 6)) as usize] as char
+        } else {
+            '='
+        });
+        output.push(if chunk.len() > 2 {
+            TABLE[(third & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    output
+}
+
+fn read_content_file_preview(
+    config: &UiRelayConfig,
+    requested_path: Option<&str>,
+) -> Result<UiFilePreviewV1, (u16, &'static str, String)> {
+    let path = requested_path
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| {
+            (
+                400,
+                "invalid_path",
+                "Le chemin d'aperçu doit être absolu.".to_string(),
+            )
+        })?;
+    let policy_path = config.project_root_policy_path.as_deref().ok_or_else(|| {
+        (
+            403,
+            "outside_project_roots",
+            "Cet aperçu n'est pas autorisé par la politique de projets.".to_string(),
+        )
+    })?;
+    let policy = ProjectRootPolicy::load(policy_path).map_err(|_| {
+        (
+            403,
+            "outside_project_roots",
+            "Cet aperçu n'est pas autorisé par la politique de projets.".to_string(),
+        )
+    })?;
+    let canonical = std::fs::canonicalize(&path).map_err(|error| {
+        if error.kind() == ErrorKind::NotFound {
+            (
+                404,
+                "not_found",
+                "Le fichier demandé est introuvable.".to_string(),
+            )
+        } else {
+            (
+                400,
+                "invalid_path",
+                "Le chemin demandé est invalide.".to_string(),
+            )
+        }
+    })?;
+    let root = policy
+        .allowed_roots()
+        .iter()
+        .filter(|root| canonical.starts_with(root))
+        .max_by_key(|root| root.components().count())
+        .ok_or_else(|| {
+            (
+                403,
+                "outside_project_roots",
+                "Cet aperçu n'est pas autorisé par la politique de projets.".to_string(),
+            )
+        })?;
+    let metadata = std::fs::metadata(&canonical).map_err(|_| {
+        (
+            404,
+            "not_found",
+            "Le fichier demandé est introuvable.".to_string(),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err((
+            415,
+            "unsupported_media_type",
+            "Seuls les fichiers réguliers peuvent être prévisualisés.".to_string(),
+        ));
+    }
+    if metadata.len() > MAX_UI_FILE_PREVIEW_BYTES {
+        return Err((
+            413,
+            "too_large",
+            "Le fichier dépasse la taille maximale d'aperçu.".to_string(),
+        ));
+    }
+    let (media_type, encoding) = content_preview_media_type(&canonical).ok_or_else(|| {
+        (
+            415,
+            "unsupported_media_type",
+            "Ce type de fichier ne peut pas être prévisualisé.".to_string(),
+        )
+    })?;
+    let file = std::fs::File::open(&canonical).map_err(|_| {
+        (
+            404,
+            "not_found",
+            "Le fichier demandé est introuvable.".to_string(),
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_UI_FILE_PREVIEW_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| {
+            (
+                415,
+                "unsupported_media_type",
+                "Le fichier ne peut pas être lu.".to_string(),
+            )
+        })?;
+    if bytes.len() as u64 > MAX_UI_FILE_PREVIEW_BYTES {
+        return Err((
+            413,
+            "too_large",
+            "Le fichier dépasse la taille maximale d'aperçu.".to_string(),
+        ));
+    }
+    let content = if encoding == "utf8" {
+        String::from_utf8(bytes.clone()).map_err(|_| {
+            (
+                415,
+                "unsupported_media_type",
+                "Le fichier texte n'est pas encodé en UTF-8.".to_string(),
+            )
+        })?
+    } else {
+        base64_standard(&bytes)
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let sha256 = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let path = canonical
+        .strip_prefix(root)
+        .map_err(|_| {
+            (
+                403,
+                "outside_project_roots",
+                "Cet aperçu n'est pas autorisé par la politique de projets.".to_string(),
+            )
+        })?
+        .to_string_lossy()
+        .trim_start_matches('/')
+        .to_string();
+    Ok(UiFilePreviewV1 {
+        version: UI_VERSION,
+        path,
+        media_type,
+        encoding,
+        content,
+        truncated: false,
+        sha256,
     })
 }
 
@@ -7031,6 +7279,76 @@ mod tests {
             ProjectRootPolicy::load(&policy_path).unwrap().generation(),
             2
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_081_apercu_fichier_reste_borne_canonique_et_sans_chemin_racine() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-081-file-preview-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let projects = root.join("projects");
+        let source = projects.join("src");
+        std::fs::create_dir_all(&source).unwrap();
+        let file = source.join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let oversized = source.join("too-large.txt");
+        std::fs::write(
+            &oversized,
+            vec![b'x'; MAX_UI_FILE_PREVIEW_BYTES as usize + 1],
+        )
+        .unwrap();
+        let outside = root.join("outside.txt");
+        std::fs::write(&outside, "hors projet").unwrap();
+        let policy_path = root.join("project-root-policy.json");
+        std::fs::write(
+            &policy_path,
+            serde_json::to_vec(&serde_json::json!({
+                "contract_version": 1,
+                "policy_generation": 1,
+                "allowed_project_roots": [projects],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let config = UiRelayConfig {
+            daemon_socket: root.join("bridget.sock"),
+            maicie_config: root.join("maicie.json"),
+            project_root_policy_path: Some(policy_path),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "test".to_string(),
+        };
+        let preview = read_content_file_preview(&config, file.to_str()).unwrap();
+        assert_eq!(preview.path, "src/main.rs");
+        assert_eq!(preview.media_type, "text/rust");
+        assert_eq!(preview.encoding, "utf8");
+        assert_eq!(preview.content, "fn main() {}\n");
+        assert!(!preview.content.contains(root.to_string_lossy().as_ref()));
+        assert!(preview.sha256.len() == 64);
+        assert_eq!(
+            read_content_file_preview(&config, Some("relative.txt"))
+                .unwrap_err()
+                .1,
+            "invalid_path"
+        );
+        assert_eq!(
+            read_content_file_preview(&config, outside.to_str())
+                .unwrap_err()
+                .1,
+            "outside_project_roots"
+        );
+        assert_eq!(
+            read_content_file_preview(&config, oversized.to_str())
+                .unwrap_err()
+                .1,
+            "too_large"
+        );
+        assert_eq!(base64_standard(&[0x66, 0x6f, 0x6f]), "Zm9v");
+        assert_eq!(base64_standard(&[0x66]), "Zg==");
         let _ = std::fs::remove_dir_all(root);
     }
 

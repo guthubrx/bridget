@@ -10,7 +10,27 @@ use std::io::Write;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-const FORMAT_VERSION: u8 = 1;
+const FORMAT_VERSION: u8 = 2;
+
+/// Autorisations d'affichage strictement locales. Elles ne sont ni un jeton,
+/// ni une permission de tunnel, ni une capacité qu'un serveur peut élargir.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ContentSecurityPreferences {
+    pub external_links: bool,
+    pub file_references: bool,
+    pub remote_images: bool,
+}
+
+impl Default for ContentSecurityPreferences {
+    fn default() -> Self {
+        Self {
+            external_links: false,
+            file_references: false,
+            remote_images: false,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -19,6 +39,7 @@ pub struct DesktopPreferences {
     pub color_scheme: String,
     pub timezone: String,
     pub font_size_px: u8,
+    pub content_security: ContentSecurityPreferences,
 }
 
 impl Default for DesktopPreferences {
@@ -28,6 +49,7 @@ impl Default for DesktopPreferences {
             color_scheme: "system".to_string(),
             timezone: "system".to_string(),
             font_size_px: 16,
+            content_security: ContentSecurityPreferences::default(),
         }
     }
 }
@@ -84,14 +106,50 @@ impl PreferencesStore {
             }
             Err(error) => return Err(error.into()),
         };
-        let document: PreferencesDocument = match serde_json::from_slice(&bytes) {
-            Ok(document) => document,
+        let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+            Ok(value) => value,
             Err(_) => return Ok(DesktopPreferences::default()),
         };
-        if document.version != FORMAT_VERSION || validate(&document.preferences).is_err() {
-            return Ok(DesktopPreferences::default());
+        match value.get("version").and_then(serde_json::Value::as_u64) {
+            Some(2) => {
+                let document: PreferencesDocument = match serde_json::from_value(value) {
+                    Ok(document) => document,
+                    Err(_) => return Ok(DesktopPreferences::default()),
+                };
+                if validate(&document.preferences).is_err() {
+                    return Ok(DesktopPreferences::default());
+                }
+                Ok(document.preferences)
+            }
+            // Migration explicite : l'opérateur qui avait déjà choisi ses
+            // préférences Desktop conserve un affichage ouvert. Une première
+            // installation ou une remise à zéro part toujours fermé.
+            Some(1) => {
+                let document: PreferencesDocumentV1 = match serde_json::from_value(value) {
+                    Ok(document) => document,
+                    Err(_) => return Ok(DesktopPreferences::default()),
+                };
+                if document.version != 1 {
+                    return Ok(DesktopPreferences::default());
+                }
+                let migrated = DesktopPreferences {
+                    display_name: document.preferences.display_name,
+                    color_scheme: document.preferences.color_scheme,
+                    timezone: document.preferences.timezone,
+                    font_size_px: document.preferences.font_size_px,
+                    content_security: ContentSecurityPreferences {
+                        external_links: true,
+                        file_references: true,
+                        remote_images: true,
+                    },
+                };
+                if validate(&migrated).is_err() {
+                    return Ok(DesktopPreferences::default());
+                }
+                Ok(migrated)
+            }
+            _ => Ok(DesktopPreferences::default()),
         }
-        Ok(document.preferences)
     }
 
     pub fn save(&self, preferences: DesktopPreferences) -> Result<(), PreferencesStoreError> {
@@ -139,6 +197,22 @@ struct PreferencesDocument {
     preferences: DesktopPreferences,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreferencesDocumentV1 {
+    version: u8,
+    preferences: DesktopPreferencesV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DesktopPreferencesV1 {
+    display_name: String,
+    color_scheme: String,
+    timezone: String,
+    font_size_px: u8,
+}
+
 fn validate(preferences: &DesktopPreferences) -> Result<(), PreferencesStoreError> {
     let display_name = preferences.display_name.trim();
     let valid_name = display_name.len() <= 96 && !display_name.chars().any(char::is_control);
@@ -172,6 +246,11 @@ mod tests {
             color_scheme: "dark".to_string(),
             timezone: "Europe/Paris".to_string(),
             font_size_px: 18,
+            content_security: ContentSecurityPreferences {
+                external_links: true,
+                file_references: false,
+                remote_images: true,
+            },
         };
         store.save(preferences.clone()).unwrap();
         assert_eq!(store.load().unwrap(), preferences);
@@ -183,6 +262,28 @@ mod tests {
             .is_err());
         fs::write(root.join("preferences.json"), b"{document corrompu").unwrap();
         assert_eq!(store.load().unwrap(), DesktopPreferences::default());
+        let legacy = serde_json::json!({
+            "version": 1,
+            "preferences": {
+                "display_name": "Camille",
+                "color_scheme": "dark",
+                "timezone": "Europe/Paris",
+                "font_size_px": 18
+            }
+        });
+        fs::write(
+            root.join("preferences.json"),
+            serde_json::to_vec(&legacy).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            store.load().unwrap().content_security,
+            ContentSecurityPreferences {
+                external_links: true,
+                file_references: true,
+                remote_images: true,
+            }
+        );
         let _ = fs::remove_dir_all(root);
     }
 }

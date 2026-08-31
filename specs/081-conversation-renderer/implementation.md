@@ -1,0 +1,164 @@
+# Journal d'implémentation - SPEC-081
+
+Ce journal ne consigne que des opérations réellement observées. Il ne contient
+ni secret, ni jeton de relais, ni contenu de conversation de production.
+
+## T004 - Point de départ - 2026-08-31
+
+- `node crates/bridget-daemon/assets/ui/app.js` : succès, 100 tests.
+- `/Users/moi/.cargo/bin/cargo test -p bridget-daemon ui` : 136 succès et 10
+  échecs de baseline, tous causés avant la feature par `path must be shorter
+  than SUN_LEN` dans le worktree temporaire. L'incident est tracé dans le
+  journal local non versionné ; aucune régression SPEC-081 ne lui est attribuée.
+- `/Users/moi/.cargo/bin/cargo test --manifest-path
+  apps/bridget-desktop/src-tauri/Cargo.toml --test desktop_commands` : succès,
+  4 tests.
+- `/Users/moi/.cargo/bin/cargo test --manifest-path
+  apps/bridget-desktop/src-tauri/Cargo.toml --test secrets_and_diagnostics` :
+  succès, 1 test.
+- `git diff --check` : succès avant les modifications de cette feature.
+
+## T002 - Coloration locale - 2026-08-31
+
+- Choix : `@highlightjs/cdn-assets` 11.12.0, distribution locale
+  `highlight.min.js`, licence BSD-3-Clause.
+- Source vérifiée : registre npm, archive
+  `https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.12.0.tgz`.
+- Fichiers ajoutés : moteur et thèmes `github` clair/sombre dans
+  `crates/bridget-daemon/assets/ui/vendor/`.
+- Empreintes SHA-256 : consignées dans `vendor/SHA256SUMS`.
+- Repli : si `globalThis.hljs` n'est pas disponible, le bloc conserve le texte
+  brut et son contrôle de copie.
+
+## T003 - Provenance T3 Code - 2026-08-31
+
+- Licence MIT complète ajoutée sous `vendor/LICENSE.t3code.MIT.txt`.
+- Référence inspectée : `/Users/moi/11.Repositories/t3code`, commit
+  `b1670ac7d`, `apps/web/src/components/ChatMarkdown.tsx`.
+- Adaptations directes prévues : uniquement l'analyse de métadonnées de fence
+  `langage + titre`, avec commentaire de provenance à côté du helper final.
+- Les principes de tours, documents agent et activités repliables inspirent
+  l'interface mais ne reprennent pas de code React T3.
+
+## Self-review Article XIX/XX - T001 à T004
+
+- Pourquoi cette solution est nécessaire : les fixtures, l'intégrité des
+  dépendances et la baseline empêchent de confondre une régression SPEC-081
+  avec l'existant.
+- Pourquoi elle reste simple : une fixture immuable, un seul moteur local et
+  les fichiers de notices déjà présents remplacent un nouveau harnais ou une
+  chaîne de construction JavaScript.
+- Hypothèses prises : `highlight.js` reste disponible avant `app.js` dans le
+  panneau ; son absence conserve du texte brut. La socket Unix du worktree
+  temporaire explique les échecs Rust de baseline observés.
+- Vérifications réalisées : 101 tests Node, cinq empreintes SHA-256 valides,
+  cinq tests Tauri ciblés réussis et lecture de la licence T3 locale.
+- Non vérifié : le rendu graphique final et la suite Rust complète depuis un
+  chemin court seront rejoués dans les preuves finales.
+- Code supprimé ou évité : aucune pile React, aucun CDN, aucun chargeur de
+  dépendance à l'exécution.
+- Complexité ajoutée et justification : environ 132 Ko de ressources locales
+  pour une coloration hors ligne et déterministe, avec licences et hashes.
+
+## Self-review Article XIX/XX - T005 à T007
+
+- Pourquoi cette solution est nécessaire : le rendu, la sécurité et les tests
+  ont besoin de décisions pures avant de toucher au DOM ou au relais.
+- Pourquoi elle reste simple : `projectTimeline` demeure l'unique décodeur du
+  journal ; `deriveConversationTurns` ne fait que regrouper sa projection.
+- Hypothèses prises : un `messageId` est durable à l'échelle du fil, y compris
+  pour l'entrée `work` qui ne porte pas forcément le nom de l'agent.
+- Vérifications réalisées : 104 tests Node, dont défaut sûr, corruption,
+  références interdites, URL canonique, segments et tour en erreur.
+- Non vérifié : canonicalisation de fichier côté Rust et rendu dans le DOM,
+  prévus par les lots suivants.
+- Code supprimé ou évité : aucun store serveur, aucune liste de racines ou
+  parseur de protocole parallèle.
+- Complexité ajoutée et justification : trois fonctions pures courtes et un
+  objet de tour, nécessaires pour rendre les invariants testables.
+
+## T013 - Validation US1 - 2026-08-31
+
+- `node crates/bridget-daemon/assets/ui/app.js` : succès, 104 tests.
+- La projection couvre un tour terminé, échoué, ouvert, actif, inter-agent et
+  une interruption, avec une seule demande humaine par identifiant durable.
+- Mesure factuelle disponible : exécution Node complète entre 0,36 et 0,48 s
+  sur cette machine. Une mesure de défilement avec layout réel n'est pas
+  revendiquée ici ; elle reste explicitement dans T034 et T038.
+
+## Self-review Article XIX/XX - T008 à T013
+
+- Pourquoi cette solution est nécessaire : les entrées d'un même tour doivent
+  rester ensemble sans transformer les traces d'activité en réponses agent.
+- Pourquoi elle reste simple : une seule section DOM par tour, rendue depuis
+  la projection pure existante, remplace l'enchaînement visuellement ambigu de
+  bulles identiques.
+- Hypothèses prises : les entrées sans `messageId` restent des tours isolés et
+  ne peuvent pas être inventées dans une demande voisine.
+- Vérifications réalisées : 104 tests Node, contrôle de diff et revue ciblée
+  du code de regroupement, d'ancre de lecture, de rendu d'activité et CSS.
+- Non vérifié : apparence sur une fenêtre macOS réelle et comportement de
+  l'ancre après changement de hauteur, réservés à la validation intégrée.
+- Code supprimé ou évité : aucun second journal, aucune mutation d'état de
+  remise, aucun temporisateur de défilement arbitraire.
+- Complexité ajoutée et justification : deux petites fonctions d'ancre DOM,
+  nécessaires pour préserver une lecture hors du bas lors d'un re-rendu.
+
+## T014 à T020 - Markdown technique passif - 2026-08-31
+
+- `extractFenceLanguage` et `extractFenceTitle` adaptent uniquement
+  l'extraction de métadonnées de fence observée dans T3 Code
+  `ChatMarkdown.tsx`, avec provenance MIT à côté du code.
+- `highlight.js` 11.12.0 et ses deux thèmes GitHub sont embarqués localement.
+  Un langage absent ou le moteur indisponible conserve le code en texte brut,
+  sans affecter la copie exacte.
+- Les blocs de code ont un titre ou langage, une copie accessible et un retour
+  à la ligne indépendant. Les tableaux gardent leur défilement horizontal et
+  peuvent être copiés en Markdown ou CSV.
+- `node crates/bridget-daemon/assets/ui/app.js` : succès, 110 tests dont
+  assainissement hostile, copie, thème et contenu actif refusé.
+
+## T021 à T030 - Préférences locales et aperçus bornés - 2026-08-31
+
+- Le store Desktop est en format V2. Un document V1 valide de l'opérateur
+  actuel migre avec liens, fichiers et images actifs comme demandé. Une
+  première installation, une corruption ou un reset restent fermés.
+- La coque Tauri injecte `__BRIDGET_CONTENT_SECURITY__` immuable avant les
+  scripts relayés et recharge le panneau après sauvegarde native. Le panneau
+  ne peut donc pas forger une mise à jour qui élargirait ses autorisations et
+  ne gagne aucune capability Tauri.
+- Les liens n'ouvrent une destination HTTPS qu'après un clic fiable. Les
+  images restent différées et sans référent. Les fichiers passent par une
+  route relayée tokenisée, canonique, lecture seule, plafonnée à 256 KiB et
+  bornée par `ProjectRootPolicy`.
+- Vérifications : test Rust `spec_081_apercu_fichier_reste_borne_canonique_et_sans_chemin_racine`, test de store Desktop et 7 tests Desktop d'isolation réussis.
+
+## T031 à T033 - Lecture d'historique - 2026-08-31
+
+- La fixture comprend vingt tours. Hors du bas, le rendu mémorise le premier
+  tour visible, y compris partiellement, et restaure son décalage après mise à
+  jour. Le brouillon, sa sélection et son focus ne sont pas modifiés.
+- Le rappel de retour au direct, les repères de tour, les petits écrans et
+  `prefers-reduced-motion` possèdent des styles dédiés.
+
+## Self-review Article XIX/XX - T014 à T037
+
+- Pourquoi cette solution est nécessaire : un fil riche sans séparation de
+  tours ni politique locale de contenu rend les agents difficiles à piloter et
+  les références difficiles à consulter en sécurité.
+- Pourquoi elle reste simple : la projection reste au-dessus de
+  `projectTimeline`, le panneau ne reçoit qu'un snapshot et l'aperçu réutilise
+  `ProjectRootPolicy` plutôt qu'un explorateur de fichiers.
+- Hypothèses prises : le navigateur système est l'unique destination des
+  liens externes dans Desktop et 256 KiB suffit à une consultation de contexte
+  sans se transformer en lecteur de médias.
+- Vérifications réalisées : 110 tests Node, format Rust, test Rust ciblé,
+  7 tests Desktop ciblés, sommes SHA-256 et contrôle de diff réussis.
+- Non vérifié : le quickstart sur une fenêtre Desktop et un serveur approuvé,
+  en thèmes clair et sombre. Cette preuve reste ouverte, elle n'est pas
+  remplacée par les tests automatisés.
+- Code supprimé ou évité : aucune capability de panneau, aucun CDN, aucune
+  navigation ou chargement automatique, aucune seconde allowlist de chemins.
+- Complexité ajoutée et justification : une route de preview et un moteur de
+  coloration local sont nécessaires pour respecter la borne de sécurité et la
+  lisibilité recherchée.

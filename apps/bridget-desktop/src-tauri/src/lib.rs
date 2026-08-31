@@ -34,6 +34,7 @@ pub fn run() {
     use std::io::{Read, Write};
     use std::net::{Ipv4Addr, SocketAddr, TcpStream};
     use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::Mutex;
     use std::time::Duration;
     use tauri::webview::WebviewBuilder;
@@ -94,6 +95,44 @@ pub fn run() {
 
     fn as_message(error: impl std::fmt::Display) -> String {
         error.to_string()
+    }
+
+    fn content_security_snapshot(preferences: &DesktopPreferences) -> serde_json::Value {
+        serde_json::json!({
+            "externalLinks": preferences.content_security.external_links,
+            "fileReferences": preferences.content_security.file_references,
+            "remoteImages": preferences.content_security.remote_images,
+        })
+    }
+
+    fn content_security_script(preferences: &DesktopPreferences) -> Result<String, String> {
+        let encoded = serde_json::to_string(&content_security_snapshot(preferences)).map_err(as_message)?;
+        Ok(format!(
+            "Object.defineProperty(window, '__BRIDGET_CONTENT_SECURITY__', {{ value: Object.freeze({encoded}), writable: false, configurable: false }}); Object.defineProperty(window, '__BRIDGET_DESKTOP_SHELL__', {{ value: true, writable: false, configurable: false }});"
+        ))
+    }
+
+    fn approved_external_https_url(value: &str) -> Option<tauri::Url> {
+        let url = value.parse::<tauri::Url>().ok()?;
+        if url.scheme() != "https" || url.host_str().is_none() || !url.username().is_empty() || url.password().is_some() {
+            return None;
+        }
+        Some(url)
+    }
+
+    fn reload_panels_after_preferences_save(app: &tauri::AppHandle, state: &DesktopState) {
+        let labels = match state.panels.lock() {
+            Ok(panels) => panels.panels().map(|panel| panel.label.clone()).collect::<Vec<_>>(),
+            Err(_) => return,
+        };
+        for label in labels {
+            if let Some(webview) = app.get_webview(&label) {
+                // Un événement DOM serait forgeable par le document relayé.
+                // Le rechargement exécute à nouveau le script d'initialisation
+                // Tauri avant les scripts du panneau, avec le snapshot local.
+                let _ = webview.eval("window.location.reload();");
+            }
+        }
     }
 
     fn publish_connection_state(app: &tauri::AppHandle, status: &ConnectionStatus) {
@@ -409,6 +448,7 @@ pub fn run() {
 
     #[tauri::command(rename_all = "snake_case")]
     fn preferences_save(
+        app: tauri::AppHandle,
         state: State<'_, DesktopState>,
         preferences: DesktopPreferences,
     ) -> Result<DesktopPreferences, String> {
@@ -418,6 +458,7 @@ pub fn run() {
             .map_err(as_message)?
             .save(preferences.clone())
             .map_err(as_message)?;
+        reload_panels_after_preferences_save(&app, &state);
         Ok(preferences)
     }
 
@@ -594,8 +635,30 @@ pub fn run() {
             .url
             .parse()
             .map_err(|_| "L'URL du relais local est invalide.")?;
+        let preferences = state
+            .preferences
+            .lock()
+            .map_err(as_message)?
+            .load()
+            .map_err(as_message)?;
+        let security_script = content_security_script(&preferences)?;
         let child = WebviewBuilder::new(panel.label.clone(), WebviewUrl::External(external_url))
-            .on_navigation(|url| url.scheme() == "http" && url.host_str() == Some("127.0.0.1"));
+            .initialization_script(security_script)
+            .on_navigation(|url| {
+                if url.scheme() == "http" && url.host_str() == Some("127.0.0.1") {
+                    return true;
+                }
+                if url.scheme() == "bridget-open" {
+                    let destination = url
+                        .query_pairs()
+                        .find_map(|(key, value)| (key == "url").then(|| value.into_owned()))
+                        .and_then(|value| approved_external_https_url(&value));
+                    if let Some(destination) = destination {
+                        let _ = Command::new("open").arg(destination.as_str()).spawn();
+                    }
+                }
+                false
+            });
         if let Err(error) = main.add_child(
             child,
             PhysicalPosition::new(0_i32, 0_i32),

@@ -47,6 +47,28 @@ fn un_seul_serveur_est_affiche_a_la_fois() {
 }
 
 #[test]
+fn les_reglages_de_contenu_restent_locaux_et_sans_capability_de_panneau() {
+    let frontend = include_str!("../../ui/app.js");
+    let markup = include_str!("../../ui/index.html");
+    let backend = include_str!("../src/lib.rs");
+
+    for identifier in [
+        "preferences-external-links",
+        "preferences-file-references",
+        "preferences-remote-images",
+    ] {
+        assert!(markup.contains(identifier), "contrôle local absent : {identifier}");
+    }
+    assert!(frontend.contains("content_security"));
+    assert!(backend.contains("__BRIDGET_CONTENT_SECURITY__"));
+    assert!(backend.contains("bridget-open"));
+    assert!(backend.contains("approved_external_https_url"));
+    assert!(backend.contains("window.location.reload()"));
+    assert!(!backend.contains("bridget-content-security-updated"));
+    assert!(!backend.contains("panel-content-security"));
+}
+
+#[test]
 fn l_icone_bundled_conserve_le_fond_sombre_et_la_mascotte_agrandie() {
     let source = include_str!("../icons/bridget.svg");
     let icon = include_str!("../icons/icon.svg");
