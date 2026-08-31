@@ -1718,6 +1718,21 @@
         );
       });
 
+      test("message_ledger_et_turn_start_ne_rendent_qu_une_bulle_utilisateur", () => {
+        const events = [
+          { kind: "message", role: "user", agent: "rc1", text: "tu m’entends ?", at: 10, messageId: "m-unique", deliveryId: "m-unique" },
+          {
+            kind: "record",
+            agent: "rc1",
+            at: 10,
+            record: { message_id: "m-unique", session_id: "s", seq: 1, event: "turn_start", payload: { body: "tu m’entends ?", from: "humain" } },
+          },
+        ];
+        const messages = api.projectTimeline(events).filter((entry) => entry.kind === "message" && entry.role === "user");
+        assert.equal(messages.length, 1);
+        assert.equal(messages[0].deliveryId, "m-unique");
+      });
+
       test("turn_steer_sans_corps_ne_masque_pas_message_ledger", () => {
         const events = [
           { kind: "message", role: "user", agent: "bridget", text: "est ce que tu travailles encore ?", at: 10, deliveryId: "S1", messageId: "S1" },
@@ -5522,6 +5537,7 @@
     });
 
     const renderedRounds = new Set();
+    const renderedUserMessageIds = new Set();
     const durableUserMessageIds = new Set(
       projected
         .filter((entry) => entry.kind === "message" && entry.role === "user" && (!entry.status || entry.failure))
@@ -5538,6 +5554,11 @@
           && durableUserMessageIds.has(uiMessageIdentity(entry))
         ) {
           return false;
+        }
+        if (entry.kind === "message" && entry.role === "user") {
+          const messageId = uiMessageIdentity(entry);
+          if (messageId && renderedUserMessageIds.has(messageId)) return false;
+          if (messageId) renderedUserMessageIds.add(messageId);
         }
         if (entry.kind !== "round" || !entry.deliveryId) return true;
         if (renderedRounds.has(entry.deliveryId)) return false;

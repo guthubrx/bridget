@@ -17,6 +17,7 @@ Les coches de la première tranche ne valent pas acceptation produit. La SPEC re
 - [x] T044 [US1] Ajouter le raccourci `Commande + virgule`, les preuves unitaires et le parcours de validation manuelle dans les artefacts de la SPEC-080.
 - [x] T045 [US1] Raccorder les boutons `+`, `Importer`, retrait, réactivation et reconnexion au registre de projets via le relais, avec dialogue de prévisualisation et confirmation explicite.
 - [x] T046 [US1] Préserver `humain` comme émetteur interne : l'exclure de la flotte sélectionnable et refuser toute remise `humain → humain` dans le relais.
+- [x] T047 [US1] Dédupliquer une bulle utilisateur projetée à la fois par le ledger de conversation et par le `turn_start` du journal, avec un test sur un même `delivery_id` dans `crates/bridget-daemon/assets/ui/app.js`.
 
 ## Dépendances
 

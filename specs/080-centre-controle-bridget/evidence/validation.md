@@ -15,7 +15,7 @@ Date : 2026-08-31
 ## Contrôles automatisés
 
 - `node --check crates/bridget-daemon/assets/ui/app.js` : PASS.
-- `node crates/bridget-daemon/assets/ui/app.js` : PASS, 99 tests, 0 échec.
+- `node crates/bridget-daemon/assets/ui/app.js` : PASS, 100 tests, 0 échec.
 - `cargo fmt --check` : PASS.
 - `cargo test -p bridget-daemon spec_080 --lib` : PASS, 2 tests.
 - `node --check apps/bridget-desktop/ui/app.js` : PASS.
@@ -65,6 +65,12 @@ Le test UI couvre aussi la séparation de portées dans la navigation Projets : 
 - Le test Rust ciblé `garde_destinataire_refuse_humain_absent_et_arrete_sans_refuser_un_agent_vivant` passe et vérifie que le relais refuse `humain` tout en acceptant un agent vivant.
 - La suite d'intégration complète `ui_relay_test` ne peut pas être conclue sur ce Mac : sa fixture lance le daemon dans un `HOME` temporaire qui n'est pas résolu comme attendu par macOS. Elle échoue avant les scénarios métier, sur `daemon non prêt`.
 - Dans le checkout Linux de déploiement, `ui_relay_test` passe 25/25. Après redémarrage, `GET /v1/snapshot` et l'asset `app.js` répondent `200`, l'asset contient les gardes de flotte, et une requête valide adressée à `humain` renvoie `400 human_recipient` sans créer de message.
+
+## Correctif de duplication des messages utilisateur
+
+- Mesure runtime : le snapshot du fil `rc1` ne contient qu'une occurrence de chacun des messages visibles en double, tandis que le journal de l'agent contient un `turn_start` avec le même `message_id`.
+- Reproduction exacte avant correctif : la projection de la bulle ledger et du `turn_start` portant `6f153302a7494` produisait 2 bulles.
+- Après correctif : la même projection produit 1 bulle avec `delivery_id=6f153302a7494`. Le programme Node complet passe 100/100.
 
 ## Paquet macOS attesté
 

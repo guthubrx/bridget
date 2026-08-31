@@ -36,6 +36,12 @@ Statut : tranche de centre de contrôle et navigation Projets déployées sur le
 - La sélection conservée d'un ancien lien `?agent=humain` retombe sur un agent réel lors de la synchronisation, sans modifier les fils existants `humain ↔ agent`.
 - Le commit `6ee3ee5` est validé dans un checkout Linux temporaire : test Rust ciblé vert, `ui_relay_test` 25/25 vert et build release vert.
 
+## Correctif de duplication des messages utilisateur
+
+- Cause attestée sur le fil `rc1` : un même message utilisateur est projeté depuis le ledger de conversation et depuis le `turn_start` du journal d'agent. Les deux sources portent le même `delivery_id`, mais la projection conservait les deux bulles durables.
+- `projectTimeline` ne conserve désormais qu'une bulle utilisateur par identifiant de remise. La bulle optimiste reste remplacée par le fait durable, sans fusionner des messages distincts qui auraient le même texte.
+- Le test `message_ledger_et_turn_start_ne_rendent_qu_une_bulle_utilisateur` reproduit le couple observé et impose une seule bulle.
+
 ## Portage de finition T3 Code
 
 La finition de l'overlay conserve les fonds sombres et les variables de couleurs Bridget. Le gabarit des réglages est en revanche porté du composant de réglages T3 Code installé :
