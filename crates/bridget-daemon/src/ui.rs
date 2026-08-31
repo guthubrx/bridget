@@ -818,6 +818,46 @@ struct UiProjectRootsUpdateAcceptedV1 {
     allowed_project_roots: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct UiControlCategoryV1 {
+    key: &'static str,
+    scope: &'static str,
+    access: &'static str,
+    summary: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct UiServerControlSettingsV1 {
+    version: u8,
+    configuration_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_generation: Option<u64>,
+    allowed_project_roots: Vec<String>,
+    categories: Vec<UiControlCategoryV1>,
+    daemon_version: &'static str,
+    update_status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct UiControlProjectRootsPreviewV1 {
+    version: u8,
+    command_id: String,
+    expected_generation: u64,
+    current_roots: Vec<String>,
+    requested_roots: Vec<String>,
+    resulting_generation: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct UiControlProjectRootsAppliedV1 {
+    version: u8,
+    command_id: String,
+    expected_generation: u64,
+    resulting_generation: u64,
+    allowed_project_roots: Vec<String>,
+    observed_at: i64,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UiProjectPreviewRequestV1 {
@@ -836,6 +876,37 @@ struct UiProjectPreviewV1 {
     display_name: String,
     git: &'static str,
     git_initialization_proposed: bool,
+}
+
+/// Projection serveur locale au tunnel courant. Ce contrat ne contient ni
+/// chemin de configuration brut, ni secret, ni commande hôte générale.
+#[derive(Debug, Serialize)]
+struct UiUsageDashboardV1 {
+    version: u8,
+    period: &'static str,
+    from_secs: i64,
+    to_secs: i64,
+    rows: Vec<UiUsageDashboardRowV1>,
+    /// Aucun prix n'est injecté sans catalogue versionné et daté. La présence
+    /// de cette règle est un garde-fou contre une fausse facture API.
+    pricing_status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct UiUsageDashboardRowV1 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    source: String,
+    samples: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_creation_input_tokens: u64,
+    cache_read_input_tokens: u64,
+    total_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cost_estimate_microunits: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -1005,6 +1076,76 @@ fn serve_connection(
             }
         }
         ("GET", "/v1/projects/settings") => match read_project_settings(config) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("GET", "/v1/control/settings") => match read_server_control_settings(config) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("POST", "/v1/control/settings/preview") => {
+            match post_control_project_roots_preview(config, &request.body) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("POST", "/v1/control/settings/apply") => {
+            match post_control_project_roots_apply(config, &request.body) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("GET", "/v1/usage") => match read_usage_dashboard(
+            config,
+            request.query.get("period").map(String::as_str),
+        ) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("GET", "/v1/control/usage") => match read_usage_dashboard(
+            config,
+            request.query.get("period").map(String::as_str),
+        ) {
             Ok(response) => write_json(stream, 200, &response),
             Err((status, code, message)) => write_json(
                 stream,
@@ -1282,6 +1423,137 @@ fn read_project_settings(
     })
 }
 
+fn read_server_control_settings(
+    config: &UiRelayConfig,
+) -> Result<UiServerControlSettingsV1, (u16, &'static str, String)> {
+    let project = read_project_settings(config).ok();
+    let configuration_available = project.is_some();
+    let categories = crate::control_settings::server_setting_descriptors(configuration_available)
+        .into_iter()
+        .map(|descriptor| UiControlCategoryV1 {
+            key: descriptor.key,
+            scope: descriptor.scope,
+            access: match descriptor.access {
+                crate::control_settings::SettingAccess::Writable => "writable",
+                crate::control_settings::SettingAccess::ReadOnly => "read_only",
+            },
+            summary: descriptor.summary,
+        })
+        .collect();
+    Ok(UiServerControlSettingsV1 {
+        version: UI_VERSION,
+        configuration_available,
+        policy_generation: project.as_ref().map(|settings| settings.policy_generation),
+        allowed_project_roots: project
+            .map(|settings| settings.allowed_project_roots)
+            .unwrap_or_default(),
+        categories,
+        daemon_version: env!("CARGO_PKG_VERSION"),
+        update_status: "not_configured",
+    })
+}
+
+fn parse_control_project_roots_update(
+    body: &[u8],
+) -> Result<crate::control_settings::ProjectRootsChange, (u16, &'static str, String)> {
+    let request: UiProjectRootsUpdateV1 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "invalid_request",
+            "Réglages de serveur invalides.".to_string(),
+        )
+    })?;
+    if request.version != UI_VERSION {
+        return Err((
+            400,
+            "invalid_request",
+            "Réglages de serveur invalides.".to_string(),
+        ));
+    }
+    Ok(crate::control_settings::ProjectRootsChange {
+        command_id: request.command_id,
+        expected_generation: request.expected_generation,
+        allowed_project_roots: request
+            .allowed_project_roots
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
+    })
+}
+
+fn control_settings_error(
+    error: crate::control_settings::ControlSettingsRefusal,
+) -> (u16, &'static str, String) {
+    match error {
+        crate::control_settings::ControlSettingsRefusal::Unavailable => (
+            409,
+            "control_settings_unavailable",
+            "Les réglages contrôlés ne sont pas disponibles sur ce serveur.".to_string(),
+        ),
+        crate::control_settings::ControlSettingsRefusal::InvalidRequest => (
+            400,
+            "invalid_request",
+            "Réglages de serveur invalides.".to_string(),
+        ),
+        crate::control_settings::ControlSettingsRefusal::ConflictOrRefusal => (
+            409,
+            "control_settings_refused",
+            "Le serveur a refusé les racines ou leur génération.".to_string(),
+        ),
+    }
+}
+
+fn post_control_project_roots_preview(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiControlProjectRootsPreviewV1, (u16, &'static str, String)> {
+    let change = parse_control_project_roots_update(body)?;
+    let command_id = change.command_id.clone();
+    let expected_generation = change.expected_generation;
+    let preview = crate::control_settings::preview_project_roots(
+        config.project_root_policy_path.as_deref(),
+        &change,
+    )
+    .map_err(control_settings_error)?;
+    Ok(UiControlProjectRootsPreviewV1 {
+        version: UI_VERSION,
+        command_id,
+        expected_generation,
+        current_roots: preview
+            .current_roots
+            .iter()
+            .map(|root| root.to_string_lossy().into_owned())
+            .collect(),
+        requested_roots: preview
+            .requested_roots
+            .iter()
+            .map(|root| root.to_string_lossy().into_owned())
+            .collect(),
+        resulting_generation: expected_generation.saturating_add(1),
+    })
+}
+
+fn post_control_project_roots_apply(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiControlProjectRootsAppliedV1, (u16, &'static str, String)> {
+    let change = parse_control_project_roots_update(body)?;
+    let applied = crate::control_settings::apply_project_roots(
+        config.project_root_policy_path.as_deref(),
+        change,
+        now_secs(),
+    )
+    .map_err(control_settings_error)?;
+    Ok(UiControlProjectRootsAppliedV1 {
+        version: UI_VERSION,
+        command_id: applied.receipt.command_id,
+        expected_generation: applied.receipt.expected_generation,
+        resulting_generation: applied.receipt.resulting_generation,
+        allowed_project_roots: applied.receipt.allowed_project_roots,
+        observed_at: applied.receipt.observed_at,
+    })
+}
+
 fn post_project_roots_update(
     config: &UiRelayConfig,
     body: &[u8],
@@ -1412,6 +1684,72 @@ fn post_project_preview(
         display_name: preview.display_name,
         git,
         git_initialization_proposed: preview.git_initialization_proposed,
+    })
+}
+
+fn read_usage_dashboard(
+    config: &UiRelayConfig,
+    requested_period: Option<&str>,
+) -> Result<UiUsageDashboardV1, (u16, &'static str, String)> {
+    let (period, duration_secs) = match requested_period.unwrap_or("7d") {
+        "7d" => ("7d", 7_i64 * 24 * 60 * 60),
+        "30d" => ("30d", 30_i64 * 24 * 60 * 60),
+        "90d" => ("90d", 90_i64 * 24 * 60 * 60),
+        _ => {
+            return Err((
+                400,
+                "invalid_period",
+                "La période d’usage doit être 7d, 30d ou 90d.".to_string(),
+            ));
+        }
+    };
+    let to_secs = now_secs();
+    if to_secs <= 0 {
+        return Err((
+            503,
+            "usage_unavailable",
+            "L’horloge du serveur est indisponible.".to_string(),
+        ));
+    }
+    let from_secs = to_secs.saturating_sub(duration_secs);
+    let store = crate::store::Store::open(&ledger_db_path_for_socket(&config.daemon_socket))
+        .map_err(|_| {
+            (
+                503,
+                "usage_unavailable",
+                "Les données d’usage du serveur sont indisponibles.".to_string(),
+            )
+        })?;
+    let rows = store
+        .usage_dashboard_window(from_secs, to_secs)
+        .map_err(|_| {
+            (
+                503,
+                "usage_unavailable",
+                "Les données d’usage du serveur sont indisponibles.".to_string(),
+            )
+        })?
+        .into_iter()
+        .map(|row| UiUsageDashboardRowV1 {
+            provider_kind: row.provider_kind,
+            model: row.model,
+            source: row.source,
+            samples: row.samples,
+            input_tokens: row.input_tokens,
+            output_tokens: row.output_tokens,
+            cache_creation_input_tokens: row.cache_creation_input_tokens,
+            cache_read_input_tokens: row.cache_read_input_tokens,
+            total_tokens: row.total_tokens(),
+            cost_estimate_microunits: None,
+        })
+        .collect();
+    Ok(UiUsageDashboardV1 {
+        version: UI_VERSION,
+        period,
+        from_secs,
+        to_secs,
+        rows,
+        pricing_status: "unconfigured",
     })
 }
 
@@ -5194,6 +5532,64 @@ mod tests {
         let updated = post_project_roots_update(&config, &request).unwrap();
         assert_eq!(updated.policy_generation, 2);
         assert!(post_project_roots_update(&config, &request).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_080_controle_serveur_previsualise_et_rejoue_sans_double_ecriture() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-080-server-control-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let projects = root.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let policy_path = root.join("project-root-policy.json");
+        std::fs::write(
+            &policy_path,
+            serde_json::to_vec(&serde_json::json!({
+                "contract_version": 1,
+                "policy_generation": 1,
+                "allowed_project_roots": [projects],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let config = UiRelayConfig {
+            daemon_socket: root.join("bridget.sock"),
+            maicie_config: root.join("maicie.json"),
+            project_root_policy_path: Some(policy_path.clone()),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "test".to_string(),
+        };
+
+        let settings = read_server_control_settings(&config).unwrap();
+        assert!(settings.configuration_available);
+        assert!(settings.categories.iter().any(|category| {
+            category.key == "project_roots.allowed_roots" && category.access == "writable"
+        }));
+        assert!(settings.categories.iter().all(|category| {
+            category.key == "project_roots.allowed_roots" || category.access == "read_only"
+        }));
+
+        let request = serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "command_id": "server-control-1",
+            "expected_generation": 1,
+            "allowed_project_roots": settings.allowed_project_roots,
+        }))
+        .unwrap();
+        let preview = post_control_project_roots_preview(&config, &request).unwrap();
+        assert_eq!(preview.resulting_generation, 2);
+        assert_eq!(ProjectRootPolicy::load(&policy_path).unwrap().generation(), 1);
+
+        let applied = post_control_project_roots_apply(&config, &request).unwrap();
+        assert_eq!(applied.resulting_generation, 2);
+        let replay = post_control_project_roots_apply(&config, &request).unwrap();
+        assert_eq!(replay.resulting_generation, 2);
+        assert_eq!(ProjectRootPolicy::load(&policy_path).unwrap().generation(), 2);
         let _ = std::fs::remove_dir_all(root);
     }
 

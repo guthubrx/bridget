@@ -3,8 +3,9 @@
 body { overflow: hidden; }
 .desktop-shell { display: grid; grid-template-rows: 2.5625rem minmax(0, 1fr); height: 100dvh; overflow: hidden; position: relative; width: 100%; }
 .page-header { align-items: center; border-bottom: 1px solid var(--desktop-line); display: flex; grid-row: 1; justify-content: space-between; min-width: 0; padding: 0 .9rem 0 1rem; position: relative; z-index: 2; }
-.page-header-row, .section-heading, .profile-card, .dialog-heading, .dialog-actions, .profile-actions { align-items: center; display: flex; }
+.page-header-row, .section-heading, .profile-card, .dialog-heading, .dialog-actions, .profile-actions, .header-actions { align-items: center; display: flex; }
 .page-header-row { justify-content: space-between; width: 100%; }
+.header-actions { gap: .4rem; }
 .product-name { align-items: baseline; display: flex; gap: .55rem; }
 h1, h2, h3 { letter-spacing: -.015em; margin: 0; }
 h1 { font-size: .88rem; font-weight: 600; }
@@ -58,4 +59,6 @@ code { color: var(--code-text); font-family: ui-monospace, SFMono-Regular, Menlo
 .active-panels { display: none; }
 .active-panel-origin { border: 1px solid var(--desktop-line); border-radius: .3rem; color: var(--text-secondary); font-size: .7rem; padding: .28rem .45rem; }
 body.panel-view .desktop-stage, body.panel-view .profiles { display: none; }
+:root[data-color-scheme="light"] { color-scheme: light; --background: #f6f6f4; --app-chrome-background: #f6f6f4; --card: #ffffff; --surface-raised: #ffffff; --surface-hover: #e9e9e6; --text-primary: #191918; --text-secondary: #5e5e5a; --desktop-line: #d8d8d3; --desktop-panel: #fff; --desktop-muted: #6a6a66; --desktop-strong: #252525; --code-text: #b34f2f; }
+@media (prefers-color-scheme: light) { :root[data-color-scheme="system"] { color-scheme: light; --background: #f6f6f4; --app-chrome-background: #f6f6f4; --card: #ffffff; --surface-raised: #ffffff; --surface-hover: #e9e9e6; --text-primary: #191918; --text-secondary: #5e5e5a; --desktop-line: #d8d8d3; --desktop-panel: #fff; --desktop-muted: #6a6a66; --desktop-strong: #252525; --code-text: #b34f2f; } }
 @media (max-width: 620px) { .desktop-slot + .desktop-slot { display: none; } .desktop-stage { grid-template-columns: 1fr; } .profiles { width: calc(100vw - 2rem); } .section-heading, .profile-card { align-items: flex-start; flex-direction: column; } .field-grid { grid-template-columns: 1fr; } }

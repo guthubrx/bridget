@@ -58,6 +58,46 @@
         assert.equal(api.clampAgentPaneWidth(900, 800), 440);
       });
 
+      test("spec_080_usage_reste_atteste_et_ne_fabrique_aucun_cout", () => {
+        assert.equal(
+          api.controlResourceUrl("/v1/usage", "jeton +", { period: "30d" }),
+          "/v1/usage?token=jeton+%2B&period=30d",
+        );
+        assert.deepEqual(api.usageDashboardProjection({
+          period: "30d",
+          pricing_status: "unconfigured",
+          rows: [{
+            provider_kind: "claude",
+            model: "claude-opus-5",
+            source: "claude-stream-json",
+            samples: 2,
+            total_tokens: 4_000,
+            input_tokens: 1_000,
+            output_tokens: 400,
+            cache_read_input_tokens: 2_600,
+          }],
+        }), {
+          period: "30d",
+          pricingStatus: "unconfigured",
+          totalTokens: 4_000,
+          rows: [{
+            provider: "claude",
+            model: "claude-opus-5",
+            source: "claude-stream-json",
+            samples: 2,
+            totalTokens: 4_000,
+            inputTokens: 1_000,
+            outputTokens: 400,
+            cacheReadTokens: 2_600,
+          }],
+        });
+        assert.equal(api.formatTokenCount(4_000), "4.0 k");
+        const source = fs.readFileSync(__filename, "utf8");
+        assert.match(source, /\/v1\/control\/settings\/preview/);
+        assert.match(source, /\/v1\/control\/settings\/apply/);
+        assert.match(source, /\/v1\/control\/usage/);
+      });
+
       test("apparence_agent_stable_et_etat_visuel_honnete", () => {
         assert.equal(api.agentAvatarShape("jc1"), api.agentAvatarShape("jc1"));
         assert.equal(api.agentAvatarShape("jc1", { jc1: { shape: "cloud" } }), "cloud");
@@ -5431,6 +5471,7 @@
     hiddenAgentList: "hidden-agent-list",
     hiddenAgents: "hidden-agents",
     hiddenCount: "hidden-count",
+    controlCenter: "control-center",
     stoppedCount: "stopped-count",
     fleetCount: "fleet-count",
     sourceState: "source-state",
@@ -5472,6 +5513,42 @@
 
   function buildSearchUrl(token) {
     return agentResourceUrl("/v1/search", token);
+  }
+
+  function controlResourceUrl(path, token, params = {}) {
+    const query = new URLSearchParams({ token });
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+    }
+    return `${path}?${query.toString()}`;
+  }
+
+  function usageDashboardProjection(payload) {
+    const rows = Array.isArray(payload && payload.rows) ? payload.rows : [];
+    const normalized = rows.map((row) => ({
+      provider: text(row && row.provider_kind) || "Fournisseur non renseigné",
+      model: text(row && row.model) || "Modèle non renseigné",
+      source: text(row && row.source) || "Source non renseignée",
+      samples: Math.max(0, Number(row && row.samples) || 0),
+      totalTokens: Math.max(0, Number(row && row.total_tokens) || 0),
+      inputTokens: Math.max(0, Number(row && row.input_tokens) || 0),
+      outputTokens: Math.max(0, Number(row && row.output_tokens) || 0),
+      cacheReadTokens: Math.max(0, Number(row && row.cache_read_input_tokens) || 0),
+    })).sort((left, right) => right.totalTokens - left.totalTokens || left.provider.localeCompare(right.provider));
+    return {
+      period: ["7d", "30d", "90d"].includes(payload && payload.period) ? payload.period : "7d",
+      pricingStatus: text(payload && payload.pricing_status) || "unconfigured",
+      totalTokens: normalized.reduce((total, row) => total + row.totalTokens, 0),
+      rows: normalized,
+    };
+  }
+
+  function formatTokenCount(value) {
+    const count = Math.max(0, Number(value) || 0);
+    if (count >= 1_000_000_000) return `${(count / 1_000_000_000).toFixed(2)} Md`;
+    if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(2)} M`;
+    if (count >= 1_000) return `${(count / 1_000).toFixed(1)} k`;
+    return String(Math.trunc(count));
   }
 
   function threadPeerForHit(hit) {
@@ -5640,6 +5717,201 @@
       if (className) node.className = className;
       if (value !== undefined) node.textContent = value;
       return node;
+    };
+
+    const renderControlHeader = (active) => {
+      const intro = make(
+        "p",
+        "control-center__intro",
+        "Ces réglages s’appliquent uniquement au serveur relié par ce tunnel SSH.",
+      );
+      const tabs = make("div", "control-center__tabs");
+      const settings = make("button", "quiet-action", "Serveur");
+      settings.type = "button";
+      settings.dataset.active = String(active === "server");
+      const usage = make("button", "quiet-action", "Usage et coûts");
+      usage.type = "button";
+      usage.dataset.active = String(active === "usage");
+      tabs.append(settings, usage);
+      return { intro, tabs, settings, usage };
+    };
+
+    const openControlCenter = () => {
+      nodes.detailPanel.hidden = false;
+      nodes.detailPanel.dataset.exchangeKey = "control-center";
+      nodes.detailTitle.textContent = "Réglages du serveur";
+
+      const renderServerSettings = async () => {
+        const header = renderControlHeader("server");
+        const content = make("div", "control-center");
+        content.append(header.intro, header.tabs);
+        const status = make("p", "control-center__status", "Lecture des réglages sécurisés…");
+        status.setAttribute("role", "status");
+        content.append(status);
+        const categories = make("ul", "control-center__categories");
+        content.append(categories);
+        nodes.detailContent.replaceChildren(content);
+        header.settings.addEventListener("click", () => void renderServerSettings());
+        header.usage.addEventListener("click", () => void renderUsageDashboard());
+        try {
+          const response = await windowRef.fetch(controlResourceUrl("/v1/control/settings", token));
+          const payload = await response.json();
+          if (!response.ok) throw new Error("settings_unavailable");
+          for (const category of Array.isArray(payload.categories) ? payload.categories : []) {
+            const item = make("li", "control-center__category");
+            item.append(
+              make("strong", null, category.key || "Réglage contrôlé"),
+              make("span", null, category.summary || "Capacité non détaillée."),
+              make("span", "control-center__badge", category.access === "writable" ? "modifiable" : "lecture seule"),
+            );
+            categories.append(item);
+          }
+          status.textContent = payload.configuration_available
+            ? `Serveur Bridget ${payload.daemon_version || "inconnu"}. La liste d’autorisation des projets est disponible.`
+            : `Serveur Bridget ${payload.daemon_version || "inconnu"}. Les réglages de projets ne sont pas disponibles.`;
+          if (!payload.configuration_available) return;
+          const label = make("label", "control-center__roots-label", "Racines de projets autorisées");
+          const roots = documentRef.createElement("textarea");
+          roots.className = "control-center__roots";
+          roots.rows = Math.max(3, payload.allowed_project_roots.length + 1);
+          roots.value = payload.allowed_project_roots.join("\n");
+          roots.spellcheck = false;
+          const help = make(
+            "p",
+            "control-center__help",
+            "Une racine par ligne. Bridget vérifie les chemins, le propriétaire et la génération avant toute écriture.",
+          );
+          const preview = make("p", "control-center__preview", "Aucune modification préparée.");
+          const prepare = make("button", "secondary", "Prévisualiser la modification");
+          prepare.type = "button";
+          const apply = make("button", null, "Confirmer et appliquer");
+          apply.type = "button";
+          apply.hidden = true;
+          const actions = make("div", "control-center__actions");
+          actions.append(prepare, apply);
+          label.append(roots);
+          content.append(label, help, preview, actions);
+          let preparedChange = null;
+          prepare.addEventListener("click", async () => {
+            const candidate = roots.value.split("\n").map((value) => value.trim()).filter(Boolean);
+            if (candidate.length === 0) {
+              preview.textContent = "Au moins une racine est obligatoire.";
+              return;
+            }
+            prepare.disabled = true;
+            preview.textContent = "Prévisualisation validée par le serveur…";
+            try {
+              const request = {
+                version: 1,
+                command_id: `control-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                expected_generation: payload.policy_generation,
+                allowed_project_roots: candidate,
+              };
+              const response = await windowRef.fetch(controlResourceUrl("/v1/control/settings/preview", token), {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(request),
+              });
+              const confirmed = await response.json();
+              if (!response.ok) throw new Error("settings_refused");
+              preparedChange = { ...request, allowed_project_roots: confirmed.requested_roots };
+              apply.hidden = false;
+              preview.textContent = `${confirmed.current_roots.length} → ${confirmed.requested_roots.length} racine(s), génération ${confirmed.expected_generation} → ${confirmed.resulting_generation}. Confirmez pour écrire.`;
+            } catch (_error) {
+              preparedChange = null;
+              apply.hidden = true;
+              preview.textContent = "Le serveur a refusé la prévisualisation. Aucune valeur n’a été modifiée.";
+            } finally {
+              prepare.disabled = false;
+            }
+          });
+          apply.addEventListener("click", async () => {
+            if (!preparedChange) return;
+            apply.disabled = true;
+            preview.textContent = "Application en cours…";
+            try {
+              const response = await windowRef.fetch(controlResourceUrl("/v1/control/settings/apply", token), {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(preparedChange),
+              });
+              const accepted = await response.json();
+              if (!response.ok) throw new Error("settings_refused");
+              roots.value = accepted.allowed_project_roots.join("\n");
+              payload.allowed_project_roots = accepted.allowed_project_roots;
+              payload.policy_generation = accepted.resulting_generation;
+              preparedChange = null;
+              apply.hidden = true;
+              preview.textContent = `Réglage appliqué - confirmation ${accepted.command_id}, génération ${accepted.resulting_generation}.`;
+            } catch (_error) {
+              preview.textContent = "Le serveur a refusé la modification. La configuration actuelle n’a pas été remplacée.";
+            } finally {
+              apply.disabled = false;
+            }
+          });
+        } catch (_error) {
+          status.textContent = "Les réglages de projet ne sont pas disponibles sur ce serveur. Les autres catégories restent en lecture seule.";
+          status.dataset.state = "error";
+        }
+      };
+
+      const renderUsageDashboard = async () => {
+        const header = renderControlHeader("usage");
+        const content = make("div", "control-center");
+        content.append(header.intro, header.tabs);
+        const periodLabel = make("label", "control-center__period-label", "Période");
+        const period = documentRef.createElement("select");
+        for (const [value, label] of [["7d", "7 jours"], ["30d", "30 jours"], ["90d", "90 jours"]]) {
+          const option = documentRef.createElement("option");
+          option.value = value;
+          option.textContent = label;
+          period.append(option);
+        }
+        periodLabel.append(period);
+        const status = make("p", "control-center__status", "Lecture des échantillons du serveur…");
+        status.setAttribute("role", "status");
+        const table = make("div", "usage-dashboard");
+        content.append(periodLabel, status, table);
+        nodes.detailContent.replaceChildren(content);
+        header.settings.addEventListener("click", () => void renderServerSettings());
+        header.usage.addEventListener("click", () => void renderUsageDashboard());
+
+        const load = async () => {
+          status.textContent = "Lecture des échantillons du serveur…";
+          table.replaceChildren();
+          try {
+            const response = await windowRef.fetch(controlResourceUrl("/v1/control/usage", token, { period: period.value }));
+            const payload = await response.json();
+            if (!response.ok) throw new Error("usage_unavailable");
+            const dashboard = usageDashboardProjection(payload);
+            period.value = dashboard.period;
+            status.textContent = dashboard.pricingStatus === "unconfigured"
+              ? `Coût API non estimé - aucune grille tarifaire datée n’est configurée. ${formatTokenCount(dashboard.totalTokens)} tokens observés.`
+              : `${formatTokenCount(dashboard.totalTokens)} tokens observés.`;
+            if (dashboard.rows.length === 0) {
+              table.append(make("p", "control-center__empty", "Aucun échantillon d’usage attesté pour cette période."));
+              return;
+            }
+            for (const row of dashboard.rows) {
+              const item = make("article", "usage-dashboard__row");
+              item.append(
+                make("strong", null, row.provider),
+                make("span", null, row.model),
+                make("span", null, `${formatTokenCount(row.totalTokens)} tokens - ${row.samples} échantillon(s) - ${row.source}`),
+                make("small", null, `Entrée ${formatTokenCount(row.inputTokens)} · Sortie ${formatTokenCount(row.outputTokens)} · Cache lu ${formatTokenCount(row.cacheReadTokens)}`),
+              );
+              table.append(item);
+            }
+          } catch (_error) {
+            status.textContent = "L’usage de ce serveur est indisponible.";
+            status.dataset.state = "error";
+          }
+        };
+        period.addEventListener("change", () => void load());
+        await load();
+      };
+
+      void renderServerSettings();
     };
 
     const identityCard = documentRef.body ? make("div", "agent-identity-card") : null;
@@ -7382,6 +7654,7 @@
     nodes.closeDetail.addEventListener("click", () => {
       nodes.detailPanel.hidden = true;
     });
+    nodes.controlCenter.addEventListener("click", () => void openControlCenter());
     nodes.selectedAgentAvatar.addEventListener("click", () => {
       const agent = state.agents.find((entry) => entry.name === state.selectedAgent);
       if (!agent) return;
@@ -7544,6 +7817,9 @@
     isInactiveAgent,
     agentRosterSignature,
     agentResourceUrl,
+    controlResourceUrl,
+    usageDashboardProjection,
+    formatTokenCount,
     fetchScopedSnapshot,
     peerExchangeProjection,
     peerExchangeKey,

@@ -10,7 +10,7 @@
   <body>
     <main class="desktop-shell" aria-labelledby="page-title">
       <header class="page-header">
-        <div class="page-header-row"><div class="product-name"><h1 id="page-title">Bridget Desktop</h1><span>client</span></div><button id="show-profiles" class="secondary" type="button">Serveurs</button></div>
+        <div class="page-header-row"><div class="product-name"><h1 id="page-title">Bridget Desktop</h1><span>client</span></div><div class="header-actions"><button id="show-profiles" class="secondary" type="button">Serveurs</button><button id="show-preferences" class="secondary" type="button">⚙ Réglages</button></div></div>
         <div id="active-panels" class="active-panels" aria-label="Panneaux distants ouverts"></div>
       </header>
       <p id="app-status" class="sr-only" aria-live="polite"></p>
@@ -48,6 +48,19 @@
         <p class="field-help">Première connexion à <strong id="host-identity-server"></strong>. Vérifie cette empreinte par un canal fiable avant de l'approuver.</p>
         <code id="host-identity-fingerprint" class="host-fingerprint"></code>
         <footer class="dialog-actions"><button value="cancel" class="secondary" type="submit" autofocus>Annuler</button><button value="approve" type="submit">Approuver l'identité</button></footer>
+      </form>
+    </dialog>
+    <dialog id="preferences-dialog" aria-labelledby="preferences-title">
+      <form id="preferences-form" method="dialog" novalidate>
+        <header class="dialog-heading"><div><p class="eyebrow">CE MAC</p><h2 id="preferences-title">Réglages Bridget</h2></div><button class="icon-button" id="close-preferences" type="button" aria-label="Fermer">×</button></header>
+        <p class="field-help">Ces préférences restent sur ce Mac. Elles ne sont jamais envoyées aux serveurs reliés ni à leurs agents.</p>
+        <label>Nom affiché<input id="preferences-display-name" maxlength="96" autocomplete="name" placeholder="Optionnel" /></label>
+        <label>Thème<select id="preferences-color-scheme"><option value="system">Système</option><option value="dark">Sombre</option><option value="light">Clair</option></select></label>
+        <label>Fuseau d’affichage<input id="preferences-timezone" maxlength="64" autocomplete="off" spellcheck="false" value="system" placeholder="system ou Europe/Paris" /><span class="field-help">Utilisez « system » ou un identifiant IANA, par exemple Europe/Paris. Le fuseau du serveur n’est pas modifié.</span></label>
+        <label>Taille de police<select id="preferences-font-size"><option value="13">13 px</option><option value="14">14 px</option><option value="15">15 px</option><option value="16">16 px</option><option value="17">17 px</option><option value="18">18 px</option><option value="20">20 px</option><option value="22">22 px</option><option value="24">24 px</option></select></label>
+        <section class="desktop-about" aria-labelledby="desktop-about-title"><h3 id="desktop-about-title">À propos</h3><p id="desktop-version">Version inconnue.</p><p id="desktop-update-status">Vérification de mise à jour non configurée.</p></section>
+        <p id="preferences-error" class="notice notice-error" hidden role="alert"></p>
+        <footer class="dialog-actions"><button id="cancel-preferences" class="secondary" type="button">Annuler</button><button type="submit">Enregistrer</button></footer>
       </form>
     </dialog>
     <script type="module" src="./app.js"></script>
