@@ -13,3 +13,24 @@ fn le_frontend_ne_peut_pas_fournir_de_commande_url_ou_secret_libre() {
         );
     }
 }
+
+#[test]
+fn les_actions_de_carte_sont_delegatees_au_listing_de_profils() {
+    let frontend = include_str!("../../ui/app.js");
+    assert!(frontend.contains("elements.list.addEventListener(\"click\""));
+    for action in [
+        "edit",
+        "delete",
+        "connect",
+        "open",
+        "disconnect",
+        "settings",
+    ] {
+        assert!(
+            frontend.contains(&format!("button.dataset.action === \"{action}\"")),
+            "action de carte absente : {action}"
+        );
+    }
+    assert!(frontend.contains("void connectProfile(profile)"));
+    assert!(frontend.contains("void openServerSettings(profile)"));
+}

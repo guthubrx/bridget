@@ -216,7 +216,20 @@ async function restoreLocalPreferences() {
 
 elements.add.addEventListener("click", () => openProfileDialog()); elements.close.addEventListener("click", closeProfileDialog); elements.cancel.addEventListener("click", closeProfileDialog); elements.showProfiles.addEventListener("click", () => void showProfiles()); document.querySelectorAll("input[name='identity-source']").forEach((input) => input.addEventListener("change", syncIdentityField)); elements.form.addEventListener("submit", saveProfile);
 elements.showPreferences.addEventListener("click", () => void openPreferences()); elements.closePreferences.addEventListener("click", closePreferences); elements.cancelPreferences.addEventListener("click", closePreferences); elements.preferencesForm.addEventListener("submit", savePreferences);
-if (button.dataset.action === "disconnect") void disconnectProfile(profile); if (button.dataset.action === "settings") void openServerSettings(profile);
+elements.list.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-action]");
+  if (!button) return;
+  const profile = profiles.find((candidate) => candidate.id === button.dataset.profileId);
+  if (!profile) return;
+  if (button.dataset.action === "edit") openProfileDialog(profile);
+  if (button.dataset.action === "delete") void deleteProfile(profile);
+  if (button.dataset.action === "connect") void connectProfile(profile);
+  if (button.dataset.action === "open") {
+    void openPanel(profile).catch((error) => visibleError(elements.loadError, error));
+  }
+  if (button.dataset.action === "disconnect") void disconnectProfile(profile);
+  if (button.dataset.action === "settings") void openServerSettings(profile);
+});
 
 const eventApi = window.__TAURI__?.event;
 if (eventApi?.listen) void eventApi.listen("connection-state", (event) => {
