@@ -33,8 +33,8 @@ function renderProfiles() {
     const item = document.createElement("li"); item.className = "profile-card";
     const connected = profileConnection(profile) === "connected";
     const action = connected
-      ? `<button type="button" data-action="open" data-profile-id="${escapeHtml(profile.id)}">Ouvrir le relais</button><button type="button" class="secondary" data-action="settings" data-profile-id="${escapeHtml(profile.id)}">Réglages</button><button type="button" class="secondary" data-action="disconnect" data-profile-id="${escapeHtml(profile.id)}">Déconnecter</button>`
-      : `<button type="button" data-action="connect" data-profile-id="${escapeHtml(profile.id)}">${profileConnection(profile) === "failed" ? "Réessayer" : "Connecter"}</button><button type="button" class="secondary" data-action="settings" data-profile-id="${escapeHtml(profile.id)}">Réglages</button>`;
+      ? `<button type="button" data-action="open" data-profile-id="${escapeHtml(profile.id)}">Ouvrir le relais</button><button type="button" class="secondary" data-action="disconnect" data-profile-id="${escapeHtml(profile.id)}">Déconnecter</button>`
+      : `<button type="button" data-action="connect" data-profile-id="${escapeHtml(profile.id)}">${profileConnection(profile) === "failed" ? "Réessayer" : "Connecter"}</button>`;
     item.innerHTML = `<div><p class="profile-kind">TUNNEL SSH GÉRÉ</p><h3>${escapeHtml(profile.label)}</h3><p class="profile-origin">${escapeHtml(profileOrigin(profile))}</p><p class="connection-badge" data-state="${escapeHtml(profileConnection(profile))}">${escapeHtml(connectionDescription(profile))}</p></div><div class="profile-actions">${action}<button type="button" class="secondary" data-action="edit" data-profile-id="${escapeHtml(profile.id)}">Modifier</button><button type="button" class="danger" data-action="delete" data-profile-id="${escapeHtml(profile.id)}">Retirer</button></div>`;
     elements.list.append(item);
   }
@@ -126,24 +126,6 @@ async function connectProfile(profile, automatic = false, initialView = null) {
   }
 }
 
-async function openServerSettings(profile) {
-  clearError(elements.loadError);
-  try {
-    if (openPanelProfiles.has(profile.id)) {
-      await invoke("panel_close", { profile_id: profile.id });
-      openPanelProfiles.delete(profile.id);
-      renderActivePanels();
-    }
-    if (profileConnection(profile) === "connected") {
-      await openPanel(profile, "settings");
-    } else {
-      await connectProfile(profile, false, "settings");
-    }
-  } catch (error) {
-    visibleError(elements.loadError, error);
-  }
-}
-
 async function disconnectProfile(profile) {
   try {
     await invoke("connection_close", { profile_id: profile.id }); connectionStates.delete(profile.id); openPanelProfiles.delete(profile.id);
@@ -228,7 +210,6 @@ elements.list.addEventListener("click", (event) => {
     void openPanel(profile).catch((error) => visibleError(elements.loadError, error));
   }
   if (button.dataset.action === "disconnect") void disconnectProfile(profile);
-  if (button.dataset.action === "settings") void openServerSettings(profile);
 });
 
 const eventApi = window.__TAURI__?.event;

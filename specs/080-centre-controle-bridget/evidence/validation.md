@@ -25,8 +25,9 @@ Le test UI vérifie que le centre contient l'overlay, la roue de bas de barre, l
 
 ## Correctif des actions Desktop
 
-- La délégation de clic du listing de profils couvre Connecter, Réessayer, Ouvrir, Déconnecter, Modifier, Retirer et Réglages.
-- Le test Desktop statique atteste les six branches et les appels `connectProfile` et `openServerSettings`.
+- La délégation de clic du listing de profils couvre Connecter, Réessayer, Ouvrir, Déconnecter, Modifier et Retirer.
+- La carte Desktop ne rend plus de lien textuel Réglages. La roue de la barre basse du panneau distant est l'unique entrée de réglages serveur.
+- Le test Desktop statique atteste les cinq branches et l'absence de `data-action="settings"` ainsi que de `openServerSettings`.
 - Sonde SSH des arguments de production : `moi@cartae.app:2222` réussit. Le profil Carte enregistré en `Moi` est refusé par SSH et doit devenir `moi` après fermeture de l'application.
 
 ## Correctif de duplication des panneaux et de l'icône

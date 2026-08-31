@@ -155,7 +155,7 @@ Comme opérateur, je veux voir si une version plus récente de Bridget est dispo
 
 ## Exigences fonctionnelles
 
-- FR-8001: L'interface DOIT offrir une roue d'engrenage persistante en bas de la barre latérale qui ouvre le centre de contrôle au clavier et à la souris.
+- FR-8001: L'interface DOIT offrir une roue d'engrenage persistante en bas de la barre latérale qui ouvre le centre de contrôle au clavier et à la souris. Cette roue est l'unique entrée des réglages du serveur affiché : la carte de profil Desktop ne DOIT PAS rendre d'action Réglages concurrente.
 - FR-8002: Le centre DOIT proposer les sections Préférences du Mac, Serveurs, Usage, Mises à jour et Diagnostics dans une navigation recherchable.
 - FR-8003: Chaque réglage DOIT afficher sa portée, son état de disponibilité et une description courte de son effet.
 - FR-8004: Les préférences de thème, fuseau horaire, taille de police et options d'accessibilité DOIVENT rester propres au Mac et ne jamais être envoyées à un serveur.

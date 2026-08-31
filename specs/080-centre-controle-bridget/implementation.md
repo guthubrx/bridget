@@ -48,8 +48,9 @@ Le binaire release courant a été construit depuis ce worktree, installé dans 
 
 ## Correctif des actions de cartes Desktop
 
-- Une régression du montage de l'interface Desktop avait supprimé la délégation des actions de cartes. Les boutons Connecter, Réessayer, Ouvrir le relais, Déconnecter, Modifier, Retirer et Réglages sont à nouveau routés par le listing.
-- Le test `desktop_commands::les_actions_de_carte_sont_delegatees_au_listing_de_profils` atteste les six branches d'action et échoue si la délégation ou les appels Connecter et Réglages disparaissent.
+- Une régression du montage de l'interface Desktop avait supprimé la délégation des actions de cartes. Les boutons Connecter, Réessayer, Ouvrir le relais, Déconnecter, Modifier et Retirer sont routés par le listing.
+- Le lien textuel « Réglages » a été retiré de ces cartes : la seule entrée des réglages serveur est la roue, ancrée en bas à gauche de la barre du panneau distant.
+- Le test `desktop_commands::les_actions_de_carte_sont_delegatees_au_listing_de_profils` atteste les cinq branches d'action et échoue si l'ancienne action Réglages réapparaît.
 - La sonde SSH avec les arguments exacts de Bridget atteste que `moi@cartae.app:2222` est joignable. Le profil local Carte contient encore `Moi` et devra être corrigé en `moi` après fermeture de Bridget, afin de ne pas faire réécrire l'état en mémoire.
 
 ## Correctif de panneau unique et d'icône macOS

@@ -24,7 +24,6 @@ fn les_actions_de_carte_sont_delegatees_au_listing_de_profils() {
         "connect",
         "open",
         "disconnect",
-        "settings",
     ] {
         assert!(
             frontend.contains(&format!("button.dataset.action === \"{action}\"")),
@@ -32,7 +31,8 @@ fn les_actions_de_carte_sont_delegatees_au_listing_de_profils() {
         );
     }
     assert!(frontend.contains("void connectProfile(profile)"));
-    assert!(frontend.contains("void openServerSettings(profile)"));
+    assert!(!frontend.contains("data-action=\"settings\""));
+    assert!(!frontend.contains("openServerSettings"));
 }
 
 #[test]
