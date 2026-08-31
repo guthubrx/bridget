@@ -16,6 +16,7 @@ pub use execution_store::{
 pub mod fleet;
 pub mod greffe_policy_refresh;
 pub mod idempotency;
+pub mod identity_migration;
 pub mod ledger;
 pub mod lifecycle;
 pub mod managed_process;

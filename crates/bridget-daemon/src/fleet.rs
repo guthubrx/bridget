@@ -38,6 +38,7 @@ use crate::recovery_trace::{
     NamedRosterEntry, NamedRosterStore, RecoveryLossEntry, persist_report, report_path,
     resolved_domain, roster_path,
 };
+use bridget_core::router::validate_agent_id;
 pub use bridget_transport::protocol::{ProjectReference, SpawnOwnership};
 use bridget_transport::{ResolvedAgentDefinition, protocol::ExecutionBudgetOutcome};
 use log::warn;
@@ -1604,12 +1605,11 @@ fn validate_order(order: &SpawnOrder) -> Result<(), FleetError> {
             "échéance non postérieure à issued_at",
         ));
     }
-    if order
-        .requested_name
-        .as_ref()
-        .is_some_and(|name| name.trim().is_empty())
-    {
-        return Err(FleetError::InvalidOrder("nom explicite vide"));
+    let Some(agent_id) = order.requested_name.as_deref() else {
+        return Err(FleetError::InvalidOrder("agent_id de spawn absent"));
+    };
+    if validate_agent_id(agent_id).is_err() {
+        return Err(FleetError::InvalidOrder("agent_id de spawn invalide"));
     }
     if let Some(ownership) = &order.ownership
         && (ownership.parent_instance_id.trim().is_empty() || ownership.role.trim().is_empty())
@@ -1748,22 +1748,12 @@ fn canonical_order(order: &SpawnOrder) -> Result<Vec<u8>, FleetError> {
     .map_err(|_| FleetError::InvalidOrder("canon non sérialisable"))
 }
 
-fn resolve_name(order: &SpawnOrder, generation: u64, active: &HashMap<String, String>) -> String {
-    if let Some(name) = &order.requested_name {
-        return name.clone();
-    }
-    let base = format!("{}-{generation}", order.agent_type);
-    if !active.contains_key(&base) {
-        return base;
-    }
-    let mut suffix = generation.saturating_add(1);
-    loop {
-        let candidate = format!("{}-{suffix}", order.agent_type);
-        if !active.contains_key(&candidate) {
-            return candidate;
-        }
-        suffix = suffix.saturating_add(1);
-    }
+fn resolve_name(order: &SpawnOrder, _generation: u64, _active: &HashMap<String, String>) -> String {
+    // `validate_order` garantit l'existence et le format de l'agent_id.
+    order
+        .requested_name
+        .clone()
+        .expect("validate_order exige un agent_id de spawn")
 }
 
 fn lease_from(active: &ActiveSpawn) -> SpawnLease {

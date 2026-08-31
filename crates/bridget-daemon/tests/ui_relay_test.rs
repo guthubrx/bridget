@@ -163,7 +163,8 @@ impl LiveAgent {
         };
         agent.send(&WrapperToDaemon::Register {
             agent_type: "ui-test".to_string(),
-            name: Some(name.to_string()),
+            identity_version: 2,
+            agent_id: name.to_string(),
             host: Some("test".to_string()),
             transport: Some(transport.to_string()),
             channel,
@@ -194,7 +195,7 @@ impl LiveAgent {
         };
         agents
             .iter()
-            .find(|agent| agent.name == name)
+            .find(|agent| agent.agent_id == name)
             .unwrap_or_else(|| panic!("présence {name} absente"))
             .channel
             .clone()
@@ -372,7 +373,7 @@ fn observe_ui_presence_channel_after(
     };
     let human = agents
         .iter()
-        .find(|agent| agent.name == "humain")
+        .find(|agent| agent.agent_id == "humain")
         .expect("présence humaine UI enregistrée");
     assert_eq!(human.transport, "cli");
     let channel = human.channel.clone();
@@ -490,7 +491,7 @@ fn spawn_stop_daemon(
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                name: "humain".to_string()
+                agent_id: "humain".to_string()
             })
             .unwrap()
         )
@@ -530,7 +531,7 @@ fn spawn_stop_daemon(
         reader.read_line(&mut line).unwrap();
         assert!(matches!(
             decode::<WrapperToDaemon>(line.trim()).unwrap(),
-            WrapperToDaemon::StopOrder { ref name, ref command_id }
+            WrapperToDaemon::StopOrder { agent_id: ref name, ref command_id }
                 if name == expected_name && command_id == expected_command_id
         ));
         writeln!(writer, "{}", encode(&stop_response).unwrap()).unwrap();
@@ -985,7 +986,7 @@ fn post_v1_send_reply_true_cree_une_demande_suivie() {
     };
     let human = agents
         .iter()
-        .find(|agent| agent.name == "humain")
+        .find(|agent| agent.agent_id == "humain")
         .expect("présence humaine UI enregistrée");
     assert_eq!(
         human.channel, None,

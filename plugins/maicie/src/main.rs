@@ -265,7 +265,7 @@ fn capture_status_sources(config: &MaicieConfig, participants: &[String]) -> Sta
         .filter(|agent| {
             participants
                 .iter()
-                .any(|participant| participant == &agent.name)
+                .any(|participant| participant == &agent.agent_id)
         })
         .map(|agent| AvailabilityOutput::from_agent(agent, started_at))
         .collect::<Vec<_>>();
@@ -278,7 +278,7 @@ fn capture_status_sources(config: &MaicieConfig, participants: &[String]) -> Sta
             ));
             continue;
         }
-        let Some(agent) = agents.iter().find(|agent| agent.name == *participant) else {
+        let Some(agent) = agents.iter().find(|agent| agent.agent_id == *participant) else {
             runtime.push(RuntimeAgentOutput::unknown(
                 participant,
                 "agent_absent_annuaire",
@@ -1426,12 +1426,12 @@ fn delegate_error_for_cli(
     if target == MAICIE_IDENTITY {
         return CliError::TargetIsPilot(target);
     }
-    let Some(agent) = agents.iter().find(|agent| agent.name == target) else {
+    let Some(agent) = agents.iter().find(|agent| agent.agent_id == target) else {
         return CliError::TargetUnknownBridget(target);
     };
     let has_profile = profiles
         .iter()
-        .any(|profile| profile.agent_name.as_deref().unwrap_or(&profile.id) == agent.name);
+        .any(|profile| profile.agent_id.as_deref().unwrap_or(&profile.id) == agent.agent_id);
     if !has_profile {
         return CliError::TargetMissingMaicieProfile {
             target,
@@ -3802,7 +3802,7 @@ struct AvailabilityOutput {
 impl AvailabilityOutput {
     fn from_agent(agent: &AgentInfo, observed_at: i64) -> Self {
         Self {
-            agent: agent.name.clone(),
+            agent: agent.agent_id.clone(),
             state: agent.state.clone(),
             transport: agent.transport.clone(),
             observed_at,
@@ -4349,7 +4349,7 @@ impl fmt::Display for CliError {
                 config_path,
             } => write!(
                 formatter,
-                "agent Bridget sans profil Maicie : {}; ajoutez un profil dans {} avec \"agent_name\": \"{}\"",
+                "agent Bridget sans profil Maicie : {}; ajoutez un profil dans {} avec \"agent_id\": \"{}\"",
                 sanitize_terminal(target),
                 config_path.display(),
                 sanitize_terminal(target)
@@ -4418,7 +4418,8 @@ mod tests {
 
     fn agent_info(name: &str, state: &str, domain: Option<&str>) -> AgentInfo {
         AgentInfo {
-            name: name.to_string(),
+            agent_id: name.to_string(),
+            display_name: name.to_string(),
             agent_type: "codex".to_string(),
             connection_id: format!("conn-{name}"),
             host: "fixture".to_string(),
@@ -4433,14 +4434,14 @@ mod tests {
         }
     }
 
-    fn profile_config(agent_name: &str) -> ProfileConfig {
+    fn profile_config(agent_id: &str) -> ProfileConfig {
         ProfileConfig {
-            id: format!("profil-{agent_name}"),
-            agent_name: Some(agent_name.to_string()),
+            id: format!("profil-{agent_id}"),
+            agent_id: Some(agent_id.to_string()),
             agent_type: None,
             model: None,
             effort: None,
-            display_name: agent_name.to_string(),
+            display_name: agent_id.to_string(),
             tags: vec!["review".to_string()],
             personality_ref: "profiles/reviewer.md".to_string(),
             tools: Vec::new(),
@@ -4932,7 +4933,7 @@ mod tests {
             review_project: None,
             profiles: vec![ProfileConfig {
                 id: "code-review".to_string(),
-                agent_name: Some("coderBridget".to_string()),
+                agent_id: Some("coderBridget".to_string()),
                 agent_type: None,
                 model: None,
                 effort: None,
@@ -4944,7 +4945,8 @@ mod tests {
             }],
         };
         let agents = vec![AgentInfo {
-            name: "coderBridget".to_string(),
+            agent_id: "coderBridget".to_string(),
+            display_name: "Code review".to_string(),
             agent_type: "codex".to_string(),
             connection_id: "conn-1".to_string(),
             host: "local".to_string(),
@@ -4984,7 +4986,8 @@ mod tests {
     #[test]
     fn agent_connecte_sans_profil_indique_le_champ_a_ajouter() {
         let agents = vec![AgentInfo {
-            name: "cursorbridget".to_string(),
+            agent_id: "cursorbridget".to_string(),
+            display_name: "cursorbridget".to_string(),
             agent_type: "cursor".to_string(),
             connection_id: "conn-cursor".to_string(),
             host: "local".to_string(),

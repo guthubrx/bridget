@@ -10,6 +10,7 @@ use bridget_transport::protocol::{AgentInfo, AttachWindow, ConnectionRole, decod
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -41,6 +42,19 @@ fn unix_now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+/// Les scénarios gardent des libellés lisibles, mais le protocole ne transporte
+/// plus ces libellés comme identités de routage.
+fn agent_id_for(label: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    label.hash(&mut hasher);
+    let value = hasher.finish();
+    format!(
+        "{:08x}-0000-4000-8000-{:012x}",
+        value as u32,
+        value & 0x0000_0fff_ffff_ffff
+    )
 }
 
 fn test_root(label: &str) -> PathBuf {
@@ -893,8 +907,9 @@ impl Peer {
             name: name.to_string(),
         };
         peer.send(&WrapperToDaemon::Register {
+            identity_version: 2,
             agent_type: "parity-client".to_string(),
-            name: Some(name.to_string()),
+            agent_id: agent_id_for(name),
             host: Some("fixture-host".to_string()),
             transport: Some("unix".to_string()),
             channel: None.into(),
@@ -907,7 +922,7 @@ impl Peer {
             journal_available: None,
         });
         match peer.recv() {
-            DaemonToWrapper::Registered { name: assigned } => peer.name = assigned,
+            DaemonToWrapper::Registered { agent_id: assigned } => peer.name = assigned,
             other => panic!("enregistrement inattendu: {other:?}"),
         }
         peer
@@ -962,7 +977,9 @@ fn wait_agent(control: &mut Peer, name: &str) -> AgentInfo {
     loop {
         control.send(&WrapperToDaemon::ListAgents);
         if let DaemonToWrapper::AgentList { agents } = control.recv()
-            && let Some(agent) = agents.into_iter().find(|agent| agent.name == name)
+            && let Some(agent) = agents
+                .into_iter()
+                .find(|agent| agent.agent_id == agent_id_for(name))
         {
             return agent;
         }
@@ -1400,7 +1417,7 @@ fn run_corpus(socket: &Path, agent: &str, run: usize, proxy: &CutProxy) -> ModeO
 
 fn stop_managed(control: &mut Peer, name: &str, run: usize) {
     control.send(&WrapperToDaemon::StopOrder {
-        name: name.to_string(),
+        agent_id: agent_id_for(name),
         command_id: format!("stop-parity-{run}"),
     });
     let response = control.recv();
@@ -1420,7 +1437,7 @@ fn spawn_managed(control: &mut Peer, root: &Path, name: &str, command_id: &str, 
     let now = unix_now();
     control.send(&WrapperToDaemon::SpawnOrder {
         agent_type: "parity".to_string(),
-        name: Some(name.to_string()),
+        agent_id: Some(agent_id_for(name)),
         cwd: root.to_string_lossy().into_owned(),
         persistent,
         command_id: command_id.to_string(),
@@ -1431,7 +1448,8 @@ fn spawn_managed(control: &mut Peer, root: &Path, name: &str, command_id: &str, 
     });
     assert!(matches!(
         control.recv(),
-        DaemonToWrapper::SpawnAccepted { name: accepted, .. } if accepted == name
+        DaemonToWrapper::SpawnAccepted { agent_id: accepted, .. }
+            if accepted == agent_id_for(name)
     ));
 }
 
@@ -1447,12 +1465,12 @@ fn wait_named_agents(socket: &Path, expected: &[String], stopped: &[String]) {
         let ready = expected.iter().all(|name| {
             agents
                 .iter()
-                .any(|agent| agent.name == *name && agent.state == "connected")
+                .any(|agent| agent.agent_id == agent_id_for(name) && agent.state == "connected")
         });
         let stopped_visible = stopped.iter().all(|name| {
             agents
                 .iter()
-                .any(|agent| agent.name == *name && agent.state == "stopped")
+                .any(|agent| agent.agent_id == agent_id_for(name) && agent.state == "stopped")
         });
         if ready && stopped_visible {
             return;
@@ -1664,7 +1682,7 @@ fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
         let now = unix_now();
         control.send(&WrapperToDaemon::SpawnOrder {
             agent_type: "parity".to_string(),
-            name: Some(managed_name.clone()),
+            agent_id: Some(agent_id_for(&managed_name)),
             cwd: root.to_string_lossy().into_owned(),
             persistent: false,
             command_id: format!("spawn-parity-{run}"),
@@ -1675,7 +1693,8 @@ fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
         });
         assert!(matches!(
             control.recv(),
-            DaemonToWrapper::SpawnAccepted { ref name, .. } if name == &managed_name
+            DaemonToWrapper::SpawnAccepted { ref agent_id, .. }
+                if agent_id == &agent_id_for(&managed_name)
         ));
         let managed_observables = run_corpus(&daemon.socket, &managed_name, run * 2 + 1, &proxy);
 
@@ -1724,7 +1743,7 @@ fn matrice_fr008_compare_la_garde_de_facturation() {
     let now = unix_now();
     control.send(&WrapperToDaemon::SpawnOrder {
         agent_type: "parity".to_string(),
-        name: Some("billing-managed".to_string()),
+        agent_id: Some(agent_id_for("billing-managed")),
         cwd: root.to_string_lossy().into_owned(),
         persistent: false,
         command_id: "spawn-billing".to_string(),
@@ -1771,7 +1790,7 @@ fn sc001_vingt_spawns_survivent_a_la_fermeture_du_client_et_repondent() {
             Peer::register(&daemon.socket, &format!("sc001-orderer-{index}"));
         ordering_terminal.send(&WrapperToDaemon::SpawnOrder {
             agent_type: "parity".to_string(),
-            name: Some(name.clone()),
+            agent_id: Some(agent_id_for(&name)),
             cwd: root.to_string_lossy().into_owned(),
             persistent: false,
             command_id,
@@ -1781,8 +1800,10 @@ fn sc001_vingt_spawns_survivent_a_la_fermeture_du_client_et_repondent() {
             ownership: None,
         });
         match ordering_terminal.recv() {
-            DaemonToWrapper::SpawnAccepted { name: accepted, .. } => {
-                assert_eq!(accepted, name)
+            DaemonToWrapper::SpawnAccepted {
+                agent_id: accepted, ..
+            } => {
+                assert_eq!(accepted, agent_id_for(&name))
             }
             other => panic!("spawn SC-001 {index} inattendu: {other:?}"),
         }
@@ -2189,7 +2210,7 @@ fn TEMOIN_abandon_apres_N_tentatives_est_nomme() {
         };
         let still_connected = agents
             .iter()
-            .any(|agent| agent.name == name && agent.state == "connected");
+            .any(|agent| agent.agent_id == agent_id_for(&name) && agent.state == "connected");
         if !still_connected {
             break;
         }

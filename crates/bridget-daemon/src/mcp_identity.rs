@@ -1,6 +1,6 @@
 //! Résolution locale de l'identité appelante MCP.
 
-use bridget_core::router::validate_agent_name;
+use bridget_core::router::validate_agent_id;
 use bridget_transport::greffe_authorization::is_valid_greffe_identity_component;
 use bridget_transport::greffe_policy_refresh::{
     LiveMarker, MARKER_INVENTORY_VERSION, MarkerInventory, MarkerSource, StaleMarker,
@@ -113,7 +113,7 @@ pub fn resolve_current() -> Result<String, IdentityError> {
 
 /// Résout atomiquement le nom affiché et la portée stable d'instance.
 pub fn resolve_current_identity() -> Result<ResolvedIdentity, IdentityError> {
-    let name_file = std::env::var_os("BRIDGET_AGENT_NAME_FILE").map(PathBuf::from);
+    let name_file = std::env::var_os("BRIDGET_AGENT_ID_FILE").map(PathBuf::from);
     let expected_instance_id = std::env::var("BRIDGET_AGENT_INSTANCE_ID")
         .ok()
         .filter(|value| !value.is_empty());
@@ -454,7 +454,7 @@ fn read_name_file(path: &Path) -> Result<String, NameFileReadError> {
     file.read_to_string(&mut name)
         .map_err(|_| NameFileReadError::Unreadable)?;
     let name = name.trim();
-    validate_agent_name(name).map_err(|_| NameFileReadError::Unreadable)?;
+    validate_agent_id(name).map_err(|_| NameFileReadError::Unreadable)?;
     Ok(name.to_string())
 }
 

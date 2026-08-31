@@ -1,7 +1,10 @@
 //! CLI — point d'entrée unifié pour toutes les sous-commandes bridget.
 
 use crate::daemon::{self, DaemonConfig};
-use bridget_core::{BridgetMessage, router::validate_agent_name};
+use bridget_core::{
+    BridgetMessage,
+    router::{validate_agent_id, validate_technical_label},
+};
 use bridget_transport::protocol::{
     AdoptStoppedOutcome, AgentInfo, AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability,
     ConnectionRole, DecommissionOutcome, GuichetDurationClass, IdempotencyIssue, LedgerMessage,
@@ -144,6 +147,7 @@ pub fn run() {
         "requests" => cmd_requests(&args[2..]),
         "rename" => cmd_rename(&args[2..]),
         "runtime" => cmd_runtime(&args[2..]),
+        "identity" => cmd_identity(&args[2..]),
         "domain" => cmd_domain(&args[2..]),
         "project-runtime" => cmd_project_runtime(&args[2..]),
         "project-round" => cmd_project_round(&args[2..]),
@@ -190,6 +194,147 @@ fn cmd_mcp() {
         eprintln!("bridget mcp: {error}");
         std::process::exit(1);
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum IdentityCommand {
+    Migrate {
+        apply: bool,
+        db_path: PathBuf,
+        fleet_path: Option<PathBuf>,
+        maicie_config: Option<PathBuf>,
+    },
+}
+
+fn parse_identity_command(args: &[String]) -> Result<IdentityCommand, String> {
+    if args.first().map(String::as_str) != Some("migrate") {
+        return Err("usage: bridget identity migrate --dry-run|--apply [--db <chemin>] [--fleet <chemin>] [--maicie-config <chemin>]".to_string());
+    }
+    let mut apply = None;
+    let mut db_path = None;
+    let mut fleet_path = None;
+    let mut maicie_config = None;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--dry-run" => {
+                if apply.replace(false).is_some() {
+                    return Err("bridget identity migrate: mode dupliqué".to_string());
+                }
+            }
+            "--apply" => {
+                if apply.replace(true).is_some() {
+                    return Err("bridget identity migrate: mode dupliqué".to_string());
+                }
+            }
+            "--db" => {
+                index += 1;
+                db_path = args.get(index).map(PathBuf::from);
+                if db_path.is_none() {
+                    return Err(
+                        "bridget identity migrate: --db requiert un chemin absolu".to_string()
+                    );
+                }
+            }
+            "--fleet" => {
+                index += 1;
+                fleet_path = args.get(index).map(PathBuf::from);
+                if fleet_path.is_none() {
+                    return Err(
+                        "bridget identity migrate: --fleet requiert un chemin absolu".to_string(),
+                    );
+                }
+            }
+            "--maicie-config" => {
+                index += 1;
+                maicie_config = args.get(index).map(PathBuf::from);
+                if maicie_config.is_none() {
+                    return Err(
+                        "bridget identity migrate: --maicie-config requiert un chemin absolu"
+                            .to_string(),
+                    );
+                }
+            }
+            option => return Err(unknown_argument("identity migrate", option)),
+        }
+        index += 1;
+    }
+    let db_path = db_path.unwrap_or_else(|| DaemonConfig::default().db_path);
+    for path in [&db_path, fleet_path.as_ref().unwrap_or(&PathBuf::new())] {
+        if !path.as_os_str().is_empty() && !path.is_absolute() {
+            return Err("bridget identity migrate: les chemins doivent être absolus".to_string());
+        }
+    }
+    if maicie_config
+        .as_ref()
+        .is_some_and(|path| !path.is_absolute())
+    {
+        return Err("bridget identity migrate: --maicie-config doit être absolu".to_string());
+    }
+    Ok(IdentityCommand::Migrate {
+        apply: apply.ok_or_else(|| {
+            "bridget identity migrate: --dry-run ou --apply est obligatoire".to_string()
+        })?,
+        db_path,
+        fleet_path,
+        maicie_config,
+    })
+}
+
+fn cmd_identity(args: &[String]) {
+    let command = parse_identity_command(args).unwrap_or_else(|error| exit_argument_error(&error));
+    let IdentityCommand::Migrate {
+        apply,
+        db_path,
+        fleet_path,
+        maicie_config,
+    } = command;
+    let mut paths =
+        crate::identity_migration::IdentityMigrationPaths::for_bridget_db(db_path, maicie_config);
+    if let Some(fleet_path) = fleet_path {
+        paths.fleet_path = fleet_path;
+    }
+    if apply && socket_path().exists() {
+        eprintln!(
+            "bridget identity migrate: daemon actif ou socket encore présent; arrêtez Bridget avant --apply"
+        );
+        std::process::exit(1);
+    }
+    let plan = crate::identity_migration::plan(paths).unwrap_or_else(|error| {
+        eprintln!("bridget identity migrate: {error}");
+        std::process::exit(1);
+    });
+    if !apply {
+        let output = serde_json::json!({
+            "mode": "dry_run",
+            "agents_a_migrer": plan.mapping.len(),
+            "references_legacy": plan.mapping.keys().collect::<Vec<_>>(),
+            "agent_ids_a_retargeter": plan.requires_retarget.iter().collect::<Vec<_>>(),
+            "bridget_db": plan.paths.bridget_db,
+            "fleet_path": plan.paths.fleet_path,
+            "maicie_config": plan.paths.maicie_config,
+            "maicie_db": plan.maicie_db,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output).expect("rapport sérialisable")
+        );
+        return;
+    }
+    let outcome = crate::identity_migration::apply(&plan).unwrap_or_else(|error| {
+        eprintln!("bridget identity migrate: {error}");
+        std::process::exit(1);
+    });
+    let output = serde_json::json!({
+        "mode": "applied",
+        "agents_migres": outcome.migrated_agents,
+        "sauvegardes": outcome.backup_paths,
+        "journal": outcome.journal_path,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&output).expect("rapport sérialisable")
+    );
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -331,7 +476,7 @@ fn cmd_managed_wrapper(args: &[String]) {
 fn cmd_managed_runtime_wrapper(args: &[String]) {
     if args.len() != 4 {
         eprintln!(
-            "bridget managed-runtime-wrapper: type, nom, commande interne et définition figée requis"
+            "bridget managed-runtime-wrapper: type, Agent ID, commande interne et définition figée requis"
         );
         std::process::exit(2);
     }
@@ -364,19 +509,19 @@ fn cmd_managed_runtime_stop(args: &[String]) {
 }
 
 fn extract_wrapper_args(args: &[String]) -> (Option<String>, Vec<String>) {
-    let mut name = None;
+    let mut agent_id = None;
     let mut rest = Vec::new();
     let mut i = 0;
     while i < args.len() {
-        if args[i] == "--name" && i + 1 < args.len() {
-            name = Some(args[i + 1].clone());
+        if args[i] == "--agent-id" && i + 1 < args.len() {
+            agent_id = Some(args[i + 1].clone());
             i += 2;
         } else {
             rest.push(args[i].clone());
             i += 1;
         }
     }
-    (name, rest)
+    (agent_id, rest)
 }
 
 fn which(cmd: &str) -> bool {
@@ -411,7 +556,7 @@ fn print_usage() {
            ui --maicie-config <P> Lance le relais UI (port+jeton stables)\n  \
            ui endpoint --json     Lit l'endpoint UI existant pour un client SSH\n  \
            attach <N>             Suit un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
-           spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--name N]\n  \
+           spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID]\n  \
            stop <N>               Arrête un équipier géré\n  \
            relaunch <N>           Relance un équipier géré arrêté\n  \
            decommission <N>       Retire un équipier de la flotte visible\n  \
@@ -437,6 +582,7 @@ fn print_usage() {
            version                Version\n  \
            help                   Cette aide\n\n\
          Options de send :\n  \
+           identity migrate --dry-run|--apply [--db <P>] [--fleet <P>] [--maicie-config <P>]\n  \
            --to <nom>             Destinataire (requis)\n  \
            --from <nom>           Se nommer ; le nom doit être adressable en\n  \
            \x20                      retour, sinon l'envoi est refusé\n  \
@@ -500,7 +646,7 @@ const SPAWN_SURVIE_CONTRADICTOIRE: &str =
 #[derive(Debug)]
 struct ParsedSpawnArgs {
     agent_type: String,
-    name: Option<String>,
+    agent_id: Option<String>,
     cwd: Option<std::path::PathBuf>,
     persistent: bool,
     persistent_was_set: bool,
@@ -512,7 +658,7 @@ struct ParsedSpawnArgs {
 fn cmd_spawn(args: &[String]) {
     let parsed = parse_spawn_args(args).unwrap_or_else(|error| {
         eprintln!(
-            "usage: bridget spawn <type> (--persistent | --no-persistent) [--name N] \
+            "usage: bridget spawn <type> (--persistent | --no-persistent) [--agent-id UUID] \
              [--cwd CHEMIN] [--timeout S] [--command-id ID]"
         );
         eprintln!("erreur: {error}");
@@ -533,12 +679,12 @@ fn cmd_spawn(args: &[String]) {
         eprintln!("bridget spawn: {error}");
         std::process::exit(1);
     });
-    if let Some(name) = parsed.name.as_deref()
+    if let Some(agent_id) = parsed.agent_id.as_deref()
         && !parsed.persistent
     {
         eprintln!(
             "avertissement: {}",
-            crate::recovery_trace::non_persistent_spawn_warning(name)
+            crate::recovery_trace::non_persistent_spawn_warning(agent_id)
         );
     }
     let command_id = match &order {
@@ -547,8 +693,8 @@ fn cmd_spawn(args: &[String]) {
     };
     println!("command_id: {command_id}");
     match send_control_to_daemon(order) {
-        Ok(DaemonToWrapper::SpawnAccepted { name, .. }) => {
-            println!("Équipier connecté : {name}");
+        Ok(DaemonToWrapper::SpawnAccepted { .. }) => {
+            println!("Équipier connecté.");
         }
         Ok(DaemonToWrapper::SpawnRejected { reason, .. }) => {
             eprintln!("SPAWN REFUSÉ: {}", display_spawn_refusal(&reason));
@@ -580,7 +726,7 @@ fn cmd_stop(args: &[String]) {
     });
     println!("command_id: {command_id}");
     match send_control_to_daemon(WrapperToDaemon::StopOrder {
-        name,
+        agent_id: name,
         command_id: command_id.clone(),
     }) {
         Ok(DaemonToWrapper::StopResult { outcome, .. }) => match outcome {
@@ -620,12 +766,12 @@ fn cmd_relaunch(args: &[String]) {
     });
     println!("command_id: {command_id}");
     match send_control_to_daemon(WrapperToDaemon::RelaunchOrder {
-        name,
+        agent_id: name,
         command_id: command_id.clone(),
     }) {
         Ok(DaemonToWrapper::RelaunchResult { outcome, .. }) => match outcome {
-            RelaunchOutcome::Started { name, generation } => {
-                println!("Équipier relancé : {name} (génération {generation}).")
+            RelaunchOutcome::Started { generation, .. } => {
+                println!("Équipier relancé (génération {generation}).")
             }
             RelaunchOutcome::AlreadyRunning => {
                 eprintln!("RELANCE REFUSÉE: l'équipier est déjà actif");
@@ -671,7 +817,7 @@ fn cmd_decommission(args: &[String]) {
     });
     println!("command_id: {command_id}");
     match send_control_to_daemon(WrapperToDaemon::DecommissionOrder {
-        name,
+        agent_id: name,
         command_id: command_id.clone(),
     }) {
         Ok(DaemonToWrapper::DecommissionResult { outcome, .. }) => match outcome {
@@ -714,8 +860,8 @@ fn cmd_adopt_stopped(args: &[String]) {
         std::process::exit(2);
     }
     for name in args {
-        if let Err(error) = validate_agent_name(name) {
-            eprintln!("adopt-stopped: nom invalide {name}: {error}");
+        if let Err(error) = validate_agent_id(name) {
+            eprintln!("adopt-stopped: agent_id invalide {name}: {error}");
             std::process::exit(2);
         }
     }
@@ -723,7 +869,7 @@ fn cmd_adopt_stopped(args: &[String]) {
     for name in args {
         let command_id = uuid::Uuid::new_v4().to_string();
         match send_control_to_daemon(WrapperToDaemon::AdoptStoppedOrder {
-            name: name.clone(),
+            agent_id: name.clone(),
             command_id,
         }) {
             Ok(DaemonToWrapper::AdoptStoppedResult { outcome, .. }) => match outcome {
@@ -767,10 +913,10 @@ fn parse_spawn_args(args: &[String]) -> Result<ParsedSpawnArgs, String> {
         .filter(|value| !value.starts_with('-'))
         .cloned()
         .ok_or_else(|| "type d'agent manquant".to_string())?;
-    validate_agent_name(&agent_type)?;
+    validate_technical_label(&agent_type)?;
     let mut parsed = ParsedSpawnArgs {
         agent_type,
-        name: None,
+        agent_id: None,
         cwd: None,
         persistent: false,
         persistent_was_set: false,
@@ -797,15 +943,15 @@ fn parse_spawn_args(args: &[String]) -> Result<ParsedSpawnArgs, String> {
                 parsed.persistent_was_set = true;
                 index += 1;
             }
-            "--name" | "--cwd" | "--command-id" | "--timeout" => {
+            "--agent-id" | "--cwd" | "--command-id" | "--timeout" => {
                 let option = args[index].as_str();
                 let value = args
                     .get(index + 1)
                     .ok_or_else(|| format!("valeur manquante pour {option}"))?;
                 match option {
-                    "--name" => {
-                        validate_agent_name(value)?;
-                        parsed.name = Some(value.clone());
+                    "--agent-id" => {
+                        validate_agent_id(value)?;
+                        parsed.agent_id = Some(value.clone());
                     }
                     "--cwd" => parsed.cwd = Some(std::path::PathBuf::from(value)),
                     "--command-id" => {
@@ -841,7 +987,7 @@ fn parse_lifecycle_args(args: &[String], action: &str) -> Result<(String, String
         .first()
         .cloned()
         .ok_or_else(|| "nom manquant".to_string())?;
-    validate_agent_name(&name)?;
+    validate_agent_id(&name)?;
     let command_id = match args.get(1).map(String::as_str) {
         None => uuid::Uuid::new_v4().to_string(),
         Some("--command-id") if args.len() == 3 => {
@@ -886,7 +1032,12 @@ fn resolve_spawn_order(
     let order = WrapperToDaemon::SpawnOrder {
         agent_type: parsed.agent_type.clone(),
         project: None,
-        name: parsed.name.clone(),
+        agent_id: Some(
+            parsed
+                .agent_id
+                .clone()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        ),
         cwd: cwd.to_string_lossy().into_owned(),
         persistent: parsed.persistent,
         command_id,
@@ -933,7 +1084,7 @@ mod spawn_executor_tests {
                 writer,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
-                    name: "cli-cwd-oracle".to_string(),
+                    agent_id: "cli-cwd-oracle".to_string(),
                 })
                 .expect("Registered encodable")
             )
@@ -1048,14 +1199,14 @@ mod spawn_executor_tests {
             &socket_valide,
             DaemonToWrapper::SpawnAccepted {
                 command_id: "cwd-executor-valide".to_string(),
-                name: "fixture-cwd".to_string(),
+                agent_id: "fixture-cwd".to_string(),
                 definition: None,
             },
         );
         assert!(matches!(
             send_control_to_daemon_at(&socket_valide, ordre_valide),
-            Ok(DaemonToWrapper::SpawnAccepted { command_id, name, .. })
-                if command_id == "cwd-executor-valide" && name == "fixture-cwd"
+            Ok(DaemonToWrapper::SpawnAccepted { command_id, agent_id, .. })
+                if command_id == "cwd-executor-valide" && agent_id == "fixture-cwd"
         ));
         assert!(matches!(
             daemon_valide.join().expect("daemon valide termine"),
@@ -1072,7 +1223,7 @@ fn validate_retry_options(
 ) -> Result<(), String> {
     let WrapperToDaemon::SpawnOrder {
         agent_type,
-        name,
+        agent_id: name,
         cwd,
         persistent,
         ..
@@ -1082,7 +1233,7 @@ fn validate_retry_options(
     };
     if &parsed.agent_type != agent_type
         || parsed
-            .name
+            .agent_id
             .as_ref()
             .is_some_and(|value| Some(value) != name.as_ref())
         || parsed
@@ -1219,9 +1370,9 @@ fn unix_timestamp() -> i64 {
 
 fn parse_attach_args(args: &[String]) -> Result<(String, AttachWindow), String> {
     let Some(agent) = args.first() else {
-        return Err("nom d'équipier manquant".to_string());
+        return Err("agent_id d'équipier manquant".to_string());
     };
-    validate_agent_name(agent)?;
+    validate_agent_id(agent)?;
     let window = match args.get(1).map(String::as_str) {
         None => AttachWindow::Today,
         Some("--from-seq") if args.len() == 3 => {
@@ -1243,61 +1394,44 @@ fn cmd_rename(args: &[String]) {
     }
 
     // Validation du nouveau nom (H-001)
-    if let Err(e) = validate_agent_name(&args[0]) {
+    if let Err(e) = validate_technical_label(&args[0]) {
         eprintln!("erreur: {}", e);
         std::process::exit(2);
     }
 
-    let current_name = current_agent_name();
-    if current_name == "human" {
+    let current_agent_id = current_agent_id();
+    if current_agent_id == "human" {
         eprintln!("rename indisponible hors d'un agent Bridget");
         std::process::exit(1);
     }
-    match send_rename_to_daemon(&current_name, &args[0]) {
-        Ok(DaemonToWrapper::Renamed { old_name, name }) => {
-            if let Ok(path) = std::env::var("BRIDGET_AGENT_NAME_FILE") {
-                let _ = std::fs::write(path, &name);
-            }
-            let parent = socket_path().parent().unwrap().to_path_buf();
-            let _ = std::fs::rename(
-                parent.join(format!("last-sender-{}", old_name)),
-                parent.join(format!("last-sender-{}", name)),
-            );
-            println!("Renommé : « {} » → « {} »", old_name, name);
-        }
-        Ok(DaemonToWrapper::Nack { reason, .. }) => {
-            eprintln!("REJET: {}", reason);
-            std::process::exit(1);
-        }
-        Ok(_) => {
-            eprintln!("réponse inattendue du daemon");
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("daemon inaccessible: {}", e);
-            std::process::exit(1);
-        }
-    }
+    eprintln!("rename de route supprimé : modifiez le nom affiché dans les réglages de l’agent");
+    std::process::exit(2);
 }
 
-fn current_agent_name() -> String {
-    let file_name = std::env::var("BRIDGET_AGENT_NAME_FILE")
+fn current_agent_id() -> String {
+    let file_agent_id = std::env::var("BRIDGET_AGENT_ID_FILE")
         .ok()
         .and_then(|path| std::fs::read_to_string(path).ok());
-    resolve_cli_agent_name(
-        file_name.as_deref(),
-        std::env::var("BRIDGET_AGENT_NAME").ok().as_deref(),
+    resolve_cli_agent_id(
+        file_agent_id.as_deref(),
+        std::env::var("BRIDGET_AGENT_ID").ok().as_deref(),
     )
 }
 
-/// Repli binaire : le nom vient du fichier puis de l'env. Sans les deux, on
+/// Repli binaire : l'identifiant vient du fichier puis de l'env. Sans les deux, on
 /// n'invente pas d'identité d'équipier — le daemon conserve `cli-send-<pid>`.
-fn resolve_cli_agent_name(file_name: Option<&str>, env_name: Option<&str>) -> String {
-    if let Some(name) = file_name.map(str::trim).filter(|name| !name.is_empty()) {
-        return name.to_string();
+fn resolve_cli_agent_id(file_agent_id: Option<&str>, env_agent_id: Option<&str>) -> String {
+    if let Some(agent_id) = file_agent_id
+        .map(str::trim)
+        .filter(|agent_id| validate_agent_id(agent_id).is_ok())
+    {
+        return agent_id.to_string();
     }
-    if let Some(name) = env_name.map(str::trim).filter(|name| !name.is_empty()) {
-        return name.to_string();
+    if let Some(agent_id) = env_agent_id
+        .map(str::trim)
+        .filter(|agent_id| validate_agent_id(agent_id).is_ok())
+    {
+        return agent_id.to_string();
     }
     "human".to_string()
 }
@@ -1449,14 +1583,15 @@ fn cmd_send(args: &[String]) {
         Some(t) => t,
         None => {
             eprintln!(
-                "usage: bridget send --to <nom> [--from <nom>] [--in-reply-to ID] [--reply] [--hops N] [--] <message>"
+                "usage: bridget send --to <agent_id> [--from <agent_id>] [--in-reply-to ID] [--reply] [--hops N] [--] <message>"
             );
             std::process::exit(2);
         }
     };
 
-    // Validation du destinataire (H-001)
-    if let Err(e) = validate_agent_name(&to) {
+    // Le transport ne connaît que les principaux opaques : aucun alias
+    // historique ne peut être accepté par la CLI.
+    if let Err(e) = validate_agent_id(&to) {
         eprintln!("erreur: {}", e);
         std::process::exit(2);
     }
@@ -1477,7 +1612,12 @@ fn cmd_send(args: &[String]) {
     // d'un nom de repli, sans quoi il ne sait pas s'il a le droit de le
     // remplacer par l'identité éphémère de la connexion.
     let from_declared = from.is_some();
-    let sender = from.unwrap_or_else(current_agent_name);
+    let sender = from.unwrap_or_else(current_agent_id);
+    if sender != "human"
+        && let Err(error) = validate_agent_id(&sender)
+    {
+        exit_argument_error(&error);
+    }
     if let Err(error) = validate_reply_options(&sender, reply, timeout_secs) {
         exit_argument_error(&error);
     }
@@ -1684,11 +1824,11 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
         index += 1;
     }
 
-    let from = from.unwrap_or_else(current_agent_name);
+    let from = from.unwrap_or_else(current_agent_id);
     if from == "human" {
         return Err("--from est requis hors wrapper Bridget".to_string());
     }
-    validate_agent_name(&from)?;
+    validate_agent_id(&from)?;
     let retry = idempotent_options(id, issued_at, issuer_scope)?;
     let scope_identity =
         std::env::var("BRIDGET_AGENT_INSTANCE_ID").unwrap_or_else(|_| from.clone());
@@ -2207,10 +2347,11 @@ fn send_control_to_daemon(command: WrapperToDaemon) -> Result<DaemonToWrapper, S
 /// de lancement ne pouvait pas nommer la machine demandeuse. Trois copies du
 /// même bloc, c'est trois occasions d'oublier la même chose ; il n'y en a plus
 /// qu'une.
-fn cli_register(usage: &str) -> WrapperToDaemon {
+fn cli_register(_usage: &str) -> WrapperToDaemon {
     WrapperToDaemon::Register {
         agent_type: "cli".to_string(),
-        name: Some(format!("cli-{usage}-{}", std::process::id())),
+        identity_version: 2,
+        agent_id: uuid::Uuid::new_v4().to_string(),
         host: Some(crate::build_info::local_host()),
         transport: None,
         channel: bridget_transport::ChannelReport::Unknown,
@@ -2292,7 +2433,7 @@ fn cmd_cancel(args: &[String]) {
     });
     match send_control_to_daemon(WrapperToDaemon::CancelRequest {
         id: parsed.id.clone(),
-        sender: current_agent_name(),
+        sender: current_agent_id(),
         reason: parsed.reason,
     }) {
         Ok(DaemonToWrapper::RequestCancelled { state, .. }) => {
@@ -2337,7 +2478,7 @@ fn cmd_requests(args: &[String]) {
         })
     } else {
         send_control_to_daemon(WrapperToDaemon::ListRequests {
-            sender: current_agent_name(),
+            sender: current_agent_id(),
             limit: 200,
         })
     };
@@ -2474,30 +2615,6 @@ fn request_report(request: &RequestInfo) -> String {
             )
         })
         .unwrap_or_else(|| "—".to_string())
-}
-
-fn send_rename_to_daemon(current_name: &str, name: &str) -> Result<DaemonToWrapper, String> {
-    let stream = UnixStream::connect(socket_path()).map_err(|e| e.to_string())?;
-    let read_stream = stream.try_clone().map_err(|e| e.to_string())?;
-    let mut writer = BufWriter::new(stream);
-    let mut reader = BufReader::new(read_stream);
-    let register = cli_register("rename");
-    writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    writer.flush().map_err(|e| e.to_string())?;
-    let mut line = String::new();
-    reader.read_line(&mut line).map_err(|e| e.to_string())?;
-    let _: DaemonToWrapper = decode(line.trim()).map_err(|e| e.to_string())?;
-    let rename = WrapperToDaemon::Rename {
-        current_name: current_name.to_string(),
-        name: name.to_string(),
-    };
-    writeln!(writer, "{}", encode(&rename).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    writer.flush().map_err(|e| e.to_string())?;
-    line.clear();
-    reader.read_line(&mut line).map_err(|e| e.to_string())?;
-    decode(line.trim()).map_err(|e| e.to_string())
 }
 
 /// Transmet une observation de runtime au daemon depuis le client CLI.
@@ -3039,7 +3156,7 @@ fn cmd_runtime(args: &[String]) {
         std::process::exit(2);
     };
 
-    let agent = current_agent_name();
+    let agent = current_agent_id();
     if agent == "human" {
         eprintln!("runtime indisponible hors d'un agent Bridget");
         std::process::exit(1);
@@ -3109,7 +3226,7 @@ fn cmd_hook(args: &[String]) {
 fn hook_claude_runtime() {
     // Hors d'un agent Bridget, le hook est inerte : les sessions Claude
     // ordinaires de l'utilisateur ne doivent subir aucun effet.
-    let agent = current_agent_name();
+    let agent = current_agent_id();
     if agent == "human" {
         return;
     }
@@ -3211,7 +3328,7 @@ struct StatusLineLimit {
 fn hook_claude_statusline() {
     // Hors d'un agent Bridget, le hook est inerte : les sessions Claude
     // ordinaires de l'utilisateur ne doivent subir aucun effet.
-    let agent = current_agent_name();
+    let agent = current_agent_id();
     if agent == "human" {
         return;
     }
@@ -3585,7 +3702,7 @@ fn parse_domain_args(args: &[String]) -> Result<Option<String>, String> {
     match args {
         [option] if option == "--reset" => Ok(None),
         [domain] if !domain.starts_with('-') => {
-            validate_agent_name(domain).map_err(|reason| format!("domain: {reason}"))?;
+            validate_technical_label(domain).map_err(|reason| format!("domain: {reason}"))?;
             Ok(Some(domain.clone()))
         }
         [] => Err("domain: nom ou --reset requis".to_string()),
@@ -3603,7 +3720,7 @@ fn cmd_domain(args: &[String]) {
         std::process::exit(2);
     });
 
-    let agent = current_agent_name();
+    let agent = current_agent_id();
     if agent == "human" {
         eprintln!("domain indisponible hors d'un agent Bridget");
         std::process::exit(1);
@@ -3708,7 +3825,7 @@ fn cmd_dnd(args: &[String]) {
         DndArgs::Disable => (true, None),
     };
 
-    let agent = current_agent_name();
+    let agent = current_agent_id();
     if agent == "human" {
         eprintln!("dnd indisponible hors d'un agent Bridget");
         std::process::exit(1);
@@ -3816,14 +3933,14 @@ fn cmd_reply(args: &[String]) {
         i += 1;
     }
 
-    let agent_name = current_agent_name();
-    if let Err(error) = validate_reply_options(&agent_name, reply_flag, timeout_secs) {
+    let agent_id = current_agent_id();
+    if let Err(error) = validate_reply_options(&agent_id, reply_flag, timeout_secs) {
         exit_argument_error(&error);
     }
     let reply_file = socket_path()
         .parent()
         .unwrap()
-        .join(format!("last-sender-{agent_name}"));
+        .join(format!("last-sender-{agent_id}"));
     let previous = match std::fs::read_to_string(&reply_file) {
         Ok(content) => content.trim().to_string(),
         Err(_) => {
@@ -3852,7 +3969,7 @@ fn cmd_reply(args: &[String]) {
         std::process::exit(2);
     }
 
-    let sender = agent_name.clone();
+    let sender = agent_id.clone();
 
     let mut msg = BridgetMessage::new(&sender, &to, &body);
     msg.in_reply_to = explicit_in_reply_to.or(implicit_in_reply_to);
@@ -3978,7 +4095,7 @@ fn cmd_agents(args: &[String]) {
         for agent in &status.agents {
             println!(
                 "  {} ({}) [{}] — {} / {} via {} (canal {}) — {} / {} [{}] — persiste {}",
-                agent.name,
+                agent.display_name,
                 agent.agent_type,
                 cell(agent.domain.as_deref()),
                 agent.host,
@@ -4042,7 +4159,7 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
             .unwrap_or(0)
             .max(header.chars().count())
     };
-    let name_w = column("NOM", &|a: &AgentInfo| a.name.clone());
+    let name_w = column("NOM", &|a: &AgentInfo| a.display_name.clone());
     let type_w = column("TYPE", &|a: &AgentInfo| a.agent_type.clone());
     let host_w = column("HÔTE", &|a: &AgentInfo| a.host.clone());
     let os_w = column("OS", &|a: &AgentInfo| a.os.clone());
@@ -4082,7 +4199,7 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
         writeln!(
             output,
             "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {:<disk_w$}  {:<persistent_w$}  {}",
-            agent.name,
+            agent.display_name,
             agent.agent_type,
             agent.host,
             agent.os,
@@ -4938,21 +5055,14 @@ mod hook_tests {
     }
 
     #[test]
-    fn repli_cli_prend_le_nom_dans_l_environnement() {
-        assert_eq!(
-            resolve_cli_agent_name(None, Some("fable-reviewer")),
-            "fable-reviewer"
-        );
-        assert_eq!(
-            resolve_cli_agent_name(Some("  "), Some("codex-1")),
-            "codex-1"
-        );
-        assert_eq!(
-            resolve_cli_agent_name(Some("renamed"), Some("old")),
-            "renamed"
-        );
-        assert_eq!(resolve_cli_agent_name(None, None), "human");
-        assert_eq!(resolve_cli_agent_name(None, Some("")), "human");
+    fn repli_cli_n_accepte_que_l_identifiant_uuid_dans_l_environnement() {
+        let first = "550e8400-e29b-41d4-a716-446655440000";
+        let second = "550e8400-e29b-41d4-a716-446655440001";
+        assert_eq!(resolve_cli_agent_id(None, Some(first)), first);
+        assert_eq!(resolve_cli_agent_id(Some("  "), Some(second)), second);
+        assert_eq!(resolve_cli_agent_id(Some(first), Some(second)), first);
+        assert_eq!(resolve_cli_agent_id(None, None), "human");
+        assert_eq!(resolve_cli_agent_id(None, Some("legacy-name")), "human");
     }
 
     #[test]
@@ -5012,10 +5122,14 @@ mod hook_tests {
     fn rendu_ledger_compte_une_ligne_par_message_apres_refus_d_un_nom_avec_lf() {
         let mut router = bridget_core::Router::new();
         router
-            .register(Some("temoin"), &bridget_core::AgentType::Codex, "conn-1")
+            .register(
+                "550e8400-e29b-41d4-a716-446655440000",
+                &bridget_core::AgentType::Codex,
+                "conn-1",
+            )
             .unwrap();
         let _ = router.register(
-            Some("relec\nbridget-faux"),
+            "invalid-agent-id",
             &bridget_core::AgentType::Codex,
             "conn-2",
         );
@@ -5025,7 +5139,7 @@ mod hook_tests {
             .map(|agent| LedgerMessage {
                 id: format!("message-{}", agent.connection_id),
                 ts: 42,
-                sender: agent.name.clone(),
+                sender: agent.agent_id.clone(),
                 target: "victime".to_string(),
                 body: "corps".to_string(),
                 delivery_status: None,
@@ -5331,13 +5445,16 @@ mod hook_tests {
     fn spawn_nomme_sans_persistent_avertit_qu_il_ne_survivra_pas() {
         let parsed = parse_spawn_args(&[
             "cursor".to_string(),
-            "--name".to_string(),
-            "cursor3".to_string(),
+            "--agent-id".to_string(),
+            "550e8400-e29b-41d4-a716-446655440002".to_string(),
             "--no-persistent".to_string(),
         ])
         .unwrap();
         assert!(!parsed.persistent);
-        assert_eq!(parsed.name.as_deref(), Some("cursor3"));
+        assert_eq!(
+            parsed.agent_id.as_deref(),
+            Some("550e8400-e29b-41d4-a716-446655440002")
+        );
         let warning = crate::recovery_trace::non_persistent_spawn_warning("cursor3");
         assert!(warning.contains("cursor3"));
         assert!(warning.contains("ne survivra pas au redémarrage"));
@@ -5543,7 +5660,7 @@ mod hook_tests {
                     writer,
                     "{}",
                     encode(&DaemonToWrapper::Registered {
-                        name: "cli-test".to_string()
+                        agent_id: "cli-test".to_string()
                     })
                     .unwrap()
                 )
@@ -5557,7 +5674,7 @@ mod hook_tests {
                     "{}",
                     encode(&DaemonToWrapper::SpawnAccepted {
                         command_id: "command-lost".to_string(),
-                        name: "codex-managed".to_string(),
+                        agent_id: "codex-managed".to_string(),
                         definition: Some(bridget_transport::ResolvedAgentDefinition {
                             command: "npx".to_string(),
                             args: vec!["fixture-acp".to_string()],
@@ -5585,7 +5702,7 @@ mod hook_tests {
         });
         let order = WrapperToDaemon::SpawnOrder {
             agent_type: "codex".to_string(),
-            name: Some("codex-managed".to_string()),
+            agent_id: Some("codex-managed".to_string()),
             cwd: "/tmp".to_string(),
             persistent: false,
             command_id: "command-lost".to_string(),
@@ -5597,8 +5714,8 @@ mod hook_tests {
         for _ in 0..2 {
             assert!(matches!(
                 send_control_to_daemon_at(&socket, order.clone()).unwrap(),
-                DaemonToWrapper::SpawnAccepted { ref command_id, ref name, .. }
-                    if command_id == "command-lost" && name == "codex-managed"
+                DaemonToWrapper::SpawnAccepted { ref command_id, ref agent_id, .. }
+                    if command_id == "command-lost" && agent_id == "codex-managed"
             ));
         }
         let observed = server.join().unwrap();
@@ -5752,7 +5869,8 @@ mod hook_tests {
     fn statusline_remplit_la_colonne_du_referent() {
         let facts = rate_limit_facts_from_statusline(&statusline_payload_complet());
         let agent = AgentInfo {
-            name: "bridget".to_string(),
+            agent_id: uuid::Uuid::new_v4().to_string(),
+            display_name: "bridget".to_string(),
             agent_type: "claude".to_string(),
             connection_id: "conn-referent".to_string(),
             host: "local".to_string(),
@@ -5915,7 +6033,8 @@ mod hook_tests {
         let mut referent_reader = BufReader::new(referent);
         let register = WrapperToDaemon::Register {
             agent_type: "claude".to_string(),
-            name: Some("referent-oracle".to_string()),
+            identity_version: 2,
+            agent_id: "referent-oracle".to_string(),
             host: None,
             transport: None,
             channel: None.into(),
@@ -5961,7 +6080,7 @@ mod hook_tests {
         // propriété-là se prouve à la source, dans l'oracle précédent.
         let referent_info = agents
             .iter()
-            .find(|agent| agent.name == "referent-oracle")
+            .find(|agent| agent.display_name == "referent-oracle")
             .expect("le référent doit rester à l'annuaire");
         let mut windows: Vec<_> = referent_info
             .rate_limits
@@ -6548,7 +6667,8 @@ mod idempotency_projection_tests {
     #[test]
     fn who_distingue_persistant_ephemere_et_non_atteste() {
         let agent = |name: &str, persistent: Option<bool>| AgentInfo {
-            name: name.to_string(),
+            agent_id: uuid::Uuid::new_v4().to_string(),
+            display_name: name.to_string(),
             agent_type: "fixture".to_string(),
             connection_id: format!("conn-{name}"),
             host: "local".to_string(),
@@ -6617,7 +6737,8 @@ mod idempotency_projection_tests {
     #[test]
     fn json_publie_la_persistance_meme_indeterminee() {
         let agent = |persistent: Option<bool>| AgentInfo {
-            name: "jc1-flux".to_string(),
+            agent_id: uuid::Uuid::new_v4().to_string(),
+            display_name: "jc1-flux".to_string(),
             agent_type: "claude".to_string(),
             connection_id: "conn-182".to_string(),
             host: "cartae".to_string(),
@@ -6667,7 +6788,8 @@ mod idempotency_projection_tests {
     #[test]
     fn who_affiche_mode_et_localisation_sans_dependre_d_un_tty() {
         let agent = |name: &str, mode: Option<PresenceMode>, location: Option<&str>| AgentInfo {
-            name: name.to_string(),
+            agent_id: uuid::Uuid::new_v4().to_string(),
+            display_name: name.to_string(),
             agent_type: "fixture".to_string(),
             connection_id: format!("conn-{name}"),
             host: "local".to_string(),
@@ -6730,7 +6852,8 @@ mod idempotency_projection_tests {
     #[test]
     fn who_rend_une_limite_compacte_par_fenetre_et_garde_l_absence() {
         let mut agent = AgentInfo {
-            name: "claude-1".to_string(),
+            agent_id: uuid::Uuid::new_v4().to_string(),
+            display_name: "claude-1".to_string(),
             agent_type: "claude".to_string(),
             connection_id: "conn-claude".to_string(),
             host: "local".to_string(),
@@ -6802,7 +6925,8 @@ mod idempotency_projection_tests {
     #[test]
     fn who_marque_l_ecart_de_modele_et_reste_muet_sans_signal() {
         let mut agent = AgentInfo {
-            name: "claude-1".to_string(),
+            agent_id: uuid::Uuid::new_v4().to_string(),
+            display_name: "claude-1".to_string(),
             agent_type: "claude".to_string(),
             connection_id: "conn-claude".to_string(),
             host: "local".to_string(),
@@ -6974,17 +7098,15 @@ mod depot_tests {
         let attendu = crate::build_info::local_host();
         for usage in ["send", "rename", "runtime"] {
             match cli_register(usage) {
-                WrapperToDaemon::Register { host, name, .. } => {
+                WrapperToDaemon::Register { host, agent_id, .. } => {
                     assert_eq!(
                         host.as_deref(),
                         Some(attendu.as_str()),
                         "usage {usage} : le CLI doit attester sa machine"
                     );
-                    // Contrôle de sens : les trois usages restent distincts, la
-                    // mise en facteur n'a pas confondu les noms.
                     assert!(
-                        name.is_some_and(|name| name.starts_with(&format!("cli-{usage}-"))),
-                        "usage {usage} : le nom doit rester distinct"
+                        uuid::Uuid::parse_str(&agent_id).is_ok(),
+                        "usage {usage} : l'identifiant doit être opaque"
                     );
                 }
                 autre => panic!("Register attendu, obtenu {autre:?}"),

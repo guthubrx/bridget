@@ -1206,7 +1206,7 @@ pub enum StopOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RelaunchOutcome {
-    Started { name: String, generation: u64 },
+    Started { agent_id: String, generation: u64 },
     AlreadyRunning,
     NotManaged,
     NotFound,
@@ -1641,7 +1641,7 @@ pub enum WrapperToDaemon {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ownership: Option<SpawnOwnership>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        name: Option<String>,
+        agent_id: Option<String>,
         cwd: String,
         persistent: bool,
         command_id: String,
@@ -1650,22 +1650,22 @@ pub enum WrapperToDaemon {
     },
     /// Ordre corrélé d'arrêt d'un équipier supervisé.
     StopOrder {
-        name: String,
+        agent_id: String,
         command_id: String,
     },
     /// Relance corrélée d'un agent géré durablement arrêté.
     RelaunchOrder {
-        name: String,
+        agent_id: String,
         command_id: String,
     },
     /// Retrait corrélé de la flotte visible, sans purge d'historique.
     DecommissionOrder {
-        name: String,
+        agent_id: String,
         command_id: String,
     },
     /// Migration explicite d'un agent historique arrêté vers le registre v4.
     AdoptStoppedOrder {
-        name: String,
+        agent_id: String,
         command_id: String,
     },
     /// Ouvrir un abonnement à la vue d'un équipier.
@@ -1735,11 +1735,13 @@ pub enum WrapperToDaemon {
     },
     /// S'enregistrer auprès du daemon.
     Register {
+        /// Version du contrat d'identité. La version 2 interdit tout nom de
+        /// routage historique et évite qu'un wrapper ancien soit admis comme
+        /// une nouvelle identité.
+        identity_version: u8,
         agent_type: String,
-        /// Identité déclarée une fois à l'ouverture de la connexion. Le daemon
-        /// ne vérifie pas encore la filiation du processus pair : un client
-        /// local parlant le protocole brut peut donc déclarer un autre nom.
-        name: Option<String>,
+        /// Identifiant opaque créé par Bridget et stable sur les reconnexions.
+        agent_id: String,
         #[serde(default)]
         host: Option<String>,
         #[serde(default)]
@@ -1799,11 +1801,6 @@ pub enum WrapperToDaemon {
     },
     /// Se désenregistrer.
     Unregister,
-    /// Renommer un agent déjà enregistré.
-    Rename {
-        current_name: String,
-        name: String,
-    },
     /// Envoyer un message à un autre agent.
     Send(BridgetMessage),
     /// Refus terminal asynchrone d'une livraison déjà acquittée par le daemon.
@@ -2357,7 +2354,7 @@ pub enum DaemonToWrapper {
     /// Succès d'un spawn, émis seulement après le `Register` réel.
     SpawnAccepted {
         command_id: String,
-        name: String,
+        agent_id: String,
         /// `None` n'est toléré que pour le rejeu d'une issue créée avant la
         /// migration du registre résolu ; tout nouveau spawn fournit `Some`.
         definition: Option<ResolvedAgentDefinition>,
@@ -2458,10 +2455,8 @@ pub enum DaemonToWrapper {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         location: Option<String>,
     },
-    /// Confirmation d'enregistrement avec le nom final.
-    Registered { name: String },
-    /// Confirmation d'un renommage.
-    Renamed { old_name: String, name: String },
+    /// Confirmation d'enregistrement avec l'identifiant stable.
+    Registered { agent_id: String },
     /// Livrer un message à l'agent.
     Deliver(BridgetMessage),
     /// Livrer un travail dont l'exécution durable a déjà été admise.
@@ -2645,7 +2640,10 @@ pub struct DiskSpaceFact {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "AgentInfoWire")]
 pub struct AgentInfo {
-    pub name: String,
+    /// Identifiant opaque utilisé pour les opérations techniques.
+    pub agent_id: String,
+    /// Nom humain projeté par le daemon. Les clients ne reconstruisent jamais cette valeur.
+    pub display_name: String,
     pub agent_type: String,
     pub connection_id: String,
     pub host: String,
@@ -2717,7 +2715,8 @@ pub struct AgentInfo {
 /// sans inventer de fenêtre.
 #[derive(Debug, Deserialize)]
 struct AgentInfoWire {
-    name: String,
+    agent_id: String,
+    display_name: String,
     agent_type: String,
     connection_id: String,
     host: String,
@@ -2766,7 +2765,8 @@ impl From<AgentInfoWire> for AgentInfo {
             wire.rate_limit.into_iter().collect()
         };
         Self {
-            name: wire.name,
+            agent_id: wire.agent_id,
+            display_name: wire.display_name,
             agent_type: wire.agent_type,
             connection_id: wire.connection_id,
             host: wire.host,
@@ -3100,8 +3100,9 @@ mod tests {
     #[test]
     fn test_encode_decode_register() {
         let msg = WrapperToDaemon::Register {
+            identity_version: 2,
             agent_type: "codex".to_string(),
-            name: None,
+            agent_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             host: Some("test-host".to_string()),
             transport: Some("unix".to_string()),
             channel: ChannelReport::Known("unix".to_string()),
@@ -3118,8 +3119,9 @@ mod tests {
         let decoded: WrapperToDaemon = decode(&json).unwrap();
         match decoded {
             WrapperToDaemon::Register {
+                identity_version,
                 agent_type,
-                name,
+                agent_id,
                 host,
                 transport,
                 channel,
@@ -3131,8 +3133,9 @@ mod tests {
                 turn_in_progress,
                 journal_available,
             } => {
+                assert_eq!(identity_version, 2);
                 assert_eq!(agent_type, "codex");
-                assert!(name.is_none());
+                assert_eq!(agent_id, "550e8400-e29b-41d4-a716-446655440000");
                 assert_eq!(host.as_deref(), Some("test-host"));
                 assert_eq!(transport.as_deref(), Some("unix"));
                 assert_eq!(channel.as_deref(), Some("unix"));
@@ -3149,57 +3152,35 @@ mod tests {
     }
 
     #[test]
-    fn register_historique_conserve_un_mode_inconnu() {
-        let json =
-            r#"{"type":"Register","agent_type":"codex","name":null,"turn_in_progress":false}"#;
-        let decoded: WrapperToDaemon = decode(json).unwrap();
-        assert!(matches!(
-            decoded,
-            WrapperToDaemon::Register {
-                channel: ChannelReport::Omitted,
-                mode: None,
-                location: None,
-                ..
-            }
-        ));
+    fn register_historique_est_refuse_sans_contrat_identite_v2() {
+        let json = r#"{\"type\":\"Register\",\"agent_type\":\"codex\",\"name\":null}"#;
+        assert!(decode::<WrapperToDaemon>(json).is_err());
     }
 
     #[test]
-    fn spec_024_register_distingue_omission_inconnu_et_attestation() {
-        let omitted_json = r#"{"type":"Register","agent_type":"ui","name":"humain"}"#;
-        let omitted: WrapperToDaemon = decode(omitted_json).unwrap();
+    fn register_v2_conserve_la_distinction_de_canal() {
+        let base = "\"type\":\"Register\",\"identity_version\":2,\"agent_type\":\"ui\",\"agent_id\":\"550e8400-e29b-41d4-a716-446655440000\"";
+        let omitted: WrapperToDaemon = decode(&format!("{{{base}}}")).unwrap();
         assert!(matches!(
-            &omitted,
+            omitted,
             WrapperToDaemon::Register {
                 channel: ChannelReport::Omitted,
                 ..
             }
         ));
-        assert!(!encode(&omitted).unwrap().contains("\"channel\""));
-
-        let unknown_json =
-            r#"{"type":"Register","agent_type":"ui","name":"humain","channel":null}"#;
-        let unknown: WrapperToDaemon = decode(unknown_json).unwrap();
+        let unknown: WrapperToDaemon = decode(&format!("{{{base},\"channel\":null}}")).unwrap();
         assert!(matches!(
-            &unknown,
+            unknown,
             WrapperToDaemon::Register {
                 channel: ChannelReport::Unknown,
                 ..
             }
         ));
-        assert!(encode(&unknown).unwrap().contains("\"channel\":null"));
-
-        let known_json =
-            r#"{"type":"Register","agent_type":"ui","name":"humain","channel":"ssh-unix"}"#;
-        let known: WrapperToDaemon = decode(known_json).unwrap();
-        assert!(matches!(
-            &known,
-            WrapperToDaemon::Register {
-                channel: ChannelReport::Known(value),
-                ..
-            } if value == "ssh-unix"
-        ));
-        assert!(encode(&known).unwrap().contains("\"channel\":\"ssh-unix\""));
+        let known: WrapperToDaemon =
+            decode(&format!("{{{base},\"channel\":\"ssh-unix\"}}")).unwrap();
+        assert!(
+            matches!(known, WrapperToDaemon::Register { channel: ChannelReport::Known(value), .. } if value == "ssh-unix")
+        );
     }
 
     #[test]
@@ -3298,27 +3279,6 @@ mod tests {
             decode(&encode(&WrapperToDaemon::TurnState { in_progress: true }).unwrap()).unwrap(),
             WrapperToDaemon::TurnState { in_progress: true }
         ));
-    }
-
-    #[test]
-    fn test_encode_decode_rename() {
-        let msg = WrapperToDaemon::Rename {
-            current_name: "codex-1".to_string(),
-            name: "analyse".to_string(),
-        };
-        let json = encode(&msg).unwrap();
-        assert!(json.contains("\"type\":\"Rename\""));
-        assert!(
-            matches!(decode(&json).unwrap(), WrapperToDaemon::Rename { current_name, name } if current_name == "codex-1" && name == "analyse")
-        );
-
-        let response = DaemonToWrapper::Renamed {
-            old_name: "codex-1".to_string(),
-            name: "analyse".to_string(),
-        };
-        assert!(
-            matches!(decode(&encode(&response).unwrap()).unwrap(), DaemonToWrapper::Renamed { old_name, name } if old_name == "codex-1" && name == "analyse")
-        );
     }
 
     #[test]
@@ -3500,7 +3460,7 @@ mod tests {
     fn test_agent_info_sans_runtime_reste_decodable() {
         // Compatibilité ascendante : un daemon d'une version antérieure ne
         // sérialise ni model ni effort.
-        let json = r#"{"name":"agent-2","agent_type":"claude","connection_id":"conn-1",
+        let json = r#"{"agent_id":"550e8400-e29b-41d4-a716-446655440002","display_name":"Agent 2","agent_type":"claude","connection_id":"conn-1",
             "host":"h","transport":"unix","os":"macOS","state":"connected",
             "last_seen_secs":0,"reconnect_count":0}"#;
         let info: AgentInfo = decode(json).unwrap();
@@ -3533,7 +3493,7 @@ mod tests {
 
     #[test]
     fn spec_024_agent_info_expose_protocole_et_canal_independants() {
-        let json = r#"{"name":"lab-agent","agent_type":"codex","connection_id":"conn-1",
+        let json = r#"{"agent_id":"550e8400-e29b-41d4-a716-446655440003","display_name":"Lab Agent","agent_type":"codex","connection_id":"conn-1",
             "host":"lab-host","transport":"tmux","channel":"ssh-unix","mode":"tmux",
             "os":"Linux","state":"connected","last_seen_secs":0,"reconnect_count":0}"#;
         let info: AgentInfo = decode(json).unwrap();
@@ -3550,7 +3510,7 @@ mod tests {
         // Ancien fil : un seul champ `rate_limit`. Doit devenir Vec d'1 élément
         // avec la fenêtre attestée telle quelle — aucune fenêtre inventée.
         let json = r#"{
-            "name":"claude-1","agent_type":"claude","connection_id":"c1",
+            "agent_id":"550e8400-e29b-41d4-a716-446655440004","display_name":"Claude","agent_type":"claude","connection_id":"c1",
             "host":"h","transport":"unix","os":"macOS","state":"connected",
             "last_seen_secs":0,"reconnect_count":0,
             "rate_limit":{"window":"five_hour","status":"rejected","resets_at":1787572200}
@@ -3564,7 +3524,7 @@ mod tests {
 
         // Nouveau fil : `rate_limits` gagne ; l'ancien champ s'il coexiste est ignoré.
         let both = r#"{
-            "name":"claude-1","agent_type":"claude","connection_id":"c1",
+            "agent_id":"550e8400-e29b-41d4-a716-446655440004","display_name":"Claude","agent_type":"claude","connection_id":"c1",
             "host":"h","transport":"unix","os":"macOS","state":"connected",
             "last_seen_secs":0,"reconnect_count":0,
             "rate_limits":[{"window":"seven_day","status":"allowed","used_percent":61}],
@@ -4131,7 +4091,7 @@ mod tests {
                 max_children: Some(3),
                 max_depth: Some(2),
             }),
-            name: Some("codex-1".to_string()),
+            agent_id: Some("550e8400-e29b-41d4-a716-446655440000".to_string()),
             cwd: "/tmp".to_string(),
             persistent: true,
             command_id: "command-1".to_string(),
@@ -4142,12 +4102,12 @@ mod tests {
             decode(&encode(&spawn).unwrap()).unwrap(),
             WrapperToDaemon::SpawnOrder {
                 agent_type,
-                name: Some(name),
+                agent_id: Some(agent_id),
                 command_id,
                 ownership: Some(ownership),
                 ..
             } if agent_type == "codex"
-                && name == "codex-1"
+                && agent_id == "550e8400-e29b-41d4-a716-446655440000"
                 && command_id == "command-1"
                 && ownership.parent_instance_id == "instance-parent"
         ));
@@ -4226,7 +4186,7 @@ mod tests {
         let relaunch = DaemonToWrapper::RelaunchResult {
             command_id: "relaunch-1".to_string(),
             outcome: RelaunchOutcome::Started {
-                name: "codex-1".to_string(),
+                agent_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
                 generation: 12,
             },
         };
@@ -4426,7 +4386,7 @@ mod tests {
     fn spawn_accepted_transporte_la_definition_resolue_complete() {
         let message = DaemonToWrapper::SpawnAccepted {
             command_id: "command-1".to_string(),
-            name: "reviewer".to_string(),
+            agent_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             definition: Some(ResolvedAgentDefinition {
                 command: "npx".to_string(),
                 args: vec!["adapter@1.2.3".to_string()],
@@ -4467,7 +4427,7 @@ mod tests {
         ));
         assert!(matches!(
             decode::<DaemonToWrapper>(
-                r#"{"type":"SpawnAccepted","command_id":"legacy","name":"ancien"}"#
+                r#"{"type":"SpawnAccepted","command_id":"legacy","agent_id":"550e8400-e29b-41d4-a716-446655440000"}"#
             )
             .unwrap(),
             DaemonToWrapper::SpawnAccepted {
@@ -4562,13 +4522,9 @@ mod tests {
     }
 
     #[test]
-    fn protocol_007_reste_compatible_sans_handshake() {
-        let json =
-            r#"{"type":"Register","agent_type":"codex","name":null,"turn_in_progress":false}"#;
-        assert!(matches!(
-            decode::<WrapperToDaemon>(json).unwrap(),
-            WrapperToDaemon::Register { agent_type, .. } if agent_type == "codex"
-        ));
+    fn protocol_007_register_legacy_est_refuse() {
+        let json = r#"{\"type\":\"Register\",\"agent_type\":\"codex\",\"name\":null}"#;
+        assert!(decode::<WrapperToDaemon>(json).is_err());
     }
 
     #[test]

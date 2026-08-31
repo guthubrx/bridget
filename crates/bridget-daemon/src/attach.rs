@@ -2308,10 +2308,10 @@ fn list_attachable_agents(socket_path: &Path) -> Vec<String> {
     };
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(read_stream);
-    let probe_name = format!("attach-list-{}", std::process::id());
     let register = WrapperToDaemon::Register {
         agent_type: "attach-list".to_string(),
-        name: Some(probe_name),
+        identity_version: 2,
+        agent_id: uuid::Uuid::new_v4().to_string(),
         host: None,
         transport: None,
         channel: bridget_transport::ChannelReport::Unknown,
@@ -2362,7 +2362,7 @@ fn attachable_agent_names(agents: Vec<AgentInfo>) -> Vec<String> {
             agent.mode == Some(PresenceMode::Acp)
                 && matches!(agent.state.as_str(), "connected" | "busy" | "dnd")
         })
-        .map(|agent| agent.name)
+        .map(|agent| agent.agent_id)
         .collect()
 }
 
@@ -4641,7 +4641,8 @@ mod tests {
 
         let agent =
             |name: &str, transport: &str, mode: Option<PresenceMode>, state: &str| AgentInfo {
-                name: name.to_string(),
+                agent_id: uuid::Uuid::new_v4().to_string(),
+                display_name: name.to_string(),
                 agent_type: "fixture".to_string(),
                 connection_id: format!("conn-{name}"),
                 host: "local".to_string(),

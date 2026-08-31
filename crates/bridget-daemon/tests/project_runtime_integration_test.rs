@@ -319,7 +319,7 @@ fn spec_066_docker_exec_lance_bridget_et_un_fournisseur_de_fixture_isole() {
         execution: policy.runtime_execution("fixture").unwrap(),
         exec_id: uuid::Uuid::new_v4().to_string(),
         agent_type: "fixture".to_string(),
-        agent_name: "fixture-runtime-066".to_string(),
+        agent_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
         instance_id: instance_id.clone(),
         agent_generation: 7,
         cwd: project_root,
@@ -394,7 +394,7 @@ fn spec_066_docker_exec_lance_bridget_et_un_fournisseur_de_fixture_isole() {
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                name: "fixture-runtime-066".to_string(),
+                agent_id: "fixture-runtime-066".to_string(),
             })
             .map_err(|error| error.to_string())?
         )

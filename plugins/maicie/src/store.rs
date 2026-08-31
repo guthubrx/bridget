@@ -431,7 +431,7 @@ struct ApprovedSpawnOrder {
     #[serde(rename = "type")]
     kind: String,
     agent_type: String,
-    name: Option<String>,
+    agent_id: Option<String>,
     cwd: String,
     persistent: bool,
     command_id: String,
@@ -522,6 +522,9 @@ impl MaicieStore {
             )
             .map_err(StoreError::Sql)?;
         migrate(&mut connection, allow_upgrade)?;
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS agent_retarget_requirements (\n                 agent_id TEXT PRIMARY KEY,\n                 created_at INTEGER NOT NULL\n             );",
+        ).map_err(StoreError::Sql)?;
         set_wal_mode(&connection)?;
         let issuer_scope = load_or_create_issuer_scope(&mut connection)?;
 
@@ -530,6 +533,134 @@ impl MaicieStore {
             connection,
             issuer_scope,
         })
+    }
+
+    /// Remplace les références d'identité dans les projections SQL et les
+    /// enveloppes JSON persistées. Les références absentes du mapping restent
+    /// volontairement inchangées : elles ne sont jamais réattribuées à un
+    /// autre agent par cette migration.
+    pub fn migrate_agent_participants(
+        &mut self,
+        mapping: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), StoreError> {
+        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        for (legacy, agent_id) in mapping {
+            for statement in [
+                "UPDATE delegation_outbox SET target = ?1 WHERE target = ?2",
+                "UPDATE delegate_idempotency SET participant = ?1 WHERE participant = ?2",
+                "UPDATE routines SET participant = ?1 WHERE participant = ?2",
+                "UPDATE delegation_generations SET participant_id = ?1 WHERE participant_id = ?2",
+                "UPDATE coordination_events SET recipient = ?1 WHERE recipient = ?2",
+                "UPDATE coordination_expectations SET recipient = ?1 WHERE recipient = ?2",
+                "UPDATE notification_outbox SET recipient = ?1 WHERE recipient = ?2",
+                "UPDATE tracked_request_outbox SET recipient = ?1 WHERE recipient = ?2",
+            ] {
+                tx.execute(statement, rusqlite::params![agent_id, legacy])
+                    .map_err(StoreError::Sql)?;
+            }
+        }
+
+        rewrite_json_agent_references(&tx, "delegations", "id", "payload_json", mapping)?;
+        rewrite_json_agent_references(
+            &tx,
+            "delegation_outbox",
+            "message_id",
+            "message_bytes",
+            mapping,
+        )?;
+        rewrite_json_agent_references(
+            &tx,
+            "notification_outbox",
+            "message_id",
+            "message_bytes",
+            mapping,
+        )?;
+        rewrite_json_agent_references(
+            &tx,
+            "tracked_request_outbox",
+            "effect_id",
+            "message_bytes",
+            mapping,
+        )?;
+        tx.commit().map_err(StoreError::Sql)
+    }
+
+    /// Liste les principales d'agents encore présentes dans Maicie, y compris
+    /// les enveloppes historisées. La migration peut ainsi convertir une
+    /// référence qui n'apparaît plus dans la flotte courante sans l'effacer.
+    pub fn agent_references_for_identity_migration(&self) -> Result<BTreeSet<String>, StoreError> {
+        let mut references = BTreeSet::new();
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT target FROM delegation_outbox
+             UNION SELECT participant FROM delegate_idempotency
+             UNION SELECT participant FROM routines
+             UNION SELECT participant_id FROM delegation_generations
+             UNION SELECT recipient FROM coordination_events
+             UNION SELECT recipient FROM coordination_expectations
+             UNION SELECT recipient FROM notification_outbox
+             UNION SELECT recipient FROM tracked_request_outbox",
+            )
+            .map_err(StoreError::Sql)?;
+        for reference in statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(StoreError::Sql)?
+        {
+            references.insert(reference.map_err(StoreError::Sql)?);
+        }
+        drop(statement);
+        for (table, column) in [
+            ("delegations", "payload_json"),
+            ("delegation_outbox", "message_bytes"),
+            ("notification_outbox", "message_bytes"),
+            ("tracked_request_outbox", "message_bytes"),
+        ] {
+            let mut statement = self
+                .connection
+                .prepare(&format!("SELECT {column} FROM {table}"))
+                .map_err(StoreError::Sql)?;
+            for payload in statement
+                .query_map([], |row| row.get::<_, Vec<u8>>(0))
+                .map_err(StoreError::Sql)?
+            {
+                let value: serde_json::Value =
+                    serde_json::from_slice(&payload.map_err(StoreError::Sql)?)
+                        .map_err(StoreError::Json)?;
+                collect_json_agent_references(&value, &mut references);
+            }
+        }
+        Ok(references)
+    }
+
+    /// Marque une ou plusieurs cibles devenues orphelines. Tant que
+    /// l'opérateur ne les a pas retargetées, aucune de leurs outboxes n'est
+    /// présentée au dispatcher.
+    pub fn mark_agents_requires_retarget(
+        &mut self,
+        agent_ids: &BTreeSet<String>,
+    ) -> Result<(), StoreError> {
+        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS agent_retarget_requirements (
+                 agent_id TEXT PRIMARY KEY,
+                 created_at INTEGER NOT NULL
+             );",
+        )
+        .map_err(StoreError::Sql)?;
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+            .unwrap_or_default();
+        for agent_id in agent_ids {
+            tx.execute(
+                "INSERT OR IGNORE INTO agent_retarget_requirements(agent_id, created_at)
+                 VALUES (?1, ?2)",
+                params![agent_id, created_at],
+            )
+            .map_err(StoreError::Sql)?;
+        }
+        tx.commit().map_err(StoreError::Sql)
     }
 
     pub fn path(&self) -> &Path {
@@ -1199,6 +1330,7 @@ impl MaicieStore {
                         message_bytes, state
                  FROM tracked_request_outbox
                  WHERE terminal = 0 AND state IN ('prepared','outcome_unknown')
+                   AND NOT EXISTS (SELECT 1 FROM agent_retarget_requirements requirement WHERE requirement.agent_id = tracked_request_outbox.recipient)
                  ORDER BY effect_id",
             )
             .map_err(StoreError::Sql)?;
@@ -1253,6 +1385,7 @@ impl MaicieStore {
                         generation, event_id, policy_version, recipient, message_bytes, state
                  FROM notification_outbox
                  WHERE terminal = 0 AND state IN ('prepared','outcome_unknown')
+                   AND NOT EXISTS (SELECT 1 FROM agent_retarget_requirements requirement WHERE requirement.agent_id = notification_outbox.recipient)
                  ORDER BY message_id",
             )
             .map_err(StoreError::Sql)?;
@@ -4339,6 +4472,7 @@ impl MaicieStore {
                         dedup_retained_until\n\
                  FROM delegation_outbox\n\
                  WHERE terminal = 0 AND state IN ('prepared', 'outcome_unknown')\n\
+                   AND NOT EXISTS (SELECT 1 FROM agent_retarget_requirements requirement WHERE requirement.agent_id = delegation_outbox.target)\n\
                  ORDER BY issued_at, message_id",
             )
             .map_err(StoreError::Sql)?;
@@ -4795,7 +4929,7 @@ impl MaicieStore {
     ) -> Result<(), StoreError> {
         let SpawnOutcome::Accepted {
             command_id: accepted_id,
-            name,
+            agent_id,
         } = outcome
         else {
             return Err(StoreError::Invalid("une divergence exige SpawnAccepted"));
@@ -4806,7 +4940,7 @@ impl MaicieStore {
         let issue = serde_json::to_vec(&json!({
             "kind": "definition_digest_divergent",
             "command_id": accepted_id,
-            "name": name,
+            "agent_id": agent_id,
             "expected_definition_digest": hex_digest(expected_digest),
             "received_definition_digest": received_digest,
             "agent_launched_without_followup": true,
@@ -10026,7 +10160,7 @@ fn validate_approved_spawn_order(
             "SpawnOrder non conforme à l'approbation",
         ));
     }
-    let _ = (order.name, order.persistent);
+    let _ = (order.agent_id, order.persistent);
     Ok(())
 }
 
@@ -10036,11 +10170,14 @@ fn activation_issue(
 ) -> Result<(EtatActivationOutbox, Vec<u8>), StoreError> {
     let expected = command_id.to_string();
     let value = match outcome {
-        SpawnOutcome::Accepted { command_id, name } => {
+        SpawnOutcome::Accepted {
+            command_id,
+            agent_id,
+        } => {
             if command_id != &expected {
                 return Err(StoreError::Invalid("command_id d'issue divergent"));
             }
-            json!({"kind":"accepted","command_id":command_id,"name":name})
+            json!({"kind":"accepted","command_id":command_id,"agent_id":agent_id})
         }
         SpawnOutcome::Rejected { command_id, reason } => {
             if command_id != &expected {
@@ -10483,6 +10620,101 @@ fn validate_project_registration_intent(
 
 fn parse_uuid(value: &str) -> Result<Uuid, StoreError> {
     Uuid::parse_str(value).map_err(|_| StoreError::Corrupt("UUID stocké invalide"))
+}
+
+fn collect_json_agent_references(value: &serde_json::Value, references: &mut BTreeSet<String>) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_json_agent_references(value, references);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            for (key, value) in object {
+                if matches!(
+                    key.as_str(),
+                    "participant" | "participant_id" | "agent_id" | "to" | "recipient"
+                ) && let Some(reference) = value.as_str()
+                {
+                    references.insert(reference.to_string());
+                }
+                collect_json_agent_references(value, references);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rewrite_json_agent_references(
+    tx: &Transaction<'_>,
+    table: &str,
+    key_column: &str,
+    payload_column: &str,
+    mapping: &std::collections::BTreeMap<String, String>,
+) -> Result<(), StoreError> {
+    let allowed = matches!(
+        (table, key_column, payload_column),
+        ("delegations", "id", "payload_json")
+            | ("delegation_outbox", "message_id", "message_bytes")
+            | ("notification_outbox", "message_id", "message_bytes")
+            | ("tracked_request_outbox", "effect_id", "message_bytes")
+    );
+    if !allowed {
+        return Err(StoreError::Invalid("table de migration non autorisée"));
+    }
+    let select = format!("SELECT {key_column}, {payload_column} FROM {table}");
+    let mut statement = tx.prepare(&select).map_err(StoreError::Sql)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })
+        .map_err(StoreError::Sql)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::Sql)?;
+    drop(statement);
+
+    for (key, payload) in rows {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+        if !replace_json_agent_references(&mut value, mapping) {
+            continue;
+        }
+        let bytes = serde_json::to_vec(&value).map_err(StoreError::Json)?;
+        let update = format!("UPDATE {table} SET {payload_column} = ?1 WHERE {key_column} = ?2");
+        tx.execute(&update, rusqlite::params![bytes, key])
+            .map_err(StoreError::Sql)?;
+    }
+    Ok(())
+}
+
+fn replace_json_agent_references(
+    value: &mut serde_json::Value,
+    mapping: &std::collections::BTreeMap<String, String>,
+) -> bool {
+    let mut changed = false;
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                changed |= replace_json_agent_references(value, mapping);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            for (key, value) in object.iter_mut() {
+                if matches!(
+                    key.as_str(),
+                    "participant" | "participant_id" | "agent_id" | "to" | "recipient"
+                ) && let Some(legacy) = value.as_str()
+                    && let Some(agent_id) = mapping.get(legacy)
+                {
+                    *value = serde_json::Value::String(agent_id.clone());
+                    changed = true;
+                }
+                changed |= replace_json_agent_references(value, mapping);
+            }
+        }
+        _ => {}
+    }
+    changed
 }
 
 #[derive(Debug)]

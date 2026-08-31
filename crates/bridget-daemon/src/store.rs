@@ -1240,6 +1240,19 @@ impl Store {
         tx.commit().map_err(StoreError::Sqlite)?;
         Ok(switched)
     }
+    /// Résout le nom visible depuis la source d'autorité locale. L'absence est
+    /// un fait possible tant qu'une migration n'a pas encore créé le profil.
+    pub fn agent_display_name(&self, agent_id: &str) -> Result<Option<String>, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT display_name FROM agent_profiles WHERE agent_id = ?1",
+                [agent_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(StoreError::Sqlite)
+    }
+
     pub fn project_binding(&self, project_id: &str) -> Result<Option<ProjectBinding>, StoreError> {
         project_binding_for_project(&self.conn, project_id)
     }
@@ -2862,6 +2875,46 @@ impl Store {
             .filter_map(|r| r.ok())
             .collect();
         Ok(entries)
+    }
+
+    /// Réécrit atomiquement les références d'agents du relais. Les couples
+    /// de conversation sont recalculés après chaque changement de principal.
+    pub fn migrate_agent_references(
+        &mut self,
+        mapping: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), StoreError> {
+        let transaction = self.conn.transaction().map_err(StoreError::Sqlite)?;
+        for (legacy, agent_id) in mapping {
+            transaction
+                .execute(
+                    "UPDATE ledger SET sender = ?1 WHERE sender = ?2",
+                    rusqlite::params![agent_id, legacy],
+                )
+                .map_err(StoreError::Sqlite)?;
+            transaction
+                .execute(
+                    "UPDATE ledger SET target = ?1 WHERE target = ?2",
+                    rusqlite::params![agent_id, legacy],
+                )
+                .map_err(StoreError::Sqlite)?;
+            transaction
+                .execute(
+                    "UPDATE tracked_requests SET sender = ?1 WHERE sender = ?2",
+                    rusqlite::params![agent_id, legacy],
+                )
+                .map_err(StoreError::Sqlite)?;
+            transaction
+                .execute(
+                    "UPDATE tracked_requests SET target = ?1 WHERE target = ?2",
+                    rusqlite::params![agent_id, legacy],
+                )
+                .map_err(StoreError::Sqlite)?;
+        }
+        transaction.execute(
+            "UPDATE ledger SET conversation_key = CASE WHEN sender <= target THEN sender || ':' || target ELSE target || ':' || sender END",
+            [],
+        ).map_err(StoreError::Sqlite)?;
+        transaction.commit().map_err(StoreError::Sqlite)
     }
 
     /// Parcourt le ledger (pas d'index FTS) : chaque mot doit apparaître dans

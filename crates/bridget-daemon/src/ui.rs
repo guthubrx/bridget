@@ -326,7 +326,8 @@ fn open_human_presence(
             &mut writer_guard,
             &WrapperToDaemon::Register {
                 agent_type: "ui".to_string(),
-                name: Some(UI_SENDER.to_string()),
+                identity_version: 2,
+                agent_id: "550e8400-e29b-41d4-a716-4466554400f0".to_string(),
                 host: Some("localhost".to_string()),
                 transport: None,
                 channel: ChannelReport::reported(attested_channel.map(str::to_owned)),
@@ -341,7 +342,7 @@ fn open_human_presence(
         )?;
     }
     match read_daemon(&mut reader)? {
-        DaemonToWrapper::Registered { name } if name == UI_SENDER => {}
+        DaemonToWrapper::Registered { agent_id: _ } => {}
         response => {
             return Err(UiError::Protocol(format!(
                 "présence UI humaine refusée: {response:?}"
@@ -661,7 +662,7 @@ struct UiVigilanceRoundV1 {
 
 #[derive(Debug, Serialize)]
 struct UiAgentRowV1 {
-    name: String,
+    agent_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     profile: Option<UiAgentProfileV1>,
     #[serde(rename = "type")]
@@ -714,7 +715,7 @@ struct UiAgentRowV1 {
 
 #[derive(Debug, Clone, Serialize)]
 struct UiAgentProfileV1 {
-    profile_ref: String,
+    agent_id: String,
     display_name: String,
     labels: Vec<String>,
     avatar: UiAgentAvatarV1,
@@ -742,7 +743,7 @@ struct UiAgentProfileResponseV1 {
 
 #[derive(Debug, Serialize)]
 struct UiAgentProfileDetailV1 {
-    profile_ref: String,
+    agent_id: String,
     display_name: String,
     labels: Vec<String>,
     avatar: UiAgentAvatarV1,
@@ -780,7 +781,7 @@ struct UiAttentionResponseV1 {
 #[derive(Debug, Serialize)]
 struct UiAttentionEventV1 {
     event_id: String,
-    profile_ref: String,
+    agent_id: String,
     display_name: String,
     event_type: &'static str,
     summary: String,
@@ -798,7 +799,7 @@ struct UiAttentionPreferencesResponseV1 {
 
 #[derive(Debug, Serialize)]
 struct UiAttentionPreferenceV1 {
-    profile_ref: String,
+    agent_id: String,
     human_input_needed: bool,
     task_completed: bool,
     terminal_failure: bool,
@@ -815,7 +816,7 @@ struct UiAttentionPreferencesRequestV1 {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UiAttentionPreferenceInputV1 {
-    profile_ref: String,
+    agent_id: String,
     human_input_needed: bool,
     task_completed: bool,
     terminal_failure: bool,
@@ -843,14 +844,14 @@ struct UiSendRequestV1 {
 #[serde(deny_unknown_fields)]
 struct UiStopRequestV1 {
     version: u8,
-    name: String,
+    agent_id: String,
     command_id: String,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 struct UiStopAcceptedV1 {
     version: u8,
-    name: String,
+    agent_id: String,
     command_id: String,
     outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1088,7 +1089,7 @@ struct UiUsageDashboardRowV1 {
 
 #[derive(Serialize)]
 struct UiRecoveryLossV1 {
-    name: String,
+    display_name: String,
     reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
@@ -1186,8 +1187,8 @@ fn serve_connection(
     }
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/") => write_asset(stream, "text/html; charset=utf-8", UI_INDEX, if_none_match),
-        ("GET", path) if path.starts_with("/v1/agent-profiles/") => {
-            match get_agent_profile(config, profile_ref_from_path(path)) {
+        ("GET", path) if path.starts_with("/v1/agents/") && path.ends_with("/profile") => {
+            match get_agent_profile(config, agent_id_from_profile_path(path)) {
                 Ok(response) => write_json(stream, 200, &response),
                 Err((status, code, message)) => write_json(
                     stream,
@@ -1200,8 +1201,8 @@ fn serve_connection(
                 ),
             }
         }
-        ("PATCH", path) if path.starts_with("/v1/agent-profiles/") => {
-            match patch_agent_profile(config, profile_ref_from_path(path), &request.body) {
+        ("PATCH", path) if path.starts_with("/v1/agents/") && path.ends_with("/profile") => {
+            match patch_agent_profile(config, agent_id_from_profile_path(path), &request.body) {
                 Ok(response) => write_json(stream, 200, &response),
                 Err((status, code, message)) => write_json(
                     stream,
@@ -1573,9 +1574,9 @@ fn serve_connection(
     }
 }
 
-fn profile_ref_from_path(path: &str) -> Option<&str> {
-    let profile_ref = path.strip_prefix("/v1/agent-profiles/")?;
-    (!profile_ref.is_empty() && !profile_ref.contains('/')).then_some(profile_ref)
+fn agent_id_from_profile_path(path: &str) -> Option<&str> {
+    let agent_id = path.strip_prefix("/v1/agents/")?.strip_suffix("/profile")?;
+    (!agent_id.is_empty() && !agent_id.contains('/')).then_some(agent_id)
 }
 
 fn open_agent_profile_store(
@@ -1592,14 +1593,14 @@ fn open_agent_profile_store(
 
 fn get_agent_profile(
     config: &UiRelayConfig,
-    profile_ref: Option<&str>,
+    agent_id: Option<&str>,
 ) -> Result<UiAgentProfileResponseV1, (u16, &'static str, String)> {
-    let Some(profile_ref) = profile_ref else {
+    let Some(agent_id) = agent_id else {
         return Err((404, "profile_not_found", "profil indisponible".to_string()));
     };
     let store = open_agent_profile_store(config)?;
     let profile = store
-        .profile_detail(profile_ref)
+        .profile_detail(agent_id)
         .map_err(profile_error_response)?;
     Ok(UiAgentProfileResponseV1 {
         version: UI_VERSION,
@@ -1609,10 +1610,10 @@ fn get_agent_profile(
 
 fn patch_agent_profile(
     config: &UiRelayConfig,
-    profile_ref: Option<&str>,
+    agent_id: Option<&str>,
     body: &[u8],
 ) -> Result<UiAgentProfileResponseV1, (u16, &'static str, String)> {
-    let Some(profile_ref) = profile_ref else {
+    let Some(agent_id) = agent_id else {
         return Err((404, "profile_not_found", "profil indisponible".to_string()));
     };
     let request: UiAgentProfileUpdateRequestV1 = serde_json::from_slice(body)
@@ -1623,7 +1624,7 @@ fn patch_agent_profile(
     let mut store = open_agent_profile_store(config)?;
     let profile = store
         .update_profile(
-            profile_ref,
+            agent_id,
             AgentProfileUpdate {
                 expected_revision: request.expected_revision,
                 display_name: request.display_name,
@@ -1667,7 +1668,7 @@ fn profile_error_response(error: AgentProfileError) -> (u16, &'static str, Strin
 fn ui_agent_profile_detail(profile: AgentProfileDetail) -> UiAgentProfileDetailV1 {
     let summary = profile.summary;
     UiAgentProfileDetailV1 {
-        profile_ref: summary.profile_ref,
+        agent_id: summary.agent_id,
         display_name: summary.display_name,
         labels: summary.labels,
         avatar: UiAgentAvatarV1 {
@@ -1738,7 +1739,7 @@ fn put_attention_preferences(
         .preferences
         .into_iter()
         .map(|preference| ClientNotificationPreference {
-            profile_ref: preference.profile_ref,
+            agent_id: preference.agent_id,
             human_input_needed: preference.human_input_needed,
             task_completed: preference.task_completed,
             terminal_failure: preference.terminal_failure,
@@ -1782,7 +1783,7 @@ fn ui_attention_event(event: AttentionEvent) -> UiAttentionEventV1 {
     };
     UiAttentionEventV1 {
         event_id: event.event_id,
-        profile_ref: event.profile_ref,
+        agent_id: event.agent_id,
         display_name: event.display_name,
         event_type: event.event_type.as_str(),
         summary,
@@ -1795,7 +1796,7 @@ fn ui_attention_event(event: AttentionEvent) -> UiAttentionEventV1 {
 
 fn ui_attention_preference(preference: ClientNotificationPreference) -> UiAttentionPreferenceV1 {
     UiAttentionPreferenceV1 {
-        profile_ref: preference.profile_ref,
+        agent_id: preference.agent_id,
         human_input_needed: preference.human_input_needed,
         task_completed: preference.task_completed,
         terminal_failure: preference.terminal_failure,
@@ -1878,7 +1879,9 @@ fn parse_ui_lifecycle_request(body: &[u8], action: &str) -> Result<UiStopRequest
     let command_id_valid = !request.command_id.is_empty()
         && request.command_id.len() <= MAX_UI_COMMAND_ID_BYTES
         && request.command_id.bytes().all(is_query_byte);
-    if request.version != UI_VERSION || validate_agent(&request.name).is_err() || !command_id_valid
+    if request.version != UI_VERSION
+        || validate_agent(&request.agent_id).is_err()
+        || !command_id_valid
     {
         return Err((
             400,
@@ -1893,7 +1896,7 @@ fn validate_ui_stop_target(
     agents: &[bridget_transport::protocol::AgentInfo],
     name: &str,
 ) -> Result<(), (u16, &'static str)> {
-    let Some(agent) = agents.iter().find(|agent| agent.name == name) else {
+    let Some(agent) = agents.iter().find(|agent| agent.agent_id == name) else {
         return Err((404, "agent_not_found"));
     };
     if agent.persistent.is_none() {
@@ -1911,7 +1914,7 @@ fn validate_ui_relaunch_target(
     agents: &[bridget_transport::protocol::AgentInfo],
     name: &str,
 ) -> Result<(), (u16, &'static str)> {
-    let Some(agent) = agents.iter().find(|agent| agent.name == name) else {
+    let Some(agent) = agents.iter().find(|agent| agent.agent_id == name) else {
         return Err((404, "agent_not_found"));
     };
     if agent.persistent.is_none() {
@@ -1929,7 +1932,7 @@ fn validate_ui_decommission_target(
     agents: &[bridget_transport::protocol::AgentInfo],
     name: &str,
 ) -> Result<(), (u16, &'static str)> {
-    let Some(agent) = agents.iter().find(|agent| agent.name == name) else {
+    let Some(agent) = agents.iter().find(|agent| agent.agent_id == name) else {
         return Err((404, "agent_not_found"));
     };
     if agent.persistent.is_none() {
@@ -1950,7 +1953,7 @@ fn map_ui_stop_outcome(
     match outcome {
         StopOutcome::Stopped => Ok(UiStopAcceptedV1 {
             version: UI_VERSION,
-            name: request.name.clone(),
+            agent_id: request.agent_id.clone(),
             command_id: request.command_id.clone(),
             outcome: "stopped",
             survivors_killed: None,
@@ -1958,7 +1961,7 @@ fn map_ui_stop_outcome(
         }),
         StopOutcome::StoppedForced { survivors_killed } => Ok(UiStopAcceptedV1 {
             version: UI_VERSION,
-            name: request.name.clone(),
+            agent_id: request.agent_id.clone(),
             command_id: request.command_id.clone(),
             outcome: "stopped_forced",
             survivors_killed: Some(survivors_killed),
@@ -2827,7 +2830,7 @@ fn send_ui_stop(
     send_daemon(
         &mut writer,
         &WrapperToDaemon::StopOrder {
-            name: request.name.clone(),
+            agent_id: request.agent_id.clone(),
             command_id: request.command_id.clone(),
         },
     )?;
@@ -2851,7 +2854,7 @@ fn post_ui_stop(config: &UiRelayConfig, body: &[u8]) -> Result<UiStopAcceptedV1,
             "Le daemon Bridget est indisponible.".to_string(),
         )
     })?;
-    validate_ui_stop_target(&agents, &request.name).map_err(|(status, code)| {
+    validate_ui_stop_target(&agents, &request.agent_id).map_err(|(status, code)| {
         let message = match code {
             "agent_not_managed" => "Cet agent n'est pas géré par Bridget.",
             "agent_stopped" => "Cet agent est déjà arrêté.",
@@ -2879,7 +2882,7 @@ fn map_ui_relaunch_outcome(
     match outcome {
         RelaunchOutcome::Started { generation, .. } => Ok(UiStopAcceptedV1 {
             version: UI_VERSION,
-            name: request.name.clone(),
+            agent_id: request.agent_id.clone(),
             command_id: request.command_id.clone(),
             outcome: "started",
             survivors_killed: None,
@@ -2929,7 +2932,7 @@ fn send_ui_relaunch(
     send_daemon(
         &mut writer,
         &WrapperToDaemon::RelaunchOrder {
-            name: request.name.clone(),
+            agent_id: request.agent_id.clone(),
             command_id: request.command_id.clone(),
         },
     )?;
@@ -2953,7 +2956,7 @@ fn post_ui_relaunch(config: &UiRelayConfig, body: &[u8]) -> Result<UiStopAccepte
             "Le daemon Bridget est indisponible.".to_string(),
         )
     })?;
-    validate_ui_relaunch_target(&agents, &request.name).map_err(|(status, code)| {
+    validate_ui_relaunch_target(&agents, &request.agent_id).map_err(|(status, code)| {
         let message = match code {
             "agent_not_managed" => "Cet agent n'est pas géré par Bridget.",
             "agent_already_running" => "Cet agent est déjà actif.",
@@ -2981,7 +2984,7 @@ fn map_ui_decommission_outcome(
     match outcome {
         DecommissionOutcome::Decommissioned => Ok(UiStopAcceptedV1 {
             version: UI_VERSION,
-            name: request.name.clone(),
+            agent_id: request.agent_id.clone(),
             command_id: request.command_id.clone(),
             outcome: "decommissioned",
             survivors_killed: None,
@@ -2989,7 +2992,7 @@ fn map_ui_decommission_outcome(
         }),
         DecommissionOutcome::DecommissionedForced { survivors_killed } => Ok(UiStopAcceptedV1 {
             version: UI_VERSION,
-            name: request.name.clone(),
+            agent_id: request.agent_id.clone(),
             command_id: request.command_id.clone(),
             outcome: "decommissioned_forced",
             survivors_killed: Some(survivors_killed),
@@ -3029,7 +3032,7 @@ fn send_ui_decommission(
     send_daemon(
         &mut writer,
         &WrapperToDaemon::DecommissionOrder {
-            name: request.name.clone(),
+            agent_id: request.agent_id.clone(),
             command_id: request.command_id.clone(),
         },
     )?;
@@ -3056,7 +3059,7 @@ fn post_ui_decommission(
             "Le daemon Bridget est indisponible.".to_string(),
         )
     })?;
-    validate_ui_decommission_target(&agents, &request.name).map_err(|(status, code)| {
+    validate_ui_decommission_target(&agents, &request.agent_id).map_err(|(status, code)| {
         let message = match code {
             "agent_not_managed" => "Cet agent n'est pas géré par Bridget.",
             _ => "Cet agent est introuvable.",
@@ -3110,7 +3113,7 @@ fn search_ui_ledger(config: &UiRelayConfig, query: &str) -> Result<UiSearchOutco
         .iter()
         .flat_map(|entry| [entry.sender.clone(), entry.target.clone()])
         .collect::<Vec<_>>();
-    let profiles = profile_summaries_for_routes(config, &routing_names);
+    let profiles = profile_summaries_for_agent_ids(config, &routing_names);
 
     Ok(UiSearchOutcome {
         hits: outcome
@@ -3156,7 +3159,7 @@ fn validate_ui_recipient(
     if recipient == UI_SENDER {
         return Err((400, "human_recipient"));
     }
-    let Some(agent) = agents.iter().find(|agent| agent.name == recipient) else {
+    let Some(agent) = agents.iter().find(|agent| agent.agent_id == recipient) else {
         return Err((404, "unknown_recipient"));
     };
     if matches!(agent.state.as_str(), "stopped" | "unreachable") {
@@ -3442,18 +3445,27 @@ fn read_snapshot(
     focus_agent: Option<&str>,
 ) -> Result<UiSnapshotV1, UiError> {
     let facts = read_bridget_snapshot(&config.daemon_socket)?;
-    let mut routing_names = facts
+    let mut agent_ids = facts
         .agents
         .iter()
-        .map(|agent| agent.name.clone())
+        .map(|agent| agent.agent_id.clone())
         .collect::<Vec<_>>();
-    routing_names.extend(
+    agent_ids.extend(
         facts
             .messages
             .iter()
             .flat_map(|message| [message.sender.clone(), message.target.clone()]),
     );
-    let profiles = profile_summaries_for_routes(config, &routing_names);
+    let profiles = profile_summaries_for_agent_ids(config, &agent_ids);
+    let recovery_display_names = facts
+        .agents
+        .iter()
+        .filter_map(|agent| {
+            profiles
+                .get(&agent.agent_id)
+                .map(|profile| (agent.agent_id.clone(), profile.display_name.clone()))
+        })
+        .collect::<HashMap<_, _>>();
     let agents = compose_agent_rows(facts.agents, &facts.messages, &profiles);
     let peer_exchanges = focus_agent.map(|agent| aggregate_peer_exchanges(agent, &facts.messages));
     // Chemin productif du fil humain↔référent : lecture ledger filtrée sur le
@@ -3469,7 +3481,7 @@ fn read_snapshot(
         .map_err(|error| UiError::Configuration(error.to_string()))?
         .map(retain_living_objectives)
         .unwrap_or_else(MissionProjectionV1::empty);
-    let recovery_losses = read_recovery_losses(&config.daemon_socket);
+    let recovery_losses = read_recovery_losses(&config.daemon_socket, &recovery_display_names);
     Ok(UiSnapshotV1 {
         version: UI_VERSION,
         agents,
@@ -3490,37 +3502,36 @@ fn focused_agent_is_stopped(config: &UiRelayConfig, agent: &str) -> Result<bool,
     Ok(snapshot
         .agents
         .iter()
-        .any(|candidate| candidate.name == agent && candidate.state == "stopped"))
+        .any(|candidate| candidate.agent_id == agent && candidate.state == "stopped"))
 }
 
-fn profile_summaries_for_routes(
+fn profile_summaries_for_agent_ids(
     config: &UiRelayConfig,
-    routing_names: &[String],
+    agent_ids: &[String],
 ) -> HashMap<String, AgentProfileSummary> {
     let mut store = match AgentProfileStore::open(&ledger_db_path_for_socket(&config.daemon_socket))
     {
         Ok(store) => store,
         Err(_) => return HashMap::new(),
     };
-    let _ = store.import_historical_routing_names();
-    if store.ensure_routing_names(routing_names).is_err() {
+    if store.ensure_agent_ids(agent_ids).is_err() {
         return HashMap::new();
     }
-    routing_names
+    agent_ids
         .iter()
-        .filter_map(|name| {
+        .filter_map(|agent_id| {
             store
-                .profile_for_routing_name(name)
+                .profile_for_agent_id(agent_id)
                 .ok()
                 .flatten()
-                .map(|profile| (name.clone(), profile))
+                .map(|profile| (agent_id.clone(), profile))
         })
         .collect()
 }
 
 fn ui_agent_profile(summary: &AgentProfileSummary) -> UiAgentProfileV1 {
     UiAgentProfileV1 {
-        profile_ref: summary.profile_ref.clone(),
+        agent_id: summary.agent_id.clone(),
         display_name: summary.display_name.clone(),
         labels: summary.labels.clone(),
         avatar: UiAgentAvatarV1 {
@@ -3555,7 +3566,9 @@ fn compose_agent_rows(
             };
             let last = messages
                 .iter()
-                .filter(|message| message.sender == agent.name || message.target == agent.name)
+                .filter(|message| {
+                    message.sender == agent.agent_id || message.target == agent.agent_id
+                })
                 .max_by(|left, right| (left.ts, &left.id).cmp(&(right.ts, &right.id)));
             let connection_state = public_agent_state(&agent.state);
             let (turn_state, wait_state, progress_age_secs, queue_depth, continuation_mode) = agent
@@ -3582,8 +3595,8 @@ fn compose_agent_rows(
             );
 
             UiAgentRowV1 {
-                name: agent.name.clone(),
-                profile: profiles.get(&agent.name).map(ui_agent_profile),
+                agent_id: agent.agent_id.clone(),
+                profile: profiles.get(&agent.agent_id).map(ui_agent_profile),
                 agent_type: agent.agent_type,
                 host: agent.host,
                 transport: agent.transport,
@@ -3609,7 +3622,9 @@ fn compose_agent_rows(
                 last_excerpt: last.map(|message| excerpt(&message.body)),
                 unread: messages
                     .iter()
-                    .filter(|message| message.sender == agent.name && message.target == UI_SENDER)
+                    .filter(|message| {
+                        message.sender == agent.agent_id && message.target == UI_SENDER
+                    })
                     .count(),
             }
         })
@@ -3867,13 +3882,19 @@ fn recovery_losses_path_for_socket(socket_path: &Path) -> PathBuf {
     ))
 }
 
-fn read_recovery_losses(socket_path: &Path) -> Vec<UiRecoveryLossV1> {
+fn read_recovery_losses(
+    socket_path: &Path,
+    display_names: &HashMap<String, String>,
+) -> Vec<UiRecoveryLossV1> {
     match crate::recovery_trace::load_report(&recovery_losses_path_for_socket(socket_path)) {
         Ok(Some(report)) => report
             .absents
             .into_iter()
             .map(|entry| UiRecoveryLossV1 {
-                name: entry.name,
+                display_name: display_names
+                    .get(&entry.name)
+                    .cloned()
+                    .unwrap_or_else(|| "Agent indisponible".to_string()),
                 reason: entry.reason,
                 detail: entry.detail,
             })
@@ -4545,7 +4566,8 @@ mod tests {
 
     fn agent_info(name: &str, state: &str) -> bridget_transport::protocol::AgentInfo {
         serde_json::from_value(serde_json::json!({
-            "name": name,
+            "agent_id": name,
+            "display_name": name,
             "agent_type": "codex",
             "connection_id": "conn-test",
             "host": "test",
@@ -4714,7 +4736,7 @@ mod tests {
                 writer,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
-                    name: UI_SENDER.to_string(),
+                    agent_id: UI_SENDER.to_string(),
                 })
                 .unwrap()
             )
@@ -4877,7 +4899,7 @@ mod tests {
                     writer,
                     "{}",
                     encode(&DaemonToWrapper::Registered {
-                        name: UI_SENDER.to_string(),
+                        agent_id: UI_SENDER.to_string(),
                     })
                     .unwrap()
                 )
@@ -4949,7 +4971,7 @@ mod tests {
                 writer,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
-                    name: UI_SENDER.to_string(),
+                    agent_id: UI_SENDER.to_string(),
                 })
                 .unwrap()
             )
@@ -5191,17 +5213,18 @@ mod tests {
 
     #[test]
     fn spec_073_contrat_stop_refuse_version_champs_et_identifiants_invalides() {
-        let valid =
-            parse_ui_stop_request(br#"{"version":1,"name":"agent-1","command_id":"stop-ui-123"}"#)
-                .unwrap();
-        assert_eq!(valid.name, "agent-1");
+        let valid = parse_ui_stop_request(
+            br#"{"version":1,"agent_id":"agent-1","command_id":"stop-ui-123"}"#,
+        )
+        .unwrap();
+        assert_eq!(valid.agent_id, "agent-1");
         assert_eq!(valid.command_id, "stop-ui-123");
 
         for body in [
-            br#"{"version":2,"name":"agent-1","command_id":"stop-ui-123"}"#.as_slice(),
-            br#"{"version":1,"name":"agent/1","command_id":"stop-ui-123"}"#.as_slice(),
-            br#"{"version":1,"name":"agent-1","command_id":""}"#.as_slice(),
-            br#"{"version":1,"name":"agent-1","command_id":"stop ui","extra":true}"#.as_slice(),
+            br#"{"version":2,"agent_id":"agent-1","command_id":"stop-ui-123"}"#.as_slice(),
+            br#"{"version":1,"agent_id":"agent/1","command_id":"stop-ui-123"}"#.as_slice(),
+            br#"{"version":1,"agent_id":"agent-1","command_id":""}"#.as_slice(),
+            br#"{"version":1,"agent_id":"agent-1","command_id":"stop ui","extra":true}"#.as_slice(),
         ] {
             assert_eq!(
                 parse_ui_stop_request(body).unwrap_err().1,
@@ -5238,7 +5261,7 @@ mod tests {
     fn spec_073_mapping_stop_conserve_tous_les_verdicts() {
         let request = UiStopRequestV1 {
             version: UI_VERSION,
-            name: "managed".to_string(),
+            agent_id: "managed".to_string(),
             command_id: "stop-ui-123".to_string(),
         };
         let clean =
@@ -5314,13 +5337,13 @@ mod tests {
     fn spec_075_mapping_relaunch_et_decommission_reste_ferme() {
         let request = UiStopRequestV1 {
             version: UI_VERSION,
-            name: "managed".to_string(),
+            agent_id: "managed".to_string(),
             command_id: "lifecycle-ui-123".to_string(),
         };
         let relaunched = map_ui_relaunch_outcome(
             &request,
             bridget_transport::protocol::RelaunchOutcome::Started {
-                name: "managed".to_string(),
+                agent_id: "managed".to_string(),
                 generation: 9,
             },
         )
@@ -5361,6 +5384,7 @@ mod tests {
 
     #[test]
     fn spec_073_relais_stop_transmet_un_seul_stop_order() {
+        let agent_id = "550e8400-e29b-41d4-a716-446655440010";
         let socket_path = std::env::temp_dir().join(format!(
             "bridget-ui-stop-{}.sock",
             uuid::Uuid::new_v4().simple()
@@ -5376,7 +5400,7 @@ mod tests {
                 decode::<WrapperToDaemon>(line.trim()).unwrap(),
                 WrapperToDaemon::ListAgents
             ));
-            let mut managed = agent_info("managed", "connected");
+            let mut managed = agent_info(agent_id, "connected");
             managed.persistent = Some(false);
             writeln!(
                 writer,
@@ -5396,8 +5420,8 @@ mod tests {
             reader.read_line(&mut line).unwrap();
             assert!(matches!(
                 decode::<WrapperToDaemon>(line.trim()).unwrap(),
-                WrapperToDaemon::StopOrder { ref name, ref command_id }
-                    if name == "managed" && command_id == "stop-ui-123"
+                WrapperToDaemon::StopOrder { ref agent_id, ref command_id }
+                    if agent_id == "550e8400-e29b-41d4-a716-446655440010" && command_id == "stop-ui-123"
             ));
             writeln!(
                 writer,
@@ -5420,7 +5444,7 @@ mod tests {
         };
         let response = post_ui_stop(
             &config,
-            br#"{"version":1,"name":"managed","command_id":"stop-ui-123"}"#,
+            br#"{"version":1,"agent_id":"550e8400-e29b-41d4-a716-446655440010","command_id":"stop-ui-123"}"#,
         )
         .unwrap();
         assert_eq!(response.outcome, "stopped");
@@ -5430,6 +5454,7 @@ mod tests {
 
     #[test]
     fn spec_073_relais_refuse_un_agent_non_gere_avant_stop_order() {
+        let agent_id = "550e8400-e29b-41d4-a716-446655440011";
         let socket_path = std::env::temp_dir().join(format!(
             "bridget-ui-stop-refus-{}.sock",
             uuid::Uuid::new_v4().simple()
@@ -5449,7 +5474,7 @@ mod tests {
                 writer,
                 "{}",
                 encode(&DaemonToWrapper::AgentList {
-                    agents: vec![agent_info("external", "connected")]
+                    agents: vec![agent_info(agent_id, "connected")]
                 })
                 .unwrap()
             )
@@ -5465,7 +5490,7 @@ mod tests {
         };
         let error = post_ui_stop(
             &config,
-            br#"{"version":1,"name":"external","command_id":"stop-ui-123"}"#,
+            br#"{"version":1,"agent_id":"550e8400-e29b-41d4-a716-446655440011","command_id":"stop-ui-123"}"#,
         )
         .unwrap_err();
         assert_eq!((error.0, error.1), (409, "agent_not_managed"));
@@ -6577,7 +6602,7 @@ mod tests {
             queue_depth: 0,
         });
         let rows = compose_agent_rows(vec![active, waiting], &[], &HashMap::new());
-        let active = rows.iter().find(|row| row.name == "active").unwrap();
+        let active = rows.iter().find(|row| row.agent_id == "active").unwrap();
         assert_eq!(active.connection_state, "busy");
         assert_eq!(active.provider_age_secs, 5);
         assert_eq!(active.transport, "codex_app_server");
@@ -6595,7 +6620,7 @@ mod tests {
                 && link.direct_descendants == 1
                 && link.descendants == 2
         ));
-        let waiting = rows.iter().find(|row| row.name == "waiting").unwrap();
+        let waiting = rows.iter().find(|row| row.agent_id == "waiting").unwrap();
         assert_eq!(waiting.connection_state, "alive");
         assert_eq!(waiting.turn_state.as_deref(), Some("waiting_approval"));
         assert_eq!(waiting.wait_state.as_deref(), Some("waiting_approval"));
@@ -6979,7 +7004,7 @@ mod tests {
             .unwrap();
         store
             .update_profile(
-                &profile.profile_ref,
+                &profile.agent_id,
                 AgentProfileUpdate {
                     expected_revision: profile.revision,
                     display_name: "Bibliothécaire".to_string(),
@@ -7003,7 +7028,7 @@ mod tests {
         let worker = thread::spawn(move || relay.serve_one().unwrap());
         let (denied, _) = get_asset(
             address,
-            &format!("/v1/agent-profiles/{}", profile.profile_ref),
+            &format!("/v1/agents/{}/profile", profile.agent_id),
             None,
         );
         worker.join().unwrap();
@@ -7015,8 +7040,8 @@ mod tests {
         let (status, raw) = get_asset(
             address,
             &format!(
-                "/v1/agent-profiles/{}?token=jeton-spec-078",
-                profile.profile_ref
+                "/v1/agents/{}/profile?token=jeton-spec-078",
+                profile.agent_id
             ),
             None,
         );
@@ -7032,7 +7057,7 @@ mod tests {
     fn spec_078_attention_projette_un_nom_affiche_et_erreurs_sans_detail() {
         let event = ui_attention_event(AttentionEvent {
             event_id: "event-opaque".to_string(),
-            profile_ref: "profile-opaque".to_string(),
+            agent_id: "profile-opaque".to_string(),
             display_name: "Bibliothécaire".to_string(),
             event_type: AttentionEventType::HumanInputNeeded,
             created_at: 42,

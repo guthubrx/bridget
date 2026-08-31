@@ -285,7 +285,8 @@ fn delegate_est_admis_comme_depot_sans_etre_confondu_avec_un_succes_metier() {
             &mut wrapper_writer,
             WrapperToDaemon::Register {
                 agent_type: "codex".to_string(),
-                name: Some("jc6".to_string()),
+                identity_version: 2,
+                agent_id: "jc6".to_string(),
                 host: None,
                 transport: Some("unix".to_string()),
                 channel: Some("unix".to_string()).into(),
@@ -384,7 +385,8 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
             &mut wrapper_writer,
             WrapperToDaemon::Register {
                 agent_type: "codex".to_string(),
-                name: Some("codex-1".to_string()),
+                identity_version: 2,
+                agent_id: "codex-1".to_string(),
                 host: None,
                 transport: Some("unix".to_string()),
                 channel: None.into(),
@@ -588,7 +590,8 @@ fn depot_cli_reel_mesure_head_et_remote_au_lieu_de_copier_le_mandat() {
             &mut recipient_writer,
             WrapperToDaemon::Register {
                 agent_type: "codex".to_string(),
-                name: Some("codex-1".to_string()),
+                identity_version: 2,
+                agent_id: "codex-1".to_string(),
                 host: None,
                 transport: Some("unix".to_string()),
                 channel: Some("unix".to_string()).into(),
@@ -610,7 +613,8 @@ fn depot_cli_reel_mesure_head_et_remote_au_lieu_de_copier_le_mandat() {
             &mut maicie_writer,
             WrapperToDaemon::Register {
                 agent_type: "maicie".to_string(),
-                name: Some("maicie".to_string()),
+                identity_version: 2,
+                agent_id: "maicie".to_string(),
                 host: None,
                 transport: Some("unix".to_string()),
                 channel: Some("unix".to_string()).into(),
@@ -949,7 +953,8 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
             &mut recipient_writer,
             WrapperToDaemon::Register {
                 agent_type: "codex".to_string(),
-                name: Some("codex-1".to_string()),
+                identity_version: 2,
+                agent_id: "codex-1".to_string(),
                 host: None,
                 transport: Some("unix".to_string()),
                 channel: None.into(),
@@ -971,7 +976,8 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
             &mut maicie_writer,
             WrapperToDaemon::Register {
                 agent_type: "maicie".to_string(),
-                name: Some("maicie".to_string()),
+                identity_version: 2,
+                agent_id: "maicie".to_string(),
                 host: None,
                 transport: Some("unix".to_string()),
                 channel: None.into(),

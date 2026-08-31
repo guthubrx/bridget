@@ -404,7 +404,8 @@ pub struct ProjectProfileClient {
 /// Information factuelle issue de l'annuaire Bridget.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct AgentInfo {
-    pub name: String,
+    pub agent_id: String,
+    pub display_name: String,
     pub agent_type: String,
     pub connection_id: String,
     pub host: String,
@@ -493,7 +494,7 @@ pub enum SubscriptionEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SpawnOrder {
     pub agent_type: String,
-    pub name: Option<String>,
+    pub agent_id: Option<String>,
     pub cwd: String,
     pub persistent: bool,
     pub command_id: String,
@@ -506,8 +507,14 @@ pub struct SpawnOrder {
 /// Reponse publique d'un SpawnOrder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpawnOutcome {
-    Accepted { command_id: String, name: String },
-    Rejected { command_id: String, reason: Value },
+    Accepted {
+        command_id: String,
+        agent_id: String,
+    },
+    Rejected {
+        command_id: String,
+        reason: Value,
+    },
     Idempotency(IdempotencyIssue),
 }
 
@@ -962,7 +969,7 @@ impl BridgetClient {
         let response = connection.request(json!({
             "type": "SpawnOrder",
             "agent_type": order.agent_type,
-            "name": order.name,
+            "agent_id": order.agent_id,
             "cwd": order.cwd,
             "persistent": order.persistent,
             "command_id": order.command_id,
@@ -1470,7 +1477,7 @@ struct PersistedSpawnOrder {
     kind: String,
     command_id: String,
     agent_type: String,
-    name: Option<String>,
+    agent_id: Option<String>,
     cwd: String,
     persistent: bool,
     issued_at: i64,
@@ -1499,7 +1506,7 @@ fn spawn_command_id(bytes: &[u8]) -> Result<String, BridgetClientError> {
             "SpawnOrder persiste invalide".to_string(),
         ));
     }
-    let _ = (order.name, order.persistent, order.project);
+    let _ = (order.agent_id, order.persistent, order.project);
     Ok(order.command_id)
 }
 
@@ -1524,7 +1531,7 @@ fn parse_spawn_replay(
             Ok(SpawnReplay {
                 outcome: SpawnOutcome::Accepted {
                     command_id,
-                    name: required_string(&response, "name")?,
+                    agent_id: required_string(&response, "agent_id")?,
                 },
                 definition_digest,
             })

@@ -1278,7 +1278,8 @@ fn registered_connection(
     let mut connection = DaemonConnection::connect(socket)?;
     let registration = WrapperToDaemon::Register {
         agent_type: "mcp".to_string(),
-        name: Some(identity.to_string()),
+        identity_version: 2,
+        agent_id: identity.to_string(),
         host: None,
         transport: None,
         channel: bridget_transport::ChannelReport::Unknown,
@@ -1974,7 +1975,8 @@ mod tests {
                 read_command(&mut reader),
                 WrapperToDaemon::Register {
                     agent_type,
-                    name: Some(name),
+                    identity_version: 2,
+                    agent_id: name,
                     instance_id: Some(instance_id),
                     ..
                 } if agent_type == "mcp"
@@ -1984,7 +1986,7 @@ mod tests {
             write_command(
                 &mut writer,
                 DaemonToWrapper::Registered {
-                    name: "jc2".to_string(),
+                    agent_id: "jc2".to_string(),
                 },
             );
             assert!(matches!(
@@ -2053,7 +2055,7 @@ mod tests {
             write_command(
                 &mut writer,
                 DaemonToWrapper::Registered {
-                    name: "jc2".to_string(),
+                    agent_id: "jc2".to_string(),
                 },
             );
             assert!(matches!(
@@ -2135,7 +2137,7 @@ mod tests {
             write_command(
                 &mut writer,
                 DaemonToWrapper::Registered {
-                    name: "jc2".to_string(),
+                    agent_id: "jc2".to_string(),
                 },
             );
             assert!(matches!(
@@ -3126,7 +3128,8 @@ mod tests {
                 let mut writer = BufWriter::new(stream);
                 match read_command(&mut reader) {
                     WrapperToDaemon::Register {
-                        name: Some(name),
+                        identity_version: 2,
+                        agent_id: name,
                         instance_id: Some(instance_id),
                         ..
                     } => principals_tx.send((name, instance_id)).unwrap(),
@@ -3135,7 +3138,7 @@ mod tests {
                 write_command(
                     &mut writer,
                     DaemonToWrapper::Registered {
-                        name: "mcp".to_string(),
+                        agent_id: "mcp".to_string(),
                     },
                 );
             }
@@ -3312,7 +3315,7 @@ mod tests {
             write_command(
                 &mut writer,
                 DaemonToWrapper::Registered {
-                    name: "mcp-test".to_string(),
+                    agent_id: "mcp-test".to_string(),
                 },
             );
             assert!(matches!(

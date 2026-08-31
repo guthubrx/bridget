@@ -212,7 +212,7 @@
           model: "claude-opus-5",
           effort: "high",
           profile: {
-            profile_ref: "opaque-profile",
+            agent_id: "550e8400-e29b-41d4-a716-446655440000",
             display_name: "Bibliothécaire",
             labels: ["recherche", "référence"],
             avatar: { shape: "round", color: "blue" },
@@ -250,7 +250,7 @@
         const agent = api.normalizeAgentRow({
           name: "agent-interne-42",
           profile: {
-            profile_ref: "opaque-profile",
+            agent_id: "550e8400-e29b-41d4-a716-446655440001",
             display_name: "Coordination",
             labels: ["coordinateur", "recherche"],
             avatar: { shape: "cloud", color: "teal" },
@@ -377,7 +377,7 @@
       test("spec_073_demande_et_verdicts_stop_restent_exacts", () => {
         assert.deepEqual(api.buildAgentStopRequest("agent-1", "stop-ui-fixed"), {
           version: 1,
-          name: "agent-1",
+          agent_id: "agent-1",
           command_id: "stop-ui-fixed",
         });
         assert.equal(api.buildAgentStopUrl("jeton +"), "/v1/agents/stop?token=jeton+%2B");
@@ -485,10 +485,10 @@
 
       test("spec_077_projection_epinglage_masquage_et_compteur_restant_honnetes", () => {
         const projection = api.agentSidebarProjection([
-          { name: "beta", state: "connected" },
-          { name: "alpha", state: "busy" },
-          { name: "stop", state: "stopped" },
-          { name: "cache", state: "connected" },
+          { agent_id: "beta", state: "connected" },
+          { agent_id: "alpha", state: "busy" },
+          { agent_id: "stop", state: "stopped" },
+          { agent_id: "cache", state: "connected" },
         ], {
           version: 1,
           pinned: ["alpha", "stop"],
@@ -502,7 +502,7 @@
       });
 
       test("spec_077_matrice_unique_expose_toutes_les_actions_et_raisons", () => {
-        const running = { name: "alpha", state: "connected", persistent: true, unread: 2 };
+        const running = { agent_id: "alpha", state: "connected", persistent: true, unread: 2 };
         const items = api.agentContextMenuItems(running, {
           version: 1,
           pinned: [],
@@ -526,7 +526,7 @@
         assert.equal(local.find((item) => item.key === "read").enabled, false);
 
         const unmanaged = api.agentContextMenuItems(
-          { name: "externe", state: "connected", persistent: null },
+          { agent_id: "externe", state: "connected", persistent: null },
           { version: 1, pinned: [], hidden: [], readThrough: {} },
         );
         for (const key of ["stop", "relaunch", "decommission"]) {
@@ -831,7 +831,7 @@
         );
         const event = {
           event_id: "33333333-3333-4333-8333-333333333333",
-          profile_ref: "opaque-profile",
+          agent_id: "550e8400-e29b-41d4-a716-446655440002",
           display_name: "Bibou",
           event_type: "human_input_needed",
           attention_enabled: true,
@@ -843,7 +843,7 @@
           key: event.event_id,
           title: "Bibou",
           body: "Bibou attend votre réponse.",
-          profileRef: "opaque-profile",
+          agentId: "550e8400-e29b-41d4-a716-446655440002",
         });
         assert.match(api.buildAttentionUrl("secret", first), /client_id=11111111-1111-4111-8111-111111111111/);
       });
@@ -1231,7 +1231,7 @@
           },
         });
         const next = api.applyReconnectSnapshot(state, {
-          agents: [{ name: "rc1", state: "busy", host: "lab-host", unread: 2 }],
+          agents: [{ agent_id: "rc1", state: "busy", host: "lab-host", unread: 2 }],
         });
         assert.deepEqual(next.draft, state.draft);
         assert.deepEqual(next.viewport, state.viewport);
@@ -1239,8 +1239,8 @@
       });
 
       test("identite_humaine_reste_emetteur_et_n_est_jamais_un_interlocuteur", () => {
-        const humain = { name: "humain", type: "ui", state: "connected", host: "localhost" };
-        const bridget = { name: "bridget", type: "codex", state: "connected", host: "serveur" };
+        const humain = { agent_id: "humain", type: "ui", state: "connected", host: "localhost" };
+        const bridget = { agent_id: "bridget", type: "codex", state: "connected", host: "serveur" };
         assert.deepEqual(api.normalizeAgents([humain, bridget]).map((agent) => agent.name), ["bridget"]);
         assert.deepEqual(
           api.agentSidebarProjection([humain, bridget], api.normalizeAgentSidebarPreferences(null))
@@ -1260,12 +1260,12 @@
         assert.equal(api.isInactiveAgent({ state: "busy" }), false);
 
         const initial = [{
-          name: "ancien",
+          agent_id: "ancien",
           state: "unreachable",
           provider_age_secs: 4,
           progress_age_secs: 8,
         }, {
-          name: "actif",
+          agent_id: "actif",
           state: "busy",
           provider_age_secs: 2,
           progress_age_secs: 3,
@@ -1279,7 +1279,7 @@
         assert.notEqual(
           api.agentRosterSignature(initial),
           api.agentRosterSignature(initial.map((agent) => (
-            agent.name === "actif" ? { ...agent, state: "stopped" } : agent
+            agent.agent_id === "actif" ? { ...agent, state: "stopped" } : agent
           ))),
         );
 
@@ -3575,7 +3575,7 @@
         return pinDifference || left.index - right.index;
       })
       .map((entry) => entry.agent);
-    const source = (Array.isArray(agents) ? agents : []).filter((agent) => !isUiSender(agent));
+    const source = normalizeAgents(agents);
     const visible = source.filter((agent) => !hiddenNames.has(agent.name));
     return {
       active: withStableOrder(visible.filter((agent) => !isInactiveAgent(agent))),
@@ -3655,10 +3655,10 @@
     );
   }
 
-  function buildAgentStopRequest(name, commandId) {
+  function buildAgentStopRequest(agentId, commandId) {
     return {
       version: 1,
-      name: String(name || ""),
+      agent_id: String(agentId || ""),
       command_id: String(commandId || ""),
     };
   }
@@ -4116,12 +4116,12 @@
 
   function normalizeAgentProfile(profile) {
     if (!profile || typeof profile !== "object" || Array.isArray(profile)) return null;
-    const profileRef = text(profile.profile_ref).trim();
+    const agentId = text(profile.agent_id).trim();
     const displayName = text(profile.display_name).trim();
     const avatar = profile.avatar && typeof profile.avatar === "object" ? profile.avatar : {};
     const shape = text(avatar.shape).trim();
     const color = text(avatar.color).trim();
-    if (!profileRef || !displayName || !shape || !color) return null;
+    if (!agentId || !displayName || !shape || !color) return null;
     const labels = Array.isArray(profile.labels)
       ? profile.labels
         .filter((label) => typeof label === "string")
@@ -4132,7 +4132,7 @@
       ? profile.instruction_state
       : {};
     return {
-      profile_ref: profileRef,
+      agent_id: agentId,
       display_name: displayName,
       labels,
       avatar: { shape, color },
@@ -4170,7 +4170,7 @@
       ? agent.mode.trim().toLowerCase()
       : "";
     return {
-      name: text(agent && agent.name, "agent inconnu"),
+      name: text(agent && agent.agent_id, "agent inconnu"),
       type: text(agent && agent.type, "type inconnu"),
       profile: normalizeAgentProfile(agent && agent.profile),
       host: text(agent && agent.host, "machine inconnue"),
@@ -6036,7 +6036,7 @@
       key: eventId,
       title: text(event.display_name) || "Bridget",
       body: attentionEventLabel(event),
-      profileRef: text(event.profile_ref),
+      agentId: text(event.agent_id),
     };
   }
 
@@ -6044,9 +6044,9 @@
     return agentResourceUrl("/v1/search", token);
   }
 
-  function buildAgentProfileUrl(token, profileRef) {
+  function buildAgentProfileUrl(token, agentId) {
     const query = new URLSearchParams({ token: String(token || "") });
-    return `/v1/agent-profiles/${encodeURIComponent(String(profileRef || ""))}?${query.toString()}`;
+    return `/v1/agents/${encodeURIComponent(String(agentId || ""))}/profile?${query.toString()}`;
   }
 
   function instructionStatusLabel(status) {
@@ -8324,7 +8324,7 @@
     };
 
     const profileSummaryFromDetail = (profile) => ({
-      profile_ref: profile.profile_ref,
+      agent_id: profile.agent_id,
       display_name: profile.display_name,
       labels: Array.isArray(profile.labels) ? profile.labels : [],
       avatar: profile.avatar,
@@ -8456,7 +8456,7 @@
 
       const attentionField = make("fieldset", "agent-profile-editor__attention");
       attentionField.append(make("legend", "agent-profile-editor__label", "Notifications pour cet appareil"));
-      const preference = preferenceForProfile(profile.profile_ref);
+      const preference = preferenceForAgent(profile.agent_id);
       const preferenceInputs = [
         ["human_input_needed", "Quand cet agent attend votre réponse"],
         ["task_completed", "Quand un travail est terminé"],
@@ -8529,7 +8529,7 @@
         const draft = redrawProfileDraft();
         saveState.textContent = "Enregistrement…";
         try {
-          const response = await windowRef.fetch(buildAgentProfileUrl(token, persistedProfile.profile_ref), {
+          const response = await windowRef.fetch(buildAgentProfileUrl(token, persistedProfile.agent_id), {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -8591,7 +8591,7 @@
         attentionSaveInFlight = true;
         saveState.textContent = "Enregistrement…";
         try {
-          await saveAttentionPreference(persistedProfile.profile_ref, attentionDraft());
+          await saveAttentionPreference(persistedProfile.agent_id, attentionDraft());
           saveState.textContent = "Enregistré.";
         } catch (error) {
           saveState.textContent = error && error.message === "attention_save_failed"
@@ -8643,15 +8643,15 @@
     };
 
     const openAgentProfile = async (agent) => {
-      const profileRef = agent && agent.profile && agent.profile.profile_ref;
-      if (!profileRef || !token) return;
+      const agentId = agent && agent.profile && agent.profile.agent_id;
+      if (!agentId || !token) return;
       nodes.detailPanel.dataset.mode = "profile";
       nodes.detailPanel.dataset.exchangeKey = "";
       nodes.detailTitle.textContent = `Réglages de ${agentDisplayName(agent)}`;
       nodes.detailContent.replaceChildren(make("p", "trace-message-state", "Chargement du profil…"));
       nodes.detailPanel.hidden = false;
       try {
-        const response = await windowRef.fetch(buildAgentProfileUrl(token, profileRef));
+        const response = await windowRef.fetch(buildAgentProfileUrl(token, agentId));
         let payload = {};
         try { payload = await response.json(); } catch (_error) { /* réponse illisible */ }
         if (!response.ok || !payload.profile) throw new Error(payload.code || "profile_load_failed");
@@ -9280,8 +9280,8 @@
       }, 0);
     };
 
-    const preferenceForProfile = (profileRef) => attentionPreferences.get(profileRef) || {
-      profile_ref: profileRef,
+    const preferenceForAgent = (agentId) => attentionPreferences.get(agentId) || {
+      agent_id: agentId,
       human_input_needed: false,
       task_completed: false,
       terminal_failure: false,
@@ -9339,7 +9339,7 @@
         notification.onclick = () => {
           if (typeof windowRef.focus === "function") windowRef.focus();
           if (typeof notification.close === "function") notification.close();
-          const agent = state.agents.find((entry) => entry.profile && entry.profile.profile_ref === target.profileRef);
+          const agent = state.agents.find((entry) => entry.profile && entry.profile.agent_id === target.agentId);
           if (agent) selectAgent(agent.name);
         };
       } catch (_error) {
@@ -9355,7 +9355,7 @@
         if (!response.ok || !Array.isArray(payload.preferences)) return false;
         attentionPreferences.clear();
         payload.preferences.forEach((preference) => {
-          if (text(preference && preference.profile_ref)) attentionPreferences.set(preference.profile_ref, preference);
+          if (text(preference && preference.agent_id)) attentionPreferences.set(preference.agent_id, preference);
         });
         return true;
       } catch (_error) {
@@ -9364,13 +9364,13 @@
       }
     };
 
-    const saveAttentionPreference = async (profileRef, next) => {
+    const saveAttentionPreference = async (agentId, next) => {
       if (!attentionClientId) return;
-      if (!attentionPreferences.has(profileRef) && !(await refreshAttentionPreferences())) {
+      if (!attentionPreferences.has(agentId) && !(await refreshAttentionPreferences())) {
         throw new Error("attention_save_failed");
       }
       const preferences = new Map(attentionPreferences);
-      preferences.set(profileRef, { profile_ref: profileRef, ...next });
+      preferences.set(agentId, { agent_id: agentId, ...next });
       const response = await windowRef.fetch(buildAttentionPreferencesUrl(token), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -9387,7 +9387,7 @@
       }
       attentionPreferences.clear();
       payload.preferences.forEach((preference) => {
-        if (text(preference && preference.profile_ref)) attentionPreferences.set(preference.profile_ref, preference);
+        if (text(preference && preference.agent_id)) attentionPreferences.set(preference.agent_id, preference);
       });
       void refreshAttention();
     };

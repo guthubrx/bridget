@@ -284,6 +284,32 @@ impl DesiredStateStore {
         self.persist_unlocked_observed(fleet, observer)
     }
 
+    /// Réindexe la flotte par agent_id. Une collision prouve que la
+    /// migration serait ambiguë et laisse le fichier intact.
+    pub fn migrate_agent_ids(
+        &self,
+        mapping: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), DesiredStateError> {
+        let _transition = self
+            .transition_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut fleet = self.load_unlocked()?;
+        let mut migrated = BTreeMap::new();
+        for (legacy, entry) in std::mem::take(&mut fleet.equipiers) {
+            let agent_id = mapping.get(&legacy).cloned().unwrap_or(legacy);
+            if migrated.insert(agent_id.clone(), entry).is_some() {
+                return Err(DesiredStateError::InvalidEntry {
+                    path: self.path.clone(),
+                    name: agent_id,
+                    reason: "collision identité de migration",
+                });
+            }
+        }
+        fleet.equipiers = migrated;
+        self.persist_unlocked(&fleet)
+    }
+
     /// Insère une génération sous sa clé stable, puis retourne l'ancienne.
     pub fn upsert(
         &self,

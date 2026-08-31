@@ -862,7 +862,7 @@ fn agents_from_status(
             .agents
             .into_iter()
             .map(|a| AgentPresence {
-                name: a.name,
+                name: a.agent_id,
                 state: a.state,
                 mode: a.mode.map(|m| m.as_str().to_string()),
                 location: a.location,

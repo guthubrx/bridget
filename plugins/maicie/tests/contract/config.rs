@@ -150,10 +150,10 @@ fn refuse_un_budget_status_nul_ou_hors_borne() {
 }
 
 #[test]
-fn accepte_un_nom_d_agent_runtime_distinct_du_slug_de_profil() {
+fn accepte_un_identifiant_d_agent_opaque_distinct_du_slug_de_profil() {
     let body = VALID_CONFIG.replace(
         "\"id\": \"prospective\",",
-        "\"id\": \"reviewer\",\n    \"agent_name\": \"coderBridget\",",
+        "\"id\": \"reviewer\",\n    \"agent_id\": \"550e8400-e29b-41d4-a716-446655440000\",",
     );
     let fixture = Fixture::new("agent-name", &body);
 
@@ -161,8 +161,8 @@ fn accepte_un_nom_d_agent_runtime_distinct_du_slug_de_profil() {
 
     assert_eq!(config.profiles[0].id, "reviewer");
     assert_eq!(
-        config.profiles[0].agent_name.as_deref(),
-        Some("coderBridget")
+        config.profiles[0].agent_id.as_deref(),
+        Some("550e8400-e29b-41d4-a716-446655440000")
     );
 }
 

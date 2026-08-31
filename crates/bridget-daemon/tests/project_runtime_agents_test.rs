@@ -62,7 +62,7 @@ impl Drop for ContainerCleanup {
 }
 
 struct ExpectedAgent {
-    name: String,
+    agent_id: String,
     instance_id: String,
     generation: u64,
 }
@@ -143,19 +143,22 @@ fn accept_agents(
         match decode(line.trim()).map_err(|error| error.to_string())? {
             WrapperToDaemon::Register {
                 agent_type,
-                name: Some(name),
+                identity_version: 2,
+                agent_id,
                 instance_id: Some(instance_id),
                 ..
             } if agent_type == "fixture"
-                && name == agent.name
+                && agent_id == agent.agent_id
                 && instance_id == agent.instance_id => {}
             other => return Err(format!("register runtime inattendu: {other:?}")),
         }
         writeln!(
             writer,
             "{}",
-            encode(&DaemonToWrapper::Registered { name: agent.name })
-                .map_err(|error| error.to_string())?
+            encode(&DaemonToWrapper::Registered {
+                agent_id: agent.agent_id,
+            })
+            .map_err(|error| error.to_string())?
         )
         .map_err(|error| error.to_string())?;
         writer.flush().map_err(|error| error.to_string())?;
@@ -222,7 +225,7 @@ fn launch(
     environment: &ProjectEnvironment,
     policy: &ProjectRuntimePolicy,
     project_root: PathBuf,
-    name: &str,
+    _display_name: &str,
     generation: u64,
     instance_id: String,
 ) -> DockerRuntimeLaunch {
@@ -243,7 +246,7 @@ fn launch(
             .expect("commande interne"),
         exec_id: uuid::Uuid::new_v4().to_string(),
         agent_type: "fixture".to_string(),
-        agent_name: name.to_string(),
+        agent_id: uuid::Uuid::new_v4().to_string(),
         instance_id,
         agent_generation: generation,
         cwd: project_root,
@@ -335,9 +338,9 @@ fn spec_066_deux_agents_partagent_un_conteneur_sans_melanger_deux_projets() {
         8,
         second_instance.clone(),
     );
-    let first_name = first.agent_name.clone();
+    let first_name = first.agent_id.clone();
     let first_generation = first.agent_generation;
-    let second_name = second.agent_name.clone();
+    let second_name = second.agent_id.clone();
     let second_generation = second.agent_generation;
     let (registered_tx, registered_rx) = std::sync::mpsc::sync_channel(2);
     let (stop_tx, stop_rx) = std::sync::mpsc::sync_channel(1);
@@ -355,12 +358,12 @@ fn spec_066_deux_agents_partagent_un_conteneur_sans_melanger_deux_projets() {
                 container_id,
                 vec![
                     ExpectedAgent {
-                        name: first_name,
+                        agent_id: first_name,
                         instance_id: first_instance,
                         generation: first_generation,
                     },
                     ExpectedAgent {
-                        name: second_name,
+                        agent_id: second_name,
                         instance_id: second_instance,
                         generation: second_generation,
                     },

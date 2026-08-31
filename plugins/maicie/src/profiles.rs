@@ -16,7 +16,7 @@ const SHA256_HEX_BYTES: usize = 64;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedProfile {
     pub id: String,
-    pub agent_name: String,
+    pub agent_id: String,
     pub display_name: String,
     pub agent_type: String,
     pub model: String,
@@ -128,10 +128,7 @@ pub fn load_profiles(configs: &[ProfileConfig]) -> Result<Vec<LoadedProfile>, Pr
             }
             Ok(LoadedProfile {
                 id: config.id.clone(),
-                agent_name: config
-                    .agent_name
-                    .clone()
-                    .unwrap_or_else(|| config.id.clone()),
+                agent_id: config.agent_id.clone().unwrap_or_else(|| config.id.clone()),
                 display_name: config.display_name.clone(),
                 agent_type,
                 model,

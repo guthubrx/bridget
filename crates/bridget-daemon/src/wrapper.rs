@@ -2,6 +2,7 @@
 //!
 //! Appelé par le CLI quand l'utilisateur tape : bridget codex, bridget claude, etc.
 
+use bridget_core::router::validate_agent_id;
 use bridget_transport::journal::{
     IncrementalJournalReader, JournalLiveFeed, JournalReadItem, JournalSourceIdentity,
     JournalWindowError, JournalWriter, current_host_date, resolve_window,
@@ -1521,7 +1522,7 @@ impl RuntimeProbe {
 #[allow(clippy::too_many_arguments)]
 fn connect_and_register(
     agent_type: &str,
-    name: Option<&str>,
+    agent_id: Option<&str>,
     host: &str,
     protocol: &str,
     channel: Option<&str>,
@@ -1535,7 +1536,7 @@ fn connect_and_register(
     connect_and_register_at(
         &socket_path(),
         agent_type,
-        name,
+        agent_id,
         host,
         protocol,
         channel,
@@ -1655,7 +1656,7 @@ fn runtime_process_environment_after_admission(
 fn connect_and_register_at(
     socket: &std::path::Path,
     agent_type: &str,
-    name: Option<&str>,
+    agent_id: Option<&str>,
     host: &str,
     protocol: &str,
     channel: Option<&str>,
@@ -1710,7 +1711,11 @@ fn connect_and_register_at(
 
     let register = WrapperToDaemon::Register {
         agent_type: agent_type.to_string(),
-        name: name.map(str::to_owned),
+        identity_version: 2,
+        agent_id: agent_id
+            .filter(|value| bridget_core::router::validate_agent_id(value).is_ok())
+            .map(str::to_owned)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         host: Some(host.to_string()),
         transport: Some(protocol.to_string()),
         channel: ChannelReport::reported(channel.map(str::to_owned)),
@@ -1729,9 +1734,9 @@ fn connect_and_register_at(
     let mut line = String::new();
     reader.read_line(&mut line).map_err(|e| e.to_string())?;
     match decode(line.trim()).map_err(|e| e.to_string())? {
-        DaemonToWrapper::Registered { name } => {
+        DaemonToWrapper::Registered { agent_id } => {
             send_disk_space_fact(&mut writer);
-            Ok((reader, writer, name))
+            Ok((reader, writer, agent_id))
         }
         DaemonToWrapper::Nack { reason, .. } => Err(format!("enregistrement refusé: {}", reason)),
         other => Err(format!("réponse inattendue: {:?}", other)),
@@ -1769,6 +1774,20 @@ fn send_disk_space_fact(writer: &mut BufWriter<UnixStream>) {
         // ne doit pas empêcher un wrapper déjà enregistré de travailler.
         warn!("impossible d'envoyer le relevé d'espace disque: {error}");
     }
+}
+
+fn display_name_for_agent_id(agent_id: &str) -> String {
+    let profile_path = socket_path().with_extension("db");
+    let Ok(mut profiles) = crate::agent_profile::AgentProfileStore::open(&profile_path) else {
+        return "Agent".to_string();
+    };
+    let _ = profiles.ensure_agent_ids([agent_id]);
+    profiles
+        .profile_for_agent_id(agent_id)
+        .ok()
+        .flatten()
+        .map(|profile| profile.display_name)
+        .unwrap_or_else(|| "Agent".to_string())
 }
 
 /// Lance un agent CLI wrapper.
@@ -1828,8 +1847,9 @@ pub fn launch(
     )?;
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
 
-    eprintln!("[bridget] Enregistré en tant que « {} »", my_name);
-    info!("enregistré: {}", my_name);
+    let my_display_name = display_name_for_agent_id(&my_name);
+    eprintln!("[bridget] Agent connecté : « {} »", my_display_name);
+    info!("agent enregistré: {} ({})", my_display_name, my_name);
 
     // Sauvegarder le nom pour les futurs resume
     save_persistent_name(agent_type, &agent_args, &my_name);
@@ -1944,7 +1964,11 @@ pub fn launch(
     }
 
     if agent_type == "codex" {
-        final_args.extend(prepare_codex_agent_args(&agent_args, &my_name, mcp_enabled));
+        final_args.extend(prepare_codex_agent_args(
+            &agent_args,
+            &my_display_name,
+            mcp_enabled,
+        ));
     } else {
         // Claude n'a pas de sous-commande `resume` dans la forme pilotée ici.
         // Conserver son contrat historique et placer le prompt avant les args.
@@ -1952,7 +1976,7 @@ pub fn launch(
             .iter()
             .any(|argument| !argument.starts_with("--"));
         if !has_prompt && agent_type == "claude" {
-            final_args.push(interactive_bridget_prompt(&my_name, mcp_enabled));
+            final_args.push(interactive_bridget_prompt(&my_display_name, mcp_enabled));
         }
         final_args.extend(agent_args.iter().cloned());
     }
@@ -1972,8 +1996,9 @@ pub fn launch(
 
     let mut child = match Command::new(agent_binary)
         .args(&final_args)
-        .env("BRIDGET_AGENT_NAME", &my_name)
-        .env("BRIDGET_AGENT_NAME_FILE", &name_state_path)
+        .env("BRIDGET_AGENT_ID", &my_name)
+        .env("BRIDGET_AGENT_ID_FILE", &name_state_path)
+        .env("BRIDGET_AGENT_DISPLAY_NAME", &my_display_name)
         .env("BRIDGET_AGENT_INSTANCE_ID", &instance_id)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -2285,7 +2310,7 @@ pub fn launch(
                         let _ = std::fs::write(&reply_file, value);
                     }
                     if let Some(ref mut t) = transport {
-                        if let Err(e) = t.deliver(&bm) {
+                        if let Err(e) = t.deliver(&message_for_provider(&bm)) {
                             error!("injection tmux: {}", e);
                         }
                     } else {
@@ -2312,7 +2337,7 @@ pub fn launch(
                             record_interactive_turn(journal.as_ref(), message);
                             match transport.as_mut() {
                                 Some(transport) => transport
-                                    .deliver(message)
+                                    .deliver(&message_for_provider(message))
                                     .map_err(|error| error.to_string()),
                                 None => Err("aucun pane tmux pour la livraison idempotente".into()),
                             }
@@ -3266,11 +3291,11 @@ fn apply_pending_profile_instructions(
             return;
         }
     };
-    if let Err(error) = store.ensure_routing_names([recipient]) {
+    if let Err(error) = store.ensure_agent_ids([recipient]) {
         warn!("identité agent indisponible avant démarrage fournisseur: {error}");
         return;
     }
-    let pending = match store.pending_instructions_for_routing_name(recipient) {
+    let pending = match store.pending_instructions_for_agent_id(recipient) {
         Ok(Some(pending)) if !pending.instructions.is_empty() => pending,
         Ok(_) => return,
         Err(error) => {
@@ -3286,7 +3311,7 @@ fn apply_pending_profile_instructions(
         ),
     };
     if let Err(error) = store.mark_instruction_application(
-        &pending.profile_ref,
+        &pending.agent_id,
         pending.revision,
         provider_spawn_id,
         outcome.0,
@@ -3330,7 +3355,7 @@ fn attention_occurrence_key(kind: &str, agent: &str, subject: &str) -> String {
 
 fn record_attention(
     profile_db_path: Option<&Path>,
-    routing_name: &str,
+    agent_id: &str,
     event_type: AttentionEventType,
     subject: &str,
 ) {
@@ -3341,9 +3366,9 @@ fn record_attention(
         warn!("attention non persistée: store indisponible");
         return;
     };
-    let occurrence_key = attention_occurrence_key(event_type.as_str(), routing_name, subject);
+    let occurrence_key = attention_occurrence_key(event_type.as_str(), agent_id, subject);
     if store
-        .record_attention_for_routing_name(routing_name, event_type, &occurrence_key)
+        .record_attention_for_agent_id(agent_id, event_type, &occurrence_key)
         .is_err()
     {
         warn!("attention non persistée: écriture refusée");
@@ -3549,10 +3574,12 @@ pub fn stop_runtime_acp(instance_id: &str) -> Result<(), Box<dyn std::error::Err
 /// par celle attestée dans la politique hôte du runtime.
 pub fn launch_runtime_acp(
     agent_type: &str,
-    explicit_name: &str,
+    explicit_agent_id: &str,
     provider_command: &str,
     resolved_definition: &bridget_transport::ResolvedAgentDefinition,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    validate_agent_id(explicit_agent_id)
+        .map_err(|reason| format!("Agent ID runtime invalide: {reason}"))?;
     if runtime_instance_id_from_environment()?.is_none() {
         return Err("runtime ingress absent du wrapper de projet".into());
     }
@@ -3567,7 +3594,7 @@ pub fn launch_runtime_acp(
     launch_acp_with_status(
         agent_type,
         &[],
-        Some(explicit_name),
+        Some(explicit_agent_id),
         &registry,
         &socket_path(),
         &home,
@@ -3840,7 +3867,7 @@ fn launch_acp_with_status(
             Ok(_) => match decode(line.trim()) {
                 Ok(DaemonToWrapper::Deliver(message)) => {
                     idempotent_deliveries.record_historic(&message.id);
-                    if let Err(error) = transport.deliver(&message) {
+                    if let Err(error) = transport.deliver(&message_for_provider(&message)) {
                         idempotent_deliveries.historic_injection_failed(&message.id);
                         send_wrapper_message(
                             &writer,
@@ -3874,7 +3901,7 @@ fn launch_acp_with_status(
                     if let Some(identity) = transport.provider_identity() {
                         publish_provider_context(&writer, &execution_bindings, &identity);
                     }
-                    if let Err(error) = transport.deliver(&message) {
+                    if let Err(error) = transport.deliver(&message_for_provider(&message)) {
                         idempotent_deliveries.historic_injection_failed(&message_id);
                         publish_execution_transition(
                             &writer,
@@ -3927,7 +3954,7 @@ fn launch_acp_with_status(
                             delivery_id,
                         } => {
                             let message_id = message.id.clone();
-                            if let Err(error) = transport.deliver(&message) {
+                            if let Err(error) = transport.deliver(&message_for_provider(&message)) {
                                 send_wrapper_message(
                                     &writer,
                                     WrapperToDaemon::DeliveryRejected {
@@ -4246,11 +4273,11 @@ fn managed_adapter_environment(
         OsString::from(instance_id),
     )];
     if let Some(name) = explicit_name.filter(|value| !value.is_empty()) {
-        environment.push((OsString::from("BRIDGET_AGENT_NAME"), OsString::from(name)));
+        environment.push((OsString::from("BRIDGET_AGENT_ID"), OsString::from(name)));
     }
     if let Some(path) = name_state_path {
         environment.push((
-            OsString::from("BRIDGET_AGENT_NAME_FILE"),
+            OsString::from("BRIDGET_AGENT_ID_FILE"),
             OsString::from(path.as_os_str()),
         ));
     }
@@ -5039,6 +5066,41 @@ fn delegated_runtime_message(
     message.intent = Some(bridget_core::MessageIntent::QueueOnly);
     message.reply = false;
     message
+}
+
+/// Projette le seul élément de présentation nécessaire au fournisseur sans
+/// toucher au message de routage. `from` reste donc un Agent ID partout où le
+/// wrapper en a besoin pour `reply`, le journal et les accusés de livraison.
+fn message_for_provider(message: &bridget_core::BridgetMessage) -> bridget_core::BridgetMessage {
+    let mut projected = message.clone();
+    if let Some(display_name) = message
+        .from_display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        projected.from = display_name.to_string();
+    }
+    projected
+}
+
+#[cfg(test)]
+#[test]
+fn projection_fournisseur_expose_le_display_name_sans_perdre_l_agent_id() {
+    let agent_id = "018f2d95-8bd4-7c4c-8b7e-6cafb0a39a63";
+    let mut message = bridget_core::BridgetMessage::new(
+        agent_id,
+        "018f2d95-8bd4-7c4c-8b7e-6cafb0a39a64",
+        "bonjour",
+    );
+    message.from_display_name = Some("Bibliothécaire".to_string());
+
+    let projected = message_for_provider(&message);
+
+    assert_eq!(message.from, agent_id, "le routage conserve l'Agent ID");
+    assert_eq!(projected.from, "Bibliothécaire");
+    assert_eq!(projected.to, message.to);
+    assert_eq!(projected.id, message.id);
 }
 
 #[cfg(test)]
@@ -5919,23 +5981,15 @@ mod prompt_tests {
 
         let mut router = bridget_core::Router::new();
         router
-            .register(
-                Some("sans-mission"),
-                &bridget_core::AgentType::Codex,
-                "conn-1",
-            )
+            .register("sans-mission", &bridget_core::AgentType::Codex, "conn-1")
             .unwrap();
-        let _ = router.register(
-            Some("rel\nConsigne"),
-            &bridget_core::AgentType::Codex,
-            "conn-2",
-        );
+        let _ = router.register("rel\nConsigne", &bridget_core::AgentType::Codex, "conn-2");
 
         for agent in router.list_agents() {
             let context = managed_resume_context(
                 &home,
                 &worktree,
-                &agent.name,
+                &agent.agent_id,
                 "fixture",
                 "acp",
                 "fixture-digest",
@@ -6743,7 +6797,7 @@ mod reconnect_tests {
                 writer,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
-                    name: "lab-agent".to_string()
+                    agent_id: "lab-agent".to_string()
                 })
                 .unwrap()
             )
@@ -7152,14 +7206,14 @@ mod reconnect_tests {
         assert_eq!(
             pairs
                 .iter()
-                .find(|(key, _)| key == "BRIDGET_AGENT_NAME")
+                .find(|(key, _)| key == "BRIDGET_AGENT_ID")
                 .map(|(_, value)| value.as_str()),
             Some("fable-reviewer")
         );
         assert_eq!(
             pairs
                 .iter()
-                .find(|(key, _)| key == "BRIDGET_AGENT_NAME_FILE")
+                .find(|(key, _)| key == "BRIDGET_AGENT_ID_FILE")
                 .map(|(_, value)| value.as_str()),
             Some(name_file.to_str().unwrap())
         );
@@ -7241,7 +7295,7 @@ mod reconnect_tests {
             Some(&name_file),
         ));
         assert!(
-            unnamed.iter().all(|(key, _)| key != "BRIDGET_AGENT_NAME"),
+            unnamed.iter().all(|(key, _)| key != "BRIDGET_AGENT_ID"),
             "{unnamed:?}"
         );
         assert_eq!(

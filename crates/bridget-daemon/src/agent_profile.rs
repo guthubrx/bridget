@@ -27,7 +27,7 @@ const AVATAR_COLORS: &[&str] = &[
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentProfileSummary {
-    pub profile_ref: String,
+    pub agent_id: String,
     pub display_name: String,
     pub labels: Vec<String>,
     pub avatar_shape: String,
@@ -56,7 +56,7 @@ pub struct AgentProfileUpdate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingProfileInstructions {
-    pub profile_ref: String,
+    pub agent_id: String,
     pub revision: u64,
     pub instructions: String,
 }
@@ -90,7 +90,7 @@ impl AttentionEventType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttentionEvent {
     pub event_id: String,
-    pub profile_ref: String,
+    pub agent_id: String,
     pub display_name: String,
     pub event_type: AttentionEventType,
     pub created_at: i64,
@@ -101,7 +101,7 @@ pub struct AttentionEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientNotificationPreference {
-    pub profile_ref: String,
+    pub agent_id: String,
     pub human_input_needed: bool,
     pub task_completed: bool,
     pub terminal_failure: bool,
@@ -172,18 +172,9 @@ impl AgentProfileStore {
             "PRAGMA foreign_keys = ON;
              CREATE TABLE IF NOT EXISTS agent_identities (
                  agent_id TEXT PRIMARY KEY,
-                 current_routing_name TEXT NOT NULL UNIQUE,
                  created_at INTEGER NOT NULL,
                  updated_at INTEGER NOT NULL
              );
-             CREATE TABLE IF NOT EXISTS agent_routing_aliases (
-                 routing_name TEXT PRIMARY KEY,
-                 agent_id TEXT NOT NULL REFERENCES agent_identities(agent_id),
-                 is_current INTEGER NOT NULL CHECK (is_current IN (0, 1)),
-                 observed_at INTEGER NOT NULL
-             );
-             CREATE INDEX IF NOT EXISTS idx_agent_routing_aliases_agent
-                 ON agent_routing_aliases(agent_id, is_current DESC);
              CREATE TABLE IF NOT EXISTS agent_profiles (
                  agent_id TEXT PRIMARY KEY REFERENCES agent_identities(agent_id),
                  display_name TEXT NOT NULL,
@@ -243,6 +234,58 @@ impl AgentProfileStore {
         Ok(Self { conn })
     }
 
+    fn table_exists(&self, table: &str) -> Result<bool, AgentProfileError> {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |_| Ok(()),
+            )
+            .optional()
+            .map(|row| row.is_some())
+            .map_err(AgentProfileError::Sqlite)
+    }
+
+    fn has_legacy_identity_schema(&self) -> Result<bool, AgentProfileError> {
+        let mut statement = self
+            .conn
+            .prepare("PRAGMA table_info(agent_identities)")
+            .map_err(AgentProfileError::Sqlite)?;
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(AgentProfileError::Sqlite)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(AgentProfileError::Sqlite)?;
+        Ok(columns
+            .iter()
+            .any(|column| column == "current_routing_name"))
+    }
+
+    fn legacy_alias_table(&self, create: bool) -> Result<Option<&'static str>, AgentProfileError> {
+        if self.table_exists("agent_routing_aliases")? {
+            return Ok(Some("agent_routing_aliases"));
+        }
+        if create {
+            self.conn
+                .execute_batch(
+                    "CREATE TABLE IF NOT EXISTS identity_migration_aliases (
+                     routing_name TEXT PRIMARY KEY,
+                     agent_id TEXT NOT NULL REFERENCES agent_identities(agent_id),
+                     observed_at INTEGER NOT NULL
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_identity_migration_aliases_agent
+                     ON identity_migration_aliases(agent_id);",
+                )
+                .map_err(AgentProfileError::Sqlite)?;
+            return Ok(Some("identity_migration_aliases"));
+        }
+        if self.table_exists("identity_migration_aliases")? {
+            Ok(Some("identity_migration_aliases"))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn ensure_routing_names<I>(&mut self, names: I) -> Result<(), AgentProfileError>
     where
         I: IntoIterator,
@@ -258,6 +301,10 @@ impl AgentProfileStore {
         if names.is_empty() {
             return Ok(());
         }
+        let alias_table = self
+            .legacy_alias_table(true)?
+            .ok_or(AgentProfileError::Invalid("table de migration absente"))?;
+        let legacy_identity_schema = self.has_legacy_identity_schema()?;
         let transaction = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -265,7 +312,7 @@ impl AgentProfileStore {
         for routing_name in names {
             let existing = transaction
                 .query_row(
-                    "SELECT agent_id FROM agent_routing_aliases WHERE routing_name = ?1",
+                    &format!("SELECT agent_id FROM {alias_table} WHERE routing_name = ?1"),
                     [&routing_name],
                     |row| row.get::<_, String>(0),
                 )
@@ -277,20 +324,39 @@ impl AgentProfileStore {
             let agent_id = Uuid::new_v4().to_string();
             let display_name = available_display_name(&transaction, "Agent")?;
             let normalized = normalize_display_name(&display_name)?;
-            transaction
-                .execute(
-                    "INSERT INTO agent_identities(agent_id, current_routing_name, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?3)",
-                    params![agent_id, routing_name, now],
-                )
-                .map_err(AgentProfileError::Sqlite)?;
-            transaction
-                .execute(
-                    "INSERT INTO agent_routing_aliases(routing_name, agent_id, is_current, observed_at)
-                     VALUES (?1, ?2, 1, ?3)",
-                    params![routing_name, agent_id, now],
-                )
-                .map_err(AgentProfileError::Sqlite)?;
+            if legacy_identity_schema {
+                transaction
+                    .execute(
+                        "INSERT INTO agent_identities(agent_id, current_routing_name, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?3)",
+                        params![agent_id, routing_name, now],
+                    )
+                    .map_err(AgentProfileError::Sqlite)?;
+            } else {
+                transaction
+                    .execute(
+                        "INSERT INTO agent_identities(agent_id, created_at, updated_at) VALUES (?1, ?2, ?2)",
+                        params![agent_id, now],
+                    )
+                    .map_err(AgentProfileError::Sqlite)?;
+            }
+            if alias_table == "agent_routing_aliases" {
+                transaction
+                    .execute(
+                        "INSERT INTO agent_routing_aliases(routing_name, agent_id, is_current, observed_at)
+                         VALUES (?1, ?2, 1, ?3)",
+                        params![routing_name, agent_id, now],
+                    )
+                    .map_err(AgentProfileError::Sqlite)?;
+            } else {
+                transaction
+                    .execute(
+                        "INSERT INTO identity_migration_aliases(routing_name, agent_id, observed_at)
+                         VALUES (?1, ?2, ?3)",
+                        params![routing_name, agent_id, now],
+                    )
+                    .map_err(AgentProfileError::Sqlite)?;
+            }
             transaction
                 .execute(
                     "INSERT INTO agent_profiles(
@@ -310,6 +376,166 @@ impl AgentProfileStore {
                 .map_err(AgentProfileError::Sqlite)?;
         }
         transaction.commit().map_err(AgentProfileError::Sqlite)
+    }
+
+    /// Crée les profils des identifiants opaques déjà établis. Cette voie ne
+    /// crée aucun alias ni nom de routage lisible.
+    pub fn ensure_agent_ids<I>(&mut self, agent_ids: I) -> Result<(), AgentProfileError>
+    where
+        I: IntoIterator,
+        I::Item: AsRef<str>,
+    {
+        let now = now_secs();
+        let legacy_identity_schema = self.has_legacy_identity_schema()?;
+        let transaction = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(AgentProfileError::Sqlite)?;
+        for agent_id in agent_ids {
+            let agent_id = agent_id.as_ref().trim();
+            if agent_id.is_empty() {
+                continue;
+            }
+            let exists = transaction
+                .query_row(
+                    "SELECT 1 FROM agent_identities WHERE agent_id = ?1",
+                    [agent_id],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(AgentProfileError::Sqlite)?
+                .is_some();
+            if exists {
+                continue;
+            }
+            let display_name = available_display_name(&transaction, "Agent")?;
+            let normalized = normalize_display_name(&display_name)?;
+            if legacy_identity_schema {
+                transaction.execute(
+                    "INSERT INTO agent_identities(agent_id, current_routing_name, created_at, updated_at) VALUES (?1, ?1, ?2, ?2)",
+                    params![agent_id, now],
+                ).map_err(AgentProfileError::Sqlite)?;
+            } else {
+                transaction.execute(
+                    "INSERT INTO agent_identities(agent_id, created_at, updated_at) VALUES (?1, ?2, ?2)",
+                    params![agent_id, now],
+                ).map_err(AgentProfileError::Sqlite)?;
+            }
+            transaction.execute(
+                "INSERT INTO agent_profiles(agent_id, display_name, display_name_normalized, avatar_shape, avatar_color, instructions, instructions_revision, revision, updated_at) VALUES (?1, ?2, ?3, 'round', 'blue', '', 1, 1, ?4)",
+                params![agent_id, display_name, normalized, now],
+            ).map_err(AgentProfileError::Sqlite)?;
+            transaction.execute(
+                "INSERT INTO agent_profile_applications(agent_id, provider_spawn_id, instructions_revision, status, observed_at, diagnostic_code) VALUES (?1, NULL, 1, 'applied', ?2, NULL)",
+                params![agent_id, now],
+            ).map_err(AgentProfileError::Sqlite)?;
+        }
+        transaction.commit().map_err(AgentProfileError::Sqlite)
+    }
+
+    /// Lit la correspondance de migration, sans rien modifier. Les clés sont des
+    /// routes historiques et les valeurs les UUID déjà attribués aux profils.
+    pub fn legacy_routing_map(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, String>, AgentProfileError> {
+        let Some(alias_table) = self.legacy_alias_table(false)? else {
+            return Ok(std::collections::BTreeMap::new());
+        };
+        let mut statement = self
+            .conn
+            .prepare(&format!(
+                "SELECT routing_name, agent_id FROM {alias_table} ORDER BY routing_name"
+            ))
+            .map_err(AgentProfileError::Sqlite)?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(AgentProfileError::Sqlite)?
+            .collect::<Result<std::collections::BTreeMap<_, _>, _>>()
+            .map_err(AgentProfileError::Sqlite)
+    }
+
+    /// Supprime réellement le schéma transitoire de routage après que tous les
+    /// stores ont été réécrits. Les identités restantes ne contiennent plus
+    /// aucune colonne ni table permettant de retrouver un ancien nom.
+    pub fn retire_legacy_routing_aliases(&mut self) -> Result<(), AgentProfileError> {
+        let has_legacy_identities = self.has_legacy_identity_schema()?;
+        let has_historical_aliases = self.table_exists("agent_routing_aliases")?;
+        let has_temporary_aliases = self.table_exists("identity_migration_aliases")?;
+        if !has_legacy_identities && !has_historical_aliases && !has_temporary_aliases {
+            return Ok(());
+        }
+
+        // SQLite ne sait pas retirer une colonne couverte par une contrainte
+        // UNIQUE. On reconstruit donc exclusivement la table d'identités,
+        // sans jamais renommer l'ancienne table : les clés étrangères des
+        // tables de profils restent ainsi reliées au même nom final.
+        self.conn
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+             PRAGMA legacy_alter_table = ON;
+             BEGIN IMMEDIATE;
+             CREATE TABLE IF NOT EXISTS agent_identities_v2 (
+                 agent_id TEXT PRIMARY KEY,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             INSERT OR IGNORE INTO agent_identities_v2(agent_id, created_at, updated_at)
+                 SELECT agent_id, created_at, updated_at FROM agent_identities;",
+            )
+            .map_err(AgentProfileError::Sqlite)?;
+        if has_historical_aliases {
+            self.conn
+                .execute("DROP TABLE agent_routing_aliases", [])
+                .map_err(AgentProfileError::Sqlite)?;
+        }
+        if has_temporary_aliases {
+            self.conn
+                .execute("DROP TABLE identity_migration_aliases", [])
+                .map_err(AgentProfileError::Sqlite)?;
+        }
+        if has_legacy_identities {
+            self.conn
+                .execute("DROP TABLE agent_identities", [])
+                .map_err(AgentProfileError::Sqlite)?;
+            self.conn
+                .execute(
+                    "ALTER TABLE agent_identities_v2 RENAME TO agent_identities",
+                    [],
+                )
+                .map_err(AgentProfileError::Sqlite)?;
+        } else {
+            self.conn
+                .execute("DROP TABLE agent_identities_v2", [])
+                .map_err(AgentProfileError::Sqlite)?;
+        }
+        self.conn
+            .execute_batch("COMMIT; PRAGMA foreign_keys = ON; PRAGMA legacy_alter_table = OFF;")
+            .map_err(AgentProfileError::Sqlite)?;
+        let foreign_key_issue = self
+            .conn
+            .query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+            .optional()
+            .map_err(AgentProfileError::Sqlite)?;
+        if foreign_key_issue.is_some() {
+            return Err(AgentProfileError::Invalid(
+                "intégrité des profils après migration",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn profile_for_agent_id(
+        &self,
+        agent_id: &str,
+    ) -> Result<Option<AgentProfileSummary>, AgentProfileError> {
+        let row = self.conn.query_row(
+            "SELECT profile.agent_id, profile.display_name, profile.avatar_shape, profile.avatar_color, profile.revision, profile.instructions_revision, application.status, profile.updated_at FROM agent_profiles profile LEFT JOIN agent_profile_applications application ON application.agent_id = profile.agent_id WHERE profile.agent_id = ?1",
+            [agent_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, i64>(4)?, row.get::<_, i64>(5)?, row.get::<_, Option<String>>(6)?, row.get::<_, i64>(7)?)),
+        ).optional().map_err(AgentProfileError::Sqlite)?;
+        row.map(|row| self.summary_from_row(row)).transpose()
     }
 
     pub fn import_historical_routing_names(&mut self) -> Result<(), AgentProfileError> {
@@ -335,16 +561,19 @@ impl AgentProfileStore {
         &self,
         routing_name: &str,
     ) -> Result<Option<AgentProfileSummary>, AgentProfileError> {
+        let Some(alias_table) = self.legacy_alias_table(false)? else {
+            return Ok(None);
+        };
         let row = self
             .conn
             .query_row(
-                "SELECT identity.agent_id, profile.display_name, profile.avatar_shape, profile.avatar_color,
+                &format!("SELECT identity.agent_id, profile.display_name, profile.avatar_shape, profile.avatar_color,
                         profile.revision, profile.instructions_revision, application.status, profile.updated_at
-                 FROM agent_routing_aliases alias
+                 FROM {alias_table} alias
                  JOIN agent_identities identity ON identity.agent_id = alias.agent_id
                  JOIN agent_profiles profile ON profile.agent_id = identity.agent_id
                  LEFT JOIN agent_profile_applications application ON application.agent_id = identity.agent_id
-                 WHERE alias.routing_name = ?1",
+                 WHERE alias.routing_name = ?1"),
                 [routing_name],
                 |row| {
                     Ok((
@@ -364,10 +593,7 @@ impl AgentProfileStore {
         row.map(|row| self.summary_from_row(row)).transpose()
     }
 
-    pub fn profile_detail(
-        &self,
-        profile_ref: &str,
-    ) -> Result<AgentProfileDetail, AgentProfileError> {
+    pub fn profile_detail(&self, agent_id: &str) -> Result<AgentProfileDetail, AgentProfileError> {
         let row = self
             .conn
             .query_row(
@@ -377,7 +603,7 @@ impl AgentProfileStore {
                  FROM agent_profiles profile
                  LEFT JOIN agent_profile_applications application ON application.agent_id = profile.agent_id
                  WHERE profile.agent_id = ?1",
-                [profile_ref],
+                [agent_id],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?,
@@ -399,7 +625,7 @@ impl AgentProfileStore {
 
     pub fn update_profile(
         &mut self,
-        profile_ref: &str,
+        agent_id: &str,
         update: AgentProfileUpdate,
     ) -> Result<AgentProfileDetail, AgentProfileError> {
         let display_name = clean_display_name(&update.display_name)?;
@@ -419,7 +645,7 @@ impl AgentProfileStore {
             .query_row(
                 "SELECT display_name_normalized, revision, instructions_revision, instructions
                  FROM agent_profiles WHERE agent_id = ?1",
-                [profile_ref],
+                [agent_id],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -438,7 +664,7 @@ impl AgentProfileStore {
         let conflict = transaction
             .query_row(
                 "SELECT agent_id FROM agent_profiles WHERE display_name_normalized = ?1 AND agent_id != ?2",
-                params![normalized_display_name, profile_ref],
+                params![normalized_display_name, agent_id],
                 |row| row.get::<_, String>(0),
             )
             .optional()
@@ -460,7 +686,7 @@ impl AgentProfileStore {
                      revision = revision + 1, updated_at = ?8
                  WHERE agent_id = ?1",
                 params![
-                    profile_ref,
+                    agent_id,
                     display_name,
                     normalized_display_name,
                     update.avatar_shape,
@@ -474,7 +700,7 @@ impl AgentProfileStore {
         transaction
             .execute(
                 "DELETE FROM agent_profile_labels WHERE agent_id = ?1",
-                [profile_ref],
+                [agent_id],
             )
             .map_err(AgentProfileError::Sqlite)?;
         for (position, (label, normalized_label)) in labels.iter().enumerate() {
@@ -482,7 +708,7 @@ impl AgentProfileStore {
                 .execute(
                     "INSERT INTO agent_profile_labels(agent_id, position, label, normalized_label)
                      VALUES (?1, ?2, ?3, ?4)",
-                    params![profile_ref, position as i64, label, normalized_label],
+                    params![agent_id, position as i64, label, normalized_label],
                 )
                 .map_err(AgentProfileError::Sqlite)?;
         }
@@ -498,27 +724,66 @@ impl AgentProfileStore {
                      SET provider_spawn_id = NULL, instructions_revision = ?2,
                          status = ?3, observed_at = ?4, diagnostic_code = NULL
                      WHERE agent_id = ?1",
-                    params![profile_ref, instructions_revision, status, now],
+                    params![agent_id, instructions_revision, status, now],
                 )
                 .map_err(AgentProfileError::Sqlite)?;
         }
         transaction.commit().map_err(AgentProfileError::Sqlite)?;
-        self.profile_detail(profile_ref)
+        self.profile_detail(agent_id)
+    }
+
+    pub fn pending_instructions_for_agent_id(
+        &self,
+        agent_id: &str,
+    ) -> Result<Option<PendingProfileInstructions>, AgentProfileError> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT profile.agent_id, profile.instructions, profile.instructions_revision
+                 FROM agent_profiles profile
+                 JOIN agent_profile_applications application ON application.agent_id = profile.agent_id
+                 WHERE profile.agent_id = ?1
+                   AND application.status = 'pending_restart'",
+                [agent_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(AgentProfileError::Sqlite)?;
+        row.map(|(agent_id, instructions, revision)| {
+            Ok(PendingProfileInstructions {
+                agent_id,
+                revision: u64::try_from(revision)
+                    .map_err(|_| AgentProfileError::Invalid("révision instructions invalide"))?,
+                instructions,
+            })
+        })
+        .transpose()
     }
 
     pub fn pending_instructions_for_routing_name(
         &self,
         routing_name: &str,
     ) -> Result<Option<PendingProfileInstructions>, AgentProfileError> {
+        let Some(alias_table) = self.legacy_alias_table(false)? else {
+            return Ok(None);
+        };
         let row = self
             .conn
             .query_row(
-                "SELECT profile.agent_id, profile.instructions, profile.instructions_revision
-                 FROM agent_routing_aliases alias
+                &format!(
+                    "SELECT profile.agent_id, profile.instructions, profile.instructions_revision
+                 FROM {alias_table} alias
                  JOIN agent_profiles profile ON profile.agent_id = alias.agent_id
                  JOIN agent_profile_applications application ON application.agent_id = profile.agent_id
                  WHERE alias.routing_name = ?1
-                   AND application.status = 'pending_restart'",
+                   AND application.status = 'pending_restart'"
+                ),
                 [routing_name],
                 |row| {
                     Ok((
@@ -530,9 +795,9 @@ impl AgentProfileStore {
             )
             .optional()
             .map_err(AgentProfileError::Sqlite)?;
-        row.map(|(profile_ref, instructions, revision)| {
+        row.map(|(agent_id, instructions, revision)| {
             Ok(PendingProfileInstructions {
-                profile_ref,
+                agent_id,
                 revision: u64::try_from(revision)
                     .map_err(|_| AgentProfileError::Invalid("révision instructions invalide"))?,
                 instructions,
@@ -543,7 +808,7 @@ impl AgentProfileStore {
 
     pub fn mark_instruction_application(
         &mut self,
-        profile_ref: &str,
+        agent_id: &str,
         revision: u64,
         provider_spawn_id: &str,
         status: InstructionStatus,
@@ -557,7 +822,7 @@ impl AgentProfileStore {
                  SET provider_spawn_id = ?3, status = ?4, observed_at = ?5, diagnostic_code = ?6
                  WHERE agent_id = ?1 AND instructions_revision = ?2",
                 params![
-                    profile_ref,
+                    agent_id,
                     i64::try_from(revision).map_err(|_| AgentProfileError::Invalid(
                         "révision instructions invalide"
                     ))?,
@@ -572,6 +837,47 @@ impl AgentProfileStore {
             return Err(AgentProfileError::RevisionConflict);
         }
         Ok(())
+    }
+
+    pub fn record_attention_for_agent_id(
+        &mut self,
+        agent_id: &str,
+        event_type: AttentionEventType,
+        occurrence_key: &str,
+    ) -> Result<bool, AgentProfileError> {
+        let agent_id = agent_id.trim();
+        if Uuid::parse_str(agent_id).is_err()
+            || occurrence_key.is_empty()
+            || occurrence_key.len() > 240
+            || !occurrence_key.is_ascii()
+        {
+            return Err(AgentProfileError::Invalid("événement d'attention invalide"));
+        }
+        self.ensure_agent_ids([agent_id])?;
+        let now = now_secs();
+        let transaction = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(AgentProfileError::Sqlite)?;
+        let inserted = transaction
+            .execute(
+                "INSERT INTO attention_events(
+                     event_id, occurrence_key, agent_id, event_type, source_message_id, summary, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)
+                 ON CONFLICT(occurrence_key) DO NOTHING",
+                params![
+                    Uuid::new_v4().to_string(),
+                    occurrence_key,
+                    agent_id,
+                    event_type.as_str(),
+                    event_type.as_str(),
+                    now,
+                ],
+            )
+            .map_err(AgentProfileError::Sqlite)?
+            == 1;
+        transaction.commit().map_err(AgentProfileError::Sqlite)?;
+        Ok(inserted)
     }
 
     pub fn record_attention_for_routing_name(
@@ -589,6 +895,9 @@ impl AgentProfileStore {
             return Err(AgentProfileError::Invalid("événement d'attention invalide"));
         }
         self.ensure_routing_names([routing_name])?;
+        let alias_table = self
+            .legacy_alias_table(false)?
+            .ok_or(AgentProfileError::Invalid("table de migration absente"))?;
         let now = now_secs();
         let transaction = self
             .conn
@@ -596,7 +905,7 @@ impl AgentProfileStore {
             .map_err(AgentProfileError::Sqlite)?;
         let agent_id = transaction
             .query_row(
-                "SELECT agent_id FROM agent_routing_aliases WHERE routing_name = ?1",
+                &format!("SELECT agent_id FROM {alias_table} WHERE routing_name = ?1"),
                 [routing_name],
                 |row| row.get::<_, String>(0),
             )
@@ -689,7 +998,7 @@ impl AgentProfileStore {
                     };
                     Ok(AttentionEvent {
                         event_id: row.get(0)?,
-                        profile_ref: row.get(1)?,
+                        agent_id: row.get(1)?,
                         display_name: row.get(2)?,
                         event_type,
                         created_at: row.get(4)?,
@@ -725,7 +1034,7 @@ impl AgentProfileStore {
         statement
             .query_map([client_id], |row| {
                 Ok(ClientNotificationPreference {
-                    profile_ref: row.get(0)?,
+                    agent_id: row.get(0)?,
                     human_input_needed: row.get::<_, Option<i64>>(1)?.unwrap_or(0) != 0,
                     task_completed: row.get::<_, Option<i64>>(2)?.unwrap_or(0) != 0,
                     terminal_failure: row.get::<_, Option<i64>>(3)?.unwrap_or(0) != 0,
@@ -742,10 +1051,10 @@ impl AgentProfileStore {
         preferences: &[ClientNotificationPreference],
     ) -> Result<Vec<ClientNotificationPreference>, AgentProfileError> {
         validate_client_id(client_id)?;
-        let mut profile_refs = HashSet::new();
+        let mut agent_ids = HashSet::new();
         if preferences
             .iter()
-            .any(|preference| !profile_refs.insert(preference.profile_ref.as_str()))
+            .any(|preference| !agent_ids.insert(preference.agent_id.as_str()))
         {
             return Err(AgentProfileError::Invalid("préférences dupliquées"));
         }
@@ -758,7 +1067,7 @@ impl AgentProfileStore {
             let exists = transaction
                 .query_row(
                     "SELECT 1 FROM agent_profiles WHERE agent_id = ?1",
-                    [&preference.profile_ref],
+                    [&preference.agent_id],
                     |_| Ok(()),
                 )
                 .optional()
@@ -782,7 +1091,7 @@ impl AgentProfileStore {
                      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         client_id,
-                        preference.profile_ref,
+                        preference.agent_id,
                         preference.human_input_needed as i64,
                         preference.task_completed as i64,
                         preference.terminal_failure as i64,
@@ -859,7 +1168,7 @@ impl AgentProfileStore {
     ) -> Result<AgentProfileSummary, AgentProfileError> {
         let labels = self.labels_for_profile(&row.0)?;
         Ok(AgentProfileSummary {
-            profile_ref: row.0,
+            agent_id: row.0,
             display_name: row.1,
             avatar_shape: row.2,
             avatar_color: row.3,
@@ -875,7 +1184,7 @@ impl AgentProfileStore {
         })
     }
 
-    fn labels_for_profile(&self, profile_ref: &str) -> Result<Vec<String>, AgentProfileError> {
+    fn labels_for_profile(&self, agent_id: &str) -> Result<Vec<String>, AgentProfileError> {
         let mut statement = self
             .conn
             .prepare(
@@ -883,7 +1192,7 @@ impl AgentProfileStore {
             )
             .map_err(AgentProfileError::Sqlite)?;
         statement
-            .query_map([profile_ref], |row| row.get::<_, String>(0))
+            .query_map([agent_id], |row| row.get::<_, String>(0))
             .map_err(AgentProfileError::Sqlite)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(AgentProfileError::Sqlite)
@@ -986,6 +1295,19 @@ mod tests {
     }
 
     #[test]
+    fn migration_expose_la_table_puis_purge_les_alias_legacy() {
+        let (mut store, path) = store();
+        store.ensure_routing_names(["ancien-agent"]).unwrap();
+        let mapping = store.legacy_routing_map().unwrap();
+        let agent_id = mapping.get("ancien-agent").unwrap().clone();
+        assert!(Uuid::parse_str(&agent_id).is_ok());
+        store.retire_legacy_routing_aliases().unwrap();
+        assert!(store.legacy_routing_map().unwrap().is_empty());
+        assert!(store.profile_for_agent_id(&agent_id).unwrap().is_some());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn import_is_idempotent_and_keeps_routing_out_of_profile() {
         let (mut store, path) = store();
         store
@@ -1008,7 +1330,7 @@ mod tests {
         let profile = store.profile_for_routing_name("alpha").unwrap().unwrap();
         let saved = store
             .update_profile(
-                &profile.profile_ref,
+                &profile.agent_id,
                 AgentProfileUpdate {
                     expected_revision: profile.revision,
                     display_name: "Alpha".to_string(),
@@ -1034,7 +1356,7 @@ mod tests {
         assert_eq!(pending.instructions, "Réponds en français.");
         store
             .mark_instruction_application(
-                &pending.profile_ref,
+                &pending.agent_id,
                 pending.revision,
                 "spawn-1",
                 InstructionStatus::Applied,
@@ -1043,7 +1365,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             store
-                .profile_detail(&pending.profile_ref)
+                .profile_detail(&pending.agent_id)
                 .unwrap()
                 .summary
                 .instruction_status,
@@ -1051,7 +1373,7 @@ mod tests {
         );
         assert!(matches!(
             store.update_profile(
-                &profile.profile_ref,
+                &profile.agent_id,
                 AgentProfileUpdate {
                     expected_revision: profile.revision,
                     display_name: "Alpha".to_string(),
@@ -1095,7 +1417,7 @@ mod tests {
             .replace_preferences_for_client(
                 &client_a,
                 &[ClientNotificationPreference {
-                    profile_ref: profile.profile_ref.clone(),
+                    agent_id: profile.agent_id.clone(),
                     human_input_needed: true,
                     task_completed: false,
                     terminal_failure: true,

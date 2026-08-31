@@ -84,10 +84,11 @@ impl Peer {
         self.register_with_name(Some(name.to_string()));
     }
 
-    fn register_with_name(&mut self, name: Option<String>) {
+    fn register_with_name(&mut self, agent_id: Option<String>) {
         self.send(&WrapperToDaemon::Register {
             agent_type: "capability-test".to_string(),
-            name,
+            identity_version: 2,
+            agent_id: agent_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             host: None,
             transport: None,
             channel: None.into(),
@@ -181,7 +182,7 @@ fn spawn_order(command_id: &str) -> WrapperToDaemon {
     WrapperToDaemon::SpawnOrder {
         agent_type: "fixture".to_string(),
         project: None,
-        name: Some("capability-fixture".to_string()),
+        agent_id: Some("capability-fixture".to_string()),
         cwd: "/tmp".to_string(),
         persistent: false,
         command_id: command_id.to_string(),

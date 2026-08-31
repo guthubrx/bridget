@@ -96,7 +96,7 @@ done
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                name: "claude-native-1".to_string(),
+                agent_id: "claude-native-1".to_string(),
             })
             .unwrap()
         )
@@ -244,7 +244,7 @@ while IFS= read -r line; do :; done
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                name: "claude-manage-1".to_string(),
+                agent_id: "claude-manage-1".to_string(),
             })
             .unwrap()
         )
@@ -308,7 +308,7 @@ while IFS= read -r line; do :; done
     match register_rx.recv_timeout(Duration::from_secs(2)).unwrap() {
         WrapperToDaemon::Register {
             agent_type,
-            name,
+            agent_id,
             transport,
             channel,
             mode,
@@ -317,7 +317,7 @@ while IFS= read -r line; do :; done
             ..
         } => {
             assert_eq!(agent_type, "claude");
-            assert_eq!(name.as_deref(), Some("claude-manage-1"));
+            assert_eq!(agent_id, "claude-manage-1".to_string());
             assert_eq!(transport.as_deref(), Some("claude_stream_json"));
             assert!(
                 channel
@@ -404,7 +404,7 @@ while :; do :; done
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                name: "fixture-ignore-cancel-1".to_string(),
+                agent_id: "fixture-ignore-cancel-1".to_string(),
             })
             .unwrap()
         )
@@ -572,7 +572,7 @@ while IFS= read -r line; do :; done
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                name: "claude-silencieux-1".to_string(),
+                agent_id: "claude-silencieux-1".to_string(),
             })
             .unwrap()
         )

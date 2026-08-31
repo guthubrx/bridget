@@ -102,13 +102,13 @@ fn query_agent_list(socket: &Path) -> Option<Vec<AgentInfo>> {
 fn agent_state(socket: &Path, name: &str) -> Option<String> {
     query_agent_list(socket)?
         .into_iter()
-        .find(|agent| agent.name == name)
+        .find(|agent| agent.agent_id == name)
         .map(|agent| agent.state)
 }
 
 fn agent_ready_for_send(socket: &Path, name: &str) -> bool {
     query_agent_list(socket).into_iter().flatten().any(|agent| {
-        agent.name == name && agent.state == "connected" && !agent.connection_id.is_empty()
+        agent.agent_id == name && agent.state == "connected" && !agent.connection_id.is_empty()
     })
 }
 
@@ -254,7 +254,8 @@ fn connect_sender(socket: &Path) -> (BufWriter<UnixStream>, BufReader<UnixStream
         &mut writer,
         &WrapperToDaemon::Register {
             agent_type: "fixture".to_string(),
-            name: Some("bench-sender".to_string()),
+            identity_version: 2,
+            agent_id: "bench-sender".to_string(),
             host: Some("test-host".to_string()),
             transport: Some("unix".to_string()),
             channel: None.into(),
@@ -268,7 +269,7 @@ fn connect_sender(socket: &Path) -> (BufWriter<UnixStream>, BufReader<UnixStream
         },
     );
     match read_message(&mut reader) {
-        DaemonToWrapper::Registered { name } if name == "bench-sender" => {}
+        DaemonToWrapper::Registered { agent_id: name } if name == "bench-sender" => {}
         other => panic!("Register bench-sender inattendu: {other:?}"),
     }
     (writer, reader)

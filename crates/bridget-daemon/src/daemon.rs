@@ -2318,7 +2318,7 @@ fn drain_managed_events(
                                 &requester,
                                 DaemonToWrapper::SpawnAccepted {
                                     command_id: lease.command_id.clone(),
-                                    name: lease.name.clone(),
+                                    agent_id: lease.name.clone(),
                                     definition: Some((*definition).clone()),
                                 },
                                 &mut controls,
@@ -2332,7 +2332,7 @@ fn drain_managed_events(
                             DaemonToWrapper::RelaunchResult {
                                 command_id: lease.command_id.clone(),
                                 outcome: RelaunchOutcome::Started {
-                                    name: lease.name.clone(),
+                                    agent_id: lease.name.clone(),
                                     generation: lease.generation,
                                 },
                             },
@@ -3167,6 +3167,13 @@ impl DaemonState {
                 continuation_mode: summary.continuation_mode.clone(),
             })
         };
+        let display_name = |agent_id: &str| {
+            self.store
+                .agent_display_name(agent_id)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "Agent non identifié".to_string())
+        };
         let agent_link_projection =
             |instance_id: &str| match self.fleet.agent_link_summary_for_child(instance_id) {
                 Ok(Some(summary)) => Some(bridget_transport::protocol::AgentLinkUiProjection {
@@ -3199,7 +3206,8 @@ impl DaemonState {
                 // Jamais inventer connected/unix : sans présence attestée, hors
                 // annuaire public (connexions MCP éphémères sans instance_id).
                 Some(bridget_transport::protocol::AgentInfo {
-                    name: agent.name.clone(),
+                    agent_id: agent.agent_id.clone(),
+                    display_name: display_name(&agent.agent_id),
                     agent_type: agent.agent_type.to_string(),
                     connection_id: agent.connection_id.clone(),
                     host: presence.host.clone(),
@@ -3207,7 +3215,7 @@ impl DaemonState {
                     channel: presence.channel.clone(),
                     mode: presence.mode,
                     location: presence.location.clone(),
-                    execution: execution_projection(&agent.name),
+                    execution: execution_projection(&agent.agent_id),
                     os: presence.os.clone(),
                     // Un agent qui refuse d'être dérangé est connecté mais non
                     agent_link: agent_link_projection(instance_id),
@@ -3234,13 +3242,13 @@ impl DaemonState {
                         presence.served_model.as_deref(),
                     ),
                     disk_space: presence.disk_space.clone(),
-                    persistent: persistence.get(&agent.name).copied(),
+                    persistent: persistence.get(&agent.agent_id).copied(),
                     provider: self.provider_ui_projection(&presence.agent_type),
                 })
             })
             .collect();
         let live_names: std::collections::HashSet<String> =
-            agents.iter().map(|agent| agent.name.clone()).collect();
+            agents.iter().map(|agent| agent.agent_id.clone()).collect();
         for record in self.managed_spawns.values().filter(|record| {
             (self.recovery_commands.contains(&record.lease.command_id)
                 || self
@@ -3268,7 +3276,8 @@ impl DaemonState {
                 "relaunching"
             };
             agents.push(bridget_transport::protocol::AgentInfo {
-                name: record.lease.name.clone(),
+                agent_id: record.lease.name.clone(),
+                display_name: display_name(&record.lease.name),
                 agent_type: record.agent_type.clone(),
                 connection_id: String::new(),
                 host: "local".to_string(),
@@ -3293,13 +3302,14 @@ impl DaemonState {
             });
         }
         let listed_names: std::collections::HashSet<String> =
-            agents.iter().map(|agent| agent.name.clone()).collect();
+            agents.iter().map(|agent| agent.agent_id.clone()).collect();
         for (instance_id, presence) in self.presences.iter().filter(|(_, presence)| {
             matches!(presence.state.as_str(), "stopped" | "unreachable")
                 && !listed_names.contains(&presence.name)
         }) {
             agents.push(bridget_transport::protocol::AgentInfo {
-                name: presence.name.clone(),
+                agent_id: presence.name.clone(),
+                display_name: display_name(&presence.name),
                 agent_type: presence.agent_type.clone(),
                 connection_id: String::new(),
                 host: presence.host.clone(),
@@ -3327,7 +3337,8 @@ impl DaemonState {
                 provider: self.provider_ui_projection(&presence.agent_type),
             });
         }
-        let listed_names: HashSet<String> = agents.iter().map(|agent| agent.name.clone()).collect();
+        let listed_names: HashSet<String> =
+            agents.iter().map(|agent| agent.agent_id.clone()).collect();
         if let Ok(desired) = self.fleet.desired_fleet() {
             for (name, entry) in desired.equipiers.into_iter().filter(|(name, entry)| {
                 entry.lifecycle_state == DesiredLifecycleState::Stopped
@@ -3345,7 +3356,8 @@ impl DaemonState {
                     .map(definition_presence_fields)
                     .unwrap_or_else(|| ("unknown".to_string(), None));
                 agents.push(bridget_transport::protocol::AgentInfo {
-                    name: name.clone(),
+                    agent_id: name.clone(),
+                    display_name: display_name(&name),
                     agent_type: entry.agent_type.clone(),
                     connection_id: String::new(),
                     host: self.host.clone(),
@@ -3370,7 +3382,11 @@ impl DaemonState {
                 });
             }
         }
-        agents.sort_by(|left, right| left.name.cmp(&right.name));
+        agents.sort_by(|left, right| {
+            left.display_name
+                .cmp(&right.display_name)
+                .then_with(|| left.agent_id.cmp(&right.agent_id))
+        });
         agents
     }
 
@@ -3693,6 +3709,9 @@ fn defer_idempotent_delivery(
 ) -> Result<(), String> {
     let mut message: bridget_core::BridgetMessage = serde_json::from_slice(&delivery.message_bytes)
         .map_err(|error| format!("enveloppe de remise idempotente corrompue: {error}"))?;
+    // Le journal et l'idempotence conservent l'Agent ID. Le seul nom destiné
+    // au fournisseur est une projection de présentation ajoutée à la remise.
+    message.from_display_name = state.store.agent_display_name(&message.from).ok().flatten();
     // Même autorité que Deliver classique : relire à la poussée. Les octets
     // persistés (souvent sans deadline pour reply=false) ne doivent pas
     // condamner le tour au notify figé du fleet (600 s mesuré sur relec6).
@@ -4595,7 +4614,7 @@ fn handle_connection(
     }
 
     if let Some(agent) = removed {
-        info!("agent '{}' déconnecté ({})", agent.name, conn_id);
+        info!("agent '{}' déconnecté ({})", agent.agent_id, conn_id);
     } else {
         info!("connexion {} fermée (non enregistrée)", conn_id);
     }
@@ -5473,7 +5492,7 @@ fn non_empty_registration_value(value: Option<String>) -> Option<String> {
 fn managed_definition_for_register(
     state: &DaemonState,
     instance_id: &str,
-    name: &str,
+    agent_id: &str,
 ) -> Option<ResolvedAgentDefinition> {
     state
         .managed_by_instance
@@ -5481,7 +5500,7 @@ fn managed_definition_for_register(
         .and_then(|command_id| state.fleet.resolved_definition_for_command(command_id))
         .or_else(|| {
             state.managed_spawns.values().find_map(|record| {
-                (record.lease.name == name)
+                (record.lease.name == agent_id)
                     .then(|| {
                         state
                             .fleet
@@ -5492,11 +5511,19 @@ fn managed_definition_for_register(
         })
 }
 
+fn ensure_agent_profile_for_registration(state: &DaemonState, agent_id: &str) {
+    let Ok(mut profiles) = crate::agent_profile::AgentProfileStore::open(&state.db_path) else {
+        return;
+    };
+    let _ = profiles.ensure_agent_ids([agent_id]);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_register_with_channel(
     conn_id: &str,
+    identity_version: u8,
     agent_type: String,
-    name: Option<String>,
+    agent_id: String,
     host: Option<String>,
     transport: Option<String>,
     channel: ChannelReport,
@@ -5510,15 +5537,23 @@ fn handle_register_with_channel(
     state: &mut DaemonState,
 ) -> DaemonToWrapper {
     log::debug!(
-        "Register reçu de {}: type={}, name={:?}, host={:?}",
+        "Register reçu de {}: version_identité={}, type={}, agent_id={}, host={:?}",
         conn_id,
+        identity_version,
         agent_type,
-        name,
+        agent_id,
         host
     );
 
+    if identity_version != 2 {
+        return DaemonToWrapper::Nack {
+            id: "register".to_string(),
+            reason: "contrat d’identité v2 requis".to_string(),
+        };
+    }
+
     let auxiliary_mcp = agent_type == "mcp";
-    let requested_name = name.clone();
+    let requested_agent_id = agent_id.clone();
     let parsed_type = agent_type
         .parse()
         .unwrap_or(bridget_core::AgentType::Custom(agent_type));
@@ -5526,37 +5561,32 @@ fn handle_register_with_channel(
     // Un MCP auxiliaire partage parfois identite et instance avec le wrapper
     // vivant. Il ne doit donc jamais tenter de reprendre la route canonique.
     if auxiliary_mcp
-        && let (Some(requested), Some(instance_id)) = (name.as_deref(), instance_id.as_deref())
+        && let Some(instance_id) = instance_id.as_deref()
         && state.presences.get(instance_id).is_some_and(|presence| {
-            presence.name == requested && matches!(presence.state.as_str(), "connected" | "busy")
+            presence.name == agent_id && matches!(presence.state.as_str(), "connected" | "busy")
         })
     {
         state
             .conn_names
-            .insert(conn_id.to_string(), requested.to_string());
+            .insert(conn_id.to_string(), agent_id.clone());
         state
             .conn_instances
             .insert(conn_id.to_string(), instance_id.to_string());
         state.auxiliary_connections.insert(conn_id.to_string());
         return DaemonToWrapper::Registered {
-            name: requested.to_string(),
+            agent_id: agent_id.clone(),
         };
     }
-    // Takeover sans stop : si le nom est tenu par un fantôme (routeur sans
-    // présence live), on libère avant d'enregistrer — c'est ce qui forçait
-    // trois interventions manuelles « stop puis spawn » la nuit du constat.
-    if let Some(requested) = name.as_deref() {
-        let _ = state.reclaim_phantom_name(requested);
-    }
+    // Takeover sans stop : une route UUID fantôme est libérée avant la réinscription.
+    let _ = state.reclaim_phantom_name(&agent_id);
 
-    match state
-        .router
-        .register(name.as_deref(), &parsed_type, conn_id)
-    {
-        Ok(final_name) => {
+    match state.router.register(&agent_id, &parsed_type, conn_id) {
+        Ok(()) => {
+            let final_agent_id = agent_id.clone();
+            ensure_agent_profile_for_registration(state, &final_agent_id);
             state
                 .conn_names
-                .insert(conn_id.to_string(), final_name.clone());
+                .insert(conn_id.to_string(), final_agent_id.clone());
             state.conn_hosts.insert(
                 conn_id.to_string(),
                 // Sentinelle PARTAGEE : ce champ est relu par les gardes de
@@ -5588,7 +5618,7 @@ fn handle_register_with_channel(
                         .get(&instance_id)
                         .filter(|presence| {
                             auxiliary_mcp
-                                && requested_name.as_deref() == Some(presence.name.as_str())
+                                && Some(requested_agent_id.as_str()) == Some(presence.name.as_str())
                         })
                         .map(|presence| presence.name.clone());
                     if let Some(canonical_name) = canonical_mcp_name {
@@ -5605,13 +5635,13 @@ fn handle_register_with_channel(
                             .insert(conn_id.to_string(), instance_id.clone());
                         state.auxiliary_connections.insert(conn_id.to_string());
                         return DaemonToWrapper::Registered {
-                            name: canonical_name,
+                            agent_id: canonical_name,
                         };
                     }
                     let same_equipier = state
                         .presences
                         .get(&instance_id)
-                        .is_some_and(|presence| presence.name == final_name);
+                        .is_some_and(|presence| presence.name == final_agent_id);
                     if !same_equipier {
                         // Une connexion auxiliaire issue de la filiation MCP peut
                         // revendiquer la même instance que le wrapper. Elle garde
@@ -5622,8 +5652,10 @@ fn handle_register_with_channel(
                             "présence {} conservée : connexion auxiliaire {} ignorée",
                             instance_id, conn_id
                         );
-                        state.restore_pending_for_agent(&final_name, conn_id);
-                        return DaemonToWrapper::Registered { name: final_name };
+                        state.restore_pending_for_agent(&final_agent_id, conn_id);
+                        return DaemonToWrapper::Registered {
+                            agent_id: final_agent_id,
+                        };
                     }
                     // Réconnexion du même équipier avant l'EOF de l'ancienne
                     // connexion : voler l'instance pour que mark_unreachable
@@ -5644,7 +5676,7 @@ fn handle_register_with_channel(
                     state
                         .presences
                         .iter()
-                        .find(|(_, presence)| presence.name == final_name)
+                        .find(|(_, presence)| presence.name == final_agent_id)
                         .map(|(key, _)| key.clone())
                 };
                 let previous = previous_instance_key
@@ -5657,7 +5689,7 @@ fn handle_register_with_channel(
                     })
                     .unwrap_or(0);
                 let managed_definition =
-                    managed_definition_for_register(state, &instance_id, &final_name);
+                    managed_definition_for_register(state, &instance_id, &final_agent_id);
                 let managed_runtime = managed_definition
                     .as_ref()
                     .and_then(definition_runtime)
@@ -5773,7 +5805,7 @@ fn handle_register_with_channel(
                 if state.managed_by_instance.contains_key(&instance_id) {
                     let _ = state
                         .fleet
-                        .set_desired_domain(&final_name, derived_domain.as_deref());
+                        .set_desired_domain(&final_agent_id, derived_domain.as_deref());
                 }
                 // Les wrappers récents réinitialisent explicitement ce fait à
                 // `false` puis annoncent `JournalReady`. Les binaires
@@ -5815,7 +5847,7 @@ fn handle_register_with_channel(
                 state.presences.insert(
                     instance_id.clone(),
                     Presence {
-                        name: final_name.clone(),
+                        name: final_agent_id.clone(),
                         agent_type,
                         host,
                         transport,
@@ -5853,14 +5885,16 @@ fn handle_register_with_channel(
                     state,
                     conn_id,
                     &instance_id,
-                    &final_name,
+                    &final_agent_id,
                     turn_in_progress,
                 );
             }
 
-            state.restore_pending_for_agent(&final_name, conn_id);
-            info!("agent '{}' enregistré ({})", final_name, conn_id);
-            DaemonToWrapper::Registered { name: final_name }
+            state.restore_pending_for_agent(&final_agent_id, conn_id);
+            info!("agent '{}' enregistré ({})", final_agent_id, conn_id);
+            DaemonToWrapper::Registered {
+                agent_id: final_agent_id,
+            }
         }
         Err(e) => {
             log::warn!("enregistrement refusé pour {}: {}", conn_id, e);
@@ -5878,7 +5912,7 @@ fn handle_register_with_channel(
 fn handle_register(
     conn_id: &str,
     agent_type: String,
-    name: Option<String>,
+    agent_id: Option<String>,
     host: Option<String>,
     transport: Option<String>,
     mode: Option<PresenceMode>,
@@ -5892,8 +5926,9 @@ fn handle_register(
 ) -> DaemonToWrapper {
     handle_register_with_channel(
         conn_id,
+        2,
         agent_type,
-        name,
+        agent_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
         host,
         transport,
         ChannelReport::Omitted,
@@ -5906,6 +5941,25 @@ fn handle_register(
         journal_available,
         state,
     )
+}
+
+#[cfg(test)]
+trait LegacyRouterTestRename {
+    fn rename(&mut self, connection_id: &str, _legacy_name: &str) -> Result<(), String>;
+}
+
+#[cfg(test)]
+impl LegacyRouterTestRename for Router {
+    fn rename(&mut self, connection_id: &str, _legacy_name: &str) -> Result<(), String> {
+        self.unregister_by_conn(connection_id);
+        self.register(
+            &Uuid::new_v4().to_string(),
+            &bridget_core::AgentType::Codex,
+            connection_id,
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
 }
 
 /// Longueur maximale acceptée pour un identifiant de modèle ou un niveau
@@ -7958,7 +8012,6 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::DiskSpace { .. }
                 | WrapperToDaemon::JournalReady
                 | WrapperToDaemon::Unregister
-                | WrapperToDaemon::Rename { .. }
                 | WrapperToDaemon::Send { .. }
                 | WrapperToDaemon::DeliveryRejected { .. }
                 | WrapperToDaemon::TurnState { .. }
@@ -8115,7 +8168,6 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::DiskSpace { .. }
                 | WrapperToDaemon::JournalReady
                 | WrapperToDaemon::Unregister
-                | WrapperToDaemon::Rename { .. }
                 | WrapperToDaemon::Send { .. }
                 | WrapperToDaemon::DeliveryRejected { .. }
                 | WrapperToDaemon::TurnState { .. }
@@ -10348,7 +10400,7 @@ fn handle_wrapper_message(
         WrapperToDaemon::SpawnOrder {
             agent_type,
             project,
-            name,
+            agent_id,
             cwd,
             persistent,
             command_id,
@@ -10359,7 +10411,7 @@ fn handle_wrapper_message(
             let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
             let order = FleetSpawnOrder {
                 agent_type,
-                requested_name: name,
+                requested_name: agent_id,
                 cwd: PathBuf::from(cwd),
                 persistent,
                 project,
@@ -10601,7 +10653,7 @@ fn handle_wrapper_message(
                             exec_id: Uuid::new_v4().to_string(),
                             execution,
                             agent_type: prepared.agent_type.clone(),
-                            agent_name: prepared.lease.name.clone(),
+                            agent_id: prepared.lease.name.clone(),
                             instance_id: prepared.lease.instance_id.clone(),
                             agent_generation: prepared.lease.generation,
                             cwd: prepared.cwd.clone(),
@@ -10691,7 +10743,7 @@ fn handle_wrapper_message(
                 Ok(SpawnDecision::Accepted { name, definition }) => {
                     Some(DaemonToWrapper::SpawnAccepted {
                         command_id,
-                        name,
+                        agent_id: name,
                         definition,
                     })
                 }
@@ -10711,7 +10763,10 @@ fn handle_wrapper_message(
                 }),
             }
         }
-        WrapperToDaemon::StopOrder { name, command_id } => {
+        WrapperToDaemon::StopOrder {
+            agent_id: name,
+            command_id,
+        } => {
             info!("cycle_vie action=stop phase=request name={name} command_id={command_id}");
             let outcome = await_managed_stop(prepare_managed_stop(state, &name), &name);
             info!(
@@ -10722,7 +10777,10 @@ fn handle_wrapper_message(
                 outcome,
             })
         }
-        WrapperToDaemon::RelaunchOrder { name, command_id } => {
+        WrapperToDaemon::RelaunchOrder {
+            agent_id: name,
+            command_id,
+        } => {
             info!("cycle_vie action=relaunch phase=request name={name} command_id={command_id}");
             let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
             if st.decommissioning_names.contains(&name) {
@@ -10764,7 +10822,7 @@ fn handle_wrapper_message(
                         command_id: command_id.clone(),
                         outcome: if entry.command_id == command_id {
                             RelaunchOutcome::Started {
-                                name,
+                                agent_id: name,
                                 generation: entry.generation,
                             }
                         } else {
@@ -10905,7 +10963,10 @@ fn handle_wrapper_message(
                         .unwrap_or_default();
                     Some(DaemonToWrapper::RelaunchResult {
                         command_id,
-                        outcome: RelaunchOutcome::Started { name, generation },
+                        outcome: RelaunchOutcome::Started {
+                            agent_id: name,
+                            generation,
+                        },
                     })
                 }
                 Ok(SpawnDecision::Rejected(reason)) => Some(DaemonToWrapper::RelaunchResult {
@@ -10928,7 +10989,10 @@ fn handle_wrapper_message(
                 }),
             }
         }
-        WrapperToDaemon::DecommissionOrder { name, command_id } => {
+        WrapperToDaemon::DecommissionOrder {
+            agent_id: name,
+            command_id,
+        } => {
             info!(
                 "cycle_vie action=decommission phase=request name={name} command_id={command_id}"
             );
@@ -11034,7 +11098,10 @@ fn handle_wrapper_message(
                 outcome,
             })
         }
-        WrapperToDaemon::AdoptStoppedOrder { name, command_id } => {
+        WrapperToDaemon::AdoptStoppedOrder {
+            agent_id: name,
+            command_id,
+        } => {
             info!(
                 "cycle_vie action=adopt_stopped phase=request name={name} command_id={command_id}"
             );
@@ -11042,7 +11109,7 @@ fn handle_wrapper_message(
             let visible = st
                 .agent_infos()
                 .into_iter()
-                .find(|agent| agent.name == name);
+                .find(|agent| agent.agent_id == name);
             let outcome = match visible {
                 Some(agent) if agent.persistent.is_some() => AdoptStoppedOutcome::AlreadyManaged,
                 Some(agent) if agent.state != "stopped" => AdoptStoppedOutcome::NotStopped,
@@ -11425,8 +11492,9 @@ fn handle_wrapper_message(
             None
         }
         WrapperToDaemon::Register {
+            identity_version,
             agent_type,
-            name,
+            agent_id,
             host,
             transport,
             channel,
@@ -11451,8 +11519,9 @@ fn handle_wrapper_message(
             let managed_instance = instance_id.clone();
             let response = handle_register_with_channel(
                 conn_id,
+                identity_version,
                 agent_type,
-                name,
+                agent_id,
                 host,
                 transport,
                 channel,
@@ -11465,8 +11534,12 @@ fn handle_wrapper_message(
                 journal_available,
                 &mut st,
             );
-            if let (Some(instance_id), DaemonToWrapper::Registered { name: final_name }) =
-                (managed_instance, &response)
+            if let (
+                Some(instance_id),
+                DaemonToWrapper::Registered {
+                    agent_id: final_agent_id,
+                },
+            ) = (managed_instance, &response)
                 && let Some(command_id) = st.managed_by_instance.get(&instance_id).cloned()
                 && let Some(record) = st.managed_spawns.get_mut(&command_id)
             {
@@ -11474,7 +11547,7 @@ fn handle_wrapper_message(
                 let _ = st.managed_tx.send(ManagedSupervisorCommand::Registered {
                     instance_id,
                     conn_id: conn_id.to_string(),
-                    name: final_name.clone(),
+                    name: final_agent_id.clone(),
                 });
             }
             Some(response)
@@ -11537,33 +11610,6 @@ fn handle_wrapper_message(
                 view.close_and_join();
             }
             None
-        }
-
-        WrapperToDaemon::Rename { current_name, name } => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            let target_conn = match st.router.get_agent(&current_name) {
-                Some(agent) => agent.connection_id.clone(),
-                None => {
-                    return Some(DaemonToWrapper::Nack {
-                        id: "rename".to_string(),
-                        reason: format!("agent introuvable: {}", current_name),
-                    });
-                }
-            };
-            match st.router.rename(&target_conn, &name) {
-                Ok((old_name, new_name)) => {
-                    st.conn_names.insert(target_conn, new_name.clone());
-                    info!("agent '{}' renommé en '{}'", old_name, new_name);
-                    Some(DaemonToWrapper::Renamed {
-                        old_name,
-                        name: new_name,
-                    })
-                }
-                Err(error) => Some(DaemonToWrapper::Nack {
-                    id: "rename".to_string(),
-                    reason: error.to_string(),
-                }),
-            }
         }
 
         WrapperToDaemon::Send(mut bridge_msg) => {
@@ -11756,6 +11802,11 @@ fn handle_wrapper_message(
             // reply=yes) : relire la valeur courante et la pousser en absolu.
             // Sans cela, worker.notify_timeout figé au spawn ignore agents.json.
             let mut delivered_message = bridge_msg.clone();
+            // Ne jamais remplacer l'Agent ID dans le message routé : le
+            // wrapper a encore besoin de `from` pour reply. Le display name
+            // est une projection d'injection sans sémantique de routage.
+            delivered_message.from_display_name =
+                st.store.agent_display_name(&bridge_msg.from).ok().flatten();
             let agent_type = st
                 .conn_instances
                 .get(&target_conn)
@@ -12188,7 +12239,8 @@ pub fn get_status(config: &DaemonConfig) -> Result<DaemonStatus, String> {
     // Register
     let reg = WrapperToDaemon::Register {
         agent_type: "status-probe".to_string(),
-        name: Some(format!("status-{}", std::process::id())),
+        identity_version: 2,
+        agent_id: uuid::Uuid::new_v4().to_string(),
         host: Some(crate::build_info::local_host()),
         transport: None,
         channel: ChannelReport::Unknown,
@@ -12437,7 +12489,7 @@ mod matrice_roles_tests {
                     project_id: "project-066".to_string(),
                     binding_generation: 1,
                 }),
-                name: Some("fixture-docker".to_string()),
+                agent_id: Some("fixture-docker".to_string()),
                 cwd: root.display().to_string(),
                 persistent: false,
                 command_id: "docker-spawn-command".to_string(),
@@ -13768,11 +13820,7 @@ mod presence_tests {
         let mut state = DaemonState::new(&config, managed_tx).unwrap();
         state
             .router
-            .register(
-                Some("agent-distant-1"),
-                &bridget_core::AgentType::Codex,
-                "conn-1",
-            )
+            .register("agent-distant-1", &bridget_core::AgentType::Codex, "conn-1")
             .unwrap();
         state
             .conn_instances
@@ -13812,7 +13860,7 @@ mod presence_tests {
         assert_eq!(
             agents
                 .iter()
-                .map(|agent| agent.name.as_str())
+                .map(|agent| agent.display_name.as_str())
                 .collect::<Vec<_>>(),
             vec!["agent-distant-1"]
         );
@@ -13890,7 +13938,7 @@ mod presence_tests {
         state.fixture_root = Some(fixture_root);
         state
             .router
-            .register(Some("agent-2"), &bridget_core::AgentType::Claude, "conn-1")
+            .register("agent-2", &bridget_core::AgentType::Claude, "conn-1")
             .unwrap();
         state
             .conn_instances
@@ -13952,8 +14000,9 @@ mod presence_tests {
         assert!(matches!(
             handle_register_with_channel(
                 "conn-sender",
+                2,
                 "codex".to_string(),
-                Some("agent-sender".to_string()),
+                "agent-sender".to_string(),
                 Some("cartae".to_string()),
                 Some("tmux".to_string()),
                 ChannelReport::Known("unix".to_string()),
@@ -13966,7 +14015,7 @@ mod presence_tests {
                 Some(false),
                 &mut state,
             ),
-            DaemonToWrapper::Registered { name } if name == "agent-sender"
+            DaemonToWrapper::Registered { agent_id: name } if name == "agent-sender"
         ));
         let stale = Instant::now()
             .checked_sub(Duration::from_secs(1900))
@@ -13993,7 +14042,7 @@ mod presence_tests {
         let sender = state
             .agent_infos()
             .into_iter()
-            .find(|agent| agent.name == "agent-sender")
+            .find(|agent| agent.display_name == "agent-sender")
             .expect("expéditeur enregistré visible dans l'annuaire");
         if expected_fresh {
             assert!(
@@ -14167,8 +14216,9 @@ mod presence_tests {
 
         let response = handle_register_with_channel(
             "conn-lab",
+            2,
             "codex".to_string(),
-            Some("lab-agent".to_string()),
+            "lab-agent".to_string(),
             Some("lab-host".to_string()),
             Some("ssh-unix".to_string()),
             ChannelReport::Omitted,
@@ -14201,11 +14251,12 @@ mod presence_tests {
 
         let response = handle_register_with_channel(
             "conn-natif",
+            2,
             "fixture".to_string(),
-            Some("natif-distant".to_string()),
+            "natif-distant".to_string(),
             Some("lab-host".to_string()),
             Some("codex_app_server".to_string()),
-            Some("ssh-unix".to_string()).into(),
+            ChannelReport::Known("ssh-unix".to_string()),
             Some(PresenceMode::Cli),
             None,
             Some("Linux".to_string()),
@@ -14868,7 +14919,8 @@ mod presence_tests {
                 "terminal-alpha",
                 WrapperToDaemon::Register {
                     agent_type: "fixture".to_string(),
-                    name: Some("alpha".to_string()),
+                    identity_version: 2,
+                    agent_id: "alpha".to_string(),
                     host: Some("local".to_string()),
                     transport: Some("tmux".to_string()),
                     channel: Some("unix".to_string()).into(),
@@ -14882,14 +14934,15 @@ mod presence_tests {
                 },
                 &shared,
             ),
-            Some(DaemonToWrapper::Registered { ref name }) if name == "alpha"
+            Some(DaemonToWrapper::Registered { agent_id: ref name }) if name == "alpha"
         ));
         assert!(matches!(
             handle_wrapper_message(
                 "managed-alpha",
                 WrapperToDaemon::Register {
                     agent_type: "fixture".to_string(),
-                    name: Some("alpha".to_string()),
+                    identity_version: 2,
+                    agent_id: "alpha".to_string(),
                     host: Some("local".to_string()),
                     transport: Some("acp".to_string()),
                     channel: Some("unix".to_string()).into(),
@@ -15045,7 +15098,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "control",
                 WrapperToDaemon::StopOrder {
-                    name: "beta".to_string(),
+                    agent_id: "beta".to_string(),
                     command_id: "stop-beta-recovery".to_string(),
                 },
                 &caller_state,
@@ -15274,7 +15327,7 @@ mod presence_tests {
             &config.socket_path,
             WrapperToDaemon::SpawnOrder {
                 agent_type: "fixture".to_string(),
-                name: Some("persistent-one".to_string()),
+                agent_id: Some("persistent-one".to_string()),
                 cwd: root.to_string_lossy().to_string(),
                 persistent: true,
                 command_id: "initial-persistent".to_string(),
@@ -15286,7 +15339,7 @@ mod presence_tests {
         );
         assert!(matches!(
             accepted,
-            DaemonToWrapper::SpawnAccepted { ref name, definition: Some(ref definition), .. }
+            DaemonToWrapper::SpawnAccepted { agent_id: ref name, definition: Some(ref definition), .. }
                 if name == "persistent-one"
                     && definition.command == adapter.to_string_lossy()
                     && definition.args.is_empty()
@@ -15349,7 +15402,7 @@ mod presence_tests {
             if let DaemonToWrapper::AgentList { agents } =
                 daemon_request(&config.socket_path, WrapperToDaemon::ListAgents)
                 && agents.len() == 1
-                && agents[0].name == "persistent-one"
+                && agents[0].display_name == "persistent-one"
                 && agents[0].state == "connected"
             {
                 break agents;
@@ -15410,7 +15463,7 @@ mod presence_tests {
                 &config.socket_path,
                 WrapperToDaemon::SpawnOrder {
                     agent_type: "fixture".to_string(),
-                    name: Some("persistent-one".to_string()),
+                    agent_id: Some("persistent-one".to_string()),
                     cwd: root.to_string_lossy().to_string(),
                     persistent: true,
                     command_id: "initial-persistent".to_string(),
@@ -15431,7 +15484,7 @@ mod presence_tests {
             daemon_request(
                 &config.socket_path,
                 WrapperToDaemon::StopOrder {
-                    name: "persistent-one".to_string(),
+                    agent_id: "persistent-one".to_string(),
                     command_id: "stop-after-recovery".to_string(),
                 }
             ),
@@ -15679,7 +15732,8 @@ mod presence_tests {
                 "wrapper-maicie",
                 WrapperToDaemon::Register {
                     agent_type: "codex".to_string(),
-                    name: Some("maicie".to_string()),
+                    identity_version: 2,
+                    agent_id: "maicie".to_string(),
                     host: None,
                     transport: None,
                     channel: None.into(),
@@ -16217,7 +16271,8 @@ mod presence_tests {
                 "historic-register",
                 WrapperToDaemon::Register {
                     agent_type: "codex".to_string(),
-                    name: Some("historique-012".to_string()),
+                    identity_version: 2,
+                    agent_id: "historique-012".to_string(),
                     host: None,
                     transport: None,
                     channel: None.into(),
@@ -16609,11 +16664,7 @@ mod presence_tests {
         let (mut state, config) = state_with_registered_agent("idempotent-reply");
         state
             .router
-            .register(
-                Some("maicie"),
-                &bridget_core::AgentType::Codex,
-                "sender-wrapper",
-            )
+            .register("maicie", &bridget_core::AgentType::Codex, "sender-wrapper")
             .unwrap();
         state
             .store
@@ -17094,7 +17145,12 @@ mod presence_tests {
         }
 
         let infos = state.agent_infos();
-        let info = |name: &str| infos.iter().find(|agent| agent.name == name).unwrap();
+        let info = |name: &str| {
+            infos
+                .iter()
+                .find(|agent| agent.display_name == name)
+                .unwrap()
+        };
         assert_eq!(info("acp-agent").mode, Some(PresenceMode::Acp));
         assert_eq!(info("tmux-agent").mode, Some(PresenceMode::Tmux));
         assert_eq!(info("tmux-agent").location.as_deref(), Some("bridget:3.1"));
@@ -17211,7 +17267,7 @@ mod presence_tests {
 
         let infos = state.agent_infos();
         assert!(
-            infos.iter().all(|agent| agent.name != "agent-2"),
+            infos.iter().all(|agent| agent.display_name != "agent-2"),
             "le fantôme ne doit plus figurer dans l'annuaire: {infos:?}"
         );
         assert!(
@@ -17316,11 +17372,7 @@ mod presence_tests {
         // Émetteur « bridget » avec une vraie connexion lisible.
         state
             .router
-            .register(
-                Some("bridget"),
-                &bridget_core::AgentType::Claude,
-                "conn-emitter",
-            )
+            .register("bridget", &bridget_core::AgentType::Claude, "conn-emitter")
             .unwrap();
         state
             .conn_instances
@@ -17489,11 +17541,7 @@ mod presence_tests {
         // (voir doc de l'oracle : trou déclaré).
         state
             .router
-            .register(
-                Some("bridget"),
-                &bridget_core::AgentType::Claude,
-                "conn-emitter",
-            )
+            .register("bridget", &bridget_core::AgentType::Claude, "conn-emitter")
             .unwrap();
         state
             .conn_instances
@@ -17570,12 +17618,12 @@ mod presence_tests {
         assert!(
             !infos
                 .iter()
-                .any(|agent| agent.name == "agent-2" && agent.state == "connected"),
+                .any(|agent| agent.display_name == "agent-2" && agent.state == "connected"),
             "pas de connected résiduel: {infos:?}"
         );
         let unreachable = infos
             .iter()
-            .find(|agent| agent.name == "agent-2")
+            .find(|agent| agent.display_name == "agent-2")
             .expect("l'état unreachable reste listé distinctement");
         assert_eq!(unreachable.state, "unreachable");
         let _ = std::fs::remove_file(config.db_path);
@@ -17609,14 +17657,14 @@ mod presence_tests {
         assert!(
             matches!(
                 registered,
-                DaemonToWrapper::Registered { ref name } if name == "agent-2"
+                DaemonToWrapper::Registered { agent_id: ref name } if name == "agent-2"
             ),
             "takeover refusé: {registered:?}"
         );
         let infos = state.agent_infos();
         let info = infos
             .iter()
-            .find(|agent| agent.name == "agent-2")
+            .find(|agent| agent.display_name == "agent-2")
             .expect("agent repris");
         assert_eq!(info.state, "connected");
         assert_eq!(info.transport, "acp");
@@ -17718,7 +17766,7 @@ mod presence_tests {
         let infos = st.agent_infos();
         let agent = infos
             .iter()
-            .find(|agent| agent.name == "agent-2")
+            .find(|agent| agent.display_name == "agent-2")
             .expect("contrôle positif : présence légitime (lien frais) reste à l'annuaire");
         assert!(
             agent.last_seen_secs >= 1800,
@@ -17751,7 +17799,7 @@ mod presence_tests {
         let infos = state.agent_infos();
         let agent = infos
             .iter()
-            .find(|agent| agent.name == "agent-2")
+            .find(|agent| agent.display_name == "agent-2")
             .expect("présence légitime visible");
         assert!(
             agent.last_seen_secs < 2,
@@ -17791,7 +17839,7 @@ mod presence_tests {
         assert!(
             infos
                 .iter()
-                .any(|a| a.name == "agent-2" && a.state == "busy"),
+                .any(|a| a.display_name == "agent-2" && a.state == "busy"),
             "busy jury ne doit pas être purgé: {infos:?}"
         );
         let _ = std::fs::remove_file(&config.db_path);
@@ -17990,7 +18038,7 @@ mod presence_tests {
         }
         let infos = state.agent_infos();
         assert!(
-            infos.iter().any(|a| a.name == "agent-2"),
+            infos.iter().any(|a| a.display_name == "agent-2"),
             "présence fraîche doit survivre: {infos:?}"
         );
         let _ = std::fs::remove_file(config.db_path);
@@ -18020,7 +18068,7 @@ mod presence_tests {
         }
         let infos = state.agent_infos();
         assert!(
-            infos.iter().all(|a| a.name != "agent-2"),
+            infos.iter().all(|a| a.display_name != "agent-2"),
             "connected mort doit disparaître sans redémarrage: {infos:?}"
         );
         assert!(!state.presences.contains_key("instance-1"));
@@ -18169,7 +18217,7 @@ mod presence_tests {
         state.mark_unreachable("mcp-child");
         let agents = state.agent_infos();
         assert_eq!(agents.len(), 1);
-        assert_eq!(agents[0].name, "agent-2");
+        assert_eq!(agents[0].display_name, "agent-2");
         assert_eq!(agents[0].transport, "acp");
         assert_eq!(agents[0].mode, Some(PresenceMode::Acp));
         assert_eq!(agents[0].domain.as_deref(), Some("coordination"));
@@ -18274,7 +18322,7 @@ mod presence_tests {
             .register_connected(&lease, &instance_id, now + 1)
             .unwrap();
         let agent = state.agent_infos().pop().expect("géré visible");
-        assert_eq!(agent.name, "coder-terra");
+        assert_eq!(agent.display_name, "coder-terra");
         assert_eq!(agent.transport, "acp");
         assert_eq!(agent.channel.as_deref(), Some("unix"));
         assert_eq!(agent.mode, Some(PresenceMode::Acp));
@@ -18341,7 +18389,7 @@ mod presence_tests {
         let agent = state
             .agent_infos()
             .into_iter()
-            .find(|agent| agent.name == lease.name)
+            .find(|agent| agent.display_name == lease.name)
             .expect("la relance en cours doit rester visible");
         assert_eq!(agent.state, "relaunching");
 
@@ -18411,7 +18459,7 @@ mod presence_tests {
             DaemonToWrapper::Registered { .. }
         ));
         let reconnected = state.agent_infos().pop().expect("réinscrit");
-        assert_eq!(reconnected.name, "cursor5");
+        assert_eq!(reconnected.display_name, "cursor5");
         assert_eq!(reconnected.transport, "acp");
         assert_eq!(reconnected.mode, Some(PresenceMode::Acp));
         assert_eq!(reconnected.domain.as_deref(), Some("bridget"));
@@ -18481,7 +18529,7 @@ mod presence_tests {
         let reconnected = state
             .agent_infos()
             .into_iter()
-            .find(|agent| agent.name == "cursor5" && agent.state != "unreachable")
+            .find(|agent| agent.display_name == "cursor5" && agent.state != "unreachable")
             .expect("réinscrit visible");
         assert_eq!(reconnected.transport, "acp");
         assert_eq!(reconnected.mode, Some(PresenceMode::Acp));
@@ -18558,7 +18606,7 @@ mod presence_tests {
                 None,
                 &mut state,
             ),
-            DaemonToWrapper::Registered { ref name } if name == "claude-managed"
+            DaemonToWrapper::Registered { agent_id: ref name } if name == "claude-managed"
         ));
 
         let agent = state.agent_infos().pop().expect("Claude inscrit");
@@ -19492,7 +19540,7 @@ mod presence_tests {
         assert_eq!(
             agents
                 .iter()
-                .map(|agent| agent.name.as_str())
+                .map(|agent| agent.display_name.as_str())
                 .collect::<Vec<_>>(),
             vec!["agent-2"]
         );
@@ -19608,7 +19656,7 @@ mod presence_tests {
         state.set_turn_state("conn-1", true).unwrap();
         let agents = state.agent_infos();
         assert_eq!(agents.len(), 1);
-        assert_eq!(agents[0].name, "agent-2");
+        assert_eq!(agents[0].display_name, "agent-2");
         assert_eq!(agents[0].state, "busy");
         state.router.unregister_by_conn("conn-1");
         state.mark_unreachable("conn-1");
@@ -20269,7 +20317,7 @@ mod presence_tests {
         );
         assert!(matches!(response, DaemonToWrapper::Registered { .. }));
         let agent = state.agent_infos().pop().expect("agent réinscrit");
-        assert_eq!(agent.name, "coder-natif");
+        assert_eq!(agent.display_name, "coder-natif");
         assert_eq!(
             agent.state, "busy",
             "who doit restaurer busy depuis Register.turn_in_progress, pas attendre un prochain tour"
@@ -20488,11 +20536,11 @@ mod presence_tests {
             .unwrap();
         state
             .router
-            .register(Some("sender"), &bridget_core::AgentType::Codex, "conn-s")
+            .register("sender", &bridget_core::AgentType::Codex, "conn-s")
             .unwrap();
         state
             .router
-            .register(Some("target"), &bridget_core::AgentType::Claude, "conn-t")
+            .register("target", &bridget_core::AgentType::Claude, "conn-t")
             .unwrap();
         state.restore_pending_for_agent("target", "conn-t");
         assert_eq!(state.pending_replies.len(), 1);
@@ -20640,7 +20688,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "control",
                 WrapperToDaemon::StopOrder {
-                    name: "agent-2".to_string(),
+                    agent_id: "agent-2".to_string(),
                     command_id: "stop-terminal".to_string(),
                 },
                 &shared,
@@ -20667,7 +20715,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "control",
                 WrapperToDaemon::RelaunchOrder {
-                    name: lease.name.clone(),
+                    agent_id: lease.name.clone(),
                     command_id: "relaunch-during-decommission".to_string(),
                 },
                 &shared,
@@ -20709,7 +20757,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "control",
                 WrapperToDaemon::StopOrder {
-                    name: "agent-2".to_string(),
+                    agent_id: "agent-2".to_string(),
                     command_id: "stop-before-marker".to_string(),
                 },
                 &caller_state,
@@ -20820,7 +20868,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "control",
                 WrapperToDaemon::StopOrder {
-                    name: "agent-2".to_string(),
+                    agent_id: "agent-2".to_string(),
                     command_id: "stop-bootstrap-blocked".to_string(),
                 },
                 &caller_state,
@@ -20881,7 +20929,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "control",
                 WrapperToDaemon::StopOrder {
-                    name: "agent-2".to_string(),
+                    agent_id: "agent-2".to_string(),
                     command_id: "stop-connected".to_string(),
                 },
                 &caller_state,
@@ -20965,7 +21013,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "control",
                 WrapperToDaemon::StopOrder {
-                    name: "agent-2".to_string(),
+                    agent_id: "agent-2".to_string(),
                     command_id: "stop-timeout".to_string(),
                 },
                 &caller_state,
@@ -21230,7 +21278,7 @@ mod presence_tests {
             let result = handle_wrapper_message(
                 "control",
                 WrapperToDaemon::StopOrder {
-                    name: "agent-2".to_string(),
+                    agent_id: "agent-2".to_string(),
                     command_id: "stop-e2e".to_string(),
                 },
                 &stop_state,
@@ -21305,7 +21353,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "control",
                 WrapperToDaemon::StopOrder {
-                    name: "agent-2".to_string(),
+                    agent_id: "agent-2".to_string(),
                     command_id: "stop-stale-fallback".to_string(),
                 },
                 &shared,
@@ -21810,11 +21858,7 @@ fn intentions_de_soumission_restent_distinctes_et_persistantes() {
     .unwrap();
     state
         .router
-        .register(
-            Some("agent-1"),
-            &bridget_core::AgentType::Codex,
-            "conn-sender",
-        )
+        .register("agent-1", &bridget_core::AgentType::Codex, "conn-sender")
         .unwrap();
     state
         .conn_names
@@ -21927,11 +21971,7 @@ fn transition_execution_refusee_si_wrapper_non_proprietaire() {
         .unwrap();
     state
         .router
-        .register(
-            Some("agent-3"),
-            &bridget_core::AgentType::Codex,
-            "conn-attacker",
-        )
+        .register("agent-3", &bridget_core::AgentType::Codex, "conn-attacker")
         .unwrap();
     state
         .conn_names
@@ -22130,7 +22170,8 @@ fn spec_068_register_rejoue_apres_registered_les_incidents_delegues_en_ordre() {
     let mut writer = BufWriter::new(stream);
     let register = WrapperToDaemon::Register {
         agent_type: "claude".to_string(),
-        name: Some("parent-068".to_string()),
+        identity_version: 2,
+        agent_id: "parent-068".to_string(),
         host: Some("test".to_string()),
         transport: Some("acp".to_string()),
         channel: ChannelReport::Known("unix".to_string()),
@@ -22408,7 +22449,8 @@ fn spec_066_ingress_accepte_uniquement_la_reservation_avant_register() {
     ));
     let register = WrapperToDaemon::Register {
         agent_type: "claude".to_string(),
-        name: Some("runtime-agent-066".to_string()),
+        identity_version: 2,
+        agent_id: "runtime-agent-066".to_string(),
         host: Some("runtime".to_string()),
         transport: Some("acp".to_string()),
         channel: ChannelReport::Known("unix".to_string()),
@@ -22426,7 +22468,7 @@ fn spec_066_ingress_accepte_uniquement_la_reservation_avant_register() {
     reader.read_line(&mut registered).unwrap();
     assert!(matches!(
         decode(registered.trim()).unwrap(),
-        DaemonToWrapper::Registered { name } if name == "runtime-agent-066"
+        DaemonToWrapper::Registered { agent_id: name } if name == "runtime-agent-066"
     ));
     drop(reader);
     drop(writer);

@@ -116,7 +116,8 @@ fn refus_de_lancement(socket: &Path, cwd: &Path) -> SpawnRefusal {
 
     let register = WrapperToDaemon::Register {
         agent_type: "cli".to_string(),
-        name: Some("temoin-hotes".to_string()),
+        identity_version: 2,
+        agent_id: "temoin-hotes".to_string(),
         // La valeur que le CLI transmet désormais. Avant le correctif : `None`.
         host: Some(HOTE_CLIENT.to_string()),
         transport: None,
@@ -148,7 +149,7 @@ fn refus_de_lancement(socket: &Path, cwd: &Path) -> SpawnRefusal {
     let ordre = WrapperToDaemon::SpawnOrder {
         agent_type: "fixture".to_string(),
         project: None,
-        name: Some("temoin-lance".to_string()),
+        agent_id: Some("temoin-lance".to_string()),
         cwd: cwd.display().to_string(),
         persistent: false,
         command_id: "temoin-hotes-1".to_string(),

@@ -262,10 +262,9 @@ impl DurationClasses {
 pub struct ProfileConfig {
     /// Clé stable de gouvernance du profil, distincte du nom runtime Bridget.
     pub id: String,
-    /// Identité exacte publiée par l'annuaire Bridget. L'absence conserve la
-    /// compatibilité avec les profils historiques dont `id` était ce nom.
+    /// UUID opaque publié par l’annuaire Bridget. Son absence interdit la sélection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_name: Option<String>,
+    pub agent_id: Option<String>,
     /// Type Bridget affiché à l'approbation. Son absence reste lisible dans
     /// les configurations historiques, mais interdit une activation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -456,7 +455,7 @@ fn validate_profiles(profiles: &[ProfileConfig]) -> Result<(), ConfigError> {
     }
 
     let mut ids = HashSet::with_capacity(profiles.len());
-    let mut agent_names = HashSet::with_capacity(profiles.len());
+    let mut agent_ids = HashSet::with_capacity(profiles.len());
     for profile in profiles {
         let field = format!("profiles.{}", profile.id);
         validate_slug(&format!("{field}.id"), &profile.id)?;
@@ -466,22 +465,24 @@ fn validate_profiles(profiles: &[ProfileConfig]) -> Result<(), ConfigError> {
                 format!("identifiant de profil duplique : {}", profile.id),
             ));
         }
-        let agent_name = profile.agent_name.as_deref().unwrap_or(&profile.id);
-        validate_text(
-            &format!("{field}.agent_name"),
-            agent_name,
-            MAX_SHORT_TEXT_BYTES,
-        )?;
-        if agent_name.chars().any(bridget_core::is_disallowed_control) {
+        let Some(agent_id) = profile.agent_id.as_deref() else {
             return Err(ConfigError::validation(
-                format!("{field}.agent_name"),
-                "le nom d'agent ne peut contenir de caractere de controle",
+                format!("{field}.agent_id"),
+                "agent_id requis",
+            ));
+        };
+        bridget_core::router::validate_agent_id(agent_id)
+            .map_err(|reason| ConfigError::validation(format!("{field}.agent_id"), reason))?;
+        if agent_id.chars().any(bridget_core::is_disallowed_control) {
+            return Err(ConfigError::validation(
+                format!("{field}.agent_id"),
+                "le agent_id ne peut contenir de caractere de controle",
             ));
         }
-        if !agent_names.insert(agent_name) {
+        if !agent_ids.insert(agent_id) {
             return Err(ConfigError::validation(
                 "profiles",
-                format!("nom d'agent duplique : {agent_name}"),
+                format!("agent_id duplique : {agent_id}"),
             ));
         }
         validate_text(
@@ -690,7 +691,7 @@ impl std::error::Error for ConfigError {
 mod tests {
     use super::*;
 
-    /// Contrôle positif Cc sur agent_name ; puis bidi réel via validate_reference.
+    /// Contrôle positif Cc sur agent_id ; puis bidi réel via validate_reference.
     #[test]
     fn oracle_config_refuse_bidi_dans_reference_et_prouve_aveuglement_cc() {
         assert!(

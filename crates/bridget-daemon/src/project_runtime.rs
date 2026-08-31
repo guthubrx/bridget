@@ -4,6 +4,7 @@
 //! centralise seulement l'état d'environnement, la politique hôte fermée et la
 //! construction déterministe des arguments Docker.
 
+use bridget_core::router::validate_agent_id;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1033,7 +1034,7 @@ pub struct DockerRuntimeLaunch {
     pub execution: ProjectRuntimeExecution,
     pub exec_id: String,
     pub agent_type: String,
-    pub agent_name: String,
+    pub agent_id: String,
     pub instance_id: String,
     pub agent_generation: u64,
     pub cwd: PathBuf,
@@ -1063,8 +1064,7 @@ impl DockerRuntimeLaunch {
 
     pub fn docker_exec_arguments(&self) -> Result<Vec<String>, RuntimeIssue> {
         if !is_valid_runtime_agent_type(&self.agent_type)
-            || self.agent_name.trim().is_empty()
-            || self.agent_name.len() > 128
+            || validate_agent_id(&self.agent_id).is_err()
             || self.agent_generation == 0
             || !self.cwd.is_absolute()
             || self.resolved_definition_json.is_empty()
@@ -1127,7 +1127,7 @@ impl DockerRuntimeLaunch {
             self.execution.wrapper_executable.clone(),
             "managed-runtime-wrapper".to_string(),
             self.agent_type.clone(),
-            self.agent_name.clone(),
+            self.agent_id.clone(),
             self.execution.provider_command.clone(),
             self.resolved_definition_json.clone(),
         ]);
@@ -2180,7 +2180,7 @@ mod tests {
             },
             exec_id: uuid::Uuid::new_v4().to_string(),
             agent_type: "fixture".to_string(),
-            agent_name: "coord-066".to_string(),
+            agent_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             instance_id: uuid::Uuid::new_v4().to_string(),
             agent_generation: 7,
             cwd: PathBuf::from("/workspace/project-066"),
@@ -2221,7 +2221,10 @@ mod tests {
                 .all(|argument| !argument.contains("S067_SYNTHETIC_SECRET"))
         );
         assert_eq!(arguments[arguments.len() - 5], "managed-runtime-wrapper");
-        assert_eq!(arguments[arguments.len() - 3], "coord-066");
+        assert_eq!(
+            arguments[arguments.len() - 3],
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
         assert_eq!(
             arguments[arguments.len() - 2],
             "/usr/local/bin/fixture-agent"

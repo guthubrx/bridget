@@ -95,10 +95,10 @@ pub fn candidates_from(config: &MaicieConfig, agents: &[AgentInfo]) -> Vec<Deleg
         .profiles
         .iter()
         .filter_map(|profile| {
-            let agent_name = profile.agent_name.as_deref().unwrap_or(&profile.id);
-            let agent = agents.iter().find(|agent| agent.name == agent_name)?;
+            let agent_id = profile.agent_id.as_deref().unwrap_or(&profile.id);
+            let agent = agents.iter().find(|agent| agent.agent_id == agent_id)?;
             Some(DelegationCandidate {
-                name: agent.name.clone(),
+                name: agent.agent_id.clone(),
                 tags: profile.tags.clone(),
                 available: matches!(agent.state.as_str(), "connected" | "dnd"),
                 dnd: agent.state == "dnd",

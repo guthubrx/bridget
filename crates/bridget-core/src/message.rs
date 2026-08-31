@@ -64,8 +64,13 @@ pub enum MessageIntent {
 pub struct BridgetMessage {
     /// UUID court pour déduplication et quarantaine.
     pub id: String,
-    /// Nom de l'expéditeur (ex: "claude-1").
+    /// Identifiant opaque de l'expéditeur. Il sert exclusivement au routage.
     pub from: String,
+    /// Nom de présentation de l'expéditeur, résolu par le daemon au moment de
+    /// la remise. Cette valeur n'est jamais une clé de routage : le wrapper
+    /// l'emploie seulement pour construire le prompt fournisseur.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_display_name: Option<String>,
     /// Nom du destinataire (ex: "codex-2").
     pub to: String,
     /// Texte du message.
@@ -121,6 +126,7 @@ impl BridgetMessage {
         BridgetMessage {
             id,
             from: from.into(),
+            from_display_name: None,
             to: to.into(),
             body: body.into(),
             reply: false,

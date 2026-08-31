@@ -1891,7 +1891,7 @@ struct ApprovedSpawnOrder<'a> {
     #[serde(rename = "type")]
     kind: &'static str,
     agent_type: &'a str,
-    name: Option<&'a str>,
+    agent_id: Option<&'a str>,
     cwd: &'a str,
     persistent: bool,
     command_id: String,
@@ -1932,7 +1932,7 @@ fn approved_spawn_order_bytes(
     serde_json::to_vec(&ApprovedSpawnOrder {
         kind: "SpawnOrder",
         agent_type: request.agent_type,
-        name: None,
+        agent_id: None,
         cwd: request.cwd,
         persistent: request.persistent,
         command_id: command_id.to_string(),

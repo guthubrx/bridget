@@ -30,8 +30,8 @@ signal-hook = "0.3"
 libc = "0.2"
 # Le renderer doit compter les cellules du terminal (CJK/emoji), pas les scalaires Unicode.
 unicode-width = "0.2"
+maicie = { path = "../../plugins/maicie" }
 
 [dev-dependencies]
 bridget-core = { path = "../bridget-core" }
 bridget-transport = { path = "../bridget-transport", features = ["test-support"] }
-maicie = { path = "../../plugins/maicie" }

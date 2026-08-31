@@ -147,7 +147,7 @@ fn run_mission_with(
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                name: "claude-outil-1".to_string(),
+                agent_id: "123e4567-e89b-42d3-a456-426614174000".to_string(),
             })
             .unwrap()
         )
