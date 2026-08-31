@@ -1522,6 +1522,8 @@
         assert.match(css, /--agent-pane-search-surface:\s*#252525/);
         assert.match(css, /\.agent-pane \.agent-row__layout\s*\{[\s\S]*?grid-template-columns: 2\.5rem minmax\(0, 1fr\);[\s\S]*?gap: 0\.78rem;/);
         assert.match(css, /\.agent-pane \.agent-row__excerpt\s*\{[\s\S]*?font-size: 0\.82rem;/);
+        assert.match(css, /\.agent-pane \.message-search\s*\{[\s\S]*?padding: 0 0\.1rem 1rem;/);
+        assert.match(css, /\.agent-pane \.agent-list\s*\{[\s\S]*?align-content: start;[\s\S]*?grid-auto-rows: min-content;/);
       });
 
       test("entree_envoie_et_maj_entree_insere_une_ligne", () => {

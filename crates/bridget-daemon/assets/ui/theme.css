@@ -2371,7 +2371,7 @@ code {
 }
 
 .agent-pane .message-search {
-  padding: 0 0.1rem 0.7rem;
+  padding: 0 0.1rem 1rem;
 }
 
 .agent-pane .message-search input {
@@ -2720,6 +2720,8 @@ code {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  align-content: start;
+  grid-auto-rows: min-content;
 }
 
 .agent-pane__footer {

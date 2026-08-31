@@ -38,6 +38,11 @@ Le test UI vérifie que le centre contient l'overlay, la roue de bas de barre, l
 - `cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml --test desktop_commands` : PASS, 3 tests.
 - Le bundle macOS reconstruit contient `CFBundleIconFile=icon.icns` et `Contents/Resources/icon.icns`; sa signature ad hoc passe `codesign --verify --deep --strict`.
 
+## Finition de la liste d'agents
+
+- La grille d'agents est ancrée en haut avec `align-content: start` et des lignes `min-content`, afin qu'un petit nombre d'agents ne soit jamais réparti sur toute la hauteur de la barre.
+- La recherche a une marge basse de `1rem` avant la liste.
+
 ## Paquet macOS attesté
 
 - Bundle reconstruit avec un seul panneau distant et l'icône Bridget intégrée.

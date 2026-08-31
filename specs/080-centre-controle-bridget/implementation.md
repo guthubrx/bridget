@@ -59,6 +59,12 @@ Le binaire release courant a été construit depuis ce worktree, installé dans 
 - Le registre est limité à un panneau et les tests couvrent la limite, la fermeture du panneau précédent et le rendu pleine largeur.
 - `bridget.svg` est converti en `apps/bridget-desktop/src-tauri/icons/icon.icns`, déclaré dans `tauri.conf.json` et contrôlé dans le bundle macOS. Le paquet contient désormais `Contents/Resources/icon.icns` et `CFBundleIconFile=icon.icns`.
 
+## Finition de densité de la liste d'agents
+
+- La liste d'agents utilise une grille défilable dont les lignes étaient étirées pour occuper toute la hauteur disponible. Les agents sont désormais ancrés en haut et chaque ligne conserve la hauteur de son contenu.
+- La recherche conserve son contrôle compact et reçoit une marge basse de `1rem` avant le premier agent.
+- Le test UI statique vérifie l'ancrage, les lignes de contenu et la nouvelle marge de recherche.
+
 ## Paquet macOS construit
 
 - Bundle : `Bridget.app`, reconstruit avec `cargo tauri build --bundles app` après le correctif de panneau unique et l'intégration de l'icône.
