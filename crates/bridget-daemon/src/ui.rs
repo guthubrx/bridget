@@ -16,11 +16,11 @@ use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
 use bridget_transport::journal::valid_events;
 use bridget_transport::protocol::{
     AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
-    LedgerMessage, LedgerScope, PresenceMode, ProjectAdminOperation, ProjectAdminRequest,
-    ProjectBackend, ProjectBindStatus, ProjectBindRequest, ProjectBindingProjection,
-    ProjectBindingStatus,
-    ProjectRuntimeOperation, ProjectRuntimeRefusal, ProjectRuntimeRequest,
-    PROJECT_REGISTRY_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION, ServiceCapability, decode, encode,
+    LedgerMessage, LedgerScope, PROJECT_REGISTRY_CONTRACT_VERSION, PresenceMode,
+    ProjectAdminOperation, ProjectAdminRequest, ProjectBackend, ProjectBindRequest,
+    ProjectBindStatus, ProjectBindingProjection, ProjectBindingStatus, ProjectRuntimeOperation,
+    ProjectRuntimeRefusal, ProjectRuntimeRequest, SERVICE_CONTRACT_VERSION, ServiceCapability,
+    decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
 use serde::{Deserialize, Serialize};
@@ -1446,20 +1446,18 @@ fn serve_connection(
                 },
             ),
         },
-        ("POST", "/v1/projects/confirm") => {
-            match post_project_confirm(config, &request.body) {
-                Ok(response) => write_json(stream, 200, &response),
-                Err((status, code, message)) => write_json(
-                    stream,
-                    status,
-                    &UiSendErrorV1 {
-                        version: UI_VERSION,
-                        code,
-                        message,
-                    },
-                ),
-            }
-        }
+        ("POST", "/v1/projects/confirm") => match post_project_confirm(config, &request.body) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
         ("POST", "/v1/projects/disable") => {
             match post_project_admin(config, &request.body, ProjectAdminOperation::Disable) {
                 Ok(response) => write_json(stream, 200, &response),
@@ -2205,7 +2203,11 @@ fn post_project_preview(
         )
     })?;
     if request.version != UI_VERSION {
-        return Err((400, "invalid_request", "Prévisualisation projet invalide.".to_string()));
+        return Err((
+            400,
+            "invalid_request",
+            "Prévisualisation projet invalide.".to_string(),
+        ));
     }
     let preview = resolve_project_preview(
         config,
@@ -2242,7 +2244,11 @@ fn resolve_project_preview(
     use crate::project_workspace::ProjectPreview;
 
     if root.trim().is_empty() {
-        return Err((400, "invalid_request", "La racine du projet est obligatoire.".to_string()));
+        return Err((
+            400,
+            "invalid_request",
+            "La racine du projet est obligatoire.".to_string(),
+        ));
     }
     let Some(source) = config.project_root_policy_path.as_deref() else {
         return Err((
@@ -2555,7 +2561,11 @@ fn post_project_admin(
     );
     if !valid_command_id
         || !valid_project_id
-        || (needs_root && request.root.as_deref().is_none_or(|root| root.trim().is_empty()))
+        || (needs_root
+            && request
+                .root
+                .as_deref()
+                .is_none_or(|root| root.trim().is_empty()))
         || (!needs_root && request.root.is_some())
     {
         return Err((
@@ -6888,7 +6898,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(confirmed.display_name, "atelier");
-        assert_eq!(confirmed.canonical_path, expected_root.display().to_string());
+        assert_eq!(
+            confirmed.canonical_path,
+            expected_root.display().to_string()
+        );
         assert!(expected_root.is_dir(), "le dossier confirmé doit être créé");
         server.join().unwrap();
         let _ = std::fs::remove_dir_all(root);
