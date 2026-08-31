@@ -34,6 +34,7 @@ Statut : tranche de centre de contrôle et navigation Projets déployées sur le
 - `humain` reste l'identité technique de l'opérateur qui émet depuis le WebView. Elle n'est jamais un agent sélectionnable et ne rend plus de ligne dans la flotte, même si le daemon la publie pour permettre aux agents de répondre à l'opérateur.
 - Le relais refuse explicitement une remise à destination de `humain`. Cette garde empêche une requête directe ou un ancien état d'interface de créer un fil `humain → humain` sans consommateur.
 - La sélection conservée d'un ancien lien `?agent=humain` retombe sur un agent réel lors de la synchronisation, sans modifier les fils existants `humain ↔ agent`.
+- Le commit `6ee3ee5` est validé dans un checkout Linux temporaire : test Rust ciblé vert, `ui_relay_test` 25/25 vert et build release vert.
 
 ## Portage de finition T3 Code
 
@@ -48,11 +49,12 @@ Les contrôles restent des éléments HTML natifs et accessibles. Seule leur pr�
 
 ## Déploiement attesté
 
-Le binaire release courant a été construit depuis un clone propre de `main`, installé dans /home/moi/.local/bin/bridget, puis les services utilisateur ont été redémarrés le 2026-08-31 à 09:29:20 UTC :
+Le binaire release courant a été construit depuis le checkout isolé du commit `6ee3ee5`, installé dans `/home/moi/.local/bin/bridget`, puis les services utilisateur ont été redémarrés le 2026-08-31 à 09:56:52 UTC :
 
-- `bridget-daemon.service` : actif, PID 2531711 ;
+- `bridget-daemon.service` : actif ;
 - `bridget-ui.service` : actif après le même redémarrage ;
-- SHA-256 du binaire installé : `732f10d4dd2f0322f39323bccf04d864aade3262fed3f012a3fc600750c92d83`.
+- SHA-256 du binaire installé : `2a004a0a1b49c55bb80dab236e6b642b4b835baef2f4ac48596b6a2d6181ad17`.
+- Le checkout serveur présentant des modifications non validées a été laissé intact. La sauvegarde de l'ancien binaire est `/home/moi/.local/bin/bridget.before-human-sender-20260831-095800`.
 - Les assets servis par le relais contiennent la navigation Projets et l'overlay de création ou d'import.
 - Les appels authentifiés `GET /v1/projects/settings` et `GET /v1/projects` répondent tous deux `200` après redémarrage, avec respectivement une racine autorisée et un projet inscrit.
 

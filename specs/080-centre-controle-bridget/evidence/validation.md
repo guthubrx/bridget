@@ -5,9 +5,10 @@ Date : 2026-08-31
 ## Relais effectivement déployé
 
 - Build : `cargo build --release -p bridget-daemon` réussi.
-- Installation : `/home/moi/.local/bin/bridget` SHA-256 `732f10d4dd2f0322f39323bccf04d864aade3262fed3f012a3fc600750c92d83`.
-- Services utilisateur : `bridget-daemon.service` et `bridget-ui.service` actifs depuis 09:29:20 UTC.
-- Build et test réalisés dans le clone propre `/tmp/bridget-project-validation-cb327e2` du commit `cb327e2e9e3c84b9e44c44b84be085f0e32c0a7f`.
+- Installation : `/home/moi/.local/bin/bridget` SHA-256 `2a004a0a1b49c55bb80dab236e6b642b4b835baef2f4ac48596b6a2d6181ad17`.
+- Services utilisateur : `bridget-daemon.service` et `bridget-ui.service` actifs depuis 09:56:52 UTC.
+- Build et test réalisés dans le checkout Linux isolé `/tmp/bridget-human-sender.7CyaQE` du commit `6ee3ee5a33b3d5a699413d043329489fd15f230e`.
+- Sauvegarde du binaire antérieur : `/home/moi/.local/bin/bridget.before-human-sender-20260831-095800`.
 - Le relais sert les marqueurs `project-presentation-overlay`, `project-onboarding-overlay` et `Navigation des projets` après redémarrage.
 - Les routes authentifiées `GET /v1/projects/settings` et `GET /v1/projects` répondent `200`, avec une racine autorisée et un projet inscrit.
 
@@ -63,6 +64,7 @@ Le test UI couvre aussi la séparation de portées dans la navigation Projets : 
 - Le test Node vérifie que la présence interne `humain` est exclue de la flotte, de sa projection latérale et de toute sélection restaurée.
 - Le test Rust ciblé `garde_destinataire_refuse_humain_absent_et_arrete_sans_refuser_un_agent_vivant` passe et vérifie que le relais refuse `humain` tout en acceptant un agent vivant.
 - La suite d'intégration complète `ui_relay_test` ne peut pas être conclue sur ce Mac : sa fixture lance le daemon dans un `HOME` temporaire qui n'est pas résolu comme attendu par macOS. Elle échoue avant les scénarios métier, sur `daemon non prêt`.
+- Dans le checkout Linux de déploiement, `ui_relay_test` passe 25/25. Après redémarrage, `GET /v1/snapshot` et l'asset `app.js` répondent `200`, l'asset contient les gardes de flotte, et une requête valide adressée à `humain` renvoie `400 human_recipient` sans créer de message.
 
 ## Paquet macOS attesté
 
