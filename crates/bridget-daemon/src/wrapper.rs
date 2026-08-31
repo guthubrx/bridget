@@ -8,8 +8,8 @@ use bridget_transport::journal::{
 };
 use bridget_transport::protocol::{
     DelegatedRuntimeEventFrame, DelegatedRuntimeEventKind, DiskSpaceFact, ExecutionControlCommand,
-    ExecutionControlOperation, ExecutionProviderContext, PresenceMode, ProviderOperation,
-    RUNTIME_INGRESS_CONTRACT_VERSION, RuntimeIngressHandshake, decode, encode,
+    ExecutionControlOperation, ExecutionDeliveryContext, ExecutionProviderContext, PresenceMode,
+    ProviderOperation, RUNTIME_INGRESS_CONTRACT_VERSION, RuntimeIngressHandshake, decode, encode,
 };
 use bridget_transport::{
     AcpOptions, AcpTransport, AttachRefusal, AttachWindow, ChannelReport, ClaudeStreamJsonOptions,
@@ -2298,6 +2298,7 @@ pub fn launch(
                     delivery_generation,
                     expires_at,
                     message,
+                    execution: _,
                 } => {
                     let reports = deliver_idempotent_to_interactive(
                         &mut idempotent_deliveries,
@@ -3897,38 +3898,52 @@ fn launch_acp_with_status(
                     delivery_generation,
                     expires_at,
                     message,
-                }) => match idempotent_deliveries.receive(
-                    delivery_id,
-                    recipient_instance_id,
-                    delivery_generation,
-                    expires_at,
-                    message,
-                    unix_now_secs(),
-                ) {
-                    IdempotentDeliveryAction::Report(report) => {
-                        send_wrapper_message(&writer, report);
+                    execution,
+                }) => {
+                    let message_id = message.id.clone();
+                    if bind_idempotent_delivery_execution(
+                        &mut execution_bindings,
+                        &message_id,
+                        execution,
+                        agent_type,
+                        &definition.protocol,
+                    ) && let Some(identity) = transport.provider_identity()
+                    {
+                        publish_provider_context(&writer, &execution_bindings, &identity);
                     }
-                    IdempotentDeliveryAction::Inject {
-                        message,
+                    match idempotent_deliveries.receive(
                         delivery_id,
-                    } => {
-                        let message_id = message.id.clone();
-                        if let Err(error) = transport.deliver(&message) {
-                            send_wrapper_message(
-                                &writer,
-                                WrapperToDaemon::DeliveryRejected {
-                                    id: message_id.clone(),
-                                    reason: error.to_string(),
-                                },
-                            );
-                            if let Some(report) =
-                                idempotent_deliveries.injection_failed(&delivery_id)
-                            {
-                                send_wrapper_message(&writer, report);
+                        recipient_instance_id,
+                        delivery_generation,
+                        expires_at,
+                        message,
+                        unix_now_secs(),
+                    ) {
+                        IdempotentDeliveryAction::Report(report) => {
+                            send_wrapper_message(&writer, report);
+                        }
+                        IdempotentDeliveryAction::Inject {
+                            message,
+                            delivery_id,
+                        } => {
+                            let message_id = message.id.clone();
+                            if let Err(error) = transport.deliver(&message) {
+                                send_wrapper_message(
+                                    &writer,
+                                    WrapperToDaemon::DeliveryRejected {
+                                        id: message_id.clone(),
+                                        reason: error.to_string(),
+                                    },
+                                );
+                                if let Some(report) =
+                                    idempotent_deliveries.injection_failed(&delivery_id)
+                                {
+                                    send_wrapper_message(&writer, report);
+                                }
                             }
                         }
                     }
-                },
+                }
                 Ok(DaemonToWrapper::DelegatedRuntimeEvent { event }) => {
                     let message = delegated_runtime_message(&event, &my_name);
                     idempotent_deliveries.record_delegated_runtime(&message.id, event.event_id);
@@ -4642,6 +4657,31 @@ struct ManagedExecutionBinding {
     revision: u64,
     approval_requests: u8,
     last_approval_request: Option<String>,
+}
+
+fn bind_idempotent_delivery_execution(
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    message_id: &str,
+    execution: Option<ExecutionDeliveryContext>,
+    provider_kind: &str,
+    execution_path: &str,
+) -> bool {
+    let Some(execution) = execution else {
+        return false;
+    };
+    bindings
+        .entry(message_id.to_string())
+        .or_insert(ManagedExecutionBinding {
+            execution_id: execution.execution_id,
+            provider_kind: provider_kind.to_string(),
+            execution_path: execution_path.to_string(),
+            generation: execution.generation,
+            state: "starting".to_string(),
+            revision: execution.revision,
+            approval_requests: 0,
+            last_approval_request: None,
+        });
+    true
 }
 
 /// L usage ne reçoit une ascendance que si le wrapper ne porte qu un seul
@@ -9050,6 +9090,52 @@ mod reconnect_tests {
                 Some(PathBuf::from("/home/agent")),
             ),
             PathBuf::from("/run/bridget/runtime/invalid.sock")
+        );
+    }
+    #[test]
+    fn spec_079_binding_idempotent_precede_le_filtre_de_doublon() {
+        let mut bindings = HashMap::new();
+        assert!(!bind_idempotent_delivery_execution(
+            &mut bindings,
+            "message-079",
+            None,
+            "codex",
+            "acp",
+        ));
+        assert!(bindings.is_empty());
+
+        assert!(bind_idempotent_delivery_execution(
+            &mut bindings,
+            "message-079",
+            Some(ExecutionDeliveryContext {
+                execution_id: "execution-079".to_string(),
+                generation: 2,
+                revision: 3,
+            }),
+            "codex",
+            "acp",
+        ));
+        let binding = bindings.get("message-079").expect("binding créé");
+        assert_eq!(binding.execution_id, "execution-079");
+        assert_eq!(binding.generation, 2);
+        assert_eq!(binding.revision, 3);
+        assert_eq!(binding.provider_kind, "codex");
+        assert_eq!(binding.execution_path, "acp");
+
+        assert!(bind_idempotent_delivery_execution(
+            &mut bindings,
+            "message-079",
+            Some(ExecutionDeliveryContext {
+                execution_id: "execution-divergente".to_string(),
+                generation: 99,
+                revision: 99,
+            }),
+            "claude",
+            "tmux",
+        ));
+        assert_eq!(
+            bindings["message-079"].execution_id, "execution-079",
+            "un rejeu ne remplace jamais la première corrélation admise"
         );
     }
 }

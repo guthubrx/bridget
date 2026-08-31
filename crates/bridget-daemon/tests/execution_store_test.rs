@@ -1,5 +1,6 @@
 use bridget_daemon::execution_store::{
-    ControlCommandStatus, ControlReservation, ProviderBindingOutcome,
+    ContinuationMode, ControlCommandStatus, ControlReservation, ExecutionRecoveryOutcome,
+    ProviderBindingOutcome,
 };
 use bridget_daemon::{ConditionalTransition, ExecutionStore};
 use bridget_transport::protocol::{
@@ -90,6 +91,124 @@ fn reprise_apres_crash_retrouve_les_executions_non_terminales() {
         vec!["execution-1"]
     );
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn spec_079_reconstruction_conserve_message_soumission_projet_et_lignee() {
+    let store = ExecutionStore::open_in_memory().unwrap();
+    let project = ProjectReference {
+        project_id: "project-079".to_string(),
+        binding_generation: 7,
+    };
+    let mut message =
+        bridget_core::BridgetMessage::new("humain", "coordinateur", "reprends exactement ceci");
+    message.id = "message-079".to_string();
+    message.origin = Some(bridget_core::MessageOrigin::Human);
+    message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+    assert!(
+        store
+            .admit_starting_message_for_project(
+                &message,
+                "execution-079-parent",
+                Some(&project),
+                40,
+            )
+            .unwrap()
+    );
+    store
+        .transition_if_current(
+            "execution-079-parent",
+            "starting",
+            0,
+            1,
+            "running",
+            "provider_accepted",
+            41,
+        )
+        .unwrap();
+
+    let outcome = store
+        .reconstruct_active_for_agent(
+            "coordinateur",
+            "instance-reprise",
+            "execution-079-enfant",
+            50,
+        )
+        .unwrap();
+    let reconstructed = match outcome {
+        ExecutionRecoveryOutcome::Reconstructed(value) => value,
+        other => panic!("reconstruction attendue, reçu {other:?}"),
+    };
+    assert_eq!(reconstructed.parent_execution_id, "execution-079-parent");
+    assert_eq!(reconstructed.message, message);
+    assert_eq!(reconstructed.snapshot.project, Some(project));
+    assert_eq!(reconstructed.snapshot.generation, 2);
+    assert_eq!(reconstructed.snapshot.state, "starting");
+    assert!(matches!(
+        store.execution_snapshot("execution-079-parent").unwrap(),
+        Some(snapshot) if snapshot.state == "unreachable" && snapshot.revision == 2
+    ));
+    let continuation = store
+        .continuation_for("execution-079-enfant")
+        .unwrap()
+        .unwrap();
+    assert_eq!(continuation.parent_execution_id, "execution-079-parent");
+    assert_eq!(continuation.mode, ContinuationMode::Reconstructed);
+}
+
+#[test]
+fn spec_079_payload_absent_ferme_le_parent_sans_inventer() {
+    let store = ExecutionStore::open_in_memory().unwrap();
+    store
+        .record_starting("submission-legacy", "execution-legacy", "coordinateur", 40)
+        .unwrap();
+    assert!(matches!(
+        store
+            .reconstruct_active_for_agent(
+                "coordinateur",
+                "instance-reprise",
+                "execution-ne-doit-pas-exister",
+                50,
+            )
+            .unwrap(),
+        ExecutionRecoveryOutcome::PayloadUnavailable {
+            parent_execution_id
+        } if parent_execution_id == "execution-legacy"
+    ));
+    assert!(matches!(
+        store.execution_snapshot("execution-legacy").unwrap(),
+        Some(snapshot) if snapshot.state == "unreachable" && snapshot.revision == 1
+    ));
+    assert_eq!(
+        store
+            .execution_snapshot("execution-ne-doit-pas-exister")
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn spec_079_deux_actifs_refusent_une_reconstruction_aveugle() {
+    let store = ExecutionStore::open_in_memory().unwrap();
+    store
+        .record_starting("submission-a", "execution-a", "coordinateur", 40)
+        .unwrap();
+    store
+        .record_starting("submission-b", "execution-b", "coordinateur", 41)
+        .unwrap();
+    assert!(matches!(
+        store
+            .reconstruct_active_for_agent(
+                "coordinateur",
+                "instance-reprise",
+                "execution-enfant",
+                50,
+            )
+            .unwrap(),
+        ExecutionRecoveryOutcome::Ambiguous { execution_ids }
+            if execution_ids == vec!["execution-a", "execution-b"]
+    ));
+    assert_eq!(store.recoverable_execution_ids().unwrap().len(), 2);
 }
 
 #[test]
