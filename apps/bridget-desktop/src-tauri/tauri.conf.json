@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Bridget Desktop",
+  "productName": "Bridget",
   "version": "0.1.0",
   "identifier": "app.cartae.bridget-desktop",
   "build": {
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Bridget Desktop",
+        "title": "Bridget",
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "decorations": true,
