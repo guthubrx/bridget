@@ -794,7 +794,7 @@ dialog.settings-dialog {
   background: #0d0d0d;
 }
 
-.settings-sidebar button {
+#settings-dialog .settings-sidebar button {
   min-height: 2.2rem;
   padding: 0.42rem 0.54rem;
   border: 0;
@@ -808,9 +808,9 @@ dialog.settings-dialog {
   cursor: pointer;
 }
 
-.settings-sidebar button:hover,
-.settings-sidebar button:focus-visible,
-.settings-sidebar button[aria-current]:not([aria-current="false"]) {
+#settings-dialog .settings-sidebar button:hover,
+#settings-dialog .settings-sidebar button:focus-visible,
+#settings-dialog .settings-sidebar button[aria-current]:not([aria-current="false"]) {
   outline: none;
   color: var(--fleet-text);
   background: var(--fleet-surface-hover);
@@ -922,7 +922,7 @@ dialog.settings-dialog {
   gap: 0.35rem;
 }
 
-.settings-dialog button:not(.icon-button) {
+#settings-dialog button:not(.icon-button) {
   border: 1px solid #383838;
   border-radius: 0.46rem;
   padding: 0.4rem 0.55rem;
@@ -934,11 +934,24 @@ dialog.settings-dialog {
   cursor: pointer;
 }
 
-.settings-dialog button:not(.icon-button):hover,
-.settings-dialog button:not(.icon-button):focus-visible {
+#settings-dialog button:not(.icon-button):hover,
+#settings-dialog button:not(.icon-button):focus-visible {
   outline: none;
   border-color: #575757;
   background: #303030;
+}
+
+#settings-dialog .settings-sidebar button {
+  border: 0;
+  color: var(--fleet-muted);
+  background: transparent;
+}
+
+#settings-dialog .settings-sidebar button:hover,
+#settings-dialog .settings-sidebar button:focus-visible,
+#settings-dialog .settings-sidebar button[aria-current]:not([aria-current="false"]) {
+  color: var(--fleet-text);
+  background: var(--fleet-surface-hover);
 }
 
 .settings-dialog .dialog-actions {

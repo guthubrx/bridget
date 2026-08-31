@@ -75,6 +75,7 @@ fn le_centre_de_parametres_reunit_application_serveurs_et_usage() {
     assert!(frontend.contains("openSettings(\"servers\")"));
     assert!(stylesheet.contains(".settings-dialog"));
     assert!(stylesheet.contains(".settings-layout"));
+    assert!(stylesheet.contains("#settings-dialog .settings-sidebar button"));
 }
 
 #[test]
