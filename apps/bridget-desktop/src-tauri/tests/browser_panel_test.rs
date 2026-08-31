@@ -25,11 +25,12 @@ fn navigation_browser_reste_https_ou_publication_locale_et_le_panneau_est_unique
 }
 
 #[test]
-fn accueil_browser_est_local_et_ne_peut_pas_dupliquer_la_conversation_distante() {
+fn accueil_browser_recoit_un_marqueur_de_relais_et_ne_duplique_pas_la_conversation() {
     let backend = include_str!("../src/lib.rs");
 
-    assert!(backend.contains("La page d'accueil du Browser appartient au client Desktop"));
-    assert!(backend.contains("WebviewUrl::App(\"browser-home.html\".into())"));
+    assert!(backend.contains("append_pair(\"browser_panel\", \"1\")"));
+    assert!(backend.contains("WebviewUrl::External(target.parse::<tauri::Url>()"));
     assert!(backend.contains("second fil de discussion"));
+    assert!(backend.contains("window.__BRIDGET_BROWSER_PANEL__ = true;"));
     assert!(backend.contains("open_browser_home_surface(&app, &state)?;"));
 }

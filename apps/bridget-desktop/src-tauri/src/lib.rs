@@ -485,26 +485,50 @@ pub fn run() {
         app: &tauri::AppHandle,
         state: &DesktopState,
     ) -> Result<(), String> {
-        // La page d'accueil du Browser appartient au client Desktop. Elle ne
-        // doit jamais charger le rendu de conversation du relais, faute de
-        // quoi un WebView indisponible ou filtré pouvait se transformer en
-        // second fil de discussion. Les navigations HTTPS explicites passent
-        // ensuite par `open_browser_surface`, dans ce même WebView isolé.
-        let target = "bridget://browser-home";
+        let relay_target = state
+            .panels
+            .lock()
+            .map_err(as_message)?
+            .panels()
+            .next()
+            .map(|panel| panel.url.clone());
+        let target = relay_target
+            .map(|value| {
+                let mut url = value.parse::<tauri::Url>().expect("relais déjà validé");
+                // Le marqueur est porté par la query du relais. Contrairement
+                // au chemin, WebKit le conserve lors du rétablissement de la
+                // navigation : cette surface ne peut donc pas devenir un
+                // second fil de discussion.
+                url.query_pairs_mut().append_pair("browser_panel", "1");
+                url.to_string()
+            })
+            .unwrap_or_else(|| "bridget://browser-home".to_owned());
         let browser = {
             let mut panels = state.panels.lock().map_err(as_message)?;
-            panels.open_browser(target).map_err(as_message)?
+            panels.open_browser(target.clone()).map_err(as_message)?
         };
         let preferences =
             save_browser_preferences(state, |panel| panel.right_panel_visible = true)?;
-        if app.get_webview(&browser.label).is_some() {
+        if let Some(webview) = app.get_webview(&browser.label) {
+            if target != "bridget://browser-home" {
+                let url = target
+                    .parse::<tauri::Url>()
+                    .map_err(|_| "URL Browser Bridget invalide.".to_owned())?;
+                webview.navigate(url).map_err(as_message)?;
+            }
             return arrange_panels(app, state);
         }
         let main = main_window(app)?;
-        let child = WebviewBuilder::new(browser.label, WebviewUrl::App("browser-home.html".into()))
+        let initial_url = if target == "bridget://browser-home" {
+            WebviewUrl::App("browser-home.html".into())
+        } else {
+            WebviewUrl::External(target.parse::<tauri::Url>().map_err(as_message)?)
+        };
+        let child = WebviewBuilder::new(browser.label, initial_url)
             .data_store_identifier(browser_data_store_identifier(
                 preferences.browser_profile_generation,
             ))
+            .initialization_script("window.__BRIDGET_BROWSER_PANEL__ = true;")
             .on_navigation(|url| {
                 url.scheme() == "https"
                     || (url.scheme() == "http" && url.host_str() == Some("127.0.0.1"))
