@@ -43,18 +43,25 @@ Le binaire release courant a été construit depuis ce worktree, installé dans 
 | `node --check apps/bridget-desktop/ui/app.js` | PASS |
 | `cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml panels` | PASS - 1 test ciblé |
 | `git diff --check` | PASS |
+| `cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml --test desktop_commands` | PASS - 2 tests ciblés |
 
+
+## Correctif des actions de cartes Desktop
+
+- Une régression du montage de l'interface Desktop avait supprimé la délégation des actions de cartes. Les boutons Connecter, Réessayer, Ouvrir le relais, Déconnecter, Modifier, Retirer et Réglages sont à nouveau routés par le listing.
+- Le test `desktop_commands::les_actions_de_carte_sont_delegatees_au_listing_de_profils` atteste les six branches d'action et échoue si la délégation ou les appels Connecter et Réglages disparaissent.
+- La sonde SSH avec les arguments exacts de Bridget atteste que `moi@cartae.app:2222` est joignable. Le profil local Carte contient encore `Moi` et devra être corrigé en `moi` après fermeture de Bridget, afin de ne pas faire réécrire l'état en mémoire.
 
 ## Paquet macOS construit
 
-- Bundle : `Bridget.app`, construit depuis le commit `02052f9` avec `cargo-tauri build --bundles app`.
+- Bundle : `Bridget.app`, reconstruit depuis le commit `b48bfb3` avec `cargo-tauri build --bundles app`.
 - Manifeste : nom affiché et nom de bundle `Bridget`, identifiant `app.cartae.bridget-desktop`, version `0.1.0`.
 - Signature : signature ad hoc vérifiée par `codesign --verify --deep --strict`. Le paquet n'est pas notarisé Apple, ce qui est attendu pour cette distribution interne.
-- Copie prête sans écrasement : `/Users/moi/Downloads/Bridget.app`.
-- La copie `/Applications/Bridget.app` demeure active et n'est pas remplacée tant que l'opérateur ne l'a pas fermée et ne l'a pas demandé.
+- Copie prête sans écrasement de l'application active : `/Users/moi/Downloads/Bridget.app`.
+- La copie `/Applications/Bridget.app` reste active et contient la version antérieure tant que l'opérateur ne l'a pas fermée et n'a pas demandé son remplacement.
 
 ## Limites explicites avant clôture
 
-- Le paquet est reconstruit et disponible dans `/Users/moi/Downloads/Bridget.app`, mais la copie `/Applications/Bridget.app` n'est pas encore remplacée car elle était ouverte au moment de la livraison.
+- Le paquet corrigé est disponible dans `/Users/moi/Downloads/Bridget.app`, mais la copie `/Applications/Bridget.app` n'est pas encore remplacée car elle est ouverte.
 - La validation humaine de la vue Typographie après le portage T3 reste requise. Aucun résultat de clic ou de capture externe ambiguë n'est compté comme acceptation.
 - Les coûts restent indisponibles sans tarifs versionnés. Les filtres avancés, la courbe quotidienne et les autres réglages serveur écrits restent des tâches non cochées dans `tasks.md`.
