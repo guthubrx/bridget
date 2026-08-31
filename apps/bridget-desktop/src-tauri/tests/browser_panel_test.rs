@@ -23,3 +23,12 @@ fn navigation_browser_reste_https_ou_publication_locale_et_le_panneau_est_unique
         Err(PanelError::InvalidBrowserUrl)
     ));
 }
+
+#[test]
+fn surface_browser_existante_est_rechargee_vers_le_mode_browser_bridget() {
+    let backend = include_str!("../src/lib.rs");
+
+    assert!(backend.contains("if let Some(webview) = app.get_webview(&browser.label)"));
+    assert!(backend.contains("webview.navigate(url).map_err(as_message)?;"));
+    assert!(backend.contains("jamais conserver une seconde conversation dans le volet"));
+}

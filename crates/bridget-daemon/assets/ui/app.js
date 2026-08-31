@@ -658,6 +658,14 @@
         assert.equal(projection.activeTotal, 3);
       });
 
+      test("agents_arretes_restent_visibles_des_l_ouverture_de_la_colonne", () => {
+        const index = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+        assert.match(
+          index,
+          /<details class="stopped-agents" id="stopped-agents" open>/,
+        );
+      });
+
       test("spec_081_tri_de_la_colonne_agents_respecte_criteres_direction_et_epingles", () => {
         const agents = [
           { agent_id: "opaque-zoe", profile: { agent_id: "opaque-zoe", display_name: "Zoé", avatar: { shape: "round", color: "blue" } }, state: "connected", project_id: "beta", last_message_at: 10 },

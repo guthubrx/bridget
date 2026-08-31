@@ -510,7 +510,17 @@ pub fn run() {
         };
         let preferences =
             save_browser_preferences(state, |panel| panel.right_panel_visible = true)?;
-        if app.get_webview(&browser.label).is_some() {
+        if let Some(webview) = app.get_webview(&browser.label) {
+            // Un WebView latéral peut survivre à une fermeture visuelle, ou
+            // avoir précédemment affiché une URL HTTPS. Dans les deux cas,
+            // l'ouvrir à nouveau doit ramener la surface Browser Bridget,
+            // jamais conserver une seconde conversation dans le volet.
+            if target != "bridget://browser-home" {
+                let url = target
+                    .parse::<tauri::Url>()
+                    .map_err(|_| "URL Browser Bridget invalide.".to_owned())?;
+                webview.navigate(url).map_err(as_message)?;
+            }
             return arrange_panels(app, state);
         }
         let main = main_window(app)?;
