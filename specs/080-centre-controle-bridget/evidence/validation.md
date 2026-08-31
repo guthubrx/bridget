@@ -14,7 +14,7 @@ Date : 2026-08-31
 ## Contrôles automatisés
 
 - `node --check crates/bridget-daemon/assets/ui/app.js` : PASS.
-- `node crates/bridget-daemon/assets/ui/app.js` : PASS, 98 tests, 0 échec.
+- `node crates/bridget-daemon/assets/ui/app.js` : PASS, 99 tests, 0 échec.
 - `cargo fmt --check` : PASS.
 - `cargo test -p bridget-daemon spec_080 --lib` : PASS, 2 tests.
 - `node --check apps/bridget-desktop/ui/app.js` : PASS.
@@ -57,6 +57,12 @@ Le test UI couvre aussi la séparation de portées dans la navigation Projets : 
 
 - La grille d'agents est ancrée en haut avec `align-content: start` et des lignes `min-content`, afin qu'un petit nombre d'agents ne soit jamais réparti sur toute la hauteur de la barre.
 - La recherche a une marge basse de `1rem` avant la liste.
+
+## Correctif de l'identité humaine
+
+- Le test Node vérifie que la présence interne `humain` est exclue de la flotte, de sa projection latérale et de toute sélection restaurée.
+- Le test Rust ciblé `garde_destinataire_refuse_humain_absent_et_arrete_sans_refuser_un_agent_vivant` passe et vérifie que le relais refuse `humain` tout en acceptant un agent vivant.
+- La suite d'intégration complète `ui_relay_test` ne peut pas être conclue sur ce Mac : sa fixture lance le daemon dans un `HOME` temporaire qui n'est pas résolu comme attendu par macOS. Elle échoue avant les scénarios métier, sur `daemon non prêt`.
 
 ## Paquet macOS attesté
 

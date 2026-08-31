@@ -16,6 +16,7 @@ Les coches de la première tranche ne valent pas acceptation produit. La SPEC re
 - [x] T043 [US1] Ajouter la tuile locale initiales/couleur, le repli de la colonne sans perte d'icônes et la réserve pour les boutons macOS dans `crates/bridget-daemon/assets/ui/app.js`, `index.html` et `theme.css`.
 - [x] T044 [US1] Ajouter le raccourci `Commande + virgule`, les preuves unitaires et le parcours de validation manuelle dans les artefacts de la SPEC-080.
 - [x] T045 [US1] Raccorder les boutons `+`, `Importer`, retrait, réactivation et reconnexion au registre de projets via le relais, avec dialogue de prévisualisation et confirmation explicite.
+- [x] T046 [US1] Préserver `humain` comme émetteur interne : l'exclure de la flotte sélectionnable et refuser toute remise `humain → humain` dans le relais.
 
 ## Dépendances
 

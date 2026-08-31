@@ -1839,8 +1839,14 @@ fn post_ui_message(
 
     let agents = read_agent_list(&config.daemon_socket)
         .map_err(|error| (503, "daemon_unavailable", error.to_string()))?;
-    validate_ui_recipient(&agents, &request.to)
-        .map_err(|(status, code)| (status, code, "destinataire indisponible".to_string()))?;
+    validate_ui_recipient(&agents, &request.to).map_err(|(status, code)| {
+        let message = if code == "human_recipient" {
+            "l’identité locale ne peut pas recevoir de message"
+        } else {
+            "destinataire indisponible"
+        };
+        (status, code, message.to_string())
+    })?;
     // Ré-assurée à chaque envoi, que la réponse soit attendue ou non : c'est
     // ce qui rouvre l'inscription après un redémarrage du daemon. Quand aucune
     // réponse n'est attendue, un échec ne doit pas faire perdre le message —
@@ -3147,6 +3153,9 @@ fn validate_ui_recipient(
     agents: &[bridget_transport::protocol::AgentInfo],
     recipient: &str,
 ) -> Result<(), (u16, &'static str)> {
+    if recipient == UI_SENDER {
+        return Err((400, "human_recipient"));
+    }
     let Some(agent) = agents.iter().find(|agent| agent.name == recipient) else {
         return Err((404, "unknown_recipient"));
     };
@@ -5161,10 +5170,14 @@ mod tests {
     }
 
     #[test]
-    fn garde_destinataire_refuse_absent_et_arrete_sans_refuser_un_agent_vivant() {
+    fn garde_destinataire_refuse_humain_absent_et_arrete_sans_refuser_un_agent_vivant() {
         let vivant = agent_info("vivant", "connected");
         let arrete = agent_info("arrete", "stopped");
         let agents = vec![vivant, arrete];
+        assert_eq!(
+            validate_ui_recipient(&agents, UI_SENDER),
+            Err((400, "human_recipient"))
+        );
         assert_eq!(
             validate_ui_recipient(&agents, "absent"),
             Err((404, "unknown_recipient"))

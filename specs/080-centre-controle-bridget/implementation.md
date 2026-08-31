@@ -29,6 +29,12 @@ Statut : tranche de centre de contrôle et navigation Projets déployées sur le
 - Une création revalide la politique juste avant l'écriture, crée uniquement le dossier confirmé, initialise Git seulement avec l'accord explicite et inscrit ensuite le projet dans le registre durable. Un refus du registre ne supprime jamais automatiquement le dossier créé ni le contenu d'un projet importé.
 - L'ancienne interface attendait un catalogue de coordinateurs et des routes qui n'existaient pas. Cette attente a été supprimée plutôt que simulée : le coordinateur relève du projet ou de l'exécution, pas de l'ajout au registre.
 
+## Correctif de l'identité humaine dans les conversations
+
+- `humain` reste l'identité technique de l'opérateur qui émet depuis le WebView. Elle n'est jamais un agent sélectionnable et ne rend plus de ligne dans la flotte, même si le daemon la publie pour permettre aux agents de répondre à l'opérateur.
+- Le relais refuse explicitement une remise à destination de `humain`. Cette garde empêche une requête directe ou un ancien état d'interface de créer un fil `humain → humain` sans consommateur.
+- La sélection conservée d'un ancien lien `?agent=humain` retombe sur un agent réel lors de la synchronisation, sans modifier les fils existants `humain ↔ agent`.
+
 ## Portage de finition T3 Code
 
 La finition de l'overlay conserve les fonds sombres et les variables de couleurs Bridget. Le gabarit des réglages est en revanche porté du composant de réglages T3 Code installé :
@@ -55,7 +61,7 @@ Le binaire release courant a été construit depuis un clone propre de `main`, i
 | Commande | Résultat |
 |---|---|
 | `node --check crates/bridget-daemon/assets/ui/app.js` | PASS |
-| `node crates/bridget-daemon/assets/ui/app.js` | PASS - 98 tests, 0 échec |
+| `node crates/bridget-daemon/assets/ui/app.js` | PASS - 99 tests, 0 échec |
 | `cargo fmt --check` | PASS |
 | `cargo test -p bridget-daemon spec_080 --lib` | PASS - 2 tests ciblés |
 | `cargo build --release -p bridget-daemon` | PASS |

@@ -1238,6 +1238,22 @@
         assert.equal(next.agents[0].name, "rc1");
       });
 
+      test("identite_humaine_reste_emetteur_et_n_est_jamais_un_interlocuteur", () => {
+        const humain = { name: "humain", type: "ui", state: "connected", host: "localhost" };
+        const bridget = { name: "bridget", type: "codex", state: "connected", host: "serveur" };
+        assert.deepEqual(api.normalizeAgents([humain, bridget]).map((agent) => agent.name), ["bridget"]);
+        assert.deepEqual(
+          api.agentSidebarProjection([humain, bridget], api.normalizeAgentSidebarPreferences(null))
+            .active.map((agent) => agent.name),
+          ["bridget"],
+        );
+        const next = api.applyReconnectSnapshot(
+          api.createUiState({ selectedAgent: "humain" }),
+          { agents: [humain, bridget] },
+        );
+        assert.equal(next.selectedAgent, "bridget");
+      });
+
       test("flotte_dynamique_classe_injoignable_sans_rendu_sur_un_age_seul", () => {
         assert.equal(api.isInactiveAgent({ state: "stopped" }), true);
         assert.equal(api.isInactiveAgent({ state: "unreachable" }), true);
@@ -3544,7 +3560,7 @@
         return pinDifference || left.index - right.index;
       })
       .map((entry) => entry.agent);
-    const source = Array.isArray(agents) ? agents : [];
+    const source = (Array.isArray(agents) ? agents : []).filter((agent) => !isUiSender(agent));
     const visible = source.filter((agent) => !hiddenNames.has(agent.name));
     return {
       active: withStableOrder(visible.filter((agent) => !isInactiveAgent(agent))),
@@ -4123,6 +4139,17 @@
     return displayName || "Agent";
   }
 
+  // `humain` identifie l'opérateur qui écrit depuis cette interface. C'est
+  // l'émetteur des messages UI, jamais un interlocuteur ni une ligne de flotte.
+  const UI_SENDER_NAME = "humain";
+
+  function isUiSender(agentOrName) {
+    const name = typeof agentOrName === "string"
+      ? agentOrName
+      : agentOrName && agentOrName.name;
+    return text(name).trim() === UI_SENDER_NAME;
+  }
+
   function normalizeAgentRow(agent) {
     const mode = typeof (agent && agent.mode) === "string"
       ? agent.mode.trim().toLowerCase()
@@ -4241,6 +4268,7 @@
   function normalizeAgents(agents) {
     return (Array.isArray(agents) ? agents : [])
       .map(normalizeAgentRow)
+      .filter((agent) => !isUiSender(agent))
       .sort((left, right) => {
         const byMessage = (right.last_message_at || 0) - (left.last_message_at || 0);
         return byMessage || left.name.localeCompare(right.name, "fr");
@@ -6128,7 +6156,7 @@
       return controlPreferences;
     };
     applyControlCenterPreferences(documentRef, controlPreferences);
-    let state = createUiState({ selectedAgent: requestedAgent });
+    let state = createUiState({ selectedAgent: isUiSender(requestedAgent) ? null : requestedAgent });
     let projects = [];
     let selectedProjectId = null;
     let projectSettingsSnapshot = null;
@@ -9204,7 +9232,7 @@
     };
 
     const selectAgent = (agentName) => {
-      if (!state.agents.some((agent) => agent.name === agentName)) return;
+      if (isUiSender(agentName) || !state.agents.some((agent) => agent.name === agentName)) return;
       closeIdentityCard(false);
       if (state.selectedAgent !== agentName) storeCurrentDraft();
       state = { ...state, selectedAgent: agentName };
@@ -9445,6 +9473,11 @@
       const body = nodes.draft.value;
       const target = state.selectedAgent;
       if (!target || !body.trim() || nodes.draft.dataset.composing === "true") return;
+      if (isUiSender(target)) {
+        nodes.sendState.textContent = "choisissez un agent";
+        nodes.send.disabled = true;
+        return;
+      }
       const result = explicitSend(
         { ...state, draft: createDraft(body, nodes.draft.selectionStart, nodes.draft.selectionEnd, true) },
         target,
@@ -9494,6 +9527,7 @@
       } catch (error) {
         const labels = {
           invalid_body: "message invalide",
+          human_recipient: "choisissez un agent",
           unknown_recipient: "agent inconnu",
           agent_stopped: "agent arrêté",
           daemon_unavailable: "daemon indisponible",
@@ -9503,7 +9537,9 @@
         nodes.sendState.textContent = labels[error.message] || "envoi refusé";
       } finally {
         resizeDraft();
-        nodes.send.disabled = !state.selectedAgent || nodes.draft.value.trim().length === 0;
+        nodes.send.disabled = isUiSender(state.selectedAgent)
+          || !state.selectedAgent
+          || nodes.draft.value.trim().length === 0;
         nodes.draft.focus();
       }
     };
@@ -9533,7 +9569,9 @@
     nodes.draft.addEventListener("input", () => {
       storeCurrentDraft();
       resizeDraft();
-      nodes.send.disabled = !state.selectedAgent || nodes.draft.value.trim().length === 0;
+      nodes.send.disabled = isUiSender(state.selectedAgent)
+        || !state.selectedAgent
+        || nodes.draft.value.trim().length === 0;
     });
     nodes.draft.addEventListener("select", storeCurrentDraft);
     nodes.thread.addEventListener("scroll", () => {
@@ -9650,7 +9688,7 @@
       nodes.sourceState.dataset.state = "error";
     });
 
-    if (requestedAgent) {
+    if (requestedAgent && !isUiSender(requestedAgent)) {
       connectWatch(requestedAgent);
     } else {
       fetchScopedSnapshot((url) => windowRef.fetch(url), token, null)

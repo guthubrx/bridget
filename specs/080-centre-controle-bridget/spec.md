@@ -201,6 +201,7 @@ Comme opérateur, je veux voir si une version plus récente de Bridget est dispo
 - FR-8026: Le comportement de lecture, prévisualisation, confirmation, application et reçu DOIT fonctionner au travers du même chemin sécurisé que les autres commandes Bridget vers un serveur enregistré.
 - FR-8027: `Commande + virgule` DOIT ouvrir le centre de contrôle de Bridget dans le WebView macOS, au même titre que la roue visible.
 - FR-8028: La colonne Projets DOIT être limitée à l'ajout, l'import, le filtrage, le repli et les actions contextuelles sur un projet. Elle ne DOIT PAS proposer un second accès global aux réglages du serveur.
+- FR-8032: L'identité interne `humain` DOIT rester l'émetteur de l'opérateur dans les fils `humain ↔ agent`, sans apparaître comme agent sélectionnable ni pouvoir être la cible d'un envoi UI.
 - FR-8029: Chaque projet DOIT posséder une présentation locale avec initiales et couleur validées. Cette présentation NE DOIT produire aucune écriture vers le serveur.
 - FR-8030: Les actions de retrait et de personnalisation d'un projet DOIVENT être rattachées au menu contextuel de ce projet, pas à un pied de colonne ambigu.
 - FR-8031: Les actions d'ajout, d'import, de retrait, de réactivation et de reconnexion d'un projet DOIVENT emprunter les routes versionnées du relais et la capacité locale `ProjectRegistryV1`. Elles ne DOIVENT pas simuler un catalogue de coordinateurs ni utiliser une route absente.
