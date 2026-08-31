@@ -719,11 +719,13 @@ mod tests {
             &identity,
             Some(&ProjectBindingProjection {
                 project_id: "project-1".to_string(),
+                canonical_root: None,
                 state: ProjectBindingStatus::Active,
                 binding_generation: Some(1),
                 backend: Some(ProjectBackend::Host),
                 runtime_policy: None,
                 reason: None,
+                last_audit: None,
                 observed_at: 12,
             }),
         );

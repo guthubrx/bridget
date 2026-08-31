@@ -211,6 +211,54 @@ impl LiveAgent {
         decode(line.trim()).unwrap()
     }
 
+    /// Un agent peut recevoir une notification Bridget déjà en attente au
+    /// moment où le relais ouvre son abonnement Attach. Le client doit donc
+    /// continuer à lire jusqu'à la trame d'abonnement, au lieu de confondre
+    /// une livraison normale avec une erreur de protocole.
+    fn read_subscription_for(&mut self, expected_agent: &str) -> String {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        self.reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        let subscription_id = loop {
+            let mut line = String::new();
+            match self.reader.read_line(&mut line) {
+                Ok(0) => panic!("connexion agent fermée avant Subscribe"),
+                Ok(_) => match decode(line.trim()).unwrap() {
+                    DaemonToWrapper::Subscribe {
+                        subscription_id,
+                        agent,
+                        ..
+                    } if agent == expected_agent => break subscription_id,
+                    DaemonToWrapper::Deliver(message) if message.from == "bridget" => {
+                        assert!(
+                            message.body.starts_with("Rappel :"),
+                            "notification Bridget inattendue avant Subscribe: {message:?}"
+                        );
+                    }
+                    response => {
+                        panic!("Subscribe pour {expected_agent} attendu, reçu {response:?}")
+                    }
+                },
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "Subscribe pour {expected_agent} non reçu avant l'échéance"
+                    );
+                }
+                Err(error) => panic!("lecture agent avant Subscribe: {error}"),
+            }
+        };
+        self.reader.get_ref().set_read_timeout(None).unwrap();
+        subscription_id
+    }
+
     fn ledger_messages(&mut self) -> Vec<bridget_transport::protocol::LedgerMessage> {
         self.send(&WrapperToDaemon::LedgerProjection {
             scope: LedgerScope::Messages,
@@ -262,6 +310,16 @@ fn write_maicie_config(root: &Path) -> PathBuf {
     });
     std::fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
     path
+}
+
+fn write_agent_journal(root: &Path, agent: &str) {
+    let journal_dir = root.join(".cache/bridget/sessions").join(agent);
+    std::fs::create_dir_all(&journal_dir).unwrap();
+    std::fs::write(
+        journal_dir.join("fixture.jsonl"),
+        "{\"v\":1,\"seq\":1,\"message_id\":\"turn-fixture\",\"event\":\"turn_start\",\"session_id\":\"fixture\"}\n",
+    )
+    .unwrap();
 }
 
 fn observe_ui_presence_channel(
@@ -613,18 +671,11 @@ fn loopback_rend_snapshot_et_relaie_un_fragment_attach_d_un_agent_vivant() {
     demandeur.send(&WrapperToDaemon::Send(demande));
     assert!(matches!(demandeur.read(), DaemonToWrapper::Ack { .. }));
     assert!(matches!(agent.read(), DaemonToWrapper::Deliver(_)));
-    let config = UiRelayConfig {
-        daemon_socket: socket,
-        maicie_config: write_maicie_config(&root),
-        project_root_policy_path: None,
-        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-        token: "jeton-couture".to_string(),
-    };
-    let relay = UiRelay::bind(config).unwrap();
-    let address = relay.local_addr().unwrap();
-    thread::spawn(move || relay.serve().unwrap());
+    write_agent_journal(&root, "agent-vivant");
+    let ui = UiProcess::start(&root, None);
+    let address = ui.address;
 
-    let mut snapshot = request(address, "/v1/snapshot?token=jeton-couture");
+    let mut snapshot = request(address, &format!("/v1/snapshot?token={}", ui.token));
     let mut snapshot_text = read_until(&mut snapshot, "agent-vivant");
     let mut snapshot_tail = String::new();
     snapshot
@@ -641,18 +692,11 @@ fn loopback_rend_snapshot_et_relaie_un_fragment_attach_d_un_agent_vivant() {
         "la projection globale doit inclure la demande suivie réelle; {snapshot_text}"
     );
 
-    let mut events = request(address, "/v1/watch?token=jeton-couture&agent=agent-vivant");
-    let subscription_id = match agent.read() {
-        DaemonToWrapper::Subscribe {
-            subscription_id,
-            agent,
-            ..
-        } => {
-            assert_eq!(agent, "agent-vivant");
-            subscription_id
-        }
-        response => panic!("Subscribe wrapper attendu, reçu {response:?}"),
-    };
+    let mut events = request(
+        address,
+        &format!("/v1/watch?token={}&agent=agent-vivant", ui.token),
+    );
+    let subscription_id = agent.read_subscription_for("agent-vivant");
     agent.send(&WrapperToDaemon::Subscribed {
         subscription_id: subscription_id.clone(),
     });
@@ -680,6 +724,9 @@ fn loopback_rend_snapshot_et_relaie_un_fragment_attach_d_un_agent_vivant() {
         "Mutation : publier l'instantané avant Subscribe ferait perdre le fragment entre les deux; {events}"
     );
 
+    drop(ui);
+    drop(agent);
+    drop(demandeur);
     drop(daemon);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -1078,24 +1125,15 @@ fn watch_annonce_reconnecting_puis_connected_apres_coupure_daemon() {
     let mut daemon = DaemonProcess::start(&root);
     let socket = root.join(".cache/bridget/bridget.sock");
     let mut agent = LiveAgent::connect(&socket, "agent-reprise");
-    let config = UiRelayConfig {
-        daemon_socket: socket.clone(),
-        maicie_config: write_maicie_config(&root),
-        project_root_policy_path: None,
-        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-        token: "jeton-reprise".to_string(),
-    };
-    let relay = UiRelay::bind(config).unwrap();
-    let address = relay.local_addr().unwrap();
-    thread::spawn(move || relay.serve().unwrap());
+    write_agent_journal(&root, "agent-reprise");
+    let ui = UiProcess::start(&root, None);
+    let address = ui.address;
 
-    let mut events = request(address, "/v1/watch?token=jeton-reprise&agent=agent-reprise");
-    let subscription_id = match agent.read() {
-        DaemonToWrapper::Subscribe {
-            subscription_id, ..
-        } => subscription_id,
-        response => panic!("Subscribe attendu, reçu {response:?}"),
-    };
+    let mut events = request(
+        address,
+        &format!("/v1/watch?token={}&agent=agent-reprise", ui.token),
+    );
+    let subscription_id = agent.read_subscription_for("agent-reprise");
     agent.send(&WrapperToDaemon::Subscribed { subscription_id });
     let initial = read_until(&mut events, "\"state\":\"connected\"");
     assert!(initial.contains("event: relay_state"), "{initial}");
@@ -1106,16 +1144,15 @@ fn watch_annonce_reconnecting_puis_connected_apres_coupure_daemon() {
 
     let daemon_restarted = DaemonProcess::start(&root);
     let mut reconnected = LiveAgent::connect(&socket, "agent-reprise");
-    let subscription_id = match reconnected.read() {
-        DaemonToWrapper::Subscribe {
-            subscription_id, ..
-        } => subscription_id,
-        response => panic!("Subscribe de reprise attendu, reçu {response:?}"),
-    };
+    let subscription_id = reconnected.read_subscription_for("agent-reprise");
     reconnected.send(&WrapperToDaemon::Subscribed { subscription_id });
     let restored = read_until(&mut events, "\"state\":\"connected\"");
     assert!(restored.contains("event: relay_state"), "{restored}");
 
+    drop(ui);
+    drop(reconnected);
+    drop(agent);
+    drop(daemon);
     drop(daemon_restarted);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -1139,20 +1176,13 @@ fn snapshot_sans_agent_omet_les_pairs_et_watch_agent_les_projette() {
     assert!(matches!(peer.read(), DaemonToWrapper::Ack { .. }));
     assert!(matches!(focus.read(), DaemonToWrapper::Deliver(_)));
 
-    let config = UiRelayConfig {
-        daemon_socket: socket,
-        maicie_config: write_maicie_config(&root),
-        project_root_policy_path: None,
-        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-        token: "jeton-peer".to_string(),
-    };
-    let relay = UiRelay::bind(config).unwrap();
-    let address = relay.local_addr().unwrap();
-    thread::spawn(move || relay.serve().unwrap());
+    write_agent_journal(&root, "agent-focus");
+    let ui = UiProcess::start(&root, None);
+    let address = ui.address;
 
     let global = response_json(&read_response(request(
         address,
-        "/v1/snapshot?token=jeton-peer",
+        &format!("/v1/snapshot?token={}", ui.token),
     )));
     assert!(
         global.get("peer_exchanges").is_none(),
@@ -1161,7 +1191,7 @@ fn snapshot_sans_agent_omet_les_pairs_et_watch_agent_les_projette() {
 
     let focused = response_json(&read_response(request(
         address,
-        "/v1/snapshot?token=jeton-peer&agent=agent-focus",
+        &format!("/v1/snapshot?token={}&agent=agent-focus", ui.token),
     )));
     let focused_exchanges = focused["peer_exchanges"]
         .as_array()
@@ -1171,13 +1201,11 @@ fn snapshot_sans_agent_omet_les_pairs_et_watch_agent_les_projette() {
     assert_eq!(focused_exchanges[0]["direction"], "both", "{focused}");
     assert_eq!(focused_exchanges[0]["count"], 2, "{focused}");
 
-    let mut events = request(address, "/v1/watch?token=jeton-peer&agent=agent-focus");
-    let subscription_id = match focus.read() {
-        DaemonToWrapper::Subscribe {
-            subscription_id, ..
-        } => subscription_id,
-        response => panic!("Subscribe attendu, reçu {response:?}"),
-    };
+    let mut events = request(
+        address,
+        &format!("/v1/watch?token={}&agent=agent-focus", ui.token),
+    );
+    let subscription_id = focus.read_subscription_for("agent-focus");
     focus.send(&WrapperToDaemon::Subscribed { subscription_id });
 
     let snapshot = read_until(&mut events, "event: peer_exchange");
@@ -1188,6 +1216,9 @@ fn snapshot_sans_agent_omet_les_pairs_et_watch_agent_les_projette() {
     let pushed = read_until(&mut events, "\"delivery_ids\"");
     assert!(pushed.contains("data: {\"version\":1,\"kind\":\"peer_exchange\""));
 
+    drop(ui);
+    drop(focus);
+    drop(peer);
     drop(daemon);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -1207,24 +1238,15 @@ fn watch_pousse_thread_message_sortant_apres_ouverture() {
     // Présence humaine : le Send sortant vers humain doit être accepté au ledger.
     let _humain = LiveAgent::connect(&socket, "humain");
 
-    let config = UiRelayConfig {
-        daemon_socket: socket,
-        maicie_config: write_maicie_config(&root),
-        project_root_policy_path: None,
-        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-        token: "jeton-live".to_string(),
-    };
-    let relay = UiRelay::bind(config).unwrap();
-    let address = relay.local_addr().unwrap();
-    thread::spawn(move || relay.serve().unwrap());
+    write_agent_journal(&root, "agent-referent");
+    let ui = UiProcess::start(&root, None);
+    let address = ui.address;
 
-    let mut events = request(address, "/v1/watch?token=jeton-live&agent=agent-referent");
-    let subscription_id = match referent.read() {
-        DaemonToWrapper::Subscribe {
-            subscription_id, ..
-        } => subscription_id,
-        response => panic!("Subscribe attendu, reçu {response:?}"),
-    };
+    let mut events = request(
+        address,
+        &format!("/v1/watch?token={}&agent=agent-referent", ui.token),
+    );
+    let subscription_id = referent.read_subscription_for("agent-referent");
     referent.send(&WrapperToDaemon::Subscribed { subscription_id });
 
     let opened = read_until(&mut events, "event: snapshot");
@@ -1261,6 +1283,9 @@ fn watch_pousse_thread_message_sortant_apres_ouverture() {
         "une reconnexion ne compte pas comme chemin vivant: {live}"
     );
 
+    drop(ui);
+    drop(referent);
+    drop(_humain);
     drop(daemon);
     std::fs::remove_dir_all(root).unwrap();
 }

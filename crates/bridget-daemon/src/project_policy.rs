@@ -131,15 +131,15 @@ impl ProjectRootPolicy {
             .iter()
             .map(|root| root.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        if let Some(receipt) = current.last_control_receipt() {
-            if receipt.command_id == command_id {
-                if receipt.expected_generation == expected_generation
-                    && receipt.allowed_project_roots == requested_strings
-                {
-                    return Ok(current);
-                }
-                return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+        if let Some(receipt) = current.last_control_receipt()
+            && receipt.command_id == command_id
+        {
+            if receipt.expected_generation == expected_generation
+                && receipt.allowed_project_roots == requested_strings
+            {
+                return Ok(current);
             }
+            return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
         }
         if current.generation != expected_generation {
             return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);

@@ -103,6 +103,17 @@ impl ProjectIdentity {
         self.reference(binding_generation)
     }
 
+    pub fn reactivate(
+        &mut self,
+        binding_generation: u64,
+        observed_at: i64,
+    ) -> Result<ProjectReference, DomainError> {
+        if self.status == ProjectIdentityStatus::Disabled {
+            self.transition(ProjectIdentityStatus::Active, observed_at)?;
+        }
+        self.reference(binding_generation)
+    }
+
     pub fn registration_conflict(&mut self, observed_at: i64) -> Result<(), DomainError> {
         if self.status != ProjectIdentityStatus::PendingBinding {
             return Err(DomainError::TransitionInterdite);

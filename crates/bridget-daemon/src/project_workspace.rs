@@ -212,8 +212,20 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    fn git(path: &std::path::Path, args: &[&str]) {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
     struct Fixture {
@@ -302,6 +314,53 @@ mod tests {
             "conserver"
         );
         assert!(!imported.join(".git").exists());
+    }
+
+    #[test]
+    fn spec_076_import_git_diagnostique_propre_modifie_et_worktree_sans_contenu() {
+        let fixture = Fixture::new();
+        let policy = fixture.policy();
+
+        let clean = fixture.projects.join("git-propre");
+        fs::create_dir_all(&clean).unwrap();
+        git(&clean, &["init", "--quiet"]);
+        assert_eq!(
+            ProjectPreview::import(&policy, &clean).unwrap().git,
+            GitDiagnostic::Clean
+        );
+
+        let changed = clean.join("modifie.txt");
+        fs::write(&changed, "conserver exactement").unwrap();
+        let modified = ProjectPreview::import(&policy, &clean).unwrap();
+        assert_eq!(modified.git, GitDiagnostic::Modified);
+        assert_eq!(fs::read_to_string(changed).unwrap(), "conserver exactement");
+
+        let source = fixture.projects.join("source-worktree");
+        fs::create_dir_all(&source).unwrap();
+        git(&source, &["init", "--quiet"]);
+        git(
+            &source,
+            &["config", "user.email", "spec076@example.invalid"],
+        );
+        git(&source, &["config", "user.name", "SPEC 076"]);
+        fs::write(source.join("README.md"), "base").unwrap();
+        git(&source, &["add", "README.md"]);
+        git(&source, &["commit", "--quiet", "-m", "initial"]);
+        let worktree = fixture.projects.join("copie-worktree");
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(&source)
+                .args(["worktree", "add", "--detach"])
+                .arg(&worktree)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(
+            ProjectPreview::import(&policy, &worktree).unwrap().git,
+            GitDiagnostic::Worktree
+        );
     }
 
     #[test]

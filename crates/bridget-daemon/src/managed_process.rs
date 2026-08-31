@@ -420,6 +420,33 @@ impl RunningManagedChild {
         Ok(ManagedStopResult::Timeout)
     }
 
+    /// Demande l'arrêt du groupe sans attendre. Cette phase peut être appelée
+    /// pour tous les enfants au début de l'arrêt du daemon afin que les délais
+    /// ne s'additionnent pas avec la taille de la flotte.
+    pub fn request_group_termination(&mut self) -> Result<(), ManagedProcessError> {
+        let pgid = self.marker.marker().pgid;
+        let _ = self.inner.child.try_wait()?;
+        if !group_exists(pgid)? {
+            self.remove_marker()?;
+            return Ok(());
+        }
+        signal_group(pgid, libc::SIGTERM)?;
+        Ok(())
+    }
+
+    /// Récolte le leader et retire le marqueur seulement une fois le groupe
+    /// effectivement absent. Un groupe résiduel reste marquable pour la
+    /// réconciliation du prochain démarrage.
+    pub fn reap_terminated_group(&mut self) -> Result<bool, ManagedProcessError> {
+        let pgid = self.marker.marker().pgid;
+        let _ = self.inner.child.try_wait()?;
+        if group_exists(pgid)? {
+            return Ok(false);
+        }
+        self.remove_marker()?;
+        Ok(true)
+    }
+
     fn wait_group_gone_reaping(
         &mut self,
         pgid: u32,

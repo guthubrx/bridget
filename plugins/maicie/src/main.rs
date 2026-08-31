@@ -14,8 +14,8 @@ use maicie::MAICIE_IDENTITY;
 use maicie::app::{
     CatalogueReconcileError, DelegateError, DelegateRequest, DelegateResult, DelegationCandidate,
     LocalProfileApproval, ObjectiveError, ProfileActivationError, ProfileActivationProposalRequest,
-    ProjectRegistrationError, ProjectRegistrationRequest, add_participant,
-    approve_profile_activation, delegated_participants, disable_project_identity,
+    ProjectRegistrationError, ProjectRegistrationRequest, activate_project_identity,
+    add_participant, approve_profile_activation, delegated_participants, disable_project_identity,
     prepare_project_registration, project_registration_request_bytes, propose_profile_activation,
     reconcile_catalogue_from_store, remove_participant, resolve_project_registration, status,
     stored_profile_activation_proposal, summarize,
@@ -915,6 +915,7 @@ fn run_project(arguments: ProjectArgs, migrate: bool) -> Result<String, CliError
         | ProjectAction::Status { .. }
         | ProjectAction::Rebind { .. }
         | ProjectAction::Disable { .. }
+        | ProjectAction::Activate { .. }
         | ProjectAction::Reconcile { .. }) => {
             return run_project_admin(&mut store, &config, action, arguments.json);
         }
@@ -974,6 +975,16 @@ fn run_project_admin(
             None,
             command_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
         ),
+        ProjectAction::Activate {
+            project_id,
+            requested_root,
+            command_id,
+        } => (
+            ProjectAdminOperation::Activate,
+            Some(project_id),
+            Some(requested_root),
+            command_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+        ),
         ProjectAction::Reconcile {
             dry_run,
             command_id,
@@ -1008,6 +1019,23 @@ fn run_project_admin(
     let mut client = ProjectRegistryClient::connect(&config.bridget_socket, store.issuer_scope())
         .map_err(CliError::Bridget)?;
     let outcome = client.administer(&request).map_err(CliError::Bridget)?;
+    if outcome.reason.is_none()
+        && outcome.operation == ProjectAdminOperation::Activate
+        && outcome
+            .bindings
+            .first()
+            .is_some_and(|binding| binding.state == ProjectBindingStatus::Active)
+        && let (Some(project_id), Some(binding_generation)) = (
+            project_id.as_deref(),
+            outcome
+                .bindings
+                .first()
+                .and_then(|binding| binding.binding_generation),
+        )
+    {
+        activate_project_identity(store, project_id, binding_generation, outcome.observed_at)
+            .map_err(CliError::ProjectRegistration)?;
+    }
     if outcome.reason.is_none()
         && outcome.operation == ProjectAdminOperation::Disable
         && outcome
@@ -1639,6 +1667,11 @@ enum ProjectAction {
         project_id: String,
         command_id: Option<String>,
     },
+    Activate {
+        project_id: String,
+        requested_root: String,
+        command_id: Option<String>,
+    },
     Reconcile {
         dry_run: bool,
         command_id: Option<String>,
@@ -1732,7 +1765,7 @@ fn parse_project_profile(arguments: &[String]) -> Result<ProjectProfileArgs, Cli
 fn parse_project(arguments: &[String]) -> Result<ProjectArgs, CliError> {
     let Some((action, tail)) = arguments.split_first() else {
         return Err(CliError::Usage(
-            "action project obligatoire : register, resume, list, status, rebind, disable ou reconcile",
+            "action project obligatoire : register, resume, list, status, rebind, disable, activate ou reconcile",
         ));
     };
     let mut config = None;
@@ -1846,6 +1879,16 @@ fn parse_project(arguments: &[String]) -> Result<ProjectArgs, CliError> {
                 command_id,
             }
         }
+        "activate" => {
+            if display_name.is_some() {
+                return Err(CliError::Usage("project activate n accepte pas --name"));
+            }
+            ProjectAction::Activate {
+                project_id: project_id.ok_or(CliError::Usage("--project-id est obligatoire"))?,
+                requested_root: requested_root.ok_or(CliError::Usage("--root est obligatoire"))?,
+                command_id,
+            }
+        }
         "disable" => {
             if display_name.is_some() || requested_root.is_some() {
                 return Err(CliError::Usage(
@@ -1875,7 +1918,7 @@ fn parse_project(arguments: &[String]) -> Result<ProjectArgs, CliError> {
         }
         _ => {
             return Err(CliError::Usage(
-                "action project inconnue : register, resume, list, status, rebind, disable ou reconcile",
+                "action project inconnue : register, resume, list, status, rebind, disable, activate ou reconcile",
             ));
         }
     };

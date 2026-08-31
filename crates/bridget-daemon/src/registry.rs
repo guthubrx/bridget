@@ -22,6 +22,11 @@ const NATIVE_CODEX_COMMAND: &str = "/opt/homebrew/bin/codex";
 const MAX_PASS_ENV_ENTRIES: usize = 64;
 const MAX_ENV_NAME_BYTES: usize = 128;
 const MAX_CAPABILITY_VALUE_CHARS: usize = 100;
+/// Les coordinateurs de découverte ne réemploient jamais une définition
+/// d'agent ordinaire telle quelle : celle-ci peut volontairement avoir des
+/// permissions larges pour un autre usage. Le préfixe rend la génération
+/// durable lisible dans la flotte sans permettre de confondre les deux rôles.
+const PROJECT_DISCOVERY_AGENT_PREFIX: &str = "project-discovery-";
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct McpDefinition {
@@ -149,6 +154,7 @@ impl AgentRegistry {
                 ));
             }
         }
+        add_project_discovery_definitions(&mut agents);
         Ok(Self {
             agents,
             source,
@@ -165,6 +171,7 @@ impl AgentRegistry {
         let execution_projection = user.execution_projection;
         let mut agents = default_agents()?;
         agents.extend(user.agents);
+        add_project_discovery_definitions(&mut agents);
         Ok(Self {
             agents,
             source,
@@ -184,6 +191,25 @@ impl AgentRegistry {
 
     pub fn resolved_definition(&self, agent_type: &str) -> Result<ResolvedAgentDefinition, String> {
         resolved_definition(self.get(agent_type)?)
+    }
+
+    /// Projette uniquement les définitions résolues et attestées du registre.
+    /// Les secrets et les valeurs d environnement n y figurent jamais.
+    pub fn resolved_definitions(&self) -> Result<Vec<(String, ResolvedAgentDefinition)>, String> {
+        self.agents
+            .iter()
+            .map(|(agent_type, definition)| {
+                resolved_definition(definition).map(|resolved| (agent_type.clone(), resolved))
+            })
+            .collect()
+    }
+
+    /// Retourne le type interne, réellement lecture seule, associé à un
+    /// choix de coordinateur visible. Les protocoles dont nous ne savons pas
+    /// prouver cette propriété ne sont volontairement pas proposés.
+    pub fn project_discovery_agent_type(&self, agent_type: &str) -> Option<String> {
+        let candidate = format!("{PROJECT_DISCOVERY_AGENT_PREFIX}{agent_type}");
+        self.agents.contains_key(&candidate).then_some(candidate)
     }
 
     /// Reconstruit un registre à une seule entrée depuis la définition figée
@@ -1124,6 +1150,118 @@ fn native_cursor_definition() -> AgentDefinition {
     }
 }
 
+/// Ajoute des définitions internes de découverte à partir des définitions
+/// déclarées. Elles n'écrasent jamais le type normal et ne sont créées que
+/// pour les pilotes dont l'isolation lecture seule est attestée ici.
+fn add_project_discovery_definitions(agents: &mut BTreeMap<String, AgentDefinition>) {
+    let sources = agents
+        .iter()
+        .filter(|(name, _)| !name.starts_with(PROJECT_DISCOVERY_AGENT_PREFIX))
+        .map(|(name, definition)| (name.clone(), definition.clone()))
+        .collect::<Vec<_>>();
+    for (agent_type, definition) in sources {
+        let Some(discovery) = project_discovery_definition(&definition) else {
+            continue;
+        };
+        agents.insert(
+            format!("{PROJECT_DISCOVERY_AGENT_PREFIX}{agent_type}"),
+            discovery,
+        );
+    }
+}
+
+/// Produit une définition strictement moins permissive que sa source.
+///
+/// Codex reçoit un bac à sable lecture seule explicite et aucun bypass.
+/// Claude reçoit son mode restreint et le mode plan, qui écarte les outils
+/// d'exécution et toute écriture sans décision humaine. Les autres protocoles
+/// sont refusés faute de preuve équivalente.
+fn project_discovery_definition(source: &AgentDefinition) -> Option<AgentDefinition> {
+    let mut definition = source.clone();
+    definition.permissions = "deny".to_string();
+    match definition.protocol.as_str() {
+        "codex_app_server" => {
+            strip_codex_discovery_unsafe_arguments(&mut definition.args);
+            insert_before_subcommand(
+                &mut definition.args,
+                "app-server",
+                &["--sandbox", "read-only", "--ask-for-approval", "never"],
+            );
+        }
+        "claude_stream_json" => {
+            strip_claude_discovery_unsafe_arguments(&mut definition.args);
+            definition.args.extend([
+                "--restricted".to_string(),
+                "--permission-mode".to_string(),
+                "plan".to_string(),
+            ]);
+        }
+        _ => return None,
+    }
+    Some(definition)
+}
+
+fn insert_before_subcommand(args: &mut Vec<String>, subcommand: &str, values: &[&str]) {
+    let position = args
+        .iter()
+        .position(|argument| argument == subcommand)
+        .unwrap_or(args.len());
+    args.splice(
+        position..position,
+        values.iter().map(|value| (*value).to_string()),
+    );
+}
+
+fn strip_codex_discovery_unsafe_arguments(args: &mut Vec<String>) {
+    let mut cleaned = Vec::with_capacity(args.len());
+    let mut index = 0;
+    while index < args.len() {
+        if matches!(
+            args[index].as_str(),
+            "--yolo" | "--dangerously-bypass-approvals-and-sandbox"
+        ) {
+            index += 1;
+            continue;
+        }
+        if matches!(
+            args[index].as_str(),
+            "--sandbox" | "-s" | "--ask-for-approval" | "-a"
+        ) {
+            index += 2;
+            continue;
+        }
+        cleaned.push(args[index].clone());
+        index += 1;
+    }
+    *args = cleaned;
+}
+
+fn strip_claude_discovery_unsafe_arguments(args: &mut Vec<String>) {
+    let mut cleaned = Vec::with_capacity(args.len());
+    let mut index = 0;
+    while index < args.len() {
+        if args[index].contains("dangerously-skip-permissions") {
+            index += 1;
+            continue;
+        }
+        if args[index] == "--permission-mode" {
+            index += 2;
+            continue;
+        }
+        if args[index] == "bypassPermissions" {
+            index += 1;
+            continue;
+        }
+        if args[index] == "--restricted" {
+            index += 1;
+            continue;
+        }
+        cleaned.push(args[index].clone());
+        index += 1;
+    }
+    *args = cleaned;
+}
+
 fn default_agents() -> Result<BTreeMap<String, AgentDefinition>, String> {
     Ok(BTreeMap::from([
         ("codex".to_string(), native_codex_definition()),
@@ -1234,6 +1372,55 @@ mod tests {
         assert_eq!(
             runtime_model_and_effort(&cursor.args),
             Some(("auto".to_string(), None))
+        );
+    }
+
+    #[test]
+    fn spec_076_coordinateurs_decouverte_sont_derives_et_restreints() {
+        let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
+        let original_codex = registry.get("codex").unwrap();
+        let discovery_codex = registry.get("project-discovery-codex").unwrap();
+        assert_eq!(original_codex.permissions, "allow");
+        assert_eq!(discovery_codex.permissions, "deny");
+        assert!(
+            discovery_codex
+                .args
+                .windows(2)
+                .any(|arguments| arguments == ["--sandbox", "read-only"]),
+            "le coordinateur Codex doit être enfermé en lecture seule"
+        );
+        assert!(
+            discovery_codex
+                .args
+                .iter()
+                .all(|argument| argument != "--dangerously-bypass-approvals-and-sandbox"),
+            "aucun bypass Codex ne doit survivre"
+        );
+
+        let discovery_claude = registry.get("project-discovery-claude").unwrap();
+        assert_eq!(discovery_claude.permissions, "deny");
+        assert!(
+            discovery_claude
+                .args
+                .iter()
+                .any(|argument| argument == "--restricted")
+        );
+        assert!(
+            discovery_claude
+                .args
+                .iter()
+                .any(|argument| argument == "plan")
+        );
+        assert!(
+            discovery_claude
+                .args
+                .iter()
+                .all(|argument| !argument.contains("dangerously-skip-permissions")),
+            "aucun bypass Claude ne doit survivre"
+        );
+        assert!(
+            registry.project_discovery_agent_type("cursor").is_none(),
+            "Cursor n'est pas proposé sans preuve de lecture seule"
         );
     }
 

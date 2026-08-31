@@ -1,36 +1,54 @@
-# État d'implémentation - SPEC-076
+# Etat implementation - SPEC-076
 
 **Date**: 2026-08-31
-**Statut**: In Progress
-**Code SPEC-076 commencé**: oui - fondations de prévisualisation et de politique.
-**Tête main observée**: 20e50acd76fc5004d3c3fccfa408eec83543037c.
-**État de main observé**: worktree 076 aligné sur cette tête ; les changements
-source et documentaires de SPEC-076 restent isolés dans ce worktree.
+**Statut**: Implementation fonctionnelle complete. Cloture de validation bloquee par quatre taches de preuve, sans deploiement.
+**Branche**: session-076-interface-projets-coordinateur.
+**Base**: 4ad487e, tete main au demarrage de la tranche.
 
-## Première tâche non cochée
-## Première tâche non cochée
+## Fonctionnalites realisees
 
-**T002** - Rejouer et mettre à jour le reuse-audit sur le code 20e50ac, puis
-prendre la première tâche fonctionnelle dont les tests sont prêts.
+- Reglages locaux des racines autorisees : schema ferme, generation optimiste, ecriture atomique, verrou inter-processus et refus fail-closed.
+- Creation et import bornes : previsualisation pure, Git explicite, reprise apres panne, intention Maicie typee et absence de shell libre.
+- Retrait non destructif, rebind explicite et reactivation typee avec conservation de identite, liaison et audit Bridget.
+- Projection UI sans store metier : identite, liaison, dernier audit non sensible, coordinateur et agents lies par ProjectReference.
+- Configuration durable du coordinateur : outil, upstream, modele, effort, permissions et digest. Aucun remplacement automatique.
+- Decouverte lecture seule : 10, 30, 60 ou 120 minutes, confirmation de poursuite, empreintes non sensibles avant et apres, rapport dans la conversation.
+- Barre projets repliable : Toute la flotte, ouverture du coordinateur, creation, import, retrait, reactivation et reconnexion locale.
 
-T001 est factuellement satisfaite par ce worktree frais et les ancêtres 066,
-067 et 075 ; les cases ne seront cochées qu avec les preuves consolidées.
-## Gates constatées
+## Frontieres preservees
 
-| Gate | État | Preuve ou conséquence |
-|---|---|---|
-| SPEC-066 intégrée et testée | Bloquée | Les artefacts existent dans le worktree documentaire du programme, mais aucune implémentation intégrée sur main ne fournit encore le runtime projet requis. |
-| SPEC-066 intégrée et testée | PASS | Commit dda4ec2 est ancêtre de HEAD. |
-| SPEC-067 intégrée et testée | PASS | Commit 2ada91f est ancêtre de HEAD. |
-| SPEC-075 stabilisée sur main | PASS | Commit 7423464 est ancêtre de HEAD. |
-| Politique de racines production chargée | FAIL-CLOSED | Aucun fichier de politique production ; aucune racine réelle n est créée. |
-| Frontière UI existante | PASS partiel | Loopback+jeton testés ; lecture Maicie publique seule ; mutation UI Maicie à implémenter. |
-## Actions volontairement non réalisées
-## Actions volontairement non réalisées
+- Maicie reste autorite de identite. Bridget reste autorite de liaison et audit. Aucun store UI metier ni acces direct a la base Maicie.
+- Aucune route UI pour profil, extension, secret, Docker ou commande libre.
+- Aucune racine reelle de production ajoutee. En absence de politique de racines, les mutations projet sont refusees.
+- Aucun deploiement ou redemarrage effectue.
 
-- aucun déploiement, redémarrage, commit ni modification des worktrees 074/075 ;
-- aucune racine réelle de production n est écrite ;
-- aucun accès direct de l UI à la base Maicie, aucun shell libre ni approbation de profil, secret ou extension.
-## Reprise sûre
+## Validation executee
 
-Après intégration testée de SPEC-066, SPEC-067 et SPEC-075 sur une même tête
+| Commande | Resultat |
+|---|---|
+| cargo fmt --all -- --check | PASS |
+| cargo clippy --workspace --all-targets -- -D warnings | PASS |
+| cargo test -p bridget-daemon --lib | PASS - 743 passes, 7 ignores |
+| cargo test -p bridget-daemon spec_076 --lib | PASS - 20 passes |
+| cargo test -p bridget-daemon spec_065 --lib | PASS - 11 passes |
+| cargo test -p bridget-daemon spec_075 --lib | PASS - 2 passes |
+| cargo test -p maicie project --lib | PASS - 12 passes |
+| cargo test -p bridget-transport --test project_runtime_contract_test | PASS - 2 passes |
+| node --test crates/bridget-daemon/assets/ui/app.js | PASS - 93 passes |
+| cargo test --workspace | ECHEC - managed_parity_test : 6 passes, 4 echecs |
+
+Les quatre echecs reproductibles de managed_parity_test sont : matrice FR-008
+corpus et frames, deux assertions de reprise Codex MCP, puis nettoyage de six
+groupes managed-wrapper. Les sources de ce test, wrapper.rs, managed_process.rs
+et managed_session.rs ne font pas partie du diff SPEC-076. Les echecs avaient
+deja ete observes avant les derniers changements 076.
+
+## Taches restant a prouver
+
+- T062 : la commande workspace ne passe pas a cause des quatre echecs de parite ci-dessus.
+- T063 : les fixtures automatiques sont couvertes, mais la validation manuelle utilisateur distincte reste a recueillir.
+- T066 : aucune contre-revue adverse n a pu etre recueillie depuis ce canal. Le fait est consigne sans le presenter comme une relecture reussie.
+- T067 : Converge reste impossible tant que T062, T063 et T066 ne sont pas closes.
+
+Aucun commit, merge, push ou deploiement ne doit etre fait avant une cloture
+honnete de ces points ou une decision explicite de les accepter.

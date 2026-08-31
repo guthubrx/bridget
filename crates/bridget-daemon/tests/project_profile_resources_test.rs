@@ -1,7 +1,7 @@
 use bridget_daemon::project_runtime::ProjectResourceCatalog;
 use bridget_transport::protocol::{ProjectResourceKind, ProjectResourceRef};
 use std::fs;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
 #[test]
 fn spec_067_catalogue_refuse_une_source_sans_projet_autorise() {
@@ -54,6 +54,11 @@ fn spec_067_attestation_secrete_ne_porte_ni_valeur_ni_contenu() {
     let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/project-profile/secrets/file-secret.txt");
     let root = source.parent().unwrap();
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(
+        fs::metadata(&source).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
     let metadata = fs::metadata(&source).unwrap();
     let catalog = ProjectResourceCatalog::from_json(&format!(
         r#"{{"contract_version":1,"extension_roots":[],"secret_roots":["{}"],"sources":[{{"source_ref":"catalog:secret","kind":"secret_file","expected_uid":{},"expected_gid":{},"canonical_path":"{}","source_revision":7,"allowed_project_ids":["project-a"]}}]}}"#,
