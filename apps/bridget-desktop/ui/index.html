@@ -32,11 +32,13 @@
     </main></section>
     <main id="fleet-shell" aria-labelledby="fleet-title">
       <aside class="fleet-sources-pane" aria-label="Sources">
-        <header><h1 id="fleet-title">Sources</h1><button id="fleet-global" type="button" aria-current="true">Toute la flotte</button></header>
+        <header class="fleet-sources-header">
+          <div class="fleet-sources-title"><h1 id="fleet-title">Projets</h1><span>Ajouter, organiser et filtrer</span></div>
+          <div class="fleet-source-actions"><button id="create-project" type="button" aria-label="Créer un projet">+</button><button id="import-project" type="button">Importer</button></div>
+        </header>
+        <button id="fleet-global" class="fleet-global-button" type="button" aria-current="true">Toute la flotte</button>
         <nav><ul id="fleet-sources" aria-label="Sources et projets"></ul></nav>
         <footer>
-          <button id="create-project" type="button">Créer un projet</button>
-          <button id="import-project" type="button" class="quiet">Importer un projet</button>
           <button id="manage-servers" type="button" class="quiet">Gérer les serveurs</button>
           <button id="show-preferences" type="button" class="icon-settings" aria-label="Ouvrir les réglages">⚙</button>
         </footer>

@@ -37,6 +37,19 @@ fn un_seul_serveur_est_affiche_a_la_fois() {
 }
 
 #[test]
+fn la_flotte_desktop_reutilise_la_chrome_sombre_et_ne_cree_que_deux_volets() {
+    let markup = include_str!("../../ui/index.html");
+    let stylesheet = include_str!("../../ui/fleet-desktop.css");
+
+    assert!(markup.contains("<h1 id=\"fleet-title\">Projets</h1>"));
+    assert!(stylesheet.contains("grid-template-columns: 12.5rem 20rem;"));
+    assert!(stylesheet.contains("width: min(100vw, 32.5rem);"));
+    assert!(stylesheet.contains("#fleet-shell .fleet-sources-pane button"));
+    assert!(stylesheet.contains("#fleet-shell .fleet-agents-pane button"));
+    assert!(stylesheet.contains("background: var(--fleet-surface-hover);"));
+}
+
+#[test]
 fn flotte_desktop_ne_restitue_ni_secret_ni_chemin_d_origine() {
     let backend = include_str!("../src/lib.rs");
     let fleet = include_str!("../src/fleet.rs");
@@ -59,7 +72,10 @@ fn les_reglages_de_contenu_restent_locaux_et_sans_capability_de_panneau() {
         "preferences-file-references",
         "preferences-remote-images",
     ] {
-        assert!(markup.contains(identifier), "contrôle local absent : {identifier}");
+        assert!(
+            markup.contains(identifier),
+            "contrôle local absent : {identifier}"
+        );
     }
     assert!(frontend.contains("content_security"));
     assert!(backend.contains("__BRIDGET_CONTENT_SECURITY__"));

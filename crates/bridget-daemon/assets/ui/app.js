@@ -72,6 +72,23 @@
         assert.match(stylesheet, /body\[data-desktop-shell="true"\] \.conversation/);
       });
 
+      test("spec_081_mode_desktop_cache_bien_les_volets_du_relais", () => {
+        const stylesheet = fs.readFileSync(path.join(__dirname, "theme.css"), "utf8");
+        const legacyRule = stylesheet.lastIndexOf(".agent-pane__settings > span:first-child {");
+        const desktopRule = stylesheet.indexOf(
+          "body[data-desktop-shell=\"true\"] .workspace",
+        );
+        assert.ok(legacyRule >= 0 && desktopRule > legacyRule);
+        assert.ok(
+          stylesheet.indexOf("}", legacyRule) < desktopRule,
+          "la règle précédente doit être fermée avant le mode desktop",
+        );
+        assert.match(
+          stylesheet,
+          /body\[data-desktop-shell="true"\] \.project-pane,[\s\S]*?\.agent-pane-resizer\s*\{\s*display: none;\s*\}/,
+        );
+      });
+
       test("spec_080_usage_reste_atteste_et_ne_fabrique_aucun_cout", () => {
         assert.equal(
           api.controlResourceUrl("/v1/usage", "jeton +", { period: "30d" }),

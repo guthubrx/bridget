@@ -4158,6 +4158,9 @@ code {
   width: auto;
   height: auto;
   background: transparent;
+  color: var(--text-primary);
+  font-size: 1.6rem;
+}
 
 /* La coque native Desktop garde Sources et flotte à gauche. Le relais reste
    propriétaire de la seule conversation visible dans son enfant WebView. */
@@ -4176,9 +4179,6 @@ body[data-desktop-shell="true"] .agent-pane-resizer {
 
 body[data-desktop-shell="true"] .conversation {
   grid-column: 1;
-}
-  color: var(--text-primary);
-  font-size: 1.6rem;
 }
 
 /* Création/import : même précision que le centre de contrôle, dans un dialogue
