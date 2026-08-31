@@ -10,6 +10,7 @@ pub mod panels;
 pub mod profile;
 pub mod profile_service;
 pub mod profile_store;
+pub mod preferences_store;
 pub mod ssh;
 
 #[cfg(target_os = "macos")]
@@ -27,6 +28,7 @@ pub fn run() {
     use crate::profile::{ConnectionProfile, ProfileDraft};
     use crate::profile_service::ProfileService;
     use crate::profile_store::ProfileStore;
+    use crate::preferences_store::{DesktopPreferences, PreferencesStore};
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Mutex;
@@ -35,6 +37,7 @@ pub fn run() {
 
     struct DesktopState {
         profiles: Mutex<ProfileService>,
+        preferences: Mutex<PreferencesStore>,
         known_hosts: PathBuf,
         pending_host_tickets: Mutex<HashMap<String, HostIdentityTicket>>,
         sessions: Mutex<HashMap<String, ActiveConnection>>,
@@ -59,6 +62,12 @@ pub fn run() {
         status: &'static str,
         fingerprint: Option<String>,
         ticket: Option<String>,
+    }
+
+    #[derive(serde::Serialize)]
+    struct DesktopAboutView {
+        version: &'static str,
+        update_status: &'static str,
     }
 
     fn as_message(error: impl std::fmt::Display) -> String {
@@ -229,6 +238,40 @@ pub fn run() {
             .map_err(as_message)?
             .delete(&profile_id, confirmed)
             .map_err(as_message)
+    }
+
+    /// Préférences du Mac uniquement. Elles ne sont jamais remises au tunnel
+    /// SSH, ni sérialisées dans un profil de serveur.
+    #[tauri::command(rename_all = "snake_case")]
+    fn preferences_get(state: State<'_, DesktopState>) -> Result<DesktopPreferences, String> {
+        state
+            .preferences
+            .lock()
+            .map_err(as_message)?
+            .load()
+            .map_err(as_message)
+    }
+
+    #[tauri::command(rename_all = "snake_case")]
+    fn preferences_save(
+        state: State<'_, DesktopState>,
+        preferences: DesktopPreferences,
+    ) -> Result<DesktopPreferences, String> {
+        state
+            .preferences
+            .lock()
+            .map_err(as_message)?
+            .save(preferences.clone())
+            .map_err(as_message)?;
+        Ok(preferences)
+    }
+
+    #[tauri::command(rename_all = "snake_case")]
+    fn desktop_about() -> DesktopAboutView {
+        DesktopAboutView {
+            version: env!("CARGO_PKG_VERSION"),
+            update_status: "not_configured",
+        }
     }
 
     #[tauri::command(rename_all = "snake_case")]
@@ -418,18 +461,18 @@ pub fn run() {
 
     tauri::Builder::default()
         .setup(|app| {
-            let path = app
+            let app_data_dir = app
                 .path()
                 .app_data_dir()
-                .map_err(|error| format!("Répertoire applicatif indisponible : {error}"))?
-                .join("profiles.json");
+                .map_err(|error| format!("Répertoire applicatif indisponible : {error}"))?;
             app.manage(DesktopState {
-                profiles: Mutex::new(ProfileService::new(ProfileStore::new(path))),
-                known_hosts: app
-                    .path()
-                    .app_data_dir()
-                    .map_err(|error| format!("Répertoire applicatif indisponible : {error}"))?
-                    .join("known_hosts"),
+                profiles: Mutex::new(ProfileService::new(ProfileStore::new(
+                    app_data_dir.join("profiles.json"),
+                ))),
+                preferences: Mutex::new(PreferencesStore::new(
+                    app_data_dir.join("preferences.json"),
+                )),
+                known_hosts: app_data_dir.join("known_hosts"),
                 pending_host_tickets: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashMap::new()),
                 panels: Mutex::new(PanelRegistry::default()),
@@ -452,6 +495,9 @@ pub fn run() {
             profiles_list,
             profile_save,
             profile_delete,
+            preferences_get,
+            preferences_save,
+            desktop_about,
             host_identity_check,
             host_identity_approve,
             connection_open,
