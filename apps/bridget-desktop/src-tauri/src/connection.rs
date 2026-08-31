@@ -3,11 +3,16 @@
 use crate::profile::{ConnectionErrorCategory, ConnectionSession, ConnectionState, RelayEndpoint};
 use crate::ssh::{OwnedTunnel, discovery_invocation};
 use serde::Deserialize;
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::path::Path;
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 const ENDPOINT_VERSION: u8 = 1;
+pub const LOCAL_ENDPOINT_PROGRAM: &str = "bridget";
+pub const LOCAL_ENDPOINT_ARGS: [&str; 3] = ["ui", "endpoint", "--json"];
 const RELAY_READY_TIMEOUT: Duration = Duration::from_secs(4);
 const RELAY_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -128,6 +133,7 @@ pub enum ConnectionError {
     SshUnavailable,
     TunnelUnavailable,
     RelayUnavailable,
+    LocalUnavailable,
     HostApprovalRequired,
 }
 
@@ -139,6 +145,7 @@ impl ConnectionError {
             Self::SshUnavailable => ConnectionErrorCategory::SshUnavailable,
             Self::TunnelUnavailable => ConnectionErrorCategory::Tunnel,
             Self::RelayUnavailable => ConnectionErrorCategory::RelayUnavailable,
+            Self::LocalUnavailable => ConnectionErrorCategory::RelayUnavailable,
             Self::HostApprovalRequired => ConnectionErrorCategory::HostIdentity,
         }
     }
@@ -155,6 +162,9 @@ impl std::fmt::Display for ConnectionError {
             }
             Self::SshUnavailable => {
                 formatter.write_str("La connexion SSH n'a pas pu être établie.")
+            }
+            Self::LocalUnavailable => {
+                formatter.write_str("Le relais Bridget de cet ordinateur est indisponible.")
             }
             Self::TunnelUnavailable => formatter.write_str("Le tunnel SSH n'a pas pu être ouvert."),
             Self::RelayUnavailable => formatter
@@ -363,6 +373,51 @@ pub fn parse_endpoint_document(body: &[u8]) -> Result<RelayEndpoint, ConnectionE
     RelayEndpoint::new(document.port, document.token).map_err(|_| ConnectionError::EndpointInvalid)
 }
 
+/// Découverte locale éphémère : aucun profil ni jeton n'est persisté.
+///
+/// La commande et ses arguments sont constants afin qu'une WebView ne puisse
+/// jamais piloter une exécution locale. L'absence de relais est un état attendu
+/// de l'interface, pas une erreur fatale de Desktop.
+pub fn discover_local_endpoint() -> Result<RelayEndpoint, ConnectionError> {
+    let mut command = Command::new(LOCAL_ENDPOINT_PROGRAM);
+    if let Some(path) = local_endpoint_path(
+        std::env::var_os("HOME").as_deref().map(Path::new),
+        std::env::var_os("PATH"),
+    ) {
+        command.env("PATH", path);
+    }
+    let output = command
+        .args(LOCAL_ENDPOINT_ARGS)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map_err(|_| ConnectionError::LocalUnavailable)?;
+    if !output.status.success() {
+        return Err(ConnectionError::LocalUnavailable);
+    }
+    parse_endpoint_document(&output.stdout)
+}
+
+/// Reconstruit le PATH du processus enfant sans dépendre du shell ayant lancé
+/// Desktop. Les installations Bridget officielles placent le binaire dans
+/// .local/bin, qui n est pas toujours propagé par une application graphique.
+/// Le chemin reste local, déterministe et ne vient jamais d une WebView.
+fn local_endpoint_path(home: Option<&Path>, inherited_path: Option<OsString>) -> Option<OsString> {
+    let mut paths = Vec::new();
+    if let Some(home) = home {
+        paths.push(home.join(".local/bin"));
+    }
+    paths.extend(
+        inherited_path
+            .as_deref()
+            .into_iter()
+            .flat_map(std::env::split_paths),
+    );
+    (!paths.is_empty())
+        .then(|| std::env::join_paths(paths).ok())
+        .flatten()
+}
+
 pub fn relay_url(local_port: u16, endpoint: &RelayEndpoint) -> String {
     relay_url_for_client(local_port, endpoint, None)
 }
@@ -390,6 +445,42 @@ pub fn desktop_relay_url(local_port: u16, endpoint: &RelayEndpoint, client_id: &
         "{}&native_attention=1",
         relay_url_for_client(local_port, endpoint, Some(client_id))
     )
+}
+
+/// URL de conversation pour un enfant WebView : le jeton reste dans Rust et ne
+/// remonte jamais dans un payload IPC de la page Desktop.
+pub fn desktop_panel_url(
+    local_port: u16,
+    endpoint: &RelayEndpoint,
+    client_id: &str,
+    agent_name: Option<&str>,
+    desktop_action: Option<&str>,
+) -> String {
+    let mut url = format!(
+        "{}&desktop_shell=1",
+        desktop_relay_url(local_port, endpoint, client_id)
+    );
+    if let Some(agent_name) = agent_name.filter(|value| !value.is_empty()) {
+        url.push_str("&agent=");
+        url.push_str(&percent_encode(agent_name));
+    }
+    if let Some(action) = desktop_action {
+        let action = match action {
+            "create_project" | "import_project" => action,
+            _ => return url,
+        };
+        url.push_str("&desktop_action=");
+        url.push_str(action);
+    }
+    url
+}
+
+pub fn fleet_snapshot_path(endpoint: &RelayEndpoint) -> String {
+    format!("/v1/snapshot?token={}", percent_encode(endpoint.token()))
+}
+
+pub fn fleet_projects_path(endpoint: &RelayEndpoint) -> String {
+    format!("/v1/projects?token={}", percent_encode(endpoint.token()))
 }
 
 pub fn attention_request_path(endpoint: &RelayEndpoint, client_id: &str) -> String {
@@ -422,15 +513,17 @@ fn percent_encode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectionError, HttpRelayProbe, RelayProbe, RemoteTransport, attention_request_path,
-        attention_state_request_path, connect_remote, desktop_relay_url, mark_tunnel_lost,
-        parse_endpoint_document, transition,
+        ConnectionError, HttpRelayProbe, LOCAL_ENDPOINT_ARGS, LOCAL_ENDPOINT_PROGRAM, RelayProbe,
+        RemoteTransport, attention_request_path, attention_state_request_path, connect_remote,
+        desktop_panel_url, desktop_relay_url, fleet_projects_path, fleet_snapshot_path,
+        local_endpoint_path, mark_tunnel_lost, parse_endpoint_document, transition,
     };
     use crate::profile::{
         ConnectionProfile, ConnectionSession, ConnectionState, ProfileCapability, RelayEndpoint,
         SshIdentityRef,
     };
     use std::cell::Cell;
+    use std::ffi::OsString;
     use std::io::{Read, Write};
     use std::net::{Ipv4Addr, TcpListener};
     use std::thread;
@@ -564,6 +657,39 @@ mod tests {
             attention_state_request_path(&endpoint),
             "/v1/attention/state?token=fixture%20token"
         );
+        assert_eq!(LOCAL_ENDPOINT_PROGRAM, "bridget");
+        assert_eq!(LOCAL_ENDPOINT_ARGS, ["ui", "endpoint", "--json"]);
+        let panel_url = desktop_panel_url(
+            39002,
+            &endpoint,
+            client_id,
+            Some("coordinateur / projet"),
+            Some("create_project"),
+        );
+        assert!(panel_url.contains("desktop_shell=1"));
+        assert!(panel_url.contains("agent=coordinateur%20%2F%20projet"));
+        assert!(panel_url.contains("desktop_action=create_project"));
+        assert_eq!(
+            fleet_snapshot_path(&endpoint),
+            "/v1/snapshot?token=fixture%20token"
+        );
+        assert_eq!(
+            fleet_projects_path(&endpoint),
+            "/v1/projects?token=fixture%20token"
+        );
+    }
+
+    #[test]
+    fn decouverte_locale_retablit_le_repertoire_d_installation_utilisateur() {
+        let path = local_endpoint_path(
+            Some(std::path::Path::new("/home/fixture")),
+            Some(OsString::from("/usr/local/bin:/usr/bin")),
+        )
+        .expect("PATH local");
+        let paths = std::env::split_paths(&path).collect::<Vec<_>>();
+        assert_eq!(paths[0], std::path::PathBuf::from("/home/fixture/.local/bin"));
+        assert_eq!(paths[1], std::path::PathBuf::from("/usr/local/bin"));
+        assert_eq!(paths[2], std::path::PathBuf::from("/usr/bin"));
     }
 
     #[test]

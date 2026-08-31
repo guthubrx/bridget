@@ -58,6 +58,20 @@
         assert.equal(api.clampAgentPaneWidth(900, 800), 440);
       });
 
+
+      test("spec_081_coque_desktop_compacte_garde_conversation_et_onboarding", () => {
+        const source = fs.readFileSync(__filename, "utf8");
+        const stylesheet = fs.readFileSync(path.join(__dirname, "theme.css"), "utf8");
+        assert.match(source, /const desktopShell = params\.get\("desktop_shell"\) === "1";/);
+        assert.match(source, /const requestedAgent = params\.get\("agent"\);/);
+        assert.match(source, /desktopAction === "create_project"/);
+        assert.match(source, /beginProject\("create", nodes\.conversation\)/);
+        assert.match(source, /desktopAction === "import_project"/);
+        assert.match(stylesheet, /body\[data-desktop-shell="true"\] \.project-pane/);
+        assert.match(stylesheet, /body\[data-desktop-shell="true"\] \.agent-pane/);
+        assert.match(stylesheet, /body\[data-desktop-shell="true"\] \.conversation/);
+      });
+
       test("spec_080_usage_reste_atteste_et_ne_fabrique_aucun_cout", () => {
         assert.equal(
           api.controlResourceUrl("/v1/usage", "jeton +", { period: "30d" }),
@@ -6961,6 +6975,11 @@
     const token = params.get("token") || "";
     const requestedAgent = params.get("agent");
     const nativeAttentionShell = params.get("native_attention") === "1";
+    const desktopShell = params.get("desktop_shell") === "1";
+    const desktopAction = params.get("desktop_action");
+    if (desktopShell) {
+      documentRef.body.dataset.desktopShell = "true";
+    }
     const attentionClientId = resolveAttentionClientId(
       params.get("client_id"),
       windowRef.localStorage,
@@ -10632,6 +10651,11 @@
       });
     }
     if (params.get("view") === "settings") void openControlCenter();
+    if (desktopAction === "create_project") {
+      void beginProject("create", nodes.conversation);
+    } else if (desktopAction === "import_project") {
+      void beginProject("import", nodes.conversation);
+    }
     nodes.selectedAgentAvatar.addEventListener("click", () => {
       const agent = state.agents.find((entry) => entry.name === state.selectedAgent);
       if (!agent) return;
