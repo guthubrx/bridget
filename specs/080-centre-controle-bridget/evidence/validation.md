@@ -23,6 +23,8 @@ Date : 2026-08-31
 
 Le test UI vérifie que le centre contient l'overlay, la roue de bas de barre, la grille `SettingsRow` portée, le sélecteur de police de 11 rem, le sélecteur de taille de 5,5 rem et la bordure fine de contrôle. Cette preuve ne remplace pas l'évaluation visuelle humaine.
 
+Le test UI couvre aussi la séparation de portées dans la navigation Projets : l'ancien pied global `Réglages / Retirer` est absent, l'overlay de présentation du projet est présent, les préférences d'initiales et de couleurs sont tolérantes aux valeurs invalides et restent locales, la colonne repliée conserve la liste d'icônes, et `Commande + virgule` ouvre le même centre de contrôle.
+
 ## Correctif des actions Desktop
 
 - La délégation de clic du listing de profils couvre Connecter, Réessayer, Ouvrir, Déconnecter, Modifier et Retirer.
@@ -63,5 +65,8 @@ Le test UI vérifie que le centre contient l'overlay, la roue de bas de barre, l
 4. Changer puis restaurer une préférence locale, et vérifier qu'aucune mutation serveur n'est déclenchée.
 5. Vérifier la page Serveur sans appliquer de réglage, puis Usage et facturation sans supposer un coût absent.
 6. Fermer Bridget, vérifier que Carte utilise `moi`, installer le bundle corrigé dans `/Applications/Bridget.app`, reconnecter Loin puis Carte et vérifier qu'un seul panneau pleine largeur reste visible et que l'icône Bridget est présente dans le Dock.
+7. Vérifier sous les boutons macOS la colonne Projets : « Toute la flotte » doit expliciter « Tous projets confondus », un projet doit afficher une tuile avec initiales, et le pied de colonne ne doit afficher ni « Retirer » ni « Réglages ».
+8. Ouvrir `…` ou faire un clic droit sur un projet, changer ses initiales puis sa couleur dans l'overlay, refermer puis vérifier la persistance locale. Replier la colonne et vérifier que les tuiles restent visibles.
+9. Presser `Commande + virgule`, vérifier que le même overlay de centre de contrôle s'ouvre au-dessus de la conversation.
 
 Aucune validation visuelle ambiguë, aucun clic non confirmé et aucune opération de serveur non demandée ne sont comptés comme preuve d'acceptation.

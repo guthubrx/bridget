@@ -11,6 +11,16 @@ Statut : tranche de centre de contrôle déployée sur le relais et paquet macOS
 - La page Serveur ne propose que les capacités publiées. La politique des racines de projets est prévisualisée puis confirmée avant application. Les autres catégories restent explicitement en lecture seule.
 - Usage et facturation affiche les jetons attestés par fournisseur et modèle. En l'absence d'une grille tarifaire datée, elle indique qu'aucune estimation API ne peut être produite.
 - Mises à jour et Diagnostics restent informatifs : aucune action d'hôte, de fournisseur ou de maintenance n'est envoyée par cette surface.
+- Le raccourci macOS `Commande + virgule` ouvre ce même centre de contrôle sans changer la conversation en cours.
+
+## Navigation Projets et frontière des réglages
+
+- La colonne Projets est exclusivement consacrée au cycle de vie des projets : création, import, filtre, repli et actions contextualisées. Elle ne possède plus de pied de colonne « Retirer / Réglages ».
+- « Toute la flotte » porte le sous-titre « Tous projets confondus ». Chaque projet a une tuile carrée légèrement arrondie avec une ou deux initiales et une couleur.
+- Le bouton `…`, le clic droit et `Maj + F10` ouvrent un menu par projet. Celui-ci permet de retirer le projet sans toucher au dossier ni à Git, ou d'ouvrir l'overlay de personnalisation.
+- Les initiales et la couleur sont stockées dans le WebView, avec l'étiquette « Cette interface ». Elles ne déclenchent aucune route serveur et ne prétendent pas être une politique de projet.
+- Les racines autorisées et le coordinateur des nouveaux projets restent dans la section Serveur du centre de contrôle. La roue basse est donc l'unique entrée des réglages globaux et serveur.
+- La marge haute de la colonne réserve les boutons macOS. En mode replié, seules les tuiles restent visibles et leurs actions restent accessibles au clic droit ou au clavier.
 
 ## Portage de finition T3 Code
 

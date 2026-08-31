@@ -144,6 +144,34 @@
         assert.match(stylesheet, /\.agent-pane__footer[\s\S]*padding: 0\.9rem 0\.1rem 0\.15rem/);
       });
 
+      test("spec_080_navigation_projet_separe_cycle_de_vie_et_reglages_globaux", () => {
+        const values = new Map();
+        const storage = {
+          getItem: (key) => values.get(key) || null,
+          setItem: (key, value) => values.set(key, value),
+        };
+        const project = { project_id: "projet-bleu", display_name: "Cartae Atlas" };
+        assert.equal(api.projectInitials(project.display_name), "CA");
+        assert.equal(api.projectInitials("bridget"), "BR");
+        assert.deepEqual(api.normalizeProjectPresentation({ initials: "ca!", color: "#4e7cf6" }, project), {
+          initials: "CA", color: "#4e7cf6",
+        });
+        const saved = api.writeProjectPresentationPreferences(storage, {
+          [project.project_id]: { initials: "CA", color: "#4e7cf6" },
+        });
+        assert.deepEqual(api.readProjectPresentationPreferences(storage), saved);
+        const markup = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+        const stylesheet = fs.readFileSync(path.join(__dirname, "theme.css"), "utf8");
+        const source = fs.readFileSync(__filename, "utf8");
+        assert.match(markup, /id="project-presentation-overlay"/);
+        assert.doesNotMatch(markup, /id="project-settings"/);
+        assert.doesNotMatch(markup, /id="project-remove"/);
+        assert.match(source, /openProjectContextMenu\(project, actions/);
+        assert.match(source, /event\.key !== "," \|\| !event\.metaKey/);
+        assert.match(stylesheet, /\.project-pane\[data-collapsed="true"\] \.project-list\s*\{\s*display: grid;/);
+        assert.match(stylesheet, /\.agent-pane__settings > span:first-child\s*\{[\s\S]*font-size: 1\.6rem;/);
+      });
+
       test("apparence_agent_stable_et_etat_visuel_honnete", () => {
         assert.equal(api.agentAvatarShape("jc1"), api.agentAvatarShape("jc1"));
         assert.equal(api.agentAvatarShape("jc1", { jc1: { shape: "cloud" } }), "cloud");
@@ -5636,8 +5664,7 @@
     projectList: "project-list",
     projectNew: "project-new",
     projectImport: "project-import",
-    projectSettings: "project-settings",
-    projectRemove: "project-remove",
+    projectPresentationOverlay: "project-presentation-overlay",
     agentList: "agent-list",
     stoppedAgentList: "stopped-agent-list",
     stoppedAgents: "stopped-agents",
@@ -5685,6 +5712,10 @@
   });
 
   const CONTROL_CENTER_PREFERENCES_KEY = "bridget.control-center.preferences.v1";
+  const PROJECT_PRESENTATION_PREFERENCES_KEY = "bridget.project-presentation.preferences.v1";
+  const PROJECT_PRESENTATION_COLORS = Object.freeze([
+    "#4e7cf6", "#43a878", "#c86fbe", "#d58a52", "#8a70e8", "#4c9eb8",
+  ]);
   const CONTROL_INTERFACE_FONT_OPTIONS = Object.freeze([
     {
       key: "system",
@@ -5834,6 +5865,60 @@
     const match = CONTROL_CENTER_NAVIGATION.find((entry) => [entry.key, entry.label, ...entry.keywords]
       .some((candidate) => candidate.toLocaleLowerCase("fr-FR").includes(query)));
     return match ? match.key : null;
+  }
+
+  function projectInitials(value) {
+    const words = String(value || "")
+      .trim()
+      .split(/\s+/)
+      .map((word) => word.replace(/[^\p{L}\p{N}]/gu, ""))
+      .filter(Boolean);
+    if (words.length >= 2) return (words[0][0] + words[1][0]).toLocaleUpperCase("fr-FR");
+    const compact = (words[0] || "BR").slice(0, 2);
+    return compact.toLocaleUpperCase("fr-FR");
+  }
+
+  function defaultProjectPresentation(project) {
+    const projectId = String(project && project.project_id || "");
+    let hash = 0;
+    for (const character of projectId) hash = ((hash << 5) - hash) + character.charCodeAt(0);
+    return {
+      initials: projectInitials(project && project.display_name),
+      color: PROJECT_PRESENTATION_COLORS[Math.abs(hash) % PROJECT_PRESENTATION_COLORS.length],
+    };
+  }
+
+  function normalizeProjectPresentation(value, project) {
+    const fallback = defaultProjectPresentation(project);
+    const source = value && typeof value === "object" ? value : {};
+    const initials = String(source.initials || fallback.initials)
+      .replace(/[^\p{L}\p{N}]/gu, "")
+      .slice(0, 2)
+      .toLocaleUpperCase("fr-FR");
+    return {
+      initials: initials || fallback.initials,
+      color: PROJECT_PRESENTATION_COLORS.includes(source.color) ? source.color : fallback.color,
+    };
+  }
+
+  function readProjectPresentationPreferences(storage) {
+    try {
+      const raw = storage && storage.getItem(PROJECT_PRESENTATION_PREFERENCES_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch (_error) {
+      return {};
+    }
+  }
+
+  function writeProjectPresentationPreferences(storage, value) {
+    const preferences = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    try {
+      storage && storage.setItem(PROJECT_PRESENTATION_PREFERENCES_KEY, JSON.stringify(preferences));
+    } catch (_error) {
+      // La navigation reste utilisable si le stockage local est indisponible.
+    }
+    return preferences;
   }
 
   function buildSearchRequest(query) {
@@ -6046,6 +6131,9 @@
     let projects = [];
     let selectedProjectId = null;
     let projectSettingsSnapshot = null;
+    let projectPresentationPreferences = readProjectPresentationPreferences(windowRef.localStorage);
+    let projectContextMenu = null;
+    let projectContextTrigger = null;
     const pendingUiMessages = new Map();
     const notifiedTerminalIds = new Set();
     const attentionEvents = new Map();
@@ -6583,6 +6671,34 @@
               } finally {
                 apply.disabled = false;
               }
+            });
+            const defaults = controlSection(
+              "Nouveaux projets",
+              "Le coordinateur ci-dessous sera proposé lors de la création ou de l'import d'un projet. Les projets déjà enregistrés ne changent pas.",
+              "Serveur relié",
+            );
+            const defaultsStatus = make("p", "control-center__status", "Lecture de la configuration des nouveaux projets…");
+            defaultsStatus.setAttribute("role", "status");
+            const configureDefaults = make("button", "secondary", "Configurer le coordinateur par défaut");
+            configureDefaults.type = "button";
+            configureDefaults.hidden = true;
+            configureDefaults.addEventListener("click", () => { void updateDefaultCoordinator(); });
+            defaults.append(defaultsStatus, configureDefaults);
+            section.append(defaults);
+            void requestProject("/v1/projects/settings").then((settings) => {
+              const configured = settings.default_coordinator || {};
+              const choice = (settings.coordinator_options || []).find((entry) => (
+                entry.agent_type === configured.agent_type
+                && entry.model_id === configured.model_id
+                && (entry.efforts || []).includes(configured.effort)
+              ));
+              defaultsStatus.textContent = choice
+                ? `Actuel : ${coordinatorLabel(choice)} - effort ${configured.effort}.`
+                : "Aucun coordinateur par défaut attesté pour les nouveaux projets.";
+              configureDefaults.hidden = !settings.configuration_available;
+            }).catch(() => {
+              defaultsStatus.textContent = "La configuration des nouveaux projets est indisponible.";
+              defaultsStatus.dataset.state = "error";
             });
           } catch (_error) {
             status.textContent = "Les réglages de ce serveur sont indisponibles. Aucune valeur locale n'a été remplacée.";
@@ -7351,12 +7467,176 @@
       agent && agent.agent_link && agent.agent_link.project
         ? String(agent.agent_link.project.project_id || "") : ""
     );
+    const projectPresentation = (project) => normalizeProjectPresentation(
+      projectPresentationPreferences[String(project.project_id || "")],
+      project,
+    );
+    const saveProjectPresentation = (project, presentation) => {
+      projectPresentationPreferences = writeProjectPresentationPreferences(windowRef.localStorage, {
+        ...projectPresentationPreferences,
+        [project.project_id]: normalizeProjectPresentation(presentation, project),
+      });
+    };
+    const createProjectAvatar = (project, variant = "project") => {
+      const avatar = make("span", "project-row__avatar");
+      avatar.dataset.variant = variant;
+      if (variant === "all") {
+        avatar.textContent = "◎";
+        avatar.setAttribute("aria-hidden", "true");
+        return avatar;
+      }
+      const presentation = projectPresentation(project);
+      avatar.textContent = presentation.initials;
+      avatar.style.setProperty("--project-avatar-color", presentation.color);
+      avatar.setAttribute("aria-hidden", "true");
+      return avatar;
+    };
+    const closeProjectContextMenu = (restoreFocus = false) => {
+      if (!projectContextMenu) return;
+      const trigger = projectContextTrigger;
+      projectContextMenu.remove();
+      projectContextMenu = null;
+      projectContextTrigger = null;
+      if (restoreFocus && canFocus(trigger)) trigger.focus();
+    };
+    const positionProjectContextMenu = (anchor) => {
+      if (!projectContextMenu || !anchor || typeof projectContextMenu.getBoundingClientRect !== "function") return;
+      const rect = projectContextMenu.getBoundingClientRect();
+      const width = windowRef.innerWidth || 0;
+      const height = windowRef.innerHeight || 0;
+      const left = Math.min(Math.max(8, anchor.left), Math.max(8, width - rect.width - 8));
+      const top = Math.min(Math.max(8, anchor.bottom + 6), Math.max(8, height - rect.height - 8));
+      projectContextMenu.style.left = `${left}px`;
+      projectContextMenu.style.top = `${top}px`;
+    };
+    const openProjectPresentation = (project, returnFocus) => {
+      const dialog = nodes.projectPresentationOverlay;
+      if (!dialog) return;
+      const current = projectPresentation(project);
+      const form = make("form", "project-presentation-overlay__shell");
+      form.method = "dialog";
+      const header = make("header", "project-presentation-overlay__header");
+      const heading = make("div");
+      const eyebrow = make("p", "project-presentation-overlay__eyebrow", "RÉGLAGES DU PROJET");
+      const title = make("h2", null, `Identité de ${project.display_name}`);
+      title.id = "project-presentation-title";
+      heading.append(eyebrow, title);
+      const close = make("button", "quiet-action", "Fermer");
+      close.type = "button";
+      close.addEventListener("click", () => dialog.close());
+      header.append(heading, close);
+      const intro = make(
+        "p",
+        "project-presentation-overlay__intro",
+        "Choisissez les initiales et la couleur utilisées pour ce projet dans cette interface. Cela ne modifie ni son dossier, ni ses agents, ni le serveur.",
+      );
+      const initialsLabel = make("label", "project-presentation-overlay__field", "Initiales");
+      const initials = documentRef.createElement("input");
+      initials.type = "text";
+      initials.value = current.initials;
+      initials.maxLength = 2;
+      initials.autocomplete = "off";
+      initials.setAttribute("aria-describedby", "project-presentation-initials-help");
+      const initialsHelp = make("span", "project-presentation-overlay__help", "Une ou deux lettres.");
+      initialsHelp.id = "project-presentation-initials-help";
+      initialsLabel.append(initials, initialsHelp);
+      const colorField = make("fieldset", "project-presentation-overlay__palette");
+      colorField.append(make("legend", null, "Couleur"));
+      let selectedColor = current.color;
+      const swatches = make("div", "project-presentation-overlay__swatches");
+      const renderSwatches = () => {
+        swatches.replaceChildren();
+        PROJECT_PRESENTATION_COLORS.forEach((color) => {
+          const swatch = make("button", "project-presentation-overlay__swatch");
+          swatch.type = "button";
+          swatch.style.setProperty("--swatch-color", color);
+          swatch.dataset.selected = String(color === selectedColor);
+          swatch.setAttribute("aria-label", `Choisir la couleur ${color}`);
+          swatch.setAttribute("aria-pressed", String(color === selectedColor));
+          swatch.addEventListener("click", () => {
+            selectedColor = color;
+            renderSwatches();
+          });
+          swatches.append(swatch);
+        });
+      };
+      renderSwatches();
+      colorField.append(swatches);
+      const scope = make("p", "project-presentation-overlay__scope", "Cette interface");
+      const actions = make("div", "project-presentation-overlay__actions");
+      const cancel = make("button", "secondary", "Annuler");
+      cancel.type = "button";
+      cancel.addEventListener("click", () => dialog.close());
+      const save = make("button", null, "Enregistrer");
+      save.type = "submit";
+      actions.append(cancel, save);
+      form.append(header, intro, initialsLabel, colorField, scope, actions);
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        saveProjectPresentation(project, { initials: initials.value, color: selectedColor });
+        dialog.close();
+        renderProjects();
+      });
+      dialog.replaceChildren(form);
+      dialog.returnFocus = returnFocus;
+      if (!dialog.open) dialog.showModal();
+      initials.focus();
+    };
+    const removeProject = (project) => {
+      if (!windowRef.confirm(`Retirer ${project.display_name} de Bridget ? Son dossier, Git et historique seront conservés.`)) return;
+      void requestProject("/v1/projects/disable", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ version: 1, command_id: "project-disable-" + Date.now(), project_id: project.project_id }),
+      }).then(async () => {
+        selectedProjectId = null;
+        await refreshProjects();
+        renderProjects();
+      }).catch((error) => {
+        nodes.sourceState.textContent = error.message;
+        nodes.sourceState.dataset.state = "error";
+      });
+    };
+    const openProjectContextMenu = (project, trigger, anchor) => {
+      closeProjectContextMenu(false);
+      const menu = make("div", "project-context-menu");
+      menu.setAttribute("role", "menu");
+      menu.setAttribute("aria-label", `Actions pour ${project.display_name}`);
+      const heading = make("div", "project-context-menu__heading");
+      heading.append(createProjectAvatar(project), make("strong", null, project.display_name));
+      const customize = make("button", "project-context-menu__item", "Personnaliser l’icône");
+      customize.type = "button";
+      customize.setAttribute("role", "menuitem");
+      customize.addEventListener("click", () => {
+        closeProjectContextMenu(false);
+        openProjectPresentation(project, trigger);
+      });
+      const remove = make("button", "project-context-menu__item project-context-menu__item--danger", "Retirer de Bridget");
+      remove.type = "button";
+      remove.setAttribute("role", "menuitem");
+      remove.addEventListener("click", () => {
+        closeProjectContextMenu(false);
+        removeProject(project);
+      });
+      menu.append(heading, customize, make("div", "project-context-menu__separator"), remove);
+      documentRef.body.append(menu);
+      projectContextMenu = menu;
+      projectContextTrigger = trigger;
+      positionProjectContextMenu(anchor || trigger.getBoundingClientRect());
+      customize.focus();
+    };
     const renderProjects = () => {
       nodes.projectList.replaceChildren();
-      const all = make("button", "project-row", "Toute la flotte");
+      const all = make("button", "project-row project-row--all");
       all.type = "button";
       all.dataset.selected = String(selectedProjectId === null);
       all.setAttribute("aria-current", String(selectedProjectId === null));
+      all.title = "Toute la flotte";
+      const allContent = make("span", "project-row__content");
+      allContent.append(
+        make("strong", "project-row__name", "Toute la flotte"),
+        make("span", "project-row__state", "Tous projets confondus"),
+      );
+      all.append(createProjectAvatar(null, "all"), allContent);
       all.addEventListener("click", () => {
         selectedProjectId = null;
         lastAgentsRenderSignature = null;
@@ -7364,18 +7644,19 @@
         renderAgents();
       });
       nodes.projectList.append(all);
-      nodes.projectRemove.disabled = !selectedProjectId;
       projects.forEach((project) => {
+        const shell = make("div", "project-row-shell");
         const button = make("button", "project-row");
         button.type = "button";
         button.dataset.selected = String(project.project_id === selectedProjectId);
         button.setAttribute("aria-current", String(project.project_id === selectedProjectId));
         button.title = project.canonical_path;
-        button.append(
+        const content = make("span", "project-row__content");
+        content.append(
           make("strong", "project-row__name", project.display_name),
           make("span", "project-row__state", projectStatusLabel(project)),
-          make("span", "project-row__path", project.canonical_path),
         );
+        button.append(createProjectAvatar(project), content);
         button.addEventListener("click", () => {
           if (project.discovery_state === "awaiting_confirmation") {
             if (!windowRef.confirm("Le compte rendu intermédiaire est attendu. Autoriser un nouveau créneau de découverte en lecture seule ?")) return;
@@ -7453,7 +7734,31 @@
           const coordinator = project.coordinator || state.agents.find((agent) => projectAgentId(agent) === project.project_id)?.name;
           if (coordinator) selectAgent(coordinator);
         });
-        nodes.projectList.append(button);
+        const actions = make("button", "project-row__actions", "⋯");
+        actions.type = "button";
+        actions.setAttribute("aria-label", `Ouvrir le menu de ${project.display_name}`);
+        actions.setAttribute("aria-haspopup", "menu");
+        actions.setAttribute("aria-expanded", "false");
+        actions.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openProjectContextMenu(project, actions, actions.getBoundingClientRect());
+        });
+        button.addEventListener("keydown", (event) => {
+          const opensContextMenu = event.key === "ContextMenu" || (event.shiftKey && event.key === "F10");
+          if (!opensContextMenu) return;
+          event.preventDefault();
+          openProjectContextMenu(project, actions, shell.getBoundingClientRect());
+        });
+        shell.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openProjectContextMenu(project, actions, {
+            left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY,
+          });
+        });
+        shell.append(button, actions);
+        nodes.projectList.append(shell);
       });
     };
     const refreshProjects = async () => {
@@ -7573,13 +7878,9 @@
         nodes.sourceState.dataset.state = "error";
       }
     };
-    const updateProjectRoots = async () => {
+    const updateDefaultCoordinator = async () => {
       try {
         const settings = await requestProject("/v1/projects/settings");
-        const current = (settings.allowed_project_roots || []).join("\n");
-        const value = windowRef.prompt("Une racine autorisée par ligne :", current);
-        if (value === null) return;
-        const allowed_project_roots = value.split("\n").map((entry) => entry.trim()).filter(Boolean);
         const coordinator = selectCoordinator(
           settings,
           "Valeur par défaut des futurs coordinateurs (les projets existants ne changent pas)",
@@ -7589,7 +7890,8 @@
           method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify({
             version: 1, command_id: "project-settings-" + Date.now(),
-            expected_generation: settings.policy_generation, allowed_project_roots,
+            expected_generation: settings.policy_generation,
+            allowed_project_roots: settings.allowed_project_roots || [],
             default_coordinator: {
               agent_type: coordinator.choice.agent_type,
               model_id: coordinator.choice.model_id,
@@ -7597,7 +7899,7 @@
             },
           }),
         });
-        nodes.sourceState.textContent = "Racines projet mises à jour.";
+        nodes.sourceState.textContent = "Coordinateur par défaut des nouveaux projets mis à jour.";
         nodes.sourceState.dataset.state = "ready";
       } catch (error) {
         nodes.sourceState.textContent = error.message;
@@ -7611,26 +7913,25 @@
     };
     nodes.projectNew.addEventListener("click", () => { void beginProject("create"); });
     nodes.projectImport.addEventListener("click", () => { void beginProject("import"); });
-    nodes.projectSettings.addEventListener("click", () => { void updateProjectRoots(); });
-    nodes.projectRemove.addEventListener("click", () => {
-      const project = projects.find((entry) => entry.project_id === selectedProjectId);
-      if (!project) return;
-      if (!windowRef.confirm("Retirer " + project.display_name + " de Bridget ? Son dossier, Git et historique seront conservés.")) return;
-      void requestProject("/v1/projects/disable", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ version: 1, command_id: "project-disable-" + Date.now(), project_id: project.project_id }),
-      }).then(async () => {
-        selectedProjectId = null;
-        await refreshProjects();
-        renderProjects();
-      }).catch((error) => {
-        nodes.sourceState.textContent = error.message;
-        nodes.sourceState.dataset.state = "error";
-      });
-    });
     nodes.projectCollapse.addEventListener("click", () => {
       setProjectPaneCollapsed(nodes.projectPane.dataset.collapsed !== "true");
     });
+    nodes.projectPresentationOverlay.addEventListener("close", () => {
+      const returnFocus = nodes.projectPresentationOverlay.returnFocus;
+      nodes.projectPresentationOverlay.returnFocus = null;
+      if (canFocus(returnFocus)) returnFocus.focus();
+    });
+    if (typeof documentRef.addEventListener === "function") {
+      documentRef.addEventListener("pointerdown", (event) => {
+        if (!projectContextMenu || projectContextMenu.contains(event.target)) return;
+        closeProjectContextMenu(false);
+      });
+      documentRef.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape" || !projectContextMenu) return;
+        event.preventDefault();
+        closeProjectContextMenu(true);
+      });
+    }
     setProjectPaneCollapsed(false);
 
     const renderAgents = () => {
@@ -9181,6 +9482,13 @@
     nodes.controlCenterOverlay.addEventListener("click", (event) => {
       if (event.target === nodes.controlCenterOverlay) nodes.controlCenterOverlay.close();
     });
+    if (typeof windowRef.addEventListener === "function") {
+      windowRef.addEventListener("keydown", (event) => {
+        if (event.key !== "," || !event.metaKey || event.ctrlKey || event.altKey) return;
+        event.preventDefault();
+        void openControlCenter();
+      });
+    }
     if (params.get("view") === "settings") void openControlCenter();
     nodes.selectedAgentAvatar.addEventListener("click", () => {
       const agent = state.agents.find((entry) => entry.name === state.selectedAgent);
@@ -9360,6 +9668,11 @@
     writeControlCenterPreferences,
     applyControlCenterPreferences,
     controlCenterRouteForSearch,
+    projectInitials,
+    defaultProjectPresentation,
+    normalizeProjectPresentation,
+    readProjectPresentationPreferences,
+    writeProjectPresentationPreferences,
     fetchScopedSnapshot,
     peerExchangeProjection,
     peerExchangeKey,

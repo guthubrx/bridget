@@ -93,6 +93,21 @@ Comme opérateur, je veux ouvrir les réglages depuis une roue en bas de la barr
 3. La navigation distingue Préférences du Mac, Serveurs, Usage, Mises à jour et Diagnostics.
 4. Les sections non disponibles restent visibles avec une explication et ne donnent pas une impression de panne.
 5. Le centre mémorise le dernier écran visité localement, sans masquer une erreur ou une permission devenue différente.
+6. Le raccourci macOS `Commande + virgule` ouvre le même centre de contrôle sans changer la conversation affichée.
+
+## User Story 1b - Organiser les projets sans confondre les portées - P1
+
+Comme opérateur, je veux une colonne Projets consacrée aux projets, afin d'ajouter, filtrer, personnaliser ou retirer un projet sans la confondre avec les réglages globaux de Bridget ou du serveur.
+
+### Scénarios d'acceptation
+
+1. La colonne Projets explique qu'elle sert à ajouter, organiser et filtrer, et laisse une marge macOS suffisante sous les boutons de fenêtre.
+2. « Toute la flotte » signifie explicitement « Tous projets confondus ».
+3. Chaque projet est représenté par une petite tuile carrée, légèrement arrondie, portant une ou deux initiales et une couleur stable.
+4. Un clic droit, le bouton d'actions ou le clavier ouvre le menu propre au projet. Ce menu permet au minimum de personnaliser son icône ou de le retirer de Bridget.
+5. Les initiales et la couleur sont des préférences de présentation locales à cette interface. Elles ne modifient ni le dossier, ni les agents, ni une politique serveur.
+6. La colonne peut être repliée : elle conserve alors les icônes des projets et les actions restent atteignables au clic droit ou au clavier.
+7. Aucun bouton textuel « Réglages » ou « Retirer » global ne reste au pied de la colonne Projets.
 
 ## User Story 2 - Régler les préférences du Mac - P1
 
@@ -183,6 +198,10 @@ Comme opérateur, je veux voir si une version plus récente de Bridget est dispo
 - FR-8024: La page Mises à jour DOIT seulement présenter l'information de version attestée et une orientation manuelle. Elle ne DOIT pas exécuter une mise à jour.
 - FR-8025: Les diagnostics DOIVENT être bornés aux métadonnées utiles de santé, version, capacité et dernière synchronisation, sans messages, contenu ou secret.
 - FR-8026: Le comportement de lecture, prévisualisation, confirmation, application et reçu DOIT fonctionner au travers du même chemin sécurisé que les autres commandes Bridget vers un serveur enregistré.
+- FR-8027: `Commande + virgule` DOIT ouvrir le centre de contrôle de Bridget dans le WebView macOS, au même titre que la roue visible.
+- FR-8028: La colonne Projets DOIT être limitée à l'ajout, l'import, le filtrage, le repli et les actions contextuelles sur un projet. Elle ne DOIT PAS proposer un second accès global aux réglages du serveur.
+- FR-8029: Chaque projet DOIT posséder une présentation locale avec initiales et couleur validées. Cette présentation NE DOIT produire aucune écriture vers le serveur.
+- FR-8030: Les actions de retrait et de personnalisation d'un projet DOIVENT être rattachées au menu contextuel de ce projet, pas à un pied de colonne ambigu.
 - FR-8027: Une perte de connexion, une réponse invalide, une capacité retirée ou une erreur de validation DOIVENT conserver la dernière valeur confirmée et fournir une erreur actionnable.
 - FR-8028: Les préférences locales DOIVENT être versionnées, validées et tolérer un stockage corrompu ou indisponible.
 

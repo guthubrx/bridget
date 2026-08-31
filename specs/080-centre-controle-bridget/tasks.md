@@ -10,6 +10,12 @@ T041 reste volontairement ouverte : aucune validation visuelle humaine ne peut �
 
 Les coches de la première tranche ne valent pas acceptation produit. La SPEC reste ouverte jusqu'à la vérification visuelle du parcours complet sur le relais réellement servi.
 
+## Correctif navigation Projets - 2026-08-31
+
+- [x] T042 [US1] Déplacer les actions de retrait et de présentation du projet dans un menu contextuel par projet, supprimer le pied de colonne ambigu et conserver les réglages globaux dans la roue unique.
+- [x] T043 [US1] Ajouter la tuile locale initiales/couleur, le repli de la colonne sans perte d'icônes et la réserve pour les boutons macOS dans `crates/bridget-daemon/assets/ui/app.js`, `index.html` et `theme.css`.
+- [x] T044 [US1] Ajouter le raccourci `Commande + virgule`, les preuves unitaires et le parcours de validation manuelle dans les artefacts de la SPEC-080.
+
 ## Dépendances
 
 `Fondations -> US1 -> US3 -> US4 -> US5 -> US6`

@@ -14,17 +14,17 @@
     <div class="workspace" id="workspace">
       <aside class="project-pane" id="project-pane" aria-label="Projets">
         <header class="project-pane__header">
-          <button id="project-collapse" type="button" aria-label="Replier la barre des projets" aria-expanded="true">‹</button><strong>Projets</strong>
+          <button id="project-collapse" type="button" aria-label="Replier la barre des projets" aria-expanded="true">‹</button>
+          <div class="project-pane__title">
+            <strong>Projets</strong>
+            <span>Ajouter, organiser et filtrer</span>
+          </div>
           <div class="project-pane__actions">
             <button id="project-new" type="button" aria-label="Créer un projet">+</button>
             <button id="project-import" type="button">Importer</button>
           </div>
         </header>
         <nav id="project-list" class="project-list" aria-label="Projets ouverts"></nav>
-        <footer class="project-pane__footer">
-          <button id="project-remove" type="button">Retirer</button>
-          <button id="project-settings" type="button">⚙ Réglages</button>
-        </footer>
       </aside>
       <aside class="agent-pane" aria-label="Agents Bridget">
         <header class="agent-pane__header" data-tauri-drag-region>
@@ -219,5 +219,6 @@
         </section>
       </div>
     </dialog>
+    <dialog class="project-presentation-overlay" id="project-presentation-overlay" aria-labelledby="project-presentation-title"></dialog>
   </body>
 </html>
