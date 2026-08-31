@@ -10,17 +10,24 @@ use bridget_transport::protocol::{
     COORDINATION_EVENTS_VERSION, COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal,
     ConnectionRole, DecommissionOutcome, DelegatedRuntimeEventFrame, DiskSpaceFact,
     ExecutionControlCommand, ExecutionControlOperation, ExecutionControlOutcome,
-    ExecutionControlRefusal, IdempotencyIssue, PROJECT_REGISTRY_CONTRACT_VERSION, PresenceMode,
+    ExecutionControlRefusal, ExecutionDeliveryContext, IdempotencyIssue,
+    PROJECT_REGISTRY_CONTRACT_VERSION, PROJECT_ROUND_POLICY_CONTRACT_VERSION, PresenceMode,
     ProjectAdminOperation, ProjectAdminOutcome, ProjectAdminRequest, ProjectBackend,
     ProjectBindOutcome, ProjectBindRequest, ProjectBindStatus, ProjectBindingProjection,
     ProjectBindingStatus, ProjectProfileOutcome, ProjectProfileRefusal, ProjectProfileRequest,
-    ProjectRegistryRefusal, ProjectRuntimeOperation, ProjectRuntimeOutcome, ProjectRuntimeRefusal,
-    ProjectRuntimeRequest, REVIEW_DELEGATE_CONTRACT_VERSION, RelaunchOutcome,
-    RuntimeIngressRefusal, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal,
-    SpawnRefusal, StopOutcome, decode, encode,
+    ProjectRegistryRefusal, ProjectRoundOperation, ProjectRoundOutcome, ProjectRoundProjection,
+    ProjectRoundRefusal, ProjectRoundRequest, ProjectRuntimeOperation, ProjectRuntimeOutcome,
+    ProjectRuntimeRefusal, ProjectRuntimeRequest, REVIEW_DELEGATE_CONTRACT_VERSION,
+    RelaunchOutcome, RuntimeIngressRefusal, SERVICE_CONTRACT_VERSION, ServiceCapability,
+    ServiceRefusal, SpawnRefusal, StopOutcome, decode, encode,
+};
+use bridget_transport::protocol::{
+    PROJECT_ROUND_INTERVAL_SECS, ProjectReference, ProjectRoundDispatchOutcome,
+    ProjectRoundDispatchRequest,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::io::AsRawFd;
@@ -33,12 +40,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::execution_store::{
-    ConditionalTransition, ControlCommandStatus, ControlReservation, ExecutionStore,
-    ExecutionUsageSample, ProviderBindingOutcome,
+    ConditionalTransition, ControlCommandStatus, ControlReservation, ExecutionRecoveryOutcome,
+    ExecutionStore, ExecutionUsageSample, ProviderBindingOutcome,
 };
 use crate::idempotency::{
-    DelegatedRuntimeEventInput, IdempotencyKey, IdempotencyStore, LookupResult, OperationKind,
-    ReplyTracking, Reservation, SendDelivery,
+    DelegatedRuntimeEventInput, DeliveryExecutionLink, IdempotencyKey, IdempotencyStore,
+    LookupResult, OperationKind, ReplyTracking, Reservation, SendDelivery,
 };
 use crate::managed_supervisor::ManagedSupervisorGuard;
 use crate::store::{
@@ -3621,6 +3628,30 @@ fn defer_idempotent_delivery(
         .map(|presence| presence.agent_type.as_str())
         .unwrap_or("");
     stamp_turn_deadline_for_delivery(&mut message, &state.registry, agent_type);
+    let execution = match state
+        .idempotency
+        .delivery_execution_link(&delivery.delivery_id)
+    {
+        Ok(None) => None,
+        Ok(Some(link)) => {
+            if link.submission_id != message.id {
+                return Err("lien causal divergent du message remis".to_string());
+            }
+            let snapshot = state
+                .execution_store
+                .execution_snapshot(&link.execution_id)
+                .map_err(|error| format!("exécution liée illisible: {error}"))?
+                .ok_or_else(|| "exécution liée absente".to_string())?;
+            Some(ExecutionDeliveryContext {
+                execution_id: snapshot.execution_id,
+                generation: snapshot.generation,
+                revision: snapshot.revision,
+            })
+        }
+        Err(error) => {
+            return Err(format!("lien causal de remise illisible: {error}"));
+        }
+    };
     defer_control(
         state,
         target_conn,
@@ -3630,6 +3661,7 @@ fn defer_idempotent_delivery(
             delivery_generation: delivery.delivery_generation,
             expires_at: delivery.expires_at,
             message,
+            execution,
         },
         controls,
     );
@@ -3675,6 +3707,191 @@ fn schedule_idempotent_delivery_recovery(
             .or_default()
             .extend(controls);
     }
+}
+
+fn schedule_execution_recovery(
+    state: &mut DaemonState,
+    conn_id: &str,
+    instance_id: &str,
+    agent_name: &str,
+    turn_in_progress: bool,
+) {
+    if turn_in_progress {
+        return;
+    }
+    let now = unix_now_secs();
+    let candidates = match state
+        .execution_store
+        .recoverable_execution_ids_for_agent(agent_name)
+    {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            error!("sélection des exécutions à reprendre pour {agent_name}: {error}");
+            return;
+        }
+    };
+    let Some(parent_execution_id) = candidates.first() else {
+        return;
+    };
+    if candidates.len() > 1 {
+        warn!(
+            "reprise refusée pour {agent_name}: exécutions actives concurrentes {:?}",
+            candidates
+        );
+        return;
+    }
+    match state.idempotency.dispatching_delivery_for_execution(
+        parent_execution_id,
+        instance_id,
+        now,
+    ) {
+        Ok(Some(_)) => return,
+        Ok(None) => {}
+        Err(error) => {
+            error!("vérification de remise active pour {parent_execution_id}: {error}");
+            return;
+        }
+    }
+    let stranded_delivery = match state
+        .idempotency
+        .dispatching_delivery_for_execution_any_instance(parent_execution_id, now)
+    {
+        Ok(delivery) => delivery,
+        Err(error) => {
+            error!("recherche de remise liée hors présence pour {parent_execution_id}: {error}");
+            return;
+        }
+    };
+    if let Some(delivery) = stranded_delivery {
+        match state.idempotency.reassign_dispatching_deliveries(
+            &delivery.recipient_instance_id,
+            instance_id,
+            now,
+        ) {
+            Ok(_) => schedule_idempotent_delivery_recovery(state, conn_id, instance_id),
+            Err(error) => error!(
+                "réaffectation de la remise {} vers {}: {error}",
+                delivery.delivery_id, instance_id
+            ),
+        }
+        return;
+    }
+
+    let child_execution_id = format!("execution-recovery-{}", Uuid::new_v4());
+    let reconstructed = match state.execution_store.reconstruct_active_for_agent(
+        agent_name,
+        instance_id,
+        &child_execution_id,
+        now,
+    ) {
+        Ok(ExecutionRecoveryOutcome::Reconstructed(reconstructed)) => reconstructed,
+        Ok(ExecutionRecoveryOutcome::None) => return,
+        Ok(ExecutionRecoveryOutcome::PayloadUnavailable {
+            parent_execution_id,
+        }) => {
+            warn!(
+                "reprise fermée pour {agent_name}: enveloppe absente ou corrompue sur {parent_execution_id}"
+            );
+            return;
+        }
+        Ok(ExecutionRecoveryOutcome::Ambiguous { execution_ids }) => {
+            warn!(
+                "reprise refusée pour {agent_name}: exécutions actives concurrentes {:?}",
+                execution_ids
+            );
+            return;
+        }
+        Err(error) => {
+            error!("reconstruction d'exécution pour {agent_name}: {error}");
+            return;
+        }
+    };
+
+    let issuer_scope = match state.idempotency.supervisor_scope() {
+        Ok(scope) => scope,
+        Err(error) => {
+            error!("identité du superviseur pour la reprise: {error}");
+            return;
+        }
+    };
+    let idempotency_key = format!("recovery-{}", reconstructed.snapshot.execution_id);
+    let key = match IdempotencyKey::new(issuer_scope, OperationKind::Send, idempotency_key) {
+        Ok(key) => key,
+        Err(error) => {
+            error!("clé interne de reprise invalide: {error}");
+            return;
+        }
+    };
+    let canonical = canonical_send(
+        &key.issuer_scope,
+        &key.idempotency_key,
+        &reconstructed.message,
+        now,
+    );
+    let expires_at = match state.idempotency.reserve(
+        &key,
+        &canonical,
+        now,
+        CLIENT_IDEMPOTENCY_HORIZON_SECS,
+        now,
+        CLIENT_ISSUED_AT_TOLERANCE_SECS,
+    ) {
+        Ok(Reservation::Prepared { expires_at }) => expires_at,
+        Ok(other) => {
+            error!(
+                "réservation interne inattendue pour {}: {:?}",
+                reconstructed.snapshot.execution_id, other
+            );
+            return;
+        }
+        Err(error) => {
+            error!("réservation interne de reprise: {error}");
+            return;
+        }
+    };
+    let message_bytes = match serde_json::to_vec(&reconstructed.message) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            error!("sérialisation de l'enveloppe reprise: {error}");
+            return;
+        }
+    };
+    let delivery = SendDelivery {
+        delivery_id: format!("delivery-recovery-{}", reconstructed.snapshot.execution_id),
+        recipient_instance_id: instance_id.to_string(),
+        delivery_generation: next_delivery_generation(),
+        expires_at,
+        message_bytes,
+    };
+    let link = DeliveryExecutionLink {
+        delivery_id: delivery.delivery_id.clone(),
+        submission_id: reconstructed.message.id.clone(),
+        execution_id: reconstructed.snapshot.execution_id.clone(),
+    };
+    if let Err(error) = state
+        .idempotency
+        .begin_send_delivery_with_execution(&key, &delivery, None, &link)
+    {
+        error!("gravure de la remise de reprise: {error}");
+        return;
+    }
+    get_metrics().record_execution_admitted();
+
+    let mut controls = Vec::new();
+    if let Err(error) = defer_idempotent_delivery(state, conn_id, delivery.clone(), &mut controls) {
+        error!("remise de reprise non sérialisable: {error}");
+        let _ = state.idempotency.mark_delivery_indeterminate(
+            &delivery.delivery_id,
+            &delivery.recipient_instance_id,
+            delivery.delivery_generation,
+        );
+        return;
+    }
+    state
+        .pending_post_response_controls
+        .entry(conn_id.to_string())
+        .or_default()
+        .extend(controls);
 }
 
 /// Lance le daemon.
@@ -4402,6 +4619,69 @@ fn project_registry_admin_failure(
             reason: Some(reason),
             observed_at,
         },
+    }
+}
+
+fn project_round_failure(
+    request: &ProjectRoundRequest,
+    reason: ProjectRoundRefusal,
+    observed_at: i64,
+) -> DaemonToWrapper {
+    DaemonToWrapper::ProjectRoundOutcome {
+        outcome: ProjectRoundOutcome {
+            contract_version: request.contract_version,
+            command_id: request.command_id.clone(),
+            operation: request.operation,
+            policies: Vec::new(),
+            reason: Some(reason),
+            observed_at,
+        },
+    }
+}
+
+fn project_round_dispatch_failure(
+    request: &ProjectRoundDispatchRequest,
+    reason: ProjectRoundRefusal,
+    observed_at: i64,
+) -> DaemonToWrapper {
+    DaemonToWrapper::ProjectRoundDispatchOutcome {
+        outcome: ProjectRoundDispatchOutcome {
+            contract_version: request.contract_version,
+            occurrence_at: request.occurrence_at,
+            project: request.project.clone(),
+            issue: None,
+            reason: Some(reason),
+            observed_at,
+        },
+    }
+}
+
+fn project_round_message_id(project: &ProjectReference, occurrence_at: i64) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"bridget/project-round/v1\0");
+    for value in [
+        project.project_id.as_bytes(),
+        &project.binding_generation.to_be_bytes(),
+        &occurrence_at.to_be_bytes(),
+    ] {
+        digest.update((value.len() as u64).to_be_bytes());
+        digest.update(value);
+    }
+    format!("round-{:x}", digest.finalize())
+}
+
+fn unregistered_project_round_projection(
+    project_id: String,
+    observed_at: i64,
+) -> ProjectRoundProjection {
+    ProjectRoundProjection {
+        project_id,
+        binding_generation: None,
+        active: false,
+        configured: false,
+        enabled: false,
+        revision: 0,
+        updated_at: observed_at,
     }
 }
 
@@ -5492,6 +5772,13 @@ fn handle_register_with_channel(
                     },
                 );
                 schedule_idempotent_delivery_recovery(state, conn_id, &instance_id);
+                schedule_execution_recovery(
+                    state,
+                    conn_id,
+                    &instance_id,
+                    &final_name,
+                    turn_in_progress,
+                );
             }
 
             state.restore_pending_for_agent(&final_name, conn_id);
@@ -6735,11 +7022,17 @@ fn remember_reply_cycle(
     });
 }
 
+struct IdempotentSendAdmission {
+    project: Option<ProjectReference>,
+    issued_at_tolerance_secs: i64,
+}
+
 fn handle_idempotent_send(
     conn_id: &str,
     mut message: bridget_core::BridgetMessage,
     message_id: String,
     issued_at: i64,
+    admission: IdempotentSendAdmission,
     st: &mut DaemonState,
     controls: &mut Vec<DeferredControl>,
 ) -> DaemonToWrapper {
@@ -6769,7 +7062,7 @@ fn handle_idempotent_send(
         issued_at,
         CLIENT_IDEMPOTENCY_HORIZON_SECS,
         now,
-        CLIENT_ISSUED_AT_TOLERANCE_SECS,
+        admission.issued_at_tolerance_secs,
     ) {
         Ok(reservation) => reservation,
         Err(crate::idempotency::IdempotencyError::InvalidIssuedAt) => {
@@ -6892,11 +7185,78 @@ fn handle_idempotent_send(
             .saturating_add(message.reply_timeout.unwrap_or(60).min(i64::MAX as u64) as i64)
             .max(0),
     });
-    let delivery_result = match reply_tracking.as_ref() {
-        Some(reply) => st
-            .idempotency
-            .begin_send_delivery_with_reply(&key, &delivery, reply),
-        None => st.idempotency.begin_send_delivery(&key, &delivery),
+    let execution_link = if st.registry.execution_projection().dual_write
+        && matches!(
+            message.intent,
+            Some(
+                bridget_core::MessageIntent::TriggerTurn
+                    | bridget_core::MessageIntent::InterruptAndStart
+            )
+        ) {
+        let execution_id = format!("execution-{}", message.id);
+        match st.execution_store.admit_starting_message_for_project(
+            &message,
+            &execution_id,
+            admission.project.as_ref(),
+            now,
+        ) {
+            Ok(true) => {
+                get_metrics().record_execution_admitted();
+                Some(DeliveryExecutionLink {
+                    delivery_id: delivery.delivery_id.clone(),
+                    submission_id: message.id.clone(),
+                    execution_id,
+                })
+            }
+            Ok(false) => match st.execution_store.execution_snapshot(&execution_id) {
+                Ok(Some(snapshot))
+                    if !matches!(
+                        snapshot.state.as_str(),
+                        "interrupted" | "completed" | "failed" | "unreachable"
+                    ) =>
+                {
+                    Some(DeliveryExecutionLink {
+                        delivery_id: delivery.delivery_id.clone(),
+                        submission_id: message.id.clone(),
+                        execution_id,
+                    })
+                }
+                Ok(_) => {
+                    return DaemonToWrapper::Nack {
+                        id: key.idempotency_key.clone(),
+                        reason: "soumission déjà terminale".to_string(),
+                    };
+                }
+                Err(error) => {
+                    return DaemonToWrapper::Nack {
+                        id: key.idempotency_key.clone(),
+                        reason: format!("soumission existante illisible: {error}"),
+                    };
+                }
+            },
+            Err(error) => {
+                return DaemonToWrapper::Nack {
+                    id: key.idempotency_key.clone(),
+                    reason: format!("démarrage non persisté: {error}"),
+                };
+            }
+        }
+    } else {
+        None
+    };
+    let delivery_result = match execution_link.as_ref() {
+        Some(link) => st.idempotency.begin_send_delivery_with_execution(
+            &key,
+            &delivery,
+            reply_tracking.as_ref(),
+            link,
+        ),
+        None => match reply_tracking.as_ref() {
+            Some(reply) => st
+                .idempotency
+                .begin_send_delivery_with_reply(&key, &delivery, reply),
+            None => st.idempotency.begin_send_delivery(&key, &delivery),
+        },
     };
     if let Err(error) = delivery_result {
         error!("idempotence dispatch: {error}");
@@ -7479,6 +7839,8 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ClientHello { .. }
+                | WrapperToDaemon::ProjectRoundRequest { .. }
+                | WrapperToDaemon::ProjectRoundDispatch { .. }
                 | WrapperToDaemon::RuntimeIngressHello { .. }
                 | WrapperToDaemon::RuntimeIngressPreflight { .. }
                 // Refusé AVANT ce lot aussi : il tombait dans le tiret bas.
@@ -7554,6 +7916,8 @@ fn handle_wrapper_message(
                 WrapperToDaemon::SendIdempotent { .. }
                 | WrapperToDaemon::Lookup { .. }
                 | WrapperToDaemon::ControlExecution { .. }
+                | WrapperToDaemon::ProjectRoundRequest { .. }
+                | WrapperToDaemon::ProjectRoundDispatch { .. }
                     if !st.client_negotiations.contains_key(conn_id) =>
                 {
                     Some(ClientRefusal::NegotiationRequired)
@@ -7595,6 +7959,20 @@ fn handle_wrapper_message(
                 {
                     Some(ClientRefusal::CapabilityNotNegotiated)
                 }
+                WrapperToDaemon::ProjectRoundRequest { .. }
+                | WrapperToDaemon::ProjectRoundDispatch { .. }
+                    if st
+                        .client_negotiations
+                        .get(conn_id)
+                        .is_some_and(|negotiated| {
+                            negotiated.version != CLIENT_CONTRACT_VERSION
+                                || !negotiated
+                                    .capabilities
+                                    .contains(&ClientCapability::ProjectRoundPolicyV1)
+                        }) =>
+                {
+                    Some(ClientRefusal::CapabilityNotNegotiated)
+                }
                 // MATRICE EXHAUSTIVE — aucun `_`, et c'est délibéré.
                 //
                 // Le tiret bas précédent classait trois variantes et renvoyait
@@ -7609,6 +7987,8 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::SendIdempotent { .. }
                 | WrapperToDaemon::Lookup { .. }
                 | WrapperToDaemon::ControlExecution { .. }
+                | WrapperToDaemon::ProjectRoundRequest { .. }
+                | WrapperToDaemon::ProjectRoundDispatch { .. }
                 // Sonde d'identité : lecture seule, aucune écriture durable, et
                 // c'est le rôle Client qui l'emprunte (`daemon_identity`).
                 | WrapperToDaemon::DaemonIdentityRequest => None,
@@ -7679,6 +8059,8 @@ fn handle_wrapper_message(
                         | WrapperToDaemon::SendIdempotent { .. }
                         | WrapperToDaemon::Lookup { .. }
                         | WrapperToDaemon::ControlExecution { .. }
+                        | WrapperToDaemon::ProjectRoundRequest { .. }
+                        | WrapperToDaemon::ProjectRoundDispatch { .. }
                 ) =>
             {
                 Some(ClientRefusal::ClientRoleRequired)
@@ -7990,6 +8372,256 @@ fn handle_wrapper_message(
                         observed_at,
                     )
                 }
+            })
+        }
+        WrapperToDaemon::ProjectRoundRequest { request } => {
+            let observed_at = unix_now_secs();
+            if request.contract_version != PROJECT_ROUND_POLICY_CONTRACT_VERSION {
+                return Some(project_round_failure(
+                    &request,
+                    ProjectRoundRefusal::InvalidContract,
+                    observed_at,
+                ));
+            }
+            if request.command_id.trim().is_empty()
+                || request.issued_at < 0
+                || request.deadline_at < request.issued_at
+                || observed_at > request.deadline_at
+            {
+                return Some(project_round_failure(
+                    &request,
+                    ProjectRoundRefusal::IdempotencyExpired,
+                    observed_at,
+                ));
+            }
+            let project_id = request
+                .project_id
+                .clone()
+                .filter(|project_id| !project_id.trim().is_empty());
+            let valid_shape = match request.operation {
+                ProjectRoundOperation::List => {
+                    project_id.is_none() && request.binding_generation.is_none()
+                }
+                ProjectRoundOperation::Status => {
+                    project_id.is_some() && request.binding_generation.is_none()
+                }
+                ProjectRoundOperation::Enable | ProjectRoundOperation::Disable => {
+                    project_id.is_some()
+                        && request.binding_generation.is_some_and(|value| value > 0)
+                }
+            };
+            if !valid_shape {
+                return Some(project_round_failure(
+                    &request,
+                    ProjectRoundRefusal::InvalidRequest,
+                    observed_at,
+                ));
+            }
+            if state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .peer_uids
+                .get(conn_id)
+                .copied()
+                != Some(unsafe { libc::geteuid() })
+            {
+                return Some(project_round_failure(
+                    &request,
+                    ProjectRoundRefusal::PeerUidMismatch,
+                    observed_at,
+                ));
+            }
+
+            let outcome = match request.operation {
+                ProjectRoundOperation::List => state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .store
+                    .project_round_policies(observed_at)
+                    .map(|policies| ProjectRoundOutcome {
+                        contract_version: request.contract_version,
+                        command_id: request.command_id.clone(),
+                        operation: request.operation,
+                        policies,
+                        reason: None,
+                        observed_at,
+                    }),
+                ProjectRoundOperation::Status => {
+                    let project_id = project_id.expect("project_id status validé");
+                    state
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .store
+                        .project_round_policy_for_project(&project_id, observed_at)
+                        .map(|policy| ProjectRoundOutcome {
+                            contract_version: request.contract_version,
+                            command_id: request.command_id.clone(),
+                            operation: request.operation,
+                            policies: policy.map(|policy| vec![policy]).unwrap_or_else(|| {
+                                vec![unregistered_project_round_projection(
+                                    project_id,
+                                    observed_at,
+                                )]
+                            }),
+                            reason: None,
+                            observed_at,
+                        })
+                }
+                ProjectRoundOperation::Enable | ProjectRoundOperation::Disable => state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .store
+                    .apply_project_round_mutation(
+                        &request.command_id,
+                        request.operation,
+                        project_id.as_deref().expect("project_id mutation validé"),
+                        request.binding_generation.expect("génération validée"),
+                        observed_at,
+                    ),
+            };
+            Some(match outcome {
+                Ok(outcome) => DaemonToWrapper::ProjectRoundOutcome { outcome },
+                Err(StoreError::ProjectRoundRefusal(reason)) => {
+                    project_round_failure(&request, reason, observed_at)
+                }
+                Err(error) => {
+                    warn!("politique de ronde indisponible: {error}");
+                    project_round_failure(
+                        &request,
+                        ProjectRoundRefusal::StoreUnavailable,
+                        observed_at,
+                    )
+                }
+            })
+        }
+        WrapperToDaemon::ProjectRoundDispatch { request } => {
+            let observed_at = unix_now_secs();
+            if request.contract_version != PROJECT_ROUND_POLICY_CONTRACT_VERSION
+                || request.project.project_id.trim().is_empty()
+                || request.project.binding_generation == 0
+                || request.occurrence_at < 0
+                || request.occurrence_at > observed_at
+                || observed_at.saturating_sub(request.occurrence_at) >= PROJECT_ROUND_INTERVAL_SECS
+            {
+                return Some(project_round_dispatch_failure(
+                    &request,
+                    ProjectRoundRefusal::InvalidRequest,
+                    observed_at,
+                ));
+            }
+            if state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .peer_uids
+                .get(conn_id)
+                .copied()
+                != Some(unsafe { libc::geteuid() })
+            {
+                return Some(project_round_dispatch_failure(
+                    &request,
+                    ProjectRoundRefusal::PeerUidMismatch,
+                    observed_at,
+                ));
+            }
+            let policy = {
+                let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                match st
+                    .store
+                    .project_round_policy_for_project(&request.project.project_id, observed_at)
+                {
+                    Ok(Some(policy)) => policy,
+                    Ok(None) => {
+                        return Some(project_round_dispatch_failure(
+                            &request,
+                            ProjectRoundRefusal::ProjectNotFound,
+                            observed_at,
+                        ));
+                    }
+                    Err(error) => {
+                        warn!("lecture politique de ronde avant émission: {error}");
+                        return Some(project_round_dispatch_failure(
+                            &request,
+                            ProjectRoundRefusal::StoreUnavailable,
+                            observed_at,
+                        ));
+                    }
+                }
+            };
+            if !policy.active {
+                return Some(project_round_dispatch_failure(
+                    &request,
+                    ProjectRoundRefusal::ProjectInactive,
+                    observed_at,
+                ));
+            }
+            if policy.binding_generation != Some(request.project.binding_generation) {
+                return Some(project_round_dispatch_failure(
+                    &request,
+                    ProjectRoundRefusal::BindingGenerationMismatch,
+                    observed_at,
+                ));
+            }
+            if !policy.configured || !policy.enabled {
+                return Some(project_round_dispatch_failure(
+                    &request,
+                    ProjectRoundRefusal::PolicyDisabled,
+                    observed_at,
+                ));
+            }
+
+            let message_id = project_round_message_id(&request.project, request.occurrence_at);
+            let mut message = bridget_core::BridgetMessage::new(
+                "bridget-round",
+                "bridget",
+                format!(
+                    "RONDE DE VIGILANCE (7 min) - réveil périodique du projet {} à l'occurrence {}.",
+                    request.project.project_id, request.occurrence_at
+                ),
+            );
+            message.origin = Some(bridget_core::MessageOrigin::Routine);
+            message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+            message.references = vec![format!(
+                "project:{}@{}",
+                request.project.project_id, request.project.binding_generation
+            )];
+            let (response, controls) = {
+                let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                let mut controls = Vec::new();
+                let response = handle_idempotent_send(
+                    conn_id,
+                    message,
+                    message_id,
+                    request.occurrence_at,
+                    IdempotentSendAdmission {
+                        project: Some(request.project.clone()),
+                        issued_at_tolerance_secs: PROJECT_ROUND_INTERVAL_SECS,
+                    },
+                    &mut st,
+                    &mut controls,
+                );
+                (response, controls)
+            };
+            let issue = match response {
+                DaemonToWrapper::IdempotencyResult { issue, .. } => issue,
+                other => {
+                    warn!("émission de ronde refusée par le socle idempotent: {other:?}");
+                    return Some(project_round_dispatch_failure(
+                        &request,
+                        ProjectRoundRefusal::StoreUnavailable,
+                        observed_at,
+                    ));
+                }
+            };
+            let _ = execute_controls(controls);
+            Some(DaemonToWrapper::ProjectRoundDispatchOutcome {
+                outcome: ProjectRoundDispatchOutcome {
+                    contract_version: request.contract_version,
+                    occurrence_at: request.occurrence_at,
+                    project: request.project,
+                    issue: Some(issue),
+                    reason: None,
+                    observed_at,
+                },
             })
         }
         WrapperToDaemon::ProjectProfileRequest { request } => {
@@ -9404,6 +10036,7 @@ fn handle_wrapper_message(
                         ClientCapability::SendIdempotent
                             | ClientCapability::Lookup
                             | ClientCapability::ExecutionControlV1
+                            | ClientCapability::ProjectRoundPolicyV1
                     )
                 })
                 .collect();
@@ -9436,6 +10069,10 @@ fn handle_wrapper_message(
                     message,
                     message_id,
                     issued_at,
+                    IdempotentSendAdmission {
+                        project: None,
+                        issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+                    },
                     &mut st,
                     &mut controls,
                 );
@@ -19006,7 +19643,515 @@ mod presence_tests {
         let _ = std::fs::remove_file(&config.db_path);
     }
 
+    #[test]
+    fn spec_079_reprise_register_livre_le_message_exact_une_seule_fois() {
+        let (mut state, config) = state_with_registered_agent("spec-079-recovery-register");
+        let (writer, _reader) = control_socket("spec-079-recovery-register");
+        state.connections.insert("conn-1".to_string(), writer);
+        let mut message =
+            bridget_core::BridgetMessage::new("humain", "agent-2", "reprends exactement ceci");
+        message.id = "message-recovery-079".to_string();
+        message.origin = Some(bridget_core::MessageOrigin::Human);
+        message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+        state
+            .execution_store
+            .admit_starting_message(&message, "execution-parent-079", unix_now_secs())
+            .unwrap();
+
+        schedule_execution_recovery(&mut state, "conn-1", "instance-1", "agent-2", false);
+
+        let controls = state
+            .pending_post_response_controls
+            .get("conn-1")
+            .expect("remise de reprise différée");
+        assert_eq!(controls.len(), 1);
+        let child_execution_id = match &controls[0].message {
+            DaemonToWrapper::DeliverIdempotent {
+                message: delivered,
+                execution: Some(execution),
+                ..
+            } => {
+                assert_eq!(delivered.id, message.id);
+                assert_eq!(delivered.body, message.body);
+                assert_eq!(delivered.origin, message.origin);
+                assert_eq!(delivered.intent, message.intent);
+                assert_eq!(execution.generation, 2);
+                execution.execution_id.clone()
+            }
+            other => panic!("remise liée attendue, reçu {other:?}"),
+        };
+        assert!(matches!(
+            state
+                .execution_store
+                .execution_snapshot("execution-parent-079")
+                .unwrap(),
+            Some(snapshot) if snapshot.state == "unreachable"
+        ));
+        assert!(matches!(
+            state
+                .execution_store
+                .continuation_for(&child_execution_id)
+                .unwrap(),
+            Some(continuation)
+                if continuation.parent_execution_id == "execution-parent-079"
+                    && continuation.mode
+                        == crate::execution_store::ContinuationMode::Reconstructed
+        ));
+
+        schedule_execution_recovery(&mut state, "conn-1", "instance-1", "agent-2", false);
+        assert_eq!(
+            state.pending_post_response_controls["conn-1"].len(),
+            1,
+            "la remise dispatching existante doit être rejouée, pas remplacée"
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn spec_079_ack_puis_deux_redemarrages_rejouent_une_seule_continuation() {
+        fn reopen_fixture_state(config: &DaemonConfig, home: &std::path::Path) -> DaemonState {
+            let _home_lock = HOME_REGISTRY_LOCK.lock().unwrap();
+            let previous_home = std::env::var_os("HOME");
+            unsafe { std::env::set_var("HOME", home) };
+            let (managed_tx, _managed_rx) = mpsc::channel();
+            let result = DaemonState::new(config, managed_tx);
+            if let Some(previous_home) = previous_home {
+                unsafe { std::env::set_var("HOME", previous_home) };
+            } else {
+                unsafe { std::env::remove_var("HOME") };
+            }
+            result.unwrap()
+        }
+
+        let (mut state, config) = state_with_registered_agent("spec-079-real-restart");
+        let fixture_root = state.fixture_root.take().expect("racine fixture");
+        let home = fixture_root.0.clone();
+        let registry_file = home.join(".config/bridget/agents.json");
+        let registry_json = serde_json::json!({
+            "execution_projection": { "dual_write": true, "legacy_projection": false },
+            "agents": {
+                "claude": {
+                    "command": "/bin/sh",
+                    "protocol": "acp",
+                    "forbidden_env": [],
+                    "pass_env": []
+                }
+            }
+        })
+        .to_string();
+        std::fs::write(&registry_file, &registry_json).unwrap();
+        std::fs::set_permissions(&registry_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        state.registry = AgentRegistry::from_json(&registry_json, &registry_file).unwrap();
+        state.client_negotiations.insert(
+            "ui-client-079".to_string(),
+            NegotiatedClient {
+                version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: crate::mcp::issuer_scope("ui-client-real-restart-079"),
+                capabilities: vec![ClientCapability::SendIdempotent],
+            },
+        );
+        let (initial_writer, _initial_reader) = control_socket("spec-079-real-restart-initial");
+        state
+            .connections
+            .insert("conn-1".to_string(), initial_writer);
+
+        let now = unix_now_secs();
+        let mut message = bridget_core::BridgetMessage::new(
+            "human",
+            "agent-2",
+            "message exact après acquittement",
+        );
+        message.id = "message-real-restart-079".to_string();
+        message.origin = Some(bridget_core::MessageOrigin::Human);
+        message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+        let mut controls = Vec::new();
+        let response = handle_idempotent_send(
+            "ui-client-079",
+            message.clone(),
+            message.id.clone(),
+            now,
+            IdempotentSendAdmission {
+                project: None,
+                issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+            },
+            &mut state,
+            &mut controls,
+        );
+        assert!(matches!(
+            response,
+            DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown {
+                    delivery_id: Some(_),
+                    ..
+                },
+                ..
+            }
+        ));
+        assert_eq!(controls.len(), 1);
+        let (initial_delivery_id, initial_generation) = match &controls[0].message {
+            DaemonToWrapper::DeliverIdempotent {
+                delivery_id,
+                delivery_generation,
+                message: delivered,
+                execution: Some(execution),
+                ..
+            } => {
+                assert_eq!(delivered.body, message.body);
+                assert_eq!(execution.execution_id, "execution-message-real-restart-079");
+                (delivery_id.clone(), *delivery_generation)
+            }
+            other => panic!("remise initiale liée attendue: {other:?}"),
+        };
+        state
+            .idempotency
+            .acknowledge_send_delivery(&initial_delivery_id, "instance-1", initial_generation)
+            .unwrap();
+        drop(state);
+
+        let mut restarted = reopen_fixture_state(&config, &home);
+        restarted.fixture_root = Some(fixture_root);
+        let (restart_writer, _restart_reader) = control_socket("spec-079-real-restart-first");
+        restarted
+            .connections
+            .insert("conn-restart-1".to_string(), restart_writer);
+        assert!(matches!(
+            handle_register(
+                "conn-restart-1",
+                "claude".to_string(),
+                Some("agent-2".to_string()),
+                Some("macbook".to_string()),
+                Some("acp".to_string()),
+                Some(PresenceMode::Acp),
+                None,
+                Some("Linux".to_string()),
+                Some("instance-restart-1".to_string()),
+                None,
+                false,
+                Some(true),
+                &mut restarted,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        let first_controls = restarted
+            .pending_post_response_controls
+            .get("conn-restart-1")
+            .expect("continuation après premier redémarrage");
+        assert_eq!(first_controls.len(), 1);
+        let (recovery_delivery_id, recovery_execution_id) = match &first_controls[0].message {
+            DaemonToWrapper::DeliverIdempotent {
+                delivery_id,
+                message: delivered,
+                execution: Some(execution),
+                ..
+            } => {
+                assert_eq!(delivered.id, message.id);
+                assert_eq!(delivered.body, message.body);
+                (delivery_id.clone(), execution.execution_id.clone())
+            }
+            other => panic!("continuation liée attendue: {other:?}"),
+        };
+        assert!(matches!(
+            restarted
+                .execution_store
+                .continuation_for(&recovery_execution_id)
+                .unwrap(),
+            Some(continuation)
+                if continuation.parent_execution_id
+                    == "execution-message-real-restart-079"
+                    && continuation.mode
+                        == crate::execution_store::ContinuationMode::Reconstructed
+        ));
+
+        let fixture_root = restarted.fixture_root.take().expect("racine conservée");
+        drop(restarted);
+        let mut restarted_again = reopen_fixture_state(&config, &home);
+        restarted_again.fixture_root = Some(fixture_root);
+        let recoverable = restarted_again
+            .execution_store
+            .recoverable_execution_ids_for_agent("agent-2")
+            .unwrap();
+        assert_eq!(
+            recoverable.as_slice(),
+            std::slice::from_ref(&recovery_execution_id)
+        );
+        assert_eq!(
+            restarted_again
+                .idempotency
+                .dispatching_deliveries_for_instance("instance-restart-1", unix_now_secs(),)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            restarted_again
+                .idempotency
+                .dispatching_delivery_for_execution(
+                    &recovery_execution_id,
+                    "instance-restart-1",
+                    unix_now_secs(),
+                )
+                .unwrap()
+                .is_some()
+        );
+        let (second_writer, _second_reader) = control_socket("spec-079-real-restart-second");
+        restarted_again
+            .connections
+            .insert("conn-restart-2".to_string(), second_writer);
+        assert!(matches!(
+            handle_register(
+                "conn-restart-2",
+                "claude".to_string(),
+                Some("agent-2".to_string()),
+                Some("macbook".to_string()),
+                Some("acp".to_string()),
+                Some(PresenceMode::Acp),
+                None,
+                Some("Linux".to_string()),
+                Some("instance-restart-2".to_string()),
+                None,
+                false,
+                Some(true),
+                &mut restarted_again,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        let second_controls = restarted_again
+            .pending_post_response_controls
+            .get("conn-restart-2")
+            .expect("rejeu après second redémarrage");
+        assert_eq!(second_controls.len(), 1);
+        match &second_controls[0].message {
+            DaemonToWrapper::DeliverIdempotent {
+                delivery_id,
+                message: delivered,
+                execution: Some(execution),
+                ..
+            } => {
+                assert_eq!(delivery_id, &recovery_delivery_id);
+                assert_eq!(delivered.body, message.body);
+                assert_eq!(execution.execution_id, recovery_execution_id);
+            }
+            other => panic!("rejeu de continuation liée attendu: {other:?}"),
+        }
+
+        drop(restarted_again);
+        let _ = std::fs::remove_file(config.db_path);
+        let _ = std::fs::remove_file(config.socket_path);
+        let _ = std::fs::remove_file(config.log_path);
+    }
+
+    #[test]
+    fn spec_079_tour_vivant_interdit_la_reconstruction() {
+        let (mut state, config) = state_with_registered_agent("spec-079-recovery-busy");
+        let mut message = bridget_core::BridgetMessage::new("humain", "agent-2", "tour vivant");
+        message.id = "message-busy-079".to_string();
+        message.origin = Some(bridget_core::MessageOrigin::Human);
+        message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+        state
+            .execution_store
+            .admit_starting_message(&message, "execution-busy-079", unix_now_secs())
+            .unwrap();
+
+        schedule_execution_recovery(&mut state, "conn-1", "instance-1", "agent-2", true);
+
+        assert!(state.pending_post_response_controls.is_empty());
+        assert!(matches!(
+            state
+                .execution_store
+                .execution_snapshot("execution-busy-079")
+                .unwrap(),
+            Some(snapshot) if snapshot.state == "starting" && snapshot.generation == 1
+        ));
+        assert_eq!(
+            state
+                .idempotency
+                .dispatching_delivery_for_execution(
+                    "execution-busy-079",
+                    "instance-1",
+                    unix_now_secs()
+                )
+                .unwrap(),
+            None
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
     /// Redémarrage daemon simulé : aucune présence préalable, le wrapper
+    #[test]
+    fn spec_079_tick_global_ne_livre_que_la_politique_projet_active() {
+        let (mut state, config) = state_with_registered_agent("spec-079-project-round");
+        state.registry = AgentRegistry::from_json(
+            r#"{"execution_projection":{"dual_write":true,"legacy_projection":false}}"#,
+            "/tmp/spec-079-project-round-agents.json",
+        )
+        .unwrap();
+        state.router.rename("conn-1", "bridget").unwrap();
+        state
+            .conn_names
+            .insert("conn-1".to_string(), "bridget".to_string());
+        state.presences.get_mut("instance-1").unwrap().name = "bridget".to_string();
+        let (target_writer, mut target_reader) = control_socket("spec-079-project-round");
+        state
+            .connections
+            .insert("conn-1".to_string(), target_writer);
+        state
+            .peer_uids
+            .insert("round-client".to_string(), unsafe { libc::geteuid() });
+        let now = unix_now_secs();
+        let occurrence_at = now - now.rem_euclid(PROJECT_ROUND_INTERVAL_SECS);
+        state
+            .store
+            .bind_project_registration(
+                "register-project-round-079",
+                "project-079",
+                "/srv/projects/project-079",
+                now - 2,
+            )
+            .unwrap();
+        state
+            .store
+            .apply_project_round_mutation(
+                "enable-project-round-079",
+                ProjectRoundOperation::Enable,
+                "project-079",
+                1,
+                now - 1,
+            )
+            .unwrap();
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_wrapper_message(
+                "round-client",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "round-client",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: crate::mcp::issuer_scope("project-round-test-079"),
+                    capabilities: vec![ClientCapability::ProjectRoundPolicyV1],
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientWelcome { .. })
+        ));
+        let request = ProjectRoundDispatchRequest {
+            contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+            occurrence_at,
+            project: ProjectReference {
+                project_id: "project-079".to_string(),
+                binding_generation: 1,
+            },
+        };
+        let first = handle_wrapper_message(
+            "round-client",
+            WrapperToDaemon::ProjectRoundDispatch {
+                request: request.clone(),
+            },
+            &shared,
+        );
+        let first_issue = match first {
+            Some(DaemonToWrapper::ProjectRoundDispatchOutcome { outcome }) => {
+                assert_eq!(outcome.project, request.project);
+                assert_eq!(outcome.reason, None);
+                outcome.issue.expect("issue de remise")
+            }
+            other => panic!("issue de ronde inattendue: {other:?}"),
+        };
+        assert!(matches!(
+            first_issue,
+            IdempotencyIssue::OutcomeUnknown {
+                delivery_id: Some(_),
+                ..
+            }
+        ));
+
+        let delivered = read_control(&mut target_reader);
+        let execution_id = match delivered {
+            DaemonToWrapper::DeliverIdempotent {
+                message,
+                execution: Some(execution),
+                ..
+            } => {
+                assert_eq!(message.origin, Some(bridget_core::MessageOrigin::Routine));
+                assert_eq!(
+                    message.intent,
+                    Some(bridget_core::MessageIntent::TriggerTurn)
+                );
+                assert_eq!(message.references, ["project:project-079@1".to_string()]);
+                execution.execution_id
+            }
+            other => panic!("remise de ronde liée attendue: {other:?}"),
+        };
+        {
+            let state = shared.lock().unwrap();
+            let snapshot = state
+                .execution_store
+                .execution_snapshot(&execution_id)
+                .unwrap()
+                .expect("exécution de ronde");
+            assert_eq!(snapshot.project, Some(request.project.clone()));
+        }
+
+        let replay = handle_wrapper_message(
+            "round-client",
+            WrapperToDaemon::ProjectRoundDispatch {
+                request: request.clone(),
+            },
+            &shared,
+        );
+        assert!(matches!(
+            replay,
+            Some(DaemonToWrapper::ProjectRoundDispatchOutcome { outcome })
+                if outcome.issue == Some(first_issue)
+        ));
+        {
+            let mut state = shared.lock().unwrap();
+            assert_eq!(
+                state
+                    .idempotency
+                    .dispatching_deliveries_for_instance("instance-1", now)
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+
+        shared
+            .lock()
+            .unwrap()
+            .store
+            .apply_project_round_mutation(
+                "disable-project-round-079",
+                ProjectRoundOperation::Disable,
+                "project-079",
+                1,
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            handle_wrapper_message(
+                "round-client",
+                WrapperToDaemon::ProjectRoundDispatch { request },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ProjectRoundDispatchOutcome { outcome })
+                if outcome.reason == Some(ProjectRoundRefusal::PolicyDisabled)
+                    && outcome.issue.is_none()
+        ));
+        drop(target_reader);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
     /// ré-annonce un tour ouvert via Register. Sans `turn_in_progress=true`,
     /// who afficherait `connected` — exactement le mensonge du constat.
     #[test]

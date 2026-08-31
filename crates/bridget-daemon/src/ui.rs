@@ -8,7 +8,7 @@ use crate::mission_projection::{
     MissionProjectionV1, read_public_mission_projection_v1, retain_living_objectives,
 };
 use crate::project_policy::ProjectRootPolicy;
-use bridget_core::{BridgetMessage, MessageOrigin};
+use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
 use bridget_transport::journal::valid_events;
 use bridget_transport::protocol::{
     AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
@@ -1925,6 +1925,7 @@ fn send_ui_message(
     let mut message = BridgetMessage::new(UI_SENDER, request.to, request.body);
     message.reply = request.reply;
     message.origin = Some(MessageOrigin::Human);
+    message.intent = Some(MessageIntent::TriggerTurn);
     let message_id = message.id.clone();
     send_daemon(
         &mut writer,
@@ -3223,6 +3224,109 @@ mod tests {
         let json = serde_json::to_value(accepted).unwrap();
         assert_eq!(json["message_id"], "message-9afa");
         assert_eq!(json["delivery_id"], "delivery-ccff");
+    }
+
+    #[test]
+    fn spec_079_message_ui_est_humain_et_declenche_un_tour() {
+        let socket_path = std::env::temp_dir().join(format!(
+            "bridget-ui-spec-079-{}.sock",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client
+                }
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client,
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::ClientHello { capabilities, .. }
+                    if capabilities == vec![ClientCapability::SendIdempotent]
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "spec-079".to_string(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: vec![ClientCapability::SendIdempotent],
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            let message_id = match decode::<WrapperToDaemon>(line.trim()).unwrap() {
+                WrapperToDaemon::SendIdempotent {
+                    message,
+                    message_id,
+                    ..
+                } => {
+                    assert_eq!(message.id, message_id);
+                    assert_eq!(message.from, UI_SENDER);
+                    assert_eq!(message.to, "coordinateur");
+                    assert_eq!(message.body, "continue le travail");
+                    assert_eq!(message.origin, Some(MessageOrigin::Human));
+                    assert_eq!(message.intent, Some(MessageIntent::TriggerTurn));
+                    message_id
+                }
+                other => panic!("SendIdempotent attendu, reçu {other:?}"),
+            };
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::IdempotencyResult {
+                    operation_kind: "send".to_string(),
+                    idempotency_key: message_id,
+                    issue: IdempotencyIssue::OutcomeUnknown {
+                        expires_at: now_secs() + 60,
+                        delivery_id: Some("delivery-ui-079".to_string()),
+                    },
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+        });
+
+        let accepted = send_ui_message(
+            &socket_path,
+            UiSendRequestV1 {
+                version: UI_VERSION,
+                to: "coordinateur".to_string(),
+                body: "continue le travail".to_string(),
+                reply: false,
+            },
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(accepted.delivery_id, "delivery-ui-079");
+        std::fs::remove_file(socket_path).unwrap();
     }
 
     fn capture_ui_registration_channel(

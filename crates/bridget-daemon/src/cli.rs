@@ -10,6 +10,11 @@ use bridget_transport::protocol::{
     ServiceRequestOperation, ServiceRequestPayload, ServiceSuiteDeclaration, decode, encode,
     is_canonical_git_sha,
 };
+use bridget_transport::protocol::{
+    PROJECT_ROUND_INTERVAL_SECS, PROJECT_ROUND_POLICY_CONTRACT_VERSION, ProjectReference,
+    ProjectRoundDispatchOutcome, ProjectRoundDispatchRequest, ProjectRoundOperation,
+    ProjectRoundOutcome, ProjectRoundRequest,
+};
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -141,6 +146,7 @@ pub fn run() {
         "runtime" => cmd_runtime(&args[2..]),
         "domain" => cmd_domain(&args[2..]),
         "project-runtime" => cmd_project_runtime(&args[2..]),
+        "project-round" => cmd_project_round(&args[2..]),
         "dnd" => cmd_dnd(&args[2..]),
         "hook" => cmd_hook(&args[2..]),
         "install-hooks" => cmd_install_hooks(&args[2..]),
@@ -416,6 +422,7 @@ fn print_usage() {
            requests [--all]       Mes demandes (défaut) ou toutes les ouvertes\n  \
            rename <N>             Renomme l'agent courant\n  \
            project-runtime <OP> --project <ID> Prépare, consulte ou recrée Docker\n  \
+           project-round <OP>       Pilote ou déclenche la ronde par projet\n  \
            runtime --model <M>    Déclare le modèle courant [--effort <E>]\n  \
            domain <N> | --reset   Change le domaine de l'agent courant\n  \
            dnd [off]              Ne pas déranger [--duration 30m]\n  \
@@ -2535,6 +2542,369 @@ fn send_runtime_to_daemon(
     line.clear();
     reader.read_line(&mut line).map_err(|e| e.to_string())?;
     decode(line.trim()).map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectRoundCliOperation {
+    Policy(ProjectRoundOperation),
+    Dispatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectRoundCliCommand {
+    operation: ProjectRoundCliOperation,
+    project_id: Option<String>,
+    binding_generation: Option<u64>,
+    command_id: Option<String>,
+    occurrence_at: Option<i64>,
+    json: bool,
+}
+
+fn parse_project_round_args(args: &[String]) -> Result<ProjectRoundCliCommand, String> {
+    let operation = match args.first().map(String::as_str) {
+        Some("list") => ProjectRoundCliOperation::Policy(ProjectRoundOperation::List),
+        Some("status") => ProjectRoundCliOperation::Policy(ProjectRoundOperation::Status),
+        Some("enable") => ProjectRoundCliOperation::Policy(ProjectRoundOperation::Enable),
+        Some("disable") => ProjectRoundCliOperation::Policy(ProjectRoundOperation::Disable),
+        Some("dispatch") => ProjectRoundCliOperation::Dispatch,
+        Some(other) => {
+            return Err(format!(
+                "project-round: opération inconnue: {other}; attendu list, status, enable, disable ou dispatch"
+            ));
+        }
+        None => return Err("project-round: opération manquante".to_string()),
+    };
+    let mut project_id = None;
+    let mut binding_generation = None;
+    let mut command_id = None;
+    let mut occurrence_at = None;
+    let mut json = false;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--project" => {
+                if project_id.is_some() {
+                    return Err("project-round: --project dupliqué".to_string());
+                }
+                index += 1;
+                project_id = args.get(index).cloned();
+                if project_id
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    return Err("project-round: --project requiert un identifiant".to_string());
+                }
+            }
+            "--binding-generation" => {
+                if binding_generation.is_some() {
+                    return Err("project-round: --binding-generation dupliqué".to_string());
+                }
+                index += 1;
+                binding_generation = Some(
+                    args.get(index)
+                        .ok_or_else(|| {
+                            "project-round: --binding-generation requiert un entier".to_string()
+                        })?
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|value| *value > 0)
+                        .ok_or_else(|| {
+                            "project-round: --binding-generation requiert un entier positif"
+                                .to_string()
+                        })?,
+                );
+            }
+            "--command-id" => {
+                if command_id.is_some() {
+                    return Err("project-round: --command-id dupliqué".to_string());
+                }
+                index += 1;
+                let value = args
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| "project-round: --command-id requiert une valeur".to_string())?;
+                validate_command_id(&value)?;
+                command_id = Some(value);
+            }
+            "--occurrence" => {
+                if occurrence_at.is_some() {
+                    return Err("project-round: --occurrence dupliqué".to_string());
+                }
+                index += 1;
+                occurrence_at = Some(
+                    args.get(index)
+                        .ok_or_else(|| {
+                            "project-round: --occurrence requiert un instant Unix".to_string()
+                        })?
+                        .parse::<i64>()
+                        .ok()
+                        .filter(|value| *value >= 0)
+                        .ok_or_else(|| {
+                            "project-round: --occurrence requiert un instant Unix positif ou nul"
+                                .to_string()
+                        })?,
+                );
+            }
+            "--json" if !json => json = true,
+            "--json" => return Err("project-round: --json dupliqué".to_string()),
+            option => return Err(unknown_argument("project-round", option)),
+        }
+        index += 1;
+    }
+
+    match operation {
+        ProjectRoundCliOperation::Policy(ProjectRoundOperation::List)
+            if project_id.is_none() && binding_generation.is_none() && occurrence_at.is_none() => {}
+        ProjectRoundCliOperation::Policy(ProjectRoundOperation::Status)
+            if project_id.is_some() && binding_generation.is_none() && occurrence_at.is_none() => {}
+        ProjectRoundCliOperation::Policy(
+            ProjectRoundOperation::Enable | ProjectRoundOperation::Disable,
+        ) if project_id.is_some() && binding_generation.is_some() && occurrence_at.is_none() => {}
+        ProjectRoundCliOperation::Dispatch
+            if project_id.is_none() && binding_generation.is_none() && command_id.is_none() => {}
+        ProjectRoundCliOperation::Policy(_) => {
+            return Err(
+                "project-round: forme invalide pour list/status/enable/disable".to_string(),
+            );
+        }
+        ProjectRoundCliOperation::Dispatch => {
+            return Err(
+                "project-round dispatch: seuls --occurrence et --json sont acceptés".to_string(),
+            );
+        }
+    }
+
+    Ok(ProjectRoundCliCommand {
+        operation,
+        project_id,
+        binding_generation,
+        command_id,
+        occurrence_at,
+        json,
+    })
+}
+
+fn send_project_round_client_request(request: WrapperToDaemon) -> Result<DaemonToWrapper, String> {
+    let stream = UnixStream::connect(socket_path()).map_err(|error| error.to_string())?;
+    let read_stream = stream.try_clone().map_err(|error| error.to_string())?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+
+    write_control_message(
+        &mut writer,
+        &WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Client,
+        },
+    )?;
+    match read_control_message(&mut reader)? {
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client,
+        } => {}
+        response => return Err(format!("handshake project-round refusé: {response:?}")),
+    }
+
+    write_control_message(
+        &mut writer,
+        &WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: crate::mcp::issuer_scope("project-round-cli-v1"),
+            capabilities: vec![ClientCapability::ProjectRoundPolicyV1],
+        },
+    )?;
+    match read_control_message(&mut reader)? {
+        DaemonToWrapper::ClientWelcome {
+            capabilities,
+            build_id,
+            ..
+        } if capabilities.contains(&ClientCapability::ProjectRoundPolicyV1) => {
+            if let Some(warning) = crate::build_info::stale_daemon_warning(&build_id) {
+                eprintln!("{warning}");
+            }
+        }
+        DaemonToWrapper::ClientRejected { reason } => {
+            return Ok(DaemonToWrapper::ClientRejected { reason });
+        }
+        response => return Err(format!("négociation project-round refusée: {response:?}")),
+    }
+
+    write_control_message(&mut writer, &request)?;
+    read_control_message(&mut reader)
+}
+
+fn request_project_round_policies(
+    operation: ProjectRoundOperation,
+    project_id: Option<String>,
+    binding_generation: Option<u64>,
+    command_id: Option<String>,
+) -> Result<ProjectRoundOutcome, String> {
+    let issued_at = unix_timestamp();
+    let request = ProjectRoundRequest {
+        contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+        command_id: command_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        issued_at,
+        deadline_at: issued_at.saturating_add(60),
+        operation,
+        project_id,
+        binding_generation,
+    };
+    match send_project_round_client_request(WrapperToDaemon::ProjectRoundRequest { request })? {
+        DaemonToWrapper::ProjectRoundOutcome { outcome } => Ok(outcome),
+        response => Err(format!(
+            "réponse de politique de ronde inattendue: {response:?}"
+        )),
+    }
+}
+
+fn dispatch_project_round(
+    occurrence_at: i64,
+    project: ProjectReference,
+) -> Result<ProjectRoundDispatchOutcome, String> {
+    let request = ProjectRoundDispatchRequest {
+        contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+        occurrence_at,
+        project,
+    };
+    match send_project_round_client_request(WrapperToDaemon::ProjectRoundDispatch { request })? {
+        DaemonToWrapper::ProjectRoundDispatchOutcome { outcome } => Ok(outcome),
+        response => Err(format!(
+            "réponse de dispatch de ronde inattendue: {response:?}"
+        )),
+    }
+}
+
+fn print_project_round_policy(outcome: &ProjectRoundOutcome, json: bool) {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(outcome).expect("issue de ronde sérialisable")
+        );
+        return;
+    }
+    if outcome.policies.is_empty() {
+        println!("Aucun projet enregistré.");
+        return;
+    }
+    for policy in &outcome.policies {
+        let state = if policy.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        let configured = if policy.configured {
+            "configurée"
+        } else {
+            "implicite"
+        };
+        println!(
+            "{}: {} ({}, active={}, génération={:?}, révision={})",
+            policy.project_id,
+            state,
+            configured,
+            policy.active,
+            policy.binding_generation,
+            policy.revision
+        );
+    }
+}
+
+fn cmd_project_round(args: &[String]) {
+    let command = parse_project_round_args(args).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        eprintln!(
+            "usage: bridget project-round <list|status|enable|disable|dispatch> [--project ID] [--binding-generation N] [--command-id ID] [--occurrence UNIX] [--json]"
+        );
+        std::process::exit(2);
+    });
+
+    match command.operation {
+        ProjectRoundCliOperation::Policy(operation) => {
+            let outcome = request_project_round_policies(
+                operation,
+                command.project_id,
+                command.binding_generation,
+                command.command_id,
+            )
+            .unwrap_or_else(|error| {
+                eprintln!("project-round: {error}");
+                std::process::exit(1);
+            });
+            if let Some(reason) = outcome.reason {
+                eprintln!("PROJECT-ROUND REFUSÉ: {reason:?}");
+                std::process::exit(1);
+            }
+            print_project_round_policy(&outcome, command.json);
+        }
+        ProjectRoundCliOperation::Dispatch => {
+            let now = unix_timestamp();
+            let occurrence_at = command
+                .occurrence_at
+                .unwrap_or_else(|| now - now.rem_euclid(PROJECT_ROUND_INTERVAL_SECS));
+            let listed =
+                request_project_round_policies(ProjectRoundOperation::List, None, None, None)
+                    .unwrap_or_else(|error| {
+                        eprintln!("project-round dispatch: {error}");
+                        std::process::exit(1);
+                    });
+            if let Some(reason) = listed.reason {
+                eprintln!("PROJECT-ROUND REFUSÉ: {reason:?}");
+                std::process::exit(1);
+            }
+            let mut outcomes = Vec::new();
+            for policy in listed
+                .policies
+                .into_iter()
+                .filter(|policy| policy.active && policy.configured && policy.enabled)
+            {
+                let binding_generation = policy
+                    .binding_generation
+                    .expect("une politique active porte sa génération");
+                let outcome = dispatch_project_round(
+                    occurrence_at,
+                    ProjectReference {
+                        project_id: policy.project_id,
+                        binding_generation,
+                    },
+                )
+                .unwrap_or_else(|error| {
+                    eprintln!("project-round dispatch: {error}");
+                    std::process::exit(1);
+                });
+                outcomes.push(outcome);
+            }
+            if command.json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&outcomes)
+                        .expect("issues de dispatch de ronde sérialisables")
+                );
+            } else if outcomes.is_empty() {
+                println!("Ronde: aucun projet activé.");
+            } else {
+                for outcome in &outcomes {
+                    println!(
+                        "Ronde {}@{} occurrence {}: {}",
+                        outcome.project.project_id,
+                        outcome.project.binding_generation,
+                        outcome.occurrence_at,
+                        if outcome.issue.as_ref().is_some_and(send_deposited) {
+                            "déposée"
+                        } else {
+                            "refusée"
+                        }
+                    );
+                }
+            }
+            if outcomes.iter().any(|outcome| {
+                outcome.reason.is_some()
+                    || outcome
+                        .issue
+                        .as_ref()
+                        .is_none_or(|issue| !send_deposited(issue))
+            }) {
+                std::process::exit(1);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6662,6 +7032,76 @@ mod depot_tests {
             argv(&["prepare", "--project", "project-066", "--unexpected"]),
         ] {
             assert!(parse_project_runtime_args(&invalid).is_err());
+        }
+    }
+    #[test]
+    fn spec_079_cli_ronde_separe_politique_projet_et_tick_global() {
+        let argv = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>()
+        };
+        let list = parse_project_round_args(&argv(&["list", "--json"])).unwrap();
+        assert_eq!(
+            list.operation,
+            ProjectRoundCliOperation::Policy(ProjectRoundOperation::List)
+        );
+        assert!(list.json);
+
+        let status =
+            parse_project_round_args(&argv(&["status", "--project", "project-079"])).unwrap();
+        assert_eq!(
+            status.operation,
+            ProjectRoundCliOperation::Policy(ProjectRoundOperation::Status)
+        );
+        assert_eq!(status.project_id.as_deref(), Some("project-079"));
+
+        let enable = parse_project_round_args(&argv(&[
+            "enable",
+            "--project",
+            "project-079",
+            "--binding-generation",
+            "4",
+            "--command-id",
+            "enable-round-079",
+        ]))
+        .unwrap();
+        assert_eq!(
+            enable.operation,
+            ProjectRoundCliOperation::Policy(ProjectRoundOperation::Enable)
+        );
+        assert_eq!(enable.binding_generation, Some(4));
+        assert_eq!(enable.command_id.as_deref(), Some("enable-round-079"));
+
+        let dispatch =
+            parse_project_round_args(&argv(&["dispatch", "--occurrence", "1788000000"])).unwrap();
+        assert_eq!(dispatch.operation, ProjectRoundCliOperation::Dispatch);
+        assert_eq!(dispatch.occurrence_at, Some(1_788_000_000));
+
+        for invalid in [
+            argv(&[]),
+            argv(&["list", "--project", "project-079"]),
+            argv(&["status"]),
+            argv(&[
+                "status",
+                "--project",
+                "project-079",
+                "--binding-generation",
+                "4",
+            ]),
+            argv(&["enable", "--project", "project-079"]),
+            argv(&[
+                "dispatch",
+                "--project",
+                "project-079",
+                "--occurrence",
+                "1788000000",
+            ]),
+            argv(&["dispatch", "--command-id", "forbidden"]),
+            argv(&["disable", "--project", "project-079", "--unexpected"]),
+        ] {
+            assert!(parse_project_round_args(&invalid).is_err(), "{invalid:?}");
         }
     }
 }
