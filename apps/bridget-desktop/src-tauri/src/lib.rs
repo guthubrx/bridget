@@ -860,17 +860,19 @@ pub fn run() {
                 notified_attention_events: Mutex::new(HashSet::new()),
             });
             let handle = app.handle().clone();
-            if let Some(main) = app.get_window("main") {
-                main.on_window_event(move |event| {
-                    if matches!(event, tauri::WindowEvent::Resized(_)) {
-                        if let Some(state) = handle.try_state::<DesktopState>() {
-                            if let Ok(panels) = state.panels.lock() {
-                                let _ = arrange_panels(&handle, &panels);
-                            }
+            let main = main_window(&handle)?;
+            main.show().map_err(as_message)?;
+            main.set_focus().map_err(as_message)?;
+
+            main.on_window_event(move |event| {
+                if matches!(event, tauri::WindowEvent::Resized(_)) {
+                    if let Some(state) = handle.try_state::<DesktopState>() {
+                        if let Ok(panels) = state.panels.lock() {
+                            let _ = arrange_panels(&handle, &panels);
                         }
                     }
-                });
-            }
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -37,6 +37,15 @@ fn un_seul_serveur_est_affiche_a_la_fois() {
 }
 
 #[test]
+fn la_fenetre_principale_est_rendue_visible_au_demarrage() {
+    let backend = include_str!("../src/lib.rs");
+
+    assert!(backend.contains("let main = main_window(&handle)?;"));
+    assert!(backend.contains("main.show().map_err(as_message)?;"));
+    assert!(backend.contains("main.set_focus().map_err(as_message)?;"));
+}
+
+#[test]
 fn la_flotte_desktop_reutilise_la_chrome_sombre_et_ne_cree_que_deux_volets() {
     let markup = include_str!("../../ui/index.html");
     let stylesheet = include_str!("../../ui/fleet-desktop.css");
