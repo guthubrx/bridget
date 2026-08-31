@@ -1,16 +1,7 @@
-import "./fleet-presentation.js";
-const presentation = globalThis.FleetPresentation;
-
 const elements = {
   status: document.querySelector("#app-status"),
   sources: document.querySelector("#fleet-sources"),
   global: document.querySelector("#fleet-global"),
-  filters: document.querySelector("#fleet-filters"),
-  groups: document.querySelector("#fleet-groups"),
-  fleetCount: document.querySelector("#fleet-count"),
-  sortChips: document.querySelector("#sort-chips"),
-  sortField: document.querySelector("#sort-field"),
-  addSort: document.querySelector("#add-sort"),
   createProject: document.querySelector("#create-project"),
   importProject: document.querySelector("#import-project"),
   manageServers: document.querySelector("#manage-servers"),
@@ -56,7 +47,8 @@ let profiles = [];
 let snapshot = { sources: [], agents: [] };
 let preferences = null;
 let pendingPanelAction = null;
-const filters = { sourceIds: new Set(), projectIds: new Set() };
+let activeSourceId = null;
+let activeProjectId = null;
 const connectionStates = new Map();
 
 function invoke(command, payload = {}) {
@@ -101,24 +93,6 @@ function sourceById(sourceId) {
   return snapshot.sources.find((source) => source.source_id === sourceId);
 }
 
-function sourceLabel(sourceId) {
-  return sourceById(sourceId)?.label || sourceId;
-}
-
-function projectById(projectId) {
-  for (const source of snapshot.sources) {
-    const project = (source.projects || []).find((candidate) => candidate.project_id === projectId);
-    if (project) return { ...project, source };
-  }
-  return null;
-}
-
-function effectivePinned(agent) {
-  const pinned = new Set(preferences?.pinned_agent_keys || []);
-  const unpinned = new Set(preferences?.unpinned_coordinator_keys || []);
-  return presentation.isPinned(agent, pinned, unpinned);
-}
-
 function applyPreferences() {
   if (!preferences) return;
   document.documentElement.dataset.colorScheme = preferences.color_scheme || "system";
@@ -130,52 +104,26 @@ async function savePreferences() {
   applyPreferences();
 }
 
-function renderFilters() {
-  clear(elements.filters);
-  const addChip = (label, title, remove) => {
-    const chip = button(`${label} ×`, "filter-chip", remove);
-    chip.title = title;
-    elements.filters.append(chip);
-  };
-  for (const sourceId of filters.sourceIds) {
-    addChip(sourceLabel(sourceId), "Retirer ce filtre source", () => {
-      filters.sourceIds.delete(sourceId);
-      render();
-    });
-  }
-  for (const projectId of filters.projectIds) {
-    const project = projectById(projectId);
-    addChip(project?.display_name || projectId, "Retirer ce filtre projet", () => {
-      filters.projectIds.delete(projectId);
-      render();
-    });
-  }
-}
-
 function renderSources() {
   clear(elements.sources);
-  elements.global.setAttribute("aria-current", String(filters.sourceIds.size === 0 && filters.projectIds.size === 0));
+  elements.global.setAttribute("aria-current", String(activeProjectId === null));
   for (const source of snapshot.sources) {
     const sourceItem = document.createElement("li");
     sourceItem.className = "source-item";
-    const sourceButton = button(source.label, "source-button", () => {
-      if (filters.sourceIds.has(source.source_id)) filters.sourceIds.delete(source.source_id);
-      else filters.sourceIds.add(source.source_id);
-      render();
-    });
-    sourceButton.setAttribute("aria-pressed", String(filters.sourceIds.has(source.source_id)));
+    const sourceButton = button(source.label, "source-button", () => void openSource(source.source_id));
+    sourceButton.setAttribute("aria-pressed", String(activeSourceId === source.source_id));
     const state = document.createElement("small");
     state.textContent = source.error || source.connection_state;
     sourceItem.append(sourceButton, state);
     const projects = document.createElement("ul");
     projects.className = "source-projects";
     for (const project of source.projects || []) {
-      const projectButton = button(project.display_name, "project-button", () => {
-        filters.sourceIds.add(source.source_id);
-        filters.projectIds.add(project.project_id);
-        render();
-      });
-      projectButton.setAttribute("aria-pressed", String(filters.projectIds.has(project.project_id)));
+      const projectButton = button(
+        project.display_name,
+        "project-button",
+        () => void openSource(source.source_id, project.project_id),
+      );
+      projectButton.setAttribute("aria-pressed", String(activeProjectId === project.project_id));
       const projectItem = document.createElement("li");
       projectItem.append(projectButton);
       projects.append(projectItem);
@@ -185,206 +133,39 @@ function renderSources() {
   }
 }
 
-function renderSortChips() {
-  clear(elements.sortChips);
-  const labels = { source: "Source", state: "État", project: "Projet", activity: "Activité récente", name: "Nom" };
-  (preferences?.sort_criteria || []).forEach((criterion, index) => {
-    const chip = document.createElement("div");
-    chip.className = "sort-chip";
-    chip.append(document.createTextNode(`${labels[criterion.field]} ${criterion.direction === "asc" ? "↑" : "↓"}`));
-    chip.append(
-      button("Inverser", "quiet", async () => {
-        criterion.direction = criterion.direction === "asc" ? "desc" : "asc";
-        await savePreferences();
-        render();
-      }),
-      button("←", "quiet", async () => {
-        if (index === 0) return;
-        [preferences.sort_criteria[index - 1], preferences.sort_criteria[index]] =
-          [preferences.sort_criteria[index], preferences.sort_criteria[index - 1]];
-        await savePreferences();
-        render();
-      }),
-      button("→", "quiet", async () => {
-        if (index === preferences.sort_criteria.length - 1) return;
-        [preferences.sort_criteria[index + 1], preferences.sort_criteria[index]] =
-          [preferences.sort_criteria[index], preferences.sort_criteria[index + 1]];
-        await savePreferences();
-        render();
-      }),
-      button("Retirer", "quiet", async () => {
-        preferences.sort_criteria.splice(index, 1);
-        await savePreferences();
-        render();
-      }),
-    );
-    elements.sortChips.append(chip);
-  });
-}
-
-function renderAgentList(agents) {
-  const list = document.createElement("ul");
-  list.className = "fleet-agent-list";
-  for (const agent of agents) {
-    const item = document.createElement("li");
-    const card = button("", "agent-card", () => void openAgent(agent));
-    const layout = document.createElement("span");
-    layout.className = "agent-card__layout";
-    layout.append(createFleetAgentAvatar(agent));
-    const content = document.createElement("span");
-    content.className = "agent-card__content";
-    const name = document.createElement("strong");
-    name.textContent = agent.display_name || agent.name;
-    const origin = document.createElement("small");
-    origin.textContent = `${agent.source_label} · ${agent.project_name || "Sans projet"}`;
-    const details = document.createElement("span");
-    details.textContent = agent.wait_state === "waiting" || (agent.alerts || []).length
-      ? "À traiter"
-      : agent.state || "Inconnu";
-    content.append(name, origin);
-    if ((agent.labels || []).length > 0) {
-      const labels = document.createElement("span");
-      labels.className = "fleet-agent-labels";
-      agent.labels.slice(0, 2).forEach((label) => {
-        const chip = document.createElement("span");
-        chip.className = "fleet-agent-label";
-        chip.textContent = label;
-        labels.append(chip);
-      });
-      content.append(labels);
-    }
-    content.append(details);
-    if (agent.last_excerpt) {
-      const excerpt = document.createElement("span");
-      excerpt.className = "agent-card__excerpt";
-      excerpt.textContent = agent.last_excerpt;
-      content.append(excerpt);
-    }
-    layout.append(content);
-    card.append(layout);
-    const menu = button("⋯", "agent-menu", () => void openAgentMenu(agent));
-    menu.setAttribute("aria-label", `Ouvrir les actions de ${agent.display_name || agent.name}`);
-    menu.setAttribute("aria-haspopup", "menu");
-    const pin = button(effectivePinned(agent) ? "★" : "☆", "pin-agent", () => void togglePin(agent));
-    pin.setAttribute("aria-label", effectivePinned(agent) ? "Désépingler" : "Épingler");
-    item.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      void openAgentMenu(agent);
-    });
-    item.append(card, menu, pin);
-    list.append(item);
-  }
-  return list;
-}
-
-function createFleetAgentAvatar(agent) {
-  const colors = {
-    white: "#e2e3e5", brown: "#b08962", red: "#d64e55", orange: "#d98b2b",
-    amber: "#e6a23c", green: "#49b46c", teal: "#4bafa0", blue: "#3f7fe0",
-    purple: "#6e48c7", pink: "#c33680", gray: "#a5a6aa",
-  };
-  const shapes = new Set(["round", "soft-square", "pill", "triangle", "hexagon", "cloud", "drop", "pebble"]);
-  const avatar = document.createElement("span");
-  avatar.className = "fleet-agent-avatar";
-  avatar.dataset.shape = shapes.has(agent.avatar_shape) ? agent.avatar_shape : "round";
-  avatar.dataset.state = agent.state || "unknown";
-  avatar.style.setProperty("--fleet-avatar-color", colors[agent.avatar_color] || colors.blue);
-  avatar.setAttribute("aria-hidden", "true");
-  avatar.append(document.createElement("span"));
-  return avatar;
-}
-
-function renderGroup(group, collapsed, depth = 0) {
-  const section = document.createElement("section");
-  section.className = "fleet-group";
-  section.style.paddingLeft = `${depth * 8}px`;
-  const agents = presentation.flattenGroups([group]);
-  const header = button(
-    `${collapsed.has(group.key) ? "▸" : "▾"} ${group.label} (${agents.length})`,
-    "group-header",
-    async () => {
-      const next = new Set(preferences.collapsed_group_keys || []);
-      if (next.has(group.key)) next.delete(group.key); else next.add(group.key);
-      preferences.collapsed_group_keys = [...next];
-      await savePreferences();
-      render();
-    },
-  );
-  section.append(header);
-  if (!collapsed.has(group.key)) {
-    if (group.groups?.length) group.groups.forEach((child) => section.append(renderGroup(child, collapsed, depth + 1)));
-    else section.append(renderAgentList(group.agents));
-  }
-  return section;
-}
-
-function renderGroups() {
-  clear(elements.groups);
-  const filtered = presentation.applyFilters(snapshot.agents || [], filters);
-  const sorted = presentation.sortAgents(
-    filtered,
-    preferences?.sort_criteria || [],
-    new Set(preferences?.pinned_agent_keys || []),
-    new Set(preferences?.unpinned_coordinator_keys || []),
-  );
-  const groups = presentation.groupAgents(sorted, preferences?.sort_criteria || []);
-  elements.fleetCount.textContent = `${sorted.length} agent${sorted.length > 1 ? "s" : ""}`;
-  const collapsed = new Set(preferences?.collapsed_group_keys || []);
-  groups.forEach((group) => elements.groups.append(renderGroup(group, collapsed)));
-}
-
 function render() {
-  renderFilters();
   renderSources();
-  renderSortChips();
-  renderGroups();
 }
 
 async function refreshFleet() {
   try {
     snapshot = await invoke("fleet_snapshot");
     render();
+    if (!activeSourceId) {
+      const initialSource = selectedTargetSources()[0];
+      if (initialSource) void openSource(initialSource.source_id);
+    }
   } catch (error) {
     announce(`Flotte indisponible : ${error.message || error}`);
   }
 }
 
-async function openAgent(agent) {
-  try {
-    await invoke("panel_open", { source_id: agent.source_id, agent_name: agent.name });
-    announce(`${agent.display_name || agent.name} est ouvert depuis ${agent.source_label}.`);
-  } catch (error) {
-    announce(error.message || String(error));
-  }
-}
-
-async function openAgentMenu(agent) {
+async function openSource(sourceId, projectId = null) {
+  activeSourceId = sourceId;
+  activeProjectId = projectId;
+  render();
   try {
     await invoke("panel_open", {
-      source_id: agent.source_id,
-      agent_name: agent.name,
-      desktop_action: "agent_menu",
+      source_id: sourceId,
+      project_id: projectId,
     });
-    announce(`Les actions de ${agent.display_name || agent.name} sont ouvertes sur ${agent.source_label}.`);
+    const source = sourceById(sourceId);
+    announce(projectId
+      ? `Les agents du projet sont filtrés sur ${source?.label || sourceId}.`
+      : `Tous les agents de ${source?.label || sourceId} sont affichés.`);
   } catch (error) {
     announce(error.message || String(error));
   }
-}
-
-async function togglePin(agent) {
-  const pinned = new Set(preferences.pinned_agent_keys || []);
-  const unpinned = new Set(preferences.unpinned_coordinator_keys || []);
-  if (effectivePinned(agent)) {
-    pinned.delete(agent.key);
-    if (agent.is_coordinator) unpinned.add(agent.key);
-  } else {
-    pinned.add(agent.key);
-    unpinned.delete(agent.key);
-  }
-  preferences.pinned_agent_keys = [...pinned];
-  preferences.unpinned_coordinator_keys = [...unpinned];
-  await savePreferences();
-  render();
 }
 
 function selectedTargetSources() {
@@ -406,8 +187,9 @@ function beginPanelAction(action) {
     announce("Aucune source connectée ne peut recevoir cette action.");
     return;
   }
-  const selected = [...filters.sourceIds].filter((sourceId) => selectedTargetSources().some((source) => source.source_id === sourceId));
-  if (selected.length === 1) return void openPanelAction(selected[0], action);
+  if (activeSourceId && selectedTargetSources().some((source) => source.source_id === activeSourceId)) {
+    return void openPanelAction(activeSourceId, action);
+  }
   pendingPanelAction = action;
   elements.targetTitle.textContent = panelActionTitle(action);
   clear(elements.targetChoices);
@@ -549,16 +331,13 @@ async function openSettings(section = "general") {
 }
 
 elements.global.addEventListener("click", () => {
-  filters.sourceIds.clear();
-  filters.projectIds.clear();
-  render();
-});
-elements.addSort.addEventListener("click", async () => {
-  const field = elements.sortField.value;
-  if (preferences.sort_criteria.some((criterion) => criterion.field === field)) return;
-  preferences.sort_criteria.push({ field, direction: field === "activity" ? "desc" : "asc" });
-  await savePreferences();
-  render();
+  if (!activeSourceId) {
+    const source = selectedTargetSources()[0];
+    if (!source) return announce("Aucun serveur connecté ne peut afficher sa flotte.");
+    void openSource(source.source_id);
+    return;
+  }
+  void openSource(activeSourceId);
 });
 elements.createProject.addEventListener("click", () => beginPanelAction("create_project"));
 elements.importProject.addEventListener("click", () => beginPanelAction("import_project"));

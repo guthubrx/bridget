@@ -2938,6 +2938,147 @@ code {
   padding: 0 0.1rem 1rem;
 }
 
+.agent-pane .agent-sort {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.34rem;
+  padding: 0 0.1rem 0.72rem;
+}
+
+.agent-pane .agent-sort__chips {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.agent-pane .agent-sort-chip {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.16rem;
+  border: 0;
+  outline: 1px solid color-mix(in srgb, var(--agent-pane-secondary) 22%, transparent);
+  outline-offset: -1px;
+  border-radius: 0.58rem;
+  padding: 0.13rem 0.16rem 0.13rem 0.26rem;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--agent-pane-search-surface) 78%, transparent);
+  cursor: grab;
+  font-size: 0.74rem;
+  line-height: 1.2;
+}
+
+.agent-pane .agent-sort-chip:focus-within,
+.agent-pane .agent-sort-chip:hover {
+  outline-color: color-mix(in srgb, var(--agent-pane-secondary) 48%, transparent);
+}
+
+.agent-pane .agent-sort-chip:active {
+  cursor: grabbing;
+}
+
+.agent-pane .agent-sort-chip__direction,
+.agent-pane .agent-sort-chip__remove,
+.agent-pane .agent-sort__add,
+.agent-pane .agent-sort-menu__item {
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-pane .agent-sort-chip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-pane .agent-sort-chip__direction,
+.agent-pane .agent-sort-chip__remove {
+  display: grid;
+  width: 1.35rem;
+  height: 1.35rem;
+  padding: 0;
+  place-items: center;
+  border-radius: 0.36rem;
+  color: var(--agent-pane-secondary);
+  font-size: 0.64rem;
+}
+
+.agent-pane .agent-sort-chip__remove {
+  font-size: 0.92rem;
+  line-height: 1;
+}
+
+.agent-pane .agent-sort-chip__direction:hover,
+.agent-pane .agent-sort-chip__direction:focus-visible,
+.agent-pane .agent-sort-chip__remove:hover,
+.agent-pane .agent-sort-chip__remove:focus-visible {
+  outline: none;
+  color: var(--text-primary);
+  background: var(--agent-pane-hover-surface);
+}
+
+.agent-pane .agent-sort__add {
+  min-height: 1.85rem;
+  padding: 0.22rem 0.44rem;
+  border: 0;
+  outline: 1px solid color-mix(in srgb, var(--agent-pane-secondary) 22%, transparent);
+  outline-offset: -1px;
+  border-radius: 0.56rem;
+  color: var(--agent-pane-secondary);
+  font-size: 0.74rem;
+  font-weight: 620;
+}
+
+.agent-pane .agent-sort__add:hover,
+.agent-pane .agent-sort__add:focus-visible,
+.agent-pane .agent-sort__add[aria-expanded="true"] {
+  outline: none;
+  outline-color: color-mix(in srgb, var(--agent-pane-secondary) 48%, transparent);
+  color: var(--text-primary);
+  background: var(--agent-pane-hover-surface);
+}
+
+.agent-pane .agent-sort-menu {
+  position: absolute;
+  z-index: 8;
+  top: calc(100% - 0.48rem);
+  left: 0.1rem;
+  display: grid;
+  min-width: 11.5rem;
+  gap: 0.1rem;
+  padding: 0.28rem;
+  border: 0;
+  outline: 1px solid color-mix(in srgb, var(--agent-pane-secondary) 30%, transparent);
+  outline-offset: -1px;
+  border-radius: 0.64rem;
+  background: #202020;
+}
+
+.agent-pane .agent-sort-menu[hidden] {
+  display: none;
+}
+
+.agent-pane .agent-sort-menu__item {
+  min-height: 2rem;
+  padding: 0.32rem 0.46rem;
+  border-radius: 0.42rem;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  text-align: left;
+}
+
+.agent-pane .agent-sort-menu__item:hover,
+.agent-pane .agent-sort-menu__item:focus-visible {
+  outline: none;
+  background: var(--agent-pane-hover-surface);
+}
+
 .agent-pane .message-search input {
   padding: 0.56rem 0.72rem 0.56rem 2.1rem;
   background: var(--agent-pane-search-surface);
@@ -4162,23 +4303,21 @@ code {
   font-size: 1.6rem;
 }
 
-/* La coque native Desktop garde Sources et flotte à gauche. Le relais reste
-   propriétaire de la seule conversation visible dans son enfant WebView. */
+/* La coque native Desktop garde seulement les sources. Le relais reste
+   propriétaire de son volet d'agents et de la conversation. */
 body[data-desktop-shell="true"] .workspace,
 body[data-desktop-shell="true"] .workspace:has(.detail-panel:not([hidden])),
 body[data-desktop-shell="true"] .workspace:has(.project-pane[data-collapsed="true"]),
 body[data-desktop-shell="true"] .workspace:has(.project-pane[data-collapsed="true"]):has(.detail-panel:not([hidden])) {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: var(--agent-pane-width) var(--agent-pane-resizer-width) minmax(0, 1fr);
 }
 
-body[data-desktop-shell="true"] .project-pane,
-body[data-desktop-shell="true"] .agent-pane,
-body[data-desktop-shell="true"] .agent-pane-resizer {
+body[data-desktop-shell="true"] .project-pane {
   display: none;
 }
 
 body[data-desktop-shell="true"] .conversation {
-  grid-column: 1;
+  grid-column: 3;
 }
 
 /* Création/import : même précision que le centre de contrôle, dans un dialogue

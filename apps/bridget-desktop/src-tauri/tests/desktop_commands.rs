@@ -15,31 +15,29 @@ fn le_frontend_ne_peut_pas_fournir_de_commande_url_ou_secret_libre() {
 }
 
 #[test]
-fn les_actions_de_carte_sont_delegatees_au_listing_de_profils() {
+fn le_volet_agents_reste_la_surface_distante_autoritaire() {
     let frontend = include_str!("../../ui/fleet-app.js");
     let connection = include_str!("../src/connection.rs");
     let remote_ui = include_str!("../../../../crates/bridget-daemon/assets/ui/app.js");
     assert!(frontend.contains("invoke(\"fleet_snapshot\")"));
-    assert!(frontend.contains("void openAgent(agent)"));
-    assert!(frontend.contains("void openAgentMenu(agent)"));
-    assert!(frontend.contains("item.addEventListener(\"contextmenu\""));
-    assert!(frontend.contains("fleet-agent-avatar"));
+    assert!(frontend.contains("async function openSource(sourceId, projectId = null)"));
+    assert!(frontend.contains("project_id: projectId"));
     assert!(frontend.contains("void openPanelAction(source.source_id, pendingPanelAction)"));
     assert!(frontend.contains("await invoke(\"connection_close\""));
     assert!(frontend.contains("await connectProfile(profile)"));
-    assert!(frontend.contains("source_id: agent.source_id"));
     assert!(frontend.contains("desktop_action: action"));
-    assert!(connection.contains("\"agent_menu\" if agent_name.is_some()"));
-    assert!(remote_ui.contains("params.get(\"agent_menu\") === \"1\""));
+    assert!(!connection.contains("agent_menu"));
+    assert!(remote_ui.contains("const renderAgentButton = (agent) =>"));
+    assert!(remote_ui.contains("shell.addEventListener(\"contextmenu\""));
 }
 
 #[test]
 fn un_seul_serveur_est_affiche_a_la_fois() {
     let frontend = include_str!("../../ui/fleet-app.js");
     let backend = include_str!("../src/lib.rs");
-    assert!(frontend.contains("source_id: agent.source_id"));
+    assert!(frontend.contains("source_id: sourceId"));
     assert!(backend.contains("close_open_panels(&app, &state)?;"));
-    assert!(backend.contains("const DESKTOP_SHELL_WIDTH: u32 = 520;"));
+    assert!(backend.contains("const DESKTOP_SHELL_WIDTH: u32 = 200;"));
     assert!(backend.contains("PhysicalSize::new(panel_width, size.height.max(1))"));
 }
 
@@ -53,15 +51,15 @@ fn la_fenetre_principale_est_rendue_visible_au_demarrage() {
 }
 
 #[test]
-fn la_flotte_desktop_reutilise_la_chrome_sombre_et_ne_cree_que_deux_volets() {
+fn la_coque_desktop_ne_garde_que_le_filtre_sources() {
     let markup = include_str!("../../ui/index.html");
     let stylesheet = include_str!("../../ui/fleet-desktop.css");
 
     assert!(markup.contains("<h1 id=\"fleet-title\">Projets</h1>"));
-    assert!(stylesheet.contains("grid-template-columns: 12.5rem 20rem;"));
-    assert!(stylesheet.contains("width: min(100vw, 32.5rem);"));
+    assert!(stylesheet.contains("grid-template-columns: 12.5rem;"));
+    assert!(stylesheet.contains("width: min(100vw, 12.5rem);"));
     assert!(stylesheet.contains("#fleet-shell .fleet-sources-pane button"));
-    assert!(stylesheet.contains("#fleet-shell .fleet-agents-pane button"));
+    assert!(!markup.contains("fleet-agents-pane"));
     assert!(stylesheet.contains("background: var(--fleet-surface-hover);"));
 }
 

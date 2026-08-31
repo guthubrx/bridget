@@ -13,250 +13,6 @@ body {
   color: #f5f5f5;
 }
 
-#fleet-shell {
-  display: grid;
-  grid-template-columns: 190px 330px minmax(0, 1fr);
-  width: 100vw;
-  height: 100dvh;
-  overflow: hidden;
-  background: #101010;
-}
-
-.fleet-sources-pane,
-.fleet-agents-pane {
-  min-height: 0;
-  box-sizing: border-box;
-  background: var(--fleet-panel);
-  border-right: 1px solid var(--fleet-line);
-}
-
-.fleet-sources-pane {
-  display: flex;
-  flex-direction: column;
-  padding: 0.8rem 0.55rem 0.65rem;
-}
-
-.fleet-sources-pane h1 {
-  margin: 0 0 0.7rem;
-  font-size: 1.05rem;
-}
-
-.fleet-sources-pane nav {
-  min-height: 0;
-  flex: 1;
-  overflow: auto;
-}
-
-.fleet-sources-pane ul,
-.fleet-sources-pane li,
-.fleet-agent-list,
-.server-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.fleet-sources-pane footer {
-  display: grid;
-  gap: 0.35rem;
-  padding-top: 0.7rem;
-}
-
-button,
-select {
-  font: inherit;
-}
-
-button {
-  border: 1px solid var(--fleet-line);
-  border-radius: 0.45rem;
-  padding: 0.42rem 0.52rem;
-  color: inherit;
-  background: #252525;
-  cursor: pointer;
-}
-
-button:hover,
-button:focus-visible,
-button[aria-current="true"],
-button[aria-pressed="true"] {
-  outline: none;
-  border-color: #7994d8;
-  background: var(--fleet-selected);
-}
-
-button.quiet,
-.quiet {
-  border-color: transparent;
-  background: transparent;
-  color: var(--fleet-muted);
-}
-
-.icon-settings {
-  justify-self: start;
-  margin-top: 0.25rem;
-  padding: 0.35rem 0.5rem;
-}
-
-.source-item {
-  display: grid;
-  gap: 0.12rem;
-  margin: 0.25rem 0;
-}
-
-.source-item small,
-.project-button,
-.agent-card small,
-.agent-card span,
-.server-list small {
-  color: var(--fleet-muted);
-}
-
-.source-button,
-.project-button {
-  width: 100%;
-  text-align: left;
-}
-
-.source-projects {
-  display: grid;
-  gap: 0.12rem;
-  padding-left: 0.65rem !important;
-}
-
-.project-button {
-  border: 0;
-  background: transparent;
-  font-size: 0.86rem;
-}
-
-.fleet-agents-pane {
-  display: flex;
-  flex-direction: column;
-  padding: 0.8rem 0.6rem;
-}
-
-.fleet-agents-pane > header {
-  display: flex;
-  min-height: 1.8rem;
-  align-items: center;
-}
-
-.fleet-filter-chips,
-.sort-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-}
-
-.fleet-filter-chips {
-  min-height: 1.8rem;
-  margin-bottom: 0.45rem;
-}
-
-.filter-chip,
-.sort-chip {
-  font-size: 0.78rem;
-}
-
-.sort-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.1rem;
-  border: 1px solid var(--fleet-line);
-  border-radius: 0.45rem;
-  padding: 0.2rem 0.25rem 0.2rem 0.45rem;
-}
-
-.sort-chip button {
-  padding: 0.15rem 0.28rem;
-  font-size: 0.7rem;
-}
-
-.fleet-sort-controls {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 0.3rem;
-  margin-bottom: 0.4rem;
-}
-
-.fleet-sort-controls label {
-  grid-column: 1 / -1;
-  color: var(--fleet-muted);
-  font-size: 0.78rem;
-}
-
-.fleet-sort-controls select {
-  min-width: 0;
-  border: 1px solid var(--fleet-line);
-  border-radius: 0.4rem;
-  padding: 0.33rem;
-  color: inherit;
-  background: #252525;
-}
-
-.fleet-groups {
-  min-height: 0;
-  flex: 1;
-  overflow: auto;
-}
-
-.fleet-group {
-  margin-bottom: 0.45rem;
-}
-
-.group-header {
-  width: 100%;
-  border: 0;
-  border-radius: 0;
-  padding: 0.35rem 0.15rem;
-  text-align: left;
-  color: var(--fleet-muted);
-  background: transparent;
-  font-size: 0.78rem;
-}
-
-.fleet-agent-list {
-  display: grid;
-  gap: 0.3rem;
-}
-
-.fleet-agent-list li {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.28rem;
-}
-
-.agent-card {
-  display: grid;
-  min-width: 0;
-  gap: 0.16rem;
-  text-align: left;
-}
-
-.agent-card strong,
-.agent-card small,
-.agent-card span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-card span {
-  font-size: 0.76rem;
-}
-
-.pin-agent {
-  align-self: stretch;
-  min-width: 2rem;
-}
-
-.fleet-conversation-placeholder {
-  display: grid;
-  place-items: center;
-  color: var(--fleet-muted);
-}
-
 .server-list {
   display: grid;
   gap: 0.55rem;
@@ -289,23 +45,11 @@ button.quiet,
   padding: 0.4rem 0;
 }
 
-@media (max-width: 740px) {
-  #fleet-shell {
-    grid-template-columns: 190px minmax(0, 1fr);
-  }
-
-  .fleet-conversation-placeholder {
-    display: none;
-  }
-}
-
-/* La flotte n'est pas une seconde application : elle reprend la chrome sombre
-   des colonnes Projets et Agents déjà connues, puis laisse le relais occuper
-   la troisième colonne pour la seule conversation. */
+/* La coque locale ne porte que les sources. Le relais conserve son véritable
+   volet d'agents, ses cartes et ses actions. */
 #fleet-shell {
   --fleet-background: #0a0a0a;
   --fleet-project-surface: #0d0d0d;
-  --fleet-agent-surface: #101010;
   --fleet-surface-raised: color-mix(in srgb, #0a0a0a 93%, white);
   --fleet-surface-hover: color-mix(in srgb, #0a0a0a 89%, white);
   --fleet-line: color-mix(in srgb, #8d8d8a 12%, transparent);
@@ -313,8 +57,8 @@ button.quiet,
   --fleet-text: #f4f4f2;
   --fleet-accent: #6695ff;
   display: grid;
-  grid-template-columns: 12.5rem 20rem;
-  width: min(100vw, 32.5rem);
+  grid-template-columns: 12.5rem;
+  width: min(100vw, 12.5rem);
   height: 100dvh;
   overflow: hidden;
   color: var(--fleet-text);
@@ -323,8 +67,7 @@ button.quiet,
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
 }
 
-#fleet-shell .fleet-sources-pane,
-#fleet-shell .fleet-agents-pane {
+#fleet-shell .fleet-sources-pane {
   min-width: 0;
   min-height: 0;
   padding: 2.15rem 0.5rem 0.7rem;
@@ -336,12 +79,6 @@ button.quiet,
   flex-direction: column;
   gap: 0.8rem;
   background: var(--fleet-project-surface);
-}
-
-#fleet-shell .fleet-agents-pane {
-  display: flex;
-  flex-direction: column;
-  background: var(--fleet-agent-surface);
 }
 
 #fleet-shell .fleet-sources-header {
@@ -379,8 +116,7 @@ button.quiet,
   gap: 0.16rem;
 }
 
-#fleet-shell .fleet-sources-pane button,
-#fleet-shell .fleet-agents-pane button {
+#fleet-shell .fleet-sources-pane button {
   appearance: none;
   border: 0;
   border-radius: 0.55rem;
@@ -391,9 +127,7 @@ button.quiet,
   cursor: pointer;
 }
 
-#fleet-shell .fleet-sources-pane button:focus-visible,
-#fleet-shell .fleet-agents-pane button:focus-visible,
-#fleet-shell .fleet-agents-pane select:focus-visible {
+#fleet-shell .fleet-sources-pane button:focus-visible {
   outline: 2px solid var(--fleet-accent);
   outline-offset: 2px;
 }
@@ -434,7 +168,6 @@ button.quiet,
 
 #fleet-shell .fleet-sources-pane ul,
 #fleet-shell .fleet-sources-pane li,
-#fleet-shell .fleet-agent-list,
 #fleet-shell .server-list {
   margin: 0;
   padding: 0;
@@ -471,8 +204,6 @@ button.quiet,
 
 #fleet-shell .source-item small,
 #fleet-shell .project-button,
-#fleet-shell .agent-card small,
-#fleet-shell .agent-card span,
 #fleet-shell .server-list small {
   color: var(--fleet-muted);
 }
@@ -522,276 +253,6 @@ button.quiet,
 #fleet-shell .fleet-sources-pane .icon-settings:hover {
   color: var(--fleet-text);
   background: var(--fleet-surface-hover);
-}
-
-#fleet-shell .fleet-agents-pane > header {
-  display: flex;
-  min-height: 2.2rem;
-  align-items: center;
-}
-
-#fleet-shell #fleet-count {
-  color: var(--fleet-text);
-  font-size: 1rem;
-  font-weight: 720;
-  letter-spacing: -0.02em;
-}
-
-#fleet-shell .fleet-filter-chips,
-#fleet-shell .sort-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.28rem;
-}
-
-#fleet-shell .fleet-filter-chips {
-  min-height: 0;
-  margin-bottom: 0.32rem;
-}
-
-#fleet-shell .filter-chip,
-#fleet-shell .sort-chip {
-  border: 1px solid var(--fleet-line);
-  background: var(--fleet-surface-raised);
-  font-size: 0.72rem;
-}
-
-#fleet-shell .filter-chip {
-  padding: 0.24rem 0.42rem;
-}
-
-#fleet-shell .sort-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.16rem;
-  padding: 0.16rem 0.2rem 0.16rem 0.42rem;
-  color: var(--fleet-text);
-}
-
-#fleet-shell .sort-chip button {
-  min-width: 1.35rem;
-  min-height: 1.35rem;
-  padding: 0.1rem 0.22rem;
-  color: var(--fleet-muted);
-  font-size: 0.68rem;
-}
-
-#fleet-shell .sort-chip button:hover,
-#fleet-shell .filter-chip:hover {
-  color: var(--fleet-text);
-  background: var(--fleet-surface-hover);
-}
-
-#fleet-shell .fleet-sort-controls {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.32rem;
-  margin: 0.22rem 0 0.42rem;
-}
-
-#fleet-shell .fleet-sort-controls label {
-  grid-column: 1 / -1;
-  color: var(--fleet-muted);
-  font-size: 0.74rem;
-  font-weight: 620;
-}
-
-#fleet-shell .fleet-agents-pane select {
-  min-width: 0;
-  min-height: 2rem;
-  border: 1px solid var(--fleet-line);
-  border-radius: 0.5rem;
-  padding: 0.28rem 0.45rem;
-  color: var(--fleet-text);
-  background: var(--fleet-surface-raised);
-  font: inherit;
-  font-size: 0.8rem;
-}
-
-#fleet-shell .fleet-sort-controls button {
-  min-height: 2rem;
-  padding: 0.28rem 0.5rem;
-  color: var(--fleet-text);
-  background: var(--fleet-surface-raised);
-  font-size: 0.78rem;
-  font-weight: 650;
-}
-
-#fleet-shell .fleet-sort-controls button:hover {
-  background: var(--fleet-surface-hover);
-}
-
-#fleet-shell .fleet-groups {
-  min-height: 0;
-  flex: 1;
-  overflow: auto;
-}
-
-#fleet-shell .fleet-group {
-  margin-bottom: 0.32rem;
-}
-
-#fleet-shell .group-header {
-  width: 100%;
-  padding: 0.36rem 0.42rem;
-  color: var(--fleet-muted);
-  font-size: 0.74rem;
-  font-weight: 650;
-  text-align: left;
-}
-
-#fleet-shell .group-header:hover {
-  color: var(--fleet-text);
-  background: var(--fleet-surface-hover);
-}
-
-#fleet-shell .fleet-agent-list {
-  display: grid;
-  gap: 0.18rem;
-}
-
-#fleet-shell .fleet-agent-list li {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 2rem 2rem;
-  gap: 0.08rem;
-}
-
-#fleet-shell .agent-card {
-  display: grid;
-  min-width: 0;
-  gap: 0.12rem;
-  min-height: 4.1rem;
-  padding: 0.5rem 0.52rem;
-  text-align: left;
-}
-
-#fleet-shell .agent-card:hover,
-#fleet-shell .agent-card:focus-visible {
-  color: var(--fleet-text);
-  background: var(--fleet-surface-raised);
-}
-
-#fleet-shell .agent-card strong,
-#fleet-shell .agent-card small,
-#fleet-shell .agent-card span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-#fleet-shell .agent-card strong {
-  color: var(--fleet-text);
-  font-size: 0.92rem;
-  font-weight: 690;
-  letter-spacing: -0.01em;
-}
-
-#fleet-shell .agent-card small,
-#fleet-shell .agent-card span {
-  font-size: 0.72rem;
-}
-
-#fleet-shell .agent-card__layout {
-  display: grid;
-  grid-template-columns: 2.4rem minmax(0, 1fr);
-  align-items: start;
-  gap: 0.5rem;
-}
-
-#fleet-shell .agent-card__content {
-  display: grid;
-  min-width: 0;
-  gap: 0.1rem;
-}
-
-#fleet-shell .fleet-agent-avatar {
-  position: relative;
-  display: grid;
-  width: 2.2rem;
-  height: 2.2rem;
-  place-items: center;
-}
-
-#fleet-shell .fleet-agent-avatar::before {
-  position: absolute;
-  inset: -0.12rem;
-  border: 2px solid #50bd78;
-  border-radius: 50%;
-  content: "";
-}
-
-#fleet-shell .fleet-agent-avatar > span {
-  position: relative;
-  display: block;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  background: var(--fleet-avatar-color);
-}
-
-#fleet-shell .fleet-agent-avatar > span::before,
-#fleet-shell .fleet-agent-avatar > span::after {
-  position: absolute;
-  top: 39%;
-  width: 13%;
-  height: 25%;
-  border-radius: 50%;
-  background: #101215;
-  content: "";
-}
-
-#fleet-shell .fleet-agent-avatar > span::before { left: 31%; transform: rotate(-12deg); }
-#fleet-shell .fleet-agent-avatar > span::after { right: 31%; transform: rotate(12deg); }
-#fleet-shell .fleet-agent-avatar[data-shape="round"] > span { border-radius: 50%; }
-#fleet-shell .fleet-agent-avatar[data-shape="soft-square"] > span { border-radius: 34%; }
-#fleet-shell .fleet-agent-avatar[data-shape="pill"] > span { border-radius: 48%; }
-#fleet-shell .fleet-agent-avatar[data-shape="triangle"] > span { clip-path: polygon(50% 2%, 97% 88%, 88% 98%, 12% 98%, 3% 88%); }
-#fleet-shell .fleet-agent-avatar[data-shape="hexagon"] > span { clip-path: polygon(50% 1%, 92% 24%, 92% 76%, 50% 99%, 8% 76%, 8% 24%); }
-#fleet-shell .fleet-agent-avatar[data-shape="cloud"] > span { clip-path: polygon(9% 76%, 0 59%, 8% 43%, 23% 39%, 27% 20%, 43% 11%, 57% 18%, 68% 10%, 85% 18%, 91% 35%, 100% 50%, 93% 72%, 76% 83%, 26% 86%); }
-#fleet-shell .fleet-agent-avatar[data-shape="drop"] > span { clip-path: polygon(50% 1%, 89% 44%, 89% 67%, 78% 87%, 60% 99%, 40% 99%, 22% 87%, 11% 67%, 11% 44%); }
-#fleet-shell .fleet-agent-avatar[data-shape="pebble"] > span { border-radius: 52% 38% 46% 41% / 43% 52% 39% 56%; }
-#fleet-shell .fleet-agent-avatar[data-state="stopped"]::before { border-color: #70737a; }
-#fleet-shell .fleet-agent-avatar[data-state="stopped"] > span { filter: grayscale(1); opacity: 0.38; }
-#fleet-shell .fleet-agent-avatar[data-state="stopped"] > span::before,
-#fleet-shell .fleet-agent-avatar[data-state="stopped"] > span::after { top: 56%; height: 7%; }
-
-#fleet-shell .fleet-agent-labels {
-  display: flex;
-  min-width: 0;
-  gap: 0.2rem;
-}
-
-#fleet-shell .fleet-agent-label {
-  max-width: 7rem;
-  padding: 0.06rem 0.28rem;
-  border: 1px solid var(--fleet-line);
-  border-radius: 999px;
-  color: var(--fleet-muted);
-  font-size: 0.62rem;
-  line-height: 1.15;
-}
-
-#fleet-shell .agent-menu,
-#fleet-shell .pin-agent {
-  align-self: stretch;
-  color: var(--fleet-muted);
-  font-size: 1rem;
-}
-
-#fleet-shell .agent-menu:hover,
-#fleet-shell .agent-menu:focus-visible {
-  color: var(--fleet-text);
-  background: var(--fleet-surface-hover);
-}
-
-#fleet-shell .pin-agent:hover,
-#fleet-shell .pin-agent[aria-pressed="true"] {
-  color: var(--fleet-text);
-  background: var(--fleet-surface-hover);
-}
-
-#fleet-shell .fleet-conversation-placeholder {
-  display: none;
 }
 
 /* Centre de contrôle : les connexions et réglages sont des sections d'une

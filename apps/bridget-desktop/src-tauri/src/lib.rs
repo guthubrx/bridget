@@ -57,7 +57,7 @@ pub fn run() {
         notified_attention_events: Mutex<HashSet<String>>,
     }
 
-    const DESKTOP_SHELL_WIDTH: u32 = 520;
+    const DESKTOP_SHELL_WIDTH: u32 = 200;
 
     struct ActiveConnection {
         session: crate::profile::ConnectionSession,
@@ -756,6 +756,7 @@ pub fn run() {
         state: State<'_, DesktopState>,
         source_id: String,
         agent_name: Option<String>,
+        project_id: Option<String>,
         desktop_action: Option<String>,
     ) -> Result<PanelView, String> {
         let (local_port, endpoint) = if source_id == LOCAL_SOURCE_ID {
@@ -785,6 +786,7 @@ pub fn run() {
             &endpoint,
             &state.client_id,
             agent_name.as_deref(),
+            project_id.as_deref(),
             desktop_action.as_deref(),
         );
         close_open_panels(&app, &state)?;

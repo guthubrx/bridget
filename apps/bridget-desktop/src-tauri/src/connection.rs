@@ -454,6 +454,7 @@ pub fn desktop_panel_url(
     endpoint: &RelayEndpoint,
     client_id: &str,
     agent_name: Option<&str>,
+    project_id: Option<&str>,
     desktop_action: Option<&str>,
 ) -> String {
     let mut url = format!(
@@ -464,13 +465,13 @@ pub fn desktop_panel_url(
         url.push_str("&agent=");
         url.push_str(&percent_encode(agent_name));
     }
+    if let Some(project_id) = project_id.filter(|value| !value.is_empty()) {
+        url.push_str("&project_id=");
+        url.push_str(&percent_encode(project_id));
+    }
     if let Some(action) = desktop_action {
         let action = match action {
             "create_project" | "import_project" => action,
-            "agent_menu" if agent_name.is_some() => {
-                url.push_str("&agent_menu=1");
-                return url;
-            }
             "settings" => {
                 url.push_str("&view=settings");
                 return url;
@@ -676,26 +677,19 @@ mod tests {
             &endpoint,
             client_id,
             Some("coordinateur / projet"),
+            Some("projet bleu"),
             Some("create_project"),
         );
         assert!(panel_url.contains("desktop_shell=1"));
         assert!(panel_url.contains("agent=coordinateur%20%2F%20projet"));
+        assert!(panel_url.contains("project_id=projet%20bleu"));
         assert!(panel_url.contains("desktop_action=create_project"));
-        let settings_url = desktop_panel_url(39002, &endpoint, client_id, None, Some("settings"));
+        let settings_url = desktop_panel_url(39002, &endpoint, client_id, None, None, Some("settings"));
         assert!(settings_url.contains("desktop_shell=1"));
         assert!(settings_url.contains("view=settings"));
         assert!(!settings_url.contains("desktop_action="));
-        let usage_url = desktop_panel_url(39002, &endpoint, client_id, None, Some("usage"));
+        let usage_url = desktop_panel_url(39002, &endpoint, client_id, None, None, Some("usage"));
         assert!(usage_url.contains("view=usage"));
-        let menu_url = desktop_panel_url(
-            39002,
-            &endpoint,
-            client_id,
-            Some("coordinateur %2F projet"),
-            Some("agent_menu"),
-        );
-        assert!(menu_url.contains("agent_menu=1"));
-        assert!(menu_url.contains("agent=coordinateur%20%252F%20projet"));
         assert_eq!(
             fleet_snapshot_path(&endpoint),
             "/v1/snapshot?token=fixture%20token"

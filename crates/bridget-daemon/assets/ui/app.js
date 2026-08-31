@@ -69,9 +69,7 @@
         assert.match(source, /desktopAction === "import_project"/);
         assert.match(source, /const openControlCenter = \(initialRoute = "general"\) =>/);
         assert.match(source, /params\.get\("view"\) === "usage" \? "usage" : "general"/);
-        assert.match(source, /params\.get\("agent_menu"\) === "1"/);
         assert.match(stylesheet, /body\[data-desktop-shell="true"\] \.project-pane/);
-        assert.match(stylesheet, /body\[data-desktop-shell="true"\] \.agent-pane/);
         assert.match(stylesheet, /body\[data-desktop-shell="true"\] \.conversation/);
       });
 
@@ -86,10 +84,7 @@
           stylesheet.indexOf("}", legacyRule) < desktopRule,
           "la règle précédente doit être fermée avant le mode desktop",
         );
-        assert.match(
-          stylesheet,
-          /body\[data-desktop-shell="true"\] \.project-pane,[\s\S]*?\.agent-pane-resizer\s*\{\s*display: none;\s*\}/,
-        );
+        assert.match(stylesheet, /body\[data-desktop-shell="true"\] \.project-pane\s*\{\s*display: none;\s*\}/);
       });
 
       test("spec_080_usage_reste_atteste_et_ne_fabrique_aucun_cout", () => {
@@ -545,6 +540,10 @@
           pinned: [],
           hidden: [],
           readThrough: {},
+          sortCriteria: [
+            { field: "state", direction: "asc" },
+            { field: "activity", direction: "desc" },
+          ],
         });
         assert.deepEqual(api.normalizeAgentSidebarPreferences({
           version: 1,
@@ -556,10 +555,23 @@
           pinned: ["alpha", "beta"],
           hidden: ["cache"],
           readThrough: { alpha: 12, cache: 9 },
+          sortCriteria: [
+            { field: "state", direction: "asc" },
+            { field: "activity", direction: "desc" },
+          ],
         });
         assert.deepEqual(
           api.normalizeAgentSidebarPreferences({ version: 2, pinned: ["alpha"] }),
-          { version: 1, pinned: [], hidden: [], readThrough: {} },
+          {
+            version: 1,
+            pinned: [],
+            hidden: [],
+            readThrough: {},
+            sortCriteria: [
+              { field: "state", direction: "asc" },
+              { field: "activity", direction: "desc" },
+            ],
+          },
         );
         assert.equal(
           api.normalizeAgentSidebarPreferences({
@@ -575,7 +587,19 @@
           pinned: [],
           hidden: [],
           readThrough: {},
+          sortCriteria: [
+            { field: "state", direction: "asc" },
+            { field: "activity", direction: "desc" },
+          ],
         });
+        assert.deepEqual(api.normalizeAgentSidebarPreferences({
+          version: 1,
+          sortCriteria: [
+            { field: "project", direction: "desc" },
+            { field: "project", direction: "asc" },
+            { field: "inconnu", direction: "asc" },
+          ],
+        }).sortCriteria, [{ field: "project", direction: "desc" }]);
         assert.doesNotThrow(() => api.writeAgentSidebarPreferences(corrupt, {
           version: 1,
           pinned: ["alpha"],
@@ -600,6 +624,34 @@
         assert.deepEqual(projection.stopped.map((agent) => agent.name), ["stop"]);
         assert.deepEqual(projection.hidden.map((agent) => agent.name), ["cache"]);
         assert.equal(projection.activeTotal, 3);
+      });
+
+      test("spec_081_tri_de_la_colonne_agents_respecte_criteres_direction_et_epingles", () => {
+        const agents = [
+          { agent_id: "opaque-zoe", profile: { agent_id: "opaque-zoe", display_name: "Zoé", avatar: { shape: "round", color: "blue" } }, state: "connected", project_id: "beta", last_message_at: 10 },
+          { agent_id: "opaque-alain", profile: { agent_id: "opaque-alain", display_name: "Alain", avatar: { shape: "round", color: "blue" } }, state: "connected", project_id: "alpha", last_message_at: 30 },
+          { agent_id: "opaque-bruno", profile: { agent_id: "opaque-bruno", display_name: "Bruno", avatar: { shape: "round", color: "blue" } }, state: "connected", project_id: "alpha", last_message_at: 20 },
+        ];
+        const byProjectThenActivity = api.agentSidebarProjection(agents, {
+          version: 1,
+          pinned: [],
+          hidden: [],
+          readThrough: {},
+          sortCriteria: [
+            { field: "project", direction: "asc" },
+            { field: "activity", direction: "desc" },
+          ],
+        });
+        assert.deepEqual(byProjectThenActivity.active.map((agent) => agent.name), ["opaque-alain", "opaque-bruno", "opaque-zoe"]);
+
+        const descendingNameWithPin = api.agentSidebarProjection(agents, {
+          version: 1,
+          pinned: ["opaque-alain"],
+          hidden: [],
+          readThrough: {},
+          sortCriteria: [{ field: "name", direction: "desc" }],
+        });
+        assert.deepEqual(descendingNameWithPin.active.map((agent) => agent.name), ["opaque-alain", "opaque-zoe", "opaque-bruno"]);
       });
 
       test("spec_077_matrice_unique_expose_toutes_les_actions_et_raisons", () => {
@@ -3453,6 +3505,8 @@
   const MIN_CONVERSATION_WIDTH_PX = 360;
   const AGENT_SIDEBAR_PREFERENCES_STORAGE_KEY = "bridget.ui.agent-sidebar-preferences.v1";
   const AGENT_SIDEBAR_PREFERENCES_LIMIT = 500;
+  const AGENT_SORT_CRITERIA_LIMIT = 4;
+  const AGENT_SORT_FIELDS = Object.freeze(["state", "project", "activity", "name"]);
   const IDENTITY_CARD_GAP_PX = 12;
   const IDENTITY_CARD_VIEWPORT_MARGIN_PX = 12;
   const MANAGED_FLUX_TRANSPORTS = Object.freeze(new Set([
@@ -3842,7 +3896,16 @@
   }
 
   function emptyAgentSidebarPreferences() {
-    return { version: 1, pinned: [], hidden: [], readThrough: {} };
+    return {
+      version: 1,
+      pinned: [],
+      hidden: [],
+      readThrough: {},
+      sortCriteria: [
+        { field: "state", direction: "asc" },
+        { field: "activity", direction: "desc" },
+      ],
+    };
   }
 
   // Complexité: O(p + h + r), chaque collection locale est bornée à 500 entrées.
@@ -3886,11 +3949,28 @@
         if (count >= AGENT_SIDEBAR_PREFERENCES_LIMIT) break;
       }
     }
+    const sortCriteria = [];
+    const seenSortFields = new Set();
+    const hasSortCriteria = Array.isArray(value.sortCriteria);
+    if (hasSortCriteria) {
+      for (const candidate of value.sortCriteria) {
+        if (!candidate || typeof candidate !== "object") continue;
+        const field = String(candidate.field || "");
+        if (!AGENT_SORT_FIELDS.includes(field) || seenSortFields.has(field)) continue;
+        seenSortFields.add(field);
+        sortCriteria.push({
+          field,
+          direction: candidate.direction === "desc" ? "desc" : "asc",
+        });
+        if (sortCriteria.length >= AGENT_SORT_CRITERIA_LIMIT) break;
+      }
+    }
     return {
       version: 1,
       pinned: normalizeNames(value.pinned),
       hidden: normalizeNames(value.hidden),
       readThrough,
+      sortCriteria: hasSortCriteria ? sortCriteria : emptyAgentSidebarPreferences().sortCriteria,
     };
   }
 
@@ -3916,6 +3996,24 @@
     return normalized;
   }
 
+  function agentSortValue(agent, field) {
+    if (field === "state") {
+      if ((agent.alerts || []).length > 0 || agent.wait_state === "waiting") return 0;
+      if (agent.state === "running") return 1;
+      return 2;
+    }
+    if (field === "project") {
+      return String(agent.project_id || (agent.agent_link && agent.agent_link.project && agent.agent_link.project.project_id) || "");
+    }
+    if (field === "activity") return Number(agent.last_message_at || 0);
+    return agentDisplayName(agent);
+  }
+
+  function compareAgentSortValues(left, right) {
+    if (typeof left === "number" && typeof right === "number") return left - right;
+    return String(left).localeCompare(String(right), "fr", { sensitivity: "base" });
+  }
+
   // Complexité: O(n log n), due au tri stable des groupes d'agents.
   function agentSidebarProjection(agents, preferences) {
     const normalizedPreferences = normalizeAgentSidebarPreferences(preferences);
@@ -3926,7 +4024,15 @@
       .sort((left, right) => {
         const pinDifference = Number(pinned.has(right.agent.name))
           - Number(pinned.has(left.agent.name));
-        return pinDifference || left.index - right.index;
+        if (pinDifference) return pinDifference;
+        for (const criterion of normalizedPreferences.sortCriteria) {
+          const compared = compareAgentSortValues(
+            agentSortValue(left.agent, criterion.field),
+            agentSortValue(right.agent, criterion.field),
+          );
+          if (compared) return criterion.direction === "desc" ? -compared : compared;
+        }
+        return left.index - right.index;
       })
       .map((entry) => entry.agent);
     const source = normalizeAgents(agents);
@@ -6390,6 +6496,9 @@
     attentionControl: "attention-control",
     attentionCount: "attention-count",
     sourceState: "source-state",
+    agentSortChips: "agent-sort-chips",
+    agentSortAdd: "agent-sort-add",
+    agentSortMenu: "agent-sort-menu",
     messageSearch: "message-search",
     messageSearchInput: "message-search-input",
     messageSearchResults: "message-search-results",
@@ -7044,7 +7153,6 @@
     const params = new URLSearchParams(windowRef.location.search);
     const token = params.get("token") || "";
     const requestedAgent = params.get("agent");
-    const requestedAgentMenu = params.get("agent_menu") === "1";
     const nativeAttentionShell = params.get("native_attention") === "1";
     const desktopShell = params.get("desktop_shell") === "1";
     const desktopAction = params.get("desktop_action");
@@ -7104,9 +7212,8 @@
     };
     applyControlCenterPreferences(documentRef, controlPreferences);
     let state = createUiState({ selectedAgent: isUiSender(requestedAgent) ? null : requestedAgent });
-    let pendingRequestedAgentMenu = requestedAgentMenu && requestedAgent ? requestedAgent : null;
     let projects = [];
-    let selectedProjectId = null;
+    let selectedProjectId = params.get("project_id") || null;
     let projectSettingsSnapshot = null;
     let projectPresentationPreferences = readProjectPresentationPreferences(windowRef.localStorage);
     let projectContextMenu = null;
@@ -8358,6 +8465,125 @@
       renderAgents();
     };
 
+    const agentSortLabels = Object.freeze({
+      state: "État",
+      project: "Projet",
+      activity: "Activité récente",
+      name: "Nom",
+    });
+    let draggedSortCriterion = null;
+    const closeAgentSortMenu = () => {
+      nodes.agentSortMenu.hidden = true;
+      nodes.agentSortAdd.setAttribute("aria-expanded", "false");
+    };
+    const setAgentSortCriteria = (sortCriteria) => {
+      agentSidebarPreferences = normalizeAgentSidebarPreferences({
+        ...agentSidebarPreferences,
+        sortCriteria,
+        readThrough: Object.fromEntries(readThrough),
+      });
+      persistAgentSidebarPreferences();
+      lastAgentsRenderSignature = null;
+      renderAgentSortControls();
+      renderAgents();
+    };
+    const moveAgentSortCriterion = (from, to) => {
+      if (from === to || from < 0 || to < 0) return;
+      const criteria = [...agentSidebarPreferences.sortCriteria];
+      const [criterion] = criteria.splice(from, 1);
+      criteria.splice(to, 0, criterion);
+      setAgentSortCriteria(criteria);
+    };
+    const renderAgentSortControls = () => {
+      nodes.agentSortChips.replaceChildren();
+      nodes.agentSortMenu.replaceChildren();
+      agentSidebarPreferences.sortCriteria.forEach((criterion, index) => {
+        const chip = make("div", "agent-sort-chip");
+        chip.draggable = true;
+        chip.dataset.index = String(index);
+        chip.title = "Glisser-déposer pour réordonner ce tri";
+        const label = make("span", "agent-sort-chip__label", agentSortLabels[criterion.field]);
+        const direction = make(
+          "button",
+          "agent-sort-chip__direction",
+          criterion.direction === "asc" ? "▲" : "▼",
+        );
+        direction.type = "button";
+        direction.draggable = false;
+        direction.title = criterion.direction === "asc" ? "Passer en décroissant" : "Passer en croissant";
+        direction.setAttribute("aria-label", direction.title);
+        direction.addEventListener("click", () => {
+          const criteria = [...agentSidebarPreferences.sortCriteria];
+          criteria[index] = {
+            ...criteria[index],
+            direction: criteria[index].direction === "asc" ? "desc" : "asc",
+          };
+          setAgentSortCriteria(criteria);
+        });
+        const remove = make("button", "agent-sort-chip__remove", "×");
+        remove.type = "button";
+        remove.draggable = false;
+        remove.title = "Retirer ce tri";
+        remove.setAttribute("aria-label", "Retirer ce tri");
+        remove.addEventListener("click", () => {
+          setAgentSortCriteria(agentSidebarPreferences.sortCriteria.filter((_, candidate) => candidate !== index));
+        });
+        chip.addEventListener("dragstart", (event) => {
+          if (event.target.closest("button")) {
+            event.preventDefault();
+            return;
+          }
+          draggedSortCriterion = index;
+          event.dataTransfer?.setData("text/plain", String(index));
+          if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+        });
+        chip.addEventListener("dragover", (event) => {
+          event.preventDefault();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+        });
+        chip.addEventListener("drop", (event) => {
+          event.preventDefault();
+          const from = Number.isInteger(draggedSortCriterion)
+            ? draggedSortCriterion
+            : Number(event.dataTransfer?.getData("text/plain"));
+          draggedSortCriterion = null;
+          moveAgentSortCriterion(from, index);
+        });
+        chip.addEventListener("dragend", () => { draggedSortCriterion = null; });
+        chip.append(label, direction, remove);
+        nodes.agentSortChips.append(chip);
+      });
+      const used = new Set(agentSidebarPreferences.sortCriteria.map((criterion) => criterion.field));
+      AGENT_SORT_FIELDS.filter((field) => !used.has(field)).forEach((field) => {
+        const option = make("button", "agent-sort-menu__item", agentSortLabels[field]);
+        option.type = "button";
+        option.setAttribute("role", "menuitem");
+        option.addEventListener("click", () => {
+          closeAgentSortMenu();
+          const direction = field === "activity" ? "desc" : "asc";
+          setAgentSortCriteria([...agentSidebarPreferences.sortCriteria, { field, direction }]);
+        });
+        nodes.agentSortMenu.append(option);
+      });
+      nodes.agentSortAdd.hidden = used.size >= AGENT_SORT_FIELDS.length;
+    };
+    nodes.agentSortAdd.addEventListener("click", () => {
+      const willOpen = nodes.agentSortMenu.hidden;
+      nodes.agentSortMenu.hidden = !willOpen;
+      nodes.agentSortAdd.setAttribute("aria-expanded", String(willOpen));
+    });
+    if (typeof documentRef.addEventListener === "function") {
+      documentRef.addEventListener("pointerdown", (event) => {
+        if (nodes.agentSortMenu.hidden || nodes.agentSortMenu.contains(event.target) || nodes.agentSortAdd.contains(event.target)) return;
+        closeAgentSortMenu();
+      });
+      documentRef.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape" || nodes.agentSortMenu.hidden) return;
+        closeAgentSortMenu();
+        nodes.agentSortAdd.focus();
+      });
+    }
+
     const colorForAgent = (agent) => agentAvatarColor(agent && agent.name, {}, agent && agent.profile);
     const shapeForAgent = (agent) => agentAvatarShape(agent && agent.name, {}, agent && agent.profile);
 
@@ -9131,15 +9357,6 @@
       nodes.hiddenCount.textContent = String(projection.hidden.length);
       nodes.hiddenAgents.hidden = projection.hidden.length === 0;
       nodes.fleetCount.textContent = String(projection.activeTotal);
-      if (pendingRequestedAgentMenu) {
-        const target = [...activeRows, ...stoppedRows, ...hiddenRows].find(
-          (entry) => entry.agent.name === pendingRequestedAgentMenu,
-        );
-        if (target) {
-          pendingRequestedAgentMenu = null;
-          openIdentityCard(target.agent, target.node.identityActionButton, true);
-        }
-      }
       if (openedName) {
         const opened = [...activeRows, ...stoppedRows, ...hiddenRows].find(
           (entry) => entry.agent.name === openedName,
@@ -9159,6 +9376,7 @@
       lastAgentsRenderSignature = renderSignature;
       return true;
     };
+    renderAgentSortControls();
     const renderHeader = () => {
       const agent = state.agents.find((entry) => entry.name === state.selectedAgent);
       nodes.selectedAgent.textContent = agent ? agentDisplayName(agent) : "Aucun agent";

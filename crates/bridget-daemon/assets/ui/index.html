@@ -42,6 +42,12 @@
           Lecture de la flotte…
         </p>
 
+        <section class="agent-sort" aria-label="Tri et regroupement des agents">
+          <div class="agent-sort__chips" id="agent-sort-chips" aria-label="Tris actifs"></div>
+          <button class="agent-sort__add" id="agent-sort-add" type="button" aria-expanded="false" aria-controls="agent-sort-menu">+ Trier</button>
+          <div class="agent-sort__menu" id="agent-sort-menu" role="menu" aria-label="Ajouter un tri" hidden></div>
+        </section>
+
         <form class="message-search" id="message-search" novalidate>
           <label class="sr-only" for="message-search-input">Chercher dans les messages</label>
           <input
