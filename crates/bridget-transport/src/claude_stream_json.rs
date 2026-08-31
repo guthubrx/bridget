@@ -88,6 +88,7 @@ pub struct ClaudeStreamJsonTransport {
     alive: Arc<AtomicBool>,
     shutdown_started: AtomicBool,
     busy: Arc<AtomicBool>,
+    private_profile_instructions: Arc<Mutex<Option<String>>>,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     queue_capacity: usize,
     writer: Writer,
@@ -152,6 +153,7 @@ impl ClaudeStreamJsonTransport {
         ));
         let alive = Arc::new(AtomicBool::new(true));
         let busy = Arc::new(AtomicBool::new(false));
+        let private_profile_instructions = Arc::new(Mutex::new(None));
         let events = Arc::new(Mutex::new(VecDeque::new()));
         let journal = Arc::new(Mutex::new(None));
         let session_store_handle = Arc::new(Mutex::new(session_store));
@@ -185,6 +187,7 @@ impl ClaudeStreamJsonTransport {
             journal.clone(),
             alive.clone(),
             busy.clone(),
+            private_profile_instructions.clone(),
             Duration::from_secs(options.notify_timeout_secs),
         );
         push_internal(
@@ -209,6 +212,7 @@ impl ClaudeStreamJsonTransport {
             alive,
             shutdown_started: AtomicBool::new(false),
             busy,
+            private_profile_instructions,
             queue,
             queue_capacity: options.queue_capacity,
             writer,
@@ -345,6 +349,17 @@ impl Transport for ClaudeStreamJsonTransport {
 }
 
 impl ManagedSession for ClaudeStreamJsonTransport {
+    fn set_private_profile_instructions(
+        &mut self,
+        instructions: &str,
+    ) -> Result<(), TransportError> {
+        *self
+            .private_profile_instructions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(instructions.to_string());
+        Ok(())
+    }
+
     fn descriptor(&self) -> ManagedSessionDescriptor {
         ManagedSessionDescriptor {
             transport: "stdio".to_string(),
@@ -707,6 +722,7 @@ fn spawn_worker(
     journal: Journal,
     alive: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
+    private_profile_instructions: Arc<Mutex<Option<String>>>,
     notify_timeout: Duration,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
@@ -763,7 +779,11 @@ fn spawn_worker(
                     "body": message.body,
                 }),
             );
-            let terminal = match write_input(&writer, &message) {
+            let instructions = private_profile_instructions
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clone();
+            let terminal = match write_input(&writer, &message, instructions.as_deref()) {
                 Ok(()) => {
                     push_internal(
                         &events,
@@ -847,12 +867,27 @@ fn spawn_worker(
     })
 }
 
-fn write_input(writer: &Writer, message: &BridgetMessage) -> Result<(), TransportError> {
+fn private_prompt(instructions: Option<&str>, body: &str) -> String {
+    let Some(instructions) = instructions
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return body.to_string();
+    };
+    format!("[Instructions individuelles Bridget]\n{instructions}\n\n[Demande]\n{body}")
+}
+
+fn write_input(
+    writer: &Writer,
+    message: &BridgetMessage,
+    instructions: Option<&str>,
+) -> Result<(), TransportError> {
+    let prompt = private_prompt(instructions, &message.body);
     let frame = json!({
         "type": "user",
         "message": {
             "role": "user",
-            "content": [{ "type": "text", "text": message.body }],
+            "content": [{ "type": "text", "text": prompt }],
         },
     });
     let mut writer = writer
@@ -2518,5 +2553,15 @@ exit 0
         );
         t_lent.stop();
         let _ = fs::remove_dir_all(root);
+    }
+    #[test]
+    fn consigne_privee_preserve_le_corps_visible_du_message() {
+        let body = "Demande utilisateur visible.";
+        let prompt = private_prompt(Some("Privilégie les sources attestées."), body);
+
+        assert!(prompt.contains("Privilégie les sources attestées."));
+        assert!(prompt.ends_with(body));
+        assert_eq!(body, "Demande utilisateur visible.");
+        assert_eq!(private_prompt(None, body), body);
     }
 }

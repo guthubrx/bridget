@@ -180,6 +180,7 @@ struct TurnWorker {
     poll_interval: Duration,
     child: Arc<Mutex<Child>>,
     journal: Journal,
+    private_profile_instructions: Arc<Mutex<Option<String>>>,
     clock: Clock,
     test_observer: Option<mpsc::Sender<AcpEvent>>,
 }
@@ -199,6 +200,7 @@ pub struct AcpTransport {
     reader_handle: Mutex<Option<thread::JoinHandle<()>>>,
     worker_handle: Mutex<Option<thread::JoinHandle<()>>>,
     journal: Journal,
+    private_profile_instructions: Arc<Mutex<Option<String>>>,
     clock: Clock,
     context_published: AtomicBool,
 }
@@ -424,6 +426,7 @@ impl AcpTransport {
         *active_session.lock().unwrap_or_else(|err| err.into_inner()) = Some(session_id.clone());
 
         let state = Arc::new(Mutex::new(TurnState::Idle));
+        let private_profile_instructions = Arc::new(Mutex::new(None));
         let worker_handle = spawn_worker(TurnWorker {
             queue: queue.clone(),
             writer: writer.clone(),
@@ -441,6 +444,7 @@ impl AcpTransport {
             poll_interval,
             child: child.clone(),
             journal: journal.clone(),
+            private_profile_instructions: private_profile_instructions.clone(),
             clock: clock.clone(),
             test_observer,
         });
@@ -459,6 +463,7 @@ impl AcpTransport {
             reader_handle: Mutex::new(Some(reader_handle)),
             worker_handle: Mutex::new(Some(worker_handle)),
             journal,
+            private_profile_instructions,
             clock,
             context_published: AtomicBool::new(false),
         })
@@ -657,6 +662,17 @@ impl Transport for AcpTransport {
 }
 
 impl ManagedSession for AcpTransport {
+    fn set_private_profile_instructions(
+        &mut self,
+        instructions: &str,
+    ) -> Result<(), TransportError> {
+        *self
+            .private_profile_instructions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(instructions.to_string());
+        Ok(())
+    }
+
     fn descriptor(&self) -> ManagedSessionDescriptor {
         ManagedSessionDescriptor {
             transport: "acp".to_string(),
@@ -892,6 +908,11 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 .lock()
                 .unwrap_or_else(|err| err.into_inner())
                 .clear();
+            let instructions = worker
+                .private_profile_instructions
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clone();
             let result = prompt_request(
                 &worker.writer,
                 &worker.waiters,
@@ -900,7 +921,7 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 "session/prompt",
                 json!({
                     "sessionId": &worker.session_id,
-                    "prompt": [{ "type": "text", "text": prompt_for(&message) }]
+                    "prompt": [{ "type": "text", "text": prompt_for_with_private_instructions(&message, instructions.as_deref()) }]
                 }),
                 // L'échéance absolue vient du daemon (relue à chaque livraison).
                 // Sans elle, repli sur la valeur figée au spawn — qui ne suit
@@ -1971,12 +1992,26 @@ fn method_not_found_response(value: &Value, method: &str) -> Option<Value> {
 }
 
 pub fn prompt_for(message: &BridgetMessage) -> String {
-    format!(
+    prompt_for_with_private_instructions(message, None)
+}
+
+fn prompt_for_with_private_instructions(
+    message: &BridgetMessage,
+    instructions: Option<&str>,
+) -> String {
+    let prompt = format!(
         "[message Bridget de {} — réponse attendue : {}]\n\n{}",
         message.from,
         if message.reply { "oui" } else { "non" },
         message.body
-    )
+    );
+    let Some(instructions) = instructions
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return prompt;
+    };
+    format!("[Instructions individuelles Bridget]\n{instructions}\n\n{prompt}")
 }
 
 #[cfg(test)]
@@ -3767,5 +3802,26 @@ exit 0
             }
         }
         panic!("EOF actif non propagé au tour");
+    }
+    #[test]
+    fn consigne_privee_preserve_le_corps_visible_du_message() {
+        let mut message = message("profile-body");
+        message.body = "Demande utilisateur visible.".to_string();
+        let prompt = prompt_for_with_private_instructions(
+            &message,
+            Some("Privilégie les sources attestées."),
+        );
+
+        assert!(prompt.contains("Privilégie les sources attestées."));
+        assert!(prompt.ends_with(&message.body));
+        assert_eq!(
+            prompt_for(&message),
+            format!(
+                "[message Bridget de {} — réponse attendue : {}]\n\n{}",
+                message.from,
+                if message.reply { "oui" } else { "non" },
+                message.body
+            )
+        );
     }
 }

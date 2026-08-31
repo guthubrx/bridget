@@ -4,6 +4,10 @@
 //! des connexions ordinaires vers les projections publiques (`ListAgents`,
 //! `LedgerProjection`, Attach) puis les traduit en HTTP/SSE loopback.
 
+use crate::agent_profile::{
+    AgentProfileDetail, AgentProfileError, AgentProfileStore, AgentProfileSummary,
+    AgentProfileUpdate, AttentionEvent, AttentionEventType, ClientNotificationPreference,
+};
 use crate::mission_projection::{
     MissionProjectionV1, read_public_mission_projection_v1, retain_living_objectives,
 };
@@ -655,6 +659,8 @@ struct UiVigilanceRoundV1 {
 #[derive(Debug, Serialize)]
 struct UiAgentRowV1 {
     name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<UiAgentProfileV1>,
     #[serde(rename = "type")]
     agent_type: String,
     host: String,
@@ -701,6 +707,124 @@ struct UiAgentRowV1 {
     last_message_at: Option<i64>,
     last_excerpt: Option<String>,
     unread: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UiAgentProfileV1 {
+    profile_ref: String,
+    display_name: String,
+    labels: Vec<String>,
+    avatar: UiAgentAvatarV1,
+    instruction_state: UiInstructionStateV1,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UiAgentAvatarV1 {
+    shape: String,
+    color: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UiInstructionStateV1 {
+    revision: u64,
+    status: &'static str,
+    updated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct UiAgentProfileResponseV1 {
+    version: u8,
+    profile: UiAgentProfileDetailV1,
+}
+
+#[derive(Debug, Serialize)]
+struct UiAgentProfileDetailV1 {
+    profile_ref: String,
+    display_name: String,
+    labels: Vec<String>,
+    avatar: UiAgentAvatarV1,
+    instructions: String,
+    revision: u64,
+    instruction_state: UiInstructionStateV1,
+    updated_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiAgentProfileUpdateRequestV1 {
+    version: u8,
+    expected_revision: u64,
+    display_name: String,
+    labels: Vec<String>,
+    avatar: UiAgentAvatarV1Input,
+    instructions: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiAgentAvatarV1Input {
+    shape: String,
+    color: String,
+}
+
+#[derive(Debug, Serialize)]
+struct UiAttentionResponseV1 {
+    version: u8,
+    events: Vec<UiAttentionEventV1>,
+    next_after: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct UiAttentionEventV1 {
+    event_id: String,
+    profile_ref: String,
+    display_name: String,
+    event_type: &'static str,
+    summary: String,
+    created_at: i64,
+    seen: bool,
+    native_notified: bool,
+    attention_enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct UiAttentionPreferencesResponseV1 {
+    version: u8,
+    preferences: Vec<UiAttentionPreferenceV1>,
+}
+
+#[derive(Debug, Serialize)]
+struct UiAttentionPreferenceV1 {
+    profile_ref: String,
+    human_input_needed: bool,
+    task_completed: bool,
+    terminal_failure: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiAttentionPreferencesRequestV1 {
+    version: u8,
+    client_id: String,
+    preferences: Vec<UiAttentionPreferenceInputV1>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiAttentionPreferenceInputV1 {
+    profile_ref: String,
+    human_input_needed: bool,
+    task_completed: bool,
+    terminal_failure: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiAttentionStateRequestV1 {
+    version: u8,
+    client_id: String,
+    event_ids: Vec<String>,
+    action: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -879,7 +1003,7 @@ fn serve_connection(
     {
         return write_text(stream, 405, "méthode non autorisée");
     }
-    if request.method != "GET" && request.method != "POST" {
+    if request.method != "GET" && request.method != "POST" && request.method != "PATCH" {
         return write_text(stream, 405, "méthode non autorisée");
     }
     let if_none_match = request.headers.get("if-none-match").map(String::as_str);
@@ -938,6 +1062,96 @@ fn serve_connection(
     }
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/") => write_asset(stream, "text/html; charset=utf-8", UI_INDEX, if_none_match),
+        ("GET", path) if path.starts_with("/v1/agent-profiles/") => {
+            match get_agent_profile(config, profile_ref_from_path(path)) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("PATCH", path) if path.starts_with("/v1/agent-profiles/") => {
+            match patch_agent_profile(config, profile_ref_from_path(path), &request.body) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("GET", "/v1/attention") => {
+            match get_attention(
+                config,
+                request.query.get("client_id").map(String::as_str),
+                request.query.get("after").map(String::as_str),
+                request.query.get("limit").map(String::as_str),
+            ) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("GET", "/v1/attention/preferences") => {
+            match get_attention_preferences(
+                config,
+                request.query.get("client_id").map(String::as_str),
+            ) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("PUT", "/v1/attention/preferences") => {
+            match put_attention_preferences(config, &request.body) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("POST", "/v1/attention/state") => match post_attention_state(config, &request.body) {
+            Ok(()) => write_json(stream, 204, &serde_json::json!({})),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
         ("POST", "/v1/send") => match post_ui_message(config, runtime, &request.body) {
             Ok(response) => write_json(stream, 202, &response),
             Err((status, code, message)) => write_json(
@@ -1098,6 +1312,257 @@ fn serve_connection(
             )
         }
         _ => write_text(stream, 404, "ressource UI inconnue"),
+    }
+}
+
+fn profile_ref_from_path(path: &str) -> Option<&str> {
+    let profile_ref = path.strip_prefix("/v1/agent-profiles/")?;
+    (!profile_ref.is_empty() && !profile_ref.contains('/')).then_some(profile_ref)
+}
+
+fn open_agent_profile_store(
+    config: &UiRelayConfig,
+) -> Result<AgentProfileStore, (u16, &'static str, String)> {
+    AgentProfileStore::open(&ledger_db_path_for_socket(&config.daemon_socket)).map_err(|_| {
+        (
+            503,
+            "profile_store_unavailable",
+            "profils temporairement indisponibles".to_string(),
+        )
+    })
+}
+
+fn get_agent_profile(
+    config: &UiRelayConfig,
+    profile_ref: Option<&str>,
+) -> Result<UiAgentProfileResponseV1, (u16, &'static str, String)> {
+    let Some(profile_ref) = profile_ref else {
+        return Err((404, "profile_not_found", "profil indisponible".to_string()));
+    };
+    let store = open_agent_profile_store(config)?;
+    let profile = store
+        .profile_detail(profile_ref)
+        .map_err(profile_error_response)?;
+    Ok(UiAgentProfileResponseV1 {
+        version: UI_VERSION,
+        profile: ui_agent_profile_detail(profile),
+    })
+}
+
+fn patch_agent_profile(
+    config: &UiRelayConfig,
+    profile_ref: Option<&str>,
+    body: &[u8],
+) -> Result<UiAgentProfileResponseV1, (u16, &'static str, String)> {
+    let Some(profile_ref) = profile_ref else {
+        return Err((404, "profile_not_found", "profil indisponible".to_string()));
+    };
+    let request: UiAgentProfileUpdateRequestV1 = serde_json::from_slice(body)
+        .map_err(|_| (400, "invalid_profile", "profil invalide".to_string()))?;
+    if request.version != UI_VERSION || request.expected_revision == 0 {
+        return Err((400, "invalid_profile", "profil invalide".to_string()));
+    }
+    let mut store = open_agent_profile_store(config)?;
+    let profile = store
+        .update_profile(
+            profile_ref,
+            AgentProfileUpdate {
+                expected_revision: request.expected_revision,
+                display_name: request.display_name,
+                labels: request.labels,
+                avatar_shape: request.avatar.shape,
+                avatar_color: request.avatar.color,
+                instructions: request.instructions,
+            },
+        )
+        .map_err(profile_error_response)?;
+    Ok(UiAgentProfileResponseV1 {
+        version: UI_VERSION,
+        profile: ui_agent_profile_detail(profile),
+    })
+}
+
+fn profile_error_response(error: AgentProfileError) -> (u16, &'static str, String) {
+    match error {
+        AgentProfileError::Invalid(_) => (400, "invalid_profile", "profil invalide".to_string()),
+        AgentProfileError::NotFound => {
+            (404, "profile_not_found", "profil indisponible".to_string())
+        }
+        AgentProfileError::RevisionConflict => (
+            409,
+            "profile_revision_conflict",
+            "profil modifié entre-temps".to_string(),
+        ),
+        AgentProfileError::DisplayNameConflict => (
+            409,
+            "display_name_conflict",
+            "nom affiché déjà utilisé".to_string(),
+        ),
+        AgentProfileError::Sqlite(_) => (
+            503,
+            "profile_store_unavailable",
+            "profils temporairement indisponibles".to_string(),
+        ),
+    }
+}
+
+fn ui_agent_profile_detail(profile: AgentProfileDetail) -> UiAgentProfileDetailV1 {
+    let summary = profile.summary;
+    UiAgentProfileDetailV1 {
+        profile_ref: summary.profile_ref,
+        display_name: summary.display_name,
+        labels: summary.labels,
+        avatar: UiAgentAvatarV1 {
+            shape: summary.avatar_shape,
+            color: summary.avatar_color,
+        },
+        instructions: profile.instructions,
+        revision: summary.revision,
+        instruction_state: UiInstructionStateV1 {
+            revision: summary.instructions_revision,
+            status: summary.instruction_status.as_str(),
+            updated_at: summary.updated_at,
+        },
+        updated_at: summary.updated_at,
+    }
+}
+
+fn get_attention(
+    config: &UiRelayConfig,
+    client_id: Option<&str>,
+    after: Option<&str>,
+    limit: Option<&str>,
+) -> Result<UiAttentionResponseV1, (u16, &'static str, String)> {
+    let client_id = client_id.ok_or_else(|| attention_error("client absent"))?;
+    let limit = limit
+        .map(str::parse::<usize>)
+        .transpose()
+        .map_err(|_| attention_error("limite invalide"))?
+        .unwrap_or(100);
+    let store = open_agent_profile_store(config)?;
+    let (events, next_after) = store
+        .attention_for_client(client_id, after, limit)
+        .map_err(attention_error_response)?;
+    Ok(UiAttentionResponseV1 {
+        version: UI_VERSION,
+        events: events.into_iter().map(ui_attention_event).collect(),
+        next_after,
+    })
+}
+
+fn get_attention_preferences(
+    config: &UiRelayConfig,
+    client_id: Option<&str>,
+) -> Result<UiAttentionPreferencesResponseV1, (u16, &'static str, String)> {
+    let client_id = client_id.ok_or_else(|| attention_error("client absent"))?;
+    let store = open_agent_profile_store(config)?;
+    Ok(UiAttentionPreferencesResponseV1 {
+        version: UI_VERSION,
+        preferences: store
+            .preferences_for_client(client_id)
+            .map_err(attention_error_response)?
+            .into_iter()
+            .map(ui_attention_preference)
+            .collect(),
+    })
+}
+
+fn put_attention_preferences(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiAttentionPreferencesResponseV1, (u16, &'static str, String)> {
+    let request: UiAttentionPreferencesRequestV1 =
+        serde_json::from_slice(body).map_err(|_| attention_error("préférences invalides"))?;
+    if request.version != UI_VERSION {
+        return Err(attention_error("préférences invalides"));
+    }
+    let preferences = request
+        .preferences
+        .into_iter()
+        .map(|preference| ClientNotificationPreference {
+            profile_ref: preference.profile_ref,
+            human_input_needed: preference.human_input_needed,
+            task_completed: preference.task_completed,
+            terminal_failure: preference.terminal_failure,
+        })
+        .collect::<Vec<_>>();
+    let mut store = open_agent_profile_store(config)?;
+    Ok(UiAttentionPreferencesResponseV1 {
+        version: UI_VERSION,
+        preferences: store
+            .replace_preferences_for_client(&request.client_id, &preferences)
+            .map_err(attention_error_response)?
+            .into_iter()
+            .map(ui_attention_preference)
+            .collect(),
+    })
+}
+
+fn post_attention_state(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<(), (u16, &'static str, String)> {
+    let request: UiAttentionStateRequestV1 =
+        serde_json::from_slice(body).map_err(|_| attention_error("état d'attention invalide"))?;
+    if request.version != UI_VERSION {
+        return Err(attention_error("état d'attention invalide"));
+    }
+    open_agent_profile_store(config)?
+        .mark_attention_state(&request.client_id, &request.event_ids, &request.action)
+        .map_err(attention_error_response)
+}
+
+fn ui_attention_event(event: AttentionEvent) -> UiAttentionEventV1 {
+    let summary = match event.event_type {
+        AttentionEventType::HumanInputNeeded => {
+            format!("{} attend votre réponse.", event.display_name)
+        }
+        AttentionEventType::TaskCompleted => format!("{} a terminé.", event.display_name),
+        AttentionEventType::TerminalFailure => {
+            format!("{} nécessite une vérification.", event.display_name)
+        }
+    };
+    UiAttentionEventV1 {
+        event_id: event.event_id,
+        profile_ref: event.profile_ref,
+        display_name: event.display_name,
+        event_type: event.event_type.as_str(),
+        summary,
+        created_at: event.created_at,
+        seen: event.seen,
+        native_notified: event.native_notified,
+        attention_enabled: event.attention_enabled,
+    }
+}
+
+fn ui_attention_preference(preference: ClientNotificationPreference) -> UiAttentionPreferenceV1 {
+    UiAttentionPreferenceV1 {
+        profile_ref: preference.profile_ref,
+        human_input_needed: preference.human_input_needed,
+        task_completed: preference.task_completed,
+        terminal_failure: preference.terminal_failure,
+    }
+}
+
+fn attention_error(_reason: &'static str) -> (u16, &'static str, String) {
+    (400, "invalid_attention", "activité invalide".to_string())
+}
+
+fn attention_error_response(error: AgentProfileError) -> (u16, &'static str, String) {
+    match error {
+        AgentProfileError::NotFound => (
+            404,
+            "attention_not_found",
+            "activité indisponible".to_string(),
+        ),
+        AgentProfileError::Sqlite(_) => (
+            503,
+            "attention_store_unavailable",
+            "activité temporairement indisponible".to_string(),
+        ),
+        AgentProfileError::Invalid(_)
+        | AgentProfileError::RevisionConflict
+        | AgentProfileError::DisplayNameConflict => attention_error("activité invalide"),
     }
 }
 
@@ -1806,9 +2271,7 @@ fn post_ui_search(
     if request.version != UI_VERSION {
         return Err((400, "requête de recherche invalide"));
     }
-    let db_path = ledger_db_path_for_socket(&config.daemon_socket);
-    let outcome =
-        search_ui_ledger(&db_path, &request.q).map_err(|_| (503, "ledger indisponible"))?;
+    let outcome = search_ui_ledger(config, &request.q).map_err(|_| (503, "ledger indisponible"))?;
     Ok(UiSearchResponseV1 {
         version: UI_VERSION,
         hits: outcome.hits,
@@ -1824,26 +2287,51 @@ struct UiSearchOutcome {
 
 /// Chemin réel emprunté par la page : lit le store à côté de la socket daemon
 /// (pas de nouveau RPC — la flotte tourne sans redémarrage).
-fn search_ui_ledger(db_path: &Path, query: &str) -> Result<UiSearchOutcome, UiError> {
-    let store = crate::store::Store::open(db_path)
+fn search_ui_ledger(config: &UiRelayConfig, query: &str) -> Result<UiSearchOutcome, UiError> {
+    let db_path = ledger_db_path_for_socket(&config.daemon_socket);
+    let store = crate::store::Store::open(&db_path)
         .map_err(|error| UiError::Configuration(error.to_string()))?;
     let outcome = store
         .search_messages(query, crate::store::MAX_LEDGER_SEARCH_PUBLIC)
         .map_err(|error| UiError::Configuration(error.to_string()))?;
+    let routing_names = outcome
+        .hits
+        .iter()
+        .flat_map(|entry| [entry.sender.clone(), entry.target.clone()])
+        .collect::<Vec<_>>();
+    let profiles = profile_summaries_for_routes(config, &routing_names);
+
     Ok(UiSearchOutcome {
         hits: outcome
             .hits
             .into_iter()
-            .map(|entry| UiSearchHitV1 {
-                id: entry.id,
-                ts: entry.ts,
-                sender: entry.sender,
-                target: entry.target,
-                body: entry.body,
+            .map(|entry| {
+                let sender = public_search_party(&entry.sender, &profiles);
+                let target = public_search_party(&entry.target, &profiles);
+                UiSearchHitV1 {
+                    id: entry.id,
+                    ts: entry.ts,
+                    sender,
+                    target,
+                    body: entry.body,
+                }
             })
             .collect(),
         truncated: outcome.truncated,
     })
+}
+
+fn public_search_party(
+    routing_name: &str,
+    profiles: &HashMap<String, AgentProfileSummary>,
+) -> String {
+    if routing_name == UI_SENDER {
+        return "Vous".to_string();
+    }
+    profiles
+        .get(routing_name)
+        .map(|profile| profile.display_name.clone())
+        .unwrap_or_else(|| "Agent non identifié".to_string())
 }
 
 fn ledger_db_path_for_socket(socket_path: &Path) -> PathBuf {
@@ -2139,7 +2627,19 @@ fn read_snapshot(
     focus_agent: Option<&str>,
 ) -> Result<UiSnapshotV1, UiError> {
     let facts = read_bridget_snapshot(&config.daemon_socket)?;
-    let agents = compose_agent_rows(facts.agents, &facts.messages);
+    let mut routing_names = facts
+        .agents
+        .iter()
+        .map(|agent| agent.name.clone())
+        .collect::<Vec<_>>();
+    routing_names.extend(
+        facts
+            .messages
+            .iter()
+            .flat_map(|message| [message.sender.clone(), message.target.clone()]),
+    );
+    let profiles = profile_summaries_for_routes(config, &routing_names);
+    let agents = compose_agent_rows(facts.agents, &facts.messages, &profiles);
     let peer_exchanges = focus_agent.map(|agent| aggregate_peer_exchanges(agent, &facts.messages));
     // Chemin productif du fil humain↔référent : lecture ledger filtrée sur le
     // couple AVANT toute borne (pas les 200 globaux de peer_exchanges). Le
@@ -2178,9 +2678,52 @@ fn focused_agent_is_stopped(config: &UiRelayConfig, agent: &str) -> Result<bool,
         .any(|candidate| candidate.name == agent && candidate.state == "stopped"))
 }
 
+fn profile_summaries_for_routes(
+    config: &UiRelayConfig,
+    routing_names: &[String],
+) -> HashMap<String, AgentProfileSummary> {
+    let mut store = match AgentProfileStore::open(&ledger_db_path_for_socket(&config.daemon_socket))
+    {
+        Ok(store) => store,
+        Err(_) => return HashMap::new(),
+    };
+    let _ = store.import_historical_routing_names();
+    if store.ensure_routing_names(routing_names).is_err() {
+        return HashMap::new();
+    }
+    routing_names
+        .iter()
+        .filter_map(|name| {
+            store
+                .profile_for_routing_name(name)
+                .ok()
+                .flatten()
+                .map(|profile| (name.clone(), profile))
+        })
+        .collect()
+}
+
+fn ui_agent_profile(summary: &AgentProfileSummary) -> UiAgentProfileV1 {
+    UiAgentProfileV1 {
+        profile_ref: summary.profile_ref.clone(),
+        display_name: summary.display_name.clone(),
+        labels: summary.labels.clone(),
+        avatar: UiAgentAvatarV1 {
+            shape: summary.avatar_shape.clone(),
+            color: summary.avatar_color.clone(),
+        },
+        instruction_state: UiInstructionStateV1 {
+            revision: summary.instructions_revision,
+            status: summary.instruction_status.as_str(),
+            updated_at: summary.updated_at,
+        },
+    }
+}
+
 fn compose_agent_rows(
     agents: Vec<bridget_transport::protocol::AgentInfo>,
     messages: &[LedgerMessage],
+    profiles: &HashMap<String, AgentProfileSummary>,
 ) -> Vec<UiAgentRowV1> {
     agents
         .into_iter()
@@ -2225,6 +2768,7 @@ fn compose_agent_rows(
 
             UiAgentRowV1 {
                 name: agent.name.clone(),
+                profile: profiles.get(&agent.name).map(ui_agent_profile),
                 agent_type: agent.agent_type,
                 host: agent.host,
                 transport: agent.transport,
@@ -4769,17 +5313,19 @@ mod tests {
         let hit_value = json_body(&hit_raw);
         assert_eq!(hit_value["hits"].as_array().map(|a| a.len()), Some(2));
         assert_eq!(hit_value["hits"][0]["id"], "hit-early");
-        assert_eq!(hit_value["hits"][0]["sender"], "bridget");
+        assert_eq!(hit_value["hits"][0]["sender"], "Agent");
         assert_eq!(hit_value["hits"][0]["ts"], 100);
         assert_eq!(hit_value["hits"][0]["body"], "alpha cible premiere");
         assert_eq!(hit_value["hits"][1]["id"], "hit-late");
-        assert_eq!(hit_value["hits"][1]["sender"], "cursor4");
+        assert_eq!(hit_value["hits"][1]["sender"], "Agent (2)");
         assert_eq!(hit_value["hits"][1]["ts"], 200);
         assert_eq!(
             hit_value["hits"][1]["body"],
             "seconde cible avec <tag> et 100%_wild"
         );
         assert_eq!(hit_value["truncated"], false);
+        assert!(!hit_raw.contains("\"sender\":\"bridget\""));
+        assert!(!hit_raw.contains("\"sender\":\"cursor4\""));
         assert!(
             hit_value["hits"][0]["ts"].as_i64().unwrap()
                 < hit_value["hits"][1]["ts"].as_i64().unwrap()
@@ -5108,7 +5654,7 @@ mod tests {
             continuation_mode: None,
             queue_depth: 0,
         });
-        let rows = compose_agent_rows(vec![active, waiting], &[]);
+        let rows = compose_agent_rows(vec![active, waiting], &[], &HashMap::new());
         let active = rows.iter().find(|row| row.name == "active").unwrap();
         assert_eq!(active.connection_state, "busy");
         assert_eq!(active.provider_age_secs, 5);
@@ -5145,7 +5691,7 @@ mod tests {
         ephemeral.persistent = Some(false);
         let external = agent_info("external", "connected");
 
-        let rows = compose_agent_rows(vec![persistent, ephemeral, external], &[]);
+        let rows = compose_agent_rows(vec![persistent, ephemeral, external], &[], &HashMap::new());
 
         assert_eq!(rows[0].persistent, Some(true));
         assert_eq!(rows[1].persistent, Some(false));
@@ -5296,5 +5842,92 @@ mod tests {
             assert_eq!(status, 304, "{path}: {revalidated}");
             assert_eq!(revalidated.split("\r\n\r\n").nth(1).unwrap_or("x"), "");
         }
+    }
+
+    #[test]
+    fn spec_078_profil_exige_jeton_et_ne_projette_pas_le_routage() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-078-profile-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("bridget.sock");
+        let mut store = AgentProfileStore::open(&socket.with_extension("db")).unwrap();
+        store.ensure_routing_names(["routing-secret"]).unwrap();
+        let profile = store
+            .profile_for_routing_name("routing-secret")
+            .unwrap()
+            .unwrap();
+        store
+            .update_profile(
+                &profile.profile_ref,
+                AgentProfileUpdate {
+                    expected_revision: profile.revision,
+                    display_name: "Bibliothécaire".to_string(),
+                    labels: vec!["recherche".to_string()],
+                    avatar_shape: "round".to_string(),
+                    avatar_color: "blue".to_string(),
+                    instructions: "consigne interne confidentielle".to_string(),
+                },
+            )
+            .unwrap();
+
+        let config = UiRelayConfig {
+            daemon_socket: socket,
+            maicie_config: root.join("maicie.json"),
+            project_root_policy_path: None,
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "jeton-spec-078".to_string(),
+        };
+        let relay = UiRelay::bind(config.clone()).unwrap();
+        let address = relay.local_addr().unwrap();
+        let worker = thread::spawn(move || relay.serve_one().unwrap());
+        let (denied, _) = get_asset(
+            address,
+            &format!("/v1/agent-profiles/{}", profile.profile_ref),
+            None,
+        );
+        worker.join().unwrap();
+        assert_eq!(denied, 403);
+
+        let relay = UiRelay::bind(config).unwrap();
+        let address = relay.local_addr().unwrap();
+        let worker = thread::spawn(move || relay.serve_one().unwrap());
+        let (status, raw) = get_asset(
+            address,
+            &format!(
+                "/v1/agent-profiles/{}?token=jeton-spec-078",
+                profile.profile_ref
+            ),
+            None,
+        );
+        worker.join().unwrap();
+        assert_eq!(status, 200, "{raw}");
+        assert!(raw.contains("Bibliothécaire"));
+        assert!(!raw.contains("routing-secret"));
+        assert!(raw.contains("consigne interne confidentielle"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_078_attention_projette_un_nom_affiche_et_erreurs_sans_detail() {
+        let event = ui_attention_event(AttentionEvent {
+            event_id: "event-opaque".to_string(),
+            profile_ref: "profile-opaque".to_string(),
+            display_name: "Bibliothécaire".to_string(),
+            event_type: AttentionEventType::HumanInputNeeded,
+            created_at: 42,
+            seen: false,
+            native_notified: false,
+            attention_enabled: true,
+        });
+        let payload = serde_json::to_string(&event).expect("projection JSON");
+        assert!(payload.contains("Bibliothécaire attend votre réponse."));
+        assert!(!payload.contains("routing-name"));
+        assert!(!payload.contains("consigne interne"));
+        let (_, code, message) =
+            attention_error_response(AgentProfileError::Invalid("consigne interne"));
+        assert_eq!(code, "invalid_attention");
+        assert!(!message.contains("consigne interne"));
     }
 }

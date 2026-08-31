@@ -16,8 +16,9 @@ pub mod ssh;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     use crate::connection::{
-        ConnectionStatus, HttpRelayProbe, RemoteTransport, SshRemoteTransport, connect_remote,
-        mark_tunnel_lost, relay_url,
+        ConnectionStatus, HttpRelayProbe, RemoteTransport, SshRemoteTransport,
+        attention_request_path, attention_state_request_path, connect_remote, desktop_relay_url,
+        mark_tunnel_lost,
     };
     use crate::host_identity::{
         HostIdentityStatus, HostIdentityTicket, SystemHostKeyCommandRunner, approve_host_identity,
@@ -26,25 +27,46 @@ pub fn run() {
     use crate::panels::PanelRegistry;
     use crate::profile::{ConnectionProfile, ProfileDraft};
     use crate::profile_service::ProfileService;
-    use crate::profile_store::ProfileStore;
-    use std::collections::HashMap;
+    use crate::profile_store::{ClientIdentityStore, ProfileStore};
+    use std::collections::{HashMap, HashSet};
+    use std::io::{Read, Write};
+    use std::net::{Ipv4Addr, SocketAddr, TcpStream};
     use std::path::PathBuf;
     use std::sync::Mutex;
+    use std::time::Duration;
     use tauri::webview::WebviewBuilder;
     use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl};
+    use tauri_plugin_notification::NotificationExt;
 
     struct DesktopState {
         profiles: Mutex<ProfileService>,
+        client_id: String,
         known_hosts: PathBuf,
         pending_host_tickets: Mutex<HashMap<String, HostIdentityTicket>>,
         sessions: Mutex<HashMap<String, ActiveConnection>>,
         panels: Mutex<PanelRegistry>,
+        notified_attention_events: Mutex<HashSet<String>>,
     }
 
     struct ActiveConnection {
         session: crate::profile::ConnectionSession,
         transport: Option<SshRemoteTransport>,
         local_port: u16,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct AttentionResponse {
+        events: Vec<AttentionEvent>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct AttentionEvent {
+        event_id: String,
+        display_name: String,
+        summary: String,
+        attention_enabled: bool,
+        seen: bool,
+        native_notified: bool,
     }
 
     #[derive(serde::Serialize)]
@@ -67,6 +89,129 @@ pub fn run() {
 
     fn publish_connection_state(app: &tauri::AppHandle, status: &ConnectionStatus) {
         let _ = app.emit_to("main", "connection-state", status);
+    }
+
+    fn request_relay_json(
+        local_port: u16,
+        method: &str,
+        path: &str,
+        body: Option<&[u8]>,
+    ) -> Result<Vec<u8>, ()> {
+        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, local_port));
+        let timeout = Duration::from_secs(2);
+        let mut stream = TcpStream::connect_timeout(&address, timeout).map_err(|_| ())?;
+        stream.set_read_timeout(Some(timeout)).map_err(|_| ())?;
+        let content_length = body.map_or(0, <[u8]>::len);
+        let request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {content_length}\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).map_err(|_| ())?;
+        if let Some(body) = body {
+            stream.write_all(body).map_err(|_| ())?;
+        }
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).map_err(|_| ())?;
+        let header_end = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|index| index + 4)
+            .ok_or(())?;
+        if !response.starts_with(b"HTTP/1.1 2") {
+            return Err(());
+        }
+        Ok(response[header_end..].to_vec())
+    }
+
+    fn read_attention(
+        local_port: u16,
+        endpoint: &crate::profile::RelayEndpoint,
+        client_id: &str,
+    ) -> Result<Vec<AttentionEvent>, ()> {
+        let body = request_relay_json(
+            local_port,
+            "GET",
+            &attention_request_path(endpoint, client_id),
+            None,
+        )?;
+        serde_json::from_slice::<AttentionResponse>(&body)
+            .map(|response| response.events)
+            .map_err(|_| ())
+    }
+
+    fn mark_native_attention(
+        local_port: u16,
+        endpoint: &crate::profile::RelayEndpoint,
+        client_id: &str,
+        event_id: &str,
+    ) {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "client_id": client_id,
+            "event_ids": [event_id],
+            "action": "mark_native_notified",
+        }));
+        if let Ok(body) = body {
+            let _ = request_relay_json(
+                local_port,
+                "POST",
+                &attention_state_request_path(endpoint),
+                Some(&body),
+            );
+        }
+    }
+
+    fn watch_attention(app: tauri::AppHandle, profile_id: String) {
+        std::thread::spawn(move || {
+            loop {
+                let Some(state) = app.try_state::<DesktopState>() else {
+                    return;
+                };
+                let connection = match state.sessions.lock() {
+                    Ok(sessions) => sessions.get(&profile_id).and_then(|active| {
+                        active
+                            .session
+                            .endpoint()
+                            .cloned()
+                            .map(|endpoint| (active.local_port, endpoint))
+                    }),
+                    Err(_) => return,
+                };
+                let Some((local_port, endpoint)) = connection else {
+                    return;
+                };
+                if let Ok(events) = read_attention(local_port, &endpoint, &state.client_id) {
+                    for event in events.into_iter().filter(|event| {
+                        event.attention_enabled
+                            && !event.seen
+                            && !event.native_notified
+                            && !event.event_id.is_empty()
+                    }) {
+                        let should_notify = state
+                            .notified_attention_events
+                            .lock()
+                            .map(|mut ids| ids.insert(event.event_id.clone()))
+                            .unwrap_or(false);
+                        if should_notify
+                            && app
+                                .notification()
+                                .builder()
+                                .title(event.display_name)
+                                .body(event.summary)
+                                .show()
+                                .is_ok()
+                        {
+                            mark_native_attention(
+                                local_port,
+                                &endpoint,
+                                &state.client_id,
+                                &event.event_id,
+                            );
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        });
     }
 
     fn watch_remote_tunnel(app: tauri::AppHandle, profile_id: String) {
@@ -176,10 +321,7 @@ pub fn run() {
         for (index, panel) in all.into_iter().enumerate() {
             if let Some(webview) = app.get_webview(&panel.label) {
                 webview
-                    .set_position(PhysicalPosition::new(
-                        (index as u32 * width) as i32,
-                        0_i32,
-                    ))
+                    .set_position(PhysicalPosition::new((index as u32 * width) as i32, 0_i32))
                     .map_err(as_message)?;
                 webview
                     .set_size(PhysicalSize::new(width, height))
@@ -345,7 +487,8 @@ pub fn run() {
             },
         );
         publish_connection_state(&app, &status);
-        watch_remote_tunnel(app, monitor_id);
+        watch_remote_tunnel(app.clone(), monitor_id);
+        watch_attention(app, profile.id().to_owned());
         Ok(status)
     }
 
@@ -377,7 +520,7 @@ pub fn run() {
                 .session
                 .endpoint()
                 .ok_or_else(|| "Le relais connecté ne fournit pas d'endpoint.".to_owned())?;
-            relay_url(active.local_port, endpoint)
+            desktop_relay_url(active.local_port, endpoint, &state.client_id)
         };
         let panel = {
             let mut panels = state.panels.lock().map_err(as_message)?;
@@ -417,22 +560,25 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            let path = app
+            let app_data_dir = app
                 .path()
                 .app_data_dir()
-                .map_err(|error| format!("Répertoire applicatif indisponible : {error}"))?
-                .join("profiles.json");
+                .map_err(|error| format!("Répertoire applicatif indisponible : {error}"))?;
+            let client_id = ClientIdentityStore::new(app_data_dir.join("client-id.json"))
+                .load_or_create()
+                .map_err(as_message)?;
             app.manage(DesktopState {
-                profiles: Mutex::new(ProfileService::new(ProfileStore::new(path))),
-                known_hosts: app
-                    .path()
-                    .app_data_dir()
-                    .map_err(|error| format!("Répertoire applicatif indisponible : {error}"))?
-                    .join("known_hosts"),
+                profiles: Mutex::new(ProfileService::new(ProfileStore::new(
+                    app_data_dir.join("profiles.json"),
+                ))),
+                client_id,
+                known_hosts: app_data_dir.join("known_hosts"),
                 pending_host_tickets: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashMap::new()),
                 panels: Mutex::new(PanelRegistry::default()),
+                notified_attention_events: Mutex::new(HashSet::new()),
             });
             let handle = app.handle().clone();
             if let Some(main) = app.get_window("main") {

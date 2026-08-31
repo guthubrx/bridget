@@ -3,5 +3,5 @@
   "identifier": "desktop-shell",
   "description": "La coque locale Bridget Desktop peut invoquer les commandes typées de profil et de connexion.",
   "webviews": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "notification:default"]
 }

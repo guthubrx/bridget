@@ -13,6 +13,8 @@ use uuid::Uuid;
 
 const CURRENT_FORMAT_VERSION: u8 = 2;
 
+const CLIENT_ID_FORMAT_VERSION: u8 = 1;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoadedProfiles {
     pub profiles: Vec<ConnectionProfile>,
@@ -27,6 +29,7 @@ pub enum ProfileStoreError {
     UnsupportedVersion(u64),
     DuplicateId(String),
     InvalidRoot,
+    InvalidClientId,
 }
 
 impl fmt::Display for ProfileStoreError {
@@ -45,6 +48,7 @@ impl fmt::Display for ProfileStoreError {
             Self::InvalidRoot => {
                 formatter.write_str("Le fichier de profils doit être un objet JSON.")
             }
+            Self::InvalidClientId => formatter.write_str("L'identité locale est invalide."),
         }
     }
 }
@@ -172,6 +176,83 @@ impl ProfileStore {
         self.save(&loaded.profiles)?;
         Ok(true)
     }
+}
+
+/// Identité locale stable d'un client Bridget. Elle ne contient aucun secret et
+/// reste indépendante des ports éphémères de tunnels SSH.
+pub struct ClientIdentityStore {
+    path: PathBuf,
+}
+
+impl ClientIdentityStore {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn load_or_create(&self) -> Result<String, ProfileStoreError> {
+        match fs::read(&self.path) {
+            Ok(bytes) => {
+                let stored: StoredClientIdentity = serde_json::from_slice(&bytes)?;
+                if stored.version != CLIENT_ID_FORMAT_VERSION
+                    || Uuid::parse_str(&stored.client_id).is_err()
+                {
+                    return Err(ProfileStoreError::InvalidClientId);
+                }
+                Ok(stored.client_id)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let client_id = Uuid::new_v4().to_string();
+                self.save(&client_id)?;
+                Ok(client_id)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn save(&self, client_id: &str) -> Result<(), ProfileStoreError> {
+        if Uuid::parse_str(client_id).is_err() {
+            return Err(ProfileStoreError::InvalidClientId);
+        }
+        let parent = self.path.parent().ok_or_else(|| {
+            ProfileStoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Le chemin d'identité locale doit avoir un dossier parent.",
+            ))
+        })?;
+        fs::create_dir_all(parent)?;
+        set_private_directory_permissions(parent)?;
+        let mut bytes = serde_json::to_vec_pretty(&StoredClientIdentity {
+            version: CLIENT_ID_FORMAT_VERSION,
+            client_id: client_id.to_owned(),
+        })?;
+        bytes.push(b'\n');
+        let temporary = parent.join(format!(".client-id-{}.tmp", Uuid::new_v4()));
+        let result = (|| -> Result<(), ProfileStoreError> {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)?;
+            set_private_file_permissions(&file)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            fs::rename(&temporary, &self.path)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        result
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct StoredClientIdentity {
+    version: u8,
+    client_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -304,7 +385,7 @@ fn set_private_directory_permissions(path: &Path) -> Result<(), std::io::Error> 
 
 #[cfg(test)]
 mod tests {
-    use super::{ProfileStore, ProfileStoreError};
+    use super::{ClientIdentityStore, ProfileStore, ProfileStoreError};
     use crate::profile::{ConnectionProfile, ProfileCapability, SshIdentityRef};
     use std::fs;
     use std::path::PathBuf;
@@ -398,6 +479,34 @@ mod tests {
         assert!(!store.remove("absent").expect("suppression absente"));
         assert!(store.remove("production").expect("suppression exacte"));
         assert!(store.load().expect("relecture").profiles.is_empty());
+        fs::remove_dir_all(directory).expect("nettoyage exact du test");
+    }
+
+    #[test]
+    fn identite_client_est_stable_privee_et_independante_du_port_de_tunnel() {
+        let directory = test_directory();
+        let store = ClientIdentityStore::new(directory.join("client-id.json"));
+        let first = store.load_or_create().expect("création");
+        let second = ClientIdentityStore::new(store.path())
+            .load_or_create()
+            .expect("relecture");
+        assert_eq!(first, second);
+        assert!(uuid::Uuid::parse_str(&first).is_ok());
+        let content = fs::read_to_string(store.path()).expect("lecture brute");
+        assert!(content.contains("client_id"));
+        assert!(!content.contains("token"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(store.path())
+                    .expect("métadonnées")
+                    .permissions()
+                    .mode()
+                    & 0o077,
+                0
+            );
+        }
         fs::remove_dir_all(directory).expect("nettoyage exact du test");
     }
 }
