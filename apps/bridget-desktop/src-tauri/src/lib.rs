@@ -495,12 +495,10 @@ pub fn run() {
         let target = relay_target
             .map(|value| {
                 let mut url = value.parse::<tauri::Url>().expect("relais déjà validé");
-                let mut query = url.query().unwrap_or_default().to_owned();
-                if !query.is_empty() {
-                    query.push('&');
-                }
-                query.push_str("browser_panel=1");
-                url.set_query(Some(&query));
+                // Une route dédiée évite de confondre cette surface avec une
+                // conversation lorsque WebKit rétablit ou réécrit une query.
+                // Le jeton du relais reste dans la query existante.
+                url.set_path("/browser-panel");
                 url.to_string()
             })
             .unwrap_or_else(|| "bridget://browser-home".to_owned());

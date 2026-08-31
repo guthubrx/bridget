@@ -7323,7 +7323,10 @@
     const nativeAttentionShell = params.get("native_attention") === "1";
     const desktopShell = params.get("desktop_shell") === "1";
     const desktopAction = params.get("desktop_action");
-    if (params.get("browser_panel") === "1") return mountBrowserPanel(documentRef, windowRef, token, requestedAgent);
+    if (
+      params.get("browser_panel") === "1"
+      || windowRef.location.pathname === "/browser-panel"
+    ) return mountBrowserPanel(documentRef, windowRef, token, requestedAgent);
     if (desktopShell) {
       documentRef.body.dataset.desktopShell = "true";
     }

@@ -1495,7 +1495,9 @@ fn serve_connection(
         return write_text(stream, 403, "jeton UI invalide");
     }
     match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/") => write_asset(stream, "text/html; charset=utf-8", UI_INDEX, if_none_match),
+        ("GET", "/") | ("GET", "/browser-panel") => {
+            write_asset(stream, "text/html; charset=utf-8", UI_INDEX, if_none_match)
+        }
         ("GET", "/v1/content/file-preview") => {
             match read_content_file_preview(config, request.query.get("path").map(String::as_str)) {
                 Ok(response) => write_json(stream, 200, &response),
@@ -8564,6 +8566,23 @@ mod tests {
         let relay = UiRelay::bind(config).unwrap();
         let address = relay.local_addr().unwrap();
         (relay, address)
+    }
+
+    /// Le panneau latéral est une surface distincte : il doit servir l'UI sans
+    /// retomber sur une conversation classique lorsque WebKit recharge sa page.
+    #[test]
+    fn route_browser_panel_sert_l_index_de_l_interface() {
+        let (relay, address) = spawn_asset_relay();
+        let worker = thread::spawn(move || relay.serve_one().unwrap());
+        let (status, raw) = get_asset(address, "/browser-panel?token=jeton-cache", None);
+        worker.join().unwrap();
+
+        assert_eq!(status, 200, "{raw}");
+        let body = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+        assert!(
+            body.contains("browser-panel-toggle"),
+            "la route doit livrer l'interface qui initialise le panneau navigateur"
+        );
     }
 
     /// Témoin « en-têtes absents » : un mutant qui retire ETag ou no-cache meurt ici.
