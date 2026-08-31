@@ -1,5 +1,15 @@
 # Tâches - SPEC-080 Centre de contrôle Bridget
 
+## Rectification de suivi - 2026-08-31
+
+## État correctif - 2026-08-31
+
+Les tâches T010 à T013 sont réalisées dans le relais : structure de l'overlay, navigation locale, roue basse, styles accessibles, tests Node et portage de finition T3. Leur résultat est décrit dans `implementation.md` et les preuves dans `evidence/validation.md`.
+
+T041 reste volontairement ouverte : aucune validation visuelle humaine ne peut être remplacée par une capture ambiguë. Le paquet macOS reste à reconstruire avant de cocher le parcours direct par profil.
+
+Les coches de la première tranche ne valent pas acceptation produit. La SPEC reste ouverte jusqu'à la vérification visuelle du parcours complet sur le relais réellement servi.
+
 ## Dépendances
 
 `Fondations -> US1 -> US3 -> US4 -> US5 -> US6`
@@ -28,7 +38,7 @@ Test indépendant: ouvrir puis fermer la vue conserve agent sélectionné, broui
 
 - [ ] T009 [P] [US1] Ajouter les tests Node de navigation, focus et conservation d'état dans `crates/bridget-daemon/assets/ui/app.js` avant le rendu.
 - [x] T010 [US1] Ajouter l'engrenage, les régions accessibles et les conteneurs de centre de contrôle dans `crates/bridget-daemon/assets/ui/index.html`.
-- [ ] T011 [US1] Étendre l'état et le montage de `crates/bridget-daemon/assets/ui/app.js` avec l'ouverture, fermeture, recherche locale et retour conversation sans requête inutile.
+- [x] T011 [US1] Étendre l'état et le montage de `crates/bridget-daemon/assets/ui/app.js` avec l'ouverture, fermeture, recherche locale et retour conversation sans requête inutile.
 - [x] T012 [US1] Ajouter les styles de barre basse, panneaux et focus dans `crates/bridget-daemon/assets/ui/theme.css`, en respectant les tailles de barre existantes et la réduction de mouvement.
 - [x] T013 [US1] Exécuter le programme de tests Node de `crates/bridget-daemon/assets/ui/app.js` et consigner le résultat dans `specs/080-centre-controle-bridget/implementation.md`.
 

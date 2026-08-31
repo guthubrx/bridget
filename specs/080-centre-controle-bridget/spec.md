@@ -4,11 +4,37 @@
 
 Spec: 080-centre-controle-bridget
 Titre: Centre de contrôle, réglages de serveur et usage
-Statut: In Progress - tranche initiale implémentée, validation Rust bloquée par l'environnement
+Statut: In Progress - reprise corrective, centre complet exigé avant clôture
 Priorité: P1
 Branche: session-080-centre-controle-bridget
 Créée: 2026-08-31
 Dépendances: SPEC-064, SPEC-065, SPEC-066, SPEC-067, SPEC-068, SPEC-074, SPEC-076, SPEC-077
+
+## Rectification de périmètre - 2026-08-31
+
+La première livraison de cette SPEC a rendu un bouton discret « Réglages du
+serveur » et un sous-écran limité aux racines de projets et à l'usage. Cette
+tranche ne satisfait pas les User Stories 1 à 6 et ne doit plus être décrite
+comme un centre de contrôle terminé.
+
+La clôture de SPEC-080 exige désormais une vérification visuelle sur le relais
+réel des éléments suivants :
+
+- une roue reconnaissable, fixe tout en bas de la barre latérale gauche ;
+- une navigation globale recherchable : Général, Apparence, Date et heure,
+  Typographie, Serveurs, Usage et facturation, Mises à jour et Diagnostics ;
+- une page serveur distincte par profil enregistré, avec ses seules capacités
+  attestées et ses réglages réellement modifiables ;
+- une séparation visible entre les préférences de ce Mac, les réglages de ce
+  serveur et les politiques de projet ;
+- aucune annonce de livraison tant que ce parcours n'est pas observé dans
+  l'interface réellement servie.
+
+## Rectification de finition - 2026-08-31
+
+Le centre doit reprendre la grammaire visuelle de réglages de T3 Code pour les lignes, la typographie, les libellés, sous-titres, contrôles et aperçus. Bridget conserve ses fonds, ses gris, son accent et son overlay. Une approximation utilisant des contrôles système bruts ou des cartes génériques ne satisfait pas FR-8001 à FR-8004.
+
+La SPEC reste ouverte tant que la version de finition servie n'a pas été examinée par l'opérateur et tant que le paquet macOS portant l'accès direct par profil n'est pas renouvelé. Les éléments non réalisés, notamment tarification datée et réglages serveur supplémentaires, restent explicitement non livrés.
 
 ## Contexte
 

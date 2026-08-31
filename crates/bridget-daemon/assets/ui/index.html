@@ -67,10 +67,10 @@
             class="agent-pane__settings"
             id="control-center"
             type="button"
-            aria-controls="detail-panel"
+            aria-controls="control-center-overlay"
+            aria-label="Ouvrir le centre de contrôle Bridget"
           >
             <span aria-hidden="true">⚙</span>
-            <span>Réglages du serveur</span>
           </button>
         </div>
       </aside>
@@ -184,5 +184,26 @@
         <div id="detail-content"></div>
       </aside>
     </div>
+    <dialog class="control-center-overlay" id="control-center-overlay" aria-labelledby="control-center-title">
+      <div class="control-center-overlay__shell">
+        <aside class="control-center-overlay__navigation" aria-label="Navigation des réglages">
+          <div class="control-center-overlay__brand">
+            <p>CENTRE DE CONTRÔLE</p>
+            <h2>Bridget</h2>
+          </div>
+          <div id="control-center-navigation"></div>
+        </aside>
+        <section class="control-center-overlay__content" aria-label="Réglage sélectionné">
+          <header class="control-center-overlay__header">
+            <div>
+              <p>Réglages</p>
+              <h2 id="control-center-title">Général</h2>
+            </div>
+            <button class="quiet-action" id="close-control-center" type="button">Fermer</button>
+          </header>
+          <div id="control-center-content"></div>
+        </section>
+      </div>
+    </dialog>
   </body>
 </html>
