@@ -67,6 +67,8 @@
         assert.match(source, /desktopAction === "create_project"/);
         assert.match(source, /beginProject\("create", nodes\.conversation\)/);
         assert.match(source, /desktopAction === "import_project"/);
+        assert.match(source, /const openControlCenter = \(initialRoute = "general"\) =>/);
+        assert.match(source, /params\.get\("view"\) === "usage" \? "usage" : "general"/);
         assert.match(stylesheet, /body\[data-desktop-shell="true"\] \.project-pane/);
         assert.match(stylesheet, /body\[data-desktop-shell="true"\] \.agent-pane/);
         assert.match(stylesheet, /body\[data-desktop-shell="true"\] \.conversation/);
@@ -7254,7 +7256,7 @@
       return card;
     };
 
-    const openControlCenter = () => {
+    const openControlCenter = (initialRoute = "general") => {
       if (!nodes.controlCenterOverlay.open) nodes.controlCenterOverlay.showModal();
       const readServerSettings = async () => {
         const response = await windowRef.fetch(controlResourceUrl("/v1/control/settings", token));
@@ -7815,7 +7817,7 @@
         }
       };
 
-      void renderControlRoute("general");
+      void renderControlRoute(initialRoute);
     };
 
     const identityCard = documentRef.body ? make("div", "agent-identity-card") : null;
@@ -10734,7 +10736,9 @@
         void openControlCenter();
       });
     }
-    if (params.get("view") === "settings") void openControlCenter();
+    if (params.get("view") === "settings" || params.get("view") === "usage") {
+      void openControlCenter(params.get("view") === "usage" ? "usage" : "general");
+    }
     if (desktopAction === "create_project") {
       void beginProject("create", nodes.conversation);
     } else if (desktopAction === "import_project") {

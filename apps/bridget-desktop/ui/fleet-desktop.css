@@ -716,7 +716,7 @@ button.quiet,
 
 #fleet-shell .settings-launcher {
   position: absolute;
-  right: 0;
+  left: 0;
   bottom: calc(100% + 0.45rem);
   z-index: 30;
   display: grid;

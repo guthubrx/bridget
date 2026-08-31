@@ -14,22 +14,12 @@ const FORMAT_VERSION: u8 = 3;
 
 /// Autorisations d affichage strictement locales. Elles ne sont ni un jeton,
 /// ni une permission de tunnel, ni une capacité qu un serveur peut élargir.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ContentSecurityPreferences {
     pub external_links: bool,
     pub file_references: bool,
     pub remote_images: bool,
-}
-
-impl Default for ContentSecurityPreferences {
-    fn default() -> Self {
-        Self {
-            external_links: false,
-            file_references: false,
-            remote_images: false,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

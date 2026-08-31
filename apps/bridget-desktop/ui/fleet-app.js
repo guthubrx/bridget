@@ -55,7 +55,7 @@ const elements = {
 let profiles = [];
 let snapshot = { sources: [], agents: [] };
 let preferences = null;
-let pendingProjectAction = null;
+let pendingPanelAction = null;
 const filters = { sourceIds: new Set(), projectIds: new Set() };
 const connectionStates = new Map();
 
@@ -329,26 +329,36 @@ function selectedTargetSources() {
   return snapshot.sources.filter((source) => source.connection_state === "connected" && !source.error);
 }
 
-function beginProject(action) {
+function panelActionTitle(action) {
+  const titles = {
+    create_project: "Créer un projet sur…",
+    import_project: "Importer un projet depuis…",
+    settings: "Ouvrir les paramètres de…",
+    usage: "Consulter l’usage de…",
+  };
+  return titles[action] || "Choisir une source";
+}
+
+function beginPanelAction(action) {
   if (selectedTargetSources().length === 0) {
     announce("Aucune source connectée ne peut recevoir cette action.");
     return;
   }
   const selected = [...filters.sourceIds].filter((sourceId) => selectedTargetSources().some((source) => source.source_id === sourceId));
-  if (selected.length === 1) return void openProjectAction(selected[0], action);
-  pendingProjectAction = action;
-  elements.targetTitle.textContent = action === "create_project" ? "Créer un projet sur…" : "Importer un projet depuis…";
+  if (selected.length === 1) return void openPanelAction(selected[0], action);
+  pendingPanelAction = action;
+  elements.targetTitle.textContent = panelActionTitle(action);
   clear(elements.targetChoices);
   for (const source of selectedTargetSources()) {
     elements.targetChoices.append(button(source.label, "target-source", () => {
       elements.targetDialog.close();
-      void openProjectAction(source.source_id, pendingProjectAction);
+      void openPanelAction(source.source_id, pendingPanelAction);
     }));
   }
   elements.targetDialog.showModal();
 }
 
-async function openProjectAction(sourceId, action) {
+async function openPanelAction(sourceId, action) {
   try {
     await invoke("panel_open", { source_id: sourceId, desktop_action: action });
   } catch (error) {
@@ -488,8 +498,8 @@ elements.addSort.addEventListener("click", async () => {
   await savePreferences();
   render();
 });
-elements.createProject.addEventListener("click", () => beginProject("create_project"));
-elements.importProject.addEventListener("click", () => beginProject("import_project"));
+elements.createProject.addEventListener("click", () => beginPanelAction("create_project"));
+elements.importProject.addEventListener("click", () => beginPanelAction("import_project"));
 elements.manageServers.addEventListener("click", () => void openSettings("servers"));
 elements.addServer.addEventListener("click", () => openProfileDialog());
 elements.closeProfile.addEventListener("click", () => elements.profileDialog.close());
@@ -529,6 +539,12 @@ elements.showPreferences.addEventListener("click", (event) => {
 });
 document.querySelectorAll("[data-open-settings-section]").forEach((button) => {
   button.addEventListener("click", () => void openSettings(button.dataset.openSettingsSection));
+});
+document.querySelectorAll("[data-open-remote-view]").forEach((button) => {
+  button.addEventListener("click", () => {
+    closeSettingsLauncher();
+    void beginPanelAction(button.dataset.openRemoteView);
+  });
 });
 document.querySelectorAll("[data-settings-section]").forEach((button) => {
   button.addEventListener("click", async () => {

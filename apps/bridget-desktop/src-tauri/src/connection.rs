@@ -467,6 +467,14 @@ pub fn desktop_panel_url(
     if let Some(action) = desktop_action {
         let action = match action {
             "create_project" | "import_project" => action,
+            "settings" => {
+                url.push_str("&view=settings");
+                return url;
+            }
+            "usage" => {
+                url.push_str("&view=usage");
+                return url;
+            }
             _ => return url,
         };
         url.push_str("&desktop_action=");
@@ -669,6 +677,12 @@ mod tests {
         assert!(panel_url.contains("desktop_shell=1"));
         assert!(panel_url.contains("agent=coordinateur%20%2F%20projet"));
         assert!(panel_url.contains("desktop_action=create_project"));
+        let settings_url = desktop_panel_url(39002, &endpoint, client_id, None, Some("settings"));
+        assert!(settings_url.contains("desktop_shell=1"));
+        assert!(settings_url.contains("view=settings"));
+        assert!(!settings_url.contains("desktop_action="));
+        let usage_url = desktop_panel_url(39002, &endpoint, client_id, None, Some("usage"));
+        assert!(usage_url.contains("view=usage"));
         assert_eq!(
             fleet_snapshot_path(&endpoint),
             "/v1/snapshot?token=fixture%20token"
@@ -687,7 +701,10 @@ mod tests {
         )
         .expect("PATH local");
         let paths = std::env::split_paths(&path).collect::<Vec<_>>();
-        assert_eq!(paths[0], std::path::PathBuf::from("/home/fixture/.local/bin"));
+        assert_eq!(
+            paths[0],
+            std::path::PathBuf::from("/home/fixture/.local/bin")
+        );
         assert_eq!(paths[1], std::path::PathBuf::from("/usr/local/bin"));
         assert_eq!(paths[2], std::path::PathBuf::from("/usr/bin"));
     }

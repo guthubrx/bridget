@@ -19,7 +19,7 @@ fn les_actions_de_carte_sont_delegatees_au_listing_de_profils() {
     let frontend = include_str!("../../ui/fleet-app.js");
     assert!(frontend.contains("invoke(\"fleet_snapshot\")"));
     assert!(frontend.contains("void openAgent(agent)"));
-    assert!(frontend.contains("void openProjectAction(source.source_id, pendingProjectAction)"));
+    assert!(frontend.contains("void openPanelAction(source.source_id, pendingPanelAction)"));
     assert!(frontend.contains("await invoke(\"connection_close\""));
     assert!(frontend.contains("await connectProfile(profile)"));
     assert!(frontend.contains("source_id: agent.source_id"));
@@ -59,23 +59,24 @@ fn la_flotte_desktop_reutilise_la_chrome_sombre_et_ne_cree_que_deux_volets() {
 }
 
 #[test]
-fn le_centre_de_parametres_reunit_application_serveurs_et_usage() {
+fn le_menu_desktop_restitue_le_centre_de_controle_existant_sans_le_remplacer() {
     let markup = include_str!("../../ui/index.html");
     let frontend = include_str!("../../ui/fleet-app.js");
     let stylesheet = include_str!("../../ui/fleet-desktop.css");
 
     assert!(markup.contains("id=\"settings-launcher\""));
+    assert!(markup.contains("data-open-remote-view=\"settings\""));
+    assert!(markup.contains("data-open-remote-view=\"usage\""));
     assert!(markup.contains("id=\"settings-dialog\""));
-    assert!(markup.contains("data-settings-section=\"general\""));
     assert!(markup.contains("data-settings-section=\"servers\""));
-    assert!(markup.contains("data-settings-section=\"usage\""));
-    assert!(markup.contains("id=\"settings-usage\""));
     assert!(!markup.contains("id=\"preferences-dialog\""));
     assert!(!markup.contains("id=\"server-dialog\""));
+    assert!(frontend.contains("void beginPanelAction(button.dataset.openRemoteView)"));
     assert!(frontend.contains("openSettings(\"servers\")"));
     assert!(stylesheet.contains(".settings-dialog"));
     assert!(stylesheet.contains(".settings-layout"));
     assert!(stylesheet.contains("#settings-dialog .settings-sidebar button"));
+    assert!(stylesheet.contains("left: 0;"));
 }
 
 #[test]

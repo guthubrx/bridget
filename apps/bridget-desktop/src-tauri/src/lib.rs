@@ -120,7 +120,8 @@ pub fn run() {
     }
 
     fn content_security_script(preferences: &DesktopPreferences) -> Result<String, String> {
-        let encoded = serde_json::to_string(&content_security_snapshot(preferences)).map_err(as_message)?;
+        let encoded =
+            serde_json::to_string(&content_security_snapshot(preferences)).map_err(as_message)?;
         Ok(format!(
             "Object.defineProperty(window, '__BRIDGET_CONTENT_SECURITY__', {{ value: Object.freeze({encoded}), writable: false, configurable: false }}); Object.defineProperty(window, '__BRIDGET_DESKTOP_SHELL__', {{ value: true, writable: false, configurable: false }});"
         ))
@@ -128,7 +129,11 @@ pub fn run() {
 
     fn approved_external_https_url(value: &str) -> Option<tauri::Url> {
         let url = value.parse::<tauri::Url>().ok()?;
-        if url.scheme() != "https" || url.host_str().is_none() || !url.username().is_empty() || url.password().is_some() {
+        if url.scheme() != "https"
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
             return None;
         }
         Some(url)
@@ -136,7 +141,10 @@ pub fn run() {
 
     fn reload_panels_after_preferences_save(app: &tauri::AppHandle, state: &DesktopState) {
         let labels = match state.panels.lock() {
-            Ok(panels) => panels.panels().map(|panel| panel.label.clone()).collect::<Vec<_>>(),
+            Ok(panels) => panels
+                .panels()
+                .map(|panel| panel.label.clone())
+                .collect::<Vec<_>>(),
             Err(_) => return,
         };
         for label in labels {
@@ -250,18 +258,23 @@ pub fn run() {
                     .map(|active| fleet_connection_state(&active.session.state))
                     .unwrap_or_else(|| "disconnected".to_owned()),
             };
-            let active = sessions.get(profile.id());
-            if let Some(active) = active
+            if let Some((active, endpoint)) = sessions
+                .get(profile.id())
                 .filter(|active| active.session.state == crate::profile::ConnectionState::Connected)
+                .and_then(|active| {
+                    active
+                        .session
+                        .endpoint()
+                        .cloned()
+                        .map(|endpoint| (active, endpoint))
+                })
             {
-                if let Some(endpoint) = active.session.endpoint().cloned() {
-                    targets.push(FleetReadTarget {
-                        input,
-                        local_port: active.local_port,
-                        endpoint,
-                    });
-                    continue;
-                }
+                targets.push(FleetReadTarget {
+                    input,
+                    local_port: active.local_port,
+                    endpoint,
+                });
+                continue;
             }
             inactive.push(source_without_snapshot(input, None));
         }
@@ -693,15 +706,14 @@ pub fn run() {
             .find(|candidate| candidate.id() == profile_id)
             .ok_or_else(|| "Profil introuvable.".to_owned())?;
         close_panel_for_profile(&app, &state, &profile_id)?;
-        if let Some(previous) = state
+        if let Some(mut transport) = state
             .sessions
             .lock()
             .map_err(as_message)?
             .remove(&profile_id)
+            .and_then(|previous| previous.transport)
         {
-            if let Some(mut transport) = previous.transport {
-                transport.close();
-            }
+            transport.close();
         }
         let mut transport = SshRemoteTransport::new(state.known_hosts.clone());
         let mut probe = HttpRelayProbe;
