@@ -206,6 +206,7 @@ pub struct CodexAppServerTransport {
     alive: Arc<AtomicBool>,
     shutdown_started: AtomicBool,
     busy: Arc<AtomicBool>,
+    private_profile_instructions: Arc<Mutex<Option<String>>>,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     queue_capacity: usize,
     writer: Writer,
@@ -276,6 +277,7 @@ impl CodexAppServerTransport {
         let alive = Arc::new(AtomicBool::new(true));
         let next_id = Arc::new(AtomicU64::new(1));
         let journal = Arc::new(Mutex::new(None));
+        let private_profile_instructions = Arc::new(Mutex::new(None));
         let queue = Arc::new((
             Mutex::new(QueueState {
                 messages: VecDeque::new(),
@@ -396,6 +398,7 @@ impl CodexAppServerTransport {
             busy: busy.clone(),
             thread_id: thread_id.clone(),
             journal: journal.clone(),
+            private_profile_instructions: private_profile_instructions.clone(),
             active_detail: active_detail.clone(),
             pending_request,
             notify_timeout: Duration::from_secs(options.notify_timeout_secs),
@@ -423,6 +426,7 @@ impl CodexAppServerTransport {
             alive,
             shutdown_started: AtomicBool::new(false),
             busy,
+            private_profile_instructions,
             queue,
             queue_capacity: options.queue_capacity,
             writer,
@@ -617,6 +621,17 @@ impl Transport for CodexAppServerTransport {
 }
 
 impl ManagedSession for CodexAppServerTransport {
+    fn set_private_profile_instructions(
+        &mut self,
+        instructions: &str,
+    ) -> Result<(), TransportError> {
+        *self
+            .private_profile_instructions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(instructions.to_string());
+        Ok(())
+    }
+
     fn descriptor(&self) -> ManagedSessionDescriptor {
         ManagedSessionDescriptor {
             transport: "stdio".to_string(),
@@ -722,6 +737,7 @@ struct Worker {
     busy: Arc<AtomicBool>,
     thread_id: String,
     journal: Journal,
+    private_profile_instructions: Arc<Mutex<Option<String>>>,
     active_detail: ActiveTurnDetail,
     pending_request: PendingRequest,
     notify_timeout: Duration,
@@ -873,7 +889,23 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
     })
 }
 
+fn private_prompt(instructions: Option<&str>, body: &str) -> String {
+    let Some(instructions) = instructions
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return body.to_string();
+    };
+    format!("[Instructions individuelles Bridget]\n{instructions}\n\n[Demande]\n{body}")
+}
+
 fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<String, String> {
+    let instructions = worker
+        .private_profile_instructions
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone();
+    let prompt = private_prompt(instructions.as_deref(), &message.body);
     for attempt in 0..=SATURATION_RETRIES {
         match request(
             &worker.writer,
@@ -883,7 +915,7 @@ fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<St
             json!({
                 "threadId": worker.thread_id,
                 "clientUserMessageId": message.id,
-                "input": [{ "type": "text", "text": message.body }],
+                "input": [{ "type": "text", "text": &prompt }],
             }),
         ) {
             Ok(result) => {
@@ -4978,5 +5010,15 @@ mod tests {
             validate_thread_bootstrap(&Some(fork_incompatible), &fork),
             Err(TransportError::DeliveryFailed(reason)) if reason.contains("thread/fork")
         ));
+    }
+    #[test]
+    fn consigne_privee_preserve_le_corps_visible_du_message() {
+        let body = "Demande utilisateur visible.";
+        let prompt = private_prompt(Some("Privilégie les sources attestées."), body);
+
+        assert!(prompt.contains("Privilégie les sources attestées."));
+        assert!(prompt.ends_with(body));
+        assert_eq!(body, "Demande utilisateur visible.");
+        assert_eq!(private_prompt(None, body), body);
     }
 }

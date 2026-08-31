@@ -7,7 +7,7 @@
 
 use crate::journal::JournalLiveFeed;
 use crate::protocol::{PresenceMode, ProviderObservation, ProviderOperation};
-use crate::transport::Transport;
+use crate::transport::{Transport, TransportError};
 use bridget_core::BridgetMessage;
 use std::path::Path;
 
@@ -227,6 +227,20 @@ fn continuation_fallback(
 /// exclusivement les opérations de session dont le wrapper a besoin. Il ne
 /// déclare ni modèle, ni quota, ni sémantique de protocole fournisseur.
 pub trait ManagedSession: Transport {
+    /// Consigne individuelle conservée uniquement par le pilote en mémoire.
+    ///
+    /// Elle ne devient jamais un `BridgetMessage`: les implémentations qui la
+    /// prennent en charge l'ajoutent à la prochaine vraie demande fournisseur,
+    /// sans l'écrire dans le journal Bridget ni l'exposer comme conversation.
+    fn set_private_profile_instructions(
+        &mut self,
+        _instructions: &str,
+    ) -> Result<(), TransportError> {
+        Err(TransportError::DeliveryFailed(
+            "contexte privé de profil non pris en charge".to_string(),
+        ))
+    }
+
     /// Reprise neutre: sans contrat attesté, le seul repli est explicitement
     /// reconstruit et l'implémentation ne peut pas appeler le fournisseur.
     fn resume_thread(&self, _provider_thread_id: &str) -> ManagedContinuation {

@@ -1873,6 +1873,11 @@ pub enum WrapperToDaemon {
         output_tokens: u64,
         cache_creation_input_tokens: u64,
         cache_read_input_tokens: u64,
+        /// Fournisseur choisi par le wrapper au moment de l'échantillon. Les
+        /// wrappers historiques ne le transmettent pas : l'absence reste
+        /// explicite et ne doit jamais être remplacée par une inférence UI.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_kind: Option<String>,
         source: UsageSource,
     },
     /// Agréger les échantillons d'usage d'un agent dans une fenêtre fermée.
@@ -3399,6 +3404,7 @@ mod tests {
             output_tokens: 175,
             cache_creation_input_tokens: 40_804,
             cache_read_input_tokens: 13_907,
+            provider_kind: Some("claude".to_string()),
             source: UsageSource::ClaudeStreamJson,
         };
         let encoded = encode(&sample).unwrap();
