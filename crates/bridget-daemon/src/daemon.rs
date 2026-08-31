@@ -5772,18 +5772,14 @@ fn handle_usage(
         };
     };
     let provider_kind = provider_kind.unwrap_or(registered_provider);
-    if let Err(error) =
-        state
-            .store
-            .record_usage_sample(
-                agent,
-                observed_at,
-                tokens,
-                &source.to_string(),
-                Some(provider_kind.as_str()),
-                observed_model.as_deref(),
-            )
-    {
+    if let Err(error) = state.store.record_usage_sample(
+        agent,
+        observed_at,
+        tokens,
+        &source.to_string(),
+        Some(provider_kind.as_str()),
+        observed_model.as_deref(),
+    ) {
         return DaemonToWrapper::Nack {
             id: "usage".to_string(),
             reason: format!("ledger usage: {error}"),
@@ -11226,10 +11222,10 @@ fn handle_wrapper_message(
             execution_id,
             execution_generation,
             output_tokens,
-        cache_creation_input_tokens,
-        cache_read_input_tokens,
-        provider_kind,
-        source,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
+            provider_kind,
+            source,
         } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             Some(handle_usage(

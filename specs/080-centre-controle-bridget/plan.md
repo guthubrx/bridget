@@ -103,3 +103,9 @@
 ## Constitution check post-conception
 
 PASS. Le design s'appuie sur les chemins d'autorité existants et ajoute seulement les types, routes et stockages nécessaires aux exigences. Les abstractions `ControlSetting` et `UsageRate` ont au moins trois responsabilités concrètes: contrat relay, validation serveur et rendu UI. Aucune dépendance n'est ajoutée. Les objets restent inspectables, supprimables et testables indépendamment.
+
+## Rectification de finition - 2026-08-31
+
+La finition du centre est un portage structurel de la surface de réglages T3 Code, et non une interprétation visuelle : `SettingsSection`, `SettingsRow` et la géométrie de `SelectTrigger` fournissent la grille, le rythme et les contrôles. Bridget conserve son fond sombre, ses gris, son accent et son overlay modal. Cette décision évite de maintenir une deuxième grammaire de réglages imprécise.
+
+La validation finale est séparée en deux preuves : les tests automatisés assurent le contrat et les dimensions CSS, puis l'opérateur évalue le rendu réel de l'overlay. Un clic ou une capture qui ne cible pas Bridget ne vaut pas validation.

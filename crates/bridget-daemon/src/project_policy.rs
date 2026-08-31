@@ -311,7 +311,8 @@ fn write_document_atomically(
     file.write_all(&payload)
         .and_then(|_| file.sync_all())
         .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
-    std::fs::rename(&temporary, source).map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)
+    std::fs::rename(&temporary, source)
+        .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)
 }
 
 fn canonical_directory(root: &Path) -> Result<PathBuf, ProjectRegistryRefusal> {
@@ -575,13 +576,15 @@ mod tests {
         .unwrap();
         assert_eq!(replay.generation(), 2);
         assert_eq!(replay.last_control_receipt().unwrap().observed_at, 100);
-        assert!(ProjectRootPolicy::replace_atomically_with_receipt(
-            &fixture.policy,
-            "control-1".to_string(),
-            2,
-            vec![fixture.allowed.clone()],
-            102,
-        )
-        .is_err());
+        assert!(
+            ProjectRootPolicy::replace_atomically_with_receipt(
+                &fixture.policy,
+                "control-1".to_string(),
+                2,
+                vec![fixture.allowed.clone()],
+                102,
+            )
+            .is_err()
+        );
     }
 }

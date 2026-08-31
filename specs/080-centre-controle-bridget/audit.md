@@ -1,27 +1,31 @@
 # Audit d'implémentation - SPEC-080
 
-Date: 2026-08-31
-Verdict: PASS partiel, non prêt à déployer
+Date : 2026-08-31
+Verdict : PASS pour les contrôles automatisés et le relais déployé. La clôture reste bloquée uniquement par la validation visuelle humaine de la finition et le renouvellement du paquet macOS.
 
-## Sécurité
+## Conformité constatée
 
-- PASS: aucune route de contrôle n'accepte une commande shell, une variable d'environnement, un secret, un fichier de configuration libre ou une opération d'hôte.
-- PASS: les préférences du Mac sont stockées par Bridget Desktop et ne sont pas incluses dans les appels du panneau distant.
-- PASS: les écritures serveur sont limitées à la politique de racines déjà validée, avec génération attendue et écriture atomique.
-- ATTENTION: le reçu durable est actuellement le dernier reçu inclus dans le document de politique. Un historique dédié reste requis avant de déclarer FR-8015 satisfait.
+- PASS : l'accès se fait par une roue seule en bas de la barre d'agents et ouvre un overlay, pas un panneau de détails de conversation.
+- PASS : la navigation et la recherche couvrent les huit rubriques annoncées.
+- PASS : les préférences de présentation sont locales, normalisées et bornées. Les tests couvrent le stockage corrompu, le fuseau IANA, les polices et tailles invalides.
+- PASS : la page serveur conserve le catalogue fermé, la prévisualisation, la confirmation et la génération attendue de la politique de racines.
+- PASS : la page Usage distingue les jetons observés d'une estimation API indisponible.
+- PASS : les champs de la page Typographie utilisent la grille, les dimensions, les libellés, les sous-titres et les états de focus portés de T3 Code, tout en conservant le fond Bridget et l'overlay Bridget.
 
-## Données et honnêteté de l'usage
+## Sécurité et intégrité
 
-- PASS: fournisseur et modèle historiques non présents restent `null` et sont affichés comme inconnus.
-- PASS: aucun coût nul ou estimé n'est inventé. L'API répond `pricing_status: "unconfigured"` et `cost_estimate_microunits: null`.
-- INCOMPLET: pas de filtre projet, de découpage de journée selon fuseau, ni de grille tarifaire versionnée.
+- PASS : aucune préférence locale n'est envoyée au serveur.
+- PASS : aucun shell, secret, variable d'environnement ou chemin libre n'est ajouté au catalogue modifiable.
+- PASS : les écritures serveur passent encore par prévisualisation, génération attendue et reçu durable.
+- PASS : le binaire réellement installé correspond au release construit et les deux services utilisateur sont actifs.
 
-## Qualité et vérification
+## Qualité et preuves
 
-- PASS: les 94 tests Node du panneau passent, la syntaxe JavaScript Desktop est vérifiée et `git diff --check` est propre.
-- BLOQUÉ: la compilation et les tests Rust ne peuvent pas être exécutés, car la chaîne Rust est absente de l'environnement autorisé. Aucune installation n'a été faite sans instruction explicite.
-- INCOMPLET: la fiche de chaque serveur est accessible par son panneau relié, mais la liste desktop ne montre pas encore une synthèse de version, fuseau et dernière synchronisation de tous les serveurs hors connexion.
+- PASS : 95 tests JavaScript de l'interface, 2 tests Rust ciblés du daemon et 1 test ciblé Desktop passent.
+- PASS : formatage Rust, construction release, contrôles syntaxiques JavaScript et `git diff --check` passent.
+- PASS : le port de styles est contrôlé par le test UI : grille de réglage, largeurs des deux sélecteurs et bordure de contrôle sont explicitement attendues.
+- NON PRÉTENDU : aucune validation visuelle utilisateur n'est enregistrée pour la version de finition nouvellement servie.
 
-## Conclusion
+## Risque restant et sortie
 
-La conception est souhaitable parce qu'elle sépare les responsabilités Mac, serveur et projet. Elle n'est pas une console d'administration universelle. La suite doit commencer par rétablir une chaîne Rust de validation, ajouter un registre de reçus et faire une validation sur deux profils serveur réellement enregistrés.
+Le risque restant est uniquement esthétique et de livraison native : vérifier l'overlay ouvert sur Bridget, puis reconstruire et installer le paquet macOS. Les limites fonctionnelles non livrées de la SPEC, dont tarification datée et autres écritures serveur, restent signalées dans les tâches plutôt que déclarées terminées.

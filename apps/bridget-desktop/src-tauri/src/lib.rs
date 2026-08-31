@@ -410,8 +410,9 @@ pub fn run() {
         app: tauri::AppHandle,
         state: State<'_, DesktopState>,
         profile_id: String,
+        view: Option<String>,
     ) -> Result<PanelView, String> {
-        let url = {
+        let relay = {
             let sessions = state.sessions.lock().map_err(as_message)?;
             let active = sessions
                 .get(&profile_id)
@@ -421,6 +422,11 @@ pub fn run() {
                 .endpoint()
                 .ok_or_else(|| "Le relais connecté ne fournit pas d'endpoint.".to_owned())?;
             relay_url(active.local_port, endpoint)
+        };
+        let url = if view.as_deref() == Some("settings") {
+            format!("{relay}&view=settings")
+        } else {
+            relay
         };
         let panel = {
             let mut panels = state.panels.lock().map_err(as_message)?;

@@ -87,7 +87,7 @@ pub fn is_loopback_relay_url(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAXIMUM_OPEN_PANELS, PanelError, PanelRegistry};
+    use super::{is_loopback_relay_url, MAXIMUM_OPEN_PANELS, PanelError, PanelRegistry};
     #[test]
     fn labels_sont_uniques_limites_a_deux_et_url_hors_loopback_refusee() {
         let mut registry = PanelRegistry::default();
@@ -95,6 +95,9 @@ mod tests {
             .open("cartae.app", "http://127.0.0.1:39001/?token=fixture")
             .unwrap();
         assert!(first.label.starts_with("panel-"));
+        assert!(is_loopback_relay_url(
+            "http://127.0.0.1:39001/?token=fixture&view=settings"
+        ));
         assert!(matches!(
             registry.open("cartae.app", "http://127.0.0.1:39002/?token=fixture"),
             Err(PanelError::DuplicateProfile)

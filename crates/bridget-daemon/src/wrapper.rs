@@ -5197,17 +5197,20 @@ fn forward_managed_events_with_redaction(
                 bridget_transport::ManagedEventSource::ClaudeStreamJson => {
                     let (execution_id, execution_generation, provider_kind) =
                         usage_execution_context(bindings);
-                    send_wrapper_message(writer, WrapperToDaemon::Usage {
-                        agent: my_name.to_string(),
-                        input_tokens,
-                        output_tokens,
-                        execution_id,
-                        execution_generation,
-                        cache_creation_input_tokens,
-                        cache_read_input_tokens,
-                        provider_kind,
-                        source: bridget_transport::protocol::UsageSource::ClaudeStreamJson,
-                    })
+                    send_wrapper_message(
+                        writer,
+                        WrapperToDaemon::Usage {
+                            agent: my_name.to_string(),
+                            input_tokens,
+                            output_tokens,
+                            execution_id,
+                            execution_generation,
+                            cache_creation_input_tokens,
+                            cache_read_input_tokens,
+                            provider_kind,
+                            source: bridget_transport::protocol::UsageSource::ClaudeStreamJson,
+                        },
+                    )
                 }
                 bridget_transport::ManagedEventSource::Acp
                 | bridget_transport::ManagedEventSource::CodexAppServer => {

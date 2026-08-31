@@ -1127,36 +1127,34 @@ fn serve_connection(
                 ),
             }
         }
-        ("GET", "/v1/usage") => match read_usage_dashboard(
-            config,
-            request.query.get("period").map(String::as_str),
-        ) {
-            Ok(response) => write_json(stream, 200, &response),
-            Err((status, code, message)) => write_json(
-                stream,
-                status,
-                &UiSendErrorV1 {
-                    version: UI_VERSION,
-                    code,
-                    message,
-                },
-            ),
-        },
-        ("GET", "/v1/control/usage") => match read_usage_dashboard(
-            config,
-            request.query.get("period").map(String::as_str),
-        ) {
-            Ok(response) => write_json(stream, 200, &response),
-            Err((status, code, message)) => write_json(
-                stream,
-                status,
-                &UiSendErrorV1 {
-                    version: UI_VERSION,
-                    code,
-                    message,
-                },
-            ),
-        },
+        ("GET", "/v1/usage") => {
+            match read_usage_dashboard(config, request.query.get("period").map(String::as_str)) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("GET", "/v1/control/usage") => {
+            match read_usage_dashboard(config, request.query.get("period").map(String::as_str)) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
         ("POST", "/v1/projects/preview") => match post_project_preview(config, &request.body) {
             Ok(response) => write_json(stream, 200, &response),
             Err((status, code, message)) => write_json(
@@ -5583,13 +5581,19 @@ mod tests {
         .unwrap();
         let preview = post_control_project_roots_preview(&config, &request).unwrap();
         assert_eq!(preview.resulting_generation, 2);
-        assert_eq!(ProjectRootPolicy::load(&policy_path).unwrap().generation(), 1);
+        assert_eq!(
+            ProjectRootPolicy::load(&policy_path).unwrap().generation(),
+            1
+        );
 
         let applied = post_control_project_roots_apply(&config, &request).unwrap();
         assert_eq!(applied.resulting_generation, 2);
         let replay = post_control_project_roots_apply(&config, &request).unwrap();
         assert_eq!(replay.resulting_generation, 2);
-        assert_eq!(ProjectRootPolicy::load(&policy_path).unwrap().generation(), 2);
+        assert_eq!(
+            ProjectRootPolicy::load(&policy_path).unwrap().generation(),
+            2
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

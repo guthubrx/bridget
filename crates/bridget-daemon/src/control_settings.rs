@@ -32,7 +32,11 @@ pub fn server_setting_descriptors(policy_available: bool) -> Vec<SettingDescript
         SettingDescriptor {
             key: "project_roots.allowed_roots",
             scope: "server",
-            access: if policy_available { SettingAccess::Writable } else { SettingAccess::ReadOnly },
+            access: if policy_available {
+                SettingAccess::Writable
+            } else {
+                SettingAccess::ReadOnly
+            },
             summary: "Racines de projets autorisées par le serveur.",
         },
         SettingDescriptor {
@@ -160,12 +164,20 @@ mod tests {
             descriptor.key == "project_roots.allowed_roots"
                 && descriptor.access == SettingAccess::Writable
         }));
-        assert!(descriptors.iter().filter(|descriptor| descriptor.access == SettingAccess::Writable).count() == 1);
-        assert!(validate_change(&ProjectRootsChange {
-            command_id: "wrong/id".to_string(),
-            expected_generation: 1,
-            allowed_project_roots: vec![PathBuf::from("/tmp")],
-        })
-        .is_err());
+        assert!(
+            descriptors
+                .iter()
+                .filter(|descriptor| descriptor.access == SettingAccess::Writable)
+                .count()
+                == 1
+        );
+        assert!(
+            validate_change(&ProjectRootsChange {
+                command_id: "wrong/id".to_string(),
+                expected_generation: 1,
+                allowed_project_roots: vec![PathBuf::from("/tmp")],
+            })
+            .is_err()
+        );
     }
 }

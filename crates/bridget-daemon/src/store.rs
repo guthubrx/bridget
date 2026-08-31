@@ -709,7 +709,10 @@ impl Store {
         // Migration additive : les échantillons historiques restent valides
         // mais sans fournisseur/modèle attesté. Ne surtout pas les compléter
         // depuis l'état courant d'un agent.
-        let _ = conn.execute("ALTER TABLE usage_samples ADD COLUMN provider_kind TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE usage_samples ADD COLUMN provider_kind TEXT",
+            [],
+        );
         let _ = conn.execute("ALTER TABLE usage_samples ADD COLUMN model TEXT", []);
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_usage_samples_dashboard
@@ -1630,7 +1633,8 @@ impl Store {
                 })
             })
             .map_err(StoreError::Sqlite)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::Sqlite)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Sqlite)
     }
 
     /// Agrège les échantillons d'un agent dans `[from_secs, to_secs]`.

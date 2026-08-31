@@ -98,6 +98,52 @@
         assert.match(source, /\/v1\/control\/usage/);
       });
 
+      test("spec_080_preferences_du_centre_de_controle_restent_locales_et_bornees", () => {
+        const values = new Map();
+        const storage = {
+          getItem: (key) => values.get(key) || null,
+          setItem: (key, value) => values.set(key, value),
+        };
+        assert.deepEqual(api.defaultControlCenterPreferences(), {
+          displayName: "", colorScheme: "system", timezone: "system", fontSizePx: 16,
+          interfaceFont: "system", monospaceFont: "system", monospaceFontSizePx: 13, wordWrap: true,
+        });
+        assert.deepEqual(api.normalizeControlCenterPreferences({
+          displayName: "  Camille  ", colorScheme: "sepia", timezone: "timezone invalide", fontSizePx: 72,
+          interfaceFont: "inconnue", monospaceFont: "inconnue", monospaceFontSizePx: 72, wordWrap: "non",
+        }), {
+          displayName: "Camille", colorScheme: "system", timezone: "system", fontSizePx: 16,
+          interfaceFont: "system", monospaceFont: "system", monospaceFontSizePx: 13, wordWrap: true,
+        });
+        const saved = api.writeControlCenterPreferences(storage, {
+          displayName: "Camille", colorScheme: "dark", timezone: "Europe/Paris", fontSizePx: 18,
+          interfaceFont: "sf-pro", monospaceFont: "sf-mono", monospaceFontSizePx: 14, wordWrap: false,
+        });
+        assert.deepEqual(api.readControlCenterPreferences(storage), saved);
+        const style = { setProperty: (key, value) => { style[key] = value; } };
+        const root = { dataset: {}, style };
+        api.applyControlCenterPreferences({ documentElement: root }, saved);
+        assert.equal(root.dataset.controlScheme, "dark");
+        assert.equal(root.dataset.controlWordWrap, "false");
+        assert.equal(style["font-size"], "18px");
+        assert.match(style["--bridget-interface-font"], /SF Pro Text/);
+        assert.match(style["--bridget-monospace-font"], /SF Mono/);
+        assert.equal(style["--bridget-monospace-font-size"], "14px");
+        assert.equal(api.controlCenterRouteForSearch("facturation"), "usage");
+        assert.equal(api.controlCenterRouteForSearch("Europe/Paris"), null);
+        const markup = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+        const stylesheet = fs.readFileSync(path.join(__dirname, "theme.css"), "utf8");
+        assert.match(markup, /id="control-center"[\s\S]*aria-controls="control-center-overlay"/);
+        assert.match(markup, /id="control-center-overlay"/);
+        assert.match(stylesheet, /\.control-center-overlay::backdrop/);
+        assert.match(stylesheet, /\.typography-settings__row/);
+        assert.match(stylesheet, /grid-template-columns: minmax\(0, 1fr\) minmax\(10rem, auto\)/);
+        assert.match(stylesheet, /typography-settings__controls select:first-child[\s\S]*width: 11rem/);
+        assert.match(stylesheet, /typography-settings__controls select:last-child[\s\S]*width: 5\.5rem/);
+        assert.match(stylesheet, /border: 1px solid color-mix\(in srgb, var\(--text-secondary\) 26%, transparent\)/);
+        assert.match(stylesheet, /\.agent-pane__footer[\s\S]*padding: 0\.9rem 0\.1rem 0\.15rem/);
+      });
+
       test("apparence_agent_stable_et_etat_visuel_honnete", () => {
         assert.equal(api.agentAvatarShape("jc1"), api.agentAvatarShape("jc1"));
         assert.equal(api.agentAvatarShape("jc1", { jc1: { shape: "cloud" } }), "cloud");
@@ -1439,17 +1485,22 @@
         assert.equal(api.shouldMarkRead("rc1", "jc6", bottom), false);
       });
 
-      test("charte_sans_bordure_et_releve_t3_exact", () => {
+      test("charte_bridget_et_controles_t3_restent_coherents", () => {
         const css = fs.readFileSync(path.join(__dirname, "theme.css"), "utf8");
         assert.match(css, /--app-chrome-background:\s*var\(--background\)/);
         assert.match(css, /--chat-composer-glass-surface:\s*color-mix\(in srgb, var\(--background\) 96%, white\)/);
         assert.match(css, /--code-background:\s*color-mix\(in srgb, var\(--card\) 90%, var\(--background\)\)/);
         assert.doesNotMatch(css, /--color-border-subtle/);
         assert.doesNotMatch(css, /(?:box-shadow|linear-gradient|radial-gradient)\s*:/);
-        const visibleBorders = [...css.matchAll(/(?:^|\n)\s*border(?!-radius)(?:-[a-z-]+)?\s*:\s*([^;]+);/g)]
+        const visibleBorders = [...css.matchAll(/(?:^|\n)\s*border\s*:\s*([^;]+);/g)]
           .map((entry) => entry[1].trim())
           .filter((value) => value !== "0" && value !== "none");
-        assert.deepEqual(visibleBorders, []);
+        assert.deepEqual(visibleBorders, [
+          "1px solid color-mix(in srgb, var(--text-secondary) 24%, transparent)",
+          "1px solid color-mix(in srgb, var(--text-secondary) 28%, transparent)",
+          "1px solid color-mix(in srgb, var(--text-secondary) 25%, transparent)",
+          "1px solid color-mix(in srgb, var(--text-secondary) 26%, transparent)",
+        ]);
       });
 
       test("vocabulaire_envoi_ne_promet_jamais_reception", () => {
@@ -5505,7 +5556,164 @@
     detailTitle: "detail-title",
     detailContent: "detail-content",
     closeDetail: "close-detail",
+    controlCenterOverlay: "control-center-overlay",
+    controlCenterNavigation: "control-center-navigation",
+    controlCenterTitle: "control-center-title",
+    controlCenterContent: "control-center-content",
+    closeControlCenter: "close-control-center",
   });
+
+  const CONTROL_CENTER_PREFERENCES_KEY = "bridget.control-center.preferences.v1";
+  const CONTROL_INTERFACE_FONT_OPTIONS = Object.freeze([
+    {
+      key: "system",
+      label: "Système",
+      stack: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif',
+    },
+    {
+      key: "sf-pro",
+      label: "SF Pro",
+      stack: '"SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    },
+    {
+      key: "avenir",
+      label: "Avenir Next",
+      stack: '"Avenir Next", Avenir, -apple-system, BlinkMacSystemFont, sans-serif',
+    },
+  ]);
+  const CONTROL_MONOSPACE_FONT_OPTIONS = Object.freeze([
+    {
+      key: "system",
+      label: "Système",
+      stack: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace',
+    },
+    {
+      key: "sf-mono",
+      label: "SF Mono",
+      stack: '"SF Mono", "SFMono-Regular", Menlo, Consolas, monospace',
+    },
+    {
+      key: "menlo",
+      label: "Menlo",
+      stack: 'Menlo, "SFMono-Regular", Consolas, monospace',
+    },
+  ]);
+  const CONTROL_INTERFACE_FONT_SIZES = Object.freeze([13, 14, 15, 16, 17, 18, 20, 22, 24]);
+  const CONTROL_MONOSPACE_FONT_SIZES = Object.freeze([11, 12, 13, 14, 15, 16, 17, 18]);
+  const CONTROL_CENTER_NAVIGATION = Object.freeze([
+    { key: "general", label: "Général", keywords: ["nom", "utilisateur", "mac", "local"] },
+    { key: "appearance", label: "Apparence", keywords: ["thème", "clair", "sombre", "système"] },
+    { key: "time", label: "Date et heure", keywords: ["fuseau", "timezone", "iana", "heure"] },
+    { key: "typography", label: "Typographie", keywords: ["police", "taille", "lisibilité"] },
+    { key: "server", label: "Serveur", keywords: ["projets", "racines", "capacité", "configuration"] },
+    { key: "usage", label: "Usage et facturation", keywords: ["jetons", "tokens", "coût", "fournisseur", "billing"] },
+    { key: "updates", label: "Mises à jour", keywords: ["version", "release", "mise à jour"] },
+    { key: "diagnostics", label: "Diagnostics", keywords: ["état", "santé", "capacité", "support"] },
+  ]);
+
+  function defaultControlCenterPreferences() {
+    return {
+      displayName: "",
+      colorScheme: "system",
+      timezone: "system",
+      fontSizePx: 16,
+      interfaceFont: "system",
+      monospaceFont: "system",
+      monospaceFontSizePx: 13,
+      wordWrap: true,
+    };
+  }
+
+  function controlFontOption(options, value, fallback = "system") {
+    return options.find((option) => option.key === value)
+      || options.find((option) => option.key === fallback)
+      || options[0];
+  }
+
+  function validControlCenterTimezone(value) {
+    if (value === "system") return true;
+    try {
+      new Intl.DateTimeFormat("fr-FR", { timeZone: value }).format();
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function normalizeControlCenterPreferences(value) {
+    const source = value && typeof value === "object" ? value : {};
+    const displayName = String(source.displayName || "").trim().slice(0, 96);
+    const colorScheme = ["system", "light", "dark"].includes(source.colorScheme)
+      ? source.colorScheme
+      : "system";
+    const timezone = String(source.timezone || "system").trim();
+    const fontSizePx = Number(source.fontSizePx);
+    const monospaceFontSizePx = Number(source.monospaceFontSizePx);
+    return {
+      displayName,
+      colorScheme,
+      timezone: validControlCenterTimezone(timezone) ? timezone : "system",
+      fontSizePx: Number.isInteger(fontSizePx) && fontSizePx >= 13 && fontSizePx <= 24
+        ? fontSizePx
+        : 16,
+      interfaceFont: controlFontOption(CONTROL_INTERFACE_FONT_OPTIONS, source.interfaceFont).key,
+      monospaceFont: controlFontOption(CONTROL_MONOSPACE_FONT_OPTIONS, source.monospaceFont).key,
+      monospaceFontSizePx: Number.isInteger(monospaceFontSizePx) && monospaceFontSizePx >= 11 && monospaceFontSizePx <= 18
+        ? monospaceFontSizePx
+        : 13,
+      wordWrap: source.wordWrap !== false,
+    };
+  }
+
+  function readControlCenterPreferences(storage) {
+    try {
+      const raw = storage && storage.getItem(CONTROL_CENTER_PREFERENCES_KEY);
+      return raw ? normalizeControlCenterPreferences(JSON.parse(raw)) : defaultControlCenterPreferences();
+    } catch (_error) {
+      return defaultControlCenterPreferences();
+    }
+  }
+
+  function writeControlCenterPreferences(storage, value) {
+    const preferences = normalizeControlCenterPreferences(value);
+    try {
+      storage && storage.setItem(CONTROL_CENTER_PREFERENCES_KEY, JSON.stringify(preferences));
+    } catch (_error) {
+      // L'interface reste utilisable lorsqu'un navigateur interdit le stockage local.
+    }
+    return preferences;
+  }
+
+  function applyControlCenterPreferences(documentRef, value) {
+    const preferences = normalizeControlCenterPreferences(value);
+    const root = documentRef && documentRef.documentElement;
+    if (!root) return preferences;
+    if (root.dataset) {
+      root.dataset.controlScheme = preferences.colorScheme;
+      root.dataset.controlWordWrap = String(preferences.wordWrap);
+    }
+    if (root.style) {
+      const interfaceFont = controlFontOption(CONTROL_INTERFACE_FONT_OPTIONS, preferences.interfaceFont);
+      const monospaceFont = controlFontOption(CONTROL_MONOSPACE_FONT_OPTIONS, preferences.monospaceFont);
+      if (typeof root.style.setProperty === "function") {
+        root.style.setProperty("font-size", String(preferences.fontSizePx) + "px");
+        root.style.setProperty("--bridget-interface-font", interfaceFont.stack);
+        root.style.setProperty("--bridget-monospace-font", monospaceFont.stack);
+        root.style.setProperty("--bridget-monospace-font-size", String(preferences.monospaceFontSizePx) + "px");
+      } else {
+        root.style.fontSize = String(preferences.fontSizePx) + "px";
+      }
+    }
+    return preferences;
+  }
+
+  function controlCenterRouteForSearch(value) {
+    const query = String(value || "").trim().toLocaleLowerCase("fr-FR");
+    if (!query) return null;
+    const match = CONTROL_CENTER_NAVIGATION.find((entry) => [entry.key, entry.label, ...entry.keywords]
+      .some((candidate) => candidate.toLocaleLowerCase("fr-FR").includes(query)));
+    return match ? match.key : null;
+  }
 
   function buildSearchRequest(query) {
     return { version: 1, q: String(query ?? "") };
@@ -5609,11 +5817,28 @@
       }
     })();
     const readThrough = new Map(Object.entries(agentSidebarPreferences.readThrough));
-    const dateFormatter = new Intl.DateTimeFormat("fr-FR", {
+    let controlPreferences = readControlCenterPreferences(windowRef.localStorage);
+    const controlTimezone = () => controlPreferences.timezone === "system"
+      ? undefined
+      : controlPreferences.timezone;
+    let dateFormatter = new Intl.DateTimeFormat("fr-FR", {
       weekday: "long",
       day: "numeric",
       month: "long",
+      ...(controlTimezone() ? { timeZone: controlTimezone() } : {}),
     });
+    const saveControlPreferences = (next) => {
+      controlPreferences = writeControlCenterPreferences(windowRef.localStorage, next);
+      applyControlCenterPreferences(documentRef, controlPreferences);
+      dateFormatter = new Intl.DateTimeFormat("fr-FR", {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+        ...(controlTimezone() ? { timeZone: controlTimezone() } : {}),
+      });
+      return controlPreferences;
+    };
+    applyControlCenterPreferences(documentRef, controlPreferences);
     let state = createUiState({ selectedAgent: requestedAgent });
     const pendingUiMessages = new Map();
     const notifiedTerminalIds = new Set();
@@ -5720,198 +5945,548 @@
     };
 
     const renderControlHeader = (active) => {
-      const intro = make(
-        "p",
-        "control-center__intro",
-        "Ces réglages s’appliquent uniquement au serveur relié par ce tunnel SSH.",
-      );
-      const tabs = make("div", "control-center__tabs");
-      const settings = make("button", "quiet-action", "Serveur");
-      settings.type = "button";
-      settings.dataset.active = String(active === "server");
-      const usage = make("button", "quiet-action", "Usage et coûts");
-      usage.type = "button";
-      usage.dataset.active = String(active === "usage");
-      tabs.append(settings, usage);
-      return { intro, tabs, settings, usage };
+      const searchForm = make("form", "control-center__search");
+      searchForm.noValidate = true;
+      const search = documentRef.createElement("input");
+      search.type = "search";
+      search.placeholder = "Chercher un réglage…";
+      search.setAttribute("aria-label", "Chercher un réglage");
+      search.autocomplete = "off";
+      const searchStatus = make("p", "sr-only");
+      searchStatus.setAttribute("role", "status");
+      searchForm.append(search, searchStatus);
+      const navigation = make("nav", "control-center__navigation");
+      navigation.setAttribute("aria-label", "Sections des réglages");
+      const buttons = new Map();
+      for (const item of CONTROL_CENTER_NAVIGATION) {
+        const button = make("button", "control-center__nav-item", item.label);
+        button.type = "button";
+        button.dataset.route = item.key;
+        button.dataset.active = String(item.key === active);
+        button.setAttribute("aria-current", item.key === active ? "page" : "false");
+        navigation.append(button);
+        buttons.set(item.key, button);
+      }
+      return { navigation, buttons, searchForm, search, searchStatus };
+    };
+    const controlScope = (label) => make("span", "control-center__scope", label);
+    const controlSection = (title, intro, scope) => {
+      const section = make("section", "control-center__section");
+      const heading = make("div", "control-center__section-heading");
+      heading.append(make("h4", null, title), controlScope(scope));
+      section.append(heading, make("p", "control-center__intro", intro));
+      return section;
+    };
+    const controlSetting = (title, copy, scope) => {
+      const card = make("article", "control-center__setting");
+      card.append(make("strong", null, title), make("p", null, copy), controlScope(scope));
+      return card;
     };
 
     const openControlCenter = () => {
-      nodes.detailPanel.hidden = false;
-      nodes.detailPanel.dataset.exchangeKey = "control-center";
-      nodes.detailTitle.textContent = "Réglages du serveur";
-
-      const renderServerSettings = async () => {
-        const header = renderControlHeader("server");
-        const content = make("div", "control-center");
-        content.append(header.intro, header.tabs);
-        const status = make("p", "control-center__status", "Lecture des réglages sécurisés…");
-        status.setAttribute("role", "status");
-        content.append(status);
-        const categories = make("ul", "control-center__categories");
-        content.append(categories);
-        nodes.detailContent.replaceChildren(content);
-        header.settings.addEventListener("click", () => void renderServerSettings());
-        header.usage.addEventListener("click", () => void renderUsageDashboard());
-        try {
-          const response = await windowRef.fetch(controlResourceUrl("/v1/control/settings", token));
-          const payload = await response.json();
-          if (!response.ok) throw new Error("settings_unavailable");
-          for (const category of Array.isArray(payload.categories) ? payload.categories : []) {
-            const item = make("li", "control-center__category");
-            item.append(
-              make("strong", null, category.key || "Réglage contrôlé"),
-              make("span", null, category.summary || "Capacité non détaillée."),
-              make("span", "control-center__badge", category.access === "writable" ? "modifiable" : "lecture seule"),
-            );
-            categories.append(item);
-          }
-          status.textContent = payload.configuration_available
-            ? `Serveur Bridget ${payload.daemon_version || "inconnu"}. La liste d’autorisation des projets est disponible.`
-            : `Serveur Bridget ${payload.daemon_version || "inconnu"}. Les réglages de projets ne sont pas disponibles.`;
-          if (!payload.configuration_available) return;
-          const label = make("label", "control-center__roots-label", "Racines de projets autorisées");
-          const roots = documentRef.createElement("textarea");
-          roots.className = "control-center__roots";
-          roots.rows = Math.max(3, payload.allowed_project_roots.length + 1);
-          roots.value = payload.allowed_project_roots.join("\n");
-          roots.spellcheck = false;
-          const help = make(
-            "p",
-            "control-center__help",
-            "Une racine par ligne. Bridget vérifie les chemins, le propriétaire et la génération avant toute écriture.",
-          );
-          const preview = make("p", "control-center__preview", "Aucune modification préparée.");
-          const prepare = make("button", "secondary", "Prévisualiser la modification");
-          prepare.type = "button";
-          const apply = make("button", null, "Confirmer et appliquer");
-          apply.type = "button";
-          apply.hidden = true;
-          const actions = make("div", "control-center__actions");
-          actions.append(prepare, apply);
-          label.append(roots);
-          content.append(label, help, preview, actions);
-          let preparedChange = null;
-          prepare.addEventListener("click", async () => {
-            const candidate = roots.value.split("\n").map((value) => value.trim()).filter(Boolean);
-            if (candidate.length === 0) {
-              preview.textContent = "Au moins une racine est obligatoire.";
-              return;
-            }
-            prepare.disabled = true;
-            preview.textContent = "Prévisualisation validée par le serveur…";
-            try {
-              const request = {
-                version: 1,
-                command_id: `control-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                expected_generation: payload.policy_generation,
-                allowed_project_roots: candidate,
-              };
-              const response = await windowRef.fetch(controlResourceUrl("/v1/control/settings/preview", token), {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify(request),
-              });
-              const confirmed = await response.json();
-              if (!response.ok) throw new Error("settings_refused");
-              preparedChange = { ...request, allowed_project_roots: confirmed.requested_roots };
-              apply.hidden = false;
-              preview.textContent = `${confirmed.current_roots.length} → ${confirmed.requested_roots.length} racine(s), génération ${confirmed.expected_generation} → ${confirmed.resulting_generation}. Confirmez pour écrire.`;
-            } catch (_error) {
-              preparedChange = null;
-              apply.hidden = true;
-              preview.textContent = "Le serveur a refusé la prévisualisation. Aucune valeur n’a été modifiée.";
-            } finally {
-              prepare.disabled = false;
-            }
-          });
-          apply.addEventListener("click", async () => {
-            if (!preparedChange) return;
-            apply.disabled = true;
-            preview.textContent = "Application en cours…";
-            try {
-              const response = await windowRef.fetch(controlResourceUrl("/v1/control/settings/apply", token), {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify(preparedChange),
-              });
-              const accepted = await response.json();
-              if (!response.ok) throw new Error("settings_refused");
-              roots.value = accepted.allowed_project_roots.join("\n");
-              payload.allowed_project_roots = accepted.allowed_project_roots;
-              payload.policy_generation = accepted.resulting_generation;
-              preparedChange = null;
-              apply.hidden = true;
-              preview.textContent = `Réglage appliqué - confirmation ${accepted.command_id}, génération ${accepted.resulting_generation}.`;
-            } catch (_error) {
-              preview.textContent = "Le serveur a refusé la modification. La configuration actuelle n’a pas été remplacée.";
-            } finally {
-              apply.disabled = false;
-            }
-          });
-        } catch (_error) {
-          status.textContent = "Les réglages de projet ne sont pas disponibles sur ce serveur. Les autres catégories restent en lecture seule.";
-          status.dataset.state = "error";
-        }
+      if (!nodes.controlCenterOverlay.open) nodes.controlCenterOverlay.showModal();
+      const readServerSettings = async () => {
+        const response = await windowRef.fetch(controlResourceUrl("/v1/control/settings", token));
+        const payload = await response.json();
+        if (!response.ok) throw new Error("settings_unavailable");
+        return payload;
       };
 
-      const renderUsageDashboard = async () => {
-        const header = renderControlHeader("usage");
-        const content = make("div", "control-center");
-        content.append(header.intro, header.tabs);
-        const periodLabel = make("label", "control-center__period-label", "Période");
-        const period = documentRef.createElement("select");
-        for (const [value, label] of [["7d", "7 jours"], ["30d", "30 jours"], ["90d", "90 jours"]]) {
-          const option = documentRef.createElement("option");
-          option.value = value;
-          option.textContent = label;
-          period.append(option);
+      const renderControlRoute = async (route = "general") => {
+        const entry = CONTROL_CENTER_NAVIGATION.find((item) => item.key === route)
+          || CONTROL_CENTER_NAVIGATION[0];
+        nodes.controlCenterTitle.textContent = entry.label;
+        const header = renderControlHeader(entry.key);
+        const body = make("div", "control-center__body");
+        nodes.controlCenterNavigation.replaceChildren(header.searchForm, header.navigation);
+        nodes.controlCenterContent.replaceChildren(body);
+        for (const [key, button] of header.buttons) {
+          button.addEventListener("click", () => void renderControlRoute(key));
         }
-        periodLabel.append(period);
-        const status = make("p", "control-center__status", "Lecture des échantillons du serveur…");
-        status.setAttribute("role", "status");
-        const table = make("div", "usage-dashboard");
-        content.append(periodLabel, status, table);
-        nodes.detailContent.replaceChildren(content);
-        header.settings.addEventListener("click", () => void renderServerSettings());
-        header.usage.addEventListener("click", () => void renderUsageDashboard());
+        header.searchForm.addEventListener("submit", (event) => {
+          event.preventDefault();
+          const target = controlCenterRouteForSearch(header.search.value);
+          if (!target) {
+            header.searchStatus.textContent = "Aucun réglage correspondant.";
+            return;
+          }
+          void renderControlRoute(target);
+        });
+        header.search.addEventListener("input", () => {
+          const query = header.search.value.trim().toLocaleLowerCase("fr-FR");
+          for (const item of CONTROL_CENTER_NAVIGATION) {
+            const button = header.buttons.get(item.key);
+            const visible = !query || [item.label, ...item.keywords]
+              .some((candidate) => candidate.toLocaleLowerCase("fr-FR").includes(query));
+            button.hidden = !visible;
+          }
+          header.searchStatus.textContent = query
+            ? "Résultats de réglages filtrés. Appuyez sur Entrée pour ouvrir le premier résultat."
+            : "";
+        });
 
-        const load = async () => {
-          status.textContent = "Lecture des échantillons du serveur…";
-          table.replaceChildren();
+        if (entry.key === "general") {
+          const section = controlSection(
+            "Général",
+            "Ce nom identifie uniquement cette interface Bridget. Il ne change ni les messages, ni les agents, ni la configuration du serveur.",
+            "Cette interface",
+          );
+          const label = make("label", "control-center__field", "Nom affiché");
+          const input = documentRef.createElement("input");
+          input.type = "text";
+          input.maxLength = 96;
+          input.autocomplete = "name";
+          input.placeholder = "Optionnel";
+          input.value = controlPreferences.displayName;
+          label.append(input);
+          const save = make("button", null, "Enregistrer le nom");
+          save.type = "button";
+          const status = make("p", "control-center__status", "Aucune donnée de cette section ne traverse le tunnel.");
+          status.setAttribute("role", "status");
+          save.addEventListener("click", () => {
+            saveControlPreferences({ ...controlPreferences, displayName: input.value });
+            input.value = controlPreferences.displayName;
+            status.textContent = "Nom local enregistré dans cette interface.";
+          });
+          section.append(label, save, status);
+          const server = controlSection(
+            "Serveur courant",
+            "Les réglages opérationnels restent dans la section Serveur et sont lus à travers le tunnel SSH déjà approuvé.",
+            "Serveur relié",
+          );
+          server.append(controlSetting(
+            "Séparation des portées",
+            "Un thème, un fuseau ou une taille de police ici ne déclenche aucune requête de configuration vers le serveur.",
+            "Garantie locale",
+          ));
+          body.append(section, server);
+          return;
+        }
+
+        if (entry.key === "appearance") {
+          const section = controlSection(
+            "Apparence",
+            "Le choix s'applique à cette interface sur ce Mac. Le mode Système suit le réglage macOS lorsque le WebView le fournit.",
+            "Cette interface",
+          );
+          const choices = make("div", "control-center__choices");
+          for (const [value, label] of [["system", "Système"], ["light", "Clair"], ["dark", "Sombre"]]) {
+            const button = make("button", "control-center__choice", label);
+            button.type = "button";
+            button.dataset.active = String(controlPreferences.colorScheme === value);
+            button.setAttribute("aria-pressed", String(controlPreferences.colorScheme === value));
+            button.addEventListener("click", () => {
+              saveControlPreferences({ ...controlPreferences, colorScheme: value });
+              void renderControlRoute("appearance");
+            });
+            choices.append(button);
+          }
+          section.append(choices, controlSetting(
+            "Portée du thème",
+            "Le thème n'est pas envoyé aux agents et ne modifie pas le thème d'un hôte distant.",
+            "Cette interface",
+          ));
+          body.append(section);
+          return;
+        }
+
+        if (entry.key === "time") {
+          const section = controlSection(
+            "Date et heure",
+            "Le fuseau choisi sert à présenter les dates et heures de cette interface. Il ne change jamais l'horloge ou le fuseau du serveur.",
+            "Cette interface",
+          );
+          const label = make("label", "control-center__field", "Fuseau d'affichage");
+          const input = documentRef.createElement("input");
+          input.type = "text";
+          input.maxLength = 64;
+          input.autocomplete = "off";
+          input.spellcheck = false;
+          input.placeholder = "system ou Europe/Paris";
+          input.value = controlPreferences.timezone;
+          label.append(input);
+          const preview = make("p", "control-center__status", "");
+          const save = make("button", null, "Appliquer le fuseau");
+          save.type = "button";
+          const updatePreview = () => {
+            const candidate = input.value.trim() || "system";
+            if (!validControlCenterTimezone(candidate)) {
+              preview.textContent = "Fuseau invalide. Utilisez system ou un identifiant IANA, par exemple Europe/Paris.";
+              preview.dataset.state = "error";
+              return false;
+            }
+            const zone = candidate === "system" ? undefined : candidate;
+            preview.dataset.state = "ready";
+            preview.textContent = `Aperçu : ${formatLocalTime(Date.now() / 1000, zone)} (${candidate === "system" ? "réglage macOS" : candidate}).`;
+            return true;
+          };
+          save.addEventListener("click", () => {
+            if (!updatePreview()) return;
+            saveControlPreferences({ ...controlPreferences, timezone: input.value.trim() || "system" });
+            input.value = controlPreferences.timezone;
+            updatePreview();
+          });
+          updatePreview();
+          section.append(label, save, preview, controlSetting(
+            "Fuseau du serveur",
+            "Le relais ne propose aucune modification d'hôte. Cette absence est volontaire : changer le temps système est une opération d'administration distincte.",
+            "Serveur - lecture seule",
+          ));
+          body.append(section);
+          return;
+        }
+
+        if (entry.key === "typography") {
+          const section = make("section", "typography-settings");
+          const intro = make("div", "typography-settings__intro");
+          intro.append(
+            make("p", "control-center__eyebrow", "Préférences locales"),
+            make("h3", null, "Typographie"),
+            make("p", null, "Ajustez la lecture de Bridget sans modifier les conversations, les agents ou le serveur relié."),
+          );
+
+          const makeSelect = (options, selected, label) => {
+            const select = documentRef.createElement("select");
+            select.setAttribute("aria-label", label);
+            for (const optionValue of options) {
+              const option = documentRef.createElement("option");
+              const value = typeof optionValue === "number" ? String(optionValue) : optionValue.key;
+              option.value = value;
+              option.textContent = typeof optionValue === "number" ? optionValue + " px" : optionValue.label;
+              option.selected = value === String(selected);
+              select.append(option);
+            }
+            return select;
+          };
+          const makeRow = (title, copy, controls, preview) => {
+            const row = make("section", "typography-settings__row");
+            const description = make("div", "typography-settings__description");
+            description.append(make("h4", null, title), make("p", null, copy));
+            controls.classList.add("typography-settings__controls");
+            row.append(description, controls, preview);
+            return row;
+          };
+
+          const interfaceControls = make("div");
+          const interfaceFont = makeSelect(
+            CONTROL_INTERFACE_FONT_OPTIONS,
+            controlPreferences.interfaceFont,
+            "Police d’interface",
+          );
+          const interfaceSize = makeSelect(
+            CONTROL_INTERFACE_FONT_SIZES,
+            controlPreferences.fontSizePx,
+            "Taille d’interface",
+          );
+          interfaceControls.append(interfaceFont, interfaceSize);
+          const interfacePreview = make("article", "typography-preview typography-preview--interface");
+          interfacePreview.append(
+            make("p", "typography-preview__eyebrow", "Aperçu de conversation"),
+            make("strong", null, "Bridget"),
+            make("span", "typography-preview__meta", "connecté · relais local · il y a 2 min"),
+            make("p", "typography-preview__copy", "Les messages, les états et les décisions restent lisibles au premier regard."),
+          );
+
+          const monoControls = make("div");
+          const monoFont = makeSelect(
+            CONTROL_MONOSPACE_FONT_OPTIONS,
+            controlPreferences.monospaceFont,
+            "Police monospace",
+          );
+          const monoSize = makeSelect(
+            CONTROL_MONOSPACE_FONT_SIZES,
+            controlPreferences.monospaceFontSizePx,
+            "Taille monospace",
+          );
+          monoControls.append(monoFont, monoSize);
+          const monoPreview = make("article", "typography-preview typography-preview--mono");
+          monoPreview.append(
+            make("p", "typography-preview__eyebrow", "Aperçu technique"),
+            make("code", null, "bridget status\nrelay: connecté\nagents: 7 actifs · 0 en attente"),
+          );
+
+          const wrapControls = make("label", "typography-toggle");
+          const wrap = documentRef.createElement("input");
+          wrap.type = "checkbox";
+          wrap.checked = controlPreferences.wordWrap;
+          wrap.setAttribute("aria-label", "Retour à la ligne dans les blocs techniques");
+          const wrapVisual = make("span", "typography-toggle__visual");
+          const wrapLabel = make("span", "typography-toggle__label", "Activé");
+          wrapControls.append(wrap, wrapVisual, wrapLabel);
+          const wrapPreview = make("article", "typography-preview typography-preview--wrap");
+          wrapPreview.append(make("p", null, "Les blocs techniques des conversations se replient à la largeur disponible."));
+
+          const status = make("p", "typography-settings__status", "Ces réglages sont appliqués et conservés sur ce Mac.");
+          status.setAttribute("role", "status");
+          const refreshPreviews = () => {
+            const selectedInterfaceFont = controlFontOption(CONTROL_INTERFACE_FONT_OPTIONS, interfaceFont.value);
+            const selectedMonoFont = controlFontOption(CONTROL_MONOSPACE_FONT_OPTIONS, monoFont.value);
+            interfacePreview.style.fontFamily = selectedInterfaceFont.stack;
+            interfacePreview.style.fontSize = interfaceSize.value + "px";
+            monoPreview.style.fontFamily = selectedMonoFont.stack;
+            monoPreview.style.fontSize = monoSize.value + "px";
+            wrapLabel.textContent = wrap.checked ? "Activé" : "Désactivé";
+            wrapPreview.dataset.wrapped = String(wrap.checked);
+          };
+          const persist = () => {
+            saveControlPreferences({
+              ...controlPreferences,
+              interfaceFont: interfaceFont.value,
+              fontSizePx: Number(interfaceSize.value),
+              monospaceFont: monoFont.value,
+              monospaceFontSizePx: Number(monoSize.value),
+              wordWrap: wrap.checked,
+            });
+            refreshPreviews();
+            status.textContent = "Préférences locales appliquées immédiatement.";
+          };
+          [interfaceFont, interfaceSize, monoFont, monoSize, wrap].forEach((control) => {
+            control.addEventListener("change", persist);
+          });
+          refreshPreviews();
+          section.append(
+            intro,
+            makeRow(
+              "Police d’interface",
+              "Utilisée dans les conversations, les menus et les réglages.",
+              interfaceControls,
+              interfacePreview,
+            ),
+            makeRow(
+              "Police monospace",
+              "Utilisée dans les extraits techniques et les blocs de commande.",
+              monoControls,
+              monoPreview,
+            ),
+            makeRow(
+              "Retour à la ligne",
+              "Choisissez si les longues lignes techniques se replient dans les conversations.",
+              wrapControls,
+              wrapPreview,
+            ),
+            status,
+          );
+          body.append(section);
+          return;
+        }
+
+        if (entry.key === "server") {
+          const section = controlSection(
+            "Paramètres du serveur",
+            "Chaque ligne indique sa portée et son niveau d'accès. Seules les capacités attestées par ce serveur deviennent modifiables.",
+            "Serveur relié",
+          );
+          const status = make("p", "control-center__status", "Lecture des capacités sécurisées…");
+          status.setAttribute("role", "status");
+          const categories = make("ul", "control-center__categories");
+          section.append(status, categories);
+          body.append(section);
           try {
-            const response = await windowRef.fetch(controlResourceUrl("/v1/control/usage", token, { period: period.value }));
-            const payload = await response.json();
-            if (!response.ok) throw new Error("usage_unavailable");
-            const dashboard = usageDashboardProjection(payload);
-            period.value = dashboard.period;
-            status.textContent = dashboard.pricingStatus === "unconfigured"
-              ? `Coût API non estimé - aucune grille tarifaire datée n’est configurée. ${formatTokenCount(dashboard.totalTokens)} tokens observés.`
-              : `${formatTokenCount(dashboard.totalTokens)} tokens observés.`;
-            if (dashboard.rows.length === 0) {
-              table.append(make("p", "control-center__empty", "Aucun échantillon d’usage attesté pour cette période."));
-              return;
-            }
-            for (const row of dashboard.rows) {
-              const item = make("article", "usage-dashboard__row");
+            const payload = await readServerSettings();
+            for (const category of Array.isArray(payload.categories) ? payload.categories : []) {
+              const item = make("li", "control-center__category");
               item.append(
-                make("strong", null, row.provider),
-                make("span", null, row.model),
-                make("span", null, `${formatTokenCount(row.totalTokens)} tokens - ${row.samples} échantillon(s) - ${row.source}`),
-                make("small", null, `Entrée ${formatTokenCount(row.inputTokens)} · Sortie ${formatTokenCount(row.outputTokens)} · Cache lu ${formatTokenCount(row.cacheReadTokens)}`),
+                make("strong", null, category.key || "Réglage contrôlé"),
+                make("span", null, category.summary || "Capacité non détaillée."),
+                controlScope(category.scope || "Serveur"),
+                make("span", "control-center__badge", category.access === "writable" ? "modifiable" : "lecture seule"),
               );
-              table.append(item);
+              categories.append(item);
             }
+            status.textContent = payload.configuration_available
+              ? `Serveur Bridget ${payload.daemon_version || "inconnu"}. La liste d'autorisation des projets est disponible.`
+              : `Serveur Bridget ${payload.daemon_version || "inconnu"}. Les réglages de projets ne sont pas disponibles.`;
+            if (!payload.configuration_available) return;
+            const roots = Array.isArray(payload.allowed_project_roots) ? payload.allowed_project_roots : [];
+            const label = make("label", "control-center__roots-label", "Racines de projets autorisées");
+            const textarea = documentRef.createElement("textarea");
+            textarea.className = "control-center__roots";
+            textarea.rows = Math.max(3, roots.length + 1);
+            textarea.value = roots.join("\n");
+            textarea.spellcheck = false;
+            label.append(textarea);
+            const help = make("p", "control-center__help", "Une racine par ligne. Bridget vérifie les chemins, le propriétaire et la génération avant toute écriture.");
+            const preview = make("p", "control-center__preview", "Aucune modification préparée.");
+            const prepare = make("button", "secondary", "Prévisualiser la modification");
+            prepare.type = "button";
+            const apply = make("button", null, "Confirmer et appliquer");
+            apply.type = "button";
+            apply.hidden = true;
+            const actions = make("div", "control-center__actions");
+            actions.append(prepare, apply);
+            section.append(label, help, preview, actions);
+            let preparedChange = null;
+            prepare.addEventListener("click", async () => {
+              const candidate = textarea.value.split("\n").map((value) => value.trim()).filter(Boolean);
+              if (candidate.length === 0) {
+                preview.textContent = "Au moins une racine est obligatoire.";
+                return;
+              }
+              prepare.disabled = true;
+              preview.textContent = "Prévisualisation validée par le serveur…";
+              try {
+                const request = {
+                  version: 1,
+                  command_id: `control-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                  expected_generation: payload.policy_generation,
+                  allowed_project_roots: candidate,
+                };
+                const response = await windowRef.fetch(controlResourceUrl("/v1/control/settings/preview", token), {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify(request),
+                });
+                const confirmed = await response.json();
+                if (!response.ok) throw new Error("settings_refused");
+                preparedChange = { ...request, allowed_project_roots: confirmed.requested_roots };
+                apply.hidden = false;
+                preview.textContent = `${confirmed.current_roots.length} → ${confirmed.requested_roots.length} racine(s), génération ${confirmed.expected_generation} → ${confirmed.resulting_generation}. Confirmez pour écrire.`;
+              } catch (_error) {
+                preparedChange = null;
+                apply.hidden = true;
+                preview.textContent = "Le serveur a refusé la prévisualisation. Aucune valeur n'a été modifiée.";
+              } finally {
+                prepare.disabled = false;
+              }
+            });
+            apply.addEventListener("click", async () => {
+              if (!preparedChange) return;
+              apply.disabled = true;
+              preview.textContent = "Application en cours…";
+              try {
+                const response = await windowRef.fetch(controlResourceUrl("/v1/control/settings/apply", token), {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify(preparedChange),
+                });
+                const accepted = await response.json();
+                if (!response.ok) throw new Error("settings_refused");
+                textarea.value = (accepted.allowed_project_roots || []).join("\n");
+                payload.allowed_project_roots = accepted.allowed_project_roots;
+                payload.policy_generation = accepted.resulting_generation;
+                preparedChange = null;
+                apply.hidden = true;
+                preview.textContent = `Réglage appliqué - confirmation ${accepted.command_id}, génération ${accepted.resulting_generation}.`;
+              } catch (_error) {
+                preview.textContent = "Le serveur a refusé la modification. La configuration actuelle n'a pas été remplacée.";
+              } finally {
+                apply.disabled = false;
+              }
+            });
           } catch (_error) {
-            status.textContent = "L’usage de ce serveur est indisponible.";
+            status.textContent = "Les réglages de ce serveur sont indisponibles. Aucune valeur locale n'a été remplacée.";
             status.dataset.state = "error";
           }
-        };
-        period.addEventListener("change", () => void load());
-        await load();
+          return;
+        }
+
+        if (entry.key === "usage") {
+          const section = controlSection(
+            "Usage et facturation",
+            "Les jetons sont des observations attestées par le serveur. Un coût n'est affiché que lorsqu'une grille tarifaire versionnée est configurée.",
+            "Serveur relié",
+          );
+          const periodLabel = make("label", "control-center__period-label", "Période");
+          const period = documentRef.createElement("select");
+          for (const [value, label] of [["7d", "7 jours"], ["30d", "30 jours"], ["90d", "90 jours"]]) {
+            const option = documentRef.createElement("option");
+            option.value = value;
+            option.textContent = label;
+            period.append(option);
+          }
+          periodLabel.append(period);
+          const status = make("p", "control-center__status", "Lecture des échantillons du serveur…");
+          status.setAttribute("role", "status");
+          const metrics = make("div", "control-center__metrics");
+          const table = make("div", "usage-dashboard");
+          section.append(periodLabel, status, metrics, table);
+          body.append(section);
+          const load = async () => {
+            status.textContent = "Lecture des échantillons du serveur…";
+            metrics.replaceChildren();
+            table.replaceChildren();
+            try {
+              const response = await windowRef.fetch(controlResourceUrl("/v1/control/usage", token, { period: period.value }));
+              const payload = await response.json();
+              if (!response.ok) throw new Error("usage_unavailable");
+              const dashboard = usageDashboardProjection(payload);
+              period.value = dashboard.period;
+              status.textContent = dashboard.pricingStatus === "unconfigured"
+                ? `Estimation API indisponible - aucune grille tarifaire datée n'est configurée. ${formatTokenCount(dashboard.totalTokens)} tokens observés.`
+                : `${formatTokenCount(dashboard.totalTokens)} tokens observés.`;
+              const total = controlSetting("Jetons observés", formatTokenCount(dashboard.totalTokens), "Données attestées");
+              metrics.append(total);
+              const providers = new Map();
+              for (const row of dashboard.rows) {
+                providers.set(row.provider, (providers.get(row.provider) || 0) + row.totalTokens);
+              }
+              for (const [provider, tokens] of [...providers.entries()].sort((left, right) => right[1] - left[1]).slice(0, 4)) {
+                metrics.append(controlSetting(provider, `${formatTokenCount(tokens)} tokens`, "Fournisseur attesté"));
+              }
+              if (dashboard.rows.length === 0) {
+                table.append(make("p", "control-center__empty", "Aucun échantillon d'usage attesté pour cette période."));
+                return;
+              }
+              for (const row of dashboard.rows) {
+                const item = make("article", "usage-dashboard__row");
+                item.append(
+                  make("strong", null, row.provider),
+                  make("span", null, row.model),
+                  make("span", null, `${formatTokenCount(row.totalTokens)} tokens - ${row.samples} échantillon(s) - ${row.source}`),
+                  make("small", null, `Entrée ${formatTokenCount(row.inputTokens)} · Sortie ${formatTokenCount(row.outputTokens)} · Cache lu ${formatTokenCount(row.cacheReadTokens)}`),
+                );
+                table.append(item);
+              }
+            } catch (_error) {
+              status.textContent = "L'usage de ce serveur est indisponible.";
+              status.dataset.state = "error";
+            }
+          };
+          period.addEventListener("change", () => void load());
+          await load();
+          return;
+        }
+
+        if (entry.key === "updates" || entry.key === "diagnostics") {
+          const isUpdates = entry.key === "updates";
+          const section = controlSection(
+            isUpdates ? "Mises à jour" : "Diagnostics",
+            isUpdates
+              ? "Cette page est informative. Elle ne télécharge, n'installe ni ne redémarre jamais un serveur."
+              : "Les diagnostics restent bornés : ils n'exposent ni secret, ni chemin d'hôte, ni commande système.",
+            "Serveur relié - lecture seule",
+          );
+          const status = make("p", "control-center__status", "Lecture de l'état du serveur…");
+          status.setAttribute("role", "status");
+          const details = make("div", "control-center__metrics");
+          section.append(status, details);
+          body.append(section);
+          try {
+            const payload = await readServerSettings();
+            if (isUpdates) {
+              details.append(
+                controlSetting("Version du serveur", payload.daemon_version || "Inconnue", "Serveur"),
+                controlSetting("Canal de mise à jour", payload.update_status === "not_configured" ? "Non configuré" : "État inconnu", "Lecture seule"),
+              );
+              status.textContent = "Aucune action de mise à jour distante n'est proposée par Bridget.";
+            } else {
+              const categories = Array.isArray(payload.categories) ? payload.categories : [];
+              const writable = categories.filter((category) => category.access === "writable").length;
+              details.append(
+                controlSetting("Configuration de projets", payload.configuration_available ? "Disponible" : "Indisponible", "Capacité attestée"),
+                controlSetting("Capacités cataloguées", `${categories.length} dont ${writable} modifiable(s)`, "Serveur"),
+                controlSetting("Mise à jour", payload.update_status === "not_configured" ? "Source non configurée" : "État inconnu", "Lecture seule"),
+              );
+              status.textContent = "Le relais a répondu. Aucun diagnostic système ou secret n'est rendu dans cette interface.";
+            }
+          } catch (_error) {
+            status.textContent = "L'état du serveur est indisponible à travers ce tunnel.";
+            status.dataset.state = "error";
+          }
+        }
       };
 
-      void renderServerSettings();
+      void renderControlRoute("general");
     };
 
     const identityCard = documentRef.body ? make("div", "agent-identity-card") : null;
@@ -6345,7 +6920,7 @@
       documentRef.addEventListener("keydown", handleIdentityKeydown);
     }
     const timestamp = (at) => {
-      return formatLocalTime(at);
+      return formatLocalTime(at, controlTimezone());
     };
 
     const dayKey = (at) => {
@@ -7655,6 +8230,13 @@
       nodes.detailPanel.hidden = true;
     });
     nodes.controlCenter.addEventListener("click", () => void openControlCenter());
+    nodes.closeControlCenter.addEventListener("click", () => {
+      nodes.controlCenterOverlay.close();
+    });
+    nodes.controlCenterOverlay.addEventListener("click", (event) => {
+      if (event.target === nodes.controlCenterOverlay) nodes.controlCenterOverlay.close();
+    });
+    if (params.get("view") === "settings") void openControlCenter();
     nodes.selectedAgentAvatar.addEventListener("click", () => {
       const agent = state.agents.find((entry) => entry.name === state.selectedAgent);
       if (!agent) return;
@@ -7820,6 +8402,13 @@
     controlResourceUrl,
     usageDashboardProjection,
     formatTokenCount,
+    CONTROL_CENTER_NAVIGATION,
+    defaultControlCenterPreferences,
+    normalizeControlCenterPreferences,
+    readControlCenterPreferences,
+    writeControlCenterPreferences,
+    applyControlCenterPreferences,
+    controlCenterRouteForSearch,
     fetchScopedSnapshot,
     peerExchangeProjection,
     peerExchangeKey,

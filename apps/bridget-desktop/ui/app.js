@@ -32,7 +32,9 @@ function renderProfiles() {
   for (const profile of profiles) {
     const item = document.createElement("li"); item.className = "profile-card";
     const connected = profileConnection(profile) === "connected";
-    const action = connected ? `<button type="button" data-action="open" data-profile-id="${escapeHtml(profile.id)}">Ouvrir le relais</button><button type="button" class="secondary" data-action="disconnect" data-profile-id="${escapeHtml(profile.id)}">Déconnecter</button>` : `<button type="button" data-action="connect" data-profile-id="${escapeHtml(profile.id)}">${profileConnection(profile) === "failed" ? "Réessayer" : "Connecter"}</button>`;
+    const action = connected
+      ? `<button type="button" data-action="open" data-profile-id="${escapeHtml(profile.id)}">Ouvrir le relais</button><button type="button" class="secondary" data-action="settings" data-profile-id="${escapeHtml(profile.id)}">Réglages</button><button type="button" class="secondary" data-action="disconnect" data-profile-id="${escapeHtml(profile.id)}">Déconnecter</button>`
+      : `<button type="button" data-action="connect" data-profile-id="${escapeHtml(profile.id)}">${profileConnection(profile) === "failed" ? "Réessayer" : "Connecter"}</button><button type="button" class="secondary" data-action="settings" data-profile-id="${escapeHtml(profile.id)}">Réglages</button>`;
     item.innerHTML = `<div><p class="profile-kind">TUNNEL SSH GÉRÉ</p><h3>${escapeHtml(profile.label)}</h3><p class="profile-origin">${escapeHtml(profileOrigin(profile))}</p><p class="connection-badge" data-state="${escapeHtml(profileConnection(profile))}">${escapeHtml(connectionDescription(profile))}</p></div><div class="profile-actions">${action}<button type="button" class="secondary" data-action="edit" data-profile-id="${escapeHtml(profile.id)}">Modifier</button><button type="button" class="danger" data-action="delete" data-profile-id="${escapeHtml(profile.id)}">Retirer</button></div>`;
     elements.list.append(item);
   }
@@ -103,22 +105,42 @@ async function verifyHostIdentity(profile) {
 }
 
 function setConnectionMessage(message) { elements.connectionStatus.textContent = message; announce(message); }
-async function openPanel(profile) {
-  const panel = await invoke("panel_open", { profile_id: profile.id });
+async function openPanel(profile, view = null) {
+  const panel = await invoke("panel_open", view ? { profile_id: profile.id, view } : { profile_id: profile.id });
   openPanelProfiles.add(panel.profile_id); document.body.classList.add("panel-view"); elements.showProfiles.hidden = false; renderActivePanels();
-  setConnectionMessage(`${profile.label} est affiché dans un panneau local isolé.`);
+  setConnectionMessage(view === "settings"
+    ? `Les réglages de ${profile.label} sont affichés dans un panneau local isolé.`
+    : `${profile.label} est affiché dans un panneau local isolé.`);
 }
 
-async function connectProfile(profile, automatic = false) {
+async function connectProfile(profile, automatic = false, initialView = null) {
   clearError(elements.loadError);
   try {
     setConnectionMessage(`${automatic ? "Restauration du tunnel" : "Connexion à"} ${profile.label}…`);
     await verifyHostIdentity(profile);
     const status = await invoke("connection_open", { profile_id: profile.id });
-    connectionStates.set(profile.id, status); renderProfiles(); await openPanel(profile);
+    connectionStates.set(profile.id, status); renderProfiles(); await openPanel(profile, initialView);
   } catch (error) {
     connectionStates.set(profile.id, { state: "failed" }); renderProfiles(); visibleError(elements.loadError, error);
     setConnectionMessage(`Connexion à ${profile.label} non établie.`);
+  }
+}
+
+async function openServerSettings(profile) {
+  clearError(elements.loadError);
+  try {
+    if (openPanelProfiles.has(profile.id)) {
+      await invoke("panel_close", { profile_id: profile.id });
+      openPanelProfiles.delete(profile.id);
+      renderActivePanels();
+    }
+    if (profileConnection(profile) === "connected") {
+      await openPanel(profile, "settings");
+    } else {
+      await connectProfile(profile, false, "settings");
+    }
+  } catch (error) {
+    visibleError(elements.loadError, error);
   }
 }
 
@@ -194,7 +216,7 @@ async function restoreLocalPreferences() {
 
 elements.add.addEventListener("click", () => openProfileDialog()); elements.close.addEventListener("click", closeProfileDialog); elements.cancel.addEventListener("click", closeProfileDialog); elements.showProfiles.addEventListener("click", () => void showProfiles()); document.querySelectorAll("input[name='identity-source']").forEach((input) => input.addEventListener("change", syncIdentityField)); elements.form.addEventListener("submit", saveProfile);
 elements.showPreferences.addEventListener("click", () => void openPreferences()); elements.closePreferences.addEventListener("click", closePreferences); elements.cancelPreferences.addEventListener("click", closePreferences); elements.preferencesForm.addEventListener("submit", savePreferences);
-elements.list.addEventListener("click", (event) => { const button = event.target.closest("button[data-action]"); if (!button) return; const profile = profiles.find((candidate) => candidate.id === button.dataset.profileId); if (!profile) return; if (button.dataset.action === "edit") openProfileDialog(profile); if (button.dataset.action === "delete") void deleteProfile(profile); if (button.dataset.action === "connect") void connectProfile(profile); if (button.dataset.action === "open") void openPanel(profile).catch((error) => visibleError(elements.loadError, error)); if (button.dataset.action === "disconnect") void disconnectProfile(profile); });
+if (button.dataset.action === "disconnect") void disconnectProfile(profile); if (button.dataset.action === "settings") void openServerSettings(profile);
 
 const eventApi = window.__TAURI__?.event;
 if (eventApi?.listen) void eventApi.listen("connection-state", (event) => {
