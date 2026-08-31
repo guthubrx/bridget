@@ -2193,7 +2193,7 @@ fn post_project_preview(
     config: &UiRelayConfig,
     body: &[u8],
 ) -> Result<UiProjectPreviewV1, (u16, &'static str, String)> {
-    use crate::project_workspace::{GitDiagnostic, ProjectFolderMode, ProjectPreview};
+    use crate::project_workspace::{GitDiagnostic, ProjectFolderMode};
 
     let request: UiProjectPreviewRequestV1 = serde_json::from_slice(body).map_err(|_| {
         (
