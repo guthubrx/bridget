@@ -6,14 +6,15 @@
     <title>Bridget Desktop</title>
     <link rel="stylesheet" href="./theme.css" />
     <link rel="stylesheet" href="./desktop.css" />
+    <link rel="stylesheet" href="./fleet-desktop.css" />
   </head>
   <body>
-    <main class="desktop-shell" aria-labelledby="page-title">
+    <section id="legacy-shell" hidden><main class="desktop-shell" aria-labelledby="page-title">
       <header class="page-header">
-        <div class="page-header-row"><div class="product-name"><h1 id="page-title">Bridget Desktop</h1><span>client</span></div><div class="header-actions"><button id="show-profiles" class="secondary" type="button">Serveurs</button><button id="show-preferences" class="secondary" type="button">⚙ Réglages</button></div></div>
+        <div class="page-header-row"><div class="product-name"><h1 id="page-title">Bridget Desktop</h1><span>client</span></div><div class="header-actions"><button id="show-profiles" class="secondary" type="button">Serveurs</button><button id="legacy-show-preferences" class="secondary" type="button">⚙ Réglages</button></div></div>
         <div id="active-panels" class="active-panels" aria-label="Panneaux distants ouverts"></div>
       </header>
-      <p id="app-status" class="sr-only" aria-live="polite"></p>
+      <p id="legacy-app-status" class="sr-only" aria-live="polite"></p>
       <p id="connection-status" class="connection-status" aria-live="polite">Bridget Desktop ouvre un tunnel SSH temporaire pour chaque serveur connecté.</p>
       <section class="desktop-stage" aria-label="Espaces de travail">
         <article class="desktop-slot"><p>PANNEAU 01</p><h2>En attente d'un serveur</h2></article>
@@ -28,6 +29,42 @@
         <div id="empty-state" class="empty-state" hidden><h3>Aucun serveur configuré</h3><p>Ajoutez un serveur : Bridget Desktop ouvrira son tunnel SSH à chaque démarrage.</p></div>
         <ul id="profiles-list" class="profile-list" aria-label="Profils configurés"></ul>
       </section>
+    </main></section>
+    <main id="fleet-shell" aria-labelledby="fleet-title">
+      <aside class="fleet-sources-pane" aria-label="Sources">
+        <header class="fleet-sources-header">
+          <div class="fleet-sources-title"><h1 id="fleet-title">Projets</h1><span>Ajouter, organiser et filtrer</span></div>
+          <div class="fleet-source-actions"><button id="create-project" type="button" aria-label="Créer un projet">+</button><button id="import-project" type="button">Importer</button></div>
+        </header>
+        <button id="fleet-global" class="fleet-global-button" type="button" aria-current="true">Toute la flotte</button>
+        <nav><ul id="fleet-sources" aria-label="Sources et projets"></ul></nav>
+        <footer>
+          <button id="manage-servers" type="button" class="quiet">Gérer les serveurs</button>
+          <div class="settings-launcher-wrap">
+            <button id="show-preferences" type="button" class="icon-settings" aria-label="Ouvrir le menu des paramètres" aria-expanded="false" aria-controls="settings-launcher">⚙</button>
+            <div id="settings-launcher" class="settings-launcher" role="menu" aria-label="Accès aux paramètres" hidden>
+              <button type="button" role="menuitem" data-open-remote-view="settings">Paramètres</button>
+              <button type="button" role="menuitem" data-open-settings-section="servers">Serveurs et connexions</button>
+              <button type="button" role="menuitem" data-open-remote-view="usage">Usage</button>
+            </div>
+          </div>
+        </footer>
+      </aside>
+      <section class="fleet-agents-pane" aria-label="Flotte d'agents">
+        <header><strong id="fleet-count">0 agent</strong></header>
+        <div id="fleet-filters" class="fleet-filter-chips" aria-label="Filtres actifs"></div>
+        <div class="fleet-sort-controls">
+          <label for="sort-field">Trier et regrouper par</label>
+          <select id="sort-field"><option value="source">Source</option><option value="state">État</option><option value="project">Projet</option><option value="activity">Activité récente</option><option value="name">Nom</option></select>
+          <button id="add-sort" type="button" class="quiet">Ajouter</button>
+        </div>
+        <div id="sort-chips" class="sort-chips" aria-label="Tris actifs"></div>
+        <div id="fleet-groups" class="fleet-groups" aria-live="polite"></div>
+      </section>
+      <section class="fleet-conversation-placeholder" aria-label="Conversation">
+        <p>Sélectionnez un agent pour ouvrir sa conversation.</p>
+      </section>
+      <p id="app-status" class="sr-only" aria-live="polite"></p>
     </main>
     <dialog id="profile-dialog" aria-labelledby="profile-dialog-title">
       <form id="profile-form" method="dialog" novalidate>
@@ -36,7 +73,7 @@
         <label>Nom du serveur<input id="profile-label" name="label" maxlength="96" required autocomplete="off" /></label>
         <label>Serveur SSH<input id="profile-host" name="host" inputmode="url" placeholder="cartae.app" autocomplete="off" required /></label>
         <div class="field-grid"><label>Port SSH<input id="profile-port" name="port" type="number" min="1" max="65535" value="22" inputmode="numeric" required /></label><label>Utilisateur SSH<input id="profile-user" name="user" autocomplete="username" placeholder="moi" required /></label></div>
-        <fieldset><legend>Identité SSH</legend><label class="choice"><input type="radio" name="identity-source" value="agent" checked /> Utiliser l'agent SSH du Mac</label><label class="choice"><input type="radio" name="identity-source" value="file" /> Référencer un fichier de clé existant</label><label id="identity-file-field" hidden>Chemin absolu de la clé existante<input id="profile-identity-file" name="identity-file" autocomplete="off" spellcheck="false" /></label></fieldset>
+        <fieldset><legend>Identité SSH</legend><label class="choice"><input type="radio" name="identity-source" value="agent" checked /> Utiliser l'agent SSH de cet ordinateur</label><label class="choice"><input type="radio" name="identity-source" value="file" /> Référencer un fichier de clé existant</label><label id="identity-file-field" hidden>Chemin absolu de la clé existante<input id="profile-identity-file" name="identity-file" autocomplete="off" spellcheck="false" /></label></fieldset>
         <p class="field-help">L'application découvre le relais, récupère son accès par le canal SSH et ouvre un tunnel local temporaire. Aucun jeton n'est demandé ni enregistré.</p>
         <p id="form-error" class="notice notice-error" hidden role="alert"></p>
         <footer class="dialog-actions"><button id="cancel-profile" class="secondary" type="button">Annuler</button><button type="submit">Enregistrer</button></footer>
@@ -50,18 +87,43 @@
         <footer class="dialog-actions"><button value="cancel" class="secondary" type="submit" autofocus>Annuler</button><button value="approve" type="submit">Approuver l'identité</button></footer>
       </form>
     </dialog>
-    <dialog id="preferences-dialog" aria-labelledby="preferences-title">
-      <form id="preferences-form" method="dialog" novalidate>
-        <header class="dialog-heading"><div><p class="eyebrow">CE MAC</p><h2 id="preferences-title">Réglages Bridget</h2></div><button class="icon-button" id="close-preferences" type="button" aria-label="Fermer">×</button></header>
-        <p class="field-help">Ces préférences restent sur ce Mac. Elles ne sont jamais envoyées aux serveurs reliés ni à leurs agents.</p>
-        <label>Nom affiché<input id="preferences-display-name" maxlength="96" autocomplete="name" placeholder="Optionnel" /></label>
-        <label>Thème<select id="preferences-color-scheme"><option value="system">Système</option><option value="dark">Sombre</option><option value="light">Clair</option></select></label>
-        <label>Fuseau d’affichage<input id="preferences-timezone" maxlength="64" autocomplete="off" spellcheck="false" value="system" placeholder="system ou Europe/Paris" /><span class="field-help">Utilisez « system » ou un identifiant IANA, par exemple Europe/Paris. Le fuseau du serveur n’est pas modifié.</span></label>
-        <label>Taille de police<select id="preferences-font-size"><option value="13">13 px</option><option value="14">14 px</option><option value="15">15 px</option><option value="16">16 px</option><option value="17">17 px</option><option value="18">18 px</option><option value="20">20 px</option><option value="22">22 px</option><option value="24">24 px</option></select></label>
-        <section class="desktop-about" aria-labelledby="desktop-about-title"><h3 id="desktop-about-title">À propos</h3><p id="desktop-version">Version inconnue.</p><p id="desktop-update-status">Vérification de mise à jour non configurée.</p></section>
-        <p id="preferences-error" class="notice notice-error" hidden role="alert"></p>
-        <footer class="dialog-actions"><button id="cancel-preferences" class="secondary" type="button">Annuler</button><button type="submit">Enregistrer</button></footer>
-      </form>
+    <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+      <header class="dialog-heading settings-dialog-heading"><div><p class="eyebrow">CET ORDINATEUR</p><h2 id="settings-title">Paramètres</h2></div><button class="icon-button" id="close-preferences" type="button" aria-label="Fermer">×</button></header>
+      <div class="settings-layout">
+        <nav class="settings-sidebar" aria-label="Sections des paramètres">
+          <button type="button" data-settings-section="general" aria-current="true">Application</button>
+          <button type="button" data-settings-section="servers">Serveurs et connexions</button>
+          <button type="button" data-settings-section="usage">Usage</button>
+        </nav>
+        <div class="settings-sections">
+          <section id="settings-general" data-settings-panel="general" aria-labelledby="settings-general-title">
+            <header class="settings-section-heading"><p class="eyebrow">APPLICATION</p><h2 id="settings-general-title">Paramètres de l’application</h2><p>Ces préférences restent sur cet ordinateur. Elles ne sont jamais envoyées aux serveurs reliés ni à leurs agents.</p></header>
+            <form id="preferences-form" novalidate>
+              <label>Nom affiché<input id="preferences-display-name" maxlength="96" autocomplete="name" placeholder="Optionnel" /></label>
+              <label>Thème<select id="preferences-color-scheme"><option value="system">Système</option><option value="dark">Sombre</option><option value="light">Clair</option></select></label>
+              <label>Fuseau d’affichage<input id="preferences-timezone" maxlength="64" autocomplete="off" spellcheck="false" value="system" placeholder="system ou Europe/Paris" /><span class="field-help">Utilisez « system » ou un identifiant IANA, par exemple Europe/Paris. Le fuseau du serveur n’est pas modifié.</span></label>
+              <label>Taille de police<select id="preferences-font-size"><option value="13">13 px</option><option value="14">14 px</option><option value="15">15 px</option><option value="16">16 px</option><option value="17">17 px</option><option value="18">18 px</option><option value="20">20 px</option><option value="22">22 px</option><option value="24">24 px</option></select></label>
+              <fieldset class="content-security"><legend>Contenus conversationnels</legend><p class="field-help">Ces autorisations s'appliquent à ce Mac uniquement. Un message ne peut jamais les activer, lancer une commande ni modifier le serveur.</p><label class="choice"><input id="preferences-external-links" type="checkbox" /> Ouvrir les liens HTTPS externes après un clic explicite</label><label class="choice"><input id="preferences-file-references" type="checkbox" /> Prévisualiser les fichiers autorisés du projet</label><label class="choice"><input id="preferences-remote-images" type="checkbox" /> Charger les images HTTPS distantes après mon geste explicite</label></fieldset>
+              <section class="desktop-about" aria-labelledby="desktop-about-title"><h3 id="desktop-about-title">À propos</h3><p id="desktop-version">Version inconnue.</p><p id="desktop-update-status">Vérification de mise à jour non configurée.</p></section>
+              <p id="preferences-error" class="notice notice-error" hidden role="alert"></p>
+              <footer class="dialog-actions"><button id="cancel-preferences" class="secondary" type="button">Annuler</button><button type="submit">Enregistrer</button></footer>
+            </form>
+          </section>
+          <section id="settings-servers" data-settings-panel="servers" aria-labelledby="settings-servers-title" hidden>
+            <header class="settings-section-heading"><p class="eyebrow">CONNEXIONS</p><h2 id="settings-servers-title">Serveurs et connexions</h2><p>Les accès sont enregistrés sur cet ordinateur. Les secrets et jetons ne sont jamais stockés dans Bridget Desktop.</p></header>
+            <ul id="server-list" class="server-list" aria-label="Serveurs configurés"></ul>
+            <footer class="dialog-actions"><button id="add-server" type="button">Ajouter un serveur</button></footer>
+          </section>
+          <section id="settings-usage" data-settings-panel="usage" aria-labelledby="settings-usage-title" hidden>
+            <header class="settings-section-heading"><p class="eyebrow">USAGE</p><h2 id="settings-usage-title">Usage</h2><p>Cette section est prête à recevoir des données attestées. Aucun quota, coût ou consommation n’est affiché tant que Bridget ne peut pas le prouver.</p></header>
+          </section>
+        </div>
+      </div>
+    </dialog>
+    <dialog id="target-dialog" aria-labelledby="target-title">
+      <header class="dialog-heading"><div><p class="eyebrow">PROJETS</p><h2 id="target-title">Choisir une source</h2></div><button id="close-target" class="icon-button" type="button" aria-label="Fermer">×</button></header>
+      <p class="field-help">Choisissez le serveur ou cet ordinateur qui doit recevoir cette action.</p>
+      <div id="target-choices" class="target-choices"></div>
     </dialog>
     <script type="module" src="./app.js"></script>
   </body>

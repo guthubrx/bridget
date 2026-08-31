@@ -96,3 +96,10 @@ Le test UI couvre aussi la séparation de portées dans la navigation Projets : 
 9. Presser `Commande + virgule`, vérifier que le même overlay de centre de contrôle s'ouvre au-dessus de la conversation.
 
 Aucune validation visuelle ambiguë, aucun clic non confirmé et aucune opération de serveur non demandée ne sont comptés comme preuve d'acceptation.
+
+## Correctif overlay et permission native
+
+- `node --test crates/bridget-daemon/assets/ui/app.js` : PASS, 100 tests. Le contrat vérifie l'absence de `tabindex="0"` sur le fil, l'héritage de police de la barre agents et des contrôles, la police monospace et l'ascenseur du centre de contrôle.
+- `cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml --test capabilities` : PASS, 2 tests. Le test confirme que le panneau distant ne peut demander que l'autorisation native de notification sur `http://127.0.0.1:*`, sans permission de commande Tauri générale ni permission d'émettre une notification.
+- Vérification manuelle à effectuer après installation du bundle : ouvrir puis fermer le centre de contrôle et cliquer sur son arrière-plan. Aucun cadre bleu ne doit persister autour du fil. Changer la police d'interface doit mettre à jour les deux barres latérales et les contrôles du centre. Cliquer « Activer les notifications » doit faire apparaître la demande macOS ou afficher un libellé de refus ou de nouvel essai explicite.
+- Déploiement serveur : build isolé du commit `ab75bab`, SHA-256 `a6ca650772b0d9a40af1fa331413db85286473d464a4b95feb2f914cc09e4881`, installation dans `/home/moi/.local/bin/bridget`, puis redémarrage réussi de `bridget-daemon.service` et `bridget-ui.service`. Les assets effectivement servis contiennent les marqueurs de l'overlay, de l'ascenseur et du nouvel état de notification.

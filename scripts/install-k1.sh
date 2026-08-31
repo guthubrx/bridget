@@ -119,6 +119,7 @@ CATALOGUE_PATH="${CATALOGUE_PATH:-$DEFAULT_CATALOGUE_PATH}"
 BRIDGET_BIN="${INSTALL_DIR}/bridget"
 MAICIE_BIN="${INSTALL_DIR}/maicie"
 MAICIE_SUIVI_BIN="${INSTALL_DIR}/maicie-suivi"
+MAICIE_RELEVE_BIN="${INSTALL_DIR}/maicie-releve"
 AGENTS_JSON="${CONFIG_DIR_BRIDGET}/agents.json"
 MAICIE_CONFIG="${CONFIG_DIR_MAICIE}/config.json"
 
@@ -559,6 +560,21 @@ EOF
   created "lien maicie-suivi ($MAICIE_SUIVI_BIN)"
 }
 
+# La relève planifiée est le seul chemin qui compose l'observation Maicie et
+# le dispatch global des rondes. `maicie-suivi` reste une commande de statut
+# réutilisable : l'appeler manuellement ne déclenche jamais une ronde.
+write_maicie_releve() {
+  may_write "$MAICIE_RELEVE_BIN" "lanceur maicie-releve" || return 0
+  cat >"$MAICIE_RELEVE_BIN" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+"${MAICIE_SUIVI_BIN}"
+exec "${BRIDGET_BIN}" project-round dispatch
+EOF
+  chmod 0755 "$MAICIE_RELEVE_BIN"
+  created "lanceur maicie-releve ($MAICIE_RELEVE_BIN)"
+}
+
 write_plist_daemon() {
   may_write "$DAEMON_PLIST" "plist daemon" || return 0
   cat >"$DAEMON_PLIST" <<EOF
@@ -599,7 +615,7 @@ write_plist_maicie_releve() {
   <key>Label</key><string>com.bridget.maicie.releve</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${MAICIE_SUIVI_BIN}</string>
+    <string>${MAICIE_RELEVE_BIN}</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -649,8 +665,7 @@ Description=Maicie relève et dispatcher global des rondes
 
 [Service]
 Type=oneshot
-ExecStart=${MAICIE_SUIVI_BIN}
-ExecStart=${BRIDGET_BIN} project-round dispatch
+ExecStart=${MAICIE_RELEVE_BIN}
 Environment=RUST_LOG=info
 Environment=HOME=${HOME}
 Environment=PATH=${HOME}/.local/bin:/usr/bin:/bin
@@ -878,6 +893,7 @@ Artefacts:
   $BRIDGET_BIN
   $MAICIE_BIN
   $MAICIE_SUIVI_BIN
+  $MAICIE_RELEVE_BIN
   $AGENTS_JSON
   $MAICIE_CONFIG
   catalogue: $CATALOGUE_PATH
@@ -916,6 +932,7 @@ main() {
   write_test_adapter
   write_agents_json
   write_maicie_suivi
+  write_maicie_releve
   write_services
   activate_services
 

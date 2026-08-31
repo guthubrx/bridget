@@ -1,0 +1,12 @@
+.git
+target/
+.agent/
+.agents/
+.specify/
+audits/
+*.db
+*.sock
+*.pid
+*.log
+.env
+.DS_Store

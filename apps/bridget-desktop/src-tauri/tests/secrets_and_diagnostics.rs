@@ -32,3 +32,17 @@ fn profils_et_diagnostics_ne_divulguent_ni_cle_ni_jeton() {
     let relay_only_in_memory = relay_url(39174, &endpoint);
     assert!(relay_only_in_memory.contains("test-relay-token"));
 }
+
+#[test]
+fn les_preferences_de_contenu_ne_transportent_ni_jeton_ni_url_de_tunnel() {
+    let source = include_str!("../src/preferences_store.rs");
+    for forbidden in ["token", "relay_url", "tunnel_url", "private_key"] {
+        assert!(
+            !source.contains(forbidden),
+            "une préférence de contenu ne doit pas contenir : {forbidden}"
+        );
+    }
+    assert!(source.contains("external_links"));
+    assert!(source.contains("file_references"));
+    assert!(source.contains("remote_images"));
+}

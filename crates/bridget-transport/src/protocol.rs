@@ -551,6 +551,16 @@ pub enum ProjectRoundRefusal {
     StoreUnavailable,
 }
 
+/// Résultat opératoire fermé du dernier passage effectivement admis par la
+/// politique. Il décrit la remise de la ronde, jamais la réponse d'un agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRoundDispatchState {
+    Deposited,
+    Refused,
+    Indeterminate,
+}
+
 /// Projection effective. configured distingue une désactivation explicite de
 /// l'état sûr par défaut, lui aussi disabled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -564,6 +574,12 @@ pub struct ProjectRoundProjection {
     pub enabled: bool,
     pub revision: u64,
     pub updated_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_occurrence_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_dispatch_state: Option<ProjectRoundDispatchState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_dispatch_observed_at: Option<i64>,
 }
 
 /// Issue rejouable d'une commande de politique.
@@ -4921,6 +4937,27 @@ mod tests {
             r#"{"contract_version":1,"command_id":"round-enable-1","issued_at":1,"deadline_at":2,"operation":"enable","project_id":"project-079","binding_generation":4,"provider":"codex"}"#
         )
         .is_err());
+
+        let legacy_projection: ProjectRoundProjection = serde_json::from_str(
+            r#"{"project_id":"project-079","binding_generation":4,"active":true,"configured":true,"enabled":true,"revision":1,"updated_at":1788000000}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy_projection.last_occurrence_at, None);
+        assert_eq!(legacy_projection.last_dispatch_state, None);
+        assert_eq!(legacy_projection.last_dispatch_observed_at, None);
+
+        let observed_projection = ProjectRoundProjection {
+            last_occurrence_at: Some(1_788_000_000),
+            last_dispatch_state: Some(ProjectRoundDispatchState::Deposited),
+            last_dispatch_observed_at: Some(1_788_000_001),
+            ..legacy_projection
+        };
+        let projection_wire = serde_json::to_string(&observed_projection).unwrap();
+        assert!(projection_wire.contains(r#""last_dispatch_state":"deposited""#));
+        assert_eq!(
+            serde_json::from_str::<ProjectRoundProjection>(&projection_wire).unwrap(),
+            observed_projection
+        );
 
         let dispatch = ProjectRoundDispatchRequest {
             contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,

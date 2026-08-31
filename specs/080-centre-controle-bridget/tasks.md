@@ -138,3 +138,10 @@ Test indépendant: une version inconnue ou source indisponible reste informative
 - T003 est une abstraction justifiée: le même catalogue est consommé par validation, route relay et rendu UI.
 - T004 et T032 ajoutent de la persistance uniquement parce que reçu et tarif daté sont nécessaires à un comportement vérifiable; aucune dépendance n'est ajoutée.
 - Toutes les tâches possèdent une preuve observable, un chemin et un comportement vérifiable.
+
+## Correctif d'accessibilité et de finition du centre de contrôle
+
+- [x] Retirer le focus non interactif du fil afin que la fermeture du centre de contrôle ne laisse aucun cadre bleu sur la conversation.
+- [x] Ajouter une bordure d'overlay de 1 px et des ascenseurs thémés, limités aux deux zones défilantes du centre.
+- [x] Étendre la police d'interface aux colonnes, menus et contrôles HTML, en préservant la police monospace des extraits techniques.
+- [x] Limiter le panneau distant Desktop aux seules commandes Tauri de lecture et de demande d'autorisation native de notification.

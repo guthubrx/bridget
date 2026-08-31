@@ -16,11 +16,13 @@ use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
 use bridget_transport::journal::valid_events;
 use bridget_transport::protocol::{
     AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
-    LedgerMessage, LedgerScope, PROJECT_REGISTRY_CONTRACT_VERSION, PresenceMode,
-    ProjectAdminOperation, ProjectAdminRequest, ProjectBackend, ProjectBindRequest,
-    ProjectBindStatus, ProjectBindingProjection, ProjectBindingStatus, ProjectRuntimeOperation,
-    ProjectRuntimeRefusal, ProjectRuntimeRequest, SERVICE_CONTRACT_VERSION, ServiceCapability,
-    decode, encode,
+    LedgerMessage, LedgerScope, PROJECT_REGISTRY_CONTRACT_VERSION, PROJECT_ROUND_INTERVAL_SECS,
+    PROJECT_ROUND_POLICY_CONTRACT_VERSION, PresenceMode, ProjectAdminOperation,
+    ProjectAdminRequest, ProjectBackend, ProjectBindRequest, ProjectBindStatus,
+    ProjectBindingProjection, ProjectBindingStatus, ProjectRoundDispatchState,
+    ProjectRoundOperation, ProjectRoundOutcome, ProjectRoundProjection, ProjectRoundRefusal,
+    ProjectRoundRequest, ProjectRuntimeOperation, ProjectRuntimeRefusal, ProjectRuntimeRequest,
+    SERVICE_CONTRACT_VERSION, ServiceCapability, decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
 use serde::{Deserialize, Serialize};
@@ -43,6 +45,7 @@ const MAX_UI_AGENT_NAME_BYTES: usize = 100;
 const MAX_UI_COMMAND_ID_BYTES: usize = 160;
 const MAX_UI_SSE_EVENTS: usize = 20_000;
 const MAX_UI_RECONNECT_ATTEMPTS: usize = 50;
+const MAX_UI_FILE_PREVIEW_BYTES: u64 = 256 * 1024;
 const UI_RECONNECT_DELAY: Duration = Duration::from_millis(100);
 /// La rétention des présences côté daemon s'appuie sur `link_seen`, rafraîchi
 /// par le heartbeat. Une présence qui ne bat pas est donc jetée au bout de
@@ -76,6 +79,11 @@ const UI_SCRIPT: &[u8] = include_bytes!("../assets/ui/app.js");
 const UI_THEME: &[u8] = include_bytes!("../assets/ui/theme.css");
 const UI_MARKED: &[u8] = include_bytes!("../assets/ui/vendor/marked.min.js");
 const UI_PURIFY: &[u8] = include_bytes!("../assets/ui/vendor/purify.min.js");
+const UI_HIGHLIGHT: &[u8] = include_bytes!("../assets/ui/vendor/highlight.min.js");
+const UI_HIGHLIGHT_GITHUB_DARK: &[u8] =
+    include_bytes!("../assets/ui/vendor/highlight-github-dark.min.css");
+const UI_HIGHLIGHT_GITHUB_LIGHT: &[u8] =
+    include_bytes!("../assets/ui/vendor/highlight-github-light.min.css");
 const UI_PROVIDER_OPENAI: &[u8] = include_bytes!("../assets/ui/providers/openai.svg");
 const UI_PROVIDER_CLAUDE: &[u8] = include_bytes!("../assets/ui/providers/claude.svg");
 const UI_PROVIDER_CURSOR: &[u8] = include_bytes!("../assets/ui/providers/cursor.svg");
@@ -941,6 +949,42 @@ struct UiProjectListEntryV1 {
     display_name: String,
     canonical_path: String,
     state: &'static str,
+    binding_generation: u64,
+    round: UiProjectRoundV1,
+}
+
+#[derive(Debug, Serialize)]
+struct UiProjectRoundV1 {
+    configured: bool,
+    enabled: bool,
+    revision: u64,
+    updated_at: i64,
+    interval_secs: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_occurrence_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_dispatch_state: Option<ProjectRoundDispatchState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_dispatch_observed_at: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiProjectRoundRequestV1 {
+    version: u8,
+    command_id: String,
+    project_id: String,
+    binding_generation: u64,
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct UiProjectRoundAcceptedV1 {
+    version: u8,
+    command_id: String,
+    project_id: String,
+    binding_generation: u64,
+    round: UiProjectRoundV1,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1087,6 +1131,17 @@ struct UiUsageDashboardRowV1 {
     cost_estimate_microunits: Option<u64>,
 }
 
+#[derive(Debug, Serialize)]
+struct UiFilePreviewV1 {
+    version: u8,
+    path: String,
+    media_type: &'static str,
+    encoding: &'static str,
+    content: String,
+    truncated: bool,
+    sha256: String,
+}
+
 #[derive(Serialize)]
 struct UiRecoveryLossV1 {
     display_name: String,
@@ -1161,6 +1216,30 @@ fn serve_connection(
                     if_none_match,
                 );
             }
+            "/vendor/highlight.min.js" => {
+                return write_asset(
+                    stream,
+                    "application/javascript; charset=utf-8",
+                    UI_HIGHLIGHT,
+                    if_none_match,
+                );
+            }
+            "/vendor/highlight-github-dark.min.css" => {
+                return write_asset(
+                    stream,
+                    "text/css; charset=utf-8",
+                    UI_HIGHLIGHT_GITHUB_DARK,
+                    if_none_match,
+                );
+            }
+            "/vendor/highlight-github-light.min.css" => {
+                return write_asset(
+                    stream,
+                    "text/css; charset=utf-8",
+                    UI_HIGHLIGHT_GITHUB_LIGHT,
+                    if_none_match,
+                );
+            }
             "/providers/openai.svg" => {
                 return write_asset(stream, "image/svg+xml", UI_PROVIDER_OPENAI, if_none_match);
             }
@@ -1187,6 +1266,20 @@ fn serve_connection(
     }
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/") => write_asset(stream, "text/html; charset=utf-8", UI_INDEX, if_none_match),
+        ("GET", "/v1/content/file-preview") => {
+            match read_content_file_preview(config, request.query.get("path").map(String::as_str)) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
         ("GET", path) if path.starts_with("/v1/agents/") && path.ends_with("/profile") => {
             match get_agent_profile(config, agent_id_from_profile_path(path)) {
                 Ok(response) => write_json(stream, 200, &response),
@@ -1448,6 +1541,18 @@ fn serve_connection(
             ),
         },
         ("POST", "/v1/projects/confirm") => match post_project_confirm(config, &request.body) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("POST", "/v1/projects/round") => match post_project_round(config, &request.body) {
             Ok(response) => write_json(stream, 200, &response),
             Err((status, code, message)) => write_json(
                 stream,
@@ -2014,6 +2119,199 @@ fn read_project_settings(
     })
 }
 
+fn content_preview_media_type(path: &Path) -> Option<(&'static str, &'static str)> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    match extension.as_str() {
+        "txt" | "log" | "toml" | "yaml" | "yml" | "ini" | "cfg" | "conf" => {
+            Some(("text/plain", "utf8"))
+        }
+        "md" | "markdown" => Some(("text/markdown", "utf8")),
+        "rs" => Some(("text/rust", "utf8")),
+        "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" => Some(("text/javascript", "utf8")),
+        "json" => Some(("application/json", "utf8")),
+        "html" | "htm" | "css" | "py" | "sh" | "zsh" | "bash" | "sql" | "xml" => {
+            Some(("text/plain", "utf8"))
+        }
+        "png" => Some(("image/png", "base64")),
+        "jpg" | "jpeg" => Some(("image/jpeg", "base64")),
+        "gif" => Some(("image/gif", "base64")),
+        "webp" => Some(("image/webp", "base64")),
+        "avif" => Some(("image/avif", "base64")),
+        _ => None,
+    }
+}
+
+fn base64_standard(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = *chunk.get(1).unwrap_or(&0);
+        let third = *chunk.get(2).unwrap_or(&0);
+        output.push(TABLE[(first >> 2) as usize] as char);
+        output.push(TABLE[((first & 0x03) << 4 | (second >> 4)) as usize] as char);
+        output.push(if chunk.len() > 1 {
+            TABLE[((second & 0x0f) << 2 | (third >> 6)) as usize] as char
+        } else {
+            '='
+        });
+        output.push(if chunk.len() > 2 {
+            TABLE[(third & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    output
+}
+
+fn read_content_file_preview(
+    config: &UiRelayConfig,
+    requested_path: Option<&str>,
+) -> Result<UiFilePreviewV1, (u16, &'static str, String)> {
+    let path = requested_path
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| {
+            (
+                400,
+                "invalid_path",
+                "Le chemin d'aperçu doit être absolu.".to_string(),
+            )
+        })?;
+    let policy_path = config.project_root_policy_path.as_deref().ok_or_else(|| {
+        (
+            403,
+            "outside_project_roots",
+            "Cet aperçu n'est pas autorisé par la politique de projets.".to_string(),
+        )
+    })?;
+    let policy = ProjectRootPolicy::load(policy_path).map_err(|_| {
+        (
+            403,
+            "outside_project_roots",
+            "Cet aperçu n'est pas autorisé par la politique de projets.".to_string(),
+        )
+    })?;
+    let canonical = std::fs::canonicalize(&path).map_err(|error| {
+        if error.kind() == ErrorKind::NotFound {
+            (
+                404,
+                "not_found",
+                "Le fichier demandé est introuvable.".to_string(),
+            )
+        } else {
+            (
+                400,
+                "invalid_path",
+                "Le chemin demandé est invalide.".to_string(),
+            )
+        }
+    })?;
+    let root = policy
+        .allowed_roots()
+        .iter()
+        .filter(|root| canonical.starts_with(root))
+        .max_by_key(|root| root.components().count())
+        .ok_or_else(|| {
+            (
+                403,
+                "outside_project_roots",
+                "Cet aperçu n'est pas autorisé par la politique de projets.".to_string(),
+            )
+        })?;
+    let metadata = std::fs::metadata(&canonical).map_err(|_| {
+        (
+            404,
+            "not_found",
+            "Le fichier demandé est introuvable.".to_string(),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err((
+            415,
+            "unsupported_media_type",
+            "Seuls les fichiers réguliers peuvent être prévisualisés.".to_string(),
+        ));
+    }
+    if metadata.len() > MAX_UI_FILE_PREVIEW_BYTES {
+        return Err((
+            413,
+            "too_large",
+            "Le fichier dépasse la taille maximale d'aperçu.".to_string(),
+        ));
+    }
+    let (media_type, encoding) = content_preview_media_type(&canonical).ok_or_else(|| {
+        (
+            415,
+            "unsupported_media_type",
+            "Ce type de fichier ne peut pas être prévisualisé.".to_string(),
+        )
+    })?;
+    let file = std::fs::File::open(&canonical).map_err(|_| {
+        (
+            404,
+            "not_found",
+            "Le fichier demandé est introuvable.".to_string(),
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_UI_FILE_PREVIEW_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| {
+            (
+                415,
+                "unsupported_media_type",
+                "Le fichier ne peut pas être lu.".to_string(),
+            )
+        })?;
+    if bytes.len() as u64 > MAX_UI_FILE_PREVIEW_BYTES {
+        return Err((
+            413,
+            "too_large",
+            "Le fichier dépasse la taille maximale d'aperçu.".to_string(),
+        ));
+    }
+    let content = if encoding == "utf8" {
+        String::from_utf8(bytes.clone()).map_err(|_| {
+            (
+                415,
+                "unsupported_media_type",
+                "Le fichier texte n'est pas encodé en UTF-8.".to_string(),
+            )
+        })?
+    } else {
+        base64_standard(&bytes)
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let sha256 = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let path = canonical
+        .strip_prefix(root)
+        .map_err(|_| {
+            (
+                403,
+                "outside_project_roots",
+                "Cet aperçu n'est pas autorisé par la politique de projets.".to_string(),
+            )
+        })?
+        .to_string_lossy()
+        .trim_start_matches('/')
+        .to_string();
+    Ok(UiFilePreviewV1 {
+        version: UI_VERSION,
+        path,
+        media_type,
+        encoding,
+        content,
+        truncated: false,
+        sha256,
+    })
+}
+
 fn read_server_control_settings(
     config: &UiRelayConfig,
 ) -> Result<UiServerControlSettingsV1, (u16, &'static str, String)> {
@@ -2363,6 +2661,131 @@ fn open_project_registry_service(
     }
 }
 
+fn open_project_round_client(
+    socket_path: &Path,
+) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>), UiProjectError> {
+    let stream =
+        UnixStream::connect(socket_path).map_err(|_| project_round_service_unavailable())?;
+    let read_stream = stream
+        .try_clone()
+        .map_err(|_| project_round_service_unavailable())?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Client,
+        },
+    )
+    .map_err(|_| project_round_service_unavailable())?;
+    if !matches!(
+        read_daemon(&mut reader).map_err(|_| project_round_service_unavailable())?,
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client
+        }
+    ) {
+        return Err(project_round_service_unavailable());
+    }
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: crate::mcp::issuer_scope("bridget-ui-project-round"),
+            capabilities: vec![ClientCapability::ProjectRoundPolicyV1],
+        },
+    )
+    .map_err(|_| project_round_service_unavailable())?;
+    match read_daemon(&mut reader).map_err(|_| project_round_service_unavailable())? {
+        DaemonToWrapper::ClientWelcome { capabilities, .. }
+            if capabilities.contains(&ClientCapability::ProjectRoundPolicyV1) =>
+        {
+            Ok((reader, writer))
+        }
+        _ => Err(project_round_service_unavailable()),
+    }
+}
+
+fn project_round_service_unavailable() -> UiProjectError {
+    (
+        503,
+        "round_service_unavailable",
+        "Le contrôle de ronde n’est pas disponible sur ce serveur.".to_string(),
+    )
+}
+
+fn project_round_refusal(reason: ProjectRoundRefusal) -> UiProjectError {
+    match reason {
+        ProjectRoundRefusal::ProjectNotFound => (
+            404,
+            "project_not_found",
+            "Ce projet n’existe plus dans Bridget.".to_string(),
+        ),
+        ProjectRoundRefusal::ProjectInactive => (
+            409,
+            "project_inactive",
+            "La ronde ne peut être modifiée que pour un projet actif.".to_string(),
+        ),
+        ProjectRoundRefusal::BindingGenerationMismatch => (
+            409,
+            "binding_generation_mismatch",
+            "Le projet a été reconnecté. Actualisez son état avant de modifier la ronde."
+                .to_string(),
+        ),
+        ProjectRoundRefusal::EnvelopeMismatch => (
+            409,
+            "round_command_conflict",
+            "Cette commande a déjà été utilisée avec une autre demande.".to_string(),
+        ),
+        ProjectRoundRefusal::PolicyDisabled => (
+            409,
+            "round_policy_disabled",
+            "La politique de ronde n’est pas active pour cette génération.".to_string(),
+        ),
+        ProjectRoundRefusal::InvalidRequest | ProjectRoundRefusal::IdempotencyExpired => (
+            400,
+            "invalid_request",
+            "La demande de ronde est invalide ou expirée.".to_string(),
+        ),
+        ProjectRoundRefusal::InvalidContract
+        | ProjectRoundRefusal::PeerUidMismatch
+        | ProjectRoundRefusal::StoreUnavailable => project_round_service_unavailable(),
+    }
+}
+
+fn request_project_round(
+    socket_path: &Path,
+    command_id: String,
+    operation: ProjectRoundOperation,
+    project_id: Option<String>,
+    binding_generation: Option<u64>,
+) -> Result<ProjectRoundOutcome, UiProjectError> {
+    let (mut reader, mut writer) = open_project_round_client(socket_path)?;
+    let now = now_secs();
+    let request = ProjectRoundRequest {
+        contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+        command_id,
+        issued_at: now,
+        deadline_at: now.saturating_add(10),
+        operation,
+        project_id,
+        binding_generation,
+    };
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::ProjectRoundRequest { request },
+    )
+    .map_err(|_| project_round_service_unavailable())?;
+    let DaemonToWrapper::ProjectRoundOutcome { outcome } =
+        read_daemon(&mut reader).map_err(|_| project_round_service_unavailable())?
+    else {
+        return Err(project_round_service_unavailable());
+    };
+    if let Some(reason) = outcome.reason {
+        return Err(project_round_refusal(reason));
+    }
+    Ok(outcome)
+}
+
 fn read_projects(socket_path: &Path) -> Result<UiProjectListV1, UiProjectError> {
     let (mut reader, mut writer) = open_project_registry_service(socket_path)?;
     let now = now_secs();
@@ -2396,11 +2819,26 @@ fn read_projects(socket_path: &Path) -> Result<UiProjectListV1, UiProjectError> 
             "La liste des projets a été refusée par le serveur.".to_string(),
         ));
     }
-    let mut projects = outcome
-        .bindings
+    let rounds = request_project_round(
+        socket_path,
+        format!("ui-project-round-list-{}", uuid::Uuid::new_v4()),
+        ProjectRoundOperation::List,
+        None,
+        None,
+    )?;
+    let mut rounds_by_project = rounds
+        .policies
         .into_iter()
-        .filter_map(ui_project_list_entry)
-        .collect::<Vec<_>>();
+        .map(|policy| (policy.project_id.clone(), policy))
+        .collect::<HashMap<_, _>>();
+    // Complexité O(p) : chaque liaison et chaque politique est visitée une fois.
+    let mut projects = Vec::new();
+    for binding in outcome.bindings {
+        let policy = rounds_by_project.remove(&binding.project_id);
+        if let Some(project) = ui_project_list_entry(binding, policy)? {
+            projects.push(project);
+        }
+    }
     projects.sort_by(|left, right| left.display_name.cmp(&right.display_name));
     Ok(UiProjectListV1 {
         version: UI_VERSION,
@@ -2408,8 +2846,32 @@ fn read_projects(socket_path: &Path) -> Result<UiProjectListV1, UiProjectError> 
     })
 }
 
-fn ui_project_list_entry(binding: ProjectBindingProjection) -> Option<UiProjectListEntryV1> {
-    let canonical_path = binding.canonical_root?;
+fn ui_project_list_entry(
+    binding: ProjectBindingProjection,
+    policy: Option<ProjectRoundProjection>,
+) -> Result<Option<UiProjectListEntryV1>, UiProjectError> {
+    let Some(canonical_path) = binding.canonical_root else {
+        return Ok(None);
+    };
+    let binding_generation = binding
+        .binding_generation
+        .ok_or_else(project_round_service_unavailable)?;
+    let policy = policy.ok_or_else(project_round_service_unavailable)?;
+    if policy.project_id != binding.project_id
+        || policy.binding_generation != Some(binding_generation)
+        || policy.active != (binding.state == ProjectBindingStatus::Active)
+    {
+        return Err(project_round_service_unavailable());
+    }
+    let has_no_dispatch = policy.last_occurrence_at.is_none()
+        && policy.last_dispatch_state.is_none()
+        && policy.last_dispatch_observed_at.is_none();
+    let has_complete_dispatch = policy.last_occurrence_at.is_some()
+        && policy.last_dispatch_state.is_some()
+        && policy.last_dispatch_observed_at.is_some();
+    if !has_no_dispatch && !has_complete_dispatch {
+        return Err(project_round_service_unavailable());
+    }
     let display_name = Path::new(&canonical_path)
         .file_name()
         .and_then(|name| name.to_str())
@@ -2424,11 +2886,88 @@ fn ui_project_list_entry(binding: ProjectBindingProjection) -> Option<UiProjectL
         ProjectBindingStatus::BindingFailed => "binding_failed",
         ProjectBindingStatus::Unregistered => "unregistered",
     };
-    Some(UiProjectListEntryV1 {
+    Ok(Some(UiProjectListEntryV1 {
         project_id: binding.project_id,
         display_name,
         canonical_path,
         state,
+        binding_generation,
+        round: ui_project_round(policy),
+    }))
+}
+
+fn ui_project_round(policy: ProjectRoundProjection) -> UiProjectRoundV1 {
+    UiProjectRoundV1 {
+        configured: policy.configured,
+        enabled: policy.enabled,
+        revision: policy.revision,
+        updated_at: policy.updated_at,
+        interval_secs: PROJECT_ROUND_INTERVAL_SECS,
+        last_occurrence_at: policy.last_occurrence_at,
+        last_dispatch_state: policy.last_dispatch_state,
+        last_dispatch_observed_at: policy.last_dispatch_observed_at,
+    }
+}
+
+fn parse_ui_project_round_request(body: &[u8]) -> Result<UiProjectRoundRequestV1, UiProjectError> {
+    let request: UiProjectRoundRequestV1 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "invalid_request",
+            "Action de ronde invalide.".to_string(),
+        )
+    })?;
+    let valid_command_id = request.version == UI_VERSION
+        && !request.command_id.trim().is_empty()
+        && request.command_id.len() <= MAX_UI_COMMAND_ID_BYTES
+        && request.command_id.bytes().all(is_query_byte);
+    let valid_project_id = !request.project_id.trim().is_empty()
+        && request.project_id.len() <= 128
+        && request
+            .project_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+    if !valid_command_id || !valid_project_id || request.binding_generation == 0 {
+        return Err((
+            400,
+            "invalid_request",
+            "Action de ronde invalide.".to_string(),
+        ));
+    }
+    Ok(request)
+}
+
+fn post_project_round(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiProjectRoundAcceptedV1, UiProjectError> {
+    let request = parse_ui_project_round_request(body)?;
+    let operation = if request.enabled {
+        ProjectRoundOperation::Enable
+    } else {
+        ProjectRoundOperation::Disable
+    };
+    let outcome = request_project_round(
+        &config.daemon_socket,
+        request.command_id.clone(),
+        operation,
+        Some(request.project_id.clone()),
+        Some(request.binding_generation),
+    )?;
+    let Some(policy) = outcome.policies.into_iter().next() else {
+        return Err(project_round_service_unavailable());
+    };
+    if policy.project_id != request.project_id
+        || policy.binding_generation != Some(request.binding_generation)
+    {
+        return Err(project_round_service_unavailable());
+    }
+    Ok(UiProjectRoundAcceptedV1 {
+        version: UI_VERSION,
+        command_id: request.command_id,
+        project_id: request.project_id,
+        binding_generation: request.binding_generation,
+        round: ui_project_round(policy),
     })
 }
 
@@ -2615,7 +3154,21 @@ fn post_project_admin(
             "Le registre a refusé cette action sur le projet.".to_string(),
         ));
     }
-    let Some(project) = outcome.bindings.into_iter().find_map(ui_project_list_entry) else {
+    let Some(binding) = outcome.bindings.into_iter().next() else {
+        return Err((
+            409,
+            "project_action_refused",
+            "Le registre n’a pas confirmé l’état du projet.".to_string(),
+        ));
+    };
+    let round = request_project_round(
+        &config.daemon_socket,
+        format!("ui-project-round-status-{}", uuid::Uuid::new_v4()),
+        ProjectRoundOperation::Status,
+        Some(binding.project_id.clone()),
+        None,
+    )?;
+    let Some(project) = ui_project_list_entry(binding, round.policies.into_iter().next())? else {
         return Err((
             409,
             "project_action_refused",
@@ -6755,6 +7308,76 @@ mod tests {
     }
 
     #[test]
+    fn spec_081_apercu_fichier_reste_borne_canonique_et_sans_chemin_racine() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-081-file-preview-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let projects = root.join("projects");
+        let source = projects.join("src");
+        std::fs::create_dir_all(&source).unwrap();
+        let file = source.join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let oversized = source.join("too-large.txt");
+        std::fs::write(
+            &oversized,
+            vec![b'x'; MAX_UI_FILE_PREVIEW_BYTES as usize + 1],
+        )
+        .unwrap();
+        let outside = root.join("outside.txt");
+        std::fs::write(&outside, "hors projet").unwrap();
+        let policy_path = root.join("project-root-policy.json");
+        std::fs::write(
+            &policy_path,
+            serde_json::to_vec(&serde_json::json!({
+                "contract_version": 1,
+                "policy_generation": 1,
+                "allowed_project_roots": [projects],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let config = UiRelayConfig {
+            daemon_socket: root.join("bridget.sock"),
+            maicie_config: root.join("maicie.json"),
+            project_root_policy_path: Some(policy_path),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "test".to_string(),
+        };
+        let preview = read_content_file_preview(&config, file.to_str()).unwrap();
+        assert_eq!(preview.path, "src/main.rs");
+        assert_eq!(preview.media_type, "text/rust");
+        assert_eq!(preview.encoding, "utf8");
+        assert_eq!(preview.content, "fn main() {}\n");
+        assert!(!preview.content.contains(root.to_string_lossy().as_ref()));
+        assert!(preview.sha256.len() == 64);
+        assert_eq!(
+            read_content_file_preview(&config, Some("relative.txt"))
+                .unwrap_err()
+                .1,
+            "invalid_path"
+        );
+        assert_eq!(
+            read_content_file_preview(&config, outside.to_str())
+                .unwrap_err()
+                .1,
+            "outside_project_roots"
+        );
+        assert_eq!(
+            read_content_file_preview(&config, oversized.to_str())
+                .unwrap_err()
+                .1,
+            "too_large"
+        );
+        assert_eq!(base64_standard(&[0x66, 0x6f, 0x6f]), "Zm9v");
+        assert_eq!(base64_standard(&[0x66]), "Zg==");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn spec_076_previsualisation_ui_n_ecrit_rien_et_refuse_le_conflit() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -6941,6 +7564,298 @@ mod tests {
             expected_root.display().to_string()
         );
         assert!(expected_root.is_dir(), "le dossier confirmé doit être créé");
+        server.join().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_081_relais_valide_et_confirme_la_mutation_de_ronde() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-081-ui-round-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("bridget.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client
+                }
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::ClientHello { capabilities, .. }
+                    if capabilities == vec![ClientCapability::ProjectRoundPolicyV1]
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "spec-081".to_string(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: vec![ClientCapability::ProjectRoundPolicyV1],
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            let WrapperToDaemon::ProjectRoundRequest { request } =
+                decode::<WrapperToDaemon>(line.trim()).unwrap()
+            else {
+                panic!("mutation de ronde attendue");
+            };
+            assert_eq!(request.operation, ProjectRoundOperation::Enable);
+            assert_eq!(request.project_id.as_deref(), Some("project-081"));
+            assert_eq!(request.binding_generation, Some(3));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::ProjectRoundOutcome {
+                    outcome: ProjectRoundOutcome {
+                        contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+                        command_id: request.command_id,
+                        operation: request.operation,
+                        policies: vec![ProjectRoundProjection {
+                            project_id: "project-081".to_string(),
+                            binding_generation: Some(3),
+                            active: true,
+                            configured: true,
+                            enabled: true,
+                            revision: 4,
+                            updated_at: now_secs(),
+                            last_occurrence_at: Some(840),
+                            last_dispatch_state: Some(ProjectRoundDispatchState::Deposited),
+                            last_dispatch_observed_at: Some(850),
+                        }],
+                        reason: None,
+                        observed_at: now_secs(),
+                    },
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+        });
+        let config = UiRelayConfig {
+            daemon_socket: socket,
+            maicie_config: root.join("maicie.json"),
+            project_root_policy_path: None,
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "test".to_string(),
+        };
+        let accepted = post_project_round(
+            &config,
+            br#"{"version":1,"command_id":"round-ui-081","project_id":"project-081","binding_generation":3,"enabled":true}"#,
+        )
+        .unwrap();
+        assert_eq!(accepted.project_id, "project-081");
+        assert_eq!(accepted.binding_generation, 3);
+        assert!(accepted.round.enabled);
+        assert_eq!(accepted.round.last_occurrence_at, Some(840));
+        server.join().unwrap();
+
+        assert!(parse_ui_project_round_request(
+            br#"{"version":1,"command_id":"round-ui-081","project_id":"project-081","binding_generation":3,"enabled":true,"provider":"codex"}"#
+        )
+        .is_err());
+        assert!(parse_ui_project_round_request(
+            br#"{"version":1,"command_id":"round-ui-081","project_id":"project-081","binding_generation":0,"enabled":true}"#
+        )
+        .is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_081_jointure_ronde_exige_projet_generation_et_etat_coherents() {
+        let binding = ProjectBindingProjection {
+            project_id: "project-081".to_string(),
+            canonical_root: Some("/srv/project-081".to_string()),
+            state: ProjectBindingStatus::Active,
+            binding_generation: Some(3),
+            backend: Some(ProjectBackend::Host),
+            runtime_policy: None,
+            reason: None,
+            last_audit: None,
+            observed_at: 900,
+        };
+        let policy = ProjectRoundProjection {
+            project_id: "project-081".to_string(),
+            binding_generation: Some(3),
+            active: true,
+            configured: true,
+            enabled: true,
+            revision: 2,
+            updated_at: 850,
+            last_occurrence_at: None,
+            last_dispatch_state: None,
+            last_dispatch_observed_at: None,
+        };
+
+        let project = ui_project_list_entry(binding.clone(), Some(policy.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(project.binding_generation, 3);
+        assert!(project.round.enabled);
+        assert_eq!(project.round.interval_secs, PROJECT_ROUND_INTERVAL_SECS);
+
+        let missing = ui_project_list_entry(binding.clone(), None).unwrap_err();
+        assert_eq!(missing.1, "round_service_unavailable");
+
+        let mut stale = policy.clone();
+        stale.binding_generation = Some(2);
+        let mismatch = ui_project_list_entry(binding.clone(), Some(stale)).unwrap_err();
+        assert_eq!(mismatch.1, "round_service_unavailable");
+
+        let mut partial = policy;
+        partial.last_occurrence_at = Some(840);
+        let incomplete = ui_project_list_entry(binding, Some(partial)).unwrap_err();
+        assert_eq!(incomplete.1, "round_service_unavailable");
+
+        assert_eq!(
+            project_round_refusal(ProjectRoundRefusal::ProjectInactive).1,
+            "project_inactive"
+        );
+        assert_eq!(
+            project_round_refusal(ProjectRoundRefusal::BindingGenerationMismatch).1,
+            "binding_generation_mismatch"
+        );
+    }
+
+    #[test]
+    fn spec_081_perte_de_reponse_ronde_reste_une_indisponibilite_fermee() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-081-ui-round-loss-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("bridget.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "spec-081".to_string(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: vec![ClientCapability::ProjectRoundPolicyV1],
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::ProjectRoundRequest { .. }
+            ));
+            // La connexion disparaît avant tout verdict: aucun état n'est confirmé.
+        });
+        let error = request_project_round(
+            &socket,
+            "round-ui-loss-081".to_string(),
+            ProjectRoundOperation::Enable,
+            Some("project-081".to_string()),
+            Some(3),
+        )
+        .unwrap_err();
+        assert_eq!(error.0, 503);
+        assert_eq!(error.1, "round_service_unavailable");
+        server.join().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_081_capacite_ronde_absente_ne_fabrique_pas_un_etat() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-081-ui-round-capability-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("bridget.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "spec-081".to_string(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: Vec::new(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+        });
+        let error = open_project_round_client(&socket).unwrap_err();
+        assert_eq!(error.0, 503);
+        assert_eq!(error.1, "round_service_unavailable");
         server.join().unwrap();
         let _ = std::fs::remove_dir_all(root);
     }

@@ -55,7 +55,7 @@ Services **associés** (même créneau, sans les confondre) :
 | Label | Rôle | Après kickstart daemon |
 |-------|------|-------------------------|
 | `com.bridget.daemon` | Daemon Bridget | **geste ci-dessus** |
-| `com.bridget.maicie.releve` | `maicie status --config …` périodique (60 s) | reprend au prochain tick avec le `maicie` neuf |
+| `com.bridget.maicie.releve` | `maicie status --config …`, puis dispatcher global des rondes, périodique (120 s) | reprend au prochain tick avec les binaires neufs |
 | `com.bridget.ronde` | Ronde passive | idem |
 | `com.bridget.federation.cartae` | Pont distant | hors de ce GO sauf besoin explicite |
 
