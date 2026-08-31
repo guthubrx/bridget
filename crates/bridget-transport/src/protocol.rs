@@ -143,6 +143,7 @@ pub enum ClientCapability {
     SendIdempotent,
     Lookup,
     ExecutionControlV1,
+    ProjectRoundPolicyV1,
 }
 
 /// Commande neutre et versionnée du plan de contrôle.
@@ -252,6 +253,19 @@ pub struct ExecutionProviderContext {
     pub provider_turn_id: Option<String>,
     pub observed_at: i64,
 }
+
+/// Corrélation Bridget d'une remise aval idempotente.
+///
+/// Le champ reste optionnel dans `DeliverIdempotent` afin que les remises
+/// historiques sans plan d'exécution conservent exactement leur comportement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionDeliveryContext {
+    pub execution_id: String,
+    pub generation: u64,
+    pub revision: u64,
+}
+
 /// Capacité explicitement négociée par un service local.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -449,6 +463,109 @@ pub struct ProjectAdminOutcome {
     pub bindings: Vec<ProjectBindingProjection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<ProjectRegistryRefusal>,
+    pub observed_at: i64,
+}
+
+/// Version du contrat local de politique de ronde par projet.
+pub const PROJECT_ROUND_POLICY_CONTRACT_VERSION: u16 = 1;
+
+/// Opération fermée du contrôle de ronde. Les lectures ne modifient jamais la
+/// politique et les mutations exigent la génération exacte de la liaison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRoundOperation {
+    List,
+    Status,
+    Enable,
+    Disable,
+}
+
+/// Requête locale corrélée. project_id est absent uniquement pour List et la
+/// génération est obligatoire uniquement pour Enable et Disable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRoundRequest {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub issued_at: i64,
+    pub deadline_at: i64,
+    pub operation: ProjectRoundOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_generation: Option<u64>,
+}
+
+/// Refus fermé du contrôle de ronde, sans chemin hôte ni détail fournisseur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRoundRefusal {
+    InvalidContract,
+    PolicyDisabled,
+    InvalidRequest,
+    IdempotencyExpired,
+    PeerUidMismatch,
+    ProjectNotFound,
+    ProjectInactive,
+    BindingGenerationMismatch,
+    EnvelopeMismatch,
+    StoreUnavailable,
+}
+
+/// Projection effective. configured distingue une désactivation explicite de
+/// l'état sûr par défaut, lui aussi disabled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRoundProjection {
+    pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_generation: Option<u64>,
+    pub active: bool,
+    pub configured: bool,
+    pub enabled: bool,
+    pub revision: u64,
+    pub updated_at: i64,
+}
+
+/// Issue rejouable d'une commande de politique.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRoundOutcome {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub operation: ProjectRoundOperation,
+    pub policies: Vec<ProjectRoundProjection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProjectRoundRefusal>,
+    pub observed_at: i64,
+}
+
+/// Période canonique de la ronde globale. L'occurrence est calculée par le
+/// client, puis contrôlée par le daemon avant toute remise.
+pub const PROJECT_ROUND_INTERVAL_SECS: i64 = 7 * 60;
+
+/// Demande interne d'émission d'une occurrence pour une cible déjà sélectionnée.
+/// La référence projet est structurée et ne peut pas être déduite du texte.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRoundDispatchRequest {
+    pub contract_version: u16,
+    pub occurrence_at: i64,
+    pub project: ProjectReference,
+}
+
+/// Issue d'une occurrence projet. Le résultat de remise reste celui du socle
+/// idempotent commun aux fournisseurs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRoundDispatchOutcome {
+    pub contract_version: u16,
+    pub occurrence_at: i64,
+    pub project: ProjectReference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<IdempotencyIssue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProjectRoundRefusal>,
     pub observed_at: i64,
 }
 
@@ -1330,6 +1447,16 @@ pub enum WrapperToDaemon {
     ProjectRegistryAdminRequest {
         request: ProjectAdminRequest,
     },
+    /// Lecture ou mutation locale de la ronde par projet.
+    #[serde(rename = "project_round_request")]
+    ProjectRoundRequest {
+        request: ProjectRoundRequest,
+    },
+    /// Émission interne d'une occurrence déjà filtrée par le registre projet.
+    #[serde(rename = "project_round_dispatch")]
+    ProjectRoundDispatch {
+        request: ProjectRoundDispatchRequest,
+    },
     #[serde(rename = "project_profile_request")]
     ProjectProfileRequest {
         request: ProjectProfileRequest,
@@ -2043,6 +2170,13 @@ pub enum DaemonToWrapper {
     /// Issue corrélée d'une lecture ou mutation administrative du registre.
     #[serde(rename = "project_registry_admin_outcome")]
     ProjectRegistryAdminOutcome { outcome: ProjectAdminOutcome },
+    /// Issue locale de la politique de ronde par projet.
+    #[serde(rename = "project_round_outcome")]
+    ProjectRoundOutcome { outcome: ProjectRoundOutcome },
+    #[serde(rename = "project_round_dispatch_outcome")]
+    ProjectRoundDispatchOutcome {
+        outcome: ProjectRoundDispatchOutcome,
+    },
     #[serde(rename = "project_profile_outcome")]
     ProjectProfileOutcome { outcome: ProjectProfileOutcome },
     /// Issue bornée d'une opération locale d'environnement Docker.
@@ -2221,6 +2355,8 @@ pub enum DaemonToWrapper {
         delivery_generation: u64,
         expires_at: i64,
         message: BridgetMessage,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution: Option<ExecutionDeliveryContext>,
     },
     /// Souscription du daemon vers le wrapper lecteur du journal.
     Subscribe {
@@ -3041,6 +3177,52 @@ mod tests {
             }
             _ => panic!("mauvais type"),
         }
+    }
+
+    #[test]
+    fn spec_079_deliver_idempotent_projette_le_contexte_execution_optionnel() {
+        let message = BridgetMessage::new("humain", "codex-1", "reprends ce travail");
+        let frame = DaemonToWrapper::DeliverIdempotent {
+            delivery_id: "delivery-079".to_string(),
+            recipient_instance_id: "instance-079".to_string(),
+            delivery_generation: 7,
+            expires_at: 1_900_000_000,
+            message,
+            execution: Some(ExecutionDeliveryContext {
+                execution_id: "execution-079".to_string(),
+                generation: 2,
+                revision: 0,
+            }),
+        };
+
+        let encoded = encode(&frame).unwrap();
+        let decoded: DaemonToWrapper = decode(&encoded).unwrap();
+        assert!(matches!(
+            decoded,
+            DaemonToWrapper::DeliverIdempotent {
+                execution: Some(ExecutionDeliveryContext {
+                    execution_id,
+                    generation: 2,
+                    revision: 0,
+                }),
+                ..
+            } if execution_id == "execution-079"
+        ));
+    }
+
+    #[test]
+    fn spec_079_deliver_idempotent_historique_sans_contexte_reste_decodable() {
+        let json = r#"{"type":"DeliverIdempotent","delivery_id":"delivery-old","recipient_instance_id":"instance-old","delivery_generation":1,"expires_at":1900000000,"message":{"id":"message-old","from":"humain","to":"codex-1","body":"historique","reply":false,"references":[],"timestamp":"2026-08-31T00:00:00Z"}}"#;
+
+        let decoded: DaemonToWrapper = decode(json).unwrap();
+        assert!(matches!(
+            decoded,
+            DaemonToWrapper::DeliverIdempotent {
+                delivery_id,
+                execution: None,
+                ..
+            } if delivery_id == "delivery-old"
+        ));
     }
 
     #[test]
@@ -4717,5 +4899,75 @@ mod tests {
             serde_json::to_string(&RuntimeIngressRefusal::EnvironmentEpochStale).unwrap(),
             "\"environment_epoch_stale\""
         );
+    }
+    #[test]
+    fn spec_079_contrat_ronde_projet_est_ferme_versionne_et_rejouable() {
+        let request = ProjectRoundRequest {
+            contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+            command_id: "round-enable-1".to_string(),
+            issued_at: 1_788_000_000,
+            deadline_at: 1_788_000_060,
+            operation: ProjectRoundOperation::Enable,
+            project_id: Some("project-079".to_string()),
+            binding_generation: Some(4),
+        };
+        let wire = encode(&WrapperToDaemon::ProjectRoundRequest {
+            request: request.clone(),
+        })
+        .unwrap();
+        assert!(wire.contains(r#""type":"project_round_request""#));
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&wire).unwrap(),
+            WrapperToDaemon::ProjectRoundRequest { request: decoded } if decoded == request
+        ));
+        assert!(serde_json::from_str::<ProjectRoundRequest>(
+            r#"{"contract_version":1,"command_id":"round-enable-1","issued_at":1,"deadline_at":2,"operation":"enable","project_id":"project-079","binding_generation":4,"provider":"codex"}"#
+        )
+        .is_err());
+
+        let dispatch = ProjectRoundDispatchRequest {
+            contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+            occurrence_at: 1_788_000_000,
+            project: ProjectReference {
+                project_id: "project-079".to_string(),
+                binding_generation: 4,
+            },
+        };
+        let wire = encode(&WrapperToDaemon::ProjectRoundDispatch {
+            request: dispatch.clone(),
+        })
+        .unwrap();
+        assert!(wire.contains(r#""type":"project_round_dispatch""#));
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&wire).unwrap(),
+            WrapperToDaemon::ProjectRoundDispatch { request: decoded } if decoded == dispatch
+        ));
+        assert!(serde_json::from_str::<ProjectRoundDispatchRequest>(
+            r#"{"contract_version":1,"occurrence_at":1788000000,"project":{"project_id":"project-079","binding_generation":4},"cwd":"/srv/private"}"#
+        )
+        .is_err());
+
+        let outcome = ProjectRoundDispatchOutcome {
+            contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+            occurrence_at: dispatch.occurrence_at,
+            project: dispatch.project,
+            issue: Some(IdempotencyIssue::OutcomeUnknown {
+                expires_at: 1_788_604_800,
+                delivery_id: Some("delivery-079".to_string()),
+            }),
+            reason: None,
+            observed_at: 1_788_000_001,
+        };
+        assert!(matches!(
+            decode::<DaemonToWrapper>(
+                &encode(&DaemonToWrapper::ProjectRoundDispatchOutcome {
+                    outcome: outcome.clone(),
+                })
+                .unwrap()
+            )
+            .unwrap(),
+            DaemonToWrapper::ProjectRoundDispatchOutcome { outcome: decoded }
+                if decoded == outcome
+        ));
     }
 }

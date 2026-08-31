@@ -1,3 +1,4 @@
+pub mod agent_profile;
 pub mod attach;
 pub mod build_identity;
 pub mod build_info;

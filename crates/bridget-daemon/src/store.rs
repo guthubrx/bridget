@@ -4,10 +4,11 @@ use crate::project_runtime::ProjectEnvironmentState;
 use bridget_transport::greffe_authorization::GreffeAuthorizationAttestation;
 use bridget_transport::protocol::{
     CoordinationEventKind, GuichetLifecycleState, GuichetOutcome,
-    PROJECT_REGISTRY_CONTRACT_VERSION, ProjectAdminOperation, ProjectAdminOutcome, ProjectBackend,
-    ProjectBindOutcome, ProjectBindStatus, ProjectBindingProjection, ProjectBindingStatus,
-    ProjectRegistryRefusal, ProjectRuntimePolicyReference, ServiceRequestOperation,
-    ServiceRequestPayload,
+    PROJECT_REGISTRY_CONTRACT_VERSION, PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+    ProjectAdminOperation, ProjectAdminOutcome, ProjectBackend, ProjectBindOutcome,
+    ProjectBindStatus, ProjectBindingProjection, ProjectBindingStatus, ProjectRegistryRefusal,
+    ProjectRoundOperation, ProjectRoundOutcome, ProjectRoundProjection, ProjectRoundRefusal,
+    ProjectRuntimePolicyReference, ServiceRequestOperation, ServiceRequestPayload,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
@@ -703,7 +704,28 @@ impl Store {
                  canonical_root TEXT,
                  outcome_json BLOB NOT NULL,
                  observed_at INTEGER NOT NULL
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS project_round_policies (
+                 project_id TEXT NOT NULL,
+                 binding_generation INTEGER NOT NULL CHECK (binding_generation > 0),
+                 enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+                 revision INTEGER NOT NULL CHECK (revision > 0),
+                 updated_at INTEGER NOT NULL,
+                 command_id TEXT NOT NULL,
+                 PRIMARY KEY (project_id, binding_generation)
+             );
+             CREATE TABLE IF NOT EXISTS project_round_commands (
+                 command_id TEXT PRIMARY KEY,
+                 operation TEXT NOT NULL CHECK (operation IN ('enable', 'disable')),
+                 project_id TEXT NOT NULL,
+                 binding_generation INTEGER NOT NULL CHECK (binding_generation > 0),
+                 canonical_bytes BLOB NOT NULL,
+                 outcome_json BLOB NOT NULL,
+                 observed_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_project_round_enabled
+                 ON project_round_policies(enabled, project_id, binding_generation);
+             ",
         )
         .map_err(StoreError::Sqlite)?;
         // Migration additive : les échantillons historiques restent valides
@@ -1319,6 +1341,210 @@ impl Store {
                     .map(|binding| project_binding_projection(&binding, observed_at))
             })
             .collect()
+    }
+
+    /// Projette la politique effective d'un projet. L'absence de ligne est
+    /// volontairement une désactivation non configurée.
+    pub fn project_round_policy_for_project(
+        &self,
+        project_id: &str,
+        observed_at: i64,
+    ) -> Result<Option<ProjectRoundProjection>, StoreError> {
+        let Some(binding) = self.project_binding(project_id)? else {
+            return Ok(None);
+        };
+        project_round_projection(&self.conn, &binding, observed_at).map(Some)
+    }
+
+    /// Liste toutes les liaisons et leur politique effective, y compris les
+    /// projets inactifs et les politiques absentes.
+    pub fn project_round_policies(
+        &self,
+        observed_at: i64,
+    ) -> Result<Vec<ProjectRoundProjection>, StoreError> {
+        let bindings = self.project_binding_projections(observed_at)?;
+        bindings
+            .into_iter()
+            .map(|projection| {
+                let binding = self
+                    .project_binding(&projection.project_id)?
+                    .ok_or(StoreError::Invariant("liaison projet disparue"))?;
+                project_round_projection(&self.conn, &binding, observed_at)
+            })
+            .collect()
+    }
+
+    /// Cibles du scheduler unique. Une ancienne génération reste stockée mais
+    /// ne peut jamais redevenir active implicitement après rebind.
+    pub fn enabled_project_round_policies(
+        &self,
+        observed_at: i64,
+    ) -> Result<Vec<ProjectRoundProjection>, StoreError> {
+        Ok(self
+            .project_round_policies(observed_at)?
+            .into_iter()
+            .filter(|policy| policy.active && policy.configured && policy.enabled)
+            .collect())
+    }
+
+    /// Applique une décision de ronde épinglée à la génération active et
+    /// mémorise l'issue exacte par command_id.
+    pub fn apply_project_round_mutation(
+        &mut self,
+        command_id: &str,
+        operation: ProjectRoundOperation,
+        project_id: &str,
+        binding_generation: u64,
+        observed_at: i64,
+    ) -> Result<ProjectRoundOutcome, StoreError> {
+        let desired_enabled = match operation {
+            ProjectRoundOperation::Enable => true,
+            ProjectRoundOperation::Disable => false,
+            ProjectRoundOperation::List | ProjectRoundOperation::Status => {
+                return Err(StoreError::Invariant("opération de ronde non mutante"));
+            }
+        };
+        if command_id.trim().is_empty()
+            || project_id.trim().is_empty()
+            || binding_generation == 0
+            || binding_generation > i64::MAX as u64
+            || observed_at < 0
+        {
+            return Err(StoreError::Invariant("mutation de ronde invalide"));
+        }
+        let canonical_bytes = format!(
+            "project-round-policy-v1|{}|{}|{}",
+            project_round_operation_name(operation),
+            project_id,
+            binding_generation
+        )
+        .into_bytes();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sqlite)?;
+
+        if let Some((stored_canonical, outcome_json)) = tx
+            .query_row(
+                "SELECT canonical_bytes, outcome_json
+                 FROM project_round_commands WHERE command_id = ?1",
+                [command_id],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sqlite)?
+        {
+            if stored_canonical != canonical_bytes {
+                return Err(StoreError::ProjectRoundRefusal(
+                    ProjectRoundRefusal::EnvelopeMismatch,
+                ));
+            }
+            let outcome = serde_json::from_slice(&outcome_json)
+                .map_err(|_| StoreError::Invariant("issue de ronde corrompue"))?;
+            tx.commit().map_err(StoreError::Sqlite)?;
+            return Ok(outcome);
+        }
+
+        let outcome = match project_binding_for_project(&tx, project_id)? {
+            None => project_round_failure(
+                command_id,
+                operation,
+                ProjectRoundRefusal::ProjectNotFound,
+                observed_at,
+            ),
+            Some(binding) if binding.state != ProjectBindingState::Active => project_round_failure(
+                command_id,
+                operation,
+                ProjectRoundRefusal::ProjectInactive,
+                observed_at,
+            ),
+            Some(binding) if binding.generation != binding_generation => project_round_failure(
+                command_id,
+                operation,
+                ProjectRoundRefusal::BindingGenerationMismatch,
+                observed_at,
+            ),
+            Some(binding) => {
+                let stored = tx
+                    .query_row(
+                        "SELECT enabled, revision
+                         FROM project_round_policies
+                         WHERE project_id = ?1 AND binding_generation = ?2",
+                        params![project_id, binding_generation as i64],
+                        |row| Ok((row.get::<_, bool>(0)?, row.get::<_, u64>(1)?)),
+                    )
+                    .optional()
+                    .map_err(StoreError::Sqlite)?;
+                match stored {
+                    None => {
+                        tx.execute(
+                            "INSERT INTO project_round_policies (
+                                project_id, binding_generation, enabled,
+                                revision, updated_at, command_id
+                             ) VALUES (?1, ?2, ?3, 1, ?4, ?5)",
+                            params![
+                                project_id,
+                                binding_generation as i64,
+                                desired_enabled,
+                                observed_at,
+                                command_id
+                            ],
+                        )
+                        .map_err(StoreError::Sqlite)?;
+                    }
+                    Some((enabled, revision)) if enabled != desired_enabled => {
+                        let next_revision = revision
+                            .checked_add(1)
+                            .ok_or(StoreError::Invariant("révision de ronde épuisée"))?;
+                        tx.execute(
+                            "UPDATE project_round_policies
+                             SET enabled = ?1, revision = ?2,
+                                 updated_at = ?3, command_id = ?4
+                             WHERE project_id = ?5 AND binding_generation = ?6",
+                            params![
+                                desired_enabled,
+                                next_revision,
+                                observed_at,
+                                command_id,
+                                project_id,
+                                binding_generation as i64
+                            ],
+                        )
+                        .map_err(StoreError::Sqlite)?;
+                    }
+                    Some(_) => {}
+                }
+                let projection = project_round_projection(&tx, &binding, observed_at)?;
+                ProjectRoundOutcome {
+                    contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+                    command_id: command_id.to_string(),
+                    operation,
+                    policies: vec![projection],
+                    reason: None,
+                    observed_at,
+                }
+            }
+        };
+        let outcome_json = serde_json::to_vec(&outcome)
+            .map_err(|_| StoreError::Invariant("issue de ronde non sérialisable"))?;
+        tx.execute(
+            "INSERT INTO project_round_commands (
+                command_id, operation, project_id, binding_generation,
+                canonical_bytes, outcome_json, observed_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                command_id,
+                project_round_operation_name(operation),
+                project_id,
+                binding_generation as i64,
+                canonical_bytes,
+                outcome_json,
+                observed_at
+            ],
+        )
+        .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+        Ok(outcome)
     }
 
     /// Applique rebind ou disable avec son audit dans la transaction qui porte
@@ -3345,6 +3571,68 @@ fn project_admin_operation_name(operation: ProjectAdminOperation) -> &'static st
     }
 }
 
+fn project_round_operation_name(operation: ProjectRoundOperation) -> &'static str {
+    match operation {
+        ProjectRoundOperation::List => "list",
+        ProjectRoundOperation::Status => "status",
+        ProjectRoundOperation::Enable => "enable",
+        ProjectRoundOperation::Disable => "disable",
+    }
+}
+
+fn project_round_projection(
+    conn: &Connection,
+    binding: &ProjectBinding,
+    observed_at: i64,
+) -> Result<ProjectRoundProjection, StoreError> {
+    let stored = conn
+        .query_row(
+            "SELECT enabled, revision, updated_at
+             FROM project_round_policies
+             WHERE project_id = ?1 AND binding_generation = ?2",
+            params![binding.project_id, binding.generation as i64],
+            |row| {
+                Ok((
+                    row.get::<_, bool>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(StoreError::Sqlite)?;
+    let active = binding.state == ProjectBindingState::Active;
+    let (configured, enabled, revision, updated_at) = match stored {
+        Some((enabled, revision, updated_at)) => (true, active && enabled, revision, updated_at),
+        None => (false, false, 0, binding.updated_at.min(observed_at)),
+    };
+    Ok(ProjectRoundProjection {
+        project_id: binding.project_id.clone(),
+        binding_generation: Some(binding.generation),
+        active,
+        configured,
+        enabled,
+        revision,
+        updated_at,
+    })
+}
+
+fn project_round_failure(
+    command_id: &str,
+    operation: ProjectRoundOperation,
+    reason: ProjectRoundRefusal,
+    observed_at: i64,
+) -> ProjectRoundOutcome {
+    ProjectRoundOutcome {
+        contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+        command_id: command_id.to_string(),
+        operation,
+        policies: Vec::new(),
+        reason: Some(reason),
+        observed_at,
+    }
+}
+
 fn project_binding_projection(
     binding: &ProjectBinding,
     observed_at: i64,
@@ -3716,6 +4004,7 @@ pub enum StoreError {
     Sqlite(rusqlite::Error),
     Invariant(&'static str),
     ProjectRegistryRefusal(ProjectRegistryRefusal),
+    ProjectRoundRefusal(ProjectRoundRefusal),
     FrameTooLarge { max_frame_bytes: usize },
 }
 
@@ -3726,6 +4015,9 @@ impl std::fmt::Display for StoreError {
             StoreError::Invariant(detail) => write!(f, "invariant store: {detail}"),
             StoreError::ProjectRegistryRefusal(reason) => {
                 write!(f, "refus registre projet: {reason:?}")
+            }
+            StoreError::ProjectRoundRefusal(reason) => {
+                write!(f, "refus politique de ronde: {reason:?}")
             }
             StoreError::FrameTooLarge { max_frame_bytes } => {
                 write!(f, "trame guichet supérieure à {max_frame_bytes} octets")
@@ -4892,6 +5184,154 @@ mod tests {
             store.update_project_runtime("project-host", &runtime, 14),
             Err(StoreError::Invariant(_))
         ));
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn spec_079_politique_ronde_absente_idempotente_et_epinglee_au_rebind() {
+        let path =
+            std::env::temp_dir().join(format!("bridget-project-round-{}.db", Uuid::new_v4()));
+        let mut store = Store::open(&path).unwrap();
+        store
+            .bind_project_registration("register-round-1", "project-1", "/srv/projects/one", 100)
+            .unwrap();
+        store
+            .bind_project_registration("register-round-2", "project-2", "/srv/projects/two", 100)
+            .unwrap();
+
+        let initial = store.project_round_policies(101).unwrap();
+        assert_eq!(initial.len(), 2);
+        assert!(initial.iter().all(|policy| {
+            policy.active && !policy.configured && !policy.enabled && policy.revision == 0
+        }));
+
+        let enabled = store
+            .apply_project_round_mutation(
+                "round-enable-1",
+                ProjectRoundOperation::Enable,
+                "project-1",
+                1,
+                102,
+            )
+            .unwrap();
+        assert!(enabled.reason.is_none());
+        assert!(matches!(
+            enabled.policies.as_slice(),
+            [policy]
+                if policy.project_id == "project-1"
+                    && policy.binding_generation == Some(1)
+                    && policy.configured
+                    && policy.enabled
+                    && policy.revision == 1
+        ));
+        assert_eq!(
+            store
+                .apply_project_round_mutation(
+                    "round-enable-1",
+                    ProjectRoundOperation::Enable,
+                    "project-1",
+                    1,
+                    999,
+                )
+                .unwrap(),
+            enabled,
+            "le rejeu exact relit l'issue initiale"
+        );
+        assert!(matches!(
+            store.apply_project_round_mutation(
+                "round-enable-1",
+                ProjectRoundOperation::Disable,
+                "project-1",
+                1,
+                103,
+            ),
+            Err(StoreError::ProjectRoundRefusal(
+                ProjectRoundRefusal::EnvelopeMismatch
+            ))
+        ));
+        assert_eq!(
+            store.enabled_project_round_policies(103).unwrap(),
+            enabled.policies
+        );
+
+        let disabled = store
+            .apply_project_round_mutation(
+                "round-disable-1",
+                ProjectRoundOperation::Disable,
+                "project-1",
+                1,
+                104,
+            )
+            .unwrap();
+        assert!(matches!(
+            disabled.policies.as_slice(),
+            [policy] if policy.configured && !policy.enabled && policy.revision == 2
+        ));
+        assert!(
+            store
+                .enabled_project_round_policies(104)
+                .unwrap()
+                .is_empty()
+        );
+
+        let rebound = store
+            .rebind_project_binding("project-1", "/srv/projects/one-rebound", 105)
+            .unwrap();
+        assert_eq!(rebound.generation, 2);
+        let after_rebind = store
+            .project_round_policy_for_project("project-1", 106)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after_rebind.binding_generation, Some(2));
+        assert!(!after_rebind.configured);
+        assert!(!after_rebind.enabled);
+        assert_eq!(after_rebind.revision, 0);
+
+        let stale = store
+            .apply_project_round_mutation(
+                "round-stale-1",
+                ProjectRoundOperation::Enable,
+                "project-1",
+                1,
+                107,
+            )
+            .unwrap();
+        assert_eq!(
+            stale.reason,
+            Some(ProjectRoundRefusal::BindingGenerationMismatch)
+        );
+        let missing = store
+            .apply_project_round_mutation(
+                "round-missing",
+                ProjectRoundOperation::Enable,
+                "project-missing",
+                1,
+                108,
+            )
+            .unwrap();
+        assert_eq!(missing.reason, Some(ProjectRoundRefusal::ProjectNotFound));
+
+        store
+            .apply_project_admin_mutation(
+                "disable-project-2",
+                ProjectAdminOperation::Disable,
+                "project-2",
+                None,
+                109,
+            )
+            .unwrap();
+        let inactive = store
+            .apply_project_round_mutation(
+                "round-inactive",
+                ProjectRoundOperation::Enable,
+                "project-2",
+                1,
+                110,
+            )
+            .unwrap();
+        assert_eq!(inactive.reason, Some(ProjectRoundRefusal::ProjectInactive));
 
         drop(store);
         let _ = std::fs::remove_file(path);

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use uuid::Uuid;
 
 const FORMAT_VERSION: u8 = 1;

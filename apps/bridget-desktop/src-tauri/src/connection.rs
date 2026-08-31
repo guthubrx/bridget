@@ -364,8 +364,45 @@ pub fn parse_endpoint_document(body: &[u8]) -> Result<RelayEndpoint, ConnectionE
 }
 
 pub fn relay_url(local_port: u16, endpoint: &RelayEndpoint) -> String {
+    relay_url_for_client(local_port, endpoint, None)
+}
+
+/// Le client Desktop injecte son identité stable au relais. Le port local reste
+/// éphémère et n'est jamais utilisé comme identité de préférences.
+pub fn relay_url_for_client(
+    local_port: u16,
+    endpoint: &RelayEndpoint,
+    client_id: Option<&str>,
+) -> String {
+    let client_query = client_id
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("&client_id={}", percent_encode(value)))
+        .unwrap_or_default();
     format!(
-        "http://127.0.0.1:{local_port}/?token={}",
+        "http://127.0.0.1:{local_port}/?token={}{}",
+        percent_encode(endpoint.token()),
+        client_query
+    )
+}
+
+pub fn desktop_relay_url(local_port: u16, endpoint: &RelayEndpoint, client_id: &str) -> String {
+    format!(
+        "{}&native_attention=1",
+        relay_url_for_client(local_port, endpoint, Some(client_id))
+    )
+}
+
+pub fn attention_request_path(endpoint: &RelayEndpoint, client_id: &str) -> String {
+    format!(
+        "/v1/attention?token={}&client_id={}",
+        percent_encode(endpoint.token()),
+        percent_encode(client_id)
+    )
+}
+
+pub fn attention_state_request_path(endpoint: &RelayEndpoint) -> String {
+    format!(
+        "/v1/attention/state?token={}",
         percent_encode(endpoint.token())
     )
 }
@@ -385,8 +422,9 @@ fn percent_encode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectionError, HttpRelayProbe, RelayProbe, RemoteTransport, connect_remote,
-        mark_tunnel_lost, parse_endpoint_document, transition,
+        ConnectionError, HttpRelayProbe, RelayProbe, RemoteTransport, attention_request_path,
+        attention_state_request_path, connect_remote, desktop_relay_url, mark_tunnel_lost,
+        parse_endpoint_document, transition,
     };
     use crate::profile::{
         ConnectionProfile, ConnectionSession, ConnectionState, ProfileCapability, RelayEndpoint,
@@ -505,6 +543,27 @@ mod tests {
         let mut probe = HttpRelayProbe;
         assert!(probe.check(port, &endpoint).is_ok());
         server.join().expect("serveur terminé");
+    }
+
+    #[test]
+    fn url_desktop_garde_le_client_stable_quand_le_port_change() {
+        let endpoint = RelayEndpoint::new(17888, "fixture token".into()).expect("endpoint");
+        let client_id = "11111111-1111-4111-8111-111111111111";
+        let first = desktop_relay_url(39001, &endpoint, client_id);
+        let second = desktop_relay_url(39002, &endpoint, client_id);
+        assert!(first.contains("127.0.0.1:39001"));
+        assert!(second.contains("127.0.0.1:39002"));
+        assert!(first.contains(client_id));
+        assert!(second.contains(client_id));
+        assert!(first.ends_with("native_attention=1"));
+        assert_eq!(
+            attention_request_path(&endpoint, client_id),
+            format!("/v1/attention?token=fixture%20token&client_id={client_id}")
+        );
+        assert_eq!(
+            attention_state_request_path(&endpoint),
+            "/v1/attention/state?token=fixture%20token"
+        );
     }
 
     #[test]

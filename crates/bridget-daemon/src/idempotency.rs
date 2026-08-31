@@ -1799,7 +1799,7 @@ impl IdempotencyStore {
         key: &IdempotencyKey,
         delivery: &SendDelivery,
     ) -> Result<(), IdempotencyError> {
-        self.begin_send_delivery_inner(key, delivery, None)
+        self.begin_send_delivery_inner(key, delivery, None, None)
     }
 
     /// Prépare atomiquement la remise et le suivi d'une réponse attendue.
@@ -1809,7 +1809,21 @@ impl IdempotencyStore {
         delivery: &SendDelivery,
         reply: &ReplyTracking,
     ) -> Result<(), IdempotencyError> {
-        self.begin_send_delivery_inner(key, delivery, Some(reply))
+        self.begin_send_delivery_inner(key, delivery, Some(reply), None)
+    }
+
+    /// Prépare la remise et son rattachement causal dans la même transaction.
+    ///
+    /// Une panne ne peut donc jamais laisser une remise injectable sans le
+    /// contexte d'exécution que le wrapper doit publier.
+    pub fn begin_send_delivery_with_execution(
+        &mut self,
+        key: &IdempotencyKey,
+        delivery: &SendDelivery,
+        reply: Option<&ReplyTracking>,
+        link: &DeliveryExecutionLink,
+    ) -> Result<(), IdempotencyError> {
+        self.begin_send_delivery_inner(key, delivery, reply, Some(link))
     }
 
     fn begin_send_delivery_inner(
@@ -1817,11 +1831,19 @@ impl IdempotencyStore {
         key: &IdempotencyKey,
         delivery: &SendDelivery,
         reply: Option<&ReplyTracking>,
+        execution_link: Option<&DeliveryExecutionLink>,
     ) -> Result<(), IdempotencyError> {
         if key.operation_kind != OperationKind::Send || delivery.delivery_id.is_empty() {
             return Err(IdempotencyError::InvalidDelivery);
         }
         if delivery.message_bytes.is_empty() || delivery.message_bytes.len() > MAX_CANONICAL_BYTES {
+            return Err(IdempotencyError::InvalidDelivery);
+        }
+        if execution_link.is_some_and(|link| {
+            link.delivery_id != delivery.delivery_id
+                || link.submission_id.is_empty()
+                || link.execution_id.is_empty()
+        }) {
             return Err(IdempotencyError::InvalidDelivery);
         }
         // Jamais de .ok() silencieux : une remise sans enveloppe lisible
@@ -1857,6 +1879,14 @@ impl IdempotencyStore {
                 delivery.message_bytes,
             ],
         )?;
+        if let Some(link) = execution_link {
+            tx.execute(
+                "INSERT INTO send_delivery_execution_links
+                    (delivery_id, submission_id, execution_id)
+                 VALUES (?1, ?2, ?3)",
+                params![link.delivery_id, link.submission_id, link.execution_id],
+            )?;
+        }
         let conversation_key = format!("{}|{}", emitted_message.from, emitted_message.to);
         crate::store::record_message_in_transaction(&tx, &emitted_message, &conversation_key)?;
         if let Some(reply) = reply {
@@ -2145,6 +2175,89 @@ impl IdempotencyStore {
             );
         }
         Ok(deliveries)
+    }
+
+    /// Recherche une remise encore rejouable pour une exécution et une
+    /// instance exactes. Une remise accusée ou expirée n'empêche pas la
+    /// reconstruction d'une continuation.
+    /// Recherche une remise liée même si le daemon a perdu la présence qui
+    /// permettait de connaître l'ancien instance_id après un redémarrage.
+    /// Deux remises actives pour la même exécution sont une corruption fermée.
+    pub fn dispatching_delivery_for_execution_any_instance(
+        &self,
+        execution_id: &str,
+        now: i64,
+    ) -> Result<Option<SendDelivery>, IdempotencyError> {
+        if execution_id.trim().is_empty() {
+            return Ok(None);
+        }
+        let mut statement = self.conn.prepare(
+            "SELECT delivery.delivery_id, delivery.recipient_instance_id,
+                    delivery.delivery_generation, delivery.expires_at,
+                    delivery.message_bytes
+             FROM send_deliveries delivery
+             JOIN send_delivery_execution_links link
+               ON link.delivery_id = delivery.delivery_id
+             WHERE link.execution_id = ?1
+               AND delivery.phase = 'dispatching'
+               AND delivery.expires_at > ?2
+             ORDER BY delivery.delivery_id
+             LIMIT 2",
+        )?;
+        let deliveries = statement
+            .query_map(params![execution_id, now], |row| {
+                Ok(SendDelivery {
+                    delivery_id: row.get(0)?,
+                    recipient_instance_id: row.get(1)?,
+                    delivery_generation: row.get(2)?,
+                    expires_at: row.get(3)?,
+                    message_bytes: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        match deliveries.as_slice() {
+            [] => Ok(None),
+            [delivery] => Ok(Some(delivery.clone())),
+            _ => Err(IdempotencyError::CorruptRecord(
+                "plusieurs remises actives pour une exécution",
+            )),
+        }
+    }
+
+    pub fn dispatching_delivery_for_execution(
+        &self,
+        execution_id: &str,
+        recipient_instance_id: &str,
+        now: i64,
+    ) -> Result<Option<SendDelivery>, IdempotencyError> {
+        if execution_id.trim().is_empty() || recipient_instance_id.trim().is_empty() {
+            return Ok(None);
+        }
+        self.conn
+            .query_row(
+                "SELECT delivery.delivery_id, delivery.recipient_instance_id,
+                        delivery.delivery_generation, delivery.expires_at,
+                        delivery.message_bytes
+                 FROM send_deliveries delivery
+                 JOIN send_delivery_execution_links link
+                   ON link.delivery_id = delivery.delivery_id
+                 WHERE link.execution_id = ?1
+                   AND delivery.recipient_instance_id = ?2
+                   AND delivery.phase = 'dispatching'
+                   AND delivery.expires_at > ?3",
+                params![execution_id, recipient_instance_id, now],
+                |row| {
+                    Ok(SendDelivery {
+                        delivery_id: row.get(0)?,
+                        recipient_instance_id: row.get(1)?,
+                        delivery_generation: row.get(2)?,
+                        expires_at: row.get(3)?,
+                        message_bytes: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     /// Une marque `Seen` sans observable d'injection reste indéterminée : le
@@ -3618,6 +3731,132 @@ mod tests {
             }),
             Err(IdempotencyError::InvalidDelivery)
         ));
+    }
+
+    #[test]
+    fn spec_079_remise_et_lien_execution_partagent_la_transaction() {
+        let mut store = IdempotencyStore::open_in_memory().unwrap();
+        let primary_key = key();
+        assert!(matches!(
+            reserve(&store, b"canon"),
+            Reservation::Prepared { .. }
+        ));
+        let delivery = SendDelivery {
+            delivery_id: "delivery-079".to_string(),
+            recipient_instance_id: "instance-079".to_string(),
+            delivery_generation: 79,
+            expires_at: NOW + HORIZON,
+            message_bytes: sample_message_bytes("message-079", "agent-079"),
+        };
+        let link = DeliveryExecutionLink {
+            delivery_id: delivery.delivery_id.clone(),
+            submission_id: "message-079".to_string(),
+            execution_id: "execution-message-079".to_string(),
+        };
+        store
+            .begin_send_delivery_with_execution(&primary_key, &delivery, None, &link)
+            .unwrap();
+        assert_eq!(store.send_delivery(&primary_key).unwrap(), Some(delivery));
+        assert_eq!(
+            store.delivery_execution_link("delivery-079").unwrap(),
+            Some(link)
+        );
+
+        let mut refused = IdempotencyStore::open_in_memory().unwrap();
+        let refused_key = key();
+        assert!(matches!(
+            reserve(&refused, b"canon"),
+            Reservation::Prepared { .. }
+        ));
+        let refused_delivery = SendDelivery {
+            delivery_id: "delivery-refusee".to_string(),
+            recipient_instance_id: "instance-079".to_string(),
+            delivery_generation: 80,
+            expires_at: NOW + HORIZON,
+            message_bytes: sample_message_bytes("message-079", "agent-079"),
+        };
+        let mismatched = DeliveryExecutionLink {
+            delivery_id: "autre-delivery".to_string(),
+            submission_id: "message-079".to_string(),
+            execution_id: "execution-message-079".to_string(),
+        };
+        assert!(matches!(
+            refused.begin_send_delivery_with_execution(
+                &refused_key,
+                &refused_delivery,
+                None,
+                &mismatched
+            ),
+            Err(IdempotencyError::InvalidDelivery)
+        ));
+        assert_eq!(delivery_row_count(&refused, "delivery-refusee"), 0);
+    }
+
+    #[test]
+    fn spec_079_remise_dispatching_bloque_une_nouvelle_continuation() {
+        let mut store = IdempotencyStore::open_in_memory().unwrap();
+        let primary_key = key();
+        assert!(matches!(
+            reserve(&store, b"canon"),
+            Reservation::Prepared { .. }
+        ));
+        let delivery = SendDelivery {
+            delivery_id: "delivery-recovery-079".to_string(),
+            recipient_instance_id: "instance-079".to_string(),
+            delivery_generation: 81,
+            expires_at: NOW + HORIZON,
+            message_bytes: sample_message_bytes("message-079", "agent-079"),
+        };
+        let link = DeliveryExecutionLink {
+            delivery_id: delivery.delivery_id.clone(),
+            submission_id: "message-079".to_string(),
+            execution_id: "execution-recovery-079".to_string(),
+        };
+        store
+            .begin_send_delivery_with_execution(&primary_key, &delivery, None, &link)
+            .unwrap();
+
+        assert_eq!(
+            store
+                .dispatching_delivery_for_execution("execution-recovery-079", "instance-079", NOW)
+                .unwrap(),
+            Some(delivery.clone())
+        );
+        assert_eq!(
+            store
+                .dispatching_delivery_for_execution(
+                    "execution-recovery-079",
+                    "instance-apres-redemarrage",
+                    NOW,
+                )
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            store
+                .dispatching_delivery_for_execution_any_instance("execution-recovery-079", NOW,)
+                .unwrap(),
+            Some(delivery.clone())
+        );
+        store
+            .acknowledge_send_delivery(
+                &delivery.delivery_id,
+                &delivery.recipient_instance_id,
+                delivery.delivery_generation,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .dispatching_delivery_for_execution("execution-recovery-079", "instance-079", NOW,)
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            store
+                .dispatching_delivery_for_execution_any_instance("execution-recovery-079", NOW,)
+                .unwrap(),
+            None
+        );
     }
 
     #[test]

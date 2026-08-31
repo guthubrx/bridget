@@ -275,6 +275,72 @@ body:has(.agent-pane-resizer[data-dragging="true"]) {
   font-size: 0.72rem;
 }
 
+.attention-control {
+  display: inline-flex;
+  min-width: 1.4rem;
+  min-height: 1.4rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.28rem;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.62rem;
+  opacity: 0.58;
+}
+
+.attention-control:hover,
+.attention-control:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  opacity: 1;
+}
+
+.attention-control__count {
+  min-width: 0.85rem;
+  color: var(--text-primary);
+  font-size: 0.7rem;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.attention-control[data-attention="true"] {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.attention-centre {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.attention-centre__item {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.6rem;
+  border-radius: 0.6rem;
+  background: color-mix(in srgb, var(--surface-hover) 58%, transparent);
+}
+
+.attention-centre__item p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.attention-centre__item strong {
+  font-size: 0.82rem;
+}
+
+.attention-centre__empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
 .unread-badge {
   background: var(--accent);
   color: var(--background);
@@ -506,6 +572,26 @@ body:has(.agent-pane-resizer[data-dragging="true"]) {
 
 .agent-row__content {
   min-width: 0;
+}
+
+.agent-row__labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.2rem;
+}
+
+.agent-row__label {
+  max-width: 9rem;
+  overflow: hidden;
+  padding: 0.08rem 0.32rem;
+  border-radius: 0.28rem;
+  background: color-mix(in srgb, var(--card) 92%, var(--background));
+  color: var(--text-secondary);
+  font-size: 0.59rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-row__identity {
@@ -1853,6 +1939,125 @@ code {
   overflow-wrap: anywhere;
 }
 
+.agent-profile-editor {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.agent-profile-editor__intro,
+.agent-profile-editor__help,
+.agent-profile-editor__application,
+.agent-profile-editor__save-state {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.agent-profile-editor__field,
+.agent-profile-editor__appearance {
+  display: grid;
+  gap: 0.42rem;
+}
+
+.agent-profile-editor__attention {
+  display: grid;
+  gap: 0.48rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.agent-profile-editor__notification {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.77rem;
+  line-height: 1.35;
+}
+
+.agent-profile-editor__notification input {
+  width: 0.95rem;
+  height: 0.95rem;
+  margin: 0.05rem 0 0;
+  accent-color: var(--accent);
+}
+
+.agent-profile-editor__label {
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  font-weight: 680;
+}
+
+.agent-profile-editor__input,
+.agent-profile-editor__instructions {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 0.45rem;
+  outline: 1px solid color-mix(in srgb, var(--text-secondary) 48%, transparent);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--surface) 90%, var(--background));
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.agent-profile-editor__input {
+  min-height: 2.25rem;
+  padding: 0.48rem 0.58rem;
+}
+
+.agent-profile-editor__instructions {
+  min-height: 7.8rem;
+  padding: 0.55rem 0.58rem;
+  resize: vertical;
+}
+
+.agent-profile-editor__input::placeholder,
+.agent-profile-editor__instructions::placeholder {
+  color: var(--text-secondary);
+}
+
+.agent-profile-editor__appearance .agent-appearance-shapes,
+.agent-profile-editor__appearance .agent-appearance-colors {
+  margin: 0;
+}
+
+.agent-profile-editor__appearance .agent-appearance-shape,
+.agent-profile-editor__appearance .agent-appearance-color {
+  border: 0;
+}
+
+.agent-profile-editor__application[data-status="pending_restart"] {
+  color: #dba44b;
+}
+
+.agent-profile-editor__application[data-status="applied"] {
+  color: #61b985;
+}
+
+.agent-profile-editor__application[data-status="failed"],
+.agent-profile-editor__application[data-status="unsupported"] {
+  color: #e7717d;
+}
+
+.agent-profile-editor .primary-action {
+  justify-self: start;
+  padding: 0.52rem 0.78rem;
+  border-radius: 0.42rem;
+  background: var(--text-primary);
+  color: var(--background);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.agent-profile-editor .primary-action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .empty-state {
   align-self: center;
   justify-self: center;
@@ -2058,6 +2263,11 @@ code {
   background: var(--agent-pane-search-surface);
   color: var(--agent-pane-secondary);
   font-size: 0.74rem;
+}
+
+.agent-pane .attention-control {
+  margin-left: 0.2rem;
+  color: var(--agent-pane-secondary);
 }
 
 .agent-pane .message-search {

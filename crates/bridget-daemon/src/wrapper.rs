@@ -8,8 +8,8 @@ use bridget_transport::journal::{
 };
 use bridget_transport::protocol::{
     DelegatedRuntimeEventFrame, DelegatedRuntimeEventKind, DiskSpaceFact, ExecutionControlCommand,
-    ExecutionControlOperation, ExecutionProviderContext, PresenceMode, ProviderOperation,
-    RUNTIME_INGRESS_CONTRACT_VERSION, RuntimeIngressHandshake, decode, encode,
+    ExecutionControlOperation, ExecutionDeliveryContext, ExecutionProviderContext, PresenceMode,
+    ProviderOperation, RUNTIME_INGRESS_CONTRACT_VERSION, RuntimeIngressHandshake, decode, encode,
 };
 use bridget_transport::{
     AcpOptions, AcpTransport, AttachRefusal, AttachWindow, ChannelReport, ClaudeStreamJsonOptions,
@@ -21,6 +21,8 @@ use bridget_transport::{
 use log::{debug, error, info, warn};
 use sha2::{Digest, Sha256};
 
+use crate::agent_profile::AttentionEventType;
+use crate::agent_profile::{AgentProfileStore, InstructionStatus};
 use crate::mission_projection::{
     MissionDelegationV1, MissionObjectiveV1, MissionReviewV1, read_public_mission_projection_v1,
 };
@@ -2296,6 +2298,7 @@ pub fn launch(
                     delivery_generation,
                     expires_at,
                     message,
+                    execution: _,
                 } => {
                     let reports = deliver_idempotent_to_interactive(
                         &mut idempotent_deliveries,
@@ -3246,6 +3249,53 @@ fn emit_one_live_fragment(emit: &RelayEmitter, fanout: &mut LiveFanout) -> bool 
     true
 }
 
+fn profile_ledger_path(socket: &Path) -> PathBuf {
+    socket.with_extension("db")
+}
+
+fn apply_pending_profile_instructions(
+    socket: &Path,
+    transport: &mut dyn ManagedSession,
+    recipient: &str,
+    provider_spawn_id: &str,
+) {
+    let mut store = match AgentProfileStore::open(&profile_ledger_path(socket)) {
+        Ok(store) => store,
+        Err(error) => {
+            warn!("profil agent indisponible avant démarrage fournisseur: {error}");
+            return;
+        }
+    };
+    if let Err(error) = store.ensure_routing_names([recipient]) {
+        warn!("identité agent indisponible avant démarrage fournisseur: {error}");
+        return;
+    }
+    let pending = match store.pending_instructions_for_routing_name(recipient) {
+        Ok(Some(pending)) if !pending.instructions.is_empty() => pending,
+        Ok(_) => return,
+        Err(error) => {
+            warn!("lecture consigne agent impossible avant démarrage fournisseur: {error}");
+            return;
+        }
+    };
+    let outcome = match transport.set_private_profile_instructions(&pending.instructions) {
+        Ok(()) => (InstructionStatus::Applied, None),
+        Err(_) => (
+            InstructionStatus::Unsupported,
+            Some("private_context_unsupported"),
+        ),
+    };
+    if let Err(error) = store.mark_instruction_application(
+        &pending.profile_ref,
+        pending.revision,
+        provider_spawn_id,
+        outcome.0,
+        outcome.1,
+    ) {
+        warn!("état application consigne agent impossible: {error}");
+    }
+}
+
 fn launch_acp(
     agent_type: &str,
     agent_args: &[String],
@@ -3265,6 +3315,39 @@ fn launch_acp(
         None,
         None,
     )
+}
+
+fn attention_occurrence_key(kind: &str, agent: &str, subject: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"bridget/attention/v1\0");
+    hasher.update(kind.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(agent.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(subject.as_bytes());
+    format!("attention:v1:{kind}:{:x}", hasher.finalize())
+}
+
+fn record_attention(
+    profile_db_path: Option<&Path>,
+    routing_name: &str,
+    event_type: AttentionEventType,
+    subject: &str,
+) {
+    let Some(profile_db_path) = profile_db_path else {
+        return;
+    };
+    let Ok(mut store) = AgentProfileStore::open(profile_db_path) else {
+        warn!("attention non persistée: store indisponible");
+        return;
+    };
+    let occurrence_key = attention_occurrence_key(event_type.as_str(), routing_name, subject);
+    if store
+        .record_attention_for_routing_name(routing_name, event_type, &occurrence_key)
+        .is_err()
+    {
+        warn!("attention non persistée: écriture refusée");
+    }
 }
 
 /// Point d'entrée du wrapper supervisé. Le FD `managed-status` est fermé
@@ -3668,6 +3751,7 @@ fn launch_acp_with_status(
         &my_name,
         Some(live_feed.clone()),
     )?;
+    apply_pending_profile_instructions(socket, transport.as_mut(), &my_name, &instance_id);
     send_wrapper_message(&writer, WrapperToDaemon::JournalReady);
     let journal_directory = home.join(".cache/bridget/sessions").join(&my_name);
     let relay_writer = writer.clone();
@@ -3722,6 +3806,7 @@ fn launch_acp_with_status(
             &mut idempotent_deliveries,
             &mut execution_bindings,
             &mut redaction_lease,
+            Some(&profile_ledger_path(socket)),
         );
         if journal_failed {
             transport.stop();
@@ -3813,38 +3898,52 @@ fn launch_acp_with_status(
                     delivery_generation,
                     expires_at,
                     message,
-                }) => match idempotent_deliveries.receive(
-                    delivery_id,
-                    recipient_instance_id,
-                    delivery_generation,
-                    expires_at,
-                    message,
-                    unix_now_secs(),
-                ) {
-                    IdempotentDeliveryAction::Report(report) => {
-                        send_wrapper_message(&writer, report);
+                    execution,
+                }) => {
+                    let message_id = message.id.clone();
+                    if bind_idempotent_delivery_execution(
+                        &mut execution_bindings,
+                        &message_id,
+                        execution,
+                        agent_type,
+                        &definition.protocol,
+                    ) && let Some(identity) = transport.provider_identity()
+                    {
+                        publish_provider_context(&writer, &execution_bindings, &identity);
                     }
-                    IdempotentDeliveryAction::Inject {
-                        message,
+                    match idempotent_deliveries.receive(
                         delivery_id,
-                    } => {
-                        let message_id = message.id.clone();
-                        if let Err(error) = transport.deliver(&message) {
-                            send_wrapper_message(
-                                &writer,
-                                WrapperToDaemon::DeliveryRejected {
-                                    id: message_id.clone(),
-                                    reason: error.to_string(),
-                                },
-                            );
-                            if let Some(report) =
-                                idempotent_deliveries.injection_failed(&delivery_id)
-                            {
-                                send_wrapper_message(&writer, report);
+                        recipient_instance_id,
+                        delivery_generation,
+                        expires_at,
+                        message,
+                        unix_now_secs(),
+                    ) {
+                        IdempotentDeliveryAction::Report(report) => {
+                            send_wrapper_message(&writer, report);
+                        }
+                        IdempotentDeliveryAction::Inject {
+                            message,
+                            delivery_id,
+                        } => {
+                            let message_id = message.id.clone();
+                            if let Err(error) = transport.deliver(&message) {
+                                send_wrapper_message(
+                                    &writer,
+                                    WrapperToDaemon::DeliveryRejected {
+                                        id: message_id.clone(),
+                                        reason: error.to_string(),
+                                    },
+                                );
+                                if let Some(report) =
+                                    idempotent_deliveries.injection_failed(&delivery_id)
+                                {
+                                    send_wrapper_message(&writer, report);
+                                }
                             }
                         }
                     }
-                },
+                }
                 Ok(DaemonToWrapper::DelegatedRuntimeEvent { event }) => {
                     let message = delegated_runtime_message(&event, &my_name);
                     idempotent_deliveries.record_delegated_runtime(&message.id, event.event_id);
@@ -3942,6 +4041,7 @@ fn launch_acp_with_status(
                 &mut idempotent_deliveries,
                 &mut execution_bindings,
                 &mut redaction_lease,
+                Some(&profile_ledger_path(socket)),
             );
             if terminal_journal_failed {
                 transport.stop();
@@ -4033,6 +4133,12 @@ fn launch_acp_with_status(
                     ) {
                         warn!("journal après relance impossible: {error}");
                     }
+                    apply_pending_profile_instructions(
+                        socket,
+                        transport.as_mut(),
+                        &my_name,
+                        &instance_id,
+                    );
                     relay.shutdown();
                     let relay_writer = writer.clone();
                     relay = AttachRelayWorker::start(
@@ -4083,6 +4189,7 @@ fn launch_acp_with_status(
         &mut idempotent_deliveries,
         &mut execution_bindings,
         &mut redaction_lease,
+        Some(&profile_ledger_path(socket)),
     );
     send_wrapper_message(&writer, WrapperToDaemon::TurnState { in_progress: false });
     send_wrapper_message(&writer, WrapperToDaemon::Unregister);
@@ -4552,6 +4659,31 @@ struct ManagedExecutionBinding {
     last_approval_request: Option<String>,
 }
 
+fn bind_idempotent_delivery_execution(
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    message_id: &str,
+    execution: Option<ExecutionDeliveryContext>,
+    provider_kind: &str,
+    execution_path: &str,
+) -> bool {
+    let Some(execution) = execution else {
+        return false;
+    };
+    bindings
+        .entry(message_id.to_string())
+        .or_insert(ManagedExecutionBinding {
+            execution_id: execution.execution_id,
+            provider_kind: provider_kind.to_string(),
+            execution_path: execution_path.to_string(),
+            generation: execution.generation,
+            state: "starting".to_string(),
+            revision: execution.revision,
+            approval_requests: 0,
+            last_approval_request: None,
+        });
+    true
+}
+
 /// L usage ne reçoit une ascendance que si le wrapper ne porte qu un seul
 /// tour vivant. Plusieurs bindings rendent l attribution ambiguë : le fait
 /// reste visible par agent, mais ne peut pas consommer un budget d exécution.
@@ -4924,6 +5056,7 @@ fn forward_managed_events(
         idempotent_deliveries,
         bindings,
         &mut None,
+        None,
     )
 }
 
@@ -4945,6 +5078,7 @@ fn forward_managed_events_with_redaction(
     idempotent_deliveries: &mut IdempotentDeliveryTracker,
     bindings: &mut HashMap<String, ManagedExecutionBinding>,
     redaction: &mut Option<OutputRedactionLease>,
+    profile_db_path: Option<&Path>,
 ) -> bool {
     let mut journal_failed = false;
     for event in events {
@@ -4997,6 +5131,24 @@ fn forward_managed_events_with_redaction(
                     continue;
                 }
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
+
+                if message.reply && message.origin != Some(bridget_core::MessageOrigin::System) {
+                    match &terminal {
+                        ManagedTerminal::Completed => record_attention(
+                            profile_db_path,
+                            my_name,
+                            AttentionEventType::TaskCompleted,
+                            &message.id,
+                        ),
+                        ManagedTerminal::Failed { .. } => record_attention(
+                            profile_db_path,
+                            my_name,
+                            AttentionEventType::TerminalFailure,
+                            &message.id,
+                        ),
+                        ManagedTerminal::Cancelled => {}
+                    }
+                }
 
                 if matches!(&terminal, ManagedTerminal::Failed { .. }) {
                     publish_delegated_runtime_for_message(
@@ -5219,14 +5371,28 @@ fn forward_managed_events_with_redaction(
             },
             ManagedEventKind::Waiting { state } => match state {
                 bridget_transport::ManagedWaitState::Approval { request_id } => {
-                    publish_approval_wait(writer, bindings, &request_id)
+                    publish_approval_wait(writer, bindings, &request_id);
+                    record_attention(
+                        profile_db_path,
+                        my_name,
+                        AttentionEventType::HumanInputNeeded,
+                        &request_id,
+                    );
                 }
-                bridget_transport::ManagedWaitState::UserInput { .. } => publish_single_wait(
-                    writer,
-                    bindings,
-                    "waiting_user_input",
-                    "user_input_required",
-                ),
+                bridget_transport::ManagedWaitState::UserInput { request_id } => {
+                    publish_single_wait(
+                        writer,
+                        bindings,
+                        "waiting_user_input",
+                        "user_input_required",
+                    );
+                    record_attention(
+                        profile_db_path,
+                        my_name,
+                        AttentionEventType::HumanInputNeeded,
+                        &request_id,
+                    );
+                }
             },
             ManagedEventKind::ProviderContextObserved { mut identity } => {
                 identity.provider_session_id = identity
@@ -6286,6 +6452,26 @@ mod prompt_tests {
 }
 
 #[cfg(test)]
+mod attention_tests {
+    use super::attention_occurrence_key;
+    #[test]
+    fn cle_attention_est_stable_et_ne_divulgue_pas_le_routage() {
+        let first = attention_occurrence_key("task_completed", "agent-interne", "message-42");
+        assert_eq!(
+            first,
+            attention_occurrence_key("task_completed", "agent-interne", "message-42")
+        );
+        assert_ne!(
+            first,
+            attention_occurrence_key("terminal_failure", "agent-interne", "message-42")
+        );
+        assert!(first.starts_with("attention:v1:task_completed:"));
+        assert!(!first.contains("agent-interne"));
+        assert!(!first.contains("message-42"));
+    }
+}
+
+#[cfg(test)]
 fn journal_failure_requires_shutdown(events: &[ManagedEvent]) -> bool {
     events
         .iter()
@@ -6480,6 +6666,7 @@ mod reconnect_tests {
             &mut tracker,
             &mut HashMap::new(),
             &mut redaction,
+            None,
         ));
         let mut line = String::new();
         BufReader::new(reader_stream).read_line(&mut line).unwrap();
@@ -8903,6 +9090,52 @@ mod reconnect_tests {
                 Some(PathBuf::from("/home/agent")),
             ),
             PathBuf::from("/run/bridget/runtime/invalid.sock")
+        );
+    }
+    #[test]
+    fn spec_079_binding_idempotent_precede_le_filtre_de_doublon() {
+        let mut bindings = HashMap::new();
+        assert!(!bind_idempotent_delivery_execution(
+            &mut bindings,
+            "message-079",
+            None,
+            "codex",
+            "acp",
+        ));
+        assert!(bindings.is_empty());
+
+        assert!(bind_idempotent_delivery_execution(
+            &mut bindings,
+            "message-079",
+            Some(ExecutionDeliveryContext {
+                execution_id: "execution-079".to_string(),
+                generation: 2,
+                revision: 3,
+            }),
+            "codex",
+            "acp",
+        ));
+        let binding = bindings.get("message-079").expect("binding créé");
+        assert_eq!(binding.execution_id, "execution-079");
+        assert_eq!(binding.generation, 2);
+        assert_eq!(binding.revision, 3);
+        assert_eq!(binding.provider_kind, "codex");
+        assert_eq!(binding.execution_path, "acp");
+
+        assert!(bind_idempotent_delivery_execution(
+            &mut bindings,
+            "message-079",
+            Some(ExecutionDeliveryContext {
+                execution_id: "execution-divergente".to_string(),
+                generation: 99,
+                revision: 99,
+            }),
+            "claude",
+            "tmux",
+        ));
+        assert_eq!(
+            bindings["message-079"].execution_id, "execution-079",
+            "un rejeu ne remplace jamais la première corrélation admise"
         );
     }
 }

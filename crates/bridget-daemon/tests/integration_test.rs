@@ -566,6 +566,7 @@ sleep 2
             delivery_generation: 71,
             expires_at: i64::MAX,
             message: message.clone(),
+            execution: None,
         };
         writeln!(first_writer, "{}", encode(&delivery).unwrap()).unwrap();
         first_writer.flush().unwrap();

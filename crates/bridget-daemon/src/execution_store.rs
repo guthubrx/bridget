@@ -41,6 +41,21 @@ pub enum ConditionalTransition {
     Missing,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconstructedExecution {
+    pub parent_execution_id: String,
+    pub snapshot: ExecutionSnapshot,
+    pub message: bridget_core::BridgetMessage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecutionRecoveryOutcome {
+    None,
+    Reconstructed(Box<ReconstructedExecution>),
+    PayloadUnavailable { parent_execution_id: String },
+    Ambiguous { execution_ids: Vec<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedSubmission {
     pub submission_id: String,
     pub target_agent: String,
@@ -1171,6 +1186,188 @@ impl ExecutionStore {
         };
         tx.commit()?;
         Ok(ConditionalTransition::Applied(applied))
+    }
+
+    /// Reconstruit au plus une exécution active d'un agent après perte du
+    /// processus fournisseur.
+    ///
+    /// Le parent, l'enfant et leur lignée partagent la transaction. Le message
+    /// exact est décodé avant toute création d'enfant; une enveloppe absente ou
+    /// corrompue ferme le parent sans inventer de prompt.
+    pub fn reconstruct_active_for_agent(
+        &self,
+        target_agent: &str,
+        agent_instance_id: &str,
+        child_execution_id: &str,
+        observed_at: i64,
+    ) -> rusqlite::Result<ExecutionRecoveryOutcome> {
+        if target_agent.trim().is_empty()
+            || agent_instance_id.trim().is_empty()
+            || child_execution_id.trim().is_empty()
+            || observed_at < 0
+        {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "reconstruction d'exécution invalide".to_string(),
+            ));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let candidates = {
+            let mut statement = tx.prepare(
+                "SELECT execution.execution_id, execution.submission_id,
+                        execution.project_id, execution.binding_generation,
+                        execution.generation, execution.revision,
+                        submission.message_json
+                 FROM executions execution
+                 JOIN work_submissions submission
+                   ON submission.submission_id = execution.submission_id
+                 WHERE submission.target_agent = ?1
+                   AND execution.state IN (
+                       'queued', 'starting', 'running', 'waiting_approval',
+                       'waiting_user_input', 'interrupting'
+                   )
+                 ORDER BY execution.created_at, execution.execution_id
+                 LIMIT 2",
+            )?;
+            statement
+                .query_map([target_agent], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        project_reference_from_parts(row.get(2)?, row.get(3)?)?,
+                        row.get::<_, u64>(4)?,
+                        row.get::<_, u64>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        if candidates.is_empty() {
+            tx.commit()?;
+            return Ok(ExecutionRecoveryOutcome::None);
+        }
+        if candidates.len() > 1 {
+            let execution_ids = candidates
+                .into_iter()
+                .map(|candidate| candidate.0)
+                .collect();
+            tx.commit()?;
+            return Ok(ExecutionRecoveryOutcome::Ambiguous { execution_ids });
+        }
+        let (
+            parent_execution_id,
+            submission_id,
+            project,
+            parent_generation,
+            parent_revision,
+            message_json,
+        ) = candidates.into_iter().next().expect("candidat vérifié");
+        let message = message_json
+            .and_then(|value| serde_json::from_str::<bridget_core::BridgetMessage>(&value).ok());
+        let Some(message) = message else {
+            tx.execute(
+                "UPDATE executions
+                 SET state = 'unreachable',
+                     reason = 'recovery_payload_unavailable',
+                     revision = revision + 1,
+                     updated_at = ?2
+                 WHERE execution_id = ?1
+                   AND revision = ?3
+                   AND state IN (
+                       'queued', 'starting', 'running', 'waiting_approval',
+                       'waiting_user_input', 'interrupting'
+                   )",
+                params![parent_execution_id, observed_at, parent_revision],
+            )?;
+            tx.commit()?;
+            return Ok(ExecutionRecoveryOutcome::PayloadUnavailable {
+                parent_execution_id,
+            });
+        };
+        let closed = tx.execute(
+            "UPDATE executions
+             SET state = 'unreachable', reason = 'daemon_restart',
+                 revision = revision + 1, updated_at = ?2
+             WHERE execution_id = ?1 AND revision = ?3
+               AND state IN (
+                   'queued', 'starting', 'running', 'waiting_approval',
+                   'waiting_user_input', 'interrupting'
+               )",
+            params![parent_execution_id, observed_at, parent_revision],
+        )?;
+        if closed != 1 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        let child_generation = parent_generation
+            .checked_add(1)
+            .ok_or(rusqlite::Error::IntegralValueOutOfRange(4, i64::MAX))?;
+        tx.execute(
+            "INSERT INTO executions (
+                execution_id, submission_id, agent_instance_id,
+                project_id, binding_generation, generation, state,
+                revision, reason, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'starting', 0,
+                       'accepted', ?7, ?7)",
+            params![
+                child_execution_id,
+                submission_id,
+                agent_instance_id,
+                project.as_ref().map(|value| &value.project_id),
+                project.as_ref().map(|value| value.binding_generation),
+                child_generation,
+                observed_at,
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO execution_continuations (
+                execution_id, generation, parent_execution_id,
+                mode, reason, observed_at
+             ) VALUES (?1, ?2, ?3, 'reconstructed', 'daemon_restart', ?4)",
+            params![
+                child_execution_id,
+                child_generation,
+                parent_execution_id,
+                observed_at
+            ],
+        )?;
+        let snapshot = ExecutionSnapshot {
+            execution_id: child_execution_id.to_string(),
+            project,
+            state: "starting".to_string(),
+            generation: child_generation,
+            revision: 0,
+            created_at: observed_at,
+        };
+        tx.commit()?;
+        Ok(ExecutionRecoveryOutcome::Reconstructed(Box::new(
+            ReconstructedExecution {
+                parent_execution_id,
+                snapshot,
+                message,
+            },
+        )))
+    }
+
+    /// Sélection bornée utilisée avant une reconstruction. Deux identifiants
+    /// suffisent à distinguer le cas nominal du cas ambigu sans charger tout
+    /// l'historique d'un agent.
+    pub fn recoverable_execution_ids_for_agent(
+        &self,
+        target_agent: &str,
+    ) -> rusqlite::Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            "SELECT execution.execution_id
+             FROM executions execution
+             JOIN work_submissions submission
+               ON submission.submission_id = execution.submission_id
+             WHERE submission.target_agent = ?1
+               AND execution.state IN ('queued', 'starting', 'running',
+                   'waiting_approval', 'waiting_user_input', 'interrupting')
+             ORDER BY execution.created_at, execution.execution_id
+             LIMIT 2",
+        )?;
+        statement
+            .query_map([target_agent], |row| row.get(0))?
+            .collect()
     }
 
     /// Identifiants des exécutions qu'un redémarrage Bridget doit reprendre ou

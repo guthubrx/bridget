@@ -15,6 +15,10 @@
       <aside class="agent-pane" aria-label="Agents Bridget">
         <header class="agent-pane__header" data-tauri-drag-region>
           <span class="fleet-count" id="fleet-count" aria-live="polite">—</span>
+          <button class="attention-control" id="attention-control" type="button" aria-label="Ouvrir l’activité">
+            <span aria-hidden="true">●</span>
+            <span class="attention-control__count" id="attention-count" hidden>0</span>
+          </button>
         </header>
 
         <p class="source-state" id="source-state" data-state="loading">
@@ -91,26 +95,10 @@
                 class="selected-agent-avatar"
                 id="selected-agent-avatar"
                 type="button"
-                aria-label="Choisir l’apparence de cet agent"
-                aria-controls="agent-appearance-picker"
+                aria-label="Ouvrir les réglages de cet agent"
+                aria-controls="detail-panel"
                 aria-expanded="false"
               ></button>
-              <div class="agent-appearance-picker" id="agent-appearance-picker" hidden>
-                <p>Forme</p>
-                <div
-                  class="agent-appearance-shapes"
-                  id="agent-appearance-shapes"
-                  role="group"
-                  aria-label="Choisir la forme de l’agent"
-                ></div>
-                <p>Couleur de l’agent</p>
-                <div
-                  class="agent-appearance-colors"
-                  id="agent-appearance-colors"
-                  role="group"
-                  aria-label="Choisir la couleur de l’agent"
-                ></div>
-              </div>
             </div>
             <div>
               <h2 id="selected-agent">Aucun agent</h2>

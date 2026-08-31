@@ -183,6 +183,13 @@
           mode: "acp",
           model: "claude-opus-5",
           effort: "high",
+          profile: {
+            profile_ref: "opaque-profile",
+            display_name: "Bibliothécaire",
+            labels: ["recherche", "référence"],
+            avatar: { shape: "round", color: "blue" },
+            instruction_state: { revision: 1, status: "applied", updated_at: 1 },
+          },
         });
         assert.deepEqual(api.runtimeIdentity(cursor.type), {
           key: "cursor",
@@ -194,7 +201,7 @@
         assert.equal(cursor.model, "claude-opus-5");
         assert.equal(cursor.effort, "high");
         assert.deepEqual(api.identityCardData(cursor, 10_000), {
-          name: "agent-claude-flux",
+          name: "Bibliothécaire",
           presence: "État inconnu",
           state: "unknown",
           runtime: api.runtimeIdentity("cursor"),
@@ -209,6 +216,21 @@
         const namedFlux = api.normalizeAgentRow({ name: "faux-flux", type: "custom" });
         assert.equal(api.runtimeIdentity(namedFlux.type).key, "unknown");
         assert.equal(api.executionModeIdentity(namedFlux.mode, namedFlux.transport).key, "unknown");
+      });
+
+      test("profil_affiche_des_labels_distincts_sans_exposer_le_nom_de_routage", () => {
+        const agent = api.normalizeAgentRow({
+          name: "agent-interne-42",
+          profile: {
+            profile_ref: "opaque-profile",
+            display_name: "Coordination",
+            labels: ["coordinateur", "recherche"],
+            avatar: { shape: "cloud", color: "teal" },
+            instruction_state: { revision: 2, status: "pending_restart", updated_at: 2 },
+          },
+        });
+        assert.equal(api.agentDisplayName(agent), "Coordination");
+        assert.deepEqual(agent.profile.labels, ["coordinateur", "recherche"]);
       });
 
       test("catalogue_runtime_et_mode_couvrent_la_matrice_attestee", () => {
@@ -765,6 +787,37 @@
           api.notificationTarget(record, "rc1", pending, true, "granted", new Set(["rc1:m-notify"])),
           null,
         );
+      });
+
+      test("attention_client_persistant_et_notification_sans_bruit_outil", () => {
+        const storage = new Map();
+        storage.getItem = storage.get.bind(storage);
+        storage.setItem = storage.set.bind(storage);
+        const cryptoApi = { randomUUID: () => "11111111-1111-4111-8111-111111111111" };
+        const first = api.resolveAttentionClientId(null, storage, cryptoApi);
+        assert.equal(first, "11111111-1111-4111-8111-111111111111");
+        assert.equal(api.resolveAttentionClientId(null, storage, cryptoApi), first);
+        assert.equal(
+          api.resolveAttentionClientId("22222222-2222-4222-8222-222222222222", storage, cryptoApi),
+          "22222222-2222-4222-8222-222222222222",
+        );
+        const event = {
+          event_id: "33333333-3333-4333-8333-333333333333",
+          profile_ref: "opaque-profile",
+          display_name: "Bibou",
+          event_type: "human_input_needed",
+          attention_enabled: true,
+          native_notified: false,
+        };
+        assert.equal(api.attentionNotificationTarget(event, false, "granted", new Set()), null);
+        assert.equal(api.attentionNotificationTarget({ ...event, attention_enabled: false }, true, "granted", new Set()), null);
+        assert.deepEqual(api.attentionNotificationTarget(event, true, "granted", new Set()), {
+          key: event.event_id,
+          title: "Bibou",
+          body: "Bibou attend votre réponse.",
+          profileRef: "opaque-profile",
+        });
+        assert.match(api.buildAttentionUrl("secret", first), /client_id=11111111-1111-4111-8111-111111111111/);
       });
 
       test("erreur_terminale_reste_attachee_a_la_question_concernee", () => {
@@ -2983,7 +3036,6 @@
   const AGENT_PANE_MIN_WIDTH_PX = 224;
   const AGENT_PANE_MAX_WIDTH_PX = 560;
   const MIN_CONVERSATION_WIDTH_PX = 360;
-  const AGENT_APPEARANCE_STORAGE_KEY = "bridget.ui.agent-appearance.v1";
   const AGENT_SIDEBAR_PREFERENCES_STORAGE_KEY = "bridget.ui.agent-sidebar-preferences.v1";
   const AGENT_SIDEBAR_PREFERENCES_LIMIT = 500;
   const IDENTITY_CARD_GAP_PX = 12;
@@ -3002,6 +3054,19 @@
     "#b08962",
     "#e2e3e5",
   ]);
+  const PROFILE_AVATAR_COLORS = Object.freeze({
+    white: "#e2e3e5",
+    brown: "#b08962",
+    red: "#d64e55",
+    orange: "#d98b2b",
+    amber: "#e6a23c",
+    green: "#49b46c",
+    teal: "#4bafa0",
+    blue: "#3f7fe0",
+    purple: "#6e48c7",
+    pink: "#c33680",
+    gray: "#a5a6aa",
+  });
   const AGENT_AVATAR_SHAPES = Object.freeze([
     "round", "soft-square", "pill", "triangle", "hexagon", "cloud", "drop", "pebble",
   ]);
@@ -3098,7 +3163,9 @@
     return {};
   }
 
-  function agentAvatarShape(name, appearances = {}) {
+  function agentAvatarShape(name, appearances = {}, profile = null) {
+    const profileShape = profile && profile.avatar && profile.avatar.shape;
+    if (AGENT_AVATAR_SHAPES.includes(profileShape)) return profileShape;
     const selected = storedAgentAppearance(name, appearances).shape;
     if (AGENT_AVATAR_SHAPES.includes(selected)) return selected;
     return AGENT_AVATAR_SHAPES[stableAgentHash(name) % AGENT_AVATAR_SHAPES.length];
@@ -3113,7 +3180,11 @@
     return "unknown";
   }
 
-  function agentAvatarColor(name, appearances = {}) {
+  function agentAvatarColor(name, appearances = {}, profile = null) {
+    const profileColor = profile && profile.avatar && profile.avatar.color;
+    if (Object.hasOwn(PROFILE_AVATAR_COLORS, profileColor)) {
+      return PROFILE_AVATAR_COLORS[profileColor];
+    }
     const selected = storedAgentAppearance(name, appearances).color;
     if (AGENT_AVATAR_COLORS.includes(selected)) return selected;
     return AGENT_AVATAR_COLORS[stableAgentHash(name) % AGENT_AVATAR_COLORS.length];
@@ -3246,7 +3317,7 @@
       ? "Activité inconnue"
       : `Capacité vue il y a ${formatDuration(normalized.provider_age_secs * 1000)}`;
     return {
-      name: normalized.name,
+      name: agentDisplayName(normalized),
       presence: agentPresenceLabel(normalized.connection_state),
       state: agentVisualState(normalized.connection_state),
       runtime: runtimeIdentity(normalized.type),
@@ -3255,7 +3326,7 @@
       model: normalized.model,
       effort: normalized.effort,
       activity: relativeActivity || providerActivity,
-      excerpt: agentCardExcerpt(normalized.name, normalized.last_excerpt),
+      excerpt: agentCardExcerpt(agentDisplayName(normalized), normalized.last_excerpt),
     };
   }
 
@@ -3982,6 +4053,46 @@
     };
   }
 
+  function normalizeAgentProfile(profile) {
+    if (!profile || typeof profile !== "object" || Array.isArray(profile)) return null;
+    const profileRef = text(profile.profile_ref).trim();
+    const displayName = text(profile.display_name).trim();
+    const avatar = profile.avatar && typeof profile.avatar === "object" ? profile.avatar : {};
+    const shape = text(avatar.shape).trim();
+    const color = text(avatar.color).trim();
+    if (!profileRef || !displayName || !shape || !color) return null;
+    const labels = Array.isArray(profile.labels)
+      ? profile.labels
+        .filter((label) => typeof label === "string")
+        .map((label) => label.trim())
+        .filter(Boolean)
+      : [];
+    const instruction = profile.instruction_state && typeof profile.instruction_state === "object"
+      ? profile.instruction_state
+      : {};
+    return {
+      profile_ref: profileRef,
+      display_name: displayName,
+      labels,
+      avatar: { shape, color },
+      instruction_state: {
+        revision: Number.isInteger(instruction.revision) && instruction.revision > 0
+          ? instruction.revision
+          : 1,
+        status: text(instruction.status, "pending_restart"),
+        updated_at: Number.isFinite(instruction.updated_at) ? Number(instruction.updated_at) : null,
+      },
+    };
+  }
+
+  function agentDisplayName(agent) {
+    const profile = agent && agent.profile;
+    const displayName = profile && typeof profile.display_name === "string"
+      ? profile.display_name.trim()
+      : "";
+    return displayName || "Agent";
+  }
+
   function normalizeAgentRow(agent) {
     const mode = typeof (agent && agent.mode) === "string"
       ? agent.mode.trim().toLowerCase()
@@ -3989,6 +4100,7 @@
     return {
       name: text(agent && agent.name, "agent inconnu"),
       type: text(agent && agent.type, "type inconnu"),
+      profile: normalizeAgentProfile(agent && agent.profile),
       host: text(agent && agent.host, "machine inconnue"),
       transport: typeof (agent && agent.transport) === "string" && agent.transport.trim()
         ? agent.transport.trim()
@@ -4114,6 +4226,7 @@
     return JSON.stringify(normalizeAgents(agents).map((agent) => ({
       name: agent.name,
       type: agent.type,
+      profile: agent.profile,
       host: agent.host,
       transport: agent.transport,
       domain: agent.domain,
@@ -5525,6 +5638,8 @@
     controlCenter: "control-center",
     stoppedCount: "stopped-count",
     fleetCount: "fleet-count",
+    attentionControl: "attention-control",
+    attentionCount: "attention-count",
     sourceState: "source-state",
     messageSearch: "message-search",
     messageSearchInput: "message-search-input",
@@ -5533,9 +5648,6 @@
     selectedAgent: "selected-agent",
     selectedMeta: "selected-meta",
     selectedAgentAvatar: "selected-agent-avatar",
-    agentAppearancePicker: "agent-appearance-picker",
-    agentAppearanceShapes: "agent-appearance-shapes",
-    agentAppearanceColors: "agent-appearance-colors",
     agentPaneResizer: "agent-pane-resizer",
     connectionIndicator: "connection-indicator",
     relayBanner: "relay-banner",
@@ -5719,9 +5831,84 @@
     return { version: 1, q: String(query ?? "") };
   }
 
+  const ATTENTION_CLIENT_ID_STORAGE_KEY = "bridget.ui.attention-client-id.v1";
+
+  function isAttentionClientId(value) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+  }
+
+  function createAttentionClientId(cryptoApi) {
+    if (cryptoApi && typeof cryptoApi.randomUUID === "function") return cryptoApi.randomUUID();
+    if (!cryptoApi || typeof cryptoApi.getRandomValues !== "function") return null;
+    const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    return [...bytes].map((byte, index) => (
+      `${byte.toString(16).padStart(2, "0")}${[3, 5, 7, 9].includes(index) ? "-" : ""}`
+    )).join("");
+  }
+
+  function resolveAttentionClientId(queryValue, storage, cryptoApi) {
+    if (isAttentionClientId(queryValue)) return String(queryValue);
+    try {
+      const existing = storage && storage.getItem(ATTENTION_CLIENT_ID_STORAGE_KEY);
+      if (isAttentionClientId(existing)) return existing;
+      const created = createAttentionClientId(cryptoApi);
+      if (created && storage && typeof storage.setItem === "function") {
+        storage.setItem(ATTENTION_CLIENT_ID_STORAGE_KEY, created);
+      }
+      return created;
+    } catch (_error) {
+      return createAttentionClientId(cryptoApi);
+    }
+  }
+
+  function buildAttentionUrl(token, clientId) {
+    const query = new URLSearchParams({ token: String(token || ""), client_id: String(clientId || "") });
+    return `/v1/attention?${query.toString()}`;
+  }
+
+  function buildAttentionPreferencesUrl(token) {
+    const query = new URLSearchParams({ token: String(token || "") });
+    return `/v1/attention/preferences?${query.toString()}`;
+  }
+
+  function attentionEventLabel(event) {
+    const displayName = text(event && event.display_name) || "Cet agent";
+    return ({
+      human_input_needed: `${displayName} attend votre réponse.`,
+      task_completed: `${displayName} a terminé.`,
+      terminal_failure: `${displayName} nécessite une vérification.`,
+    })[text(event && event.event_type)] || "Une attention est requise.";
+  }
+
+  function attentionNotificationTarget(event, pageHidden, permission, notified) {
+    const eventId = text(event && event.event_id);
+    if (!eventId || !event.attention_enabled || event.native_notified || !pageHidden || permission !== "granted") {
+      return null;
+    }
+    if (notified && notified.has(eventId)) return null;
+    return {
+      key: eventId,
+      title: text(event.display_name) || "Bridget",
+      body: attentionEventLabel(event),
+      profileRef: text(event.profile_ref),
+    };
+  }
+
   function buildSearchUrl(token) {
     return agentResourceUrl("/v1/search", token);
   }
+
+  function buildAgentProfileUrl(token, profileRef) {
+    const query = new URLSearchParams({ token: String(token || "") });
+    return `/v1/agent-profiles/${encodeURIComponent(String(profileRef || ""))}?${query.toString()}`;
+  }
+
+  function instructionStatusLabel(status) {
+    return ({ applied: "Transmise à la session", pending_restart: "À appliquer au prochain redémarrage", unsupported: "Non prise en charge", failed: "Échec de transmission" })[String(status || "")] || "État inconnu";
+  }
+
 
   function controlResourceUrl(path, token, params = {}) {
     const query = new URLSearchParams({ token });
@@ -5759,6 +5946,7 @@
     return String(Math.trunc(count));
   }
 
+
   function threadPeerForHit(hit) {
     const sender = text(hit && hit.sender);
     const target = text(hit && hit.target);
@@ -5795,6 +5983,12 @@
     const params = new URLSearchParams(windowRef.location.search);
     const token = params.get("token") || "";
     const requestedAgent = params.get("agent");
+    const nativeAttentionShell = params.get("native_attention") === "1";
+    const attentionClientId = resolveAttentionClientId(
+      params.get("client_id"),
+      windowRef.localStorage,
+      windowRef.crypto,
+    );
     const fragmentBuffers = new Map();
     const journalBodies = new Map();
     const historyLoads = new Map();
@@ -5842,6 +6036,10 @@
     let state = createUiState({ selectedAgent: requestedAgent });
     const pendingUiMessages = new Map();
     const notifiedTerminalIds = new Set();
+    const attentionEvents = new Map();
+    const attentionPreferences = new Map();
+    const notifiedAttentionIds = new Set();
+    let attentionRefreshInFlight = false;
     let source = null;
     let sourceGeneration = 0;
     let replayingJournal = true;
@@ -5852,6 +6050,7 @@
     let reconnectAttempts = 0;
     let watchStreamEnded = false;
     let fleetRefreshTimer = null;
+    let attentionRefreshTimer = null;
     let fleetRefreshInFlight = false;
 
     const rootStyle = documentRef.documentElement && documentRef.documentElement.style;
@@ -6746,17 +6945,17 @@
       const wording = {
         stop: {
           verb: "Arrêter",
-          title: `Arrêter ${agent.name} ?`,
+          title: `Arrêter ${agentDisplayName(agent)} ?`,
           description: "Le processus sera arrêté. L’agent restera visible, relançable et son historique sera conservé.",
         },
         relaunch: {
           verb: "Relancer",
-          title: `Relancer ${agent.name} ?`,
+          title: `Relancer ${agentDisplayName(agent)} ?`,
           description: "Un nouveau processus sera lancé sous la même identité. L’historique sera conservé.",
         },
         decommission: {
           verb: "Décommissionner",
-          title: `Décommissionner ${agent.name} ?`,
+          title: `Décommissionner ${agentDisplayName(agent)} ?`,
           description: "Le processus sera arrêté si nécessaire, puis l’agent quittera la flotte. Son historique sera conservé.",
         },
       }[action];
@@ -6993,16 +7192,6 @@
       }
     };
 
-    let agentAppearances = (() => {
-      try {
-        const raw = windowRef.localStorage && windowRef.localStorage.getItem(AGENT_APPEARANCE_STORAGE_KEY);
-        const parsed = raw ? JSON.parse(raw) : {};
-        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-      } catch (_error) {
-        return {};
-      }
-    })();
-    let appearancePickerAgent = null;
     let lastAgentsRenderSignature = null;
     const agentSidebarStorage = () => {
       try {
@@ -7034,72 +7223,8 @@
       renderAgents();
     };
 
-
-    const colorForAgent = (name) => agentAvatarColor(name, agentAppearances);
-    const shapeForAgent = (name) => agentAvatarShape(name, agentAppearances);
-    const storeAgentAppearance = (name, update) => {
-      agentAppearances = {
-        ...agentAppearances,
-        [name]: { ...storedAgentAppearance(name, agentAppearances), ...update },
-      };
-      try {
-        windowRef.localStorage && windowRef.localStorage.setItem(
-          AGENT_APPEARANCE_STORAGE_KEY,
-          JSON.stringify(agentAppearances),
-        );
-      } catch (_error) {
-        // La couleur reste appliquée dans l'onglet si le stockage est indisponible.
-      }
-    };
-
-    const renderAppearancePicker = (agent) => {
-      nodes.agentAppearanceShapes.replaceChildren();
-      nodes.agentAppearanceColors.replaceChildren();
-      if (!agent) {
-        nodes.agentAppearancePicker.hidden = true;
-        return;
-      }
-      const selectedColor = colorForAgent(agent.name);
-      const selectedShape = shapeForAgent(agent.name);
-      for (const shape of AGENT_AVATAR_SHAPES) {
-        const shapeButton = make("button", "agent-appearance-shape");
-        shapeButton.type = "button";
-        shapeButton.setAttribute("aria-label", `Choisir la forme ${AGENT_AVATAR_SHAPE_LABELS[shape]}`);
-        shapeButton.setAttribute("aria-pressed", String(shape === selectedShape));
-        const preview = createAgentAvatar(
-          documentRef,
-          { ...agent, state: "alive" },
-          selectedColor,
-          "picker",
-          shape,
-        );
-        preview.setAttribute("aria-hidden", "true");
-        shapeButton.append(preview);
-        shapeButton.addEventListener("click", () => {
-          storeAgentAppearance(agent.name, { shape });
-          nodes.agentAppearancePicker.hidden = true;
-          nodes.selectedAgentAvatar.setAttribute("aria-expanded", "false");
-          renderAgents();
-          renderHeader();
-        });
-        nodes.agentAppearanceShapes.append(shapeButton);
-      }
-      for (const color of AGENT_AVATAR_COLORS) {
-        const colorButton = make("button", "agent-appearance-color");
-        colorButton.type = "button";
-        setStyleVariable(colorButton, "--appearance-color", color);
-        colorButton.setAttribute("aria-label", `Choisir la couleur ${color}`);
-        colorButton.setAttribute("aria-pressed", String(color === selectedColor));
-        colorButton.addEventListener("click", () => {
-          storeAgentAppearance(agent.name, { color });
-          nodes.agentAppearancePicker.hidden = true;
-          nodes.selectedAgentAvatar.setAttribute("aria-expanded", "false");
-          renderAgents();
-          renderHeader();
-        });
-        nodes.agentAppearanceColors.append(colorButton);
-      }
-    };
+    const colorForAgent = (agent) => agentAvatarColor(agent && agent.name, {}, agent && agent.profile);
+    const shapeForAgent = (agent) => agentAvatarShape(agent && agent.name, {}, agent && agent.profile);
 
     const renderAgentButton = (agent) => {
       const shell = make("div", "agent-row-shell");
@@ -7114,9 +7239,9 @@
       const avatar = createAgentAvatar(
         documentRef,
         agent,
-        colorForAgent(agent.name),
+        colorForAgent(agent),
         "card",
-        shapeForAgent(agent.name),
+        shapeForAgent(agent),
       );
       avatar.setAttribute("aria-hidden", "true");
       layout.append(avatar);
@@ -7124,7 +7249,7 @@
       const content = make("span", "agent-row__content");
       const top = make("span", "agent-row__top");
       const identity = make("span", "agent-row__identity");
-      identity.append(make("span", "agent-row__name", agent.name));
+      identity.append(make("span", "agent-row__name", agentDisplayName(agent)));
       if (shouldShowAgentHost(agent.host)) {
         identity.append(make("span", "agent-row__host", agent.host));
       }
@@ -7135,9 +7260,17 @@
       if (recency) topEnd.append(make("time", "agent-row__recency", recency));
       top.append(topEnd);
       content.append(top);
+      const labels = agent.profile && Array.isArray(agent.profile.labels)
+        ? agent.profile.labels
+        : [];
+      if (labels.length > 0) {
+        const tags = make("span", "agent-row__labels");
+        labels.forEach((label) => tags.append(make("span", "agent-row__label", label)));
+        content.append(tags);
+      }
       const execution = executionSummary(agent);
       if (execution) content.append(make("p", "agent-row__execution", execution));
-      const excerpt = agentCardExcerpt(agent.name, agent.last_excerpt);
+      const excerpt = agentCardExcerpt(agentDisplayName(agent), agent.last_excerpt);
       if (excerpt) content.append(make("p", "agent-row__excerpt", excerpt));
       layout.append(content);
       button.append(layout);
@@ -7145,7 +7278,7 @@
 
       const actions = make("button", "agent-row__actions", "⋯");
       actions.type = "button";
-      actions.setAttribute("aria-label", `Ouvrir le menu de ${agent.name}`);
+      actions.setAttribute("aria-label", `Ouvrir le menu de ${agentDisplayName(agent)}`);
       actions.setAttribute("aria-haspopup", "menu");
       actions.setAttribute(
         "aria-controls",
@@ -7200,7 +7333,6 @@
       const openedAnchorRect = identityCardAnchorRect;
       const renderSignature = JSON.stringify([
         state.selectedAgent,
-        agentAppearances,
         agentSidebarPreferences,
         agentRosterSignature(state.agents),
       ]);
@@ -7250,7 +7382,7 @@
     };
     const renderHeader = () => {
       const agent = state.agents.find((entry) => entry.name === state.selectedAgent);
-      nodes.selectedAgent.textContent = agent ? agent.name : "Aucun agent";
+      nodes.selectedAgent.textContent = agent ? agentDisplayName(agent) : "Aucun agent";
       nodes.selectedMeta.textContent = agent
         ? agentHeaderMeta(agent)
         : "Sélectionnez un agent dans la liste.";
@@ -7260,19 +7392,14 @@
         const avatar = createAgentAvatar(
           documentRef,
           agent,
-          colorForAgent(agent.name),
+          colorForAgent(agent),
           "large",
-          shapeForAgent(agent.name),
+          shapeForAgent(agent),
         );
         avatar.setAttribute("aria-hidden", "true");
         nodes.selectedAgentAvatar.append(avatar);
       }
-      if (appearancePickerAgent !== (agent && agent.name)) {
-        appearancePickerAgent = null;
-        nodes.agentAppearancePicker.hidden = true;
-        nodes.selectedAgentAvatar.setAttribute("aria-expanded", "false");
-      }
-      renderAppearancePicker(agent);
+      nodes.selectedAgentAvatar.setAttribute("aria-expanded", "false");
       nodes.stoppedBanner.hidden = !agent || agent.state !== "stopped";
       nodes.draft.disabled = !agent;
       nodes.send.disabled = !agent || nodes.draft.value.trim().length === 0;
@@ -7454,6 +7581,349 @@
       });
     };
 
+    const profileSummaryFromDetail = (profile) => ({
+      profile_ref: profile.profile_ref,
+      display_name: profile.display_name,
+      labels: Array.isArray(profile.labels) ? profile.labels : [],
+      avatar: profile.avatar,
+      instruction_state: profile.instruction_state,
+    });
+
+    const applyProfileDetail = (routingName, profile) => {
+      const summary = profileSummaryFromDetail(profile);
+      state = {
+        ...state,
+        agents: state.agents.map((entry) => (
+          entry.name === routingName ? { ...entry, profile: summary } : entry
+        )),
+      };
+      lastAgentsRenderSignature = null;
+      renderAgents();
+      renderHeader();
+      return state.agents.find((entry) => entry.name === routingName);
+    };
+
+    const profileErrorLabel = (code) => ({
+      display_name_conflict: "Ce nom est déjà utilisé par un autre agent.",
+      profile_revision_conflict: "Ce profil a été modifié dans une autre fenêtre. Rechargez-le.",
+      invalid_profile: "Vérifiez le nom, les étiquettes et les instructions.",
+      profile_store_unavailable: "Les profils sont temporairement indisponibles.",
+    })[code] || "Impossible d’enregistrer ce profil.";
+
+    const renderAgentProfileEditor = (agent, profile) => {
+      nodes.detailPanel.dataset.mode = "profile";
+      nodes.detailPanel.dataset.exchangeKey = "";
+      nodes.detailTitle.textContent = "Réglages de " + profile.display_name;
+
+      let persistedProfile = profile;
+      let selectedShape = profile.avatar.shape;
+      let selectedColor = profile.avatar.color;
+      let profileSaveTimer = null;
+      let profileSaveInFlight = false;
+      let profileSaveQueued = false;
+      let attentionSaveInFlight = false;
+      let attentionSaveQueued = false;
+
+      const form = make("form", "agent-profile-editor");
+      form.noValidate = true;
+      const intro = make(
+        "p",
+        "agent-profile-editor__intro",
+        "Les modifications sont enregistrées automatiquement.",
+      );
+      const nameField = make("label", "agent-profile-editor__field");
+      nameField.append(make("span", "agent-profile-editor__label", "Nom affiché"));
+      const nameInput = make("input", "agent-profile-editor__input");
+      nameInput.name = "display-name";
+      nameInput.maxLength = 80;
+      nameInput.value = profile.display_name;
+      nameInput.required = true;
+      nameField.append(nameInput);
+
+      const labelsField = make("label", "agent-profile-editor__field");
+      labelsField.append(make("span", "agent-profile-editor__label", "Étiquettes"));
+      const labelsInput = make("input", "agent-profile-editor__input");
+      labelsInput.name = "labels";
+      labelsInput.maxLength = 400;
+      labelsInput.placeholder = "coordination, recherche";
+      labelsInput.value = (profile.labels || []).join(", ");
+      labelsInput.setAttribute("aria-describedby", "agent-profile-label-help");
+      labelsField.append(labelsInput);
+      const labelsHelp = make(
+        "p",
+        "agent-profile-editor__help",
+        "Séparez les étiquettes par une virgule ou appuyez sur Entrée.",
+      );
+      labelsHelp.id = "agent-profile-label-help";
+
+      const appearance = make("section", "agent-profile-editor__appearance");
+      appearance.append(make("span", "agent-profile-editor__label", "Apparence"));
+      const shapeOptions = make("div", "agent-appearance-shapes");
+      shapeOptions.setAttribute("role", "group");
+      shapeOptions.setAttribute("aria-label", "Choisir la forme de l’agent");
+      const colorOptions = make("div", "agent-appearance-colors");
+      colorOptions.setAttribute("role", "group");
+      colorOptions.setAttribute("aria-label", "Choisir la couleur de l’agent");
+      const refreshAppearanceSelection = () => {
+        const selectedHex = PROFILE_AVATAR_COLORS[selectedColor] || PROFILE_AVATAR_COLORS.blue;
+        shapeOptions.querySelectorAll("button").forEach((button) => {
+          button.setAttribute("aria-pressed", String(button.dataset.shape === selectedShape));
+          const preview = button.querySelector(".agent-avatar");
+          if (preview) setStyleVariable(preview, "--avatar-color", selectedHex);
+        });
+        colorOptions.querySelectorAll("button").forEach((button) => {
+          button.setAttribute("aria-pressed", String(button.dataset.color === selectedColor));
+        });
+      };
+      for (const shape of AGENT_AVATAR_SHAPES) {
+        const shapeButton = make("button", "agent-appearance-shape");
+        shapeButton.type = "button";
+        shapeButton.dataset.shape = shape;
+        shapeButton.setAttribute("aria-label", "Choisir la forme " + AGENT_AVATAR_SHAPE_LABELS[shape]);
+        const preview = createAgentAvatar(
+          documentRef,
+          { ...agent, profile: { ...agent.profile, avatar: { shape, color: selectedColor } }, state: "alive" },
+          PROFILE_AVATAR_COLORS[selectedColor] || PROFILE_AVATAR_COLORS.blue,
+          "picker",
+          shape,
+        );
+        preview.setAttribute("aria-hidden", "true");
+        shapeButton.append(preview);
+        shapeOptions.append(shapeButton);
+      }
+      for (const [color, hex] of Object.entries(PROFILE_AVATAR_COLORS)) {
+        const colorButton = make("button", "agent-appearance-color");
+        colorButton.type = "button";
+        colorButton.dataset.color = color;
+        setStyleVariable(colorButton, "--appearance-color", hex);
+        colorButton.setAttribute("aria-label", "Choisir la couleur " + color);
+        colorOptions.append(colorButton);
+      }
+      appearance.append(shapeOptions, colorOptions);
+      refreshAppearanceSelection();
+
+      const instructionsField = make("label", "agent-profile-editor__field");
+      instructionsField.append(make("span", "agent-profile-editor__label", "Consignes individuelles"));
+      const instructions = make("textarea", "agent-profile-editor__instructions");
+      instructions.name = "instructions";
+      instructions.maxLength = 8000;
+      instructions.rows = 8;
+      instructions.placeholder = "Elles seront appliquées au prochain redémarrage contrôlé de l’agent.";
+      instructions.value = profile.instructions || "";
+      instructionsField.append(instructions);
+
+      const attentionField = make("fieldset", "agent-profile-editor__attention");
+      attentionField.append(make("legend", "agent-profile-editor__label", "Notifications pour cet appareil"));
+      const preference = preferenceForProfile(profile.profile_ref);
+      const preferenceInputs = [
+        ["human_input_needed", "Quand cet agent attend votre réponse"],
+        ["task_completed", "Quand un travail est terminé"],
+        ["terminal_failure", "En cas d’échec sans reprise"],
+      ].map(([key, label]) => {
+        const control = make("label", "agent-profile-editor__notification");
+        const input = make("input", "");
+        input.type = "checkbox";
+        input.checked = Boolean(preference[key]);
+        control.append(input, make("span", "", label));
+        attentionField.append(control);
+        return [key, input];
+      });
+      if (!attentionClientId) {
+        attentionField.append(make(
+          "p",
+          "agent-profile-editor__help",
+          "Les notifications ne sont pas disponibles dans cet environnement.",
+        ));
+        preferenceInputs.forEach(([, input]) => { input.disabled = true; });
+      }
+
+      const application = make(
+        "p",
+        "agent-profile-editor__application",
+        "Consigne : " + instructionStatusLabel(profile.instruction_state && profile.instruction_state.status) + ".",
+      );
+      application.dataset.status = profile.instruction_state && profile.instruction_state.status || "unknown";
+      const saveState = make("p", "agent-profile-editor__save-state", "");
+      saveState.setAttribute("role", "status");
+      form.append(
+        intro,
+        nameField,
+        labelsField,
+        labelsHelp,
+        appearance,
+        instructionsField,
+        attentionField,
+        application,
+        saveState,
+      );
+
+      const profileDraft = () => ({
+        ...persistedProfile,
+        display_name: nameInput.value.trim(),
+        labels: labelsInput.value
+          .split(",")
+          .map((label) => label.trim())
+          .filter(Boolean),
+        avatar: { shape: selectedShape, color: selectedColor },
+        instructions: instructions.value,
+      });
+      const redrawProfileDraft = () => {
+        const draft = profileDraft();
+        applyProfileDetail(agent.name, draft);
+        return draft;
+      };
+      const clearScheduledProfileSave = () => {
+        if (profileSaveTimer === null) return;
+        windowRef.clearTimeout(profileSaveTimer);
+        profileSaveTimer = null;
+      };
+      const persistProfile = async () => {
+        clearScheduledProfileSave();
+        if (profileSaveInFlight) {
+          profileSaveQueued = true;
+          return;
+        }
+        profileSaveInFlight = true;
+        const draft = redrawProfileDraft();
+        saveState.textContent = "Enregistrement…";
+        try {
+          const response = await windowRef.fetch(buildAgentProfileUrl(token, persistedProfile.profile_ref), {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              version: 1,
+              expected_revision: persistedProfile.revision,
+              display_name: draft.display_name,
+              labels: draft.labels,
+              avatar: draft.avatar,
+              instructions: draft.instructions,
+            }),
+          });
+          let payload = {};
+          try { payload = await response.json(); } catch (_error) { /* réponse illisible */ }
+          if (!response.ok || !payload.profile) {
+            throw new Error(payload.code || "profile_save_failed");
+          }
+          persistedProfile = payload.profile;
+          if (profileSaveQueued || profileSaveTimer !== null) {
+            redrawProfileDraft();
+          } else {
+            applyProfileDetail(agent.name, payload.profile);
+          }
+          application.textContent = "Consigne : "
+            + instructionStatusLabel(payload.profile.instruction_state && payload.profile.instruction_state.status)
+            + ".";
+          application.dataset.status = payload.profile.instruction_state
+            && payload.profile.instruction_state.status || "unknown";
+          saveState.textContent = "Enregistré.";
+        } catch (error) {
+          saveState.textContent = profileErrorLabel(error && error.message);
+        } finally {
+          profileSaveInFlight = false;
+          if (profileSaveQueued) {
+            profileSaveQueued = false;
+            void persistProfile();
+          }
+        }
+      };
+      const scheduleProfileSave = (immediate = false) => {
+        redrawProfileDraft();
+        clearScheduledProfileSave();
+        if (immediate) {
+          void persistProfile();
+          return;
+        }
+        profileSaveTimer = windowRef.setTimeout(() => {
+          profileSaveTimer = null;
+          void persistProfile();
+        }, 500);
+      };
+      const attentionDraft = () => Object.fromEntries(
+        preferenceInputs.map(([key, input]) => [key, input.checked]),
+      );
+      const persistAttention = async () => {
+        if (attentionSaveInFlight) {
+          attentionSaveQueued = true;
+          return;
+        }
+        attentionSaveInFlight = true;
+        saveState.textContent = "Enregistrement…";
+        try {
+          await saveAttentionPreference(persistedProfile.profile_ref, attentionDraft());
+          saveState.textContent = "Enregistré.";
+        } catch (error) {
+          saveState.textContent = error && error.message === "attention_save_failed"
+            ? "Impossible d’enregistrer les notifications."
+            : profileErrorLabel(error && error.message);
+        } finally {
+          attentionSaveInFlight = false;
+          if (attentionSaveQueued) {
+            attentionSaveQueued = false;
+            void persistAttention();
+          }
+        }
+      };
+
+      labelsInput.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        const start = labelsInput.selectionStart || labelsInput.value.length;
+        const end = labelsInput.selectionEnd || start;
+        labelsInput.setRangeText(", ", start, end, "end");
+        scheduleProfileSave();
+      });
+      [nameInput, labelsInput, instructions].forEach((input) => {
+        input.addEventListener("input", () => scheduleProfileSave());
+      });
+      shapeOptions.querySelectorAll("button").forEach((button) => {
+        button.addEventListener("click", () => {
+          selectedShape = button.dataset.shape;
+          refreshAppearanceSelection();
+          scheduleProfileSave(true);
+        });
+      });
+      colorOptions.querySelectorAll("button").forEach((button) => {
+        button.addEventListener("click", () => {
+          selectedColor = button.dataset.color;
+          refreshAppearanceSelection();
+          scheduleProfileSave(true);
+        });
+      });
+      preferenceInputs.forEach(([, input]) => {
+        input.addEventListener("change", () => { void persistAttention(); });
+      });
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        scheduleProfileSave(true);
+      });
+      nodes.detailContent.replaceChildren(form);
+      nodes.detailPanel.hidden = false;
+    };
+
+    const openAgentProfile = async (agent) => {
+      const profileRef = agent && agent.profile && agent.profile.profile_ref;
+      if (!profileRef || !token) return;
+      nodes.detailPanel.dataset.mode = "profile";
+      nodes.detailPanel.dataset.exchangeKey = "";
+      nodes.detailTitle.textContent = `Réglages de ${agentDisplayName(agent)}`;
+      nodes.detailContent.replaceChildren(make("p", "trace-message-state", "Chargement du profil…"));
+      nodes.detailPanel.hidden = false;
+      try {
+        const response = await windowRef.fetch(buildAgentProfileUrl(token, profileRef));
+        let payload = {};
+        try { payload = await response.json(); } catch (_error) { /* réponse illisible */ }
+        if (!response.ok || !payload.profile) throw new Error(payload.code || "profile_load_failed");
+        await refreshAttentionPreferences();
+        renderAgentProfileEditor(agent, payload.profile);
+      } catch (error) {
+        nodes.detailContent.replaceChildren(make(
+          "p",
+          "trace-message-state",
+          profileErrorLabel(error && error.message),
+        ));
+      }
+    };
+
     const renderPeer = (entry) => {
       const wrapper = make("div", "trace-wrap");
       const line = make("div", "trace-line");
@@ -7585,9 +8055,9 @@
         const avatar = createAgentAvatar(
           documentRef,
           { ...agent, state: "busy" },
-          colorForAgent(agent.name),
+          colorForAgent(agent),
           "small",
-          shapeForAgent(agent.name),
+          shapeForAgent(agent),
         );
         avatar.setAttribute("aria-hidden", "true");
         const content = make("div", "agent-activity__content");
@@ -7675,9 +8145,9 @@
       const avatar = createAgentAvatar(
         documentRef,
         agent,
-        colorForAgent(agent.name),
+        colorForAgent(agent),
         "small",
-        shapeForAgent(agent.name),
+        shapeForAgent(agent),
       );
       avatar.setAttribute("aria-hidden", "true");
       receipt.append(avatar, make("span", "delivery-activity__receipt-label", "Remis au fournisseur"));
@@ -7889,6 +8359,10 @@
         windowRef.clearInterval(fleetRefreshTimer);
         fleetRefreshTimer = null;
       }
+      if (attentionRefreshTimer !== null && typeof windowRef.clearInterval === "function") {
+        windowRef.clearInterval(attentionRefreshTimer);
+        attentionRefreshTimer = null;
+      }
       closeWatch();
       historyConnections.forEach((history) => history.close());
       historyConnections.clear();
@@ -7913,7 +8387,6 @@
           if (event.kind !== "record") return true;
           rememberEventBody(event);
           const record = event.record || {};
-          notifyTerminal(record, event.agent);
           return true;
         });
         const incomingTextCount = countNewAgentTextSegments(
@@ -8063,6 +8536,164 @@
       }, 0);
     };
 
+    const preferenceForProfile = (profileRef) => attentionPreferences.get(profileRef) || {
+      profile_ref: profileRef,
+      human_input_needed: false,
+      task_completed: false,
+      terminal_failure: false,
+    };
+
+    const renderAttentionControl = () => {
+      const pending = [...attentionEvents.values()].filter((event) => event.attention_enabled && !event.seen);
+      nodes.attentionCount.hidden = pending.length === 0;
+      nodes.attentionCount.textContent = String(pending.length);
+      nodes.attentionControl.dataset.attention = pending.length > 0 ? "true" : "false";
+      nodes.attentionControl.setAttribute(
+        "aria-label",
+        pending.length > 0 ? `Ouvrir l’activité, ${pending.length} élément${pending.length > 1 ? "s" : ""} à lire` : "Ouvrir l’activité",
+      );
+    };
+
+    const postAttentionState = async (eventIds, action) => {
+      if (!attentionClientId || eventIds.length === 0) return;
+      try {
+        const response = await windowRef.fetch(agentResourceUrl("/v1/attention/state", token), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ version: 1, client_id: attentionClientId, event_ids: eventIds, action }),
+        });
+        if (!response.ok) return;
+        eventIds.forEach((eventId) => {
+          const event = attentionEvents.get(eventId);
+          if (!event) return;
+          attentionEvents.set(eventId, {
+            ...event,
+            ...(action === "mark_seen" ? { seen: true } : { native_notified: true }),
+          });
+        });
+        renderAttentionControl();
+      } catch (_error) {
+        // Le prochain polling réessaiera sans transformer une activité en erreur de conversation.
+      }
+    };
+
+    const notifyAttention = (event) => {
+      if (nativeAttentionShell) return;
+      const NotificationApi = windowRef.Notification;
+      if (typeof NotificationApi !== "function") return;
+      const target = attentionNotificationTarget(
+        event,
+        documentRef.visibilityState === "hidden",
+        NotificationApi.permission,
+        notifiedAttentionIds,
+      );
+      if (!target) return;
+      notifiedAttentionIds.add(target.key);
+      try {
+        const notification = new NotificationApi(target.title, { body: target.body, tag: target.key });
+        void postAttentionState([target.key], "mark_native_notified");
+        notification.onclick = () => {
+          if (typeof windowRef.focus === "function") windowRef.focus();
+          if (typeof notification.close === "function") notification.close();
+          const agent = state.agents.find((entry) => entry.profile && entry.profile.profile_ref === target.profileRef);
+          if (agent) selectAgent(agent.name);
+        };
+      } catch (_error) {
+        notifiedAttentionIds.delete(target.key);
+      }
+    };
+
+    const refreshAttentionPreferences = async () => {
+      if (!attentionClientId) return false;
+      try {
+        const response = await windowRef.fetch(`${buildAttentionPreferencesUrl(token)}&client_id=${encodeURIComponent(attentionClientId)}`);
+        const payload = await response.json();
+        if (!response.ok || !Array.isArray(payload.preferences)) return false;
+        attentionPreferences.clear();
+        payload.preferences.forEach((preference) => {
+          if (text(preference && preference.profile_ref)) attentionPreferences.set(preference.profile_ref, preference);
+        });
+        return true;
+      } catch (_error) {
+        // Les réglages restent à leur dernier état confirmé jusqu'au prochain essai.
+        return false;
+      }
+    };
+
+    const saveAttentionPreference = async (profileRef, next) => {
+      if (!attentionClientId) return;
+      if (!attentionPreferences.has(profileRef) && !(await refreshAttentionPreferences())) {
+        throw new Error("attention_save_failed");
+      }
+      const preferences = new Map(attentionPreferences);
+      preferences.set(profileRef, { profile_ref: profileRef, ...next });
+      const response = await windowRef.fetch(buildAttentionPreferencesUrl(token), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          version: 1,
+          client_id: attentionClientId,
+          preferences: [...preferences.values()],
+        }),
+      });
+      let payload = {};
+      try { payload = await response.json(); } catch (_error) { /* réponse illisible */ }
+      if (!response.ok || !Array.isArray(payload.preferences)) {
+        throw new Error("attention_save_failed");
+      }
+      attentionPreferences.clear();
+      payload.preferences.forEach((preference) => {
+        if (text(preference && preference.profile_ref)) attentionPreferences.set(preference.profile_ref, preference);
+      });
+      void refreshAttention();
+    };
+
+    const refreshAttention = async () => {
+      if (!attentionClientId || attentionRefreshInFlight) return;
+      attentionRefreshInFlight = true;
+      try {
+        const response = await windowRef.fetch(buildAttentionUrl(token, attentionClientId));
+        const payload = await response.json();
+        if (!response.ok || !Array.isArray(payload.events)) return;
+        payload.events.forEach((event) => {
+          const eventId = text(event && event.event_id);
+          if (!eventId) return;
+          attentionEvents.set(eventId, event);
+          notifyAttention(event);
+        });
+        renderAttentionControl();
+      } catch (_error) {
+        // L'activité est indépendante du watch du fil et ne doit jamais masquer sa connexion.
+      } finally {
+        attentionRefreshInFlight = false;
+      }
+    };
+
+    const openAttentionCentre = () => {
+      nodes.detailPanel.dataset.mode = "attention";
+      nodes.detailPanel.dataset.exchangeKey = "";
+      nodes.detailTitle.textContent = "Activité";
+      const events = [...attentionEvents.values()]
+        .sort((left, right) => Number(right.created_at || 0) - Number(left.created_at || 0));
+      if (events.length === 0) {
+        nodes.detailContent.replaceChildren(make("p", "attention-centre__empty", "Aucune activité à signaler."));
+      } else {
+        const list = make("div", "attention-centre");
+        events.forEach((event) => {
+          const item = make("article", "attention-centre__item");
+          item.append(
+            make("strong", "", text(event.display_name) || "Agent"),
+            make("p", "", attentionEventLabel(event)),
+          );
+          list.append(item);
+        });
+        nodes.detailContent.replaceChildren(list);
+      }
+      nodes.detailPanel.hidden = false;
+      const seen = events.filter((event) => event.attention_enabled && !event.seen).map((event) => event.event_id);
+      void postAttentionState(seen, "mark_seen");
+    };
+
     const notifyTerminal = (record, agent) => {
       const NotificationApi = windowRef.Notification;
       if (typeof NotificationApi !== "function") return;
@@ -8185,6 +8816,9 @@
     nodes.notificationControl.addEventListener("click", () => {
       void requestNotificationPermission();
     });
+    nodes.attentionControl.addEventListener("click", () => {
+      openAttentionCentre();
+    });
     updateNotificationControl();
     nodes.composer.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -8240,11 +8874,8 @@
     nodes.selectedAgentAvatar.addEventListener("click", () => {
       const agent = state.agents.find((entry) => entry.name === state.selectedAgent);
       if (!agent) return;
-      const open = nodes.agentAppearancePicker.hidden;
-      appearancePickerAgent = open ? agent.name : null;
-      renderAppearancePicker(agent);
-      nodes.agentAppearancePicker.hidden = !open;
-      nodes.selectedAgentAvatar.setAttribute("aria-expanded", String(open));
+      nodes.selectedAgentAvatar.setAttribute("aria-expanded", "true");
+      void openAgentProfile(agent);
     });
 
     const renderSearchHits = (payload) => {
@@ -8264,8 +8895,9 @@
         const body = make("span", "message-search-hit__body", parts.body);
         button.append(meta, body);
         button.addEventListener("click", () => {
-          const peer = threadPeerForHit(hit);
-          if (peer) selectAgent(peer);
+          const displayName = threadPeerForHit(hit);
+          const agent = state.agents.find((entry) => agentDisplayName(entry) === displayName);
+          if (agent) selectAgent(agent.name);
         });
         item.append(button);
         nodes.messageSearchResults.append(item);
@@ -8331,6 +8963,13 @@
       fleetRefreshTimer = windowRef.setInterval(
         () => void refreshFleetRoster(),
         FLEET_REFRESH_INTERVAL_MS,
+      );
+    }
+    void refreshAttentionPreferences().then(() => void refreshAttention());
+    if (typeof windowRef.setInterval === "function") {
+      attentionRefreshTimer = windowRef.setInterval(
+        () => void refreshAttention(),
+        5_000,
       );
     }
 
@@ -8416,6 +9055,7 @@
     normalizeAgentLink,
     ownershipSummary,
     normalizeAgents,
+    agentDisplayName,
     executionSummary,
     agentHeaderMeta,
     formatLocalTime,
@@ -8463,6 +9103,12 @@
     mount,
     buildSearchRequest,
     buildSearchUrl,
+    isAttentionClientId,
+    createAttentionClientId,
+    resolveAttentionClientId,
+    buildAttentionUrl,
+    attentionEventLabel,
+    attentionNotificationTarget,
     threadPeerForHit,
     searchHitParts,
     searchStatusText,
