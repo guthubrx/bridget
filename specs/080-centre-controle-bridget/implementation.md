@@ -41,6 +41,7 @@ Statut : tranche de centre de contrôle et navigation Projets déployées sur le
 - Cause attestée sur le fil `rc1` : un même message utilisateur est projeté depuis le ledger de conversation et depuis le `turn_start` du journal d'agent. Les deux sources portent le même `delivery_id`, mais la projection conservait les deux bulles durables.
 - `projectTimeline` ne conserve désormais qu'une bulle utilisateur par identifiant de remise. La bulle optimiste reste remplacée par le fait durable, sans fusionner des messages distincts qui auraient le même texte.
 - Le test `message_ledger_et_turn_start_ne_rendent_qu_une_bulle_utilisateur` reproduit le couple observé et impose une seule bulle.
+- Le commit `a40f97d` est validé sur Linux : `ui_relay_test` 25/25 vert et l'asset servi contient la garde de déduplication.
 
 ## Portage de finition T3 Code
 
@@ -55,12 +56,12 @@ Les contrôles restent des éléments HTML natifs et accessibles. Seule leur pr�
 
 ## Déploiement attesté
 
-Le binaire release courant a été construit depuis le checkout isolé du commit `6ee3ee5`, installé dans `/home/moi/.local/bin/bridget`, puis les services utilisateur ont été redémarrés le 2026-08-31 à 09:56:52 UTC :
+Le binaire release courant a été construit depuis le checkout isolé du commit `a40f97d`, installé dans `/home/moi/.local/bin/bridget`, puis les services utilisateur ont été redémarrés le 2026-08-31 à 10:10:18 UTC :
 
 - `bridget-daemon.service` : actif ;
 - `bridget-ui.service` : actif après le même redémarrage ;
-- SHA-256 du binaire installé : `2a004a0a1b49c55bb80dab236e6b642b4b835baef2f4ac48596b6a2d6181ad17`.
-- Le checkout serveur présentant des modifications non validées a été laissé intact. La sauvegarde de l'ancien binaire est `/home/moi/.local/bin/bridget.before-human-sender-20260831-095800`.
+- SHA-256 du binaire installé : `addfbfd59131a5d05e5ffe9ea48db6de334ef9d5bc0478a4d956a8c26c50f083`.
+- Le checkout serveur présentant des modifications non validées a été laissé intact. La sauvegarde de l'ancien binaire est `/home/moi/.local/bin/bridget.before-message-dedup-20260831-101018`.
 - Les assets servis par le relais contiennent la navigation Projets et l'overlay de création ou d'import.
 - Les appels authentifiés `GET /v1/projects/settings` et `GET /v1/projects` répondent tous deux `200` après redémarrage, avec respectivement une racine autorisée et un projet inscrit.
 
@@ -69,7 +70,7 @@ Le binaire release courant a été construit depuis le checkout isolé du commit
 | Commande | Résultat |
 |---|---|
 | `node --check crates/bridget-daemon/assets/ui/app.js` | PASS |
-| `node crates/bridget-daemon/assets/ui/app.js` | PASS - 99 tests, 0 échec |
+| `node crates/bridget-daemon/assets/ui/app.js` | PASS - 100 tests, 0 échec |
 | `cargo fmt --check` | PASS |
 | `cargo test -p bridget-daemon spec_080 --lib` | PASS - 2 tests ciblés |
 | `cargo build --release -p bridget-daemon` | PASS |

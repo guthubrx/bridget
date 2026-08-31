@@ -5,10 +5,10 @@ Date : 2026-08-31
 ## Relais effectivement déployé
 
 - Build : `cargo build --release -p bridget-daemon` réussi.
-- Installation : `/home/moi/.local/bin/bridget` SHA-256 `2a004a0a1b49c55bb80dab236e6b642b4b835baef2f4ac48596b6a2d6181ad17`.
-- Services utilisateur : `bridget-daemon.service` et `bridget-ui.service` actifs depuis 09:56:52 UTC.
-- Build et test réalisés dans le checkout Linux isolé `/tmp/bridget-human-sender.7CyaQE` du commit `6ee3ee5a33b3d5a699413d043329489fd15f230e`.
-- Sauvegarde du binaire antérieur : `/home/moi/.local/bin/bridget.before-human-sender-20260831-095800`.
+- Installation : `/home/moi/.local/bin/bridget` SHA-256 `addfbfd59131a5d05e5ffe9ea48db6de334ef9d5bc0478a4d956a8c26c50f083`.
+- Services utilisateur : `bridget-daemon.service` et `bridget-ui.service` actifs depuis 10:10:18 UTC.
+- Build et test réalisés dans le checkout Linux isolé `/tmp/bridget-human-sender.7CyaQE` du commit `a40f97dad7bf38778867c5dd4ad33ff2c4ec89dc`.
+- Sauvegarde du binaire antérieur : `/home/moi/.local/bin/bridget.before-message-dedup-20260831-101018`.
 - Le relais sert les marqueurs `project-presentation-overlay`, `project-onboarding-overlay` et `Navigation des projets` après redémarrage.
 - Les routes authentifiées `GET /v1/projects/settings` et `GET /v1/projects` répondent `200`, avec une racine autorisée et un projet inscrit.
 
@@ -70,7 +70,7 @@ Le test UI couvre aussi la séparation de portées dans la navigation Projets : 
 
 - Mesure runtime : le snapshot du fil `rc1` ne contient qu'une occurrence de chacun des messages visibles en double, tandis que le journal de l'agent contient un `turn_start` avec le même `message_id`.
 - Reproduction exacte avant correctif : la projection de la bulle ledger et du `turn_start` portant `6f153302a7494` produisait 2 bulles.
-- Après correctif : la même projection produit 1 bulle avec `delivery_id=6f153302a7494`. Le programme Node complet passe 100/100.
+- Après correctif : la même projection produit 1 bulle avec `delivery_id=6f153302a7494`. Le programme Node complet passe 100/100, `ui_relay_test` passe 25/25 sur Linux, et l'asset déployé contient `renderedUserMessageIds`.
 
 ## Paquet macOS attesté
 
