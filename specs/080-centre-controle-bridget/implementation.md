@@ -60,6 +60,11 @@ Le binaire release courant a été construit depuis ce worktree, installé dans 
 - Le registre est limité à un panneau et les tests couvrent la limite, la fermeture du panneau précédent et le rendu pleine largeur.
 - `bridget.svg` est converti en `apps/bridget-desktop/src-tauri/icons/icon.icns`, déclaré dans `tauri.conf.json` et contrôlé dans le bundle macOS. Le paquet contient désormais `Contents/Resources/icon.icns` et `CFBundleIconFile=icon.icns`.
 
+## Rectification de l'asset d'icône macOS
+
+- L'asset antérieur validé est désormais conservé dans `apps/bridget-desktop/src-tauri/icons/bridget.svg`, avec ses déclinaisons `icon.svg`, `icon.png` et `icon.icns` cohérentes.
+- Cette variante a un fond noir légèrement dégradé et une mascotte rose agrandie. Le fichier de téléchargement utilisé par erreur ne contenait pas ces deux propriétés et n'est plus une source de bundle.
+
 ## Finition de densité de la liste d'agents
 
 - La liste d'agents utilise une grille défilable dont les lignes étaient étirées pour occuper toute la hauteur disponible. Les agents sont désormais ancrés en haut et chaque ligne conserve la hauteur de son contenu.

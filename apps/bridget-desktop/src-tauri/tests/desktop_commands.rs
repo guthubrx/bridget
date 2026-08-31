@@ -45,3 +45,15 @@ fn un_seul_serveur_est_affiche_a_la_fois() {
     assert!(backend.contains("close_open_panels(&app, &state)?;"));
     assert!(backend.contains("PhysicalSize::new(size.width.max(1), size.height.max(1))"));
 }
+
+#[test]
+fn l_icone_bundled_conserve_le_fond_sombre_et_la_mascotte_agrandie() {
+    let source = include_str!("../icons/bridget.svg");
+    let icon = include_str!("../icons/icon.svg");
+
+    for asset in [source, icon] {
+        assert!(asset.contains("bridget-dark-background"));
+        assert!(asset.contains("scale(1.18)"));
+    }
+    assert!(!include_bytes!("../icons/icon.icns").is_empty());
+}

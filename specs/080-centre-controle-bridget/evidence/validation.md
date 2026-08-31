@@ -50,6 +50,11 @@ Le test UI vérifie que le centre contient l'overlay, la roue de bas de barre, l
 - Manifeste vérifié : `CFBundleDisplayName=Bridget`, `CFBundleName=Bridget`, `CFBundleIdentifier=app.cartae.bridget-desktop`.
 - Intégrité locale : `codesign --verify --deep --strict` passe après signature ad hoc.
 
+## Rectification de l'icône validée
+
+- L'icône restaurée provient de l'ancien build qui a servi de référence visuelle, non du fichier `/Users/moi/Downloads/bridget.svg` qui avait perdu le fond noir et l'échelle de mascotte.
+- Les fichiers source et macOS ont le même rendu attendu : fond noir légèrement dégradé, mascotte rose volontairement grande.
+
 ## Vérification manuelle restante
 
 1. Ouvrir Bridget sur un profil déjà relié.

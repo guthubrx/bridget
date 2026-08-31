@@ -36,6 +36,8 @@ Le centre doit reprendre la grammaire visuelle de réglages de T3 Code pour les 
 
 La SPEC reste ouverte tant que la version de finition servie n'a pas été examinée par l'opérateur et tant que le paquet macOS construit n'a pas été installé par choix explicite, après fermeture de l'application en cours. Les éléments non réalisés, notamment tarification datée et réglages serveur supplémentaires, restent explicitement non livrés.
 
+L'icône de l'application est une partie du produit : le paquet macOS DOIT embarquer l'asset Bridget validé, sur fond noir légèrement dégradé, avec la mascotte agrandie. Une icône générique ou une variante plus ancienne ne satisfait pas cette SPEC.
+
 ## Contexte
 
 Bridget pilote plusieurs serveurs enregistrés. L'opérateur doit aujourd'hui raisonner à partir de l'interface principale, de l'état des agents et de la configuration du serveur, sans point unique pour distinguer ce qui relève du poste Mac, du serveur, du projet ou de l'exécution.
