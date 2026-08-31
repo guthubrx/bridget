@@ -1889,6 +1889,10 @@ fn render_journal_event(bytes: &[u8], agent: &str) -> String {
             ),
             provider_request_summary(payload),
         ),
+        "provider_request_rejected" => (
+            "[interaction refusée]".to_string(),
+            provider_request_rejected_summary(payload),
+        ),
         "turn_end" => ("[fin]".to_string(), turn_end_summary(payload)),
         "error" => ("[erreur]".to_string(), error_summary(payload)),
         // Laissé volontairement brut : tout autre `event` (et tout `update` dont
@@ -1977,11 +1981,26 @@ fn provider_request_id(value: Option<&serde_json::Value>) -> String {
     }
 }
 
+fn provider_request_rejected_summary(payload: &serde_json::Value) -> String {
+    let code = payload
+        .get("code")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unsupported_provider_request");
+    let reference = payload
+        .get("reference")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("référence absente");
+    format!(
+        "opération fournisseur non prise en charge ({code}, référence {reference}) ; le fournisseur a reçu un refus explicite"
+    )
+}
+
 fn error_summary(payload: &serde_json::Value) -> String {
     let reason = payload
         .get("reason")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("erreur sans motif");
+
     match payload.get("pending_provider_request") {
         Some(pending) if pending.is_object() => format!(
             "{reason} — interaction pendante : {}",
@@ -2289,10 +2308,10 @@ fn list_attachable_agents(socket_path: &Path) -> Vec<String> {
     };
     let mut writer = BufWriter::new(stream);
     let mut reader = BufReader::new(read_stream);
-    let probe_name = format!("attach-list-{}", std::process::id());
     let register = WrapperToDaemon::Register {
         agent_type: "attach-list".to_string(),
-        name: Some(probe_name),
+        identity_version: 2,
+        agent_id: uuid::Uuid::new_v4().to_string(),
         host: None,
         transport: None,
         channel: bridget_transport::ChannelReport::Unknown,
@@ -2343,7 +2362,7 @@ fn attachable_agent_names(agents: Vec<AgentInfo>) -> Vec<String> {
             agent.mode == Some(PresenceMode::Acp)
                 && matches!(agent.state.as_str(), "connected" | "busy" | "dnd")
         })
-        .map(|agent| agent.name)
+        .map(|agent| agent.agent_id)
         .collect()
 }
 
@@ -2653,6 +2672,8 @@ mod tests {
             notify_timeout_secs: 2,
             model: None,
             permissions: "allow".to_string(),
+            provider_observation: None,
+            thread_bootstrap: Default::default(),
         };
         let mut transport = CodexAppServerTransport::spawn(options).expect("pilote Codex");
         let (record, rendered) =
@@ -2675,10 +2696,12 @@ mod tests {
                 )
                 .to_string(),
             ],
+            provider_kind: "claude".to_string(),
             queue_capacity: 1,
             notify_timeout_secs: 2,
             session_store_root: None,
             agent_name: None,
+            provider_observation: None,
         };
         let mut transport = ClaudeStreamJsonTransport::spawn(options).expect("pilote Claude");
         let (record, rendered) =
@@ -4399,9 +4422,7 @@ mod tests {
         let stamp = short_timestamp(Some("2026-08-26T18:30:00Z"));
         assert_eq!(
             rendered,
-            format!(
-                "{stamp} [outil] Read {{\"file_path\":\"/tmp/demo.toml\",\"limit\":1}}"
-            ),
+            format!("{stamp} [outil] Read {{\"file_path\":\"/tmp/demo.toml\",\"limit\":1}}"),
             "acte tool présent → visible dans attach ; reçu {rendered:?}"
         );
         assert!(
@@ -4620,7 +4641,8 @@ mod tests {
 
         let agent =
             |name: &str, transport: &str, mode: Option<PresenceMode>, state: &str| AgentInfo {
-                name: name.to_string(),
+                agent_id: uuid::Uuid::new_v4().to_string(),
+                display_name: name.to_string(),
                 agent_type: "fixture".to_string(),
                 connection_id: format!("conn-{name}"),
                 host: "local".to_string(),
@@ -4638,7 +4660,10 @@ mod tests {
                 rate_limits: Default::default(),
                 model_mismatch: None,
                 disk_space: None,
+                provider: None,
                 persistent: None,
+                execution: None,
+                agent_link: None,
             };
         let attachable = attachable_agent_names(vec![
             agent("connected", "acp", Some(PresenceMode::Acp), "connected"),

@@ -2,25 +2,35 @@
 //!
 //! Appelé par le CLI quand l'utilisateur tape : bridget codex, bridget claude, etc.
 
+use bridget_core::router::validate_agent_id;
 use bridget_transport::journal::{
     IncrementalJournalReader, JournalLiveFeed, JournalReadItem, JournalSourceIdentity,
     JournalWindowError, JournalWriter, current_host_date, resolve_window,
 };
-use bridget_transport::protocol::{DiskSpaceFact, PresenceMode, decode, encode};
+use bridget_transport::protocol::{
+    DelegatedRuntimeEventFrame, DelegatedRuntimeEventKind, DiskSpaceFact, ExecutionControlCommand,
+    ExecutionControlOperation, ExecutionDeliveryContext, ExecutionProviderContext, PresenceMode,
+    ProviderOperation, RUNTIME_INGRESS_CONTRACT_VERSION, RuntimeIngressHandshake, decode, encode,
+};
 use bridget_transport::{
     AcpOptions, AcpTransport, AttachRefusal, AttachWindow, ChannelReport, ClaudeStreamJsonOptions,
     ClaudeStreamJsonTransport, CodexAppServerOptions, CodexAppServerTransport, DaemonToWrapper,
     MAX_ATTACH_FRAGMENT_BYTES, MAX_ATTACH_SERIALIZED_FRAME_BYTES, ManagedEvent, ManagedEventKind,
-    ManagedSession, ManagedSessionDescriptor, ManagedTerminal, TmuxTransport, Transport,
-    WrapperToDaemon,
+    ManagedProviderIdentity, ManagedSession, ManagedSessionDescriptor, ManagedTerminal,
+    TmuxTransport, Transport, WrapperToDaemon,
 };
 use log::{debug, error, info, warn};
-use maicie::review_continuity::{
-    ReviewContinuityObservation, ReviewContinuityState, observe_delegation_review,
+use sha2::{Digest, Sha256};
+
+use crate::agent_profile::AttentionEventType;
+use crate::agent_profile::{AgentProfileStore, InstructionStatus};
+use crate::mission_projection::{
+    MissionDelegationV1, MissionObjectiveV1, MissionReviewV1, read_public_mission_projection_v1,
 };
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -58,6 +68,70 @@ const ATTACH_RELAY_IDLE_WAIT: Duration = Duration::from_millis(10);
 /// wrapper (et donc tout le binaire de test) coincé si le worker est bloqué
 /// dans un hook ou un wait non coopératif.
 const ATTACH_RELAY_SHUTDOWN_BOUND: Duration = Duration::from_secs(2);
+const MAX_PROCESS_ENV_BINDINGS: usize = 32;
+const MAX_PROCESS_ENV_VALUE_BYTES: usize = 32 * 1024;
+type ProcessEnvironment = Vec<(OsString, OsString)>;
+type ProcessEnvironmentAdmission = (ProcessEnvironment, Option<OutputRedactionLease>);
+
+/// Lease volatile des valeurs process-env. Elle vit seulement dans le wrapper
+/// et conserve une fenêtre par canal afin de couvrir les fragments de sortie.
+pub struct OutputRedactionLease {
+    patterns: Vec<Vec<u8>>,
+    tails: BTreeMap<String, Vec<u8>>,
+}
+
+impl OutputRedactionLease {
+    pub fn new(patterns: Vec<Vec<u8>>) -> Self {
+        Self {
+            patterns,
+            tails: BTreeMap::new(),
+        }
+    }
+    pub fn redact(&mut self, channel: &str, bytes: &[u8], final_fragment: bool) -> Vec<u8> {
+        let overlap = self
+            .patterns
+            .iter()
+            .map(Vec::len)
+            .max()
+            .unwrap_or(0)
+            .saturating_sub(1);
+        let mut combined = self.tails.remove(channel).unwrap_or_default();
+        combined.extend_from_slice(bytes);
+        for pattern in &self.patterns {
+            if !pattern.is_empty() {
+                redact_bytes_in_place(&mut combined, pattern);
+            }
+        }
+        let retained = if final_fragment {
+            0
+        } else {
+            overlap.min(combined.len())
+        };
+        let output_len = combined.len().saturating_sub(retained);
+        let output = combined.drain(..output_len).collect();
+        if !final_fragment {
+            self.tails.insert(channel.to_string(), combined);
+        }
+        output
+    }
+}
+
+fn redact_bytes_in_place(buffer: &mut [u8], pattern: &[u8]) {
+    if pattern.len() > buffer.len() {
+        return;
+    }
+    let mut start = 0;
+    while let Some(offset) = buffer[start..]
+        .windows(pattern.len())
+        .position(|window| window == pattern)
+    {
+        let begin = start + offset;
+        for byte in &mut buffer[begin..begin + pattern.len()] {
+            *byte = 42;
+        }
+        start = begin + pattern.len();
+    }
+}
 
 /// Contexte reconstruit à chaque naissance d'un équipier géré. Il n'est jamais
 /// persisté : le greffe Maicie et Git restent les seules autorités.
@@ -134,7 +208,7 @@ fn managed_resume_context(
                         "Instruction : {}",
                         resume_card_external_text(&mission.instruction)
                     ),
-                    render_resume_review(&mission.review_continuity),
+                    render_resume_review(&mission.review),
                 ]),
                 ResumeStance::Waiting { mission, reason } => {
                     // Exhaustif sur ResumeWaitReason — pas de catch-all header.
@@ -175,7 +249,7 @@ fn managed_resume_context(
                             "Instruction d'origine (NE PAS RELANCER) : {}",
                             resume_card_external_text(&mission.instruction)
                         ),
-                        render_resume_review(&mission.review_continuity),
+                        render_resume_review(&mission.review),
                     ]);
                 }
                 ResumeStance::Absent => lines.push(format!(
@@ -230,7 +304,6 @@ fn managed_resume_context(
     lines.push(managed_resume_consigne(&resume_stance).to_string());
     lines.join("\n")
 }
-
 struct ResumeMission {
     objective_id: String,
     delegation_id: String,
@@ -239,35 +312,22 @@ struct ResumeMission {
     delegation_state: String,
     local_delivery: String,
     instruction: String,
-    review_continuity: ReviewContinuityObservation,
+    review: Option<MissionReviewV1>,
 }
 
-fn render_resume_review(observation: &ReviewContinuityObservation) -> String {
-    let target = resume_card_external_text(observation.target_ref.as_deref().unwrap_or("absente"));
-    let reviewed =
-        resume_card_external_text(observation.reviewed_head.as_deref().unwrap_or("absent"));
-    let observed =
-        resume_card_external_text(observation.observed_head.as_deref().unwrap_or("absente"));
-    match observation.state {
-        ReviewContinuityState::TargetAbsent => {
-            "Suivi du verdict : inobservable (cible Git typée absente).".to_string()
-        }
-        ReviewContinuityState::VerdictAbsent => {
-            format!("Suivi du verdict : en attente de dépôt typé pour {target}@{reviewed}.")
-        }
-        ReviewContinuityState::StillAncestor => format!(
-            "Suivi du verdict : objet jugé {reviewed} toujours ancêtre de {target}@{observed}."
+fn render_resume_review(review: &Option<MissionReviewV1>) -> String {
+    let Some(review) = review else {
+        return "Suivi du verdict : inobservable (cible Git typée absente de la projection publique)."
+            .to_string();
+    };
+    let target = resume_card_external_text(&review.target_ref);
+    let reviewed = resume_card_external_text(&review.reviewed_head);
+    match review.verdict.as_deref() {
+        Some(verdict) => format!(
+            "Suivi du verdict publié : verdict={}; cible={target}; sha_jugé={reviewed}.",
+            resume_card_external_text(verdict)
         ),
-        ReviewContinuityState::Rewritten => format!(
-            "ALERTE VERDICT RÉÉCRIT : objet jugé {reviewed} non ancêtre de {target}@{observed}."
-        ),
-        ReviewContinuityState::Unobservable => format!(
-            "Suivi du verdict : inobservable ({}), cible={target}, sha_jugé={reviewed}.",
-            observation
-                .reason
-                .map(|reason| reason.as_str())
-                .unwrap_or("motif_absent")
-        ),
+        None => format!("Suivi du verdict : en attente de dépôt typé pour {target}@{reviewed}."),
     }
 }
 
@@ -409,77 +469,50 @@ fn is_protected_principal_checkout(path: &Path) -> bool {
     canonical_path == canonical_primary
 }
 
-fn resume_mission_actionable(
-    objective: &maicie::domain::EtatObjectif,
-    delegation: &maicie::domain::EtatDelegation,
-) -> bool {
-    use maicie::domain::{EtatDelegation, EtatObjectif};
-    // `EnAttentePrerequis` n'est PAS exécutable (domain.rs : aucune outbox
-    // tant que les prérequis --depends-on ne sont pas clos). Actionable =
-    // uniquement une délégation `Creee` sur objectif ouvert/en coordination.
-    matches!(
-        objective,
-        EtatObjectif::Ouvert | EtatObjectif::EnCoordination
-    ) && matches!(delegation, EtatDelegation::Creee)
+fn resume_mission_actionable(objective: &str, delegation: &str) -> bool {
+    // `en_attente_prerequis` n'est PAS exécutable. La frontière publique
+    // conserve les libellés fermés publiés par Maicie, sans importer ses types.
+    matches!(objective, "ouvert" | "en_coordination") && delegation == "creee"
 }
 
-/// Classe le couple (objectif, délégation) en motif d'attente, ou `None` si
-/// actionnable / hors surface d'attente.
-///
-/// Matchs **exhaustifs** sur `EtatObjectif` et `EtatDelegation` : une variante
-/// neuve casse la compilation ici — pas de liste `matches!` muette.
-fn resume_wait_reason(
-    objective: &maicie::domain::EtatObjectif,
-    delegation: &maicie::domain::EtatDelegation,
-) -> Option<ResumeWaitReason> {
-    use maicie::domain::{EtatDelegation, EtatObjectif};
+/// Classe les libellés publiés. Une valeur inconnue est volontairement
+/// inactionnable : Bridget ne déduit jamais une transition métier nouvelle.
+fn resume_wait_reason(objective: &str, delegation: &str) -> Option<ResumeWaitReason> {
     if resume_mission_actionable(objective, delegation) {
         return None;
     }
-    // Priorité clos : même si la délégation est Annulee/Terminee, le message
-    // « mission close » prime (mandat explicite).
     Some(match objective {
-        EtatObjectif::Clos => ResumeWaitReason::MandatExpliciteApresClos,
-        EtatObjectif::AEvaluer | EtatObjectif::Synthetise => match delegation {
-            EtatDelegation::Annulee => ResumeWaitReason::AucunLevierApresAnnulation,
-            EtatDelegation::EnAttentePrerequis => ResumeWaitReason::ClotureDesPrerequis,
-            EtatDelegation::Terminee => ResumeWaitReason::MandatExpliciteApresTerminaison,
-            EtatDelegation::SoldeeParCloture => ResumeWaitReason::MandatExpliciteApresSolde,
-            // Levier : évaluation / synthèse d'objectif encore en cours.
-            EtatDelegation::Creee | EtatDelegation::AEvaluer => ResumeWaitReason::SuiteDuGreffe,
+        "clos" => ResumeWaitReason::MandatExpliciteApresClos,
+        "a_evaluer" | "synthetise" => match delegation {
+            "annulee" => ResumeWaitReason::AucunLevierApresAnnulation,
+            "en_attente_prerequis" => ResumeWaitReason::ClotureDesPrerequis,
+            "terminee" => ResumeWaitReason::MandatExpliciteApresTerminaison,
+            "soldee_par_cloture" => ResumeWaitReason::MandatExpliciteApresSolde,
+            "creee" | "a_evaluer" => ResumeWaitReason::SuiteDuGreffe,
+            _ => return None,
         },
-        EtatObjectif::Ouvert | EtatObjectif::EnCoordination => match delegation {
-            EtatDelegation::EnAttentePrerequis => ResumeWaitReason::ClotureDesPrerequis,
-            EtatDelegation::Annulee => ResumeWaitReason::AucunLevierApresAnnulation,
-            EtatDelegation::Terminee => ResumeWaitReason::MandatExpliciteApresTerminaison,
-            EtatDelegation::SoldeeParCloture => ResumeWaitReason::MandatExpliciteApresSolde,
-            EtatDelegation::AEvaluer => ResumeWaitReason::SuiteDuGreffe,
-            // Actionnable déjà exclu ci-dessus ; rester exhaustif pour le compilateur.
-            EtatDelegation::Creee => ResumeWaitReason::SuiteDuGreffe,
+        "ouvert" | "en_coordination" => match delegation {
+            "en_attente_prerequis" => ResumeWaitReason::ClotureDesPrerequis,
+            "annulee" => ResumeWaitReason::AucunLevierApresAnnulation,
+            "terminee" => ResumeWaitReason::MandatExpliciteApresTerminaison,
+            "soldee_par_cloture" => ResumeWaitReason::MandatExpliciteApresSolde,
+            "a_evaluer" | "creee" => ResumeWaitReason::SuiteDuGreffe,
+            _ => return None,
         },
+        _ => return None,
     })
 }
 
 fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, String> {
     let config = home.join(".config/maicie/config.json");
-    if !config.is_file() {
-        return Err(format!(
-            "configuration Maicie absente: {}",
-            config.display()
-        ));
-    }
-    let review_repository = maicie::config::MaicieConfig::load(&config)
+    let projection = read_public_mission_projection_v1(&config)
         .map_err(|error| error.to_string())?
-        .review_project
-        .map(|project| project.repository_root);
-    let projection = maicie::ui_projection::read_ui_mission_projection_v1(&config)
-        .map_err(|error| error.to_string())?;
-    let ranking = |item: &maicie::ui_projection::UiObjectiveProjection,
-                   delegation: &maicie::domain::Delegation| {
+        .ok_or_else(|| format!("projection de mission absente: {}", config.display()))?;
+    let ranking = |item: &MissionObjectiveV1, delegation: &MissionDelegationV1| {
         (
-            item.objective.mis_a_jour_at,
-            item.objective.cree_at,
-            delegation.id,
+            item.updated_at,
+            item.created_at,
+            delegation.delegation_id.clone(),
         )
     };
     let for_agent: Vec<_> = projection
@@ -494,62 +527,47 @@ fn managed_resume_mission(home: &Path, agent: &str) -> Result<ResumeStance, Stri
     let actionable = for_agent
         .iter()
         .copied()
-        .filter(|(item, delegation)| {
-            resume_mission_actionable(&item.objective.etat, &delegation.etat)
-        })
+        .filter(|(item, delegation)| resume_mission_actionable(&item.state, &delegation.state))
         .max_by_key(|(item, delegation)| ranking(item, delegation));
     let candidate = actionable.or_else(|| {
-        // Surface d'attente : tout couple que `resume_wait_reason` classifie
-        // (exhaustif côté états — pas une liste littérale à maintenir).
         for_agent
             .iter()
             .copied()
             .filter(|(item, delegation)| {
-                resume_wait_reason(&item.objective.etat, &delegation.etat).is_some()
+                resume_wait_reason(&item.state, &delegation.state).is_some()
             })
             .max_by_key(|(item, delegation)| ranking(item, delegation))
     });
     let Some((item, delegation)) = candidate else {
-        return Ok(ResumeStance::Absent);
+        return if for_agent.is_empty() {
+            Ok(ResumeStance::Absent)
+        } else {
+            Err("état de mission public inconnu: attente sans reprise inventée".to_string())
+        };
     };
-    let delivery = item
-        .local_deliveries
-        .iter()
-        .find(|delivery| delivery.delegation_id == delegation.id);
     let mission = ResumeMission {
-        objective_id: item.objective.id.to_string(),
-        delegation_id: delegation.id.to_string(),
-        message_id: delivery
-            .map(|delivery| delivery.message_id.to_string())
+        objective_id: item.objective_id.clone(),
+        delegation_id: delegation.delegation_id.clone(),
+        message_id: delegation
+            .message_id
+            .clone()
             .unwrap_or_else(|| "inconnu (aucune remise locale corrélée)".to_string()),
-        objective_state: resume_fact_label(&item.objective.etat),
-        delegation_state: resume_fact_label(&delegation.etat),
-        local_delivery: delivery
-            .map(|delivery| resume_fact_label(&delivery.state))
+        objective_state: item.state.clone(),
+        delegation_state: delegation.state.clone(),
+        local_delivery: delegation
+            .local_delivery_state
+            .clone()
             .unwrap_or_else(|| "inconnue".to_string()),
         instruction: delegation.instruction.clone(),
-        review_continuity: observe_delegation_review(
-            review_repository.as_deref(),
-            delegation,
-            item.review_verdicts
-                .iter()
-                .find(|verdict| verdict.delegation_id == delegation.id),
-        ),
+        review: delegation.review.clone(),
     };
-    if resume_mission_actionable(&item.objective.etat, &delegation.etat) {
+    if resume_mission_actionable(&item.state, &delegation.state) {
         Ok(ResumeStance::Actionable(mission))
     } else {
-        let reason = resume_wait_reason(&item.objective.etat, &delegation.etat)
-            .expect("candidat d'attente sans motif — bug de filtre");
+        let reason = resume_wait_reason(&item.state, &delegation.state)
+            .expect("candidat d'attente sans motif - bug de filtre");
         Ok(ResumeStance::Waiting { mission, reason })
     }
-}
-
-fn resume_fact_label<T: serde::Serialize>(value: &T) -> String {
-    serde_json::to_string(value)
-        .unwrap_or_else(|_| "inconnu".to_string())
-        .trim_matches('"')
-        .to_string()
 }
 
 struct ResumeWorktree {
@@ -601,12 +619,12 @@ fn interactive_bridget_prompt(name: &str, mcp_enabled: bool) -> String {
 
 /// Amorçage ajouté au prompt d'une reprise Codex.
 ///
-/// Codex diffère les outils MCP hors de sa liste d'outils principale. Une
-/// reprise restaure l'historique, mais pas la décision d'avoir recherché ces
-/// outils dans `ALL_TOOLS` : l'instruction doit donc être rejouée explicitement.
+/// Les appels MCP dynamiques ne sont pas supportés par `functions.exec` dans
+/// les sessions app-server gérées. Le binaire Bridget reste disponible dans le
+/// `PATH` du wrapper et évite ainsi qu'un tour attende une réponse impossible.
 fn codex_resume_bootstrap(name: &str) -> String {
     format!(
-        "Tu reprends la session de l'agent Bridget \"{name}\". Les outils MCP Bridget peuvent être différés. Cherche mcp__bridget__* dans ALL_TOOLS via functions.exec, puis appelle tools.mcp__bridget__bridget_send avec in_reply_to pour répondre aux demandes reply=yes. Utilise le shell bridget seulement si cette recherche ne rend aucun outil."
+        "Tu reprends la session de l'agent Bridget \"{name}\". Utilise uniquement le binaire `bridget` disponible dans PATH pour envoyer, consulter ou répondre aux messages Bridget. N'essaie pas de rechercher ni d'appeler `mcp__bridget__*` via `functions.exec` ou `ALL_TOOLS` : ce mécanisme n'est pas disponible dans cette session app-server."
     )
 }
 
@@ -732,6 +750,7 @@ struct PendingIdempotentDelivery {
 enum PendingAcpDispatch {
     Historic,
     Idempotent(PendingIdempotentDelivery),
+    DelegatedRuntime { event_id: String },
 }
 
 /// Raccorde l'observable ACP au reçu durable : aucun accusé n'est émis avant
@@ -742,6 +761,7 @@ struct IdempotentDeliveryTracker {
     pending: BTreeMap<String, VecDeque<PendingAcpDispatch>>,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum IdempotentDeliveryAction {
     Inject {
         message: bridget_core::BridgetMessage,
@@ -810,6 +830,9 @@ impl IdempotentDeliveryTracker {
 
     fn prompt_dispatched(&mut self, message_id: &str, now: i64) -> Option<WrapperToDaemon> {
         let pending = self.take_pending_by_message(message_id)?;
+        if let PendingAcpDispatch::DelegatedRuntime { event_id } = pending {
+            return Some(WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id });
+        }
         let PendingAcpDispatch::Idempotent(pending) = pending else {
             return None;
         };
@@ -878,6 +901,13 @@ impl IdempotentDeliveryTracker {
             .push_back(PendingAcpDispatch::Historic);
     }
 
+    fn record_delegated_runtime(&mut self, message_id: &str, event_id: String) {
+        self.pending
+            .entry(message_id.to_string())
+            .or_default()
+            .push_back(PendingAcpDispatch::DelegatedRuntime { event_id });
+    }
+
     fn historic_injection_failed(&mut self, message_id: &str) {
         let Some(deliveries) = self.pending.get_mut(message_id) else {
             return;
@@ -939,14 +969,104 @@ fn deliver_idempotent_to_interactive(
 }
 
 fn socket_path() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home)
-            .join(".cache")
-            .join("bridget")
-            .join("bridget.sock")
+    socket_path_from(
+        std::env::var_os("BRIDGET_RUNTIME_SOCKET").map(PathBuf::from),
+        std::env::var_os("HOME").map(PathBuf::from),
+    )
+}
+
+/// Le runtime Docker fournit son socket explicitement. Sa présence interdit
+/// toute dérivation depuis HOME: un chemin relatif ferme simplement la
+/// connexion au lieu de retomber sur le socket hôte.
+fn socket_path_from(runtime_socket: Option<PathBuf>, home: Option<PathBuf>) -> PathBuf {
+    if let Some(socket) = runtime_socket {
+        return if socket.is_absolute() {
+            socket
+        } else {
+            PathBuf::from("/run/bridget/runtime/invalid.sock")
+        };
+    }
+    if let Some(home) = home {
+        home.join(".cache").join("bridget").join("bridget.sock")
     } else {
         PathBuf::from("/tmp").join("bridget.sock")
     }
+}
+fn runtime_ingress_required_value(value: Option<&str>, field: &str) -> Result<String, String> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| format!("runtime ingress: {field} absent"))
+}
+
+fn runtime_ingress_handshake_from_values(
+    runtime_socket_configured: bool,
+    project_id: Option<&str>,
+    binding_generation: Option<&str>,
+    container_id: Option<&str>,
+    environment_epoch: Option<&str>,
+    agent_generation: Option<&str>,
+    instance_id: Option<&str>,
+) -> Result<Option<RuntimeIngressHandshake>, String> {
+    if !runtime_socket_configured {
+        return Ok(None);
+    }
+    let project_id = runtime_ingress_required_value(project_id, "project_id")?;
+    let container_id = runtime_ingress_required_value(container_id, "container_id")?;
+    let instance_id = runtime_ingress_required_value(instance_id, "instance_id")?;
+    uuid::Uuid::parse_str(&instance_id)
+        .map_err(|_| "runtime ingress: instance_id invalide".to_string())?;
+
+    let parse_generation = |value: Option<&str>, field: &str| {
+        runtime_ingress_required_value(value, field)?
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| format!("runtime ingress: {field} invalide"))
+    };
+    Ok(Some(RuntimeIngressHandshake {
+        contract_version: RUNTIME_INGRESS_CONTRACT_VERSION,
+        project_id,
+        binding_generation: parse_generation(binding_generation, "binding_generation")?,
+        container_id,
+        environment_epoch: parse_generation(environment_epoch, "environment_epoch")?,
+        agent_generation: parse_generation(agent_generation, "agent_generation")?,
+        instance_id,
+    }))
+}
+
+fn runtime_ingress_handshake_from_environment() -> Result<Option<RuntimeIngressHandshake>, String> {
+    let project_id = std::env::var("BRIDGET_RUNTIME_PROJECT_ID").ok();
+    let binding_generation = std::env::var("BRIDGET_RUNTIME_BINDING_GENERATION").ok();
+    let container_id = std::env::var("BRIDGET_RUNTIME_CONTAINER_ID").ok();
+    let environment_epoch = std::env::var("BRIDGET_RUNTIME_ENVIRONMENT_EPOCH").ok();
+    let agent_generation = std::env::var("BRIDGET_RUNTIME_AGENT_GENERATION").ok();
+    let instance_id = std::env::var("BRIDGET_RUNTIME_INSTANCE_ID").ok();
+    runtime_ingress_handshake_from_values(
+        std::env::var_os("BRIDGET_RUNTIME_SOCKET").is_some(),
+        project_id.as_deref(),
+        binding_generation.as_deref(),
+        container_id.as_deref(),
+        environment_epoch.as_deref(),
+        agent_generation.as_deref(),
+        instance_id.as_deref(),
+    )
+}
+
+/// Une instance lancée dans un runtime de projet conserve l'identité attribuée
+/// par le lease hôte. Sans elle, un wrapper du conteneur ne peut pas rejoindre
+/// la réservation privée qui vient de lui être accordée.
+fn runtime_instance_id_from_environment() -> Result<Option<String>, String> {
+    if runtime_ingress_handshake_from_environment()?.is_none() {
+        return Ok(None);
+    }
+    let instance_id = runtime_ingress_required_value(
+        std::env::var("BRIDGET_RUNTIME_INSTANCE_ID").ok().as_deref(),
+        "instance_id",
+    )?;
+    uuid::Uuid::parse_str(&instance_id)
+        .map_err(|_| "runtime ingress: instance_id invalide".to_string())?;
+    Ok(Some(instance_id))
 }
 
 fn unix_now_secs() -> i64 {
@@ -1402,7 +1522,7 @@ impl RuntimeProbe {
 #[allow(clippy::too_many_arguments)]
 fn connect_and_register(
     agent_type: &str,
-    name: Option<&str>,
+    agent_id: Option<&str>,
     host: &str,
     protocol: &str,
     channel: Option<&str>,
@@ -1416,7 +1536,7 @@ fn connect_and_register(
     connect_and_register_at(
         &socket_path(),
         agent_type,
-        name,
+        agent_id,
         host,
         protocol,
         channel,
@@ -1429,11 +1549,114 @@ fn connect_and_register(
     )
 }
 
+/// Obtient explicitement ladmission runtime avant de lire un secret process-env.
+/// Cette connexion est jetable: lenregistrement normal refait ensuite son
+/// propre handshake sur la connexion durable du wrapper.
+fn pre_admit_runtime_ingress(socket: &std::path::Path) -> Result<bool, String> {
+    let Some(hello) = runtime_ingress_handshake_from_environment()? else {
+        return Ok(false);
+    };
+    let stream = UnixStream::connect(socket).map_err(|error| error.to_string())?;
+    set_cloexec(&stream);
+    let read_stream = stream.try_clone().map_err(|error| error.to_string())?;
+    set_cloexec(&read_stream);
+    read_stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .map_err(|error| error.to_string())?;
+    let write_stream = stream.try_clone().map_err(|error| error.to_string())?;
+    set_cloexec(&write_stream);
+    let mut reader = BufReader::new(read_stream);
+    let mut writer = BufWriter::new(write_stream);
+    writeln!(
+        writer,
+        "{}",
+        encode(&WrapperToDaemon::RuntimeIngressPreflight {
+            hello: hello.clone()
+        })
+        .map_err(|error| error.to_string())?
+    )
+    .map_err(|error| error.to_string())?;
+    writer.flush().map_err(|error| error.to_string())?;
+    let mut reply = String::new();
+    reader
+        .read_line(&mut reply)
+        .map_err(|error| error.to_string())?;
+    match decode(reply.trim()).map_err(|error| error.to_string())? {
+        DaemonToWrapper::RuntimeIngressAccepted {
+            project_id,
+            binding_generation,
+            environment_epoch,
+        } if project_id == hello.project_id
+            && binding_generation == hello.binding_generation
+            && environment_epoch == hello.environment_epoch =>
+        {
+            Ok(true)
+        }
+        DaemonToWrapper::RuntimeIngressRejected { reason } => {
+            Err(format!("runtime ingress refusé: {reason:?}"))
+        }
+        other => Err(format!("runtime ingress réponse inattendue: {other:?}")),
+    }
+}
+
+fn runtime_process_environment_after_admission(
+    runtime_admitted: bool,
+) -> Result<ProcessEnvironmentAdmission, String> {
+    let Some(encoded) = std::env::var_os("BRIDGET_RUNTIME_SECRET_ENV_FILES") else {
+        return Ok((Vec::new(), None));
+    };
+    if !runtime_admitted {
+        return Err("secret process-env hors runtime admis".to_string());
+    }
+    let encoded = encoded
+        .into_string()
+        .map_err(|_| "liaison process-env invalide".to_string())?;
+    let bindings: Vec<crate::project_runtime::ProcessEnvBinding> =
+        serde_json::from_str(&encoded).map_err(|_| "liaison process-env invalide".to_string())?;
+    if bindings.is_empty() || bindings.len() > MAX_PROCESS_ENV_BINDINGS {
+        return Err("liaison process-env invalide".to_string());
+    }
+    let mut names = HashSet::new();
+    let mut environment = Vec::with_capacity(bindings.len());
+    let mut patterns = Vec::with_capacity(bindings.len());
+    for binding in bindings {
+        let valid_name = !binding.variable.is_empty()
+            && binding
+                .variable
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_');
+        let valid_path = binding
+            .container_file
+            .starts_with(crate::project_runtime::CONTAINER_PROCESS_ENV_DIRECTORY)
+            && binding.container_file.len()
+                == crate::project_runtime::CONTAINER_PROCESS_ENV_DIRECTORY.len() + 65
+            && binding.container_file.as_bytes()
+                [crate::project_runtime::CONTAINER_PROCESS_ENV_DIRECTORY.len()]
+                == b'/';
+        if !valid_name || !valid_path || !names.insert(binding.variable.clone()) {
+            return Err("liaison process-env invalide".to_string());
+        }
+        let metadata = std::fs::symlink_metadata(&binding.container_file)
+            .map_err(|_| "secret process-env indisponible".to_string())?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("secret process-env invalide".to_string());
+        }
+        let value = std::fs::read(&binding.container_file)
+            .map_err(|_| "secret process-env indisponible".to_string())?;
+        if value.len() > MAX_PROCESS_ENV_VALUE_BYTES || value.contains(&0) {
+            return Err("secret process-env invalide".to_string());
+        }
+        patterns.push(value.clone());
+        environment.push((OsString::from(binding.variable), OsString::from_vec(value)));
+    }
+    Ok((environment, Some(OutputRedactionLease::new(patterns))))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn connect_and_register_at(
     socket: &std::path::Path,
     agent_type: &str,
-    name: Option<&str>,
+    agent_id: Option<&str>,
     host: &str,
     protocol: &str,
     channel: Option<&str>,
@@ -1456,9 +1679,43 @@ fn connect_and_register_at(
     let mut writer = BufWriter::new(write_stream);
     let mut reader = BufReader::new(read_stream);
 
+    if let Some(hello) = runtime_ingress_handshake_from_environment()? {
+        let request = WrapperToDaemon::RuntimeIngressHello {
+            hello: hello.clone(),
+        };
+        writeln!(
+            writer,
+            "{}",
+            encode(&request).map_err(|error| error.to_string())?
+        )
+        .map_err(|error| error.to_string())?;
+        writer.flush().map_err(|error| error.to_string())?;
+        let mut reply = String::new();
+        reader
+            .read_line(&mut reply)
+            .map_err(|error| error.to_string())?;
+        match decode(reply.trim()).map_err(|error| error.to_string())? {
+            DaemonToWrapper::RuntimeIngressAccepted {
+                project_id,
+                binding_generation,
+                environment_epoch,
+            } if project_id == hello.project_id
+                && binding_generation == hello.binding_generation
+                && environment_epoch == hello.environment_epoch => {}
+            DaemonToWrapper::RuntimeIngressRejected { reason } => {
+                return Err(format!("runtime ingress refusé: {reason:?}"));
+            }
+            other => return Err(format!("runtime ingress réponse inattendue: {other:?}")),
+        }
+    }
+
     let register = WrapperToDaemon::Register {
         agent_type: agent_type.to_string(),
-        name: name.map(str::to_owned),
+        identity_version: 2,
+        agent_id: agent_id
+            .filter(|value| bridget_core::router::validate_agent_id(value).is_ok())
+            .map(str::to_owned)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         host: Some(host.to_string()),
         transport: Some(protocol.to_string()),
         channel: ChannelReport::reported(channel.map(str::to_owned)),
@@ -1477,9 +1734,9 @@ fn connect_and_register_at(
     let mut line = String::new();
     reader.read_line(&mut line).map_err(|e| e.to_string())?;
     match decode(line.trim()).map_err(|e| e.to_string())? {
-        DaemonToWrapper::Registered { name } => {
+        DaemonToWrapper::Registered { agent_id } => {
             send_disk_space_fact(&mut writer);
-            Ok((reader, writer, name))
+            Ok((reader, writer, agent_id))
         }
         DaemonToWrapper::Nack { reason, .. } => Err(format!("enregistrement refusé: {}", reason)),
         other => Err(format!("réponse inattendue: {:?}", other)),
@@ -1517,6 +1774,20 @@ fn send_disk_space_fact(writer: &mut BufWriter<UnixStream>) {
         // ne doit pas empêcher un wrapper déjà enregistré de travailler.
         warn!("impossible d'envoyer le relevé d'espace disque: {error}");
     }
+}
+
+fn display_name_for_agent_id(agent_id: &str) -> String {
+    let profile_path = socket_path().with_extension("db");
+    let Ok(mut profiles) = crate::agent_profile::AgentProfileStore::open(&profile_path) else {
+        return "Agent".to_string();
+    };
+    let _ = profiles.ensure_agent_ids([agent_id]);
+    profiles
+        .profile_for_agent_id(agent_id)
+        .ok()
+        .flatten()
+        .map(|profile| profile.display_name)
+        .unwrap_or_else(|| "Agent".to_string())
 }
 
 /// Lance un agent CLI wrapper.
@@ -1576,8 +1847,9 @@ pub fn launch(
     )?;
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
 
-    eprintln!("[bridget] Enregistré en tant que « {} »", my_name);
-    info!("enregistré: {}", my_name);
+    let my_display_name = display_name_for_agent_id(&my_name);
+    eprintln!("[bridget] Agent connecté : « {} »", my_display_name);
+    info!("agent enregistré: {} ({})", my_display_name, my_name);
 
     // Sauvegarder le nom pour les futurs resume
     save_persistent_name(agent_type, &agent_args, &my_name);
@@ -1692,7 +1964,11 @@ pub fn launch(
     }
 
     if agent_type == "codex" {
-        final_args.extend(prepare_codex_agent_args(&agent_args, &my_name, mcp_enabled));
+        final_args.extend(prepare_codex_agent_args(
+            &agent_args,
+            &my_display_name,
+            mcp_enabled,
+        ));
     } else {
         // Claude n'a pas de sous-commande `resume` dans la forme pilotée ici.
         // Conserver son contrat historique et placer le prompt avant les args.
@@ -1700,7 +1976,7 @@ pub fn launch(
             .iter()
             .any(|argument| !argument.starts_with("--"));
         if !has_prompt && agent_type == "claude" {
-            final_args.push(interactive_bridget_prompt(&my_name, mcp_enabled));
+            final_args.push(interactive_bridget_prompt(&my_display_name, mcp_enabled));
         }
         final_args.extend(agent_args.iter().cloned());
     }
@@ -1720,8 +1996,9 @@ pub fn launch(
 
     let mut child = match Command::new(agent_binary)
         .args(&final_args)
-        .env("BRIDGET_AGENT_NAME", &my_name)
-        .env("BRIDGET_AGENT_NAME_FILE", &name_state_path)
+        .env("BRIDGET_AGENT_ID", &my_name)
+        .env("BRIDGET_AGENT_ID_FILE", &name_state_path)
+        .env("BRIDGET_AGENT_DISPLAY_NAME", &my_display_name)
         .env("BRIDGET_AGENT_INSTANCE_ID", &instance_id)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -2033,7 +2310,7 @@ pub fn launch(
                         let _ = std::fs::write(&reply_file, value);
                     }
                     if let Some(ref mut t) = transport {
-                        if let Err(e) = t.deliver(&bm) {
+                        if let Err(e) = t.deliver(&message_for_provider(&bm)) {
                             error!("injection tmux: {}", e);
                         }
                     } else {
@@ -2046,6 +2323,7 @@ pub fn launch(
                     delivery_generation,
                     expires_at,
                     message,
+                    execution: _,
                 } => {
                     let reports = deliver_idempotent_to_interactive(
                         &mut idempotent_deliveries,
@@ -2059,7 +2337,7 @@ pub fn launch(
                             record_interactive_turn(journal.as_ref(), message);
                             match transport.as_mut() {
                                 Some(transport) => transport
-                                    .deliver(message)
+                                    .deliver(&message_for_provider(message))
                                     .map_err(|error| error.to_string()),
                                 None => Err("aucun pane tmux pour la livraison idempotente".into()),
                             }
@@ -2069,6 +2347,28 @@ pub fn launch(
                         send_wrapper_message(&writer_for_listener, report);
                     }
                 }
+                DaemonToWrapper::DelegatedRuntimeEvent { event } => {
+                    let message = delegated_runtime_message(&event, &my_name_for_thread);
+                    let injected = match transport.as_mut() {
+                        Some(transport) => {
+                            record_interactive_turn(journal.as_ref(), &message);
+                            transport
+                                .deliver(&message)
+                                .map_err(|error| error.to_string())
+                        }
+                        None => Err("aucun pane tmux pour l'incident délégué".to_string()),
+                    };
+                    match injected {
+                        Ok(()) => send_wrapper_message(
+                            &writer_for_listener,
+                            WrapperToDaemon::DelegatedRuntimeEventAcknowledged {
+                                event_id: event.event_id,
+                            },
+                        ),
+                        Err(error) => warn!("remise de l'incident délégué différée: {error}"),
+                    }
+                }
+
                 DaemonToWrapper::Subscribe {
                     subscription_id,
                     window,
@@ -2974,6 +3274,53 @@ fn emit_one_live_fragment(emit: &RelayEmitter, fanout: &mut LiveFanout) -> bool 
     true
 }
 
+fn profile_ledger_path(socket: &Path) -> PathBuf {
+    socket.with_extension("db")
+}
+
+fn apply_pending_profile_instructions(
+    socket: &Path,
+    transport: &mut dyn ManagedSession,
+    recipient: &str,
+    provider_spawn_id: &str,
+) {
+    let mut store = match AgentProfileStore::open(&profile_ledger_path(socket)) {
+        Ok(store) => store,
+        Err(error) => {
+            warn!("profil agent indisponible avant démarrage fournisseur: {error}");
+            return;
+        }
+    };
+    if let Err(error) = store.ensure_agent_ids([recipient]) {
+        warn!("identité agent indisponible avant démarrage fournisseur: {error}");
+        return;
+    }
+    let pending = match store.pending_instructions_for_agent_id(recipient) {
+        Ok(Some(pending)) if !pending.instructions.is_empty() => pending,
+        Ok(_) => return,
+        Err(error) => {
+            warn!("lecture consigne agent impossible avant démarrage fournisseur: {error}");
+            return;
+        }
+    };
+    let outcome = match transport.set_private_profile_instructions(&pending.instructions) {
+        Ok(()) => (InstructionStatus::Applied, None),
+        Err(_) => (
+            InstructionStatus::Unsupported,
+            Some("private_context_unsupported"),
+        ),
+    };
+    if let Err(error) = store.mark_instruction_application(
+        &pending.agent_id,
+        pending.revision,
+        provider_spawn_id,
+        outcome.0,
+        outcome.1,
+    ) {
+        warn!("état application consigne agent impossible: {error}");
+    }
+}
+
 fn launch_acp(
     agent_type: &str,
     agent_args: &[String],
@@ -2995,10 +3342,44 @@ fn launch_acp(
     )
 }
 
+fn attention_occurrence_key(kind: &str, agent: &str, subject: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"bridget/attention/v1\0");
+    hasher.update(kind.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(agent.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(subject.as_bytes());
+    format!("attention:v1:{kind}:{:x}", hasher.finalize())
+}
+
+fn record_attention(
+    profile_db_path: Option<&Path>,
+    agent_id: &str,
+    event_type: AttentionEventType,
+    subject: &str,
+) {
+    let Some(profile_db_path) = profile_db_path else {
+        return;
+    };
+    let Ok(mut store) = AgentProfileStore::open(profile_db_path) else {
+        warn!("attention non persistée: store indisponible");
+        return;
+    };
+    let occurrence_key = attention_occurrence_key(event_type.as_str(), agent_id, subject);
+    if store
+        .record_attention_for_agent_id(agent_id, event_type, &occurrence_key)
+        .is_err()
+    {
+        warn!("attention non persistée: écriture refusée");
+    }
+}
+
 /// Point d'entrée du wrapper supervisé. Le FD `managed-status` est fermé
 /// uniquement après Register, transport ACP, journal et relais initialisés.
-
+#[allow(clippy::too_many_arguments)]
 fn spawn_managed_session_transport(
+    agent_type: &str,
     definition: &crate::registry::AgentDefinition,
     native_args: &[String],
     mcp_environment: &[(OsString, OsString)],
@@ -3015,6 +3396,7 @@ fn spawn_managed_session_transport(
                 queue_capacity: definition.queue_capacity,
                 permissions: definition.permissions.clone(),
                 notify_timeout_secs: definition.notify_timeout_secs,
+                provider_observation: definition.capabilities.observed.clone(),
             };
             if inherit_stderr {
                 Ok(Box::new(
@@ -3036,8 +3418,10 @@ fn spawn_managed_session_transport(
             let options = ClaudeStreamJsonOptions {
                 command: definition.command.clone(),
                 args: native_args.to_vec(),
+                provider_kind: agent_type.to_string(),
                 queue_capacity: definition.queue_capacity,
                 notify_timeout_secs: definition.notify_timeout_secs,
+                provider_observation: definition.capabilities.observed.clone(),
                 // Même arbre que le journal d'agent : survit à la mort du
                 // managed-wrapper et au redémarrage du daemon (lot cursor2).
                 session_store_root: Some(home.join(".cache/bridget/sessions")),
@@ -3067,6 +3451,8 @@ fn spawn_managed_session_transport(
                 notify_timeout_secs: definition.notify_timeout_secs,
                 model: codex_model_from_args(&definition.args),
                 permissions: definition.permissions.clone(),
+                provider_observation: definition.capabilities.observed.clone(),
+                thread_bootstrap: Default::default(),
             };
             let environment = string_environment(mcp_environment);
             if inherit_stderr {
@@ -3131,6 +3517,90 @@ pub fn launch_managed_acp(
         let _ = reporter.startup_failed(kind, reason);
     }
     result
+}
+
+/// Arrête seulement l'adaptateur associé à une instance runtime attestée.
+/// Le marqueur PID est comparé à sa date de naissance afin d'ignorer un PID
+/// recyclé, et plusieurs marqueurs pour une même instance sont un refus.
+pub fn stop_runtime_acp(instance_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var_os("BRIDGET_RUNTIME_SOCKET").is_none() {
+        return Err("arrêt runtime hors environnement de projet".into());
+    }
+    uuid::Uuid::parse_str(instance_id)
+        .map_err(|_| std::io::Error::other("identifiant d'instance runtime invalide"))?;
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| std::io::Error::other("HOME absent pour l'arrêt runtime"))?;
+    let marker_directory = managed_marker_directory(&socket_path(), &home);
+    let mut selected = None;
+    for entry in std::fs::read_dir(&marker_directory)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if !file_type.is_file() || file_type.is_symlink() {
+            continue;
+        }
+        let raw = std::fs::read_to_string(entry.path())?;
+        if raw.len() > 64 * 1024 {
+            return Err("marqueur runtime trop volumineux".into());
+        }
+        let marker: crate::mcp_identity::AgentPidMarker = match serde_json::from_str(&raw) {
+            Ok(marker) => marker,
+            Err(_) => continue,
+        };
+        if marker.instance_id == instance_id && selected.replace(marker).is_some() {
+            return Err("plusieurs marqueurs pour l'instance runtime".into());
+        }
+    }
+    let Some(marker) = selected else {
+        return Ok(());
+    };
+    if marker.pid <= 1
+        || crate::managed_process::process_birth(marker.pid).ok() != Some(marker.birth)
+    {
+        return Ok(());
+    }
+    let result = unsafe { libc::kill(marker.pid as libc::pid_t, libc::SIGTERM) };
+    if result != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+/// définition persistée est contrôlée avant de remplacer seulement sa commande
+/// par celle attestée dans la politique hôte du runtime.
+pub fn launch_runtime_acp(
+    agent_type: &str,
+    explicit_agent_id: &str,
+    provider_command: &str,
+    resolved_definition: &bridget_transport::ResolvedAgentDefinition,
+) -> Result<(), Box<dyn std::error::Error>> {
+    validate_agent_id(explicit_agent_id)
+        .map_err(|reason| format!("Agent ID runtime invalide: {reason}"))?;
+    if runtime_instance_id_from_environment()?.is_none() {
+        return Err("runtime ingress absent du wrapper de projet".into());
+    }
+    let registry = crate::registry::AgentRegistry::from_resolved_with_runtime_command(
+        agent_type,
+        resolved_definition,
+        provider_command,
+    )?;
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or("HOME absent pour le journal de session ACP")?;
+    launch_acp_with_status(
+        agent_type,
+        &[],
+        Some(explicit_agent_id),
+        &registry,
+        &socket_path(),
+        &home,
+        None,
+        Some(&resolved_definition.digest),
+    )
 }
 
 /// Lance un équipier ACP avec ses dépendances de configuration et de chemins
@@ -3201,15 +3671,17 @@ fn launch_acp_with_status(
     let effective_name = explicit_name.map(str::to_owned);
     let host = host_name();
     let os = operating_system();
+    let runtime_instance_id = runtime_instance_id_from_environment()?;
     let instance_id = managed_reporter
         .as_ref()
         .map(|reporter| reporter.instance_id().to_string())
+        .or(runtime_instance_id)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let initial_domain = effective_name
         .as_deref()
         .and_then(effective_domain)
         .or_else(derive_domain);
-    let name_state_path = instance_name_state_path(socket, &instance_id);
+    let name_state_path = managed_instance_name_state_path(socket, home, &instance_id);
     if let Some(parent) = name_state_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -3219,8 +3691,17 @@ fn launch_acp_with_status(
         &name_state_path,
         explicit_name.unwrap_or_default().as_bytes(),
     )?;
-    let mcp_environment =
+    let mut mcp_environment =
         managed_adapter_environment(&instance_id, explicit_name, Some(&name_state_path));
+    let process_env_requested = std::env::var_os("BRIDGET_RUNTIME_SECRET_ENV_FILES").is_some();
+    let runtime_admitted = if process_env_requested {
+        pre_admit_runtime_ingress(socket)?
+    } else {
+        false
+    };
+    let (process_environment, mut redaction_lease) =
+        runtime_process_environment_after_admission(runtime_admitted)?;
+    mcp_environment.extend(process_environment);
     let mcp_servers: Vec<serde_json::Value> = definition
         .mcp
         .acp_session
@@ -3247,6 +3728,7 @@ fn launch_acp_with_status(
     );
     let inherit_stderr = managed_reporter.is_some();
     let mut transport: Box<dyn ManagedSession> = spawn_managed_session_transport(
+        agent_type,
         definition,
         &native_args,
         &mcp_environment,
@@ -3279,8 +3761,9 @@ fn launch_acp_with_status(
     };
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
     let mut idempotent_deliveries = IdempotentDeliveryTracker::open(home, &instance_id)?;
+    let mut execution_bindings = HashMap::new();
     std::fs::write(&name_state_path, &my_name)?;
-    let marker_directory = socket.parent().unwrap().join("agent-pids");
+    let marker_directory = managed_marker_directory(socket, home);
     let adapter_pid = transport.process_id();
     crate::mcp_identity::write_marker(
         &marker_directory,
@@ -3295,6 +3778,7 @@ fn launch_acp_with_status(
         &my_name,
         Some(live_feed.clone()),
     )?;
+    apply_pending_profile_instructions(socket, transport.as_mut(), &my_name, &instance_id);
     send_wrapper_message(&writer, WrapperToDaemon::JournalReady);
     let journal_directory = home.join(".cache/bridget/sessions").join(&my_name);
     let relay_writer = writer.clone();
@@ -3342,8 +3826,15 @@ fn launch_acp_with_status(
             consecutive_fast_failures = 0;
         }
         let events = transport.drain_events();
-        let journal_failed =
-            forward_managed_events(&writer, &my_name, events, &mut idempotent_deliveries);
+        let journal_failed = forward_managed_events_with_redaction(
+            &writer,
+            &my_name,
+            events,
+            &mut idempotent_deliveries,
+            &mut execution_bindings,
+            &mut redaction_lease,
+            Some(&profile_ledger_path(socket)),
+        );
         if journal_failed {
             transport.stop();
             break;
@@ -3376,12 +3867,53 @@ fn launch_acp_with_status(
             Ok(_) => match decode(line.trim()) {
                 Ok(DaemonToWrapper::Deliver(message)) => {
                     idempotent_deliveries.record_historic(&message.id);
-                    if let Err(error) = transport.deliver(&message) {
+                    if let Err(error) = transport.deliver(&message_for_provider(&message)) {
                         idempotent_deliveries.historic_injection_failed(&message.id);
                         send_wrapper_message(
                             &writer,
                             WrapperToDaemon::DeliveryRejected {
                                 id: message.id,
+                                reason: error.to_string(),
+                            },
+                        );
+                    }
+                }
+                Ok(DaemonToWrapper::DeliverExecution {
+                    message,
+                    execution_id,
+                    generation,
+                    revision,
+                }) => {
+                    let message_id = message.id.clone();
+                    execution_bindings.insert(
+                        message_id.clone(),
+                        ManagedExecutionBinding {
+                            execution_id,
+                            generation,
+                            state: "starting".to_string(),
+                            provider_kind: agent_type.to_string(),
+                            execution_path: definition.protocol.clone(),
+                            revision,
+                            approval_requests: 0,
+                            last_approval_request: None,
+                        },
+                    );
+                    if let Some(identity) = transport.provider_identity() {
+                        publish_provider_context(&writer, &execution_bindings, &identity);
+                    }
+                    if let Err(error) = transport.deliver(&message_for_provider(&message)) {
+                        idempotent_deliveries.historic_injection_failed(&message_id);
+                        publish_execution_transition(
+                            &writer,
+                            &mut execution_bindings,
+                            &message_id,
+                            "failed",
+                            "provider_unavailable",
+                        );
+                        send_wrapper_message(
+                            &writer,
+                            WrapperToDaemon::DeliveryRejected {
+                                id: message_id,
                                 reason: error.to_string(),
                             },
                         );
@@ -3393,38 +3925,72 @@ fn launch_acp_with_status(
                     delivery_generation,
                     expires_at,
                     message,
-                }) => match idempotent_deliveries.receive(
-                    delivery_id,
-                    recipient_instance_id,
-                    delivery_generation,
-                    expires_at,
-                    message,
-                    unix_now_secs(),
-                ) {
-                    IdempotentDeliveryAction::Report(report) => {
-                        send_wrapper_message(&writer, report);
+                    execution,
+                }) => {
+                    let message_id = message.id.clone();
+                    if bind_idempotent_delivery_execution(
+                        &mut execution_bindings,
+                        &message_id,
+                        execution,
+                        agent_type,
+                        &definition.protocol,
+                    ) && let Some(identity) = transport.provider_identity()
+                    {
+                        publish_provider_context(&writer, &execution_bindings, &identity);
                     }
-                    IdempotentDeliveryAction::Inject {
-                        message,
+                    match idempotent_deliveries.receive(
                         delivery_id,
-                    } => {
-                        let message_id = message.id.clone();
-                        if let Err(error) = transport.deliver(&message) {
-                            send_wrapper_message(
-                                &writer,
-                                WrapperToDaemon::DeliveryRejected {
-                                    id: message_id.clone(),
-                                    reason: error.to_string(),
-                                },
-                            );
-                            if let Some(report) =
-                                idempotent_deliveries.injection_failed(&delivery_id)
-                            {
-                                send_wrapper_message(&writer, report);
+                        recipient_instance_id,
+                        delivery_generation,
+                        expires_at,
+                        message,
+                        unix_now_secs(),
+                    ) {
+                        IdempotentDeliveryAction::Report(report) => {
+                            send_wrapper_message(&writer, report);
+                        }
+                        IdempotentDeliveryAction::Inject {
+                            message,
+                            delivery_id,
+                        } => {
+                            let message_id = message.id.clone();
+                            if let Err(error) = transport.deliver(&message_for_provider(&message)) {
+                                send_wrapper_message(
+                                    &writer,
+                                    WrapperToDaemon::DeliveryRejected {
+                                        id: message_id.clone(),
+                                        reason: error.to_string(),
+                                    },
+                                );
+                                if let Some(report) =
+                                    idempotent_deliveries.injection_failed(&delivery_id)
+                                {
+                                    send_wrapper_message(&writer, report);
+                                }
                             }
                         }
                     }
-                },
+                }
+                Ok(DaemonToWrapper::DelegatedRuntimeEvent { event }) => {
+                    let message = delegated_runtime_message(&event, &my_name);
+                    idempotent_deliveries.record_delegated_runtime(&message.id, event.event_id);
+                    if let Err(error) = transport.deliver(&message) {
+                        let _ = idempotent_deliveries.injection_rejected(&message.id);
+                        warn!("remise de l'incident délégué différée: {error}");
+                    }
+                }
+                Ok(DaemonToWrapper::ControlExecutionDispatch {
+                    issuer_scope,
+                    command,
+                }) => {
+                    apply_execution_control(
+                        &writer,
+                        transport.as_mut(),
+                        &mut execution_bindings,
+                        issuer_scope,
+                        command,
+                    );
+                }
                 Ok(DaemonToWrapper::CancelDelivery { id, reason }) => {
                     transport.cancel_delivery(&id, &reason);
                 }
@@ -3494,16 +4060,24 @@ fn launch_acp_with_status(
             }
         }
         if !transport.is_alive() {
+            let terminal_events = transport.drain_events();
+            let terminal_journal_failed = forward_managed_events_with_redaction(
+                &writer,
+                &my_name,
+                terminal_events,
+                &mut idempotent_deliveries,
+                &mut execution_bindings,
+                &mut redaction_lease,
+                Some(&profile_ledger_path(socket)),
+            );
+            if terminal_journal_failed {
+                transport.stop();
+                break;
+            }
             let persistent_relaunch = std::env::var_os("BRIDGET_MANAGED_PERSISTENT").is_some();
             if !persistent_relaunch {
                 break;
             }
-            let _ = forward_managed_events(
-                &writer,
-                &my_name,
-                transport.drain_events(),
-                &mut idempotent_deliveries,
-            );
             transport.stop();
             let max_relaunch: u32 = std::env::var("BRIDGET_PROVIDER_RELAUNCH_MAX")
                 .ok()
@@ -3550,6 +4124,7 @@ fn launch_acp_with_status(
                 break;
             }
             match spawn_managed_session_transport(
+                agent_type,
                 definition,
                 &native_args,
                 &mcp_environment,
@@ -3585,6 +4160,12 @@ fn launch_acp_with_status(
                     ) {
                         warn!("journal après relance impossible: {error}");
                     }
+                    apply_pending_profile_instructions(
+                        socket,
+                        transport.as_mut(),
+                        &my_name,
+                        &instance_id,
+                    );
                     relay.shutdown();
                     let relay_writer = writer.clone();
                     relay = AttachRelayWorker::start(
@@ -3628,11 +4209,14 @@ fn launch_acp_with_status(
     // L'EOF peut fermer le transport entre deux itérations : vider une dernière
     // fois les événements terminaux avant Unregister afin que le daemon voie
     // chaque DeliveryRejected (tour actif comme file restante).
-    let _ = forward_managed_events(
+    let _ = forward_managed_events_with_redaction(
         &writer,
         &my_name,
         transport.drain_events(),
         &mut idempotent_deliveries,
+        &mut execution_bindings,
+        &mut redaction_lease,
+        Some(&profile_ledger_path(socket)),
     );
     send_wrapper_message(&writer, WrapperToDaemon::TurnState { in_progress: false });
     send_wrapper_message(&writer, WrapperToDaemon::Unregister);
@@ -3644,6 +4228,31 @@ fn billing_guard_error(variable: &str) -> String {
         "variable d'environnement refusée pour l'équipier ACP : {variable} \
          (utilisez BRIDGET_ALLOW_API_KEY=1 uniquement si vous acceptez la facturation API)"
     )
+}
+
+/// Les sockets du runtime Docker sont montées comme fichiers dans une racine
+/// en lecture seule. Les états du wrapper restent donc sous HOME, qui est le
+/// montage persistant explicitement autorisé par la politique runtime.
+fn managed_wrapper_state_directory(socket: &Path, home: &Path) -> PathBuf {
+    if std::env::var_os("BRIDGET_RUNTIME_SOCKET").is_some() {
+        home.join(".cache/bridget/runtime")
+    } else {
+        socket.parent().unwrap_or(socket).to_path_buf()
+    }
+}
+
+fn managed_instance_name_state_path(socket: &Path, home: &Path, instance_id: &str) -> PathBuf {
+    if std::env::var_os("BRIDGET_RUNTIME_SOCKET").is_some() {
+        managed_wrapper_state_directory(socket, home)
+            .join("agent-names")
+            .join(format!("instance-{instance_id}"))
+    } else {
+        instance_name_state_path(socket, instance_id)
+    }
+}
+
+fn managed_marker_directory(socket: &Path, home: &Path) -> PathBuf {
+    managed_wrapper_state_directory(socket, home).join("agent-pids")
 }
 
 fn instance_name_state_path(socket: &Path, instance_id: &str) -> PathBuf {
@@ -3664,11 +4273,11 @@ fn managed_adapter_environment(
         OsString::from(instance_id),
     )];
     if let Some(name) = explicit_name.filter(|value| !value.is_empty()) {
-        environment.push((OsString::from("BRIDGET_AGENT_NAME"), OsString::from(name)));
+        environment.push((OsString::from("BRIDGET_AGENT_ID"), OsString::from(name)));
     }
     if let Some(path) = name_state_path {
         environment.push((
-            OsString::from("BRIDGET_AGENT_NAME_FILE"),
+            OsString::from("BRIDGET_AGENT_ID_FILE"),
             OsString::from(path.as_os_str()),
         ));
     }
@@ -3713,11 +4322,11 @@ fn apply_managed_mcp(
             ]);
             Ok(Some(config))
         }
-        ("codex_app_server", "codex") => {
-            args.insert(0, "-c".to_string());
-            args.insert(1, codex_mcp_override(&interactive_mcp_server_entry()?)?);
-            Ok(None)
-        }
+        // Codex app-server géré tourne dans le mode exec de Codex. Les outils
+        // MCP dynamiques y sont visibles mais ne peuvent pas être invoqués,
+        // ce qui laissait le tour en attente sans réponse. Le CLI Bridget est
+        // déjà placé dans PATH par managed_adapter_environment.
+        ("codex_app_server", "codex") => Ok(None),
         _ => Ok(None),
     }
 }
@@ -3782,14 +4391,13 @@ fn strip_claude_permission_bypass(args: &mut Vec<String>) {
             index += 1;
             continue;
         }
-        if args[index] == "--permission-mode" {
-            if index + 1 < args.len()
-                && (args[index + 1] == "bypassPermissions"
-                    || args[index + 1].contains("bypassPermissions"))
-            {
-                index += 2;
-                continue;
-            }
+        if args[index] == "--permission-mode"
+            && index + 1 < args.len()
+            && (args[index + 1] == "bypassPermissions"
+                || args[index + 1].contains("bypassPermissions"))
+        {
+            index += 2;
+            continue;
         }
         if args[index] == "bypassPermissions" || args[index].contains("bypassPermissions") {
             index += 1;
@@ -4063,11 +4671,476 @@ fn reconnect_managed_session(
     None
 }
 
+/// Corrélation locale entre une remise admise par Bridget et les événements du
+/// fournisseur. Le message demeure la clé de bord : aucun identifiant interne
+/// du fournisseur ne peut solder une autre exécution.
+#[derive(Debug, Clone)]
+struct ManagedExecutionBinding {
+    execution_id: String,
+    provider_kind: String,
+    execution_path: String,
+    generation: u64,
+    state: String,
+    revision: u64,
+    approval_requests: u8,
+    last_approval_request: Option<String>,
+}
+
+fn bind_idempotent_delivery_execution(
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    message_id: &str,
+    execution: Option<ExecutionDeliveryContext>,
+    provider_kind: &str,
+    execution_path: &str,
+) -> bool {
+    let Some(execution) = execution else {
+        return false;
+    };
+    bindings
+        .entry(message_id.to_string())
+        .or_insert(ManagedExecutionBinding {
+            execution_id: execution.execution_id,
+            provider_kind: provider_kind.to_string(),
+            execution_path: execution_path.to_string(),
+            generation: execution.generation,
+            state: "starting".to_string(),
+            revision: execution.revision,
+            approval_requests: 0,
+            last_approval_request: None,
+        });
+    true
+}
+
+/// L usage ne reçoit une ascendance que si le wrapper ne porte qu un seul
+/// tour vivant. Plusieurs bindings rendent l attribution ambiguë : le fait
+/// reste visible par agent, mais ne peut pas consommer un budget d exécution.
+fn usage_execution_context(
+    bindings: &HashMap<String, ManagedExecutionBinding>,
+) -> (Option<String>, Option<u64>, Option<String>) {
+    if bindings.len() != 1 {
+        return (None, None, None);
+    }
+    let binding = bindings.values().next().expect("binding unique");
+    (
+        Some(binding.execution_id.clone()),
+        Some(binding.generation),
+        Some(binding.provider_kind.clone()),
+    )
+}
+/// Publie uniquement une identité fournisseur réellement observée, corrélée aux
+/// exécutions vivantes. L'absence de baseline reste une absence durable : elle
+/// n'est jamais remplacée par une capacité déduite du type d'agent.
+fn publish_provider_context(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    bindings: &HashMap<String, ManagedExecutionBinding>,
+    identity: &ManagedProviderIdentity,
+) {
+    let Some(observation) = identity.provider_observation.clone() else {
+        return;
+    };
+    for binding in bindings.values() {
+        send_wrapper_message(
+            writer,
+            WrapperToDaemon::ExecutionProviderObserved {
+                context: ExecutionProviderContext {
+                    execution_id: binding.execution_id.clone(),
+                    generation: binding.generation,
+                    provider_kind: binding.provider_kind.clone(),
+                    execution_path: binding.execution_path.clone(),
+                    observation: observation.clone(),
+                    provider_session_id: identity.provider_session_id.clone(),
+                    provider_thread_id: identity.provider_thread_id.clone(),
+                    provider_turn_id: identity.active_turn_id.clone(),
+                    observed_at: unix_now_secs(),
+                },
+            },
+        );
+    }
+}
+
+fn publish_execution_transition(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    message_id: &str,
+    next_state: &str,
+    reason: &str,
+) {
+    let Some(binding) = bindings.get_mut(message_id) else {
+        return;
+    };
+    if binding.state == next_state {
+        return;
+    }
+    let transition = bridget_transport::protocol::ExecutionStateTransition {
+        execution_id: binding.execution_id.clone(),
+        generation: binding.generation,
+        expected_state: binding.state.clone(),
+        expected_revision: binding.revision,
+        next_state: next_state.to_string(),
+        reason: reason.to_string(),
+        observed_at: unix_now_secs(),
+    };
+    send_wrapper_message(
+        writer,
+        WrapperToDaemon::ExecutionStateChanged { transition },
+    );
+    binding.state = next_state.to_string();
+    binding.revision = binding.revision.saturating_add(1);
+    if matches!(
+        next_state,
+        "interrupted" | "completed" | "failed" | "unreachable"
+    ) {
+        bindings.remove(message_id);
+    }
+}
+
+fn report_execution_control(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    issuer_scope: String,
+    command: &ExecutionControlCommand,
+    accepted: bool,
+    refusal_reason: Option<String>,
+) {
+    send_wrapper_message(
+        writer,
+        WrapperToDaemon::ControlExecutionReported {
+            issuer_scope,
+            command_id: command.command_id.clone(),
+            execution_id: command.execution_id.clone(),
+            accepted,
+            refusal_reason,
+        },
+    );
+}
+
+/// Exécute seulement les contrôles explicitement supportés par la session.
+/// Une correction sans capacité native est refusée ici, jamais placée dans la
+/// FIFO comme un nouveau prompt.
+fn apply_execution_control(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    transport: &mut dyn ManagedSession,
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    issuer_scope: String,
+    command: ExecutionControlCommand,
+) {
+    let binding = bindings.iter().find_map(|(message_id, binding)| {
+        (binding.execution_id == command.execution_id)
+            .then(|| (message_id.clone(), binding.clone()))
+    });
+    let Some((message_id, binding)) = binding else {
+        return report_execution_control(
+            writer,
+            issuer_scope,
+            &command,
+            false,
+            Some("execution_not_found".to_string()),
+        );
+    };
+    if binding.generation != command.generation {
+        return report_execution_control(
+            writer,
+            issuer_scope,
+            &command,
+            false,
+            Some("generation_mismatch".to_string()),
+        );
+    }
+    if binding.revision != command.revision {
+        return report_execution_control(
+            writer,
+            issuer_scope,
+            &command,
+            false,
+            Some("revision_mismatch".to_string()),
+        );
+    }
+    let required_operation = match command.operation {
+        ExecutionControlOperation::SteerCurrent => ProviderOperation::Steer,
+        ExecutionControlOperation::Interrupt => ProviderOperation::Interrupt,
+        ExecutionControlOperation::QueueOnly
+        | ExecutionControlOperation::TriggerTurn
+        | ExecutionControlOperation::PauseQueue
+        | ExecutionControlOperation::ResumeQueue
+        | ExecutionControlOperation::CancelQueued => {
+            return report_execution_control(
+                writer,
+                issuer_scope,
+                &command,
+                false,
+                Some("capability_unavailable".to_string()),
+            );
+        }
+    };
+    if !transport.supports_operation(required_operation) {
+        return report_execution_control(
+            writer,
+            issuer_scope,
+            &command,
+            false,
+            Some("capability_unavailable".to_string()),
+        );
+    }
+    match command.operation {
+        ExecutionControlOperation::SteerCurrent => {
+            let Some(message) = command.message.as_ref() else {
+                return report_execution_control(
+                    writer,
+                    issuer_scope,
+                    &command,
+                    false,
+                    Some("message_required".to_string()),
+                );
+            };
+            match transport.deliver(message) {
+                Ok(()) => report_execution_control(writer, issuer_scope, &command, true, None),
+                Err(_) => report_execution_control(
+                    writer,
+                    issuer_scope,
+                    &command,
+                    false,
+                    Some("target_unavailable".to_string()),
+                ),
+            }
+        }
+        ExecutionControlOperation::Interrupt => {
+            if transport.cancel_delivery(&message_id, "interruption explicite") {
+                publish_execution_transition(
+                    writer,
+                    bindings,
+                    &message_id,
+                    "interrupting",
+                    "interrupt_requested",
+                );
+                report_execution_control(writer, issuer_scope, &command, true, None);
+            } else {
+                report_execution_control(
+                    writer,
+                    issuer_scope,
+                    &command,
+                    false,
+                    Some("target_unavailable".to_string()),
+                );
+            }
+        }
+        ExecutionControlOperation::QueueOnly
+        | ExecutionControlOperation::TriggerTurn
+        | ExecutionControlOperation::PauseQueue
+        | ExecutionControlOperation::ResumeQueue
+        | ExecutionControlOperation::CancelQueued => report_execution_control(
+            writer,
+            issuer_scope,
+            &command,
+            false,
+            Some("capability_unavailable".to_string()),
+        ),
+    }
+}
+
+fn publish_single_wait(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    next_state: &str,
+    reason: &str,
+) {
+    let message_ids: Vec<String> = bindings
+        .iter()
+        .filter(|(_, binding)| binding.state == "running")
+        .map(|(message_id, _)| message_id.clone())
+        .collect();
+    if message_ids.len() == 1 {
+        publish_execution_transition(writer, bindings, &message_ids[0], next_state, reason);
+    }
+}
+
+const MAX_APPROVAL_REQUESTS_PER_EXECUTION: u8 = 3;
+
+/// Corrèle et borne les demandes d'autorisation tant que le même tour reste
+/// actif. Bridget ne choisit jamais à la place de l'humain : au-delà du seuil,
+/// elle publie une issue durable que le contrôleur peut reprendre.
+fn publish_approval_wait(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    request_id: &str,
+) {
+    let message_ids: Vec<String> = bindings
+        .iter()
+        .filter(|(_, binding)| matches!(binding.state.as_str(), "running" | "waiting_approval"))
+        .map(|(message_id, _)| message_id.clone())
+        .collect();
+    if message_ids.len() != 1 {
+        return;
+    }
+    let message_id = &message_ids[0];
+    let loop_detected = {
+        let binding = bindings
+            .get_mut(message_id)
+            .expect("identifiant sélectionné depuis les bindings");
+        binding.approval_requests = binding.approval_requests.saturating_add(1);
+        binding.last_approval_request = Some(request_id.to_string());
+        binding.approval_requests > MAX_APPROVAL_REQUESTS_PER_EXECUTION
+    };
+    if loop_detected {
+        publish_execution_transition(
+            writer,
+            bindings,
+            message_id,
+            "failed",
+            "approval_loop_detected",
+        );
+    } else {
+        publish_execution_transition(
+            writer,
+            bindings,
+            message_id,
+            "waiting_approval",
+            "permission_required",
+        );
+    }
+}
+fn delegated_runtime_terminal_reference(execution_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"bridget/delegated-runtime-terminal/v1\0");
+    hasher.update(execution_id.as_bytes());
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn publish_delegated_runtime_for_message(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    bindings: &HashMap<String, ManagedExecutionBinding>,
+    message_id: &str,
+    kind: DelegatedRuntimeEventKind,
+    code: &str,
+    reference: String,
+) {
+    let Some(binding) = bindings.get(message_id) else {
+        return;
+    };
+    send_wrapper_message(
+        writer,
+        WrapperToDaemon::DelegatedRuntimeEvent {
+            execution_id: binding.execution_id.clone(),
+            kind,
+            code: code.to_string(),
+            reference,
+        },
+    );
+}
+
+fn publish_delegated_runtime_warning(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    bindings: &HashMap<String, ManagedExecutionBinding>,
+    code: String,
+    reference: String,
+) {
+    let running: Vec<&ManagedExecutionBinding> = bindings
+        .values()
+        .filter(|binding| binding.state == "running")
+        .collect();
+    if running.len() == 1 {
+        send_wrapper_message(
+            writer,
+            WrapperToDaemon::DelegatedRuntimeEvent {
+                execution_id: running[0].execution_id.clone(),
+                kind: DelegatedRuntimeEventKind::Warning,
+                code,
+                reference,
+            },
+        );
+    }
+}
+fn delegated_runtime_message(
+    event: &DelegatedRuntimeEventFrame,
+    recipient: &str,
+) -> bridget_core::BridgetMessage {
+    let kind = match event.kind {
+        DelegatedRuntimeEventKind::Warning => "avertissement récupérable",
+        DelegatedRuntimeEventKind::Failed => "échec terminal",
+    };
+    let body = format!(
+        "Incident délégué: enfant={} issue={kind} code={} référence={}.",
+        event.child_instance_id, event.code, event.reference,
+    );
+    let mut message = bridget_core::BridgetMessage::new("bridget", recipient, body);
+    message.id = format!("delegated-runtime-{}", event.event_id);
+    message.origin = Some(bridget_core::MessageOrigin::System);
+    message.intent = Some(bridget_core::MessageIntent::QueueOnly);
+    message.reply = false;
+    message
+}
+
+/// Projette le seul élément de présentation nécessaire au fournisseur sans
+/// toucher au message de routage. `from` reste donc un Agent ID partout où le
+/// wrapper en a besoin pour `reply`, le journal et les accusés de livraison.
+fn message_for_provider(message: &bridget_core::BridgetMessage) -> bridget_core::BridgetMessage {
+    let mut projected = message.clone();
+    if let Some(display_name) = message
+        .from_display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        projected.from = display_name.to_string();
+    }
+    projected
+}
+
+#[cfg(test)]
+#[test]
+fn projection_fournisseur_expose_le_display_name_sans_perdre_l_agent_id() {
+    let agent_id = "018f2d95-8bd4-7c4c-8b7e-6cafb0a39a63";
+    let mut message = bridget_core::BridgetMessage::new(
+        agent_id,
+        "018f2d95-8bd4-7c4c-8b7e-6cafb0a39a64",
+        "bonjour",
+    );
+    message.from_display_name = Some("Bibliothécaire".to_string());
+
+    let projected = message_for_provider(&message);
+
+    assert_eq!(message.from, agent_id, "le routage conserve l'Agent ID");
+    assert_eq!(projected.from, "Bibliothécaire");
+    assert_eq!(projected.to, message.to);
+    assert_eq!(projected.id, message.id);
+}
+
+#[cfg(test)]
 fn forward_managed_events(
     writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
     my_name: &str,
     events: Vec<ManagedEvent>,
     idempotent_deliveries: &mut IdempotentDeliveryTracker,
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
+) -> bool {
+    forward_managed_events_with_redaction(
+        writer,
+        my_name,
+        events,
+        idempotent_deliveries,
+        bindings,
+        &mut None,
+        None,
+    )
+}
+
+fn redact_managed_text(
+    redaction: &mut Option<OutputRedactionLease>,
+    channel: &str,
+    value: String,
+) -> String {
+    let Some(lease) = redaction.as_mut() else {
+        return value;
+    };
+    String::from_utf8_lossy(&lease.redact(channel, value.as_bytes(), true)).into_owned()
+}
+
+fn forward_managed_events_with_redaction(
+    writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
+    my_name: &str,
+    events: Vec<ManagedEvent>,
+    idempotent_deliveries: &mut IdempotentDeliveryTracker,
+    bindings: &mut HashMap<String, ManagedExecutionBinding>,
+    redaction: &mut Option<OutputRedactionLease>,
+    profile_db_path: Option<&Path>,
 ) -> bool {
     let mut journal_failed = false;
     for event in events {
@@ -4086,15 +5159,80 @@ fn forward_managed_events(
             raw.len()
         );
         match kind {
-            ManagedEventKind::TurnStarted { .. } => {
-                send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: true })
+            ManagedEventKind::TurnStarted { message_id } => {
+                if !bindings.is_empty() && !bindings.contains_key(&message_id) {
+                    warn!("événement de tour ignoré: message hors exécution active");
+                    continue;
+                }
+                if let Some(binding) = bindings.get_mut(&message_id) {
+                    binding.approval_requests = 0;
+                    binding.last_approval_request = None;
+                }
+                send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: true });
+                publish_execution_transition(
+                    writer,
+                    bindings,
+                    &message_id,
+                    "running",
+                    "provider_accepted",
+                );
             }
             ManagedEventKind::TurnFinished {
                 message,
-                response,
-                terminal,
+                mut response,
+                mut terminal,
             } => {
+                response = redact_managed_text(redaction, "provider_response", response);
+                if let ManagedTerminal::Failed { detail } = &mut terminal {
+                    *detail =
+                        redact_managed_text(redaction, "provider_error", std::mem::take(detail));
+                }
+                let message_id = message.id.clone();
+                if !bindings.is_empty() && !bindings.contains_key(&message_id) {
+                    warn!("terminal fournisseur ignoré: message hors exécution active");
+                    continue;
+                }
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
+
+                if message.reply && message.origin != Some(bridget_core::MessageOrigin::System) {
+                    match &terminal {
+                        ManagedTerminal::Completed => record_attention(
+                            profile_db_path,
+                            my_name,
+                            AttentionEventType::TaskCompleted,
+                            &message.id,
+                        ),
+                        ManagedTerminal::Failed { .. } => record_attention(
+                            profile_db_path,
+                            my_name,
+                            AttentionEventType::TerminalFailure,
+                            &message.id,
+                        ),
+                        ManagedTerminal::Cancelled => {}
+                    }
+                }
+
+                if matches!(&terminal, ManagedTerminal::Failed { .. }) {
+                    publish_delegated_runtime_for_message(
+                        writer,
+                        bindings,
+                        &message_id,
+                        DelegatedRuntimeEventKind::Failed,
+                        "provider_failed",
+                        delegated_runtime_terminal_reference(
+                            bindings
+                                .get(&message_id)
+                                .map(|binding| binding.execution_id.as_str())
+                                .unwrap_or_default(),
+                        ),
+                    );
+                }
+                let (next_state, reason) = match &terminal {
+                    ManagedTerminal::Completed => ("completed", "completed"),
+                    ManagedTerminal::Cancelled => ("interrupted", "interrupted"),
+                    ManagedTerminal::Failed { .. } => ("failed", "provider_failed"),
+                };
+                publish_execution_transition(writer, bindings, &message_id, next_state, reason);
                 match terminal {
                     ManagedTerminal::Completed if message.reply && !response.is_empty() => {
                         let mut reply =
@@ -4129,7 +5267,38 @@ fn forward_managed_events(
                 }
             }
             ManagedEventKind::DeliveryRejected { message_id, reason } => {
+                let reason = redact_managed_text(redaction, "provider_rejection", reason);
+                if !bindings.is_empty() && !bindings.contains_key(&message_id) {
+                    warn!("refus fournisseur ignoré: message hors exécution active");
+                    continue;
+                }
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
+                let execution_reason = if reason.ends_with("pleine") {
+                    publish_delegated_runtime_for_message(
+                        writer,
+                        bindings,
+                        &message_id,
+                        DelegatedRuntimeEventKind::Failed,
+                        "provider_failed",
+                        delegated_runtime_terminal_reference(
+                            bindings
+                                .get(&message_id)
+                                .map(|binding| binding.execution_id.as_str())
+                                .unwrap_or_default(),
+                        ),
+                    );
+
+                    "provider_queue_full"
+                } else {
+                    "provider_failed"
+                };
+                publish_execution_transition(
+                    writer,
+                    bindings,
+                    &message_id,
+                    "failed",
+                    execution_reason,
+                );
                 if let Some(report) = idempotent_deliveries.injection_rejected(&message_id) {
                     send_wrapper_message(writer, report);
                 }
@@ -4143,6 +5312,7 @@ fn forward_managed_events(
             }
             ManagedEventKind::JournalFailed { detail } => {
                 journal_failed = true;
+                let detail = redact_managed_text(redaction, "provider_journal_error", detail);
                 warn!("arrêt de la session gérée : {detail}");
             }
             ManagedEventKind::PromptDispatched { message_id } => {
@@ -4152,89 +5322,165 @@ fn forward_managed_events(
                     send_wrapper_message(writer, report);
                 }
             }
-            ManagedEventKind::RuntimeObserved { model, effort } => match source {
-                bridget_transport::ManagedEventSource::CodexAppServer => send_wrapper_message(
-                    writer,
-                    WrapperToDaemon::Runtime {
-                        agent: my_name.to_string(),
-                        model,
-                        effort,
-                        source: bridget_transport::protocol::RuntimeSource::CodexAppServer,
-                    },
-                ),
-                bridget_transport::ManagedEventSource::Acp
-                | bridget_transport::ManagedEventSource::ClaudeStreamJson => {
-                    warn!("fait runtime ignoré : source non autorisée")
+            ManagedEventKind::RuntimeObserved {
+                mut model,
+                mut effort,
+            } => {
+                model = redact_managed_text(redaction, "provider_runtime_model", model);
+                effort = effort
+                    .map(|value| redact_managed_text(redaction, "provider_runtime_effort", value));
+                match source {
+                    bridget_transport::ManagedEventSource::CodexAppServer => send_wrapper_message(
+                        writer,
+                        WrapperToDaemon::Runtime {
+                            agent: my_name.to_string(),
+                            model,
+                            effort,
+                            source: bridget_transport::protocol::RuntimeSource::CodexAppServer,
+                        },
+                    ),
+                    bridget_transport::ManagedEventSource::Acp
+                    | bridget_transport::ManagedEventSource::ClaudeStreamJson => {
+                        warn!("fait runtime ignoré : source non autorisée")
+                    }
                 }
-            },
+            }
             ManagedEventKind::RateLimitObserved {
-                window,
-                status,
+                mut window,
+                mut status,
                 resets_at,
                 used_percent,
-            } => match source {
-                bridget_transport::ManagedEventSource::ClaudeStreamJson => send_wrapper_message(
-                    writer,
-                    WrapperToDaemon::RateLimit {
-                        agent: my_name.to_string(),
-                        window,
-                        status,
-                        resets_at,
-                        used_percent,
-                        source: bridget_transport::protocol::RateLimitSource::ClaudeStreamJson,
-                    },
-                ),
-                bridget_transport::ManagedEventSource::CodexAppServer => send_wrapper_message(
-                    writer,
-                    WrapperToDaemon::RateLimit {
-                        agent: my_name.to_string(),
-                        window,
-                        status,
-                        resets_at,
-                        used_percent,
-                        source: bridget_transport::protocol::RateLimitSource::CodexAppServer,
-                    },
-                ),
-                bridget_transport::ManagedEventSource::Acp => {
-                    warn!("fait de limite ignoré : source ACP non autorisée")
+            } => {
+                window = redact_managed_text(redaction, "provider_rate_limit_window", window);
+                status = redact_managed_text(redaction, "provider_rate_limit_status", status);
+                match source {
+                    bridget_transport::ManagedEventSource::ClaudeStreamJson => {
+                        send_wrapper_message(
+                            writer,
+                            WrapperToDaemon::RateLimit {
+                                agent: my_name.to_string(),
+                                window,
+                                status,
+                                resets_at,
+                                used_percent,
+                                source:
+                                    bridget_transport::protocol::RateLimitSource::ClaudeStreamJson,
+                            },
+                        )
+                    }
+                    bridget_transport::ManagedEventSource::CodexAppServer => send_wrapper_message(
+                        writer,
+                        WrapperToDaemon::RateLimit {
+                            agent: my_name.to_string(),
+                            window,
+                            status,
+                            resets_at,
+                            used_percent,
+                            source: bridget_transport::protocol::RateLimitSource::CodexAppServer,
+                        },
+                    ),
+                    bridget_transport::ManagedEventSource::Acp => {
+                        warn!("fait de limite ignoré : source ACP non autorisée")
+                    }
                 }
-            },
-            ManagedEventKind::ModelObserved { model } => match source {
-                bridget_transport::ManagedEventSource::ClaudeStreamJson
-                | bridget_transport::ManagedEventSource::CodexAppServer => send_wrapper_message(
-                    writer,
-                    WrapperToDaemon::ServedModel {
-                        agent: my_name.to_string(),
-                        model,
-                    },
-                ),
-                bridget_transport::ManagedEventSource::Acp => {
-                    warn!("modèle servi ignoré : source ACP non autorisée")
+            }
+            ManagedEventKind::ModelObserved { mut model } => {
+                model = redact_managed_text(redaction, "provider_model", model);
+                match source {
+                    bridget_transport::ManagedEventSource::ClaudeStreamJson
+                    | bridget_transport::ManagedEventSource::CodexAppServer => {
+                        send_wrapper_message(
+                            writer,
+                            WrapperToDaemon::ServedModel {
+                                agent: my_name.to_string(),
+                                model,
+                            },
+                        )
+                    }
+                    bridget_transport::ManagedEventSource::Acp => {
+                        warn!("modèle servi ignoré : source ACP non autorisée")
+                    }
                 }
-            },
+            }
             ManagedEventKind::UsageObserved {
                 input_tokens,
                 output_tokens,
                 cache_creation_input_tokens,
                 cache_read_input_tokens,
             } => match source {
-                bridget_transport::ManagedEventSource::ClaudeStreamJson => send_wrapper_message(
-                    writer,
-                    WrapperToDaemon::Usage {
-                        agent: my_name.to_string(),
-                        input_tokens,
-                        output_tokens,
-                        cache_creation_input_tokens,
-                        cache_read_input_tokens,
-                        source: bridget_transport::protocol::UsageSource::ClaudeStreamJson,
-                    },
-                ),
+                bridget_transport::ManagedEventSource::ClaudeStreamJson => {
+                    let (execution_id, execution_generation, provider_kind) =
+                        usage_execution_context(bindings);
+                    send_wrapper_message(
+                        writer,
+                        WrapperToDaemon::Usage {
+                            agent: my_name.to_string(),
+                            input_tokens,
+                            output_tokens,
+                            execution_id,
+                            execution_generation,
+                            cache_creation_input_tokens,
+                            cache_read_input_tokens,
+                            provider_kind,
+                            source: bridget_transport::protocol::UsageSource::ClaudeStreamJson,
+                        },
+                    )
+                }
                 bridget_transport::ManagedEventSource::Acp
                 | bridget_transport::ManagedEventSource::CodexAppServer => {
                     warn!("fait d'usage ignoré : source ACP/Codex non autorisée pour L4")
                 }
             },
+            ManagedEventKind::Waiting { state } => match state {
+                bridget_transport::ManagedWaitState::Approval { request_id } => {
+                    publish_approval_wait(writer, bindings, &request_id);
+                    record_attention(
+                        profile_db_path,
+                        my_name,
+                        AttentionEventType::HumanInputNeeded,
+                        &request_id,
+                    );
+                }
+                bridget_transport::ManagedWaitState::UserInput { request_id } => {
+                    publish_single_wait(
+                        writer,
+                        bindings,
+                        "waiting_user_input",
+                        "user_input_required",
+                    );
+                    record_attention(
+                        profile_db_path,
+                        my_name,
+                        AttentionEventType::HumanInputNeeded,
+                        &request_id,
+                    );
+                }
+            },
+            ManagedEventKind::ProviderContextObserved { mut identity } => {
+                identity.provider_session_id = identity
+                    .provider_session_id
+                    .map(|value| redact_managed_text(redaction, "provider_session_id", value));
+                identity.provider_thread_id = identity
+                    .provider_thread_id
+                    .map(|value| redact_managed_text(redaction, "provider_thread_id", value));
+                identity.active_turn_id = identity
+                    .active_turn_id
+                    .map(|value| redact_managed_text(redaction, "provider_turn_id", value));
+                identity.provider_item_id = identity
+                    .provider_item_id
+                    .map(|value| redact_managed_text(redaction, "provider_item_id", value));
+                identity.capabilities_revision = identity.capabilities_revision.map(|value| {
+                    redact_managed_text(redaction, "provider_capabilities_revision", value)
+                });
+                publish_provider_context(writer, bindings, &identity)
+            }
             ManagedEventKind::Update { .. } | ManagedEventKind::Error { .. } => {}
+            ManagedEventKind::Diagnostic { code, reference } => {
+                let code = redact_managed_text(redaction, "provider_diagnostic_code", code);
+                let reference =
+                    redact_managed_text(redaction, "provider_diagnostic_reference", reference);
+                publish_delegated_runtime_warning(writer, bindings, code, reference);
+            }
         }
     }
     journal_failed
@@ -4262,11 +5508,11 @@ mod prompt_tests {
         codex_resume_bootstrap, interactive_bridget_prompt, is_protected_principal_checkout,
         managed_resume_context, prepare_codex_agent_args, render_resume_review,
     };
+    use crate::mission_projection::MissionReviewV1;
     use bridget_transport::protocol::ReviewTarget;
     use maicie::app::{DelegateRequest, DelegationCandidate, close, delegate};
     use maicie::config::DurationClasses;
     use maicie::domain::ClasseDuree;
-    use maicie::review_continuity::{ReviewContinuityObservation, ReviewContinuityState};
     use maicie::store::MaicieStore;
     use std::fs;
     use std::path::PathBuf;
@@ -4450,6 +5696,11 @@ mod prompt_tests {
         .unwrap();
     }
 
+    fn publish_resume_projection(home: &std::path::Path) {
+        let config = home.join(".config/maicie/config.json");
+        maicie::ui_projection::publish_ui_mission_projection_v1(&config).unwrap();
+    }
+
     fn create_active_mission(
         database: &std::path::Path,
         participant: &str,
@@ -4609,6 +5860,7 @@ mod prompt_tests {
         let mission = create_review_mission(&database, "resurrected");
         init_worktree(&worktree);
 
+        publish_resume_projection(&home);
         let context = managed_resume_context(
             &home,
             &worktree,
@@ -4661,20 +5913,15 @@ mod prompt_tests {
     #[test]
     fn carte_de_reprise_nomme_la_reecriture_du_sha_juge() {
         let judged = "1".repeat(40);
-        let observed = "2".repeat(40);
-        let rendered = render_resume_review(&ReviewContinuityObservation {
-            delegation_id: uuid::Uuid::new_v4(),
-            state: ReviewContinuityState::Rewritten,
-            target_ref: Some("origin/session-047".to_string()),
-            reviewed_head: Some(judged.clone()),
-            observed_head: Some(observed.clone()),
-            verdict: None,
-            reason: None,
-        });
+        let rendered = render_resume_review(&Some(MissionReviewV1 {
+            target_ref: "origin/session-047".to_string(),
+            reviewed_head: judged.clone(),
+            verdict: Some("approved".to_string()),
+        }));
         assert_eq!(
             rendered,
             format!(
-                "ALERTE VERDICT RÉÉCRIT : objet jugé {judged} non ancêtre de origin/session-047@{observed}."
+                "Suivi du verdict publié : verdict=approved; cible=origin/session-047; sha_jugé={judged}."
             )
         );
     }
@@ -4687,6 +5934,7 @@ mod prompt_tests {
         write_maicie_config(&home, &root.join("maicie.sqlite3"));
         init_worktree(&worktree);
 
+        publish_resume_projection(&home);
         let context = managed_resume_context(
             &home,
             &worktree,
@@ -4733,23 +5981,15 @@ mod prompt_tests {
 
         let mut router = bridget_core::Router::new();
         router
-            .register(
-                Some("sans-mission"),
-                &bridget_core::AgentType::Codex,
-                "conn-1",
-            )
+            .register("sans-mission", &bridget_core::AgentType::Codex, "conn-1")
             .unwrap();
-        let _ = router.register(
-            Some("rel\nConsigne"),
-            &bridget_core::AgentType::Codex,
-            "conn-2",
-        );
+        let _ = router.register("rel\nConsigne", &bridget_core::AgentType::Codex, "conn-2");
 
         for agent in router.list_agents() {
             let context = managed_resume_context(
                 &home,
                 &worktree,
-                &agent.name,
+                &agent.agent_id,
                 "fixture",
                 "acp",
                 "fixture-digest",
@@ -4824,6 +6064,7 @@ mod prompt_tests {
         };
         drop(store);
 
+        publish_resume_projection(&home);
         let context = managed_resume_context(
             &home,
             &worktree,
@@ -4913,6 +6154,7 @@ mod prompt_tests {
         }
         init_worktree(&worktree);
 
+        publish_resume_projection(&home);
         let context = managed_resume_context(
             &home,
             &worktree,
@@ -4950,6 +6192,7 @@ mod prompt_tests {
         let mission = create_waiting_prereq_mission(&database, "agent-prereq");
         init_worktree(&worktree);
 
+        publish_resume_projection(&home);
         let context = managed_resume_context(
             &home,
             &worktree,
@@ -4998,6 +6241,7 @@ mod prompt_tests {
         force_delegation_annulee(&database, mission.delegation_id);
         init_worktree(&worktree);
 
+        publish_resume_projection(&home);
         let context = managed_resume_context(
             &home,
             &worktree,
@@ -5056,6 +6300,7 @@ mod prompt_tests {
         );
         init_worktree(&worktree);
 
+        publish_resume_projection(&home);
         let context = managed_resume_context(
             &home,
             &worktree,
@@ -5181,15 +6426,14 @@ mod prompt_tests {
             prepared.last().unwrap(),
             &codex_resume_bootstrap("prospective")
         );
-        assert!(prepared.last().unwrap().contains("ALL_TOOLS"));
-        assert!(prepared.last().unwrap().contains("mcp__bridget__*"));
+        assert!(prepared.last().unwrap().contains("binaire `bridget`"));
+        assert!(prepared.last().unwrap().contains("N'essaie pas"));
         assert!(
-            prepared
+            !prepared
                 .last()
                 .unwrap()
                 .contains("tools.mcp__bridget__bridget_send")
         );
-        assert!(prepared.last().unwrap().contains("shell bridget"));
     }
 
     #[test]
@@ -5262,6 +6506,26 @@ mod prompt_tests {
 }
 
 #[cfg(test)]
+mod attention_tests {
+    use super::attention_occurrence_key;
+    #[test]
+    fn cle_attention_est_stable_et_ne_divulgue_pas_le_routage() {
+        let first = attention_occurrence_key("task_completed", "agent-interne", "message-42");
+        assert_eq!(
+            first,
+            attention_occurrence_key("task_completed", "agent-interne", "message-42")
+        );
+        assert_ne!(
+            first,
+            attention_occurrence_key("terminal_failure", "agent-interne", "message-42")
+        );
+        assert!(first.starts_with("attention:v1:task_completed:"));
+        assert!(!first.contains("agent-interne"));
+        assert!(!first.contains("message-42"));
+    }
+}
+
+#[cfg(test)]
 fn journal_failure_requires_shutdown(events: &[ManagedEvent]) -> bool {
     events
         .iter()
@@ -5269,9 +6533,216 @@ fn journal_failure_requires_shutdown(events: &[ManagedEvent]) -> bool {
 }
 
 #[cfg(test)]
+mod delegated_runtime_tests {
+    use super::*;
+
+    #[test]
+    fn spec_068_notification_deleguee_est_systeme_ordonnee_et_accusee_apres_injection() {
+        let event = DelegatedRuntimeEventFrame {
+            cursor: 7,
+            event_id: "event-7".to_string(),
+            link_id: "link-7".to_string(),
+            child_instance_id: "enfant-7".to_string(),
+            child_execution_id: "execution-7".to_string(),
+            kind: DelegatedRuntimeEventKind::Warning,
+            code: "unsupported_provider_request".to_string(),
+            reference: format!("sha256:{}", "a".repeat(64)),
+            observed_at: 1_700_000_000,
+            project: None,
+        };
+        let message = delegated_runtime_message(&event, "parent-7");
+        assert_eq!(message.from, "bridget");
+        assert_eq!(message.to, "parent-7");
+        assert_eq!(message.origin, Some(bridget_core::MessageOrigin::System));
+        assert_eq!(message.intent, Some(bridget_core::MessageIntent::QueueOnly));
+        assert!(!message.reply);
+        assert!(!message.body.contains("params"));
+
+        let root = std::env::temp_dir().join(format!("bridget-spec-068-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "parent-7").unwrap();
+        tracker.record_delegated_runtime(&message.id, event.event_id.clone());
+        assert!(matches!(
+            tracker.prompt_dispatched(&message.id, 1_700_000_001),
+            Some(WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id }) if event_id == "event-7"
+        ));
+        assert!(
+            tracker
+                .prompt_dispatched(&message.id, 1_700_000_002)
+                .is_none()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec_068_diagnostic_codex_est_remonte_sans_octets_fournisseur() {
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        reader_stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(writer_stream))));
+        let root =
+            std::env::temp_dir().join(format!("bridget-spec-068-forward-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "child-1").unwrap();
+        let mut bindings = HashMap::new();
+        bindings.insert(
+            "message-1".to_string(),
+            ManagedExecutionBinding {
+                execution_id: "execution-1".to_string(),
+                generation: 1,
+                revision: 0,
+                state: "running".to_string(),
+                provider_kind: "codex".to_string(),
+                execution_path: "codex_app_server".to_string(),
+                approval_requests: 0,
+                last_approval_request: None,
+            },
+        );
+        let reference = format!("sha256:{}", "b".repeat(64));
+        assert!(!forward_managed_events(
+            &writer,
+            "child-1",
+            vec![ManagedEvent::internal(
+                bridget_transport::ManagedEventSource::CodexAppServer,
+                b"params=secret-ne-pas-remonter".to_vec(),
+                ManagedEventKind::Diagnostic {
+                    code: "unsupported_provider_request".to_string(),
+                    reference: reference.clone(),
+                },
+            )],
+            &mut tracker,
+            &mut bindings
+        ));
+        let mut line = String::new();
+        BufReader::new(reader_stream).read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode(line.trim()).unwrap(),
+            WrapperToDaemon::DelegatedRuntimeEvent { execution_id, kind: DelegatedRuntimeEventKind::Warning, code, reference: observed }
+                if execution_id == "execution-1" && code == "unsupported_provider_request" && observed == reference
+        ));
+        assert!(!line.contains("secret-ne-pas-remonter"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec_068_terminal_enfant_est_failed_distinct_et_redacted() {
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        reader_stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(writer_stream))));
+        let root =
+            std::env::temp_dir().join(format!("bridget-spec-068-failed-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "child-2").unwrap();
+        let mut bindings = HashMap::new();
+        bindings.insert(
+            "message-2".to_string(),
+            ManagedExecutionBinding {
+                execution_id: "execution-2".to_string(),
+                generation: 1,
+                revision: 0,
+                state: "running".to_string(),
+                provider_kind: "codex".to_string(),
+                execution_path: "codex_app_server".to_string(),
+                approval_requests: 0,
+                last_approval_request: None,
+            },
+        );
+        let mut message = bridget_core::BridgetMessage::new("humain", "child-2", "travaille");
+        message.id = "message-2".to_string();
+        assert!(!forward_managed_events(
+            &writer,
+            "child-2",
+            vec![ManagedEvent::internal(
+                bridget_transport::ManagedEventSource::CodexAppServer,
+                b"detail=secret-ne-pas-remonter".to_vec(),
+                ManagedEventKind::TurnFinished {
+                    message,
+                    response: String::new(),
+                    terminal: ManagedTerminal::Failed {
+                        detail: "secret-ne-pas-remonter".to_string()
+                    },
+                },
+            )],
+            &mut tracker,
+            &mut bindings
+        ));
+        let mut reader = BufReader::new(reader_stream);
+        let mut failures = Vec::new();
+        for _ in 0..4 {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if let WrapperToDaemon::DelegatedRuntimeEvent {
+                kind,
+                code,
+                reference,
+                ..
+            } = decode(line.trim()).unwrap()
+            {
+                failures.push((kind, code, reference));
+                assert!(!line.contains("secret-ne-pas-remonter"));
+            }
+        }
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].0, DelegatedRuntimeEventKind::Failed);
+        assert_eq!(failures[0].1, "provider_failed");
+        assert!(failures[0].2.starts_with("sha256:"));
+        assert!(!bindings.contains_key("message-2"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
 mod reconnect_tests {
     use super::*;
 
+    #[test]
+    fn spec_067_redaction_precede_le_sink_durable_des_sorties_structurees() {
+        let secret = "S067_SYNTHETIC_SECRET";
+        let root = mcp_test_root("redaction-structured");
+        std::fs::create_dir_all(&root).unwrap();
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(writer_stream))));
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "instance-redaction").unwrap();
+        let mut redaction = Some(OutputRedactionLease::new(vec![secret.as_bytes().to_vec()]));
+        assert!(!forward_managed_events_with_redaction(
+            &writer,
+            "agent-redaction",
+            vec![ManagedEvent::source_line(
+                bridget_transport::ManagedEventSource::ClaudeStreamJson,
+                secret.as_bytes().to_vec(),
+                ManagedEventKind::ModelObserved {
+                    model: format!("model-{secret}"),
+                },
+            )],
+            &mut tracker,
+            &mut HashMap::new(),
+            &mut redaction,
+            None,
+        ));
+        let mut line = String::new();
+        BufReader::new(reader_stream).read_line(&mut line).unwrap();
+        assert!(!line.contains(secret));
+        assert!(matches!(
+            decode(line.trim_end()).unwrap(),
+            WrapperToDaemon::ServedModel { model, .. } if model == "model-*********************"
+        ));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec_067_redaction_couvre_fragment_et_canaux_distincts() {
+        let secret = b"S067_SYNTHETIC_SECRET".to_vec();
+        let mut lease = OutputRedactionLease::new(vec![secret.clone()]);
+        let mut stdout = lease.redact("stdout", b"avant-S067_SYN", false);
+        stdout.extend(lease.redact("stdout", b"THETIC_SECRET-apres", true));
+        let stderr = lease.redact("stderr", &secret, true);
+        assert!(!stdout.windows(secret.len()).any(|window| window == secret));
+        assert!(!stderr.windows(secret.len()).any(|window| window == secret));
+        assert!(stdout.contains(&42));
+    }
     #[test]
     fn spec_024_canal_federe_prefere_la_nouvelle_cle_et_lit_l_alias() {
         assert_eq!(
@@ -5326,7 +6797,7 @@ mod reconnect_tests {
                 writer,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
-                    name: "lab-agent".to_string()
+                    agent_id: "lab-agent".to_string()
                 })
                 .unwrap()
             )
@@ -5407,7 +6878,8 @@ mod reconnect_tests {
             &writer,
             "claude-1",
             vec![event],
-            &mut tracker
+            &mut tracker,
+            &mut HashMap::new(),
         ));
         let mut line = String::new();
         BufReader::new(reader_stream).read_line(&mut line).unwrap();
@@ -5444,7 +6916,8 @@ mod reconnect_tests {
             &writer,
             "claude-1",
             vec![event],
-            &mut tracker
+            &mut tracker,
+            &mut HashMap::new(),
         ));
         let mut line = String::new();
         BufReader::new(reader_stream).read_line(&mut line).unwrap();
@@ -5478,7 +6951,8 @@ mod reconnect_tests {
             &writer,
             "claude-1",
             vec![event],
-            &mut tracker
+            &mut tracker,
+            &mut HashMap::new(),
         ));
         let mut line = String::new();
         BufReader::new(reader_stream).read_line(&mut line).unwrap();
@@ -5488,8 +6962,11 @@ mod reconnect_tests {
                 agent,
                 input_tokens: 2,
                 output_tokens: 175,
+                execution_id: None,
+                execution_generation: None,
                 cache_creation_input_tokens: 40_804,
                 cache_read_input_tokens: 13_907,
+                provider_kind: None,
                 source: bridget_transport::protocol::UsageSource::ClaudeStreamJson,
             } if agent == "claude-1"
         ));
@@ -5699,10 +7176,6 @@ mod reconnect_tests {
         let before = user_config_snapshot(&root);
         let server = interactive_mcp_server_entry().unwrap();
 
-        let override_ = codex_mcp_override(&server).unwrap();
-        assert!(override_.contains("mcp_servers.bridget"));
-        assert!(override_.contains("env={HOME="));
-        assert_eq!(server["env"]["HOME"], std::env::var("HOME").unwrap());
         let config =
             claude_mcp_config_in(&root.join(".cache/bridget"), &server, "fixture").unwrap();
         assert!(config.path().exists());
@@ -5733,14 +7206,14 @@ mod reconnect_tests {
         assert_eq!(
             pairs
                 .iter()
-                .find(|(key, _)| key == "BRIDGET_AGENT_NAME")
+                .find(|(key, _)| key == "BRIDGET_AGENT_ID")
                 .map(|(_, value)| value.as_str()),
             Some("fable-reviewer")
         );
         assert_eq!(
             pairs
                 .iter()
-                .find(|(key, _)| key == "BRIDGET_AGENT_NAME_FILE")
+                .find(|(key, _)| key == "BRIDGET_AGENT_ID_FILE")
                 .map(|(_, value)| value.as_str()),
             Some(name_file.to_str().unwrap())
         );
@@ -5806,13 +7279,7 @@ mod reconnect_tests {
             .unwrap()
             .is_none()
         );
-        assert_eq!(codex_args[0], "-c");
-        assert!(
-            codex_args[1].starts_with("mcp_servers.bridget="),
-            "{}",
-            codex_args[1]
-        );
-        assert_eq!(codex_args[2], "app-server");
+        assert_eq!(codex_args, vec!["app-server".to_string()]);
 
         let mut none_args = Vec::new();
         assert!(
@@ -5828,7 +7295,7 @@ mod reconnect_tests {
             Some(&name_file),
         ));
         assert!(
-            unnamed.iter().all(|(key, _)| key != "BRIDGET_AGENT_NAME"),
+            unnamed.iter().all(|(key, _)| key != "BRIDGET_AGENT_ID"),
             "{unnamed:?}"
         );
         assert_eq!(
@@ -6060,11 +7527,53 @@ mod reconnect_tests {
 
     #[test]
     fn livraison_idempotente_interactive_injecte_une_fois_et_rejoue_l_accuse() {
+        const CHILD: &str = "BRIDGET_WRAPPER_IDEMPOTENT_RECONNECT_CHILD";
+        const ROOT: &str = "BRIDGET_WRAPPER_IDEMPOTENT_RECONNECT_ROOT";
+
+        if std::env::var_os(CHILD).is_some() {
+            let root = PathBuf::from(
+                std::env::var_os(ROOT).expect("racine de reçus transmise au sous-processus"),
+            );
+            exercise_idempotent_interactive_reconnect(&root);
+            return;
+        }
+
         let root = receipt_root("interactive-idempotent");
+        let executable = std::env::current_exe().expect("binaire de test courant");
+        assert_ne!(
+            executable.file_name().and_then(|name| name.to_str()),
+            Some("firefox"),
+            "le témoin de reconnexion doit ouvrir le binaire de test, jamais Firefox"
+        );
+        let child = Command::new(executable)
+            .args([
+                "--exact",
+                "wrapper::reconnect_tests::livraison_idempotente_interactive_injecte_une_fois_et_rejoue_l_accuse",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .env(ROOT, &root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("lancement du témoin de reconnexion isolé");
+        let output = wait_child_bounded(child, "témoin de reconnexion idempotente");
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            output.status.success(),
+            "le témoin isolé doit rejouer l'accusé sans seconde injection:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    fn exercise_idempotent_interactive_reconnect(root: &Path) {
         let instance_id = "instance_012_interactive";
         let mut injections = 0;
         let message = idempotent_message("interactive-prompt");
-        let mut tracker = IdempotentDeliveryTracker::open_at(&root, instance_id).unwrap();
+        let mut tracker = IdempotentDeliveryTracker::open_at(root, instance_id).unwrap();
 
         let first = deliver_idempotent_to_interactive(
             &mut tracker,
@@ -6091,7 +7600,7 @@ mod reconnect_tests {
         // La reconnexion réouvre le même store de reçus : le daemon peut
         // redélivrer, mais le pane ne reçoit jamais un second prompt.
         drop(tracker);
-        let mut reconnected = IdempotentDeliveryTracker::open_at(&root, instance_id).unwrap();
+        let mut reconnected = IdempotentDeliveryTracker::open_at(root, instance_id).unwrap();
         let replay = deliver_idempotent_to_interactive(
             &mut reconnected,
             "interactive-delivery".to_string(),
@@ -6114,7 +7623,24 @@ mod reconnect_tests {
             }] if delivery_id == "interactive-delivery"
         ));
         drop(reconnected);
-        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn wait_child_bounded(mut child: std::process::Child, label: &str) -> std::process::Output {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if child.try_wait().expect("état du sous-processus").is_some() {
+                return child
+                    .wait_with_output()
+                    .expect("sortie du sous-processus de reconnexion");
+            }
+            if Instant::now() >= deadline {
+                let pid = child.id();
+                child.kill().expect("arrêt du sous-processus bloqué");
+                let _ = child.wait();
+                panic!("timeout : {label} (pid {pid})");
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 
     #[test]
@@ -6278,6 +7804,7 @@ mod reconnect_tests {
             protocol: "acp".to_string(),
             forbidden_env: forbidden_env.iter().map(ToString::to_string).collect(),
             pass_env: Vec::new(),
+            claude_config_dir: None,
             permissions: "allow".to_string(),
             queue_capacity: 32,
             notify_timeout_secs: 600,
@@ -6285,8 +7812,54 @@ mod reconnect_tests {
             capabilities: bridget_transport::AdapterCapabilities {
                 execution_paths: vec!["acp".to_string()],
                 models: std::collections::BTreeMap::new(),
+                observed: None,
             },
         }
+    }
+
+    #[test]
+    fn transport_claude_managed_publie_le_type_fourni_au_wrapper() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-wrapper-provider-kind-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let definition = crate::registry::AgentDefinition {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "while IFS= read -r _; do :; done".to_string(),
+            ],
+            protocol: "claude_stream_json".to_string(),
+            forbidden_env: Vec::new(),
+            pass_env: Vec::new(),
+            claude_config_dir: None,
+            permissions: "allow".to_string(),
+            queue_capacity: 1,
+            notify_timeout_secs: 1,
+            mcp: crate::registry::McpDefinition::default(),
+            capabilities: bridget_transport::AdapterCapabilities::default(),
+        };
+        let transport = spawn_managed_session_transport(
+            "glm",
+            &definition,
+            &definition.args,
+            &[],
+            Vec::new(),
+            false,
+            &root,
+            Some("glm-test".to_string()),
+        )
+        .unwrap();
+        assert!(transport.drain_events().into_iter().any(|event| {
+            matches!(
+                event.kind,
+                ManagedEventKind::ProviderContextObserved { identity }
+                    if identity.provider_kind == "glm"
+            )
+        }));
+        transport.stop();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -7315,5 +8888,308 @@ mod reconnect_tests {
         assert!(second >= Duration::from_millis(1600));
         assert!(sixth <= RECONNECT_MAX_DELAY);
         assert!(later <= RECONNECT_MAX_DELAY);
+    }
+
+    #[test]
+    fn transition_execution_ignore_un_message_inconnu_et_evenement_tardif() {
+        let root = mcp_test_root("execution-correlation");
+        std::fs::create_dir_all(&root).unwrap();
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        reader_stream
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(writer_stream))));
+        let mut bindings = HashMap::new();
+        bindings.insert(
+            "message-active".to_string(),
+            ManagedExecutionBinding {
+                execution_id: "execution-active".to_string(),
+                generation: 3,
+                provider_kind: "fixture".to_string(),
+                execution_path: "fixture".to_string(),
+                state: "starting".to_string(),
+                approval_requests: 0,
+                last_approval_request: None,
+                revision: 0,
+            },
+        );
+
+        publish_execution_transition(
+            &writer,
+            &mut bindings,
+            "message-obsolete",
+            "running",
+            "late",
+        );
+
+        let mut reader = BufReader::new(reader_stream);
+        let mut line = String::new();
+        let error = reader.read_line(&mut line).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ));
+        assert_eq!(bindings["message-active"].state, "starting");
+
+        publish_execution_transition(
+            &writer,
+            &mut bindings,
+            "message-active",
+            "running",
+            "provider_accepted",
+        );
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode(line.trim_end()).unwrap(),
+            WrapperToDaemon::ExecutionStateChanged { transition }
+                if transition.execution_id == "execution-active"
+                    && transition.expected_state == "starting"
+                    && transition.expected_revision == 0
+                    && transition.next_state == "running"
+        ));
+        assert_eq!(bindings["message-active"].revision, 1);
+
+        line.clear();
+        publish_execution_transition(
+            &writer,
+            &mut bindings,
+            "message-active",
+            "running",
+            "duplicate",
+        );
+        let duplicate = reader.read_line(&mut line).unwrap_err();
+        assert!(matches!(
+            duplicate.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ));
+
+        line.clear();
+        publish_execution_transition(
+            &writer,
+            &mut bindings,
+            "message-active",
+            "completed",
+            "completed",
+        );
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode(line.trim_end()).unwrap(),
+            WrapperToDaemon::ExecutionStateChanged { transition }
+                if transition.expected_state == "running"
+                    && transition.expected_revision == 1
+                    && transition.next_state == "completed"
+        ));
+        assert!(!bindings.contains_key("message-active"));
+
+        line.clear();
+        publish_execution_transition(&writer, &mut bindings, "message-active", "failed", "late");
+        let late = reader.read_line(&mut line).unwrap_err();
+        assert!(matches!(
+            late.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn evenement_terminal_tardif_n_emet_ni_etat_ni_reponse() {
+        let root = mcp_test_root("terminal-tardif");
+        std::fs::create_dir_all(&root).unwrap();
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        reader_stream
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(writer_stream))));
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "terminal-tardif").unwrap();
+        let mut bindings = HashMap::from([(
+            "message-active".to_string(),
+            ManagedExecutionBinding {
+                execution_id: "execution-active".to_string(),
+                provider_kind: "fixture".to_string(),
+                execution_path: "fixture".to_string(),
+                generation: 3,
+                state: "running".to_string(),
+                approval_requests: 0,
+                last_approval_request: None,
+                revision: 1,
+            },
+        )]);
+        let mut obsolete = bridget_core::BridgetMessage::new("humain", "agent", "message ancien");
+        obsolete.id = "message-obsolete".to_string();
+
+        assert!(!forward_managed_events(
+            &writer,
+            "agent",
+            vec![ManagedEvent::internal(
+                bridget_transport::ManagedEventSource::Acp,
+                b"terminal tardif".to_vec(),
+                ManagedEventKind::TurnFinished {
+                    message: obsolete,
+                    response: "réponse qui ne doit jamais repartir".to_string(),
+                    terminal: ManagedTerminal::Completed,
+                },
+            )],
+            &mut tracker,
+            &mut bindings,
+        ));
+
+        assert_eq!(bindings["message-active"].state, "running");
+        assert_eq!(bindings["message-active"].revision, 1);
+        let mut reader = BufReader::new(reader_stream);
+        let mut line = String::new();
+        let error = reader.read_line(&mut line).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+        ));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn boucles_d_autorisation_sont_bornees_par_une_issue_machine() {
+        let (writer_stream, reader_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(writer_stream))));
+        let mut bindings = HashMap::from([(
+            "message-active".to_string(),
+            ManagedExecutionBinding {
+                execution_id: "execution-active".to_string(),
+                provider_kind: "fixture".to_string(),
+                execution_path: "fixture".to_string(),
+                generation: 3,
+                state: "running".to_string(),
+                revision: 1,
+                approval_requests: 0,
+                last_approval_request: None,
+            },
+        )]);
+
+        for request_id in ["approval-1", "approval-2", "approval-3", "approval-4"] {
+            publish_approval_wait(&writer, &mut bindings, request_id);
+        }
+
+        let mut reader = BufReader::new(reader_stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode(line.trim_end()).unwrap(),
+            WrapperToDaemon::ExecutionStateChanged { transition }
+                if transition.next_state == "waiting_approval"
+                    && transition.reason == "permission_required"
+        ));
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode(line.trim_end()).unwrap(),
+            WrapperToDaemon::ExecutionStateChanged { transition }
+                if transition.next_state == "failed"
+                    && transition.reason == "approval_loop_detected"
+                    && transition.expected_state == "waiting_approval"
+                    && transition.expected_revision == 2
+        ));
+        assert!(!bindings.contains_key("message-active"));
+    }
+    #[test]
+    fn spec_066_handshake_runtime_exige_toutes_les_identites() {
+        let handshake = runtime_ingress_handshake_from_values(
+            true,
+            Some("project-066"),
+            Some("2"),
+            Some("aaaaaaaaaaaa"),
+            Some("3"),
+            Some("4"),
+            Some("00000000-0000-4000-8000-000000000066"),
+        )
+        .unwrap();
+        assert!(matches!(
+            handshake,
+            Some(RuntimeIngressHandshake {
+                project_id,
+                binding_generation: 2,
+                environment_epoch: 3,
+                agent_generation: 4,
+                ..
+            }) if project_id == "project-066"
+        ));
+        assert!(
+            runtime_ingress_handshake_from_values(
+                true,
+                Some("project-066"),
+                Some("2"),
+                None,
+                Some("3"),
+                Some("4"),
+                Some("00000000-0000-4000-8000-000000000066"),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            runtime_ingress_handshake_from_values(false, None, None, None, None, None, None)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn spec_066_socket_runtime_est_explicite_et_n_derive_pas_de_home() {
+        assert_eq!(
+            socket_path_from(
+                Some(PathBuf::from("/run/bridget/runtime/bridget.sock")),
+                Some(PathBuf::from("/home/agent")),
+            ),
+            PathBuf::from("/run/bridget/runtime/bridget.sock")
+        );
+        assert_eq!(
+            socket_path_from(
+                Some(PathBuf::from("relative.sock")),
+                Some(PathBuf::from("/home/agent")),
+            ),
+            PathBuf::from("/run/bridget/runtime/invalid.sock")
+        );
+    }
+    #[test]
+    fn spec_079_binding_idempotent_precede_le_filtre_de_doublon() {
+        let mut bindings = HashMap::new();
+        assert!(!bind_idempotent_delivery_execution(
+            &mut bindings,
+            "message-079",
+            None,
+            "codex",
+            "acp",
+        ));
+        assert!(bindings.is_empty());
+
+        assert!(bind_idempotent_delivery_execution(
+            &mut bindings,
+            "message-079",
+            Some(ExecutionDeliveryContext {
+                execution_id: "execution-079".to_string(),
+                generation: 2,
+                revision: 3,
+            }),
+            "codex",
+            "acp",
+        ));
+        let binding = bindings.get("message-079").expect("binding créé");
+        assert_eq!(binding.execution_id, "execution-079");
+        assert_eq!(binding.generation, 2);
+        assert_eq!(binding.revision, 3);
+        assert_eq!(binding.provider_kind, "codex");
+        assert_eq!(binding.execution_path, "acp");
+
+        assert!(bind_idempotent_delivery_execution(
+            &mut bindings,
+            "message-079",
+            Some(ExecutionDeliveryContext {
+                execution_id: "execution-divergente".to_string(),
+                generation: 99,
+                revision: 99,
+            }),
+            "claude",
+            "tmux",
+        ));
+        assert_eq!(
+            bindings["message-079"].execution_id, "execution-079",
+            "un rejeu ne remplace jamais la première corrélation admise"
+        );
     }
 }

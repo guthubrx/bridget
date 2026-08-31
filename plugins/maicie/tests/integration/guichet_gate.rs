@@ -1262,7 +1262,7 @@ impl RealGateFixture {
             if BridgetClient::list_agents_at(&self.socket)
                 .unwrap_or_default()
                 .iter()
-                .any(|agent| agent.name == "g1504-agent" && agent.state == "connected")
+                .any(|agent| agent.agent_id == "g1504-agent" && agent.state == "connected")
             {
                 return;
             }

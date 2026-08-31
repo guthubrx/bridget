@@ -3,6 +3,7 @@
 //! Les états de ce module décrivent uniquement la coordination. Les faits de
 //! présence, livraison et délai restent détenus par Bridget.
 
+pub use bridget_transport::protocol::ProjectReference;
 use bridget_transport::protocol::{
     COORDINATION_STREAM_VERSION, CoordinationEventKind, DaemonToWrapper, ReviewTarget,
 };
@@ -10,6 +11,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use uuid::Uuid;
+
+#[path = "project_profile.rs"]
+pub mod project_profile;
+pub use project_profile::{ProjectProfile, ProjectProfileApproval, ProjectProfileStatus};
 
 pub const MAX_COORDINATION_NODES: usize = 100;
 pub const MAX_COORDINATION_EDGES: usize = 300;
@@ -28,6 +33,128 @@ pub enum DomainError {
     ApprobationExpiree,
     ApprobationConsommee,
     ApprobationIncoherente,
+}
+
+/// État métier de l'identité projet, détenu exclusivement par Maicie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectIdentityStatus {
+    PendingBinding,
+    Active,
+    RegistrationConflict,
+    Disabled,
+}
+
+/// Identité métier durable d'un projet, sans donnée de runtime hôte.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectIdentity {
+    pub project_id: String,
+    pub display_name: String,
+    pub status: ProjectIdentityStatus,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub registration_command_id: String,
+}
+
+impl ProjectIdentity {
+    pub fn pending(
+        project_id: String,
+        display_name: String,
+        registration_command_id: String,
+        created_at: i64,
+    ) -> Result<Self, DomainError> {
+        if project_id.trim().is_empty()
+            || display_name.trim().is_empty()
+            || registration_command_id.trim().is_empty()
+            || created_at < 0
+        {
+            return Err(DomainError::DonneeInvalide("identité projet invalide"));
+        }
+        Ok(Self {
+            project_id,
+            display_name,
+            status: ProjectIdentityStatus::PendingBinding,
+            created_at,
+            updated_at: created_at,
+            registration_command_id,
+        })
+    }
+
+    pub fn activate(
+        &mut self,
+        binding_generation: u64,
+        observed_at: i64,
+    ) -> Result<ProjectReference, DomainError> {
+        if binding_generation == 0 {
+            return Err(DomainError::DonneeInvalide(
+                "génération de liaison invalide",
+            ));
+        }
+        match self.status {
+            ProjectIdentityStatus::PendingBinding => {
+                self.transition(ProjectIdentityStatus::Active, observed_at)?;
+            }
+            ProjectIdentityStatus::Active => {}
+            ProjectIdentityStatus::RegistrationConflict | ProjectIdentityStatus::Disabled => {
+                return Err(DomainError::TransitionInterdite);
+            }
+        }
+        self.reference(binding_generation)
+    }
+
+    pub fn reactivate(
+        &mut self,
+        binding_generation: u64,
+        observed_at: i64,
+    ) -> Result<ProjectReference, DomainError> {
+        if self.status == ProjectIdentityStatus::Disabled {
+            self.transition(ProjectIdentityStatus::Active, observed_at)?;
+        }
+        self.reference(binding_generation)
+    }
+
+    pub fn registration_conflict(&mut self, observed_at: i64) -> Result<(), DomainError> {
+        if self.status != ProjectIdentityStatus::PendingBinding {
+            return Err(DomainError::TransitionInterdite);
+        }
+        self.transition(ProjectIdentityStatus::RegistrationConflict, observed_at)
+    }
+
+    pub fn disable(&mut self, observed_at: i64) -> Result<(), DomainError> {
+        if self.status != ProjectIdentityStatus::Active {
+            return Err(DomainError::TransitionInterdite);
+        }
+        self.transition(ProjectIdentityStatus::Disabled, observed_at)
+    }
+
+    pub fn reference(&self, binding_generation: u64) -> Result<ProjectReference, DomainError> {
+        if self.status != ProjectIdentityStatus::Active {
+            return Err(DomainError::TransitionInterdite);
+        }
+        if binding_generation == 0 {
+            return Err(DomainError::DonneeInvalide(
+                "génération de liaison invalide",
+            ));
+        }
+        Ok(ProjectReference {
+            project_id: self.project_id.clone(),
+            binding_generation,
+        })
+    }
+
+    fn transition(
+        &mut self,
+        status: ProjectIdentityStatus,
+        observed_at: i64,
+    ) -> Result<(), DomainError> {
+        if observed_at < self.updated_at {
+            return Err(DomainError::DonneeInvalide("date de transition antérieure"));
+        }
+        self.status = status;
+        self.updated_at = observed_at;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,9 +226,155 @@ impl ObjectiveOpeningPermit {
         }
     }
 
+    /// Construit le permis d'origine humaine, et uniquement si les cinq
+    /// vérifications de T5611 passent. Aucun appelant ne peut fabriquer cette
+    /// variante autrement : c'est le seul constructeur, et il exige des faits
+    /// observés que seul le daemon détient.
+    ///
+    /// Ce que cette vérification établit : que l'ouverture est **causée** par un
+    /// message précis, existant, non altéré et non rejoué. Ce qu'elle
+    /// n'établit pas : **qui** a écrit ce message. L'authentification de
+    /// `sender` est explicitement hors portée (spec 056) ; l'attestation vaut
+    /// donc ce que vaut l'attribution d'émetteur du daemon, et ne la répare pas.
+    pub fn human_request(
+        attestation: HumanRequestOriginAttestation,
+        observed: &ObservedHumanMessage,
+        issuer_scope: &str,
+        canonical_request_sha256: &str,
+        consumption: AttestationConsumption,
+    ) -> Result<Self, HumanOriginRefusal> {
+        if attestation.version != HUMAN_ORIGIN_ATTESTATION_VERSION {
+            return Err(HumanOriginRefusal::VersionInconnue);
+        }
+        if attestation.issuer_scope != issuer_scope {
+            return Err(HumanOriginRefusal::PerimetreEmetteurDivergent);
+        }
+        // 1. Le message attesté est bien celui qui a été observé.
+        if observed.message_id.is_empty() {
+            return Err(HumanOriginRefusal::MessageIdDivergent);
+        }
+        // 2. L'émetteur observé est l'identité humaine adressable, à l'exclusion
+        //    des replis de nommage (`human`, `cli-send-<pid>`) qui n'attestent
+        //    personne.
+        if observed.sender != HUMAN_SENDER_NAME {
+            return Err(HumanOriginRefusal::EmetteurNonHumain);
+        }
+        // 3. Le contenu du message n'a pas bougé depuis l'observation.
+        if attestation.signature != human_message_content_seal(observed) {
+            return Err(HumanOriginRefusal::ScelleDeContenuDivergent);
+        }
+        // 4. L'attestation vise bien cette ouverture-ci, et pas une autre.
+        if attestation.canonical_request_sha256 != canonical_request_sha256 {
+            return Err(HumanOriginRefusal::HashCanoniqueDivergent);
+        }
+        // 5. Usage unique : un même message humain n'ouvre jamais deux fois.
+        if consumption == AttestationConsumption::AlreadyConsumed {
+            return Err(HumanOriginRefusal::AttestationDejaConsommee);
+        }
+        Ok(Self {
+            origin: ObjectiveOrigin::HumanRequest {
+                message_id: observed.message_id.clone(),
+                attestation,
+            },
+        })
+    }
+
     pub fn origin(&self) -> &ObjectiveOrigin {
         &self.origin
     }
+}
+
+/// Version courante de l'attestation d'origine humaine.
+pub const HUMAN_ORIGIN_ATTESTATION_VERSION: u16 = 1;
+
+/// Seule identité d'émetteur acceptée comme humaine.
+///
+/// Les replis de nommage du daemon — `human` quand aucun nom n'est résolu,
+/// `cli-send-<pid>` quand seul le processus l'est — décrivent une connexion
+/// éphémère et n'attestent personne. Ils sont refusés plutôt qu'interprétés.
+pub const HUMAN_SENDER_NAME: &str = "humain";
+
+/// Message humain observé au ledger, tel que le daemon le lit.
+///
+/// Ce n'est pas une preuve d'identité : c'est le fait causal que l'attestation
+/// scelle, afin qu'il ne puisse être ni inventé, ni altéré, ni rejoué.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedHumanMessage {
+    pub message_id: String,
+    pub ts: i64,
+    pub sender: String,
+    pub target: String,
+    pub body: String,
+}
+
+/// Verdict d'usage unique. Produit par le store, jamais par l'appelant : le
+/// type force à se prononcer au lieu de laisser l'oubli passer silencieusement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttestationConsumption {
+    NeverConsumed,
+    AlreadyConsumed,
+}
+
+/// Motifs fermés du refus d'ouverture humaine. Le code public est unique :
+/// l'appelant apprend qu'il a été refusé, jamais quelle garde l'a arrêté.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HumanOriginRefusal {
+    VersionInconnue,
+    PerimetreEmetteurDivergent,
+    MessageIdDivergent,
+    EmetteurNonHumain,
+    ScelleDeContenuDivergent,
+    HashCanoniqueDivergent,
+    AttestationDejaConsommee,
+}
+
+impl HumanOriginRefusal {
+    /// Refus fermé exposé publiquement, identique pour tous les motifs.
+    pub const fn code(self) -> &'static str {
+        "HUMAN_ORIGIN_UNATTESTED"
+    }
+
+    /// Motif interne, destiné au seul audit local.
+    pub const fn motif(self) -> &'static str {
+        match self {
+            Self::VersionInconnue => "version_inconnue",
+            Self::PerimetreEmetteurDivergent => "perimetre_emetteur_divergent",
+            Self::MessageIdDivergent => "message_id_divergent",
+            Self::EmetteurNonHumain => "emetteur_non_humain",
+            Self::ScelleDeContenuDivergent => "scelle_de_contenu_divergent",
+            Self::HashCanoniqueDivergent => "hash_canonique_divergent",
+            Self::AttestationDejaConsommee => "attestation_deja_consommee",
+        }
+    }
+}
+
+/// Scellé de contenu d'un message humain observé.
+///
+/// Chaque champ est précédé de sa longueur : sans ce préfixe, deux messages
+/// distincts pourraient produire le même scellé par simple décalage de
+/// frontière entre champs. Même motif que `identifiant_deterministe`.
+pub fn human_message_content_seal(message: &ObservedHumanMessage) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"maicie/human-origin-seal/v1");
+    for field in [
+        message.message_id.as_bytes(),
+        message.sender.as_bytes(),
+        message.target.as_bytes(),
+        message.body.as_bytes(),
+    ] {
+        digest.update((field.len() as u64).to_be_bytes());
+        digest.update(field);
+    }
+    digest.update(message.ts.to_be_bytes());
+    hex_lower(&digest.finalize())
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
 }
 
 /// Suite déclarée à la création (F36). Absent uniquement pour les objectifs
@@ -2014,6 +2287,41 @@ impl CoutMissionAgent {
     }
 }
 
+/// Limites de mission décidées par Maicie. Elles sont sérialisées avec la
+/// délégation mais ne déclenchent aucune action runtime : Bridget reçoit une
+/// politique technique distincte et ne peut pas clôturer la mission.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LimitesAutonomieDelegation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_duration_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_facturable_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_descendants: Option<u64>,
+}
+
+impl LimitesAutonomieDelegation {
+    pub fn is_empty(&self) -> bool {
+        self.max_duration_secs.is_none()
+            && self.max_facturable_tokens.is_none()
+            && self.max_descendants.is_none()
+    }
+
+    pub fn verifier(self) -> Result<(), DomainError> {
+        if [
+            self.max_duration_secs,
+            self.max_facturable_tokens,
+            self.max_descendants,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|limit| limit == 0)
+        {
+            return Err(DomainError::DonneeInvalide("limite autonomie invalide"));
+        }
+        Ok(())
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delegation {
     pub id: Uuid,
@@ -2031,6 +2339,10 @@ pub struct Delegation {
     pub review_target: Option<ReviewTarget>,
     pub participant: String,
     pub instruction: String,
+    /// Limites de mission enregistrées par Maicie. Elles restent sans effet
+    /// technique direct tant qu une décision explicite ne les transmet pas.
+    #[serde(default, skip_serializing_if = "LimitesAutonomieDelegation::is_empty")]
+    pub limites_autonomie: LimitesAutonomieDelegation,
     pub duree: ClasseDuree,
     pub etat: EtatDelegation,
     pub raison: String,
@@ -2058,6 +2370,7 @@ impl Delegation {
             objectif_id,
             constat_id: None,
             review_target: None,
+            limites_autonomie: LimitesAutonomieDelegation::default(),
             participant,
             instruction,
             duree,
@@ -2116,6 +2429,7 @@ impl Delegation {
         {
             return Err(DomainError::DonneeInvalide("délégation incomplète"));
         }
+        self.limites_autonomie.verifier()?;
         if let Some(constat_id) = &self.constat_id {
             validate_constat_id(constat_id)?;
         }
@@ -2127,6 +2441,20 @@ impl Delegation {
             return Err(DomainError::DonneeInvalide("cible de revue invalide"));
         }
         Ok(())
+    }
+
+    /// Associe des limites de mission avant persistance. Cette donnée reste
+    /// déclarative : aucune transition Bridget ou Maicie ne découle de cet appel.
+    pub fn avec_limites_autonomie(
+        mut self,
+        limites_autonomie: LimitesAutonomieDelegation,
+    ) -> Result<Self, DomainError> {
+        if self.etat != EtatDelegation::Creee {
+            return Err(DomainError::TransitionInterdite);
+        }
+        limites_autonomie.verifier()?;
+        self.limites_autonomie = limites_autonomie;
+        Ok(self)
     }
 
     /// Projette le fait durable sans inventer de lien pour une délégation
@@ -2319,6 +2647,81 @@ impl SnapshotTransport {
     }
 }
 
+/// Lien opaque d'une délégation Maicie vers une exécution détenue par Bridget.
+/// Aucun champ ne permet à Maicie de piloter le processus référencé.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionReference {
+    pub delegation_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectReference>,
+    pub submission_id: String,
+    pub execution_id: String,
+    pub agent_instance_id: String,
+    pub provider_kind: String,
+    pub provider_session_id: Option<String>,
+    pub provider_turn_id: Option<String>,
+    pub bound_at: i64,
+}
+
+impl ExecutionReference {
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        if [
+            &self.submission_id,
+            &self.execution_id,
+            &self.agent_instance_id,
+            &self.provider_kind,
+        ]
+        .iter()
+        .any(|value| value.trim().is_empty())
+        {
+            return Err(DomainError::DonneeInvalide(
+                "référence d'exécution incomplète",
+            ));
+        }
+        if self.bound_at < 0 {
+            return Err(DomainError::DonneeInvalide("date de liaison invalide"));
+        }
+        Ok(())
+    }
+}
+
+/// Copie factuelle d'un état Bridget. Sa persistance ou sa fraîcheur ne peut
+/// jamais déclencher seule une transition métier Maicie.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionProjection {
+    pub reference: ExecutionReference,
+    pub runtime_state: String,
+    pub waiting_reason: Option<String>,
+    pub last_progress_at: Option<i64>,
+    pub observation_cursor: u64,
+    pub freshness: EtatFlux,
+    pub observed_at: i64,
+    pub source_generation: u64,
+}
+
+impl ExecutionProjection {
+    pub fn verifier(&self) -> Result<(), DomainError> {
+        self.reference.verifier()?;
+        if self.runtime_state.trim().is_empty() {
+            return Err(DomainError::DonneeInvalide("état runtime absent"));
+        }
+        if self.observed_at < self.reference.bound_at {
+            return Err(DomainError::DonneeInvalide(
+                "observation antérieure à la liaison",
+            ));
+        }
+        if self
+            .last_progress_at
+            .is_some_and(|value| value > self.observed_at)
+        {
+            return Err(DomainError::DonneeInvalide(
+                "progrès postérieur à l'observation",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EtatActivationProfil {
@@ -2454,5 +2857,48 @@ impl ActivationOutbox {
         }
         self.etat = next;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spec_065_identite_projet_n_est_referencable_qu_apres_activation() {
+        let mut pending = ProjectIdentity::pending(
+            "project-pending".to_string(),
+            "Projet pending".to_string(),
+            "register-command-pending".to_string(),
+            100,
+        )
+        .unwrap();
+        assert_eq!(pending.status, ProjectIdentityStatus::PendingBinding);
+        assert_eq!(pending.reference(1), Err(DomainError::TransitionInterdite));
+
+        pending.registration_conflict(101).unwrap();
+        assert_eq!(pending.status, ProjectIdentityStatus::RegistrationConflict);
+        assert_eq!(pending.reference(1), Err(DomainError::TransitionInterdite));
+
+        let mut winner = ProjectIdentity::pending(
+            "project-winner".to_string(),
+            "Projet gagnant".to_string(),
+            "register-command-winner".to_string(),
+            100,
+        )
+        .unwrap();
+        let reference = winner.activate(4, 102).unwrap();
+        assert_eq!(winner.status, ProjectIdentityStatus::Active);
+        assert_eq!(reference.project_id, "project-winner");
+        assert_eq!(reference.binding_generation, 4);
+        assert_eq!(winner.reference(4), Ok(reference));
+
+        winner.disable(103).unwrap();
+        assert_eq!(winner.status, ProjectIdentityStatus::Disabled);
+        assert_eq!(winner.reference(4), Err(DomainError::TransitionInterdite));
+        assert_eq!(
+            winner.activate(5, 104),
+            Err(DomainError::TransitionInterdite)
+        );
     }
 }

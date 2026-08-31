@@ -44,7 +44,10 @@ impl FakeAgent {
 
         let reg = WrapperToDaemon::Register {
             agent_type: agent_type.to_string(),
-            name: name.map(|s| s.to_string()),
+            identity_version: 2,
+            agent_id: name
+                .map(str::to_string)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             host: Some("test-host".to_string()),
             transport: Some("unix".to_string()),
             channel: None.into(),
@@ -76,8 +79,8 @@ impl FakeAgent {
             .map_err(|e| e.to_string())?;
         let resp: DaemonToWrapper = decode(line.trim()).map_err(|e| e.to_string())?;
         match resp {
-            DaemonToWrapper::Registered { name } => {
-                agent.name = name;
+            DaemonToWrapper::Registered { agent_id } => {
+                agent.name = agent_id;
                 Ok(agent)
             }
             _ => Err("pas de Registered".to_string()),
@@ -97,23 +100,8 @@ impl FakeAgent {
         Ok(())
     }
 
-    fn rename(&mut self, name: &str) -> Result<DaemonToWrapper, String> {
-        let request = WrapperToDaemon::Rename {
-            current_name: self.name.clone(),
-            name: name.to_string(),
-        };
-        writeln!(
-            self.writer,
-            "{}",
-            encode(&request).map_err(|e| e.to_string())?
-        )
-        .map_err(|e| e.to_string())?;
-        self.writer.flush().map_err(|e| e.to_string())?;
-        let response = self.read_response()?;
-        if let DaemonToWrapper::Renamed { name, .. } = &response {
-            self.name = name.clone();
-        }
-        Ok(response)
+    fn rename(&mut self, _display_name: &str) -> Result<DaemonToWrapper, String> {
+        Err("le renommage de l'identifiant d'agent n'est plus supporté".to_string())
     }
 
     fn read_response(&mut self) -> Result<DaemonToWrapper, String> {
@@ -258,6 +246,8 @@ mod tests {
             session: &str,
         ) -> (Self, PathBuf) {
             let marker = root.join("agent-name-file-path");
+            let stderr_log = std::fs::File::create(root.join("wrapper.stderr"))
+                .expect("journal stderr du wrapper");
             let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
             command
                 .args(["--", agent.to_str().expect("agent UTF-8"), session])
@@ -267,7 +257,7 @@ mod tests {
                 .env("BRIDGET_TEST_NAME_FILE_PATH", &marker)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null());
+                .stderr(Stdio::from(stderr_log));
             unsafe {
                 command.pre_exec(|| {
                     if libc::setpgid(0, 0) == -1 {
@@ -336,7 +326,7 @@ mod tests {
         reader.read_line(&mut line).ok().filter(|read| *read > 0)?;
         match decode(line.trim()).ok()? {
             DaemonToWrapper::AgentList { agents } => {
-                Some(agents.into_iter().map(|agent| agent.name).collect())
+                Some(agents.into_iter().map(|agent| agent.agent_id).collect())
             }
             _ => None,
         }
@@ -524,7 +514,7 @@ sleep 2
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                name: "extension".to_string(),
+                agent_id: "extension".to_string(),
             })
             .unwrap()
         )
@@ -564,6 +554,7 @@ sleep 2
             delivery_generation: 71,
             expires_at: i64::MAX,
             message: message.clone(),
+            execution: None,
         };
         writeln!(first_writer, "{}", encode(&delivery).unwrap()).unwrap();
         first_writer.flush().unwrap();
@@ -623,6 +614,9 @@ sleep 2
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
+            project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         };
         thread::spawn(move || {
             let _ = daemon::run(config);
@@ -716,6 +710,9 @@ sleep 2
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
+            project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         };
 
         // Lancer le daemon dans un thread
@@ -795,6 +792,9 @@ sleep 2
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
+            project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         };
 
         let cfg = config.clone();
@@ -841,6 +841,9 @@ sleep 2
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
+            project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         };
         thread::spawn(move || {
             let _ = daemon::run(config);
@@ -892,6 +895,9 @@ sleep 2
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
+            project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         };
         thread::spawn(move || {
             let _ = daemon::run(config);
@@ -903,21 +909,7 @@ sleep 2
             thread::sleep(Duration::from_millis(50));
         }
         let mut a = FakeAgent::connect(&socket, "codex", None).unwrap();
-        let mut b = FakeAgent::connect(&socket, "claude", None).unwrap();
-        assert!(matches!(
-            a.rename("analyse").unwrap(),
-            DaemonToWrapper::Renamed { .. }
-        ));
-        b.send("analyse", "message après renommage").unwrap();
-        assert!(matches!(
-            b.read_response().unwrap(),
-            DaemonToWrapper::Ack { .. }
-        ));
-        b.send("codex-1", "ancien nom").unwrap();
-        assert!(matches!(
-            b.read_response().unwrap(),
-            DaemonToWrapper::Nack { .. }
-        ));
+        assert!(a.rename("analyse").is_err());
         std::fs::remove_file(&socket).ok();
         std::fs::remove_file(&db_path).ok();
     }
@@ -1025,6 +1017,9 @@ sleep 2
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
+            project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         };
         thread::spawn(move || {
             let _ = daemon::run(config);
@@ -1137,6 +1132,9 @@ sleep 2
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
+            project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         };
         thread::spawn(move || {
             let _ = daemon::run(config);

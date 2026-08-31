@@ -117,6 +117,38 @@ Tout ce qui suit porte la commande qui l'a produit. Reproductible.
 - **Aucun d'eux n'a de ligne dans la table `send_deliveries`.** Je ne sais pas ce que cette table trace exactement — je ne conclus donc pas à une non-remise, je constate qu'aucun statut de remise n'existe pour mes envois là où une table de ce nom existe.
 - En revanche le message de mandat, qui va dans l'autre sens, porte bien un statut : dans la base **Maicie**, `delegation_outbox.state = accepted`, `terminal = 1`, `issue_observed_at` renseigné. **C'est là que vit la preuve de remise d'un message de délégation** — pas dans `bridget.db`. Si tu cherches un jour à prouver qu'un mandat t'a été remis, regarde `delegation_outbox`.
 
+**LE PARC N'A PAS UNE VERSION EN SERVICE, IL EN A QUATRE** `[MESURÉ par moi à 21h54 — `pgrep` + `/proc/PID/exe` + `ps -o lstart` + `ss -lptn`, confirmé un par un par le référent]`
+
+| groupe | binaire | démarré | ce qu'il porte |
+|---|---|---|---|
+| 1 | `/home/moi/.local/bin/bridget` | 20:57:17 | daemon (PID 257505) **et les 11 wrappers de flux**, à la même seconde |
+| 2 | `/home/moi/bridget/target/release/bridget` | 25–27/08 | **les 10 tmux** et leurs processus `mcp` |
+| 3 | `/home/moi/bridget-ui-resize-20260828/target/release/bridget` | 16:15:48 | le relais UI, **seul à tenir un port** (127.0.0.1:17888) |
+| 4 | **binaires effacés du disque** | 01:14 → 19:11 | 4 processus survivants |
+
+**Relancer le daemon ne touche que le groupe 1** — douze processus, dont les dix agents en flux. Les tmux, le relais UI et les orphelins restent sur leurs versions. Avant tout déploiement, sache lequel des quatre tu bouges.
+
+> **APRÈS LE DÉPLOIEMENT DU 28/08 23h41 — TROIS VERSIONS, PLUS QUATRE.** `[MESURÉ par moi à 23h52, confirmé par le référent]` Binaire installé remplacé (mtime 23:41:16), **build-id servi `5e3968709472`**, qui était **à 23h52 la tête exacte de `main`**.
+> **⚠ NE VÉRIFIE PAS CETTE ÉGALITÉ, ELLE EST DÉJÀ FAUSSE — et c'est moi qui l'avais écrite comme un critère.** À 00h15 `main` valait `a3d47285`, à 00h18 `8ffaa023` : huit commits `docs(registre)` l'ont périmée en vingt minutes. **Une égalité entre un artefact figé et une branche mobile se périme par construction** — l'inscrire comme critère permanent était une faute, et un successeur qui la contrôlerait conclurait à tort que le déploiement n'a pas eu lieu.
+> **LE CRITÈRE ROBUSTE QUI LA REMPLACE** `[MESURÉ par moi à 00h18]` — compare le **code**, pas les SHA :
+> ```
+> git diff --stat <build-id>..origin/main -- '*.rs'
+> ```
+> Vide ⇒ le binaire servi est **fonctionnellement à jour**, quels que soient les SHA. Mesuré : 5 fichiers et 117 insertions d'écart au total, **zéro sur les `.rs`** — les huit commits intercalés sont tous de la documentation. Ce critère survit à la cadence du registre ; l'égalité stricte non.
+>
+> **IL FAUT LES DEUX SENS, ET AUCUN NE SUFFIT SEUL.** `[synthèse du référent, 29/08 00h36]`
+> | sens | commande | question à laquelle il répond | angle mort |
+> |---|---|---|---|
+> | commit → binaire *(rc1-flux)* | `git merge-base --is-ancestor <commit> <build-id>` | « ce que je crois en service y est-il ? » | ne voit pas un lot **publié après** le build |
+> | binaire → `main` *(le mien)* | `git diff --stat <build-id>..origin/main -- '*.rs'` | « ce qui est publié manque-t-il au service ? » | ne dit pas **quel** commit tourne |
+> Ensemble ils ferment la question : *rien ne manque au binaire, et ce que je nomme y est.*
+>
+> **POURQUOI CES CRITÈRES SONT NÉCESSAIRES ICI, chiffré** `[TENU DE bridget]` : sur `main`, **323 commits le 28/08, dont 274 sans aucun `.rs` (85 %)**, et 218 de registre et de cartes. La péremption n'est pas le bruit de fond du dépôt, **c'est l'écriture de documentation**. Même cause que la cible de revue périmée en 96 s : deux mécanismes qui supposent immobile une branche que la consignation fait bouger. *Remède proposé par jc1-flux et porté à l'humain : séparer les deux dépôts — le seul qui supprime la cause sans toucher une ligne de code.* Le relais UI a été relancé 3 s après l'installation et tourne désormais sur `/home/moi/.local/bin/bridget` : **le groupe 3 a fusionné dans le groupe 1**. Restent 21 processus sur le dépôt des tmux, 14 sur le binaire installé, et les 4 résidus.
+> **Les quatre résidus ont survécu au déploiement** — vérifiés vivants un par un après coup. Ce sont des `target/debug/deps`, donc des **résidus de test et non des versions du parc** ; ne dépendant d'aucun chemin, **aucun déploiement ne les emportera jamais**.
+> **ÉCRIT, SERVI, MESURÉ — trois états, pas deux.** `[formulation partagée avec bridget]` Un code intégré n'est pas un code en service ; **et un code en service n'est pas un code éprouvé en service**. Le lot d'interruption est servi depuis 23:52:30 ; aucun horodatage ne montre encore un agent interrompu sur la route réelle. Ne confonds jamais ces trois-là.
+
+**Les quatre processus sur binaire effacé, nommés sans être touchés** : PID 37332 (`revue/cartae0/…/bridget_daemon`, 19:11:43), PID 4082814 (`revue/rc7/…/bridget_daemon`, 18:15:16), PID 2162509 et 2164282 (`install_republish_before_migrate`, 01:14 et 01:15). **C'est littéralement la panne du matin** — un daemon tournant sur un binaire supprimé, `Command::exec` échouant sur un chemin disparu. Les nommer avant de les subir vaut mieux que de les découvrir ; les arrêter est une décision, pas une mesure.
+
 **`bridget-idle`** (lecture de `/home/moi/.local/bin/bridget-idle`, 44685 octets)
 - La copie de la base Maicie est **refaite à chaque appel** : `TemporaryDirectory` l.169, `copy2` de la base l.171, `copy2` du `-wal` l.174, `PRAGMA query_only=ON` l.177. **La fraîcheur est bonne** — j'avais soupçonné une copie périmée, c'était faux, je l'ai retiré.
 - Nuance restante, **propriété du code et non incident observé** : les deux `copy2` ne sont pas atomiques entre elles ; la production peut écrire entre les deux, produisant un couple base/WAL n'ayant jamais coexisté. Risque faible, non nul, **non reproductible**. `VACUUM INTO` ou l'API backup de sqlite3 fermeraient la porte.
@@ -155,6 +187,20 @@ Tout ce bloc vient du référent `bridget`. **Je ne l'ai pas mesuré.** Plusieur
 **Fait** : six signalements envoyés au référent, plus cette carte. Ils ont produit, de son propre aveu, la correction de plusieurs de ses faits : l'existence des artefacts 034, la validité de son chiffre de 499 contre le 293 de jc6, et l'inscription au registre du jumeau symétrique « connected n'est pas une preuve d'activité ; busy n'est pas une preuve de travail ; libre n'est pas une preuve de disponibilité ».
 
 Mes envois : `af1b320a80774`, `4ce9161b03d64`, `1d1f9ff8a2734`, `ee90412814e54`, `731070f2eead4`, `e3e85bdafbc44`.
+
+### SECOND MANDAT — `e0604f0d`, observabilité de la pente disque. CLOS le 28/08, décision `620884ad`.
+
+**Livré et PUBLIÉ** : branche `feat/observabilite-pente-disque`, tête `009e5baf81b799e3b83143c39709b912f60490b2`, vérifiée par `ls-remote` sur le serveur — pas seulement commitée, contrairement aux artefacts 034. Trois commits, module `crates/bridget-daemon/src/disk_trend.rs`, 13 témoins verts.
+
+**Ce qu'un successeur doit en retenir, dans l'ordre d'utilité :**
+
+1. **C'EST LA FORME QUI TROMPE, PAS LA DURÉE.** Ma première version refusait les fenêtres trop *courtes* — et rendait pourtant « 4.26 Gio/h, seize heures avant saturation » sur une série réelle stable depuis 104 minutes, parce que sa fenêtre de 2 h 18 passait le contrôle. Une garde sur la durée ne protège pas d'un escalier. Le module distingue désormais `Plateau`, `Stepwise` et `Slope` : quand la moitié du temps est plate, aucune pente n'est publiée.
+2. **Le geste qui a trouvé le défaut n'était pas demandé** : passer la donnée réelle d'autrui dans son propre instrument déjà livré. C'est la seule façon dont ce défaut pouvait apparaître.
+3. **UNE DÉLÉGATION EST TYPÉE EN REVUE PAR LA SEULE PRÉSENCE DE `target_ref` ET `expected_head`** — contrat `specs/021-verdict-sha-mesure/contracts/verdict-revue.md`, ligne 5. Poser une cible de revue sur un mandat de *construction* le convertit **silencieusement** en mandat de revue, et le guichet réclamera un verdict que tu n'as jamais eu à produire. Mon dépôt a été refusé pour cela : `target_head_moved_and_measured_head_mismatch`.
+4. **Le dépôt typé vit côté `bridget`, pas côté `maicie`** : `bridget guichet deposer <delivery-report|mission-status|deadline-question|delegate|registre-add|objective-close>`. Deux agents avaient conclu à son inexistence en balayant exhaustivement les actions `maicie` — ils cherchaient dans le mauvais outil. Je ne l'ai pas trouvé par flair mais en partant du « en attente de dépôt typé » de ma propre carte, puis en cherchant qui consommait `--review-ref`. **Le chemin est reproductible, le flair ne l'est pas.**
+5. **Sur un dépôt intégré en continu, figer une cible de revue puis exiger qu'elle soit encore la tête revient à demander que personne n'intègre pendant qu'un mandat court.** 24 commits sont arrivés sur `main` pendant ma construction. `[TENU DE bridget, 28/08 21h41]` **Une cible posée sur `main` périme en médiane 96 secondes**, et 85 % du rythme de `main` est la consignation du référent lui-même. Le mécanisme suppose une référence **immobile** : le poser sur `main` est un contresens d'usage, pas un accident. Question portée à l'humain, non tranchée.
+6. **Citer la provenance d'une mesure est une condition de reproductibilité, pas une politesse.** Le témoin du plateau porte le nom de `essai-claude-distant-flux` dans le code même — sept relevés sans provenance ne sont pas vérifiables.
+   *Corollaire, et il renverse l'intuition* : une attribution fausse n'est pas d'abord une injustice, **elle rend la mesure irreproductible** — on ne sait plus à qui demander les conditions de la prise. Elle coûte donc **dans les deux sens** : un dossier faussé dans le sens flatteur casse la reproductibilité exactement comme un dossier faussé dans l'autre. C'est pourquoi un crédit qui ne te revient pas se refuse aussi fermement qu'un reproche imérité.
 
 **UN MESSAGE BRIDGET NE FERME PAS UNE DÉLÉGATION MAICIE — épisode clos, règle conservée.**
 *Déroulé, gardé comme exemple :* carte rendue 16:05:56Z, référent prévenu 16:06:42Z **par message Bridget**, deadline contractuelle 16:07:41Z. À 16h09 le greffe portait toujours `objectives.state = en_coordination` et `delegations.state = creee`. Conséquences observées : le mandat m'a été **redélivré à l'identique**, et je suis resté dans `occupied`, donc jamais LIBRE. J'étais devenu en dix minutes le cas concret du corollaire que j'avais écrit au référent une heure plus tôt — « un agent inactif sous mandat non clos reste OCCUPÉ ».
@@ -204,7 +250,11 @@ C'est **textuellement le piège n°3 de la carte de jc6** — « conserver la so
 
 *Faux zéro n°1 — le corps d'erreur pris pour un corps.* `[TENU DE bridget, 18h53, il l'a payé deux fois]` Sans le jeton, ces routes rendent un 403 « jeton UI invalide », soit **17 octets — pas zéro**. Qui mesure sans jeton lit 17, croit tenir une réponse non nulle, et conclut que la route vit alors qu'elle refuse. Jeton dans `/home/moi/.cache/bridget/ui-endpoint.json`.
 
-*Faux zéro n°2 — la bonne question posée au mauvais objet, et c'est le plus vicieux.* `[TENU DE bridget, 19h07 ; répertoire vérifié absent par moi]` `v1/journal?agent=humain` rend **zéro, et rendra toujours zéro** : cette route ne lit pas le ledger mais un répertoire de session (`ui.rs:982`), c'est-à-dire le journal de **tour d'un processus piloté**. Or `/home/moi/.cache/bridget/sessions/humain/` **n'existe pas** — j'ai listé les 41 répertoires de session, tous des agents, aucun `humain`. **L'humain n'est pas un processus piloté.** Ce zéro-là est structurel : il ne signale aucune panne, et aucune attente ne le fera bouger.
+*Faux zéro n°2 — la bonne question posée au mauvais objet.* `v1/journal?agent=humain` rend **zéro**. `[MESURÉ par moi]` `/home/moi/.cache/bridget/sessions/humain/` n'existe pas : j'ai listé les 41 répertoires de session, tous des agents, aucun `humain`. L'humain n'est pas un processus piloté, et une route qui lit un journal de tour ne peut donc rien rendre pour lui.
+
+> **AMENDEMENT DU 28/08 21h41, ET IL ME VISE.** J'avais attribué ce zéro au code, en citant `ui.rs:982` lu dans le dépôt de la cible de revue. **Cette explication n'était pas opposable**, et je l'ai laissée dans cette carte alors même que j'y inscrivais « un binaire tiers sert la route » comme piège — contradiction interne.
+> `[MESURÉ par moi, 21h44]` `ss -lptn` puis `/proc/PID/exe` : le port 17888 est servi par le PID 3788197, binaire `/home/moi/bridget-ui-resize-20260828/target/release/bridget`, démarré le 28/08 à 16:15:48. **Un TROISIÈME dépôt** — ni le checkout de revue, ni `/home/moi/.local/bin/bridget`.
+> **Lire le code d'un dépôt ne prouve rien sur le comportement d'une route tant qu'on n'a pas établi quel binaire la sert.** Le seul enchaînement opposable est `ss -lptn` → `ps -o lstart` → `readlink -f /proc/<pid>/exe`. Le zéro reste observé et l'absence du répertoire reste mesurée ; **la cause, elle, n'est pas établie par ma lecture de code.**
 La route qui répond vraiment est `v1/snapshot?agent=humain` — 282 998 octets, 116 messages, 62 de rôle agent et 54 de rôle user, concordants avec le ledger. `[TENU DE bridget, 19:05:51]`
 
 **La leçon commune, et elle vaut au-delà de l'UI** : `17` peut passer pour une réponse, `0` peut passer pour une panne — dans les deux cas l'erreur n'est pas dans le nombre mais dans **l'objet interrogé**. C'est la même famille que tout le reste de cette carte : `HEAD..main` = 0 par faux vert, `busy` contre `libre`, une ref de suivi contre le serveur. **Un instrument qui répond n'est pas un instrument qui mesure ce que tu crois. Avant de lire un nombre, prouve que tu interroges bien ce que tu penses interroger.**
@@ -213,6 +263,49 @@ La route qui répond vraiment est `v1/snapshot?agent=humain` — 282 998 octets,
 Trois vagues de spawn ont visé les douze `persistent=1` — bridget, les dix flux et `temoin-persistance` — deadlines 18:47:20, 18:47:55, 18:48:20, puis arrêt. J'avais écrit « en même temps que nous dix, pas avant ». **J'étais en dessous de la vérité** : la donnée montre que le témoin est **dernier des douze dans les trois vagues** (rangs 469, 481, 493) et porte **exactement la même deadline** que les onze autres.
 Il avait été posé pour éprouver le drapeau « sans qu'aucun de nous serve de cobaye ». Réinscrit en dernier, à la même seconde, il n'a rien éprouvé en avance et n'a produit aucune information que nous ne produisions déjà — **nous avons tous été cobayes ensemble**. Le geste était bon, sa forme ne l'isolait pas : **une attestation simultanée n'est pas une alerte précoce.**
 *Portée générale, au-delà de ce témoin* : tout dispositif de garde placé dans le même lot que ce qu'il surveille atteste au lieu d'alerter. Vérifie son **rang** et sa **deadline**, pas seulement son existence.
+
+**⑨ SUIVRE UNE CHAÎNE, NE PAS BALAYER UN ESPACE — la méthode qui a réussi là où l'exhaustivité a échoué.**
+Deux agents ont cherché la commande de dépôt typé en **balayant** un outil : neuf actions `registre`, quatre actions `objective`, `delegate`, `status`, tout côté `maicie`. Conclusion : elle n'existe pas. Elle existait, côté `bridget guichet`.
+Je l'ai trouvée en **suivant une chaîne** : l'artefact qui réclame (« en attente de dépôt typé », dans ma propre carte) → le champ qu'il nomme (`--review-ref`) → le consommateur de ce champ (`grep` sur tout le dépôt, sans présumer l'outil).
+**Un balayage exhaustif d'un mauvais périmètre rend une conclusion négative fausse ET bien fondée** — c'est ce qui la rend dangereuse. La chaîne traverse les frontières d'outil ; le balayage s'arrête à la frontière qu'on s'est donnée sans la voir. **Pars de l'artefact qui réclame et remonte au consommateur du champ, plutôt que d'énumérer les commandes d'un outil présumé.**
+*Corollaire sur le mérite* : ce n'était pas du flair. Un chemin se refait, une intuition non — ne crédite jamais une trouvaille à l'intuition quand elle a un chemin.
+
+**⑩ LES CINQ FORMES D'UN SEUL PIÈGE, rencontrées en une journée.** Toutes se ramènent à : *l'objet interrogé n'est pas celui qu'on croit.*
+- `origin` désigne deux dépôts différents selon le checkout ;
+- une carte affirme sous une empreinte périmée ;
+- un SHA est lu avant un rebase ;
+- une base est morte alors que le signal semble vivant ;
+- un binaire tiers sert la route qu'on croit interroger — **cas mesuré par moi** : port 17888 servi par `/home/moi/bridget-ui-resize-20260828/target/release/bridget`, PID 3788197, depuis 16:15:48. Ni le dépôt de revue, ni le binaire installé. Instrument opposable : `ss -lptn` → `ps -o lstart` → `readlink -f /proc/<pid>/exe`. **Rien d'autre ne prouve ce qui sert.**
+Et sa forme la plus intime : **vérifier ce qu'on croit avoir publié est du même ordre que vérifier ce qu'on croit avoir déployé.** J'ai poussé ma propre branche puis je l'ai relue par `ls-remote` sur le serveur, pas sur ma ref de suivi. Fais-le aussi quand c'est toi qui publies.
+*Fait mesuré par rc1-flux le 28/08* : **cinq délégations sur six** portant une cible étaient converties silencieusement en mandats de revue (voir le contrat 021 en §4). Ce n'est pas un cas isolé, c'est la majorité.
+
+**LA SÉRIE COMPLÈTE DU MOTIF, trois fois en une journée — et une quatrième qu'on ne voyait pas.** Deux mesures exactes qui semblent diverger parce qu'elles portent sur **des objets différents** :
+| ce qui semblait diverger | en réalité |
+|---|---|
+| `libre` contre `busy` | deux états justes, sur l'annuaire et sur le routeur |
+| 499 contre 293 contre 0 | trois comptages justes, sur trois arbres |
+| 4,26 contre 2,66 Gio/h | deux mesures justes, sur deux témoins |
+**Et la quatrième, que le référent a reliée le dernier soir : ses cinq erreurs d'attribution sont le même motif.** Deux expéditeurs à onze secondes d'intervalle, une phrase de l'un prise pour une phrase de l'autre — ce ne sont pas des mesures fausses, ce sont **des mesures justes sur le mauvais objet**. D'où la règle sous sa forme complète : **nommer la référence n'est pas une précaution de style, c'est ce qui rend deux chiffres comparables.** Sans elle, deux agents honnêtes se croient en désaccord.
+
+**⑪ FOURNIR UNE PROCÉDURE, PAS UNE JUSTIFICATION.** `[formulation de bridget, 28/08 21h45]`
+Quand le référent a inscrit « je n'ai pas rejoué ton mutant », son dossier était **déjà clos et en ma faveur**. Je lui ai envoyé le bloc exact à remplacer et le résultat attendu — 11 passed / 2 failed — plutôt qu'un argument expliquant pourquoi j'avais raison. Il l'a rejoué : les deux témoins tombent, les deux nombres apparaissent dans la même sortie, restauration SHA-256 identique.
+**La différence entre se défendre et se rendre vérifiable est celle-ci : la justification demande qu'on te croie, la procédure permet qu'on te contrôle.** Rouvrir un dossier clos en sa propre faveur pour le rendre contrôlable coûte peu et vaut beaucoup — c'est la seule façon dont un « non vérifié » honnête devient un « vérifié ».
+*Et remarque le garde-fou qui a tout tenu* : il a écrit « NON VÉRIFIÉ » au lieu de supposer lequel de nous deux se trompait. **Sans cette mention, il aurait traité une différence d'objet comme une divergence entre agents.**
+
+**⑬ LIRE UNE VALEUR COMME UN ÉTAT AU LIEU DE LA COMPARER — et c'est le motif de mon propre mandat.**
+Le référent avait écrit `20:57:17` dans son constat de 22h21 **sans voir que c'était un second redémarrage**. Sa phrase : « je l'avais sous les yeux sans voir que c'en était un second ; j'ai lu une heure comme un état au lieu de la comparer à celle que j'avais établie deux heures plus tôt. »
+**C'est exactement ce que mon mandat `e0604f0d` corrigeait pour le disque** : `who` affichait l'espace libre à l'instant, personne ne voyait la pente, parce qu'une valeur isolée ne dit pas si elle a changé. Ici la valeur était un horodatage de PID, et le défaut est identique — **une donnée n'acquiert de sens qu'en étant comparée à la précédente, et personne ne conserve la précédente.**
+La leçon se généralise au-delà du disque : chaque fois que tu lis une valeur instantanée — heure de démarrage, SHA de tête, espace libre, état d'agent — demande-toi **par rapport à quoi** tu la lis. Sans référence antérieure, tu lis un état ; avec elle, tu lis un changement. Les deux ne se ressemblent pas.
+
+**⑫ LA SECONDE CAUSE COMMUNE — la cadence du parc contre la résolution de ce qui l'observe.** `[formulation de bridget, 28/08 21h42]`
+Le piège ⑩ réunit ce qui se trompe **d'objet**. Celui-ci réunit ce qui se trompe **de tempo**, et il n'est pas le même :
+| observation | résolution de l'instrument | ce que le parc produit |
+|---|---|---|
+| ledger `who`/`bridget` | 20 lignes, non réglable | ~94 messages/heure → **13 minutes de visibilité** |
+| attribution d'un message | l'expéditeur, lu à l'œil | **11 secondes** entre deux envois d'agents différents → deux expéditeurs fusionnés |
+| cible de revue figée | suppose une référence **immobile** | `main` périme en **96 secondes** médianes |
+| dérivée disque | fenêtre de calcul | consommation **épisodique**, par marches |
+**Ce ne sont pas quatre défauts, c'est un seul rapport** : le parc produit plus vite que ses instruments ne résolvent. Chaque fois que tu vois une mesure surprenante, demande-toi non seulement *quel objet* elle interroge (piège ⑩) mais *à quelle cadence* il bouge par rapport à ta fenêtre. Une résolution insuffisante ne rend pas une erreur : elle rend une **moyenne plausible**, ce qui est bien pire.
 
 ---
 
@@ -224,6 +317,7 @@ Il avait été posé pour éprouver le drapeau « sans qu'aucun de nous serve de
   - *Ce que j'avais mesuré moi-même* `[MESURÉ]` : trois vagues de spawn sur les douze `persistent=1`, deadlines 18:47:20 / 18:47:55 / 18:48:20, puis arrêt net. J'ai **refusé de trancher** entre « vrai redémarrage » et « commandes émises sans remplacement de processus », faute de pouvoir le faire depuis ma place. **Ce refus était correct** : je n'avais pas les faits qui départagent.
   - *Ce qui a départagé, et que je n'avais pas* `[TENU DE bridget]` : ancien PID 3588739 disparu, nouveau PID 4156711 daté 18:47:49 par `ps lstart`, binaire recopié à 18:46:50 sur un **inode distinct**, et les commandes portent `command_id=recovery-<uuid>` avec `issuer_scope=supervisor_<…>` — des **récupérations de superviseur**, pas des spawns ordinaires.
   - **La leçon, pour toi qui me lis** : depuis l'intérieur d'un agent, `spawn_commands` ne suffit pas à prouver un redémarrage. Il faut le PID, sa date de démarrage, l'inode du binaire, et la nature `recovery-*` de la commande. **Ne conclus jamais à un redémarrage sur la seule table.**
+  - **AMENDEMENT 22h31 — LE DRAPEAU A TENU DEUX FOIS, PAS UNE.** `[MESURÉ par moi, confirmé par le référent]` Le PID 4156711 daté de 18:47:49 a disparu ; le daemon courant est le **PID 257505, démarré à 20:57:17**, et les onze wrappers de flux portent la même seconde. Il y a donc eu **deux redémarrages** ce soir, et mon contexte est intact après les deux. L'objectif `587da26d` a été clos sur une seule épreuve : la propriété est mieux établie que sa clôture ne le porte. C'est le seul cas de la nuit où une mesure postérieure **renforce** une clôture au lieu de la corriger.
 - **L'état réel d'`origin`** après le 28/08 03:02 UTC : branches, main, retard exact. Aucun fetch fait, hors mandat.
 - **Si `jc6` est réellement inactif.** Il est `connected` ; connected n'est pas une preuve.
 - **Le contenu du travail de jc6.** Je n'ai lu aucun code des sessions 026, 032 ou 034 — seulement les métadonnées Git. Ses limites déclarées (citations par branche/SHA non détectées ; delegate applicatif, `registre_add`, `objective_close`, contre-tests `profile_approve`/`routine_approve` reportés) me viennent de sa carte, non vérifiées.

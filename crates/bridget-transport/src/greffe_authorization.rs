@@ -300,6 +300,7 @@ impl GreffeAuthorizationGate {
         Ok(effect(&principal))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finish_with_audit<T>(
         &self,
         stage: GreffeAuthorizationStage,
@@ -504,7 +505,7 @@ impl GreffePolicy {
             principals,
         })
     }
-
+    #[allow(clippy::too_many_arguments)]
     fn attest(
         &self,
         principal: GreffePrincipal,
@@ -532,6 +533,7 @@ impl GreffePolicy {
         Ok(attestation)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn verify(
         &self,
         attestation: &GreffeAuthorizationAttestation,

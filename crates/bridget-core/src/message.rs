@@ -38,13 +38,39 @@ impl std::str::FromStr for AgentType {
     }
 }
 
+/// Source déclarée d une soumission. Absente dans un message historique.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageOrigin {
+    Human,
+    Agent,
+    Routine,
+    System,
+}
+
+/// Effet demandé lors de la remise. L adaptateur ne le déduit jamais du texte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageIntent {
+    QueueOnly,
+    TriggerTurn,
+    SteerCurrent,
+    InterruptAndStart,
+    ControlOnly,
+}
+
 /// Message normalisé qui circule entre agents via le daemon.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BridgetMessage {
     /// UUID court pour déduplication et quarantaine.
     pub id: String,
-    /// Nom de l'expéditeur (ex: "claude-1").
+    /// Identifiant opaque de l'expéditeur. Il sert exclusivement au routage.
     pub from: String,
+    /// Nom de présentation de l'expéditeur, résolu par le daemon au moment de
+    /// la remise. Cette valeur n'est jamais une clé de routage : le wrapper
+    /// l'emploie seulement pour construire le prompt fournisseur.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_display_name: Option<String>,
     /// Nom du destinataire (ex: "codex-2").
     pub to: String,
     /// Texte du message.
@@ -73,6 +99,15 @@ pub struct BridgetMessage {
     /// laisse le comportement par défaut inchangé.
     #[serde(default)]
     pub from_declared: bool,
+    /// Origine déclarée. Absente pour les producteurs historiques.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<MessageOrigin>,
+    /// Intention de remise, distincte du contenu du message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<MessageIntent>,
+    /// Références durables optionnelles de mission ou délégation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
 }
 
 fn default_hops() -> i32 {
@@ -91,6 +126,7 @@ impl BridgetMessage {
         BridgetMessage {
             id,
             from: from.into(),
+            from_display_name: None,
             to: to.into(),
             body: body.into(),
             reply: false,
@@ -99,6 +135,9 @@ impl BridgetMessage {
             deadline_at: None,
             in_reply_to: None,
             from_declared: false,
+            origin: None,
+            intent: None,
+            references: Vec::new(),
         }
     }
 
@@ -193,5 +232,43 @@ mod tests {
         assert_eq!(msg.id, decoded.id);
         assert_eq!(msg.from, decoded.from);
         assert_eq!(msg.body, decoded.body);
+    }
+
+    #[test]
+    fn message_historique_sans_champs_de_controle_reste_acceptable() {
+        let historical = r#"{"id":"legacy","from":"a","to":"b","body":"x"}"#;
+        let decoded: BridgetMessage = serde_json::from_str(historical).unwrap();
+        assert_eq!(decoded.origin, None);
+        assert_eq!(decoded.intent, None);
+        assert!(decoded.references.is_empty());
+        let reencoded = serde_json::to_value(decoded).unwrap();
+        assert!(reencoded.get("origin").is_none());
+        assert!(reencoded.get("intent").is_none());
+        assert!(reencoded.get("references").is_none());
+    }
+
+    #[test]
+    fn message_controle_serialise_origine_intention_et_references() {
+        let mut msg = BridgetMessage::new("humain", "agent", "travail");
+        msg.origin = Some(MessageOrigin::Human);
+        msg.intent = Some(MessageIntent::InterruptAndStart);
+        msg.references = vec!["objective-1".to_string(), "delegation-2".to_string()];
+        let json = serde_json::to_string(&msg).unwrap();
+        let decoded: BridgetMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.origin, Some(MessageOrigin::Human));
+        assert_eq!(decoded.intent, Some(MessageIntent::InterruptAndStart));
+        assert_eq!(decoded.references, ["objective-1", "delegation-2"]);
+    }
+
+    #[test]
+    fn enums_de_controle_sont_stables_sur_le_fil() {
+        assert_eq!(
+            serde_json::to_string(&MessageIntent::QueueOnly).unwrap(),
+            "\"queue_only\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MessageOrigin::Routine).unwrap(),
+            "\"routine\""
+        );
     }
 }

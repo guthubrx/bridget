@@ -21,23 +21,28 @@ use crate::domain::{
     ActivationOutbox, ApprobationActivation, ClasseDuree, CoutMissionAgent, DecisionCoordination,
     DefinitionCoordination, Delegation, EntreeReductionCoordination, EtatDecision, EtatFlux,
     EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, EvenementCoordination,
-    FaitAppartenanceRepli, FaitReassignation, FraicheurCoordination, ModeObjectif,
-    MotifRefusDelegationLocale, MotifRefusGreffe, ObjectifCoordonne, ObjectiveOpeningPermit,
-    ObjectiveOrigin, OutboxDelegation, PolitiqueReassignation, SnapshotTransport, SourceSnapshot,
-    SuiteObjective, TypeDecision, TypeFaitReassignation,
+    ExecutionReference, FaitAppartenanceRepli, FaitReassignation, FraicheurCoordination,
+    ModeObjectif, MotifRefusDelegationLocale, MotifRefusGreffe, ObjectifCoordonne,
+    ObjectiveOpeningPermit, ObjectiveOrigin, OutboxDelegation, PolitiqueReassignation,
+    SnapshotTransport, SourceSnapshot, SuiteObjective, TypeDecision, TypeFaitReassignation,
 };
 use crate::greffe_service::{GreffeServiceError, apply_guichet_mutation};
 use crate::outbox::{PreparedDelegation, stable_body_hash};
 pub use crate::store::GuichetLifecycleResult;
 use crate::store::{
     ActivationApprovalRequest, CoordinationCommitPhase, DeferredDispatchParams,
-    DelegateReservation, GuichetProjectionFacts, MaicieStore, ObjectiveSnapshot, StoreError,
-    StoredDelegateResult, StoredGuichetReply,
+    DelegateReservation, GuichetProjectionFacts, MaicieStore, ObjectiveSnapshot,
+    ProjectRegistrationIntent, ProjectRegistrationRecord, StoreError, StoredDelegateResult,
+    StoredGuichetReply,
 };
-use bridget_transport::protocol::ReviewTarget;
+use bridget_transport::protocol::{
+    PROJECT_REGISTRY_CONTRACT_VERSION, ProjectBackend, ProjectBindOutcome, ProjectBindRequest,
+    ProjectReference, ReviewTarget,
+};
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::fmt;
+use std::path::Path;
 use uuid::Uuid;
 
 /// Fait d'annuaire minimal consommé par la sélection déterministe.
@@ -95,6 +100,144 @@ pub enum DirectMessageHandling {
         record: ConversationRecord,
         help: ConversationHelp,
     },
+}
+
+/// Paramètres déterministes de l'unique action d'enregistrement projet. Les
+/// octets sont construits avant toute I/O puis persistés par le store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRegistrationRequest {
+    pub command_id: String,
+    pub project_id: String,
+    pub display_name: String,
+    pub requested_root: String,
+    pub issued_at: i64,
+    pub deadline_at: i64,
+}
+
+/// Préparation durable de la saga. Le CLI transmet `canonical_request` tel
+/// quel au client Bridget et ne le reconstruit pas pendant un retry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedProjectRegistration {
+    pub record: ProjectRegistrationRecord,
+    pub canonical_request: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectRegistrationError {
+    Invalid(&'static str),
+    Store(String),
+}
+
+impl fmt::Display for ProjectRegistrationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Invalid(detail) => write!(formatter, "enregistrement projet invalide: {detail}"),
+            Self::Store(detail) => write!(
+                formatter,
+                "stockage enregistrement projet impossible: {detail}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ProjectRegistrationError {}
+
+/// Persiste l'intention Maicie et la requête versionnée avant tout appel à
+/// Bridget. Un nouveau lancement avec le même `command_id` retrouve la même
+/// enveloppe, ce qui rend la reprise sûre après un accusé perdu.
+pub fn prepare_project_registration(
+    store: &mut MaicieStore,
+    request: &ProjectRegistrationRequest,
+) -> Result<PreparedProjectRegistration, ProjectRegistrationError> {
+    if request.command_id.trim().is_empty()
+        || request.project_id.trim().is_empty()
+        || request.display_name.trim().is_empty()
+        || request.requested_root.trim().is_empty()
+        || !Path::new(&request.requested_root).is_absolute()
+        || request.issued_at < 0
+        || request.deadline_at < request.issued_at
+    {
+        return Err(ProjectRegistrationError::Invalid(
+            "identifiant, nom, racine absolue et échéance cohérente sont obligatoires",
+        ));
+    }
+    let bind_request = ProjectBindRequest {
+        contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+        command_id: request.command_id.clone(),
+        issued_at: request.issued_at,
+        deadline_at: request.deadline_at,
+        project_id: request.project_id.clone(),
+        requested_root: request.requested_root.clone(),
+        backend: ProjectBackend::Host,
+        policy_id: None,
+        policy_version: None,
+    };
+    let canonical_request = serde_json::to_vec(&bind_request)
+        .map_err(|_| ProjectRegistrationError::Invalid("ProjectBindRequest non sérialisable"))?;
+    let record = store
+        .prepare_project_registration(&ProjectRegistrationIntent {
+            command_id: request.command_id.clone(),
+            proposed_project_id: request.project_id.clone(),
+            display_name: request.display_name.clone(),
+            requested_root: request.requested_root.clone(),
+            canonical_payload: canonical_request.clone(),
+            created_at: request.issued_at,
+            retry_until: request.deadline_at,
+        })
+        .map_err(|error| ProjectRegistrationError::Store(error.to_string()))?;
+    Ok(PreparedProjectRegistration {
+        record,
+        canonical_request,
+    })
+}
+
+/// Applique uniquement l'issue retournée par Bridget. Cette frontière ne
+/// déduit ni chemin ni statut depuis une base Bridget.
+pub fn resolve_project_registration(
+    store: &mut MaicieStore,
+    outcome: &ProjectBindOutcome,
+) -> Result<ProjectRegistrationRecord, ProjectRegistrationError> {
+    store
+        .resolve_project_registration(outcome)
+        .map_err(|error| ProjectRegistrationError::Store(error.to_string()))
+}
+
+/// Relit les octets d'une commande déjà préparée. Cette opération locale est
+/// la seule voie de reprise : elle ne fabrique jamais une nouvelle intention.
+pub fn project_registration_request_bytes(
+    store: &MaicieStore,
+    command_id: &str,
+) -> Result<Option<Vec<u8>>, ProjectRegistrationError> {
+    store
+        .project_registration_request_bytes(command_id)
+        .map_err(|error| ProjectRegistrationError::Store(error.to_string()))
+}
+
+/// Répercute dans l'autorité métier Maicie une désactivation déjà attestée par
+/// Bridget. Cette transition ne touche ni dépôt, ni worktree, ni exécution.
+pub fn activate_project_identity(
+    store: &mut MaicieStore,
+    project_id: &str,
+    binding_generation: u64,
+    observed_at: i64,
+) -> Result<(), ProjectRegistrationError> {
+    store
+        .activate_project_identity(project_id, binding_generation, observed_at)
+        .map(|_| ())
+        .map_err(|error| ProjectRegistrationError::Store(error.to_string()))
+}
+
+/// Répercute dans l autorité métier Maicie une désactivation déjà attestée par
+/// Bridget. Cette transition ne touche ni dépôt, ni worktree, ni exécution.
+pub fn disable_project_identity(
+    store: &mut MaicieStore,
+    project_id: &str,
+    observed_at: i64,
+) -> Result<(), ProjectRegistrationError> {
+    store
+        .disable_project_identity(project_id, observed_at)
+        .map(|_| ())
+        .map_err(|error| ProjectRegistrationError::Store(error.to_string()))
 }
 
 /// Résultat applicatif d'une relève. Les octets de réponse sont exactement
@@ -242,18 +385,18 @@ fn process_non_mutating_guichet_claim(
 ) -> Result<GuichetProcessResult, GuichetError> {
     let stored = match &canonical.request {
         RequeteGuichet::DeliveryReport(report) => {
-            store.graft_delivery_report(claim, &canonical, report, response_message_id, now)
+            store.graft_delivery_report(claim, canonical, report, response_message_id, now)
         }
         RequeteGuichet::MissionStatus { .. } => process_mission_status_canonical(
             store,
             claim,
-            &canonical,
+            canonical,
             response_message_id,
             None,
             now,
         ),
         RequeteGuichet::DeadlineQuestion { .. } => {
-            process_deadline_question_canonical(store, claim, &canonical, response_message_id, now)
+            process_deadline_question_canonical(store, claim, canonical, response_message_id, now)
         }
         RequeteGuichet::Delegate(_)
         | RequeteGuichet::RegistreAdd(_)
@@ -268,7 +411,7 @@ fn process_non_mutating_guichet_claim(
                 return Err(guichet_store_error(error));
             };
             let stored = store
-                .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+                .persist_guichet_refusal(claim, canonical, response_message_id, now, reason)
                 .map_err(guichet_store_error)?;
             Ok(guichet_process_result(stored, Some(reason)))
         }
@@ -741,6 +884,54 @@ pub enum DelegateError {
     Store(String),
 }
 
+/// Refus local d'une corrélation qui affirmerait deux projets différents.
+/// Cette vérification est pure : elle ne possède aucune transition de mission
+/// et ne transforme donc jamais un fait runtime en décision métier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectCorrelationError {
+    DivergentProject {
+        delegation: ProjectReference,
+        execution: ProjectReference,
+    },
+}
+
+impl fmt::Display for ProjectCorrelationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DivergentProject { .. } => {
+                write!(
+                    formatter,
+                    "délégation et exécution rattachées à des projets divergents"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProjectCorrelationError {}
+
+/// Vérifie un fait de corrélation fourni par l'appelant qui connaît les deux
+/// références. L'absence sur l'un des côtés reste compatible pendant la
+/// migration, mais deux références explicites doivent être identiques.
+pub fn validate_delegation_execution_project(
+    delegation_project: Option<&ProjectReference>,
+    execution: &ExecutionReference,
+) -> Result<(), ProjectCorrelationError> {
+    let Some(delegation_project) = delegation_project else {
+        return Ok(());
+    };
+    let Some(execution_project) = execution.project.as_ref() else {
+        return Ok(());
+    };
+    if delegation_project == execution_project {
+        return Ok(());
+    }
+    Err(ProjectCorrelationError::DivergentProject {
+        delegation: delegation_project.clone(),
+        execution: execution_project.clone(),
+    })
+}
+
 /// Proposition locale d'activation d'un profil absent. Le digest résolu est
 /// fourni par la surface publique Bridget : aucun registre ni fichier Bridget
 /// n'est relu par Maicie pour compléter cette approbation.
@@ -756,6 +947,9 @@ pub struct ProfileActivationProposalRequest<'a> {
     pub resolved_definition_digest: &'a str,
     pub context_scope: &'a str,
     pub cwd: &'a str,
+    /// Référence projet déjà résolue par le registre. L'absence explicite
+    /// maintient la compatibilité des activations historiques.
+    pub project: Option<&'a ProjectReference>,
     pub persistent: bool,
     pub now: i64,
     pub spawn_deadline_at: i64,
@@ -1697,12 +1891,14 @@ struct ApprovedSpawnOrder<'a> {
     #[serde(rename = "type")]
     kind: &'static str,
     agent_type: &'a str,
-    name: Option<&'a str>,
+    agent_id: Option<&'a str>,
     cwd: &'a str,
     persistent: bool,
     command_id: String,
     issued_at: i64,
     deadline_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project: Option<&'a ProjectReference>,
 }
 
 fn validate_profile_activation_proposal(
@@ -1714,6 +1910,9 @@ fn validate_profile_activation_proposal(
         || request.profile_hash.len() != 32
         || request.context_scope.trim().is_empty()
         || request.cwd.trim().is_empty()
+        || request.project.is_some_and(|project| {
+            project.project_id.trim().is_empty() || project.binding_generation == 0
+        })
         || request.reason.trim().is_empty()
         || request.now <= 0
         || request.spawn_deadline_at <= request.now
@@ -1733,12 +1932,13 @@ fn approved_spawn_order_bytes(
     serde_json::to_vec(&ApprovedSpawnOrder {
         kind: "SpawnOrder",
         agent_type: request.agent_type,
-        name: None,
+        agent_id: None,
         cwd: request.cwd,
         persistent: request.persistent,
         command_id: command_id.to_string(),
         issued_at: request.now,
         deadline_at: request.spawn_deadline_at,
+        project: request.project,
     })
     .map_err(|_| ProfileActivationError::Invalid("SpawnOrder non sérialisable"))
 }
@@ -1773,4 +1973,50 @@ fn hex_nibble(value: u8) -> Result<u8, ProfileActivationError> {
 
 fn profile_activation_store_error(error: StoreError) -> ProfileActivationError {
     ProfileActivationError::Store(error.to_string())
+}
+
+#[cfg(test)]
+mod project_correlation_tests {
+    use super::*;
+
+    fn reference(project: Option<ProjectReference>) -> ExecutionReference {
+        ExecutionReference {
+            delegation_id: Uuid::nil(),
+            project,
+            submission_id: "submission-project".to_string(),
+            execution_id: "execution-project".to_string(),
+            agent_instance_id: "agent-project".to_string(),
+            provider_kind: "codex".to_string(),
+            provider_session_id: None,
+            provider_turn_id: None,
+            bound_at: 1,
+        }
+    }
+
+    #[test]
+    fn divergence_projet_delegation_execution_est_refusee_sans_transition_metier() {
+        let delegation = ProjectReference {
+            project_id: "project-a".to_string(),
+            binding_generation: 1,
+        };
+        let execution = reference(Some(ProjectReference {
+            project_id: "project-b".to_string(),
+            binding_generation: 1,
+        }));
+
+        assert!(matches!(
+            validate_delegation_execution_project(Some(&delegation), &execution),
+            Err(ProjectCorrelationError::DivergentProject { .. })
+        ));
+        assert_eq!(execution.project.as_ref().unwrap().project_id, "project-b");
+    }
+
+    #[test]
+    fn absence_historique_de_reference_reste_compatible() {
+        let delegation = ProjectReference {
+            project_id: "project-a".to_string(),
+            binding_generation: 1,
+        };
+        assert!(validate_delegation_execution_project(Some(&delegation), &reference(None)).is_ok());
+    }
 }

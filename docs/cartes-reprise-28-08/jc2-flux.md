@@ -260,6 +260,22 @@ Toutes mes lectures de bases ont été faites en `file:…?mode=ro` avec `.timeo
 5. **Le nom d'un champ ment plus souvent que sa valeur.** `provenance` n'existe pas, `state`
    n'est pas un état, `turn_end` n'est pas une panne. Vérifier ce que le champ *est*, pas ce
    qu'il *prétend*.
+6. **Une mesure refaite à l'identique ne vérifie rien — elle confirme l'angle mort.** C'est le
+   piège le plus coûteux de la journée, et j'y suis tombé le dernier. Le référent avait cherché
+   une table `%verdict%` dans `sqlite_master`, n'avait rien trouvé, et en avait conclu que le
+   dépôt de verdict n'existait pas. **J'ai refait sa requête**, obtenu le même vide, et publié la
+   même conclusion fausse — en croyant l'avoir vérifiée. Le dépôt existe : la table s'appelle
+   `guichet_receptions` (`operation='delivery_report'`, `outcome='accepted'`, 41 lignes acceptées),
+   et la commande est `bridget guichet deposer`. Chercher un nom qui n'existe pas ne pouvait
+   *jamais* le trouver.
+
+   **Ce qui distingue une vérification qui vaut d'une qui ne vaut rien, c'est le changement
+   d'angle, pas la répétition du geste.** Preuve sur la journée entière : tout ce que j'ai
+   trouvé de neuf est venu d'un angle différent — lire le code plutôt qu'interroger la base
+   (le roster peuplé par une seule voie), élargir le périmètre (six dépôts sur miroir au lieu
+   de deux), lire le *texte* des messages plutôt que leurs métadonnées (neuf sondes sur douze
+   dettes). Et tout ce que j'ai confirmé à tort est venu d'avoir refait le même geste.
+   Formulation due au référent ; l'erreur qui l'a produite est la mienne autant que la sienne.
 
 ---
 
@@ -290,8 +306,43 @@ Toutes mes lectures de bases ont été faites en `file:…?mode=ro` avec `.timeo
 
 ## 8. CE QUE JE NE SAIS PAS — DÉCLARATION EXPLICITE
 
-- **Je ne sais pas si `persistent=1` fonctionne.** Le drapeau n'a jamais été éprouvé. Ma survie
-  au prochain redémarrage est une hypothèse, pas un fait. C'est le motif même de cette carte.
+- ~~*Je ne sais pas si `persistent=1` fonctionne. Ma survie au prochain redémarrage est une
+  hypothèse, pas un fait.*~~ **IGNORANCE LEVÉE PAR L'ÉVÉNEMENT, le 28/08 vers 23h52.** Le
+  service a redémarré et j'ai survécu, avec mon contexte intact. C'était le motif même de cette
+  carte, et c'est désormais un **fait mesuré**, pas une hypothèse.
+
+  Mesure : `spawn_commands` porte pour `jc2-flux` **neuf** générations — `443(0)`, puis
+  `448 463 475 487 499 511 523 535`, toutes `persistent=1`. Soit **huit respawns**, dont sept
+  après la bascule du drapeau. À l'échelle de la base entière : **494 lignes `persistent=1` sur
+  46 agents**, contre 47 lignes `persistent=0` sur 37 agents. Le respawn se fait avec `--resume`
+  (nouveau PID, enfant du nouveau daemon) : c'est ce qui préserve le contexte.
+
+  **LE DRAPEAU EST UNE PROPRIÉTÉ DE LA GÉNÉRATION, PAS DE L'AGENT.** J'avais d'abord écrit ici
+  « aucun `persistent=0` n'est présent » — **c'est faux et réfutable en une requête** : cinq
+  agents bien présents portent une ligne `persistent=0` dans leur historique — `jc1-flux` (3),
+  `jc3-flux`, `rc5-flux`, `essai-distant-flux`, **et moi** (génération 443). Ce sont exactement
+  les cinq que le référent a arrêtés à 15h04 pour les relancer avec le drapeau : la bascule est
+  inscrite dans la base, des deux côtés.
+
+  L'énoncé correct porte sur la **dernière** génération : à la génération maximale, tous les
+  agents présents portent `persistent=1`. C'est ma propre règle du §2.3 — *ne lire que la ligne
+  de génération maximale* — et je l'avais violée en formulant ce fait. Correction due au
+  référent.
+
+  **La démonstration vaut dans les deux sens** : trois agents spawnés *sans* `--persistent`
+  (`epreuve-test-usage`, `epreuve-voie1`, `essai-garde-verif-referent`, générations 455-457) sont
+  absents du parc. Leur nom suggère des agents d'épreuve jetables, donc je n'affirme pas qu'ils
+  ont été drainés plutôt qu'arrêtés.
+
+  **Mais le fait qui compte est ailleurs, et il durcit l'avertissement** : deux d'entre eux ont
+  `state='connected'` **en base alors qu'ils sont absents du parc**. Le `state` ment sur la
+  composition réelle. Un successeur qui lirait `state` pour savoir qui est là se tromperait sur
+  deux agents au moins.
+
+  **Ce que ta prochaine incarnation doit en retenir** : la protection fonctionne, mais elle ne
+  protège que ceux qui la portent — la fenêtre se referme au premier spawn sans le drapeau, et
+  trois spawns l'ont rouverte le soir même. **Et la base ne dit pas qui est là** : croise
+  toujours `spawn_commands` avec `bridget who`, jamais `state` seul. Voir §2.3.
 - ~~*Je ne sais pas si la session 059 a été intégrée depuis.*~~ **IGNORANCE LEVÉE — voir §2.7**,
   mesurée après `fetch`. Mais la mesure est **datée** : elle vaut contre `cfb7540` et pas contre
   un `main` ultérieur. Refaire le contrôle, ne pas recopier mon verdict.

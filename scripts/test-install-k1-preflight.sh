@@ -272,7 +272,11 @@ if grep -Fq "|${default_database}" "$force_log"; then
 fi
 grep -Fq "\"${force_home}/.local/bin/maicie\" preflight" \
   "${force_home}/.local/bin/maicie-suivi"
-grep -Fxq "ExecStart=${force_home}/.local/bin/maicie-suivi" \
+grep -Fxq "\"${force_home}/.local/bin/maicie-suivi\"" \
+  "${force_home}/.local/bin/maicie-releve"
+grep -Fxq "exec \"${force_home}/.local/bin/bridget\" project-round dispatch" \
+  "${force_home}/.local/bin/maicie-releve"
+grep -Fxq "ExecStart=${force_home}/.local/bin/maicie-releve" \
   "${force_home}/.config/systemd/user/bridget-maicie-releve.service"
 
 existing_state_is_preserved_without_warning() {

@@ -2,11 +2,14 @@
 
 use bridget_core::BridgetMessage;
 use bridget_daemon::ui::{UiRelay, UiRelayConfig};
-use bridget_transport::protocol::{LedgerScope, PresenceMode, decode, encode};
+use bridget_transport::protocol::{
+    AgentInfo, LedgerScope, PresenceMode, StopOutcome, decode, encode,
+};
 use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-use std::os::unix::net::UnixStream;
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -60,6 +63,22 @@ struct UiProcess {
 
 impl UiProcess {
     fn start(home: &Path, environment_channel: Option<&str>) -> Self {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("port UI éphémère");
+        let port = listener.local_addr().expect("adresse UI éphémère").port();
+        let endpoint = home.join(".cache/bridget/ui-endpoint.json");
+        std::fs::create_dir_all(endpoint.parent().expect("parent endpoint UI")).unwrap();
+        std::fs::write(
+            &endpoint,
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "port": port,
+                "token": uuid::Uuid::new_v4().simple().to_string(),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&endpoint, std::fs::Permissions::from_mode(0o600)).unwrap();
+        drop(listener);
         let maicie_config = write_maicie_config(home);
         let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
         command
@@ -144,7 +163,8 @@ impl LiveAgent {
         };
         agent.send(&WrapperToDaemon::Register {
             agent_type: "ui-test".to_string(),
-            name: Some(name.to_string()),
+            identity_version: 2,
+            agent_id: name.to_string(),
             host: Some("test".to_string()),
             transport: Some(transport.to_string()),
             channel,
@@ -175,7 +195,7 @@ impl LiveAgent {
         };
         agents
             .iter()
-            .find(|agent| agent.name == name)
+            .find(|agent| agent.agent_id == name)
             .unwrap_or_else(|| panic!("présence {name} absente"))
             .channel
             .clone()
@@ -190,6 +210,54 @@ impl LiveAgent {
         let mut line = String::new();
         self.reader.read_line(&mut line).unwrap();
         decode(line.trim()).unwrap()
+    }
+
+    /// Un agent peut recevoir une notification Bridget déjà en attente au
+    /// moment où le relais ouvre son abonnement Attach. Le client doit donc
+    /// continuer à lire jusqu'à la trame d'abonnement, au lieu de confondre
+    /// une livraison normale avec une erreur de protocole.
+    fn read_subscription_for(&mut self, expected_agent: &str) -> String {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        self.reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        let subscription_id = loop {
+            let mut line = String::new();
+            match self.reader.read_line(&mut line) {
+                Ok(0) => panic!("connexion agent fermée avant Subscribe"),
+                Ok(_) => match decode(line.trim()).unwrap() {
+                    DaemonToWrapper::Subscribe {
+                        subscription_id,
+                        agent,
+                        ..
+                    } if agent == expected_agent => break subscription_id,
+                    DaemonToWrapper::Deliver(message) if message.from == "bridget" => {
+                        assert!(
+                            message.body.starts_with("Rappel :"),
+                            "notification Bridget inattendue avant Subscribe: {message:?}"
+                        );
+                    }
+                    response => {
+                        panic!("Subscribe pour {expected_agent} attendu, reçu {response:?}")
+                    }
+                },
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "Subscribe pour {expected_agent} non reçu avant l'échéance"
+                    );
+                }
+                Err(error) => panic!("lecture agent avant Subscribe: {error}"),
+            }
+        };
+        self.reader.get_ref().set_read_timeout(None).unwrap();
+        subscription_id
     }
 
     fn ledger_messages(&mut self) -> Vec<bridget_transport::protocol::LedgerMessage> {
@@ -245,6 +313,16 @@ fn write_maicie_config(root: &Path) -> PathBuf {
     path
 }
 
+fn write_agent_journal(root: &Path, agent: &str) {
+    let journal_dir = root.join(".cache/bridget/sessions").join(agent);
+    std::fs::create_dir_all(&journal_dir).unwrap();
+    std::fs::write(
+        journal_dir.join("fixture.jsonl"),
+        "{\"v\":1,\"seq\":1,\"message_id\":\"turn-fixture\",\"event\":\"turn_start\",\"session_id\":\"fixture\"}\n",
+    )
+    .unwrap();
+}
+
 fn observe_ui_presence_channel(
     label: &str,
     environment_channel: Option<&str>,
@@ -295,7 +373,7 @@ fn observe_ui_presence_channel_after(
     };
     let human = agents
         .iter()
-        .find(|agent| agent.name == "humain")
+        .find(|agent| agent.agent_id == "humain")
         .expect("présence humaine UI enregistrée");
     assert_eq!(human.transport, "cli");
     let channel = human.channel.clone();
@@ -375,6 +453,90 @@ fn read_response(mut stream: TcpStream) -> String {
 
 fn response_json(response: &str) -> serde_json::Value {
     serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
+}
+
+fn managed_agent_info(name: &str) -> AgentInfo {
+    serde_json::from_value(serde_json::json!({
+        "name": name,
+        "agent_type": "ui-test",
+        "connection_id": "managed-connection",
+        "host": "test",
+        "transport": "cli",
+        "state": "idle",
+        "last_seen_secs": 0,
+        "reconnect_count": 0,
+        "persistent": false
+    }))
+    .unwrap()
+}
+
+fn spawn_stop_daemon(
+    socket: &Path,
+    expected_name: &'static str,
+    expected_command_id: &'static str,
+    stop_response: DaemonToWrapper,
+) -> thread::JoinHandle<()> {
+    let listener = UnixListener::bind(socket).unwrap();
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode::<WrapperToDaemon>(line.trim()).unwrap(),
+            WrapperToDaemon::Register { .. }
+        ));
+        writeln!(
+            writer,
+            "{}",
+            encode(&DaemonToWrapper::Registered {
+                agent_id: "humain".to_string()
+            })
+            .unwrap()
+        )
+        .unwrap();
+        writer.flush().unwrap();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode::<WrapperToDaemon>(line.trim()).unwrap(),
+            WrapperToDaemon::JournalReady
+        ));
+
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode::<WrapperToDaemon>(line.trim()).unwrap(),
+            WrapperToDaemon::ListAgents
+        ));
+        writeln!(
+            writer,
+            "{}",
+            encode(&DaemonToWrapper::AgentList {
+                agents: vec![managed_agent_info(expected_name)]
+            })
+            .unwrap()
+        )
+        .unwrap();
+        writer.flush().unwrap();
+
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode::<WrapperToDaemon>(line.trim()).unwrap(),
+            WrapperToDaemon::StopOrder { agent_id: ref name, ref command_id }
+                if name == expected_name && command_id == expected_command_id
+        ));
+        writeln!(writer, "{}", encode(&stop_response).unwrap()).unwrap();
+        writer.flush().unwrap();
+    })
 }
 
 fn read_until(stream: &mut TcpStream, expected: &str) -> String {
@@ -510,17 +672,11 @@ fn loopback_rend_snapshot_et_relaie_un_fragment_attach_d_un_agent_vivant() {
     demandeur.send(&WrapperToDaemon::Send(demande));
     assert!(matches!(demandeur.read(), DaemonToWrapper::Ack { .. }));
     assert!(matches!(agent.read(), DaemonToWrapper::Deliver(_)));
-    let config = UiRelayConfig {
-        daemon_socket: socket,
-        maicie_config: write_maicie_config(&root),
-        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-        token: "jeton-couture".to_string(),
-    };
-    let relay = UiRelay::bind(config).unwrap();
-    let address = relay.local_addr().unwrap();
-    thread::spawn(move || relay.serve().unwrap());
+    write_agent_journal(&root, "agent-vivant");
+    let ui = UiProcess::start(&root, None);
+    let address = ui.address;
 
-    let mut snapshot = request(address, "/v1/snapshot?token=jeton-couture");
+    let mut snapshot = request(address, &format!("/v1/snapshot?token={}", ui.token));
     let mut snapshot_text = read_until(&mut snapshot, "agent-vivant");
     let mut snapshot_tail = String::new();
     snapshot
@@ -537,18 +693,11 @@ fn loopback_rend_snapshot_et_relaie_un_fragment_attach_d_un_agent_vivant() {
         "la projection globale doit inclure la demande suivie réelle; {snapshot_text}"
     );
 
-    let mut events = request(address, "/v1/watch?token=jeton-couture&agent=agent-vivant");
-    let subscription_id = match agent.read() {
-        DaemonToWrapper::Subscribe {
-            subscription_id,
-            agent,
-            ..
-        } => {
-            assert_eq!(agent, "agent-vivant");
-            subscription_id
-        }
-        response => panic!("Subscribe wrapper attendu, reçu {response:?}"),
-    };
+    let mut events = request(
+        address,
+        &format!("/v1/watch?token={}&agent=agent-vivant", ui.token),
+    );
+    let subscription_id = agent.read_subscription_for("agent-vivant");
     agent.send(&WrapperToDaemon::Subscribed {
         subscription_id: subscription_id.clone(),
     });
@@ -576,6 +725,9 @@ fn loopback_rend_snapshot_et_relaie_un_fragment_attach_d_un_agent_vivant() {
         "Mutation : publier l'instantané avant Subscribe ferait perdre le fragment entre les deux; {events}"
     );
 
+    drop(ui);
+    drop(agent);
+    drop(demandeur);
     drop(daemon);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -585,6 +737,7 @@ fn requete_loopback_sans_jeton_est_refusee() {
     let config = UiRelayConfig {
         daemon_socket: PathBuf::from("/tmp/ui-inaccessible.sock"),
         maicie_config: PathBuf::from("/tmp/maicie-inaccessible.json"),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "secret".to_string(),
     };
@@ -601,6 +754,7 @@ fn get_sur_v1_send_reste_interdit_apres_ouverture_du_post() {
     let config = UiRelayConfig {
         daemon_socket: PathBuf::from("/tmp/ui-get-send-ne-doit-pas-ouvrir.sock"),
         maicie_config: PathBuf::from("/tmp/ui-get-send-ne-doit-pas-ouvrir.json"),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-get-send".to_string(),
     };
@@ -613,10 +767,122 @@ fn get_sur_v1_send_reste_interdit_apres_ouverture_du_post() {
 }
 
 #[test]
+fn spec_073_route_stop_verrouille_methode_jeton_et_version() {
+    let config = UiRelayConfig {
+        daemon_socket: PathBuf::from("/tmp/spec-073-guards-no-daemon.sock"),
+        maicie_config: PathBuf::from("/tmp/spec-073-guards-no-maicie.json"),
+        project_root_policy_path: None,
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-stop-guards".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let method = read_response(request(address, "/v1/agents/stop?token=jeton-stop-guards"));
+    assert!(method.starts_with("HTTP/1.1 405"), "{method}");
+
+    let token = read_response(request_http(
+        address,
+        "POST",
+        "/v1/agents/stop",
+        Some(r#"{"version":1,"name":"managed","command_id":"stop-ui-guards"}"#),
+    ));
+    assert!(token.starts_with("HTTP/1.1 403"), "{token}");
+
+    let version = read_response(request_http(
+        address,
+        "POST",
+        "/v1/agents/stop?token=jeton-stop-guards",
+        Some(r#"{"version":2,"name":"managed","command_id":"stop-ui-guards"}"#),
+    ));
+    assert!(version.starts_with("HTTP/1.1 400"), "{version}");
+    assert_eq!(response_json(&version)["code"], "invalid_request");
+}
+
+#[test]
+fn spec_073_route_stop_relaie_le_verdict_correle() {
+    let root = root("stop-ok");
+    let socket = root.join("stop.sock");
+    let server = spawn_stop_daemon(
+        &socket,
+        "managed",
+        "stop-ui-http-ok",
+        DaemonToWrapper::StopResult {
+            command_id: "stop-ui-http-ok".to_string(),
+            outcome: StopOutcome::Stopped,
+        },
+    );
+    let config = UiRelayConfig {
+        daemon_socket: socket.clone(),
+        maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-stop-ok".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let response = read_response(request_http(
+        address,
+        "POST",
+        "/v1/agents/stop?token=jeton-stop-ok",
+        Some(r#"{"version":1,"name":"managed","command_id":"stop-ui-http-ok"}"#),
+    ));
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let payload = response_json(&response);
+    assert_eq!(payload["version"], 1);
+    assert_eq!(payload["name"], "managed");
+    assert_eq!(payload["command_id"], "stop-ui-http-ok");
+    assert_eq!(payload["outcome"], "stopped");
+
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn spec_073_route_stop_ferme_l_erreur_de_protocole() {
+    let root = root("stop-protocol");
+    let socket = root.join("stop.sock");
+    let server = spawn_stop_daemon(
+        &socket,
+        "managed",
+        "stop-ui-http-protocol",
+        DaemonToWrapper::AgentList { agents: Vec::new() },
+    );
+    let config = UiRelayConfig {
+        daemon_socket: socket.clone(),
+        maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-stop-protocol".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let response = read_response(request_http(
+        address,
+        "POST",
+        "/v1/agents/stop?token=jeton-stop-protocol",
+        Some(r#"{"version":1,"name":"managed","command_id":"stop-ui-http-protocol"}"#),
+    ));
+    assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+    let payload = response_json(&response);
+    assert_eq!(payload["code"], "daemon_unavailable");
+    assert_eq!(payload["message"], "Le daemon Bridget est indisponible.");
+
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn post_v1_send_corps_vide_rend_le_code_ferme_invalid_body() {
     let config = UiRelayConfig {
         daemon_socket: PathBuf::from("/tmp/ui-invalid-body-ne-doit-pas-ouvrir.sock"),
         maicie_config: PathBuf::from("/tmp/ui-invalid-body-ne-doit-pas-ouvrir.json"),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-invalid-body".to_string(),
     };
@@ -643,6 +909,7 @@ fn post_v1_send_valide_repond_202_et_livre_un_identifiant_non_vide() {
     let config = UiRelayConfig {
         daemon_socket: socket,
         maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-send-ok".to_string(),
     };
@@ -690,6 +957,7 @@ fn post_v1_send_reply_true_cree_une_demande_suivie() {
     let config = UiRelayConfig {
         daemon_socket: socket,
         maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-send-reply".to_string(),
     };
@@ -718,7 +986,7 @@ fn post_v1_send_reply_true_cree_une_demande_suivie() {
     };
     let human = agents
         .iter()
-        .find(|agent| agent.name == "humain")
+        .find(|agent| agent.agent_id == "humain")
         .expect("présence humaine UI enregistrée");
     assert_eq!(
         human.channel, None,
@@ -755,6 +1023,7 @@ fn post_v1_send_destinataire_inconnu_refuse_sans_archiver() {
     let config = UiRelayConfig {
         daemon_socket: socket,
         maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-send-unknown".to_string(),
     };
@@ -796,6 +1065,7 @@ fn snapshot_compose_la_ligne_agent_avec_les_faits_du_ledger() {
     let config = UiRelayConfig {
         daemon_socket: socket,
         maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-agent-row".to_string(),
     };
@@ -831,6 +1101,7 @@ fn relais_sert_les_trois_assets_hors_du_source_rust() {
     let config = UiRelayConfig {
         daemon_socket: PathBuf::from("/tmp/ui-assets-ne-doit-pas-ouvrir.sock"),
         maicie_config: PathBuf::from("/tmp/ui-assets-ne-doit-pas-ouvrir.json"),
+        project_root_policy_path: None,
         bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         token: "jeton-assets".to_string(),
     };
@@ -855,23 +1126,15 @@ fn watch_annonce_reconnecting_puis_connected_apres_coupure_daemon() {
     let mut daemon = DaemonProcess::start(&root);
     let socket = root.join(".cache/bridget/bridget.sock");
     let mut agent = LiveAgent::connect(&socket, "agent-reprise");
-    let config = UiRelayConfig {
-        daemon_socket: socket.clone(),
-        maicie_config: write_maicie_config(&root),
-        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-        token: "jeton-reprise".to_string(),
-    };
-    let relay = UiRelay::bind(config).unwrap();
-    let address = relay.local_addr().unwrap();
-    thread::spawn(move || relay.serve().unwrap());
+    write_agent_journal(&root, "agent-reprise");
+    let ui = UiProcess::start(&root, None);
+    let address = ui.address;
 
-    let mut events = request(address, "/v1/watch?token=jeton-reprise&agent=agent-reprise");
-    let subscription_id = match agent.read() {
-        DaemonToWrapper::Subscribe {
-            subscription_id, ..
-        } => subscription_id,
-        response => panic!("Subscribe attendu, reçu {response:?}"),
-    };
+    let mut events = request(
+        address,
+        &format!("/v1/watch?token={}&agent=agent-reprise", ui.token),
+    );
+    let subscription_id = agent.read_subscription_for("agent-reprise");
     agent.send(&WrapperToDaemon::Subscribed { subscription_id });
     let initial = read_until(&mut events, "\"state\":\"connected\"");
     assert!(initial.contains("event: relay_state"), "{initial}");
@@ -882,16 +1145,15 @@ fn watch_annonce_reconnecting_puis_connected_apres_coupure_daemon() {
 
     let daemon_restarted = DaemonProcess::start(&root);
     let mut reconnected = LiveAgent::connect(&socket, "agent-reprise");
-    let subscription_id = match reconnected.read() {
-        DaemonToWrapper::Subscribe {
-            subscription_id, ..
-        } => subscription_id,
-        response => panic!("Subscribe de reprise attendu, reçu {response:?}"),
-    };
+    let subscription_id = reconnected.read_subscription_for("agent-reprise");
     reconnected.send(&WrapperToDaemon::Subscribed { subscription_id });
     let restored = read_until(&mut events, "\"state\":\"connected\"");
     assert!(restored.contains("event: relay_state"), "{restored}");
 
+    drop(ui);
+    drop(reconnected);
+    drop(agent);
+    drop(daemon);
     drop(daemon_restarted);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -915,19 +1177,13 @@ fn snapshot_sans_agent_omet_les_pairs_et_watch_agent_les_projette() {
     assert!(matches!(peer.read(), DaemonToWrapper::Ack { .. }));
     assert!(matches!(focus.read(), DaemonToWrapper::Deliver(_)));
 
-    let config = UiRelayConfig {
-        daemon_socket: socket,
-        maicie_config: write_maicie_config(&root),
-        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-        token: "jeton-peer".to_string(),
-    };
-    let relay = UiRelay::bind(config).unwrap();
-    let address = relay.local_addr().unwrap();
-    thread::spawn(move || relay.serve().unwrap());
+    write_agent_journal(&root, "agent-focus");
+    let ui = UiProcess::start(&root, None);
+    let address = ui.address;
 
     let global = response_json(&read_response(request(
         address,
-        "/v1/snapshot?token=jeton-peer",
+        &format!("/v1/snapshot?token={}", ui.token),
     )));
     assert!(
         global.get("peer_exchanges").is_none(),
@@ -936,7 +1192,7 @@ fn snapshot_sans_agent_omet_les_pairs_et_watch_agent_les_projette() {
 
     let focused = response_json(&read_response(request(
         address,
-        "/v1/snapshot?token=jeton-peer&agent=agent-focus",
+        &format!("/v1/snapshot?token={}&agent=agent-focus", ui.token),
     )));
     let focused_exchanges = focused["peer_exchanges"]
         .as_array()
@@ -946,13 +1202,11 @@ fn snapshot_sans_agent_omet_les_pairs_et_watch_agent_les_projette() {
     assert_eq!(focused_exchanges[0]["direction"], "both", "{focused}");
     assert_eq!(focused_exchanges[0]["count"], 2, "{focused}");
 
-    let mut events = request(address, "/v1/watch?token=jeton-peer&agent=agent-focus");
-    let subscription_id = match focus.read() {
-        DaemonToWrapper::Subscribe {
-            subscription_id, ..
-        } => subscription_id,
-        response => panic!("Subscribe attendu, reçu {response:?}"),
-    };
+    let mut events = request(
+        address,
+        &format!("/v1/watch?token={}&agent=agent-focus", ui.token),
+    );
+    let subscription_id = focus.read_subscription_for("agent-focus");
     focus.send(&WrapperToDaemon::Subscribed { subscription_id });
 
     let snapshot = read_until(&mut events, "event: peer_exchange");
@@ -963,6 +1217,9 @@ fn snapshot_sans_agent_omet_les_pairs_et_watch_agent_les_projette() {
     let pushed = read_until(&mut events, "\"delivery_ids\"");
     assert!(pushed.contains("data: {\"version\":1,\"kind\":\"peer_exchange\""));
 
+    drop(ui);
+    drop(focus);
+    drop(peer);
     drop(daemon);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -982,23 +1239,15 @@ fn watch_pousse_thread_message_sortant_apres_ouverture() {
     // Présence humaine : le Send sortant vers humain doit être accepté au ledger.
     let _humain = LiveAgent::connect(&socket, "humain");
 
-    let config = UiRelayConfig {
-        daemon_socket: socket,
-        maicie_config: write_maicie_config(&root),
-        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-        token: "jeton-live".to_string(),
-    };
-    let relay = UiRelay::bind(config).unwrap();
-    let address = relay.local_addr().unwrap();
-    thread::spawn(move || relay.serve().unwrap());
+    write_agent_journal(&root, "agent-referent");
+    let ui = UiProcess::start(&root, None);
+    let address = ui.address;
 
-    let mut events = request(address, "/v1/watch?token=jeton-live&agent=agent-referent");
-    let subscription_id = match referent.read() {
-        DaemonToWrapper::Subscribe {
-            subscription_id, ..
-        } => subscription_id,
-        response => panic!("Subscribe attendu, reçu {response:?}"),
-    };
+    let mut events = request(
+        address,
+        &format!("/v1/watch?token={}&agent=agent-referent", ui.token),
+    );
+    let subscription_id = referent.read_subscription_for("agent-referent");
     referent.send(&WrapperToDaemon::Subscribed { subscription_id });
 
     let opened = read_until(&mut events, "event: snapshot");
@@ -1035,6 +1284,196 @@ fn watch_pousse_thread_message_sortant_apres_ouverture() {
         "une reconnexion ne compte pas comme chemin vivant: {live}"
     );
 
+    drop(ui);
+    drop(referent);
+    drop(_humain);
     drop(daemon);
+    std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
+fn relais_ui_expose_separement_connexion_vitalite_tour_attente_et_file() {
+    let root = root("execution-projection");
+    let config_directory = root.join(".config/bridget");
+    std::fs::create_dir_all(&config_directory).unwrap();
+    let registry_path = config_directory.join("agents.json");
+    std::fs::write(
+        &registry_path,
+        r#"{"execution_projection":{"dual_write":true,"legacy_projection":true}}"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    std::fs::set_permissions(&registry_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let daemon = DaemonProcess::start(&root);
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let mut sender = LiveAgent::connect(&socket, "maicie");
+    let mut agent = LiveAgent::connect(&socket, "agent-execution");
+
+    let mut queued = BridgetMessage::new("maicie", "agent-execution", "à conserver");
+    queued.id = "queue-execution".to_string();
+    queued.intent = Some(bridget_core::MessageIntent::QueueOnly);
+    sender.send(&WrapperToDaemon::Send(queued));
+    assert!(matches!(sender.read(), DaemonToWrapper::Ack { .. }));
+
+    let mut started = BridgetMessage::new("maicie", "agent-execution", "à démarrer");
+    started.id = "turn-execution".to_string();
+    started.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+    sender.send(&WrapperToDaemon::Send(started));
+    assert!(matches!(sender.read(), DaemonToWrapper::Ack { .. }));
+    assert!(matches!(
+        agent.read(),
+        DaemonToWrapper::DeliverExecution {
+            ref execution_id,
+            generation: 1,
+            revision: 0,
+            ..
+        } if execution_id == "execution-turn-execution"
+    ));
+    let observed_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .try_into()
+        .unwrap();
+    agent.send(&WrapperToDaemon::ExecutionStateChanged {
+        transition: bridget_transport::protocol::ExecutionStateTransition {
+            execution_id: "execution-turn-execution".to_string(),
+            generation: 1,
+            expected_state: "starting".to_string(),
+            expected_revision: 0,
+            next_state: "running".to_string(),
+            reason: "provider_accepted".to_string(),
+            observed_at,
+        },
+    });
+
+    let config = UiRelayConfig {
+        daemon_socket: socket,
+        maicie_config: write_maicie_config(&root),
+        project_root_policy_path: None,
+        bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        token: "jeton-execution".to_string(),
+    };
+    let relay = UiRelay::bind(config).unwrap();
+    let address = relay.local_addr().unwrap();
+    thread::spawn(move || relay.serve().unwrap());
+
+    let response = read_response(request(address, "/v1/snapshot?token=jeton-execution"));
+    let payload = response_json(&response);
+    let row = payload["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "agent-execution")
+        .expect("projection de l'agent");
+    assert_eq!(row["connection_state"], "busy");
+    assert!(row["provider_age_secs"].as_u64().is_some());
+    assert_eq!(row["turn_state"], "running");
+    assert!(row.get("wait_state").is_none());
+    assert!(row["progress_age_secs"].as_u64().is_some(), "row={row}");
+    assert_eq!(row["queue_depth"], 1);
+
+    agent.send(&WrapperToDaemon::ExecutionStateChanged {
+        transition: bridget_transport::protocol::ExecutionStateTransition {
+            execution_id: "execution-turn-execution".to_string(),
+            generation: 1,
+            expected_state: "running".to_string(),
+            expected_revision: 1,
+            next_state: "waiting_approval".to_string(),
+            reason: "permission_required".to_string(),
+            observed_at,
+        },
+    });
+    let response = read_response(request(address, "/v1/snapshot?token=jeton-execution"));
+    let payload = response_json(&response);
+    let row = payload["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "agent-execution")
+        .expect("projection après attente");
+    assert_eq!(row["connection_state"], "alive");
+    assert_eq!(row["turn_state"], "waiting_approval");
+    assert_eq!(row["wait_state"], "waiting_approval");
+    assert_eq!(row["queue_depth"], 1);
+
+    drop(daemon);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn spec_074_cli_endpoint_lit_l_etat_sans_demarrer_de_relais_ni_divulguer_en_erreur() {
+    let root = root("endpoint-cli");
+    let endpoint_path = root.join(".cache/bridget/ui-endpoint.json");
+    std::fs::create_dir_all(endpoint_path.parent().unwrap()).unwrap();
+    let fixture_token = "fixture-token-074";
+    std::fs::write(
+        &endpoint_path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "port": 17888,
+            "token": fixture_token,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&endpoint_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .args(["ui", "endpoint", "--json"])
+        .env_clear()
+        .env("HOME", &root)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("commande endpoint exécutée");
+    assert!(output.status.success(), "stderr={:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(payload["version"], 1);
+    assert_eq!(payload["port"], 17888);
+    assert_eq!(payload["token"], fixture_token);
+    assert!(
+        String::from_utf8_lossy(&output.stderr).is_empty(),
+        "la lecture nominale ne produit pas de diagnostic"
+    );
+
+    std::fs::remove_file(&endpoint_path).unwrap();
+    let missing = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .args(["ui", "endpoint", "--json"])
+        .env_clear()
+        .env("HOME", &root)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("commande endpoint absente exécutée");
+    assert!(!missing.status.success());
+    assert!(missing.stdout.is_empty(), "aucun contrat partiel en erreur");
+    assert!(
+        !String::from_utf8_lossy(&missing.stderr).contains(fixture_token),
+        "un jeton d'état ne doit jamais fuiter dans une erreur"
+    );
+
+    std::fs::write(
+        &endpoint_path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 99,
+            "port": 17888,
+            "token": fixture_token,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&endpoint_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let invalid = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .args(["ui", "endpoint", "--json"])
+        .env_clear()
+        .env("HOME", &root)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("commande endpoint invalide exécutée");
+    assert!(!invalid.status.success());
+    assert!(invalid.stdout.is_empty(), "aucun contrat partiel en erreur");
+    assert!(
+        !String::from_utf8_lossy(&invalid.stderr).contains(fixture_token),
+        "un jeton d'état invalide ne doit jamais fuiter dans une erreur"
+    );
+
     std::fs::remove_dir_all(root).unwrap();
 }

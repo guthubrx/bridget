@@ -3,11 +3,17 @@
 > **TOUTE AFFIRMATION D'INTEGRATION OU DE DEPLOIEMENT DE CETTE CARTE EST DATEE DU 28/08 ET NON REVERIFIEE DEPUIS.**
 > Elle en porte deux, et elles périment dans des sens opposés. « 055 est intégrée »
 > (§2) était mesuré par moi après `fetch` ; une intégration ne se défait pas, mais
-> ne t'y fie pas sans mesurer. « 060 et 061 non intégrés, non déployés » (§1, §4)
-> est le plus fragile : il suffit que quelqu'un intègre ou déploie pour que cette
-> carte devienne fausse en te faisant croire qu'il reste du travail. **`061` ne
-> peut pas être intégrée seule** : elle corrige du code de `060` et se branche sur
-> `9c6f47d`, pas sur `main`. Avant de t'appuyer sur l'une ou l'autre :
+> ne t'y fie pas sans mesurer. **Cette carte a déjà menti une fois de cette
+> façon** : elle a affirmé « 060 et 061 non intégrés » jusqu'au 28/08 20:57, où
+> les deux sont entrés dans `main` (`dda0843`). Le mensonge que le bandeau
+> annonçait s'est produit, et il a fallu venir le corriger à la main. Ce qui
+> **Et elle a menti une seconde fois, trois minutes après cette correction** :
+> j'avais écrit « intégrés, toujours PAS DÉPLOYÉS » à 23:49 ; le daemon a
+> redémarré à 23:52:30 sur un binaire de 23:41:16. **Tout est intégré, déployé et
+> éprouvé en production** — j'ai mesuré les trois cas moi-même (§2). Deux
+> démentis en trois heures sur la même carte : ne crois aucune de ses
+> affirmations d'état sans la remesurer, quel que soit le soin avec lequel elle
+> est écrite. Avant de t'appuyer sur l'une ou l'autre :
 > `git fetch` puis `git merge-base --is-ancestor <sha> origin/main`. Ne déduis pas, mesure.
 > **NOMME LE REMOTE avant de le croire** : `origin` ne désigne pas le même dépôt
 > selon les checkouts. Défaut trouvé par `cartae0-flux` le 28/08, annoncé pour
@@ -102,9 +108,15 @@ la commande dans le doute : elle est sans effet de bord si le domaine est déjà
 
 ## 1. ÉTAT
 
-Deux mandats livrés et publiés, **aucun intégré, aucun déployé** :
-`50060f62` (session 060) et `3d7053a6` (session 061, qui ferme une faille
-d'usurpation ouverte par 060 — voir §2). Aucun autre travail en cours. Arbre propre à la dernière mesure. Le gel humain tient : aucune
+Deux mandats livrés, publiés et **intégrés dans `main` le 28/08 à 20:57**
+(`dda0843`) : `50060f62` (session 060) et `3d7053a6` (session 061, qui ferme une
+faille d'usurpation ouverte par 060 — voir §2). **Les deux sont déployés depuis
+le 28/08 23:52:30**, redémarrage du daemon sur un binaire de 23:41:16 ; la faille
+d'usurpation est fermée en service, et non plus seulement dans `main`.
+Intégration vérifiée par moi après `fetch`, contenu contrôlé — garde de 061
+intacte, quatre témoins présents, témoin fautif de 060 disparu — puis
+comportement éprouvé en production (§2). `3d7053a6` a été clos sur cette base,
+décision `25b0b7f0`. Aucun autre travail en cours. Arbre propre à la dernière mesure. Le gel humain tient : aucune
 reprise de 055/057 ni de quoi que ce soit d'autre sans mandat à trois
 identifiants (objectif, délégation, message). Une notification seule n'est pas
 un mandat — trois agents ont refusé de travailler sur ce fondement le 28/08 et
@@ -223,7 +235,13 @@ comme mien :
 
 - 701 messages à expéditeur dérivé du PID, 701 identités distinctes, 8 dans la
   dernière heure (mesure de 15h38).
-- `057` publié non intégré ; `058` 8 commits non intégrés ; `059` 4 commits.
+- ~~`057` publié non intégré ; `058` 8 commits non intégrés ; `059` 4 commits.~~
+  **Vieilli, et remesuré par moi le 28/08 au soir** — ce qui montre à quelle
+  vitesse le §3 se périme : `057` reste non intégrée (tête `89f244d`, 1 commit
+  d'écart), mais `058` (`16be24f`) et `059` (`b52b736`) **sont désormais dans
+  `main`**. Deux affirmations sur trois étaient devenues fausses en quelques
+  heures. Ce que tu lis au §3 vient d'autrui et n'a pas d'échéance écrite :
+  remesure avant d'en faire quoi que ce soit.
 - 45 branches repassées sur refs fraîches : 31 intégrées, 14 non.
 - Les dix prédécesseurs tmux n'ont **aucune ligne** dans `spawn_commands`, et
   leur survie repose sur la réinscription de leur wrapper, propriété éprouvée
@@ -245,23 +263,32 @@ comme mien :
 
 Rien de ma propre initiative. Sur mandat explicite seulement :
 
-- Faire intégrer `9c6f47d` **puis** `b04cd3a` dans `main` — décision humaine.
-  **Dans cet ordre, ou ensemble.** N'intégrer que `060`, c'est intégrer la faille
-  d'usurpation ; n'intégrer que `061`, c'est n'intégrer rien qui s'applique.
-- Faire **déployer**. Tant que ce n'est pas fait, les expéditeurs jetables
-  continuent de s'accumuler et le travail ne sert à rien. C'est le seul point où
-  le livrable est inerte, et il ne dépend pas de moi.
+- ~~Faire intégrer `9c6f47d` puis `b04cd3a`~~ — **FAIT le 28/08 à 20:57**,
+  `dda0843`. Les deux sont dans `main`, dans le bon ordre, et le contenu a été
+  contrôlé après coup.
+- ~~Faire **déployer**~~ — **FAIT le 28/08 à 23:52:30**, redémarrage du daemon
+  sur un binaire de 23:41:16. Le livrable n'est plus inerte. Éprouvé par moi en
+  production, les trois cas, avec leurs codes de sortie réels :
+  `--from humain` → REJET usurpation, code 1 ; `--from <nom inconnu>` → REJET non
+  adressable, code 1, **motif distinct** ; sans `--from` → OK, code 0 et
+  attribution correcte au ledger. Les deux propriétés, celle de 060 et celle de
+  061, sont séparées dans le comportement et pas seulement dans le code.
 - Compteur de référence pour juger l'effet : **616 expéditeurs jetables hors
   ronde de vigilance**, et non les 728 bruts. La ronde du référent produisait
   elle-même 112 des 728, soit 15 % du défaut qu'elle sert à surveiller ; mesurée
   sur la série brute, une correction efficace aurait pu ressembler à un échec.
   Quelques unités des 616 viennent de mes propres sondes de diagnostic.
-- Test discriminant à utiliser APRÈS déploiement, celui-là est valide :
+- Test discriminant du déploiement — **exécuté le 28/08, les deux états ont été
+  observés** ; garde-le pour éprouver un futur déploiement :
   ```
   bridget send --from un-nom-jamais-connecte --to <soi> "sonde"
-  avant → OK code 0, ledger inscrit cli-send-<pid>
-  après → REJET « … non adressable », code 1
+  avant → OK code 0, ledger inscrit cli-send-<pid>        (mesuré à 15h41)
+  après → REJET « … non adressable », code 1              (mesuré à 23h55)
   ```
+  Ne teste JAMAIS avec `--as` : il est refusé par les deux binaires et ne
+  discrimine rien. Attention aussi au code de sortie — lis celui de `bridget`,
+  pas celui d'un `head` en aval dans un tube. Je m'y suis laissé prendre et j'ai
+  failli attester un code 0 sur un rejet.
 
 ## 5. CHEMINS ABSOLUS
 
@@ -341,11 +368,20 @@ Hérités de `rc7`, que je transmets sans les avoir tous éprouvés :
 
 ## 8. CE QUE JE NE SAIS PAS — déclaré, non caché
 
-- **Si je survivrai à un redémarrage du service.** Ma survie repose sur
-  `persistent=1`, drapeau jamais éprouvé. Si tu me lis, ou bien il a tenu, ou
-  bien tu n'es pas moi et ce fichier est tout ce qui reste.
-- Si `9c6f47d` a été intégré depuis. **Vérifier après `fetch`, ne pas déduire.**
-- Si le correctif a été déployé. Le tester avec `--from`, jamais avec `--as`.
+**Trois de ces ignorances ont été levées le 28/08 au soir. Je les laisse avec
+leur réponse plutôt que de les effacer : la trace du doute enseigne plus que la
+conclusion seule.**
+
+- ~~Si je survivrai à un redémarrage du service.~~ **LEVÉE, ET PAR L'ÉVÉNEMENT
+  LUI-MÊME.** Le daemon a redémarré à 23:52:30 et j'ai survécu : contexte intact,
+  travail intact, et mon domaine valait toujours `bridget` — j'ai passé le §0
+  avant tout le reste. La survie ne reposait pas sur `persistent=1` seul : le
+  respawn s'est fait avec `--resume`. Ce que le §0 donnait pour établi par
+  lecture de code et par un témoin unitaire est désormais **mesuré en
+  conditions réelles**.
+- ~~Si `9c6f47d` a été intégré depuis.~~ **LEVÉE** : oui, `dda0843`, 20:57.
+  La consigne reste bonne pour la suite — vérifier après `fetch`, ne pas déduire.
+- ~~Si le correctif a été déployé.~~ **LEVÉE** : oui, 23:52:30, et éprouvé (§4).
 - Le contenu de l'objectif `50060f62` tel qu'inscrit au greffe : je ne l'ai
   jamais lu, l'outil ne me le permettait pas.
 - Si les bancs d'intégration passent : je ne les ai pas lancés, délibérément.

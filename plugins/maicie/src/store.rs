@@ -18,16 +18,18 @@ use crate::domain::{
     EntreeReductionCoordination, EpisodeRelance, EtatActivationOutbox, EtatDecision,
     EtatDelegation, EtatEpisodeRelance, EtatGenerationDelegation, EtatNotificationOutbox,
     EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, EvenementCoordination,
-    FaitReassignation, FraicheurCoordination, GenerationDelegation, IssueGreffe, LienArbitrage,
-    LigneeDelegation, LotReassignation, MotifRefusDelegationLocale, MotifRefusGreffe,
-    NotificationOutbox, NotificationReassignation, ObjectifCoordonne, ObjectiveOpeningPermit,
-    OperationGuichet, OutboxDelegation, PolitiqueReassignation, QualificationDependance,
-    ReceptionGreffe, RecuCorrelation, ReductionCoordinationActive, ReductionOuvertureDelegation,
+    ExecutionProjection, FaitReassignation, FraicheurCoordination, GenerationDelegation,
+    IssueGreffe, LienArbitrage, LigneeDelegation, LotReassignation, MotifRefusDelegationLocale,
+    MotifRefusGreffe, NotificationOutbox, NotificationReassignation, ObjectifCoordonne,
+    ObjectiveOpeningPermit, OperationGuichet, OutboxDelegation, PolitiqueReassignation,
+    ProjectIdentity, ProjectIdentityStatus, QualificationDependance, ReceptionGreffe,
+    RecuCorrelation, ReductionCoordinationActive, ReductionOuvertureDelegation,
     ReductionReassignation, SuiteObjective, TransitionCoordinationActive, TypeDecision,
     TypeEffetDemandeSuivie, TypeEvenementAttendu, TypeFaitReassignation,
     TypeNotificationReassignation, identifiant_deterministe, reduire_coordination,
     reduire_ouverture_dependance, reduire_reassignation,
 };
+use crate::domain::{ProjectProfile, ProjectProfileApproval, ProjectProfileStatus};
 use crate::outbox::{
     MAX_MESSAGE_BYTES, OutboxError, PendingDelegationOutbox, PreparedDelegation, RecoverySnapshot,
     StoreCommitPhase, stable_body_hash,
@@ -35,7 +37,8 @@ use crate::outbox::{
 use crate::review_continuity::StoredReviewVerdict;
 use crate::routines::{EtatOccurrence, EtatRoutine, Routine, RoutineOccurrence};
 use bridget_transport::protocol::{
-    CoordinationEventKind, GuichetOutcome, GuichetReplyPayload, WrapperToDaemon, decode,
+    CoordinationEventKind, GuichetOutcome, GuichetReplyPayload, ProjectBackend, ProjectBindOutcome,
+    ProjectBindStatus, ResolvedProjectProfile, WrapperToDaemon, decode,
 };
 use rusqlite::{
     Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
@@ -52,7 +55,7 @@ use uuid::Uuid;
 
 /// Version courante du schéma SQLite. Les oracles de migration doivent lire
 /// cette constante — un littéral en dur meurt à chaque migration.
-pub const SCHEMA_VERSION: i64 = 20;
+pub const SCHEMA_VERSION: i64 = 23;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -93,6 +96,54 @@ pub struct SchemaPreflight {
     pub database_version: Option<i64>,
     pub supported_version: i64,
     pub bootstrap_required: bool,
+}
+
+/// État durable de la commande d'enregistrement projet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectRegistrationState {
+    Prepared,
+    Binding,
+    Bound,
+    Failed,
+    Expired,
+}
+
+impl ProjectRegistrationState {
+    fn from_db(value: &str) -> Result<Self, StoreError> {
+        match value {
+            "prepared" => Ok(Self::Prepared),
+            "binding" => Ok(Self::Binding),
+            "bound" => Ok(Self::Bound),
+            "failed" => Ok(Self::Failed),
+            "expired" => Ok(Self::Expired),
+            _ => Err(StoreError::Corrupt("état enregistrement projet inconnu")),
+        }
+    }
+}
+
+/// Intention préparée avant tout appel à Bridget.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRegistrationIntent {
+    pub command_id: String,
+    pub proposed_project_id: String,
+    pub display_name: String,
+    pub requested_root: String,
+    pub canonical_payload: Vec<u8>,
+    pub created_at: i64,
+    pub retry_until: i64,
+}
+
+/// Vue durable et rejouable de la préparation d'une commande projet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRegistrationRecord {
+    pub command_id: String,
+    pub identity: ProjectIdentity,
+    pub requested_root: String,
+    pub state: ProjectRegistrationState,
+    pub resolved_project_id: Option<String>,
+    pub retry_until: i64,
+    pub outbox_pending: bool,
+    pub outcome: Option<ProjectBindOutcome>,
 }
 
 /// Paramètres figés pour créer l'outbox au déblocage F37 (aucune intention
@@ -380,7 +431,7 @@ struct ApprovedSpawnOrder {
     #[serde(rename = "type")]
     kind: String,
     agent_type: String,
-    name: Option<String>,
+    agent_id: Option<String>,
     cwd: String,
     persistent: bool,
     command_id: String,
@@ -471,6 +522,9 @@ impl MaicieStore {
             )
             .map_err(StoreError::Sql)?;
         migrate(&mut connection, allow_upgrade)?;
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS agent_retarget_requirements (\n                 agent_id TEXT PRIMARY KEY,\n                 created_at INTEGER NOT NULL\n             );",
+        ).map_err(StoreError::Sql)?;
         set_wal_mode(&connection)?;
         let issuer_scope = load_or_create_issuer_scope(&mut connection)?;
 
@@ -479,6 +533,134 @@ impl MaicieStore {
             connection,
             issuer_scope,
         })
+    }
+
+    /// Remplace les références d'identité dans les projections SQL et les
+    /// enveloppes JSON persistées. Les références absentes du mapping restent
+    /// volontairement inchangées : elles ne sont jamais réattribuées à un
+    /// autre agent par cette migration.
+    pub fn migrate_agent_participants(
+        &mut self,
+        mapping: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), StoreError> {
+        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        for (legacy, agent_id) in mapping {
+            for statement in [
+                "UPDATE delegation_outbox SET target = ?1 WHERE target = ?2",
+                "UPDATE delegate_idempotency SET participant = ?1 WHERE participant = ?2",
+                "UPDATE routines SET participant = ?1 WHERE participant = ?2",
+                "UPDATE delegation_generations SET participant_id = ?1 WHERE participant_id = ?2",
+                "UPDATE coordination_events SET recipient = ?1 WHERE recipient = ?2",
+                "UPDATE coordination_expectations SET recipient = ?1 WHERE recipient = ?2",
+                "UPDATE notification_outbox SET recipient = ?1 WHERE recipient = ?2",
+                "UPDATE tracked_request_outbox SET recipient = ?1 WHERE recipient = ?2",
+            ] {
+                tx.execute(statement, rusqlite::params![agent_id, legacy])
+                    .map_err(StoreError::Sql)?;
+            }
+        }
+
+        rewrite_json_agent_references(&tx, "delegations", "id", "payload_json", mapping)?;
+        rewrite_json_agent_references(
+            &tx,
+            "delegation_outbox",
+            "message_id",
+            "message_bytes",
+            mapping,
+        )?;
+        rewrite_json_agent_references(
+            &tx,
+            "notification_outbox",
+            "message_id",
+            "message_bytes",
+            mapping,
+        )?;
+        rewrite_json_agent_references(
+            &tx,
+            "tracked_request_outbox",
+            "effect_id",
+            "message_bytes",
+            mapping,
+        )?;
+        tx.commit().map_err(StoreError::Sql)
+    }
+
+    /// Liste les principales d'agents encore présentes dans Maicie, y compris
+    /// les enveloppes historisées. La migration peut ainsi convertir une
+    /// référence qui n'apparaît plus dans la flotte courante sans l'effacer.
+    pub fn agent_references_for_identity_migration(&self) -> Result<BTreeSet<String>, StoreError> {
+        let mut references = BTreeSet::new();
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT target FROM delegation_outbox
+             UNION SELECT participant FROM delegate_idempotency
+             UNION SELECT participant FROM routines
+             UNION SELECT participant_id FROM delegation_generations
+             UNION SELECT recipient FROM coordination_events
+             UNION SELECT recipient FROM coordination_expectations
+             UNION SELECT recipient FROM notification_outbox
+             UNION SELECT recipient FROM tracked_request_outbox",
+            )
+            .map_err(StoreError::Sql)?;
+        for reference in statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(StoreError::Sql)?
+        {
+            references.insert(reference.map_err(StoreError::Sql)?);
+        }
+        drop(statement);
+        for (table, column) in [
+            ("delegations", "payload_json"),
+            ("delegation_outbox", "message_bytes"),
+            ("notification_outbox", "message_bytes"),
+            ("tracked_request_outbox", "message_bytes"),
+        ] {
+            let mut statement = self
+                .connection
+                .prepare(&format!("SELECT {column} FROM {table}"))
+                .map_err(StoreError::Sql)?;
+            for payload in statement
+                .query_map([], |row| row.get::<_, Vec<u8>>(0))
+                .map_err(StoreError::Sql)?
+            {
+                let value: serde_json::Value =
+                    serde_json::from_slice(&payload.map_err(StoreError::Sql)?)
+                        .map_err(StoreError::Json)?;
+                collect_json_agent_references(&value, &mut references);
+            }
+        }
+        Ok(references)
+    }
+
+    /// Marque une ou plusieurs cibles devenues orphelines. Tant que
+    /// l'opérateur ne les a pas retargetées, aucune de leurs outboxes n'est
+    /// présentée au dispatcher.
+    pub fn mark_agents_requires_retarget(
+        &mut self,
+        agent_ids: &BTreeSet<String>,
+    ) -> Result<(), StoreError> {
+        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS agent_retarget_requirements (
+                 agent_id TEXT PRIMARY KEY,
+                 created_at INTEGER NOT NULL
+             );",
+        )
+        .map_err(StoreError::Sql)?;
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
+            .unwrap_or_default();
+        for agent_id in agent_ids {
+            tx.execute(
+                "INSERT OR IGNORE INTO agent_retarget_requirements(agent_id, created_at)
+                 VALUES (?1, ?2)",
+                params![agent_id, created_at],
+            )
+            .map_err(StoreError::Sql)?;
+        }
+        tx.commit().map_err(StoreError::Sql)
     }
 
     pub fn path(&self) -> &Path {
@@ -493,6 +675,231 @@ impl MaicieStore {
         self.connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(StoreError::Sql)
+    }
+
+    /// Prépare en une transaction l'identité pending, la commande immuable et
+    /// l'outbox locale. Aucun appel Bridget n'est effectué ici.
+    pub fn prepare_project_registration(
+        &mut self,
+        intent: &ProjectRegistrationIntent,
+    ) -> Result<ProjectRegistrationRecord, StoreError> {
+        validate_project_registration_intent(intent)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        if let Some(existing) = project_registration_for_command(&tx, &intent.command_id)? {
+            if existing.canonical_payload != intent.canonical_payload {
+                return Err(StoreError::EnvelopeMismatch);
+            }
+            let record = project_registration_record_from_stored(&tx, existing)?;
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(record);
+        }
+
+        let identity = ProjectIdentity::pending(
+            intent.proposed_project_id.clone(),
+            intent.display_name.clone(),
+            intent.command_id.clone(),
+            intent.created_at,
+        )
+        .map_err(StoreError::Domain)?;
+        tx.execute(
+            "INSERT INTO project_identities (
+                 project_id, display_name, status, created_at, updated_at, registration_command_id
+             ) VALUES (?1, ?2, 'pending_binding', ?3, ?3, ?4)",
+            params![
+                identity.project_id,
+                identity.display_name,
+                identity.created_at,
+                identity.registration_command_id,
+            ],
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::SqliteFailure(ref failure, _)
+                if failure.code == ErrorCode::ConstraintViolation =>
+            {
+                StoreError::Conflict("identité projet déjà préparée")
+            }
+            other => StoreError::Sql(other),
+        })?;
+        tx.execute(
+            "INSERT INTO project_registration_commands (
+                 command_id, canonical_payload, proposed_project_id, resolved_project_id,
+                 requested_root, state, retry_until
+             ) VALUES (?1, ?2, ?3, NULL, ?4, 'prepared', ?5)",
+            params![
+                intent.command_id,
+                intent.canonical_payload,
+                intent.proposed_project_id,
+                intent.requested_root,
+                intent.retry_until,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+        tx.execute(
+            "INSERT INTO project_registration_outbox (
+                 command_id, canonical_request, state
+             ) VALUES (?1, ?2, 'prepared')",
+            params![intent.command_id, intent.canonical_payload],
+        )
+        .map_err(StoreError::Sql)?;
+        let stored = project_registration_for_command(&tx, &intent.command_id)?.ok_or(
+            StoreError::Corrupt("commande projet absente après insertion"),
+        )?;
+        let record = project_registration_record_from_stored(&tx, stored)?;
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(record)
+    }
+
+    /// Relit l'issue durable d'une commande sans accéder au store Bridget.
+    pub fn project_registration(
+        &self,
+        command_id: &str,
+    ) -> Result<Option<ProjectRegistrationRecord>, StoreError> {
+        project_registration_for_command(&self.connection, command_id)?
+            .map(|stored| project_registration_record_from_stored(&self.connection, stored))
+            .transpose()
+    }
+
+    /// Relit les octets immuables de l'outbox de liaison pour rejouer la même
+    /// commande après une interruption, sans construire une seconde intention.
+    pub fn project_registration_request_bytes(
+        &self,
+        command_id: &str,
+    ) -> Result<Option<Vec<u8>>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT canonical_request FROM project_registration_outbox WHERE command_id = ?1",
+                [command_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)
+    }
+
+    /// Fige l'issue terminale renvoyée par Bridget et ne promeut l'identité
+    /// qu'après une liaison host attestée. Un même résultat est rejouable;
+    /// une issue différente pour la même commande est un conflit durable.
+    pub fn resolve_project_registration(
+        &mut self,
+        outcome: &ProjectBindOutcome,
+    ) -> Result<ProjectRegistrationRecord, StoreError> {
+        validate_project_bind_outcome(outcome)?;
+        let outcome_bytes = serde_json::to_vec(outcome).map_err(StoreError::Json)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let stored = project_registration_for_command(&tx, &outcome.command_id)?
+            .ok_or(StoreError::NotFound("commande projet inconnue"))?;
+        if stored.proposed_project_id != outcome.project_id {
+            return Err(StoreError::EnvelopeMismatch);
+        }
+        if let Some(existing_outcome) = &stored.outcome_json {
+            if existing_outcome != &outcome_bytes {
+                return Err(StoreError::Conflict("issue projet terminale déjà figée"));
+            }
+            let record = project_registration_record_from_stored(&tx, stored)?;
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(record);
+        }
+
+        let mut record = project_registration_record_from_stored(&tx, stored)?;
+        if record.identity.status != ProjectIdentityStatus::PendingBinding {
+            return Err(StoreError::Corrupt(
+                "identité projet non pending sans issue durable",
+            ));
+        }
+        let (state, resolved_project_id, outbox_state) = match outcome.status {
+            ProjectBindStatus::Active => {
+                let generation = outcome
+                    .binding_generation
+                    .ok_or(StoreError::Corrupt("issue active sans génération"))?;
+                record
+                    .identity
+                    .activate(generation, outcome.observed_at)
+                    .map_err(StoreError::Domain)?;
+                persist_project_identity(&tx, &record.identity)?;
+                (
+                    ProjectRegistrationState::Bound,
+                    Some(record.identity.project_id.clone()),
+                    "applied",
+                )
+            }
+            ProjectBindStatus::RegistrationConflict => {
+                record
+                    .identity
+                    .registration_conflict(outcome.observed_at)
+                    .map_err(StoreError::Domain)?;
+                persist_project_identity(&tx, &record.identity)?;
+                (
+                    ProjectRegistrationState::Failed,
+                    outcome.existing_project_id.clone(),
+                    "rejected",
+                )
+            }
+            ProjectBindStatus::BindingFailed => {
+                (ProjectRegistrationState::Failed, None, "rejected")
+            }
+        };
+        let changed = tx
+            .execute(
+                "UPDATE project_registration_commands
+                 SET resolved_project_id = ?1, state = ?2, outcome_json = ?3,
+                     outcome_observed_at = ?4
+                 WHERE command_id = ?5 AND outcome_json IS NULL",
+                params![
+                    resolved_project_id,
+                    project_registration_state_name(state),
+                    outcome_bytes,
+                    outcome.observed_at,
+                    outcome.command_id,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict(
+                "commande projet modifiée concurremment pendant sa résolution",
+            ));
+        }
+        let changed = tx
+            .execute(
+                "UPDATE project_registration_outbox SET state = ?1 WHERE command_id = ?2
+                 AND state IN ('prepared', 'outcome_unknown')",
+                params![outbox_state, outcome.command_id],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Corrupt(
+                "outbox projet absente ou déjà terminale sans issue durable",
+            ));
+        }
+        let stored = project_registration_for_command(&tx, &outcome.command_id)?.ok_or(
+            StoreError::Corrupt("commande projet absente après résolution"),
+        )?;
+        let result = project_registration_record_from_stored(&tx, stored)?;
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(result)
+    }
+
+    pub fn project_identities(&self) -> Result<Vec<ProjectIdentity>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT project_id, display_name, status, created_at, updated_at,
+                        registration_command_id
+                 FROM project_identities ORDER BY created_at ASC, project_id ASC",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], project_identity_from_row)
+            .map_err(StoreError::Sql)?;
+        rows.map(|row| {
+            row.map_err(StoreError::Sql)
+                .and_then(decode_project_identity)
+        })
+        .collect()
     }
 
     /// Fige la définition 016 et sa génération initiale sous transaction
@@ -923,6 +1330,7 @@ impl MaicieStore {
                         message_bytes, state
                  FROM tracked_request_outbox
                  WHERE terminal = 0 AND state IN ('prepared','outcome_unknown')
+                   AND NOT EXISTS (SELECT 1 FROM agent_retarget_requirements requirement WHERE requirement.agent_id = tracked_request_outbox.recipient)
                  ORDER BY effect_id",
             )
             .map_err(StoreError::Sql)?;
@@ -977,6 +1385,7 @@ impl MaicieStore {
                         generation, event_id, policy_version, recipient, message_bytes, state
                  FROM notification_outbox
                  WHERE terminal = 0 AND state IN ('prepared','outcome_unknown')
+                   AND NOT EXISTS (SELECT 1 FROM agent_retarget_requirements requirement WHERE requirement.agent_id = notification_outbox.recipient)
                  ORDER BY message_id",
             )
             .map_err(StoreError::Sql)?;
@@ -1656,6 +2065,72 @@ impl MaicieStore {
             })
         })
         .collect()
+    }
+
+    /// Enregistre seulement une copie de fait Bridget. Les curseurs anciens ne
+    /// réécrivent pas la dernière observation et aucun objectif n'est muté.
+    pub fn upsert_execution_projection(
+        &mut self,
+        projection: &ExecutionProjection,
+    ) -> Result<bool, StoreError> {
+        projection.verifier().map_err(StoreError::Domain)?;
+        let payload = serde_json::to_vec(projection).map_err(StoreError::Json)?;
+        let changed = self
+            .connection
+            .execute(
+                "INSERT INTO delegation_execution_projections(
+                     delegation_id, execution_id, payload_json, observation_cursor,
+                     source_generation, observed_at
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(delegation_id) DO UPDATE SET
+                     execution_id = excluded.execution_id,
+                     payload_json = excluded.payload_json,
+                     observation_cursor = excluded.observation_cursor,
+                     source_generation = excluded.source_generation,
+                     observed_at = excluded.observed_at
+                 WHERE excluded.source_generation > delegation_execution_projections.source_generation
+                    OR (excluded.source_generation = delegation_execution_projections.source_generation
+                        AND excluded.observation_cursor >= delegation_execution_projections.observation_cursor)",
+                params![
+                    projection.reference.delegation_id.to_string(),
+                    projection.reference.execution_id,
+                    payload,
+                    projection.observation_cursor,
+                    projection.source_generation,
+                    projection.observed_at,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        Ok(changed == 1)
+    }
+
+    /// Relit une observation opaque sans joindre l'état de mission propriétaire.
+    pub fn execution_projection_for_delegation(
+        &self,
+        delegation_id: Uuid,
+    ) -> Result<Option<ExecutionProjection>, StoreError> {
+        let payload = self
+            .connection
+            .query_row(
+                "SELECT payload_json FROM delegation_execution_projections WHERE delegation_id = ?1",
+                [delegation_id.to_string()],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        payload
+            .map(|bytes| {
+                let projection: ExecutionProjection =
+                    serde_json::from_slice(&bytes).map_err(StoreError::Json)?;
+                if projection.reference.delegation_id != delegation_id {
+                    return Err(StoreError::Corrupt(
+                        "projection et clé délégation divergentes",
+                    ));
+                }
+                projection.verifier().map_err(StoreError::Domain)?;
+                Ok(projection)
+            })
+            .transpose()
     }
 
     /// Relit tous les verdicts de revue depuis les réponses terminales déjà
@@ -3190,6 +3665,170 @@ impl MaicieStore {
         }
     }
 
+    /// Persists a proposed project profile before host resolution or local approval.
+    pub fn save_project_profile(&mut self, profile: &ProjectProfile) -> Result<(), StoreError> {
+        if profile.status != ProjectProfileStatus::Proposed {
+            return Err(StoreError::Invalid("project profile must be proposed"));
+        }
+        let payload = serde_json::to_vec(profile).map_err(StoreError::Json)?;
+        let changed = self
+            .connection
+            .execute(
+                "INSERT INTO project_profiles(
+                     profile_id, project_id, state, payload_json, approval_json, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, NULL, ?5)",
+                params![
+                    profile.profile_id,
+                    profile.project_id,
+                    project_profile_status_text(profile.status),
+                    payload,
+                    profile.updated_at,
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict("project profile already exists"));
+        }
+        Ok(())
+    }
+
+    // Replaces an obsolete profile proposal atomically. The former local approval
+    // is removed, so a fresh host resolution and local confirmation are required.
+    pub fn replace_project_profile(&mut self, profile: &ProjectProfile) -> Result<(), StoreError> {
+        if profile.status != ProjectProfileStatus::Proposed {
+            return Err(StoreError::Invalid(
+                "project profile replacement must be proposed",
+            ));
+        }
+        let payload = serde_json::to_vec(profile).map_err(StoreError::Json)?;
+        let changed = self.connection.execute(
+            "UPDATE project_profiles
+             SET project_id = ?1, state = ?2, payload_json = ?3, approval_json = NULL, updated_at = ?4
+             WHERE profile_id = ?5",
+            params![
+                profile.project_id,
+                project_profile_status_text(profile.status),
+                payload,
+                profile.updated_at,
+                profile.profile_id,
+            ],
+        ).map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::NotFound("project profile missing"));
+        }
+        Ok(())
+    }
+
+    pub fn project_profile(&self, profile_id: &str) -> Result<Option<ProjectProfile>, StoreError> {
+        let stored: Option<(String, Vec<u8>)> = self
+            .connection
+            .query_row(
+                "SELECT state, payload_json FROM project_profiles WHERE profile_id = ?1",
+                [profile_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        stored
+            .map(|(state, payload)| {
+                let profile: ProjectProfile =
+                    serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+                if project_profile_status_text(profile.status) != state {
+                    return Err(StoreError::Corrupt("project profile state mismatch"));
+                }
+                Ok(profile)
+            })
+            .transpose()
+    }
+
+    pub fn record_project_profile_resolution(
+        &mut self,
+        profile_id: &str,
+        resolved: ResolvedProjectProfile,
+        now: i64,
+    ) -> Result<ProjectProfile, StoreError> {
+        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        let stored: Option<(String, Vec<u8>)> = tx
+            .query_row(
+                "SELECT state, payload_json FROM project_profiles WHERE profile_id = ?1",
+                [profile_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        let Some((state, payload)) = stored else {
+            return Err(StoreError::NotFound("project profile missing"));
+        };
+        let mut profile: ProjectProfile =
+            serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+        if state != "proposed" || profile.status != ProjectProfileStatus::Proposed {
+            return Err(StoreError::Conflict("project profile is not resolvable"));
+        }
+        profile
+            .record_resolution(resolved, now)
+            .map_err(StoreError::Domain)?;
+        let profile_payload = serde_json::to_vec(&profile).map_err(StoreError::Json)?;
+        let changed = tx.execute(
+            "UPDATE project_profiles SET state = ?1, payload_json = ?2, updated_at = ?3 WHERE profile_id = ?4 AND state = ?5",
+            params![project_profile_status_text(profile.status), profile_payload, profile.updated_at, profile.profile_id, "proposed"],
+        ).map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict("project profile changed concurrently"));
+        }
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(profile)
+    }
+
+    pub fn approve_project_profile(
+        &mut self,
+        profile_id: &str,
+        profile_digest: String,
+        now: i64,
+    ) -> Result<(ProjectProfile, ProjectProfileApproval), StoreError> {
+        let tx = self.connection.transaction().map_err(StoreError::Sql)?;
+        let stored: Option<(String, Vec<u8>)> = tx
+            .query_row(
+                "SELECT state, payload_json FROM project_profiles WHERE profile_id = ?1",
+                [profile_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        let Some((state, payload)) = stored else {
+            return Err(StoreError::NotFound("project profile missing"));
+        };
+        let mut profile: ProjectProfile =
+            serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+        if state != "resolved" || profile.status != ProjectProfileStatus::Resolved {
+            return Err(StoreError::Conflict("project profile is not approvable"));
+        }
+        let approval = profile
+            .approve(profile_digest, now)
+            .map_err(StoreError::Domain)?;
+        let profile_payload = serde_json::to_vec(&profile).map_err(StoreError::Json)?;
+        let approval_payload = serde_json::to_vec(&approval).map_err(StoreError::Json)?;
+        let changed = tx
+            .execute(
+                "UPDATE project_profiles
+                 SET state = ?1, payload_json = ?2, approval_json = ?3, updated_at = ?4
+                 WHERE profile_id = ?5 AND state = ?6",
+                params![
+                    project_profile_status_text(profile.status),
+                    profile_payload,
+                    approval_payload,
+                    profile.updated_at,
+                    profile.profile_id,
+                    "resolved",
+                ],
+            )
+            .map_err(StoreError::Sql)?;
+        if changed != 1 {
+            return Err(StoreError::Conflict("project profile changed concurrently"));
+        }
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok((profile, approval))
+    }
+
     fn delegations_for(
         &self,
         objective_id: Uuid,
@@ -3214,6 +3853,7 @@ impl MaicieStore {
             let (id, state, payload) = row.map_err(StoreError::Sql)?;
             let delegation = serde_json::from_slice::<crate::domain::Delegation>(&payload)
                 .map_err(StoreError::Json)?;
+            delegation.verifier().map_err(StoreError::Domain)?;
             if delegation.id.to_string() != id
                 || delegation.objectif_id != objective_id
                 || delegation.etat != parse_delegation_state(&state)?
@@ -3682,6 +4322,68 @@ impl MaicieStore {
             .collect()
     }
 
+    /// Désactive l'identité métier uniquement après la désactivation technique
+    /// attestée par Bridget. Aucun objectif ni délégation n'est réécrit ici.
+    /// Réactive l identité métier seulement après la liaison active attestée.
+    pub fn activate_project_identity(
+        &mut self,
+        project_id: &str,
+        binding_generation: u64,
+        observed_at: i64,
+    ) -> Result<ProjectIdentity, StoreError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let mut identity = tx
+            .query_row(
+                "SELECT project_id, display_name, status, created_at, updated_at,
+                        registration_command_id
+                 FROM project_identities WHERE project_id = ?1",
+                [project_id],
+                project_identity_from_row,
+            )
+            .optional()
+            .map_err(StoreError::Sql)?
+            .ok_or(StoreError::NotFound("identité projet inconnue"))
+            .and_then(decode_project_identity)?;
+        identity
+            .reactivate(binding_generation, observed_at)
+            .map_err(StoreError::Domain)?;
+        persist_project_identity(&tx, &identity)?;
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(identity)
+    }
+
+    pub fn disable_project_identity(
+        &mut self,
+        project_id: &str,
+        observed_at: i64,
+    ) -> Result<ProjectIdentity, StoreError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let mut identity = tx
+            .query_row(
+                "SELECT project_id, display_name, status, created_at, updated_at,
+                        registration_command_id
+                 FROM project_identities WHERE project_id = ?1",
+                [project_id],
+                project_identity_from_row,
+            )
+            .optional()
+            .map_err(StoreError::Sql)?
+            .ok_or(StoreError::NotFound("identité projet inconnue"))
+            .and_then(decode_project_identity)?;
+        if identity.status == ProjectIdentityStatus::Active {
+            identity.disable(observed_at).map_err(StoreError::Domain)?;
+            persist_project_identity(&tx, &identity)?;
+        }
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(identity)
+    }
+
     /// Pose les arêtes OBJECTIF→OBJECTIF pour une délégation déjà créée
     /// (prérequis tous clos → dispatch immédiat, arêtes journalisées quand même).
     pub fn register_objective_dependencies(
@@ -3770,6 +4472,7 @@ impl MaicieStore {
                         dedup_retained_until\n\
                  FROM delegation_outbox\n\
                  WHERE terminal = 0 AND state IN ('prepared', 'outcome_unknown')\n\
+                   AND NOT EXISTS (SELECT 1 FROM agent_retarget_requirements requirement WHERE requirement.agent_id = delegation_outbox.target)\n\
                  ORDER BY issued_at, message_id",
             )
             .map_err(StoreError::Sql)?;
@@ -4226,7 +4929,7 @@ impl MaicieStore {
     ) -> Result<(), StoreError> {
         let SpawnOutcome::Accepted {
             command_id: accepted_id,
-            name,
+            agent_id,
         } = outcome
         else {
             return Err(StoreError::Invalid("une divergence exige SpawnAccepted"));
@@ -4237,7 +4940,7 @@ impl MaicieStore {
         let issue = serde_json::to_vec(&json!({
             "kind": "definition_digest_divergent",
             "command_id": accepted_id,
-            "name": name,
+            "agent_id": agent_id,
             "expected_definition_digest": hex_digest(expected_digest),
             "received_definition_digest": received_digest,
             "agent_launched_without_followup": true,
@@ -8169,6 +8872,92 @@ fn migrate_to_version(
         }
         verify_guichet_reception_shape_v20(&tx)?;
     }
+    // v21 : références opaques Bridget et dernière projection runtime par
+    // délégation. Aucun trigger ne touche objectifs ou décisions.
+    // Le garde de schéma lit ce seuil séparé pour prévenir les collisions de migrations.
+    #[allow(clippy::collapsible_if)]
+    if target_version >= 21 {
+        if current_version < 21 {
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS delegation_execution_projections (
+                 delegation_id TEXT PRIMARY KEY REFERENCES delegations(id),
+                 execution_id TEXT NOT NULL UNIQUE,
+                 payload_json BLOB NOT NULL,
+                 observation_cursor INTEGER NOT NULL CHECK(observation_cursor >= 0),
+                 source_generation INTEGER NOT NULL CHECK(source_generation >= 0),
+                 observed_at INTEGER NOT NULL CHECK(observed_at >= 0)
+             );
+             CREATE INDEX IF NOT EXISTS delegation_execution_projections_cursor_idx
+                 ON delegation_execution_projections(observation_cursor);",
+            )
+            .map_err(StoreError::Sql)?;
+        }
+    }
+    // v22 : identité projet Maicie, commande idempotente et outbox locale.
+    // La racine demandée reste une intention : Bridget seul la canonise et
+    // l'autorise avant d'activer l'identité.
+    if target_version >= 22 && current_version < 22 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS project_identities (
+                     project_id TEXT PRIMARY KEY,
+                     display_name TEXT NOT NULL,
+                     status TEXT NOT NULL CHECK(status IN (
+                         'pending_binding', 'active', 'registration_conflict', 'disabled'
+                     )),
+                     created_at INTEGER NOT NULL,
+                     updated_at INTEGER NOT NULL,
+                     registration_command_id TEXT NOT NULL UNIQUE
+                 );
+                 CREATE INDEX IF NOT EXISTS project_identities_status_idx
+                     ON project_identities(status, updated_at, project_id);
+                 CREATE TABLE IF NOT EXISTS project_registration_commands (
+                     command_id TEXT PRIMARY KEY,
+                     canonical_payload BLOB NOT NULL,
+                     proposed_project_id TEXT NOT NULL UNIQUE
+                         REFERENCES project_identities(project_id),
+                     resolved_project_id TEXT,
+                     requested_root TEXT NOT NULL,
+                     state TEXT NOT NULL CHECK(state IN (
+                         'prepared', 'binding', 'bound', 'failed', 'expired'
+                     )),
+                     retry_until INTEGER NOT NULL,
+                     outcome_json BLOB,
+                     outcome_observed_at INTEGER
+                 );
+                 CREATE INDEX IF NOT EXISTS project_registration_commands_pending_idx
+                     ON project_registration_commands(state, retry_until, command_id);
+                 CREATE TABLE IF NOT EXISTS project_registration_outbox (
+                     command_id TEXT PRIMARY KEY
+                         REFERENCES project_registration_commands(command_id),
+                     canonical_request BLOB NOT NULL,
+                     state TEXT NOT NULL CHECK(state IN (
+                         'prepared', 'outcome_unknown', 'applied', 'rejected'
+                     ))
+                 );
+                 CREATE INDEX IF NOT EXISTS project_registration_outbox_pending_idx
+                     ON project_registration_outbox(state, command_id);",
+        )
+        .map_err(StoreError::Sql)?;
+    }
+
+    // v23 : profil projet et approbation locale durables. Les payloads ne
+    // contiennent que references, digests et generations, jamais un secret.
+    if current_version < 23 && target_version >= 23 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS project_profiles (
+                 profile_id TEXT PRIMARY KEY,
+                 project_id TEXT NOT NULL,
+                 state TEXT NOT NULL,
+                 payload_json BLOB NOT NULL,
+                 approval_json BLOB,
+                 updated_at INTEGER NOT NULL CHECK(updated_at >= 0)
+             );
+             CREATE INDEX IF NOT EXISTS project_profiles_project_idx
+                 ON project_profiles(project_id, state, updated_at);",
+        )
+        .map_err(StoreError::Sql)?;
+    }
+
     for version in (current_version + 1)..=target_version {
         tx.execute(
             "INSERT OR IGNORE INTO schema_migrations(version, applied_at)\n\
@@ -9306,6 +10095,17 @@ fn parse_delegation_state(value: &str) -> Result<EtatDelegation, StoreError> {
         .ok_or(StoreError::Corrupt("état délégation inconnu"))
 }
 
+fn project_profile_status_text(status: ProjectProfileStatus) -> &'static str {
+    match status {
+        ProjectProfileStatus::Proposed => "proposed",
+        ProjectProfileStatus::Resolved => "resolved",
+        ProjectProfileStatus::Approved => "approved",
+        ProjectProfileStatus::Active => "active",
+        ProjectProfileStatus::Stale => "stale",
+        ProjectProfileStatus::Disabled => "disabled",
+    }
+}
+
 fn parse_outbox_state(value: &str) -> Result<EtatOutboxDelegation, StoreError> {
     match value {
         "prepared" => Ok(EtatOutboxDelegation::Prepared),
@@ -9360,7 +10160,7 @@ fn validate_approved_spawn_order(
             "SpawnOrder non conforme à l'approbation",
         ));
     }
-    let _ = (order.name, order.persistent);
+    let _ = (order.agent_id, order.persistent);
     Ok(())
 }
 
@@ -9370,11 +10170,14 @@ fn activation_issue(
 ) -> Result<(EtatActivationOutbox, Vec<u8>), StoreError> {
     let expected = command_id.to_string();
     let value = match outcome {
-        SpawnOutcome::Accepted { command_id, name } => {
+        SpawnOutcome::Accepted {
+            command_id,
+            agent_id,
+        } => {
             if command_id != &expected {
                 return Err(StoreError::Invalid("command_id d'issue divergent"));
             }
-            json!({"kind":"accepted","command_id":command_id,"name":name})
+            json!({"kind":"accepted","command_id":command_id,"agent_id":agent_id})
         }
         SpawnOutcome::Rejected { command_id, reason } => {
             if command_id != &expected {
@@ -9561,8 +10364,357 @@ impl TryFrom<RawRecovery> for RecoverySnapshot {
     }
 }
 
+#[derive(Debug)]
+struct StoredProjectIdentity {
+    project_id: String,
+    display_name: String,
+    status: String,
+    created_at: i64,
+    updated_at: i64,
+    registration_command_id: String,
+}
+
+fn project_identity_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredProjectIdentity> {
+    Ok(StoredProjectIdentity {
+        project_id: row.get(0)?,
+        display_name: row.get(1)?,
+        status: row.get(2)?,
+        created_at: row.get(3)?,
+        updated_at: row.get(4)?,
+        registration_command_id: row.get(5)?,
+    })
+}
+
+fn decode_project_identity(stored: StoredProjectIdentity) -> Result<ProjectIdentity, StoreError> {
+    let status = match stored.status.as_str() {
+        "pending_binding" => ProjectIdentityStatus::PendingBinding,
+        "active" => ProjectIdentityStatus::Active,
+        "registration_conflict" => ProjectIdentityStatus::RegistrationConflict,
+        "disabled" => ProjectIdentityStatus::Disabled,
+        _ => return Err(StoreError::Corrupt("état identité projet inconnu")),
+    };
+    if stored.project_id.trim().is_empty()
+        || stored.display_name.trim().is_empty()
+        || stored.registration_command_id.trim().is_empty()
+        || stored.created_at < 0
+        || stored.updated_at < stored.created_at
+    {
+        return Err(StoreError::Corrupt("identité projet durable invalide"));
+    }
+    Ok(ProjectIdentity {
+        project_id: stored.project_id,
+        display_name: stored.display_name,
+        status,
+        created_at: stored.created_at,
+        updated_at: stored.updated_at,
+        registration_command_id: stored.registration_command_id,
+    })
+}
+
+#[derive(Debug)]
+struct StoredProjectRegistration {
+    command_id: String,
+    canonical_payload: Vec<u8>,
+    proposed_project_id: String,
+    resolved_project_id: Option<String>,
+    requested_root: String,
+    state: String,
+    retry_until: i64,
+    outcome_json: Option<Vec<u8>>,
+    outcome_observed_at: Option<i64>,
+}
+
+fn project_registration_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<StoredProjectRegistration> {
+    Ok(StoredProjectRegistration {
+        command_id: row.get(0)?,
+        canonical_payload: row.get(1)?,
+        proposed_project_id: row.get(2)?,
+        resolved_project_id: row.get(3)?,
+        requested_root: row.get(4)?,
+        state: row.get(5)?,
+        retry_until: row.get(6)?,
+        outcome_json: row.get(7)?,
+        outcome_observed_at: row.get(8)?,
+    })
+}
+
+fn project_registration_for_command(
+    connection: &Connection,
+    command_id: &str,
+) -> Result<Option<StoredProjectRegistration>, StoreError> {
+    connection
+        .query_row(
+            "SELECT command_id, canonical_payload, proposed_project_id, resolved_project_id,
+                    requested_root, state, retry_until, outcome_json, outcome_observed_at
+             FROM project_registration_commands WHERE command_id = ?1",
+            [command_id],
+            project_registration_from_row,
+        )
+        .optional()
+        .map_err(StoreError::Sql)
+}
+
+fn project_registration_record_from_stored(
+    connection: &Connection,
+    stored: StoredProjectRegistration,
+) -> Result<ProjectRegistrationRecord, StoreError> {
+    let identity = connection
+        .query_row(
+            "SELECT project_id, display_name, status, created_at, updated_at,
+                    registration_command_id
+             FROM project_identities WHERE project_id = ?1",
+            [&stored.proposed_project_id],
+            project_identity_from_row,
+        )
+        .map_err(StoreError::Sql)
+        .and_then(decode_project_identity)?;
+    if identity.registration_command_id != stored.command_id {
+        return Err(StoreError::Corrupt(
+            "identité et commande projet divergentes",
+        ));
+    }
+    let state = ProjectRegistrationState::from_db(&stored.state)?;
+    let outcome: Option<ProjectBindOutcome> = stored
+        .outcome_json
+        .as_deref()
+        .map(|bytes| serde_json::from_slice(bytes).map_err(StoreError::Json))
+        .transpose()?;
+    if outcome.as_ref().is_some_and(|outcome| {
+        outcome.command_id != stored.command_id || outcome.project_id != stored.proposed_project_id
+    }) {
+        return Err(StoreError::Corrupt("issue projet et commande divergentes"));
+    }
+    if outcome.is_some() != stored.outcome_observed_at.is_some() {
+        return Err(StoreError::Corrupt("horodatage issue projet divergent"));
+    }
+    let outbox_pending: bool = connection
+        .query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM project_registration_outbox
+                 WHERE command_id = ?1 AND state IN ('prepared', 'outcome_unknown')
+             )",
+            [&stored.command_id],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::Sql)?;
+    Ok(ProjectRegistrationRecord {
+        command_id: stored.command_id,
+        identity,
+        requested_root: stored.requested_root,
+        state,
+        resolved_project_id: stored.resolved_project_id,
+        retry_until: stored.retry_until,
+        outbox_pending,
+        outcome,
+    })
+}
+
+fn persist_project_identity(
+    connection: &Connection,
+    identity: &ProjectIdentity,
+) -> Result<(), StoreError> {
+    let status = match identity.status {
+        ProjectIdentityStatus::PendingBinding => "pending_binding",
+        ProjectIdentityStatus::Active => "active",
+        ProjectIdentityStatus::RegistrationConflict => "registration_conflict",
+        ProjectIdentityStatus::Disabled => "disabled",
+    };
+    let changed = connection
+        .execute(
+            "UPDATE project_identities SET status = ?1, updated_at = ?2
+             WHERE project_id = ?3 AND registration_command_id = ?4",
+            params![
+                status,
+                identity.updated_at,
+                identity.project_id,
+                identity.registration_command_id,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    if changed != 1 {
+        return Err(StoreError::Corrupt(
+            "identité projet absente à la promotion",
+        ));
+    }
+    Ok(())
+}
+
+fn project_registration_state_name(state: ProjectRegistrationState) -> &'static str {
+    match state {
+        ProjectRegistrationState::Prepared => "prepared",
+        ProjectRegistrationState::Binding => "binding",
+        ProjectRegistrationState::Bound => "bound",
+        ProjectRegistrationState::Failed => "failed",
+        ProjectRegistrationState::Expired => "expired",
+    }
+}
+
+fn validate_project_bind_outcome(outcome: &ProjectBindOutcome) -> Result<(), StoreError> {
+    if outcome.contract_version != 1
+        || outcome.command_id.trim().is_empty()
+        || outcome.project_id.trim().is_empty()
+        || outcome.observed_at < 0
+    {
+        return Err(StoreError::Invalid(
+            "issue d'enregistrement projet invalide",
+        ));
+    }
+    match outcome.status {
+        ProjectBindStatus::Active => {
+            if outcome.binding_generation.unwrap_or_default() == 0
+                || outcome.backend != Some(ProjectBackend::Host)
+                || outcome.reason.is_some()
+                || outcome.existing_project_id.is_some()
+                || outcome.existing_binding_generation.is_some()
+            {
+                return Err(StoreError::Invalid("issue active projet invalide"));
+            }
+        }
+        ProjectBindStatus::RegistrationConflict => {
+            if outcome.binding_generation.is_some()
+                || outcome.backend.is_some()
+                || outcome.reason.is_none()
+                || outcome
+                    .existing_project_id
+                    .as_deref()
+                    .is_none_or(str::is_empty)
+                || outcome.existing_binding_generation.unwrap_or_default() == 0
+            {
+                return Err(StoreError::Invalid("issue collision projet invalide"));
+            }
+        }
+        ProjectBindStatus::BindingFailed => {
+            if outcome.binding_generation.is_some()
+                || outcome.backend.is_some()
+                || outcome.reason.is_none()
+                || outcome.existing_project_id.is_some()
+                || outcome.existing_binding_generation.is_some()
+            {
+                return Err(StoreError::Invalid("issue échec projet invalide"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_project_registration_intent(
+    intent: &ProjectRegistrationIntent,
+) -> Result<(), StoreError> {
+    if intent.command_id.trim().is_empty()
+        || intent.proposed_project_id.trim().is_empty()
+        || intent.display_name.trim().is_empty()
+        || intent.canonical_payload.is_empty()
+        || intent.created_at < 0
+        || intent.retry_until < intent.created_at
+        || intent.requested_root.trim().is_empty()
+        || !Path::new(&intent.requested_root).is_absolute()
+    {
+        return Err(StoreError::Invalid(
+            "intention enregistrement projet invalide",
+        ));
+    }
+    Ok(())
+}
+
 fn parse_uuid(value: &str) -> Result<Uuid, StoreError> {
     Uuid::parse_str(value).map_err(|_| StoreError::Corrupt("UUID stocké invalide"))
+}
+
+fn collect_json_agent_references(value: &serde_json::Value, references: &mut BTreeSet<String>) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_json_agent_references(value, references);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            for (key, value) in object {
+                if matches!(
+                    key.as_str(),
+                    "participant" | "participant_id" | "agent_id" | "to" | "recipient"
+                ) && let Some(reference) = value.as_str()
+                {
+                    references.insert(reference.to_string());
+                }
+                collect_json_agent_references(value, references);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rewrite_json_agent_references(
+    tx: &Transaction<'_>,
+    table: &str,
+    key_column: &str,
+    payload_column: &str,
+    mapping: &std::collections::BTreeMap<String, String>,
+) -> Result<(), StoreError> {
+    let allowed = matches!(
+        (table, key_column, payload_column),
+        ("delegations", "id", "payload_json")
+            | ("delegation_outbox", "message_id", "message_bytes")
+            | ("notification_outbox", "message_id", "message_bytes")
+            | ("tracked_request_outbox", "effect_id", "message_bytes")
+    );
+    if !allowed {
+        return Err(StoreError::Invalid("table de migration non autorisée"));
+    }
+    let select = format!("SELECT {key_column}, {payload_column} FROM {table}");
+    let mut statement = tx.prepare(&select).map_err(StoreError::Sql)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })
+        .map_err(StoreError::Sql)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::Sql)?;
+    drop(statement);
+
+    for (key, payload) in rows {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+        if !replace_json_agent_references(&mut value, mapping) {
+            continue;
+        }
+        let bytes = serde_json::to_vec(&value).map_err(StoreError::Json)?;
+        let update = format!("UPDATE {table} SET {payload_column} = ?1 WHERE {key_column} = ?2");
+        tx.execute(&update, rusqlite::params![bytes, key])
+            .map_err(StoreError::Sql)?;
+    }
+    Ok(())
+}
+
+fn replace_json_agent_references(
+    value: &mut serde_json::Value,
+    mapping: &std::collections::BTreeMap<String, String>,
+) -> bool {
+    let mut changed = false;
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                changed |= replace_json_agent_references(value, mapping);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            for (key, value) in object.iter_mut() {
+                if matches!(
+                    key.as_str(),
+                    "participant" | "participant_id" | "agent_id" | "to" | "recipient"
+                ) && let Some(legacy) = value.as_str()
+                    && let Some(agent_id) = mapping.get(legacy)
+                {
+                    *value = serde_json::Value::String(agent_id.clone());
+                    changed = true;
+                }
+                changed |= replace_json_agent_references(value, mapping);
+            }
+        }
+        _ => {}
+    }
+    changed
 }
 
 #[derive(Debug)]
@@ -9958,7 +11110,7 @@ mod migration_v20_tests {
         fs::set_permissions(&database, fs::Permissions::from_mode(0o600)).unwrap();
 
         let store = MaicieStore::open_with_migration_consent(&database, true).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 20);
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
         drop(store);
 
         let connection = Connection::open(&database).unwrap();

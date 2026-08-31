@@ -10,12 +10,12 @@ use crate::claude_provider_session::{
 };
 use crate::journal::{JournalFailureSink, JournalLiveFeed, JournalWriter, with_turn_failed_kind};
 use crate::managed_session::{
-    ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource, ManagedSession,
-    ManagedSessionDescriptor, ManagedTerminal,
+    ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource,
+    ManagedProviderIdentity, ManagedSession, ManagedSessionDescriptor, ManagedTerminal,
 };
-use crate::protocol::PresenceMode;
+use crate::protocol::{PresenceMode, ProviderObservation};
 use crate::transport::{Transport, TransportError};
-use bridget_core::BridgetMessage;
+use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
@@ -50,11 +50,15 @@ pub struct ClaudeStreamJsonOptions {
     pub command: String,
     /// Arguments de définition, dont l'éventuel `--model` demandé.
     pub args: Vec<String>,
+    /// Type déclaré par le registre, conservé dans les événements et les contextes.
+    pub provider_kind: String,
     pub queue_capacity: usize,
     pub notify_timeout_secs: u64,
     /// Racine durable `~/.cache/bridget/sessions` (même arbre que le journal).
     /// Survit à la mort du wrapper et au redémarrage du daemon.
     pub session_store_root: Option<PathBuf>,
+    /// Baseline relevée avant lancement, absente pour un registre historique.
+    pub provider_observation: Option<ProviderObservation>,
     /// Nom d'agent sous lequel lire/écrire `claude_provider_session`.
     pub agent_name: Option<String>,
 }
@@ -73,6 +77,10 @@ struct QueueState {
     messages: VecDeque<BridgetMessage>,
     active: Option<ActiveTurn>,
     closed: bool,
+    /// `request_id` du `control_request` d'interruption émis et non encore
+    /// corrélé par son `control_response`. Porté par l'état de file parce que
+    /// l'émetteur (`cancel_delivery`) et le lecteur le partagent déjà.
+    pending_interrupt: Option<String>,
 }
 
 pub struct ClaudeStreamJsonTransport {
@@ -80,10 +88,13 @@ pub struct ClaudeStreamJsonTransport {
     alive: Arc<AtomicBool>,
     shutdown_started: AtomicBool,
     busy: Arc<AtomicBool>,
+    private_profile_instructions: Arc<Mutex<Option<String>>>,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     queue_capacity: usize,
     writer: Writer,
     child: Arc<Mutex<Child>>,
+    provider_kind: String,
+    provider_observation: Option<ProviderObservation>,
     events: Arc<Mutex<VecDeque<ManagedEvent>>>,
     journal: Journal,
     session_store: SessionStoreHandle,
@@ -136,14 +147,17 @@ impl ClaudeStreamJsonTransport {
                 messages: VecDeque::new(),
                 active: None,
                 closed: false,
+                pending_interrupt: None,
             }),
             Condvar::new(),
         ));
         let alive = Arc::new(AtomicBool::new(true));
         let busy = Arc::new(AtomicBool::new(false));
+        let private_profile_instructions = Arc::new(Mutex::new(None));
         let events = Arc::new(Mutex::new(VecDeque::new()));
         let journal = Arc::new(Mutex::new(None));
         let session_store_handle = Arc::new(Mutex::new(session_store));
+        let provider_kind = options.provider_kind.clone();
         let pinned_model = pinned_model_from_args(&options.args);
         let resume_bootstrap = attempted_resume.map(|attempted_id| ResumeBootstrap {
             attempted_id,
@@ -162,6 +176,7 @@ impl ClaudeStreamJsonTransport {
             alive.clone(),
             journal.clone(),
             session_store_handle.clone(),
+            provider_kind.clone(),
             pinned_model,
             resume_bootstrap,
         );
@@ -172,16 +187,37 @@ impl ClaudeStreamJsonTransport {
             journal.clone(),
             alive.clone(),
             busy.clone(),
+            private_profile_instructions.clone(),
             Duration::from_secs(options.notify_timeout_secs),
+        );
+        push_internal(
+            &events,
+            ManagedEventKind::ProviderContextObserved {
+                identity: ManagedProviderIdentity {
+                    provider_kind: provider_kind.clone(),
+                    provider_session_id: None,
+                    provider_thread_id: None,
+                    active_turn_id: None,
+                    provider_item_id: None,
+                    capabilities_revision: options
+                        .provider_observation
+                        .as_ref()
+                        .map(|observation| observation.contract_version.clone()),
+                    provider_observation: options.provider_observation.clone(),
+                },
+            },
         );
         Ok(Self {
             connection_id: format!("claude-stream-json-{pid}"),
             alive,
             shutdown_started: AtomicBool::new(false),
             busy,
+            private_profile_instructions,
             queue,
             queue_capacity: options.queue_capacity,
             writer,
+            provider_kind,
+            provider_observation: options.provider_observation,
             child,
             events,
             journal,
@@ -264,6 +300,14 @@ impl Transport for ClaudeStreamJsonTransport {
         }
         let (lock, wake) = &*self.queue;
         let mut queue = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+        if message.intent == Some(MessageIntent::SteerCurrent) {
+            drop(queue);
+            self.push_internal(ManagedEventKind::DeliveryRejected {
+                message_id: message.id.clone(),
+                reason: "pilotage Claude indisponible".to_string(),
+            });
+            return Ok(());
+        }
         if queue.closed || queue.messages.len() >= self.queue_capacity {
             drop(queue);
             self.push_internal(ManagedEventKind::DeliveryRejected {
@@ -273,7 +317,25 @@ impl Transport for ClaudeStreamJsonTransport {
             return Ok(());
         }
         queue.messages.push_back(message.clone());
-        wake.notify_one();
+        // Le relais UI marque l'origine humaine sans choisir le protocole.
+        // Claude conserve la FIFO et ne cible que le tour actif capturé.
+        let active_message_id = ((message.intent == Some(MessageIntent::InterruptAndStart)
+            || message.origin == Some(MessageOrigin::Human))
+            && queue.pending_interrupt.is_none())
+        .then(|| {
+            queue
+                .active
+                .as_ref()
+                .map(|active| active.message_id.clone())
+        })
+        .flatten();
+        if let Some(active_message_id) = active_message_id {
+            drop(queue);
+            wake.notify_one();
+            let _ = self.cancel_delivery(&active_message_id, "interruption explicite");
+        } else {
+            wake.notify_one();
+        }
         Ok(())
     }
 
@@ -287,12 +349,44 @@ impl Transport for ClaudeStreamJsonTransport {
 }
 
 impl ManagedSession for ClaudeStreamJsonTransport {
+    fn set_private_profile_instructions(
+        &mut self,
+        instructions: &str,
+    ) -> Result<(), TransportError> {
+        *self
+            .private_profile_instructions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(instructions.to_string());
+        Ok(())
+    }
+
     fn descriptor(&self) -> ManagedSessionDescriptor {
         ManagedSessionDescriptor {
             transport: "stdio".to_string(),
             mode: PresenceMode::Cli,
             location: None,
         }
+    }
+
+    fn provider_identity(&self) -> Option<ManagedProviderIdentity> {
+        let session_id = self
+            .session_store
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_ref()
+            .and_then(ProviderSessionStore::load);
+        Some(ManagedProviderIdentity {
+            provider_kind: self.provider_kind.clone(),
+            provider_session_id: session_id,
+            provider_thread_id: None,
+            active_turn_id: None,
+            provider_item_id: None,
+            capabilities_revision: self
+                .provider_observation
+                .as_ref()
+                .map(|observation| observation.contract_version.clone()),
+            provider_observation: self.provider_observation.clone(),
+        })
     }
 
     fn process_id(&self) -> u32 {
@@ -349,9 +443,27 @@ impl ManagedSession for ClaudeStreamJsonTransport {
             .as_ref()
             .is_some_and(|active| active.message_id == message_id)
         {
-            // Aucun contrôle d'interruption Claude n'est attesté dans le
-            // contrat G5. On termine donc honnêtement la livraison en cours,
-            // sans inventer une interaction de permission fournisseur.
+            // Le contrôle d'interruption Claude est désormais attesté (mesures
+            // du 28/08) : on coupe le tour au lieu de tuer l'agent, qui reste
+            // vivant et enchaîne. Le terminal `aborted_*` clôt la livraison ;
+            // l'échéance du tour (`recv_timeout`) reste le repli si le
+            // fournisseur ne rend ni accusé ni terminal.
+            let request_id = format!("bridget-interrupt-{message_id}");
+            if write_control_interrupt(&self.writer, &request_id).is_ok() {
+                queue.pending_interrupt = Some(request_id.clone());
+                drop(queue);
+                wake.notify_one();
+                record_or_terminal(
+                    &self.journal,
+                    &self.events,
+                    "interrupt_requested",
+                    Some(message_id),
+                    json!({ "request_id": request_id, "reason": reason }),
+                );
+                return true;
+            }
+            // Repli historique : sans canal d'écriture, la seule fin honnête
+            // reste de terminer la livraison et d'arrêter le groupe.
             let active = queue.active.take().expect("tour Claude actif");
             let _ = active.completion.send(ManagedTerminal::Cancelled);
             wake.notify_one();
@@ -551,14 +663,13 @@ fn bootstrap_resume_in_reader(
                         failure.named_message(),
                     );
                 }
-                if let Some(session_id) = session_id_from_system_init(&value) {
-                    if let Some(store) = session_store
+                if let Some(session_id) = session_id_from_system_init(&value)
+                    && let Some(store) = session_store
                         .lock()
                         .unwrap_or_else(|poison| poison.into_inner())
                         .as_ref()
-                    {
-                        let _ = store.store(&session_id);
-                    }
+                {
+                    let _ = store.store(&session_id);
                 }
             }
             (reader.into_inner(), vec![trimmed])
@@ -584,8 +695,10 @@ fn spawn_claude_command(
         &ClaudeStreamJsonOptions {
             command: command_path.to_string(),
             args: args.to_vec(),
+            provider_kind: "claude".to_string(),
             queue_capacity: 1,
             notify_timeout_secs: 1,
+            provider_observation: None,
             session_store_root: None,
             agent_name: None,
         },
@@ -609,6 +722,7 @@ fn spawn_worker(
     journal: Journal,
     alive: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
+    private_profile_instructions: Arc<Mutex<Option<String>>>,
     notify_timeout: Duration,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
@@ -665,7 +779,11 @@ fn spawn_worker(
                     "body": message.body,
                 }),
             );
-            let terminal = match write_input(&writer, &message) {
+            let instructions = private_profile_instructions
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clone();
+            let terminal = match write_input(&writer, &message, instructions.as_deref()) {
                 Ok(()) => {
                     push_internal(
                         &events,
@@ -749,12 +867,27 @@ fn spawn_worker(
     })
 }
 
-fn write_input(writer: &Writer, message: &BridgetMessage) -> Result<(), TransportError> {
+fn private_prompt(instructions: Option<&str>, body: &str) -> String {
+    let Some(instructions) = instructions
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return body.to_string();
+    };
+    format!("[Instructions individuelles Bridget]\n{instructions}\n\n[Demande]\n{body}")
+}
+
+fn write_input(
+    writer: &Writer,
+    message: &BridgetMessage,
+    instructions: Option<&str>,
+) -> Result<(), TransportError> {
+    let prompt = private_prompt(instructions, &message.body);
     let frame = json!({
         "type": "user",
         "message": {
             "role": "user",
-            "content": [{ "type": "text", "text": message.body }],
+            "content": [{ "type": "text", "text": prompt }],
         },
     });
     let mut writer = writer
@@ -767,6 +900,33 @@ fn write_input(writer: &Writer, message: &BridgetMessage) -> Result<(), Transpor
         .map_err(|error| TransportError::Io(error.to_string()))
 }
 
+/// Trame de contrôle mesurée le 28/08 : `control_request` / `interrupt` sur
+/// l'entrée standard. Claude accuse par `control_response` en 3 ms puis rend un
+/// terminal `aborted_tools` ou `aborted_streaming` en 25 ms, sous-processus
+/// réellement arrêté, sans aucun signal POSIX. Le tour suivant repart.
+fn write_control_interrupt(writer: &Writer, request_id: &str) -> Result<(), TransportError> {
+    let frame = json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": { "subtype": "interrupt" },
+    });
+    let mut writer = writer
+        .lock()
+        .map_err(|error| TransportError::Io(error.to_string()))?;
+    let writer = writer.as_mut().ok_or(TransportError::AgentDead)?;
+    writeln!(writer, "{frame}").map_err(|error| TransportError::Io(error.to_string()))?;
+    writer
+        .flush()
+        .map_err(|error| TransportError::Io(error.to_string()))
+}
+
+/// Terminaux d'interruption Claude. Distincts d'un échec : le tour est coupé à
+/// la demande, l'agent reste vivant et enchaîne.
+fn interrupt_terminal_reason(reason: &str) -> bool {
+    matches!(reason, "aborted_tools" | "aborted_streaming")
+}
+
+#[allow(clippy::too_many_arguments)]
 fn spawn_reader(
     stdout: ChildStdout,
     prefetch: Vec<String>,
@@ -775,6 +935,7 @@ fn spawn_reader(
     alive: Arc<AtomicBool>,
     journal: Journal,
     session_store: SessionStoreHandle,
+    provider_kind: String,
     pinned_model: Option<String>,
     resume_bootstrap: Option<ResumeBootstrap>,
 ) -> thread::JoinHandle<()> {
@@ -784,11 +945,11 @@ fn spawn_reader(
         } else {
             (stdout, prefetch)
         };
-        let mut lines = prefetch
+        let lines = prefetch
             .into_iter()
             .map(Ok)
             .chain(BufReader::new(stdout).lines());
-        while let Some(line) = lines.next() {
+        for line in lines {
             let Ok(line) = line else { break };
             let raw = line.as_bytes().to_vec();
             let value = match serde_json::from_str::<Value>(&line) {
@@ -812,6 +973,21 @@ fn spawn_reader(
                 {
                     let _ = store.store(&session_id);
                 }
+                push_source(
+                    &events,
+                    raw.clone(),
+                    ManagedEventKind::ProviderContextObserved {
+                        identity: ManagedProviderIdentity {
+                            provider_kind: provider_kind.clone(),
+                            provider_session_id: Some(session_id),
+                            provider_thread_id: None,
+                            active_turn_id: None,
+                            provider_item_id: None,
+                            capabilities_revision: None,
+                            provider_observation: None,
+                        },
+                    },
+                );
             }
             let kind = value
                 .get("type")
@@ -853,6 +1029,43 @@ fn spawn_reader(
             // (deltas→assistant→result, ou assistant→result sans partial).
             // Une fixture assistant-puis-deltas testerait un fantôme de
             // protocole, pas un trou du pilote.
+            if kind == "control_response" {
+                // Forme mesurée le 28/08 : {"type":"control_response",
+                // "response":{"subtype":"success","request_id":…,
+                // "response":{"still_queued":[]}}}. Corrélation stricte : seul
+                // l'accusé portant le `request_id` émis solde l'interruption.
+                // Un accusé étranger est ignoré plutôt que d'éteindre une
+                // interruption qui n'est pas la sienne.
+                if let Some(acked) = value
+                    .pointer("/response/request_id")
+                    .and_then(Value::as_str)
+                {
+                    let matched = {
+                        let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                        if state.pending_interrupt.as_deref() == Some(acked) {
+                            state.pending_interrupt = None;
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if matched {
+                        record_or_terminal(
+                            &journal,
+                            &events,
+                            "interrupt_acked",
+                            None,
+                            json!({
+                                "request_id": acked,
+                                "subtype": value
+                                    .pointer("/response/subtype")
+                                    .and_then(Value::as_str),
+                            }),
+                        );
+                    }
+                }
+                continue;
+            }
             if kind == "assistant" {
                 // TOOL : le content_block_start arrive tôt avec name mais
                 // input={}. On journalise ici le bloc assistant qui porte
@@ -910,6 +1123,15 @@ fn spawn_reader(
                     && value.get("terminal_reason").and_then(Value::as_str) == Some("completed")
                 {
                     ManagedTerminal::Completed
+                } else if value
+                    .get("terminal_reason")
+                    .and_then(Value::as_str)
+                    .is_some_and(interrupt_terminal_reason)
+                {
+                    // `aborted_tools` / `aborted_streaming` : le tour a été
+                    // coupé à la demande. C'est une annulation, pas un échec —
+                    // sans quoi bridget-idle classerait l'agent en bloqué.
+                    ManagedTerminal::Cancelled
                 } else {
                     ManagedTerminal::Failed {
                         detail: value
@@ -1248,10 +1470,37 @@ mod tests {
                 )
                 .to_string(),
             ],
+            provider_kind: "claude".to_string(),
             queue_capacity: 2,
             notify_timeout_secs: 2,
+            provider_observation: None,
             session_store_root: None,
             agent_name: None,
+        }
+    }
+
+    #[test]
+    fn provider_kind_reste_celui_declare_par_le_registre() {
+        for provider_kind in ["claude", "anthropic", "glm", "deepseek"] {
+            let mut configured = options();
+            configured.provider_kind = provider_kind.to_string();
+            let transport = ClaudeStreamJsonTransport::spawn(configured).unwrap();
+            let contexts = transport
+                .drain_events()
+                .into_iter()
+                .filter_map(|event| match event.kind {
+                    ManagedEventKind::ProviderContextObserved { identity } => {
+                        Some(identity.provider_kind)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(contexts, vec![provider_kind.to_string()]);
+            assert_eq!(
+                transport.provider_identity().unwrap().provider_kind,
+                provider_kind
+            );
+            transport.stop();
         }
     }
 
@@ -1726,20 +1975,104 @@ mod tests {
         assert!(ensure_stream_arguments(&mut args).is_err());
     }
 
+    /// Contrat changé le 28/08, sur mesures : jusqu'ici, faute de trame
+    /// d'interruption attestée, l'annulation d'un tour actif tuait le groupe de
+    /// processus. Claude accuse un `control_request` en 3 ms et rend un
+    /// terminal `aborted_tools` en 25 ms, sous-processus arrêté sans signal
+    /// POSIX, tour suivant réussi en 1,594 s. On coupe donc le tour SANS tuer
+    /// l'agent — c'est déjà ce que fait Codex (`codex_app_server.rs`), qui
+    /// signale et laisse le worker émettre `turn/interrupt`.
+    ///
+    /// Le faux fournisseur répond ici exactement les formes mesurées.
     #[test]
-    fn annulation_active_termine_et_recolte_le_processus_claude() {
+    fn message_humain_actif_interrompt_claude_et_declenche_la_remise() {
         let mut slow = options();
-        slow.args[1] = "while IFS= read -r line; do sleep 10; done".to_string();
+        slow.args[1] = concat!(
+            "while IFS= read -r line; do case \"$line\" in ",
+            "*control_request*) ",
+            "rid=$(printf '%s' \"$line\" | sed 's/.*\"request_id\":\"\\([^\"]*\\)\".*/\\1/'); ",
+            "printf '{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",",
+            "\"request_id\":\"%s\",\"response\":{\"still_queued\":[]}}}\\n' \"$rid\"; ",
+            "printf '{\"type\":\"result\",\"is_error\":true,",
+            "\"terminal_reason\":\"aborted_tools\"}\\n';; ",
+            "*) : ;; esac; done"
+        )
+        .to_string();
+        let mut transport = ClaudeStreamJsonTransport::spawn(slow).unwrap();
+        transport.deliver(&message("claude-actif")).unwrap();
+        let start_deadline = Instant::now() + Duration::from_secs(2);
+        while !transport.is_busy() && Instant::now() < start_deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            transport.is_busy(),
+            "le tour Claude initial doit être actif"
+        );
+
+        let mut human = message("claude-humain");
+        human.from = "superviseur".to_string();
+        human.origin = Some(MessageOrigin::Human);
+        transport.deliver(&human).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut interrupted = false;
+        let mut human_dispatched = false;
+        while Instant::now() < deadline {
+            for event in transport.drain_events() {
+                interrupted |= matches!(
+                    event.kind,
+                    ManagedEventKind::TurnFinished {
+                        ref message,
+                        terminal: ManagedTerminal::Cancelled,
+                        ..
+                    } if message.id == "claude-actif"
+                );
+                human_dispatched |= matches!(
+                    event.kind,
+                    ManagedEventKind::PromptDispatched { ref message_id }
+                        if message_id == "claude-humain"
+                );
+            }
+            if interrupted && human_dispatched {
+                assert!(
+                    transport.is_alive(),
+                    "Claude doit rester utilisable après interruption"
+                );
+                transport.stop();
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        transport.stop();
+        panic!(
+            "le message humain devait interrompre le tour actif puis être remis, interruption={interrupted}, remis={human_dispatched}"
+        );
+    }
+
+    #[test]
+    fn interruption_active_coupe_le_tour_sans_tuer_l_agent_claude() {
+        let mut slow = options();
+        slow.args[1] = concat!(
+            "while IFS= read -r line; do case \"$line\" in ",
+            "*control_request*) ",
+            "rid=$(printf '%s' \"$line\" | sed 's/.*\"request_id\":\"\\([^\"]*\\)\".*/\\1/'); ",
+            "printf '{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",",
+            "\"request_id\":\"%s\",\"response\":{\"still_queued\":[]}}}\\n' \"$rid\"; ",
+            "printf '{\"type\":\"result\",\"is_error\":true,",
+            "\"terminal_reason\":\"aborted_tools\"}\\n';; ",
+            "*) : ;; esac; done"
+        )
+        .to_string();
         let mut transport = ClaudeStreamJsonTransport::spawn(slow).unwrap();
         transport.deliver(&message("claude-cancel")).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = Instant::now() + Duration::from_secs(2);
         while !transport.is_busy() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(transport.is_busy());
         assert!(transport.cancel_delivery("claude-cancel", "annulé par le daemon"));
 
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = Instant::now() + Duration::from_secs(5);
         let mut events = Vec::new();
         while Instant::now() < deadline {
             events.extend(transport.drain_events());
@@ -1756,16 +2089,26 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(10));
         }
-        assert!(events.iter().any(|event| {
-            matches!(
-                event.kind,
-                ManagedEventKind::TurnFinished {
-                    terminal: ManagedTerminal::Cancelled,
-                    ..
-                }
-            )
-        }));
-        assert!(!transport.is_alive());
+        // Assertion métier 1 : `aborted_tools` est un terminal d'annulation,
+        // pas un échec — sinon l'agent serait classé bloqué par la ronde.
+        assert!(
+            events.iter().any(|event| {
+                matches!(
+                    event.kind,
+                    ManagedEventKind::TurnFinished {
+                        terminal: ManagedTerminal::Cancelled,
+                        ..
+                    }
+                )
+            }),
+            "terminal d'interruption absent : {events:?}"
+        );
+        // Assertion métier 2 : c'est tout l'objet de la trame — l'agent
+        // survit à l'interruption et peut enchaîner le tour suivant.
+        assert!(
+            transport.is_alive(),
+            "l'agent a été tué au lieu d'être interrompu"
+        );
         transport.stop();
     }
 
@@ -2079,8 +2422,10 @@ done
         let options = ClaudeStreamJsonOptions {
             command: fake.to_string_lossy().into_owned(),
             args: Vec::new(),
+            provider_kind: "claude".to_string(),
             queue_capacity: 2,
             notify_timeout_secs: 2,
+            provider_observation: None,
             session_store_root: Some(root.clone()),
             agent_name: Some("agent-x".to_string()),
         };
@@ -2170,8 +2515,10 @@ exit 0
         let options_neuf = ClaudeStreamJsonOptions {
             command: fake.to_string_lossy().into_owned(),
             args: Vec::new(),
+            provider_kind: "claude".to_string(),
             queue_capacity: 2,
             notify_timeout_secs: 2,
+            provider_observation: None,
             session_store_root: Some(root.clone()),
             agent_name: Some("agent-neuf".to_string()),
         };
@@ -2185,8 +2532,10 @@ exit 0
         let options_lent = ClaudeStreamJsonOptions {
             command: fake.to_string_lossy().into_owned(),
             args: Vec::new(),
+            provider_kind: "claude".to_string(),
             queue_capacity: 2,
             notify_timeout_secs: 2,
+            provider_observation: None,
             session_store_root: Some(root.clone()),
             agent_name: Some("agent-lent".to_string()),
         };
@@ -2204,5 +2553,15 @@ exit 0
         );
         t_lent.stop();
         let _ = fs::remove_dir_all(root);
+    }
+    #[test]
+    fn consigne_privee_preserve_le_corps_visible_du_message() {
+        let body = "Demande utilisateur visible.";
+        let prompt = private_prompt(Some("Privilégie les sources attestées."), body);
+
+        assert!(prompt.contains("Privilégie les sources attestées."));
+        assert!(prompt.ends_with(body));
+        assert_eq!(body, "Demande utilisateur visible.");
+        assert_eq!(private_prompt(None, body), body);
     }
 }

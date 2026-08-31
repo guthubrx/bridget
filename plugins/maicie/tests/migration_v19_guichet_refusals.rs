@@ -9,7 +9,7 @@ use uuid::Uuid;
 #[path = "support/historical_guichet_receptions.rs"]
 mod historical_guichet_receptions;
 
-const EXPECTED_SCHEMA_VERSION: i64 = 20;
+const EXPECTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
 
 fn root(label: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("maicie-v19-{label}-{}", Uuid::new_v4()));
@@ -253,7 +253,7 @@ fn parcours_prive_v14_v17_v18_v19_v20_ne_mute_jamais_sa_source() {
 }
 
 #[test]
-fn bootstrap_vide_exerce_separement_tous_les_paliers_jusqu_a_v20() {
+fn bootstrap_vide_exerce_separement_tous_les_paliers_jusqu_au_schema_courant() {
     let root = root("bootstrap");
     let database = root.join("maicie.sqlite3");
     let store = MaicieStore::open(&database).unwrap();

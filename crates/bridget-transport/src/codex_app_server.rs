@@ -7,15 +7,15 @@
 
 use crate::journal::{JournalFailureSink, JournalLiveFeed, JournalWriter, with_turn_failed_kind};
 use crate::managed_session::{
-    ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource, ManagedSession,
-    ManagedSessionDescriptor, ManagedTerminal,
+    ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource,
+    ManagedProviderIdentity, ManagedSession, ManagedSessionDescriptor, ManagedTerminal,
 };
-use crate::protocol::PresenceMode;
+use crate::protocol::{PresenceMode, ProviderObservation, ProviderOperation};
 use crate::transport::{Transport, TransportError};
-use bridget_core::BridgetMessage;
+use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -26,6 +26,19 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Un pilotage humain ne doit pas rester suspendu derrière un RPC silencieux.
+/// Cette borne ne constitue pas une preuve de remise : elle laisse ensuite la
+/// FIFO reprendre le message ou déclenche l'interruption de repli.
+const STEER_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+/// Référence t3code : les interruptions de tours enfants sont bornées à trois
+/// secondes. Bridget n'a pas de sous-arbre Codex à parcourir, mais la requête
+/// du tour actif ne doit pas, elle non plus, retenir un humain indéfiniment.
+const INTERRUPT_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+/// Après l'accusé (ou le silence) de `turn/interrupt`, le terminal du tour
+/// ancien dispose encore d'une courte fenêtre. Au-delà, son état ne doit plus
+/// immobiliser la file humaine : la remise devient explicitement rejetée,
+/// jamais `dispatching` éternel.
+const INTERRUPT_TERMINAL_TIMEOUT: Duration = Duration::from_secs(10);
 const RATE_LIMIT_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const TURN_POLL: Duration = Duration::from_millis(25);
 const SATURATION_RETRIES: u32 = 4;
@@ -54,6 +67,24 @@ pub struct CodexAppServerOptions {
     /// réglage refuse. Une demande `item/*/requestApproval` reçoit toujours
     /// une réponse JSON-RPC sans intervention humaine.
     pub permissions: String,
+    /// Baseline relevée avant lancement, absente pour un registre historique.
+    pub provider_observation: Option<ProviderObservation>,
+    /// Démarrage de fil demandé par Bridget après vérification de la baseline.
+    pub thread_bootstrap: CodexThreadBootstrap,
+}
+/// Choix de fil au démarrage, explicitement versionné dans les options du
+/// pilote afin qu'une reprise native ne puisse jamais être confondue avec une
+/// session fraîche.
+#[derive(Debug, Clone, Default)]
+pub enum CodexThreadBootstrap {
+    #[default]
+    Start,
+    Resume {
+        thread_id: String,
+    },
+    Fork {
+        thread_id: String,
+    },
 }
 
 #[derive(Debug)]
@@ -65,7 +96,15 @@ struct ActiveTurn {
 #[derive(Debug)]
 struct QueueState {
     messages: VecDeque<BridgetMessage>,
+    /// Messages à injecter dans le tour EN COURS via `turn/steer`, sans
+    /// l'interrompre. Distincte de `messages` : celle-ci est le mode « queue »
+    /// (attendre la fin du tour), celle-là le mode « steer ».
+    steer: VecDeque<BridgetMessage>,
     active: Option<ActiveTurn>,
+    /// Ferme atomiquement le couloir de pilotage dès qu’un tour est annulé
+    /// ou non pilotable. Les messages suivants rejoignent alors `messages`,
+    /// derrière les messages à restituer, au lieu de pouvoir les doubler.
+    steering_open: bool,
     closed: bool,
 }
 
@@ -96,6 +135,10 @@ struct Observations {
     events: VecDeque<ManagedEvent>,
     response_by_turn: HashMap<String, String>,
     terminal_by_turn: HashMap<String, ManagedTerminal>,
+    /// Un `item/started` de type `userMessage` dont le `clientId` est présent
+    /// prouve la visibilité d’un `turn/steer`. La clé porte le thread ET le tour
+    /// afin qu’une sortie tardive ne solde jamais un autre tour actif.
+    consumed_steers_by_turn: HashMap<(String, String), HashSet<String>>,
 }
 
 // Les deltas restent provisoires : seul le worker atteste leur présence au terminal.
@@ -104,6 +147,7 @@ struct CodexTurnDetail {
     message_id: String,
     thread_id: String,
     turn_id: Option<String>,
+    provider_item_id: Option<String>,
     /// Nombre d'updates texte déjà journalisés (deltas ou repli
     /// `item/completed` agentMessage). Sert d'anti-doublon pour B.
     text_updates: usize,
@@ -162,13 +206,16 @@ pub struct CodexAppServerTransport {
     alive: Arc<AtomicBool>,
     shutdown_started: AtomicBool,
     busy: Arc<AtomicBool>,
+    private_profile_instructions: Arc<Mutex<Option<String>>>,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     queue_capacity: usize,
     writer: Writer,
     thread_id: String,
     child: Arc<Mutex<Child>>,
     observations: Arc<(Mutex<Observations>, Condvar)>,
+    active_detail: ActiveTurnDetail,
     journal: Journal,
+    provider_observation: Option<ProviderObservation>,
     reader_handle: Mutex<Option<thread::JoinHandle<()>>>,
     worker_handle: Mutex<Option<thread::JoinHandle<()>>>,
 }
@@ -196,6 +243,7 @@ impl CodexAppServerTransport {
             ));
         }
         let mut command = Command::new(&options.command);
+        validate_thread_bootstrap(&options.provider_observation, &options.thread_bootstrap)?;
         command
             .args(&options.args)
             .envs(environment.iter().cloned())
@@ -229,10 +277,13 @@ impl CodexAppServerTransport {
         let alive = Arc::new(AtomicBool::new(true));
         let next_id = Arc::new(AtomicU64::new(1));
         let journal = Arc::new(Mutex::new(None));
+        let private_profile_instructions = Arc::new(Mutex::new(None));
         let queue = Arc::new((
             Mutex::new(QueueState {
                 messages: VecDeque::new(),
+                steer: VecDeque::new(),
                 active: None,
+                steering_open: false,
                 closed: false,
             }),
             Condvar::new(),
@@ -277,11 +328,9 @@ impl CodexAppServerTransport {
             write_notification(&writer, "initialized", json!({}))?;
             let cwd =
                 std::env::current_dir().map_err(|error| TransportError::Io(error.to_string()))?;
-            let mut thread_params = json!({ "cwd": cwd });
-            if let Some(model) = &options.model {
-                thread_params["model"] = Value::String(model.clone());
-            }
-            let thread = request(&writer, &waiters, &next_id, "thread/start", thread_params)?;
+            let (thread_method, thread_params) =
+                thread_bootstrap_request(&options.thread_bootstrap, &cwd, options.model.as_deref());
+            let thread = request(&writer, &waiters, &next_id, thread_method, thread_params)?;
             if let Some((model, effort)) = runtime_from_thread_start(&thread.value) {
                 push_source(
                     &observations,
@@ -349,22 +398,43 @@ impl CodexAppServerTransport {
             busy: busy.clone(),
             thread_id: thread_id.clone(),
             journal: journal.clone(),
-            active_detail,
+            private_profile_instructions: private_profile_instructions.clone(),
+            active_detail: active_detail.clone(),
             pending_request,
             notify_timeout: Duration::from_secs(options.notify_timeout_secs),
         });
 
+        push_internal(
+            &observations,
+            ManagedEventKind::ProviderContextObserved {
+                identity: ManagedProviderIdentity {
+                    provider_kind: "codex".to_string(),
+                    provider_session_id: Some(format!("codex-app-server-{pid}")),
+                    provider_thread_id: Some(thread_id.clone()),
+                    active_turn_id: None,
+                    provider_item_id: None,
+                    capabilities_revision: options
+                        .provider_observation
+                        .as_ref()
+                        .map(|observation| observation.contract_version.clone()),
+                    provider_observation: options.provider_observation.clone(),
+                },
+            },
+        );
         Ok(Self {
             connection_id: format!("codex-app-server-{pid}"),
             alive,
             shutdown_started: AtomicBool::new(false),
             busy,
+            private_profile_instructions,
             queue,
             queue_capacity: options.queue_capacity,
             writer,
             thread_id,
             child,
+            provider_observation: options.provider_observation,
             observations,
+            active_detail,
             journal,
             reader_handle: Mutex::new(Some(reader_handle)),
             worker_handle: Mutex::new(Some(worker_handle)),
@@ -489,7 +559,28 @@ impl Transport for CodexAppServerTransport {
         }
         let (queue, wake) = &*self.queue;
         let mut queue = queue.lock().unwrap_or_else(|poison| poison.into_inner());
-        if queue.closed || queue.messages.len() >= self.queue_capacity {
+        let human_message = message.origin == Some(MessageOrigin::Human);
+        let has_active_turn = queue.active.is_some();
+        let steering_requested = message.intent == Some(MessageIntent::SteerCurrent)
+            || (human_message && has_active_turn && queue.steering_open);
+        let interrupt_requested = message.intent == Some(MessageIntent::InterruptAndStart)
+            || (human_message && has_active_turn && !queue.steering_open);
+        // Le contrôle explicite reste strict ; un message humain ne pilote que
+        // si Codex expose un tour actif ouvert au steering.
+        if steering_requested && (queue.active.is_none() || !queue.steering_open) {
+            drop(queue);
+            self.push_internal(ManagedEventKind::DeliveryRejected {
+                message_id: message.id.clone(),
+                reason: "pilotage Codex indisponible pour le tour courant".to_string(),
+            });
+            return Ok(());
+        }
+        let saturated = if steering_requested {
+            queue.steer.len() >= self.queue_capacity
+        } else {
+            queue.messages.len() >= self.queue_capacity
+        };
+        if queue.closed || saturated {
             drop(queue);
             self.push_internal(ManagedEventKind::DeliveryRejected {
                 message_id: message.id.clone(),
@@ -497,8 +588,26 @@ impl Transport for CodexAppServerTransport {
             });
             return Ok(());
         }
-        queue.messages.push_back(message.clone());
+        if steering_requested {
+            queue.steer.push_back(message.clone());
+        } else {
+            queue.messages.push_back(message.clone());
+        }
+        // La nouvelle demande reste FIFO, mais l'interruption vise seulement
+        // le tour actif capturé sous le même verrou.
+        let active_message_id = interrupt_requested
+            .then(|| {
+                queue
+                    .active
+                    .as_ref()
+                    .map(|active| active.message_id.clone())
+            })
+            .flatten();
         wake.notify_one();
+        drop(queue);
+        if let Some(active_message_id) = active_message_id {
+            let _ = self.cancel_delivery(&active_message_id, "interruption explicite");
+        }
         Ok(())
     }
 
@@ -512,6 +621,17 @@ impl Transport for CodexAppServerTransport {
 }
 
 impl ManagedSession for CodexAppServerTransport {
+    fn set_private_profile_instructions(
+        &mut self,
+        instructions: &str,
+    ) -> Result<(), TransportError> {
+        *self
+            .private_profile_instructions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(instructions.to_string());
+        Ok(())
+    }
+
     fn descriptor(&self) -> ManagedSessionDescriptor {
         ManagedSessionDescriptor {
             transport: "stdio".to_string(),
@@ -520,6 +640,26 @@ impl ManagedSession for CodexAppServerTransport {
         }
     }
 
+    fn provider_identity(&self) -> Option<ManagedProviderIdentity> {
+        let active = self
+            .active_detail
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        Some(ManagedProviderIdentity {
+            provider_kind: "codex".to_string(),
+            provider_session_id: Some(self.connection_id.clone()),
+            provider_thread_id: Some(self.thread_id.clone()),
+            active_turn_id: active.as_ref().and_then(|detail| detail.turn_id.clone()),
+            provider_item_id: active
+                .as_ref()
+                .and_then(|detail| detail.provider_item_id.clone()),
+            capabilities_revision: self
+                .provider_observation
+                .as_ref()
+                .map(|observation| observation.contract_version.clone()),
+            provider_observation: self.provider_observation.clone(),
+        })
+    }
     fn process_id(&self) -> u32 {
         self.child
             .lock()
@@ -555,6 +695,7 @@ impl ManagedSession for CodexAppServerTransport {
             .filter(|active| active.message_id == message_id)
         {
             let _ = active.cancel.send(reason.to_string());
+            queue.steering_open = false;
             return true;
         }
         let Some(position) = queue
@@ -596,6 +737,7 @@ struct Worker {
     busy: Arc<AtomicBool>,
     thread_id: String,
     journal: Journal,
+    private_profile_instructions: Arc<Mutex<Option<String>>>,
     active_detail: ActiveTurnDetail,
     pending_request: PendingRequest,
     notify_timeout: Duration,
@@ -621,6 +763,7 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                     message_id: message.id.clone(),
                     cancel: sender,
                 });
+                queue.steering_open = true;
                 (message, receiver)
             };
             if !worker.alive.load(Ordering::SeqCst) {
@@ -746,7 +889,23 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
     })
 }
 
+fn private_prompt(instructions: Option<&str>, body: &str) -> String {
+    let Some(instructions) = instructions
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return body.to_string();
+    };
+    format!("[Instructions individuelles Bridget]\n{instructions}\n\n[Demande]\n{body}")
+}
+
 fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<String, String> {
+    let instructions = worker
+        .private_profile_instructions
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone();
+    let prompt = private_prompt(instructions.as_deref(), &message.body);
     for attempt in 0..=SATURATION_RETRIES {
         match request(
             &worker.writer,
@@ -756,7 +915,7 @@ fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<St
             json!({
                 "threadId": worker.thread_id,
                 "clientUserMessageId": message.id,
-                "input": [{ "type": "text", "text": message.body }],
+                "input": [{ "type": "text", "text": &prompt }],
             }),
         ) {
             Ok(result) => {
@@ -790,8 +949,15 @@ fn wait_for_turn(
         .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds))
         .unwrap_or_else(|| started + worker.notify_timeout);
     let mut interrupted = false;
+    let mut interrupt_terminal_deadline = None;
+    let mut steering_allowed = true;
+    let mut deadline_interrupted = false;
+    // Un accusé `turn/steer` ne prouve jamais la remise. Chaque message reste
+    // dans `accepted_pending` jusqu’à sa complétion `userMessage` corrélée.
+    let mut accepted_pending: Vec<BridgetMessage> = Vec::new();
     loop {
         if !worker.alive.load(Ordering::SeqCst) {
+            requeue_unconfirmed(&worker.queue, &mut accepted_pending);
             return ManagedEventKind::DeliveryRejected {
                 message_id: message.id.clone(),
                 reason: "stdout Codex fermé pendant le tour".to_string(),
@@ -806,29 +972,128 @@ fn wait_for_turn(
                 "turn/interrupt",
                 json!({ "threadId": worker.thread_id, "turnId": turn_id }),
             );
+            requeue_unconfirmed(&worker.queue, &mut accepted_pending);
+        }
+        if !interrupted && steering_allowed {
+            steering_allowed = steer_into_turn(worker, turn_id, &mut accepted_pending);
+        }
+        // La notification de consommation peut arriver pendant la réponse
+        // JSON-RPC de `turn/steer`. La traiter avant l'échéance évite
+        // d'interrompre un tour dont la remise humaine est déjà attestée.
+        let consumed = {
+            let (lock, _) = &*worker.observations;
+            let mut observed = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+            consume_accepted_steers(
+                &mut observed,
+                &worker.thread_id,
+                turn_id,
+                &mut accepted_pending,
+            )
+        };
+        confirm_consumed_steers(worker, turn_id, consumed);
+        let now = SystemTime::now();
+        // Un tour ancien peut être long, mais sa propre échéance ne doit pas
+        // devenir celle d'un humain arrivé par `turn/steer`. Tant qu'aucune
+        // complétion userMessage corrélée ne l'atteste, on bascule sur le
+        // repli `turn/interrupt` à l'échéance de CE message humain.
+        if !interrupted
+            && earliest_unconfirmed_steer_deadline(&worker.queue, &accepted_pending)
+                .is_some_and(|steer_deadline| now >= steer_deadline)
+        {
+            interrupted = true;
+            let _ = request_with_timeout(
+                &worker.writer,
+                &worker.waiters,
+                &worker.next_id,
+                "turn/interrupt",
+                json!({ "threadId": worker.thread_id, "turnId": turn_id }),
+                INTERRUPT_REQUEST_TIMEOUT,
+            );
+            requeue_unconfirmed(&worker.queue, &mut accepted_pending);
+            interrupt_terminal_deadline = Some(now + INTERRUPT_TERMINAL_TIMEOUT);
         }
         let (lock, wake) = &*worker.observations;
         let mut observed = lock.lock().unwrap_or_else(|poison| poison.into_inner());
-        if let Some(terminal) = observed.terminal_by_turn.remove(turn_id) {
-            let response = observed
+        let consumed = consume_accepted_steers(
+            &mut observed,
+            &worker.thread_id,
+            turn_id,
+            &mut accepted_pending,
+        );
+        let terminal = observed.terminal_by_turn.remove(turn_id);
+        let response = terminal.as_ref().map(|_| {
+            observed
                 .response_by_turn
                 .remove(turn_id)
-                .unwrap_or_default();
+                .unwrap_or_default()
+        });
+        if terminal.is_some() {
+            observed
+                .consumed_steers_by_turn
+                .remove(&(worker.thread_id.clone(), turn_id.to_string()));
+        }
+        drop(observed);
+        confirm_consumed_steers(worker, turn_id, consumed);
+        if let Some(terminal) = terminal {
+            if deadline_interrupted {
+                requeue_unconfirmed(&worker.queue, &mut accepted_pending);
+                return ManagedEventKind::DeliveryRejected {
+                    message_id: message.id.clone(),
+                    reason: "échéance Codex dépassée".to_string(),
+                };
+            }
+            // Même un terminal `completed` ne solde pas un pilotage sans
+            // complétion corrélée : la restitution FIFO est donc obligatoire.
+            requeue_unconfirmed(&worker.queue, &mut accepted_pending);
             return ManagedEventKind::TurnFinished {
                 message: message.clone(),
-                response,
+                response: response.unwrap_or_default(),
                 terminal,
             };
         }
         let now = SystemTime::now();
-        if now >= deadline {
+        // L'échéance du fournisseur ne doit pas détacher le processus Codex.
+        // Elle déclenche le même arrêt borné que les autres fins de tour, puis
+        // rapporte l'échec au message qui a atteint ce plafond.
+        if !interrupted && now >= deadline {
+            interrupted = true;
+            deadline_interrupted = true;
+            let _ = request_with_timeout(
+                &worker.writer,
+                &worker.waiters,
+                &worker.next_id,
+                "turn/interrupt",
+                json!({ "threadId": worker.thread_id, "turnId": turn_id }),
+                INTERRUPT_REQUEST_TIMEOUT,
+            );
+            requeue_unconfirmed(&worker.queue, &mut accepted_pending);
+            interrupt_terminal_deadline = Some(now + INTERRUPT_TERMINAL_TIMEOUT);
+            continue;
+        }
+        let terminal_deadline = interrupt_terminal_deadline
+            .or(Some(deadline))
+            .unwrap_or(deadline);
+        if now >= terminal_deadline {
+            requeue_unconfirmed(&worker.queue, &mut accepted_pending);
             return ManagedEventKind::DeliveryRejected {
                 message_id: message.id.clone(),
-                reason: "échéance Codex dépassée".to_string(),
+                reason: if interrupt_terminal_deadline
+                    .is_some_and(|interrupt_deadline| now >= interrupt_deadline)
+                {
+                    if deadline_interrupted {
+                        "interruption Codex sans terminal après échéance fournisseur".to_string()
+                    } else {
+                        "interruption Codex sans terminal après pilotage humain non attesté"
+                            .to_string()
+                    }
+                } else {
+                    "échéance Codex dépassée".to_string()
+                },
             };
         }
-        let remaining = deadline.duration_since(now).unwrap_or(TURN_POLL);
+        let remaining = terminal_deadline.duration_since(now).unwrap_or(TURN_POLL);
         let wait = remaining.min(TURN_POLL);
+        let observed = lock.lock().unwrap_or_else(|poison| poison.into_inner());
         let (next, _) = wake
             .wait_timeout(observed, wait)
             .unwrap_or_else(|poison| poison.into_inner());
@@ -836,12 +1101,183 @@ fn wait_for_turn(
     }
 }
 
+/// Échéance la plus proche des messages humains qui ne sont pas encore
+/// attestés. Les messages dans `accepted` ont reçu un accusé `turn/steer`,
+/// ceux de `QueueState::steer` ne l'ont même pas reçu : les deux doivent être
+/// protégés par la même borne et restituer leur ordre FIFO au repli.
+fn earliest_unconfirmed_steer_deadline(
+    queue: &Arc<(Mutex<QueueState>, Condvar)>,
+    accepted: &[BridgetMessage],
+) -> Option<SystemTime> {
+    let (lock, _) = &**queue;
+    let state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+    accepted
+        .iter()
+        .chain(state.steer.iter())
+        .filter_map(|message| {
+            message
+                .deadline_at
+                .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds))
+        })
+        .min()
+}
+
+fn consume_accepted_steers(
+    observed: &mut Observations,
+    thread_id: &str,
+    turn_id: &str,
+    accepted: &mut Vec<BridgetMessage>,
+) -> Vec<BridgetMessage> {
+    let key = (thread_id.to_string(), turn_id.to_string());
+    let Some(mut consumed) = observed.consumed_steers_by_turn.remove(&key) else {
+        return Vec::new();
+    };
+    let mut confirmed = Vec::new();
+    let mut remaining = Vec::with_capacity(accepted.len());
+    for message in std::mem::take(accepted) {
+        if consumed.remove(&message.id) {
+            confirmed.push(message);
+        } else {
+            remaining.push(message);
+        }
+    }
+    *accepted = remaining;
+    if !consumed.is_empty() {
+        observed.consumed_steers_by_turn.insert(key, consumed);
+    }
+    confirmed
+}
+
+fn confirm_consumed_steers(worker: &Worker, turn_id: &str, consumed: Vec<BridgetMessage>) {
+    for message in consumed {
+        push_internal(
+            &worker.observations,
+            ManagedEventKind::PromptDispatched {
+                message_id: message.id.clone(),
+            },
+        );
+        record_or_terminal(
+            &worker.journal,
+            &worker.observations,
+            "prompt_dispatched",
+            Some(&message.id),
+            json!({
+                "from": &message.from,
+                "body": &message.body,
+                "turn_id": turn_id,
+                "via": "turn/steer",
+            }),
+        );
+    }
+}
+
+/// Restitue en tête de FIFO les messages humains non attestés. Les accusés
+/// précèdent ceux jamais acceptés, et tous précèdent la file déjà en attente.
+fn requeue_unconfirmed(
+    queue: &Arc<(Mutex<QueueState>, Condvar)>,
+    pending: &mut Vec<BridgetMessage>,
+) {
+    let (lock, wake) = &**queue;
+    let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+    state.steering_open = false;
+    let steered: Vec<_> = state.steer.drain(..).collect();
+    for message in steered.into_iter().rev() {
+        state.messages.push_front(message);
+    }
+    for message in pending.drain(..).rev() {
+        state.messages.push_front(message);
+    }
+    wake.notify_one();
+}
+
+/// Injecte dans le tour ACTIF les messages en attente de pilotage.
+///
+/// Trois contraintes tenues ici, documentées par openclaw :
+/// - le délai d’attente est borné (`request`, REQUEST_TIMEOUT) : `turn/steer`
+///   n’est qu’un accusé et rien ne garantit une réponse. Sans borne, l’appelant
+///   ne se débloquerait qu’à la fermeture du client et bloquerait TOUS les
+///   pilotages suivants derrière lui (attempt-steering.ts:184-187) ;
+/// - `expectedTurnId` porte le tour actif — jamais un identifiant retourné pour
+///   un tour mis en file (t3code, CodexSessionRuntime.ts:1853) ;
+/// - en cas de rejet, le message est remis EN TÊTE et le drainage s’arrête pour
+///   ce passage : le suivant ne doit pas doubler celui qui vient d’échouer
+///   (attempt-steering.ts:218-219).
+fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMessage>) -> bool {
+    loop {
+        let next = {
+            let (lock, _) = &*worker.queue;
+            let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+            state.steer.pop_front()
+        };
+        let Some(message) = next else {
+            return true;
+        };
+        let outcome = request_with_timeout(
+            &worker.writer,
+            &worker.waiters,
+            &worker.next_id,
+            "turn/steer",
+            json!({
+                "threadId": worker.thread_id,
+                "expectedTurnId": turn_id,
+                "clientUserMessageId": message.id,
+                "input": [{ "type": "text", "text": message.body }],
+            }),
+            STEER_REQUEST_TIMEOUT,
+        );
+        match outcome {
+            Ok(_) => {
+                record_or_terminal(
+                    &worker.journal,
+                    &worker.observations,
+                    "turn_steer",
+                    Some(&message.id),
+                    json!({ "from": &message.from, "turn_id": turn_id }),
+                );
+                // Accusé reçu : accepté, PAS encore remis. Cf. piège 1.
+                accepted.push(message);
+            }
+            Err(error) => {
+                let message_id = message.id.clone();
+                let non_pilotable = error.to_string().contains("tour non pilotable");
+                let (lock, wake) = &*worker.queue;
+                let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+                // Le message reste ici jusqu’au repli atomique : déplacer un
+                // refus non pilotable dans `messages` ferait doubler les
+                // messages acceptés antérieurs au prochain tour.
+                state.steer.push_front(message);
+                if non_pilotable {
+                    state.steering_open = false;
+                }
+                wake.notify_one();
+                drop(state);
+                // Pas de DeliveryRejected ici : le message reste récupérable
+                // et en tête de son ordre d’arrivée.
+                record_or_terminal(
+                    &worker.journal,
+                    &worker.observations,
+                    "turn_steer_refuse",
+                    Some(&message_id),
+                    json!({ "reason": error.to_string(), "turn_id": turn_id }),
+                );
+                return !non_pilotable;
+            }
+        }
+    }
+}
+
 fn clear_active(queue: &Arc<(Mutex<QueueState>, Condvar)>) {
-    queue
-        .0
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .active = None;
+    let (lock, wake) = &**queue;
+    let mut state = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+    state.steering_open = false;
+    // `turn/start` peut échouer avant `wait_for_turn`. Dans ce chemin, aucun
+    // repli précédent n’a vidé `steer` : le restituer évite une perte humaine.
+    let steered: Vec<_> = state.steer.drain(..).collect();
+    for message in steered.into_iter().rev() {
+        state.messages.push_front(message);
+    }
+    state.active = None;
+    wake.notify_one();
 }
 
 fn record(
@@ -891,6 +1327,64 @@ fn set_active_turn_id(active_detail: &ActiveTurnDetail, message_id: &str, turn_i
     {
         detail.turn_id = Some(turn_id.to_string());
     }
+}
+
+fn observe_provider_item_id(active_detail: &ActiveTurnDetail, value: &Value) {
+    let Some(provider_item_id) = value
+        .pointer("/params/item/id")
+        .and_then(Value::as_str)
+        .filter(|item_id| !item_id.is_empty())
+    else {
+        return;
+    };
+    let mut active = active_detail
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if let Some(detail) = active
+        .as_mut()
+        .filter(|detail| source_matches_active_turn(detail, value))
+    {
+        detail.provider_item_id = Some(provider_item_id.to_string());
+    }
+}
+
+fn observe_steered_user_message_visibility(
+    observations: &Arc<(Mutex<Observations>, Condvar)>,
+    active_detail: &ActiveTurnDetail,
+    value: &Value,
+) {
+    let Some(message_id) = value
+        .pointer("/params/item/clientId")
+        .and_then(Value::as_str)
+        .filter(|message_id| !message_id.is_empty())
+    else {
+        return;
+    };
+    let active = active_detail
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let Some(detail) = active.as_ref() else {
+        return;
+    };
+    let Some(turn_id) = detail.turn_id.as_deref() else {
+        return;
+    };
+    if value.pointer("/params/threadId").and_then(Value::as_str) != Some(detail.thread_id.as_str())
+        || value.pointer("/params/turnId").and_then(Value::as_str) != Some(turn_id)
+    {
+        return;
+    }
+    let key = (detail.thread_id.clone(), turn_id.to_string());
+    drop(active);
+    observations
+        .0
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .consumed_steers_by_turn
+        .entry(key)
+        .or_default()
+        .insert(message_id.to_string());
+    observations.1.notify_all();
 }
 
 fn record_active_act(
@@ -1124,6 +1618,35 @@ fn approval_response(value: &Value, permissions: &str) -> Option<(Value, Value)>
     ))
 }
 
+/// Refuse une requête fournisseur inconnue sans reproduire son corps dans les
+/// diagnostics. Le fournisseur reçoit une erreur JSON-RPC exploitable et
+/// l'interface un code stable avec une référence pseudonymisée.
+fn unsupported_provider_request_response(value: &Value) -> Option<(Value, Value, String)> {
+    let id = value.get("id")?;
+    let method = value.get("method").and_then(Value::as_str)?;
+    let reference = project_provider_method(method);
+    let delegated_reference = provider_fingerprint(b"delegated-runtime", method.as_bytes());
+    Some((
+        json!({
+            "id": id,
+            "error": {
+                "code": -32601,
+                "message": "unsupported provider request",
+                "data": {
+                    "code": "unsupported_provider_request",
+                    "reference": reference,
+                }
+            }
+        }),
+        json!({
+            "provider": "codex",
+            "code": "unsupported_provider_request",
+            "reference": project_provider_method(method),
+        }),
+        delegated_reference,
+    ))
+}
+
 fn codex_journal_payload(event: &str, payload: Value) -> Value {
     // Dans ce pilote, `error` est exclusivement l'issue terminale du worker.
     // La passerelle porte le code ici afin que les enrichissements de payload
@@ -1190,6 +1713,59 @@ fn saturation_delay(attempt: u32, message_id: &str) -> Duration {
 
 fn is_saturated(reason: &str) -> bool {
     reason == CODEX_SATURATED_REASON
+}
+
+fn bootstrap_operation(bootstrap: &CodexThreadBootstrap) -> Option<ProviderOperation> {
+    match bootstrap {
+        CodexThreadBootstrap::Start => None,
+        CodexThreadBootstrap::Resume { .. } => Some(ProviderOperation::Resume),
+        CodexThreadBootstrap::Fork { .. } => Some(ProviderOperation::Fork),
+    }
+}
+
+fn validate_thread_bootstrap(
+    observation: &Option<ProviderObservation>,
+    bootstrap: &CodexThreadBootstrap,
+) -> Result<(), TransportError> {
+    let Some(operation) = bootstrap_operation(bootstrap) else {
+        return Ok(());
+    };
+    if observation
+        .as_ref()
+        .is_some_and(|value| value.supports(operation))
+    {
+        return Ok(());
+    }
+    let requested = match operation {
+        ProviderOperation::Resume => "thread/resume",
+        ProviderOperation::Fork => "thread/fork",
+        _ => unreachable!("bootstrap limité à resume/fork"),
+    };
+    Err(TransportError::DeliveryFailed(format!(
+        "{requested} Codex refusé: capacité non attestée pour cette version"
+    )))
+}
+
+fn thread_bootstrap_request(
+    bootstrap: &CodexThreadBootstrap,
+    cwd: &Path,
+    model: Option<&str>,
+) -> (&'static str, Value) {
+    match bootstrap {
+        CodexThreadBootstrap::Start => {
+            let mut params = json!({ "cwd": cwd });
+            if let Some(model) = model {
+                params["model"] = Value::String(model.to_string());
+            }
+            ("thread/start", params)
+        }
+        CodexThreadBootstrap::Resume { thread_id } => {
+            ("thread/resume", json!({ "threadId": thread_id }))
+        }
+        CodexThreadBootstrap::Fork { thread_id } => {
+            ("thread/fork", json!({ "threadId": thread_id }))
+        }
+    }
 }
 
 fn request(
@@ -1458,6 +2034,14 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                 // Les outputDelta ne portent que la sortie — ce n'est pas le nom.
                 Some("item/started") => {
                     let item = value.pointer("/params/item").unwrap_or(&Value::Null);
+                    observe_provider_item_id(&active_detail, &value);
+                    if item.get("type").and_then(Value::as_str) == Some("userMessage") {
+                        observe_steered_user_message_visibility(
+                            &observations,
+                            &active_detail,
+                            &value,
+                        );
+                    }
                     if item.get("type").and_then(Value::as_str) == Some("commandExecution")
                         && let Some(command) = item
                             .get("command")
@@ -1655,6 +2239,50 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                 }
                 Some(other) => {
                     let method = project_provider_method(other);
+                    // Une trame avec `id` est une requête JSON-RPC. La traiter
+                    // comme une simple notification laisse Codex attendre pour
+                    // toujours. La réponse négative est volontairement sans
+                    // corps fournisseur : le journal garde seulement un code
+                    // stable et l'empreinte déjà publique de la méthode.
+                    if value.get("id").is_some()
+                        && let Some((reply, payload, delegated_reference)) =
+                            unsupported_provider_request_response(&value)
+                    {
+                        let message_id = queue
+                            .0
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .active
+                            .as_ref()
+                            .map(|active| active.message_id.clone());
+                        record_or_terminal(
+                            &journal,
+                            &observations,
+                            "provider_request_rejected",
+                            message_id.as_deref(),
+                            payload,
+                        );
+                        if let Err(error) = write_value(&writer, reply) {
+                            push_source(
+                                &observations,
+                                raw.clone(),
+                                ManagedEventKind::Error {
+                                    detail: format!(
+                                        "réponse à la requête Codex non prise en charge impossible: {error}"
+                                    ),
+                                },
+                            );
+                        } else {
+                            push_source(
+                                &observations,
+                                raw.clone(),
+                                ManagedEventKind::Diagnostic {
+                                    code: "unsupported_provider_request".to_string(),
+                                    reference: delegated_reference,
+                                },
+                            );
+                        }
+                    }
                     push_source(
                         &observations,
                         raw,
@@ -1763,9 +2391,23 @@ fn provider_error_reason(error: &Value) -> String {
         return CODEX_SATURATED_REASON.to_string();
     }
     let reference = provider_fingerprint(b"error", error.to_string().as_bytes());
+    // Marqueur de NOTRE cru, pose sur la seule foi d'un champ STRUCTURE du
+    // protocole (`codexErrorInfo.activeTurnNotSteerable`). Mesure du 28/08 sur
+    // codex-cli 0.150.1 : le message fournisseur est « cannot steer a review
+    // turn », mais il n'est jamais remonte — l'empreinte le remplace, et c'est
+    // voulu. Sans ce marqueur, aucun appelant ne peut distinguer un tour non
+    // pilotable d'un refus quelconque.
+    let non_pilotable = error
+        .pointer("/data/codexErrorInfo/activeTurnNotSteerable")
+        .is_some();
+    let suffixe = if non_pilotable {
+        "; tour non pilotable"
+    } else {
+        ""
+    };
     match code {
-        Some(code) => format!("erreur Codex (code {code}; référence {reference})"),
-        None => format!("erreur Codex (référence {reference})"),
+        Some(code) => format!("erreur Codex (code {code}{suffixe}; référence {reference})"),
+        None => format!("erreur Codex ({suffixe}référence {reference})"),
     }
 }
 fn provider_fingerprint(domain: &'static [u8], value: &[u8]) -> String {
@@ -1813,7 +2455,37 @@ mod tests {
             FIXTURE_SEQ.fetch_add(1, AtomicOrdering::Relaxed)
         ));
         fs::create_dir_all(&root).expect("racine temporaire");
+
         root
+    }
+
+    #[test]
+    fn requete_fournisseur_inconnue_recoit_un_refus_json_rpc_redacte() {
+        let sentinel = "SENTINELLE-METHODE-INCONNUE";
+        let (reply, diagnostic, delegated_reference) =
+            unsupported_provider_request_response(&json!({
+                "id": "dynamic-tool-42",
+                "method": sentinel,
+                "params": { "secret": "ne-pas-publier" },
+            }))
+            .expect("réponse aux requêtes avec id");
+        assert_eq!(reply["id"], "dynamic-tool-42");
+        assert_eq!(reply["error"]["code"], -32601);
+        assert_eq!(
+            reply["error"]["data"]["code"],
+            "unsupported_provider_request"
+        );
+        assert_eq!(diagnostic["code"], "unsupported_provider_request");
+        let serialized =
+            serde_json::to_string(&json!({ "reply": reply, "diagnostic": diagnostic }))
+                .expect("diagnostic sérialisable");
+        assert!(!serialized.contains(sentinel));
+        assert!(!serialized.contains("ne-pas-publier"));
+        assert!(serialized.contains("sha256:"));
+        assert!(delegated_reference.starts_with("sha256:"));
+        assert_ne!(delegated_reference, sentinel);
+        assert!(!delegated_reference.contains("commandExecution"));
+        assert!(!delegated_reference.contains("ne-pas-publier"));
     }
 
     #[test]
@@ -2094,12 +2766,30 @@ mod tests {
                                     printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"completed","items":[]}}}'
                                 fi
                             fi ;;
-                        *'"method":"turn/interrupt"'*) printf '%s\n' '{"id":6,"result":{}}'; printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"interrupted","items":[]}}}' ;;
+                        *'"method":"turn/steer"'*)
+                            steer_id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
+                            if [ "${BRIDGET_CODEX_STEER_REFUSE:-0}" = 1 ]; then
+                                printf '%s\n' "{\"id\":$steer_id,\"error\":{\"code\":-32600,\"message\":\"cannot steer a review turn\",\"data\":{\"message\":\"cannot steer a review turn\",\"codexErrorInfo\":{\"activeTurnNotSteerable\":{\"turnKind\":\"review\"}}}}}"
+                            else
+                                printf '%s\n' "{\"id\":$steer_id,\"result\":{}}"
+                                if [ "${BRIDGET_CODEX_STEER_CONSUME:-0}" = 1 ]; then
+                                    steer_message_id=$(printf '%s' "$line" | sed 's/.*"clientUserMessageId":"\([^"]*\)".*/\1/')
+            thread_bootstrap: CodexThreadBootstrap::Start,
+                                    provider_item_id="provider-item-$steer_message_id"
+                                    printf '%s\n' "{\"method\":\"item/started\",\"params\":{\"threadId\":\"thread-native\",\"turnId\":\"turn-native\",\"startedAtMs\":1,\"item\":{\"id\":\"$provider_item_id\",\"clientId\":\"$steer_message_id\",\"type\":\"userMessage\",\"content\":[]}}}"
+                                fi
+                            fi ;;
+                        *'"method":"turn/interrupt"'*)
+                            interrupt_id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
+                            printf '%s\n' "{\"id\":$interrupt_id,\"result\":{}}"
+                            printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-native","turn":{"id":"turn-native","status":"interrupted","items":[]}}}' ;;
                     esac
                 done"#.to_string(),
             ],
             queue_capacity: 2,
             notify_timeout_secs: 2,
+            provider_observation: None,
+            thread_bootstrap: Default::default(),
             model: Some("gpt-5.6-terra".to_string()),
             permissions: "allow".to_string(),
         }
@@ -2243,14 +2933,14 @@ mod tests {
                     "provider_request ne doit pas porter {forbidden:?}: {payload}"
                 );
             }
-            if entry["event"] == "error" {
-                if let Some(pending) = entry.pointer("/payload/pending_provider_request") {
-                    let pending = serde_json::to_string(pending).expect("pending sérialisable");
-                    assert!(
-                        !pending.contains(forbidden),
-                        "pending_provider_request ne doit pas porter {forbidden:?}: {pending}"
-                    );
-                }
+            if entry["event"] == "error"
+                && let Some(pending) = entry.pointer("/payload/pending_provider_request")
+            {
+                let pending = serde_json::to_string(pending).expect("pending sérialisable");
+                assert!(
+                    !pending.contains(forbidden),
+                    "pending_provider_request ne doit pas porter {forbidden:?}: {pending}"
+                );
             }
         }
     }
@@ -2295,10 +2985,7 @@ mod tests {
                     "BRIDGET_CODEX_REQUEST_VARIANT".to_string(),
                     variant.to_string(),
                 ),
-                (
-                    "BRIDGET_CODEX_HOLD_TURN".to_string(),
-                    "1".to_string(),
-                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
             ],
             false,
         )
@@ -2574,10 +3261,7 @@ mod tests {
                     "BRIDGET_CODEX_REQUEST_APPROVAL".to_string(),
                     "1".to_string(),
                 ),
-                (
-                    "BRIDGET_CODEX_HOLD_TURN".to_string(),
-                    "1".to_string(),
-                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
             ],
             false,
         )
@@ -2650,10 +3334,7 @@ mod tests {
                     "BRIDGET_CODEX_REQUEST_APPROVAL".to_string(),
                     "1".to_string(),
                 ),
-                (
-                    "BRIDGET_CODEX_HOLD_TURN".to_string(),
-                    "1".to_string(),
-                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
             ],
             false,
         )
@@ -2911,6 +3592,592 @@ mod tests {
         );
     }
 
+    /// Point D du chantier : un message arrivé pendant un tour actif est INJECTÉ
+    /// dans ce tour par `turn/steer`, sans l'interrompre et sans attendre sa fin.
+    ///
+    /// Assertion métier : la requête porte `expectedTurnId` = le tour ACTIF
+    /// (`turn-native`), et non l'identifiant du message ni un tour mis en file
+    /// (contrainte t3code CodexSessionRuntime.ts:1853).
+    ///
+    /// Mutant qui le tue : router le second message vers `messages` au lieu de
+    /// `steer` dans `deliver` — aucun `turn/steer` n'est alors émis, le message
+    /// attend la fin du tour, et c'est exactement le défaut que le chantier
+    /// demande de corriger.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_E_codex_message_arrive_est_pilote_dans_le_tour_en_cours() {
+        let root = root("temoin-steer");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 6;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
+            ],
+            false,
+        )
+        .expect("session native pilotage");
+
+        let mut premier = message("temoin-steer");
+        premier.id = "codex-steer-tour".to_string();
+        transport.deliver(&premier).expect("livraison du premier");
+
+        // Attendre que le tour soit RÉELLEMENT actif : piloter avant que
+        // `turn/start` ait rendu son identifiant n'aurait aucun sens.
+        let attente = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < attente {
+            if fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("\"method\":\"turn/start\"")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        thread::sleep(Duration::from_millis(150));
+
+        let mut second = message("temoin-steer-2");
+        second.id = "codex-steer-injecte".to_string();
+        second.from = "superviseur".to_string();
+        second.intent = Some(MessageIntent::SteerCurrent);
+        transport.deliver(&second).expect("livraison du second");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut ligne_steer = None;
+        while Instant::now() < deadline {
+            let contenu = fs::read_to_string(&trace).unwrap_or_default();
+            if let Some(ligne) = contenu
+                .lines()
+                .find(|ligne| ligne.contains("\"method\":\"turn/steer\""))
+            {
+                ligne_steer = Some(ligne.to_string());
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        transport.stop();
+
+        let ligne_steer = ligne_steer.unwrap_or_else(|| {
+            panic!(
+                "aucun turn/steer émis : le message a attendu la fin du tour; trace={}",
+                fs::read_to_string(&trace).unwrap_or_else(|error| error.to_string())
+            )
+        });
+        assert!(
+            ligne_steer.contains("\"expectedTurnId\":\"turn-native\""),
+            "turn/steer doit viser le tour ACTIF, ligne={ligne_steer}"
+        );
+        assert!(
+            ligne_steer.contains("\"clientUserMessageId\":\"codex-steer-injecte\""),
+            "turn/steer doit porter le message arrivé, ligne={ligne_steer}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Un tour NON PILOTABLE (`activeTurnNotSteerable`, mesuré le 28/08 contre
+    /// codex-cli 0.150.1) doit rendre le message à la file PRINCIPALE, pour
+    /// qu'il soit traité au tour suivant — et non le rejouer en boucle dans la
+    /// file de pilotage, ce qui bloquerait tout ce qui suit.
+    ///
+    /// Assertion métier : après l'échéance du premier tour, un SECOND
+    /// `turn/start` est émis — preuve que le message refusé est reparti en mode
+    /// « queue ». Mutant qui le tue : remplacer `state.messages.push_front` par
+    /// `state.steer.push_front` dans la branche non pilotable.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_F_codex_tour_non_pilotable_rend_le_message_a_la_file() {
+        let root = root("temoin-non-pilotable");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 3;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
+                ("BRIDGET_CODEX_STEER_REFUSE".to_string(), "1".to_string()),
+            ],
+            false,
+        )
+        .expect("session native non pilotable");
+
+        let mut premier = message("np-1");
+        premier.id = "codex-np-tour".to_string();
+        transport.deliver(&premier).expect("livraison du premier");
+
+        let attente = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < attente {
+            if fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("\"method\":\"turn/start\"")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        thread::sleep(Duration::from_millis(150));
+
+        let mut second = message("np-2");
+        second.id = "codex-np-refuse".to_string();
+        second.from = "humain".to_string();
+        second.intent = Some(MessageIntent::SteerCurrent);
+        transport.deliver(&second).expect("livraison du second");
+
+        // Le premier tour tombe sur son échéance (HOLD_TURN), puis le worker
+        // doit reprendre le message rendu à la file principale.
+        let deadline = Instant::now() + Duration::from_secs(14);
+        let mut deux_turn_start = false;
+        while Instant::now() < deadline {
+            let contenu = fs::read_to_string(&trace).unwrap_or_default();
+            let repris = contenu.lines().any(|ligne| {
+                ligne.contains("\"method\":\"turn/start\"") && ligne.contains("codex-np-refuse")
+            });
+            if repris {
+                deux_turn_start = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(40));
+        }
+        transport.stop();
+
+        let contenu = fs::read_to_string(&trace).unwrap_or_default();
+        assert!(
+            contenu.contains("\"method\":\"turn/steer\""),
+            "le second message devait d'abord être tenté en pilotage; trace={contenu}"
+        );
+        assert!(
+            deux_turn_start,
+            "un tour non pilotable doit rendre le message à la file : \
+             aucun second turn/start observé, le message est resté bloqué en \
+             pilotage; trace={contenu}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Un accusé `turn/steer` sans `item/completed userMessage` n'est pas une
+    /// remise. Le délai du message humain doit donc interrompre le tour ancien
+    /// bloqué, restituer ce message en tête de FIFO, puis laisser le système
+    /// démarrer son tour AVANT tout message système arrivé entre-temps.
+    ///
+    /// Sans ce repli, le délai suivi est celui du tour ancien (60 s ici) : la
+    /// remise humaine reste `dispatching` jusqu'à cette échéance étrangère.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_G_codex_steer_sans_consommation_interrompt_et_priorise_l_humain() {
+        let root = root("temoin-steer-sans-consommation");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 60;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
+                (
+                    "BRIDGET_CODEX_REQUEST_APPROVAL".to_string(),
+                    "1".to_string(),
+                ),
+            ],
+            false,
+        )
+        .expect("session native steering non consommé");
+
+        let mut ancien = message("ancien-bloque");
+        ancien.id = "codex-ancien-bloque".to_string();
+        transport
+            .deliver(&ancien)
+            .expect("livraison du tour ancien");
+
+        let attente = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < attente {
+            if fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("\"method\":\"turn/start\"")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        let mut humain = message("humain-prioritaire");
+        humain.id = "codex-humain-prioritaire".to_string();
+        humain.from = "humain".to_string();
+        humain.origin = Some(MessageOrigin::Human);
+        humain.deadline_at = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("horloge")
+                .as_secs()
+                + 1,
+        );
+        transport.deliver(&humain).expect("livraison humaine");
+
+        let mut systeme = message("systeme-apres-humain");
+        systeme.id = "codex-systeme-apres-humain".to_string();
+        transport.deliver(&systeme).expect("livraison système");
+
+        let deadline = Instant::now() + Duration::from_secs(6);
+        let mut humain_repris = false;
+        while Instant::now() < deadline {
+            let contenu = fs::read_to_string(&trace).unwrap_or_default();
+            humain_repris = contenu.lines().any(|ligne| {
+                ligne.contains("\"method\":\"turn/start\"")
+                    && ligne.contains("codex-humain-prioritaire")
+            });
+            if humain_repris {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        transport.stop();
+
+        let contenu = fs::read_to_string(&trace).unwrap_or_default();
+        let position_humain = contenu
+            .find("codex-humain-prioritaire")
+            .expect("turn/start humain attendu");
+        let position_systeme = contenu.find("codex-systeme-apres-humain");
+        assert!(
+            contenu.contains("\"method\":\"turn/steer\""),
+            "le message humain devait d'abord tenter turn/steer; trace={contenu}"
+        );
+        assert!(
+            contenu.contains("\"decision\":\"accept\""),
+            "la demande d'autorisation du tour ancien devait être soldée avant le repli; trace={contenu}"
+        );
+        assert!(
+            contenu.contains("\"method\":\"turn/interrupt\""),
+            "le steering non consommé devait interrompre le tour ancien; trace={contenu}"
+        );
+        assert!(
+            humain_repris,
+            "le message humain non consommé devait repartir en tête avant 60 s; trace={contenu}"
+        );
+        assert!(
+            position_systeme.is_none_or(|position| position_humain < position),
+            "un message système ne doit pas doubler l'humain restitué; trace={contenu}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Un résultat JSON-RPC `turn/steer` ne solde jamais une remise humaine.
+    /// Le faux serveur garde le tour ouvert et n'émet pas `userMessage` :
+    /// aucun `PromptDispatched` humain ne doit sortir avant preuve contraire.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_H_codex_steer_ack_sans_consommation_ne_solde_pas_la_remise() {
+        let root = root("temoin-steer-ack-sans-consommation");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 8;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
+            ],
+            false,
+        )
+        .expect("session native ack sans consommation");
+
+        let mut ancien = message("ack-sans-consommation-ancien");
+        ancien.id = "codex-ack-sans-consommation-ancien".to_string();
+        transport
+            .deliver(&ancien)
+            .expect("livraison du tour ancien");
+        let attente = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < attente {
+            if fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("\"method\":\"turn/start\"")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        let mut humain = message("ack-sans-consommation-humain");
+        humain.id = "codex-ack-sans-consommation-humain".to_string();
+        humain.from = "humain".to_string();
+        humain.intent = Some(MessageIntent::SteerCurrent);
+        humain.deadline_at = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("horloge")
+                .as_secs()
+                + 30,
+        );
+        transport.deliver(&humain).expect("livraison humaine");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut steer_observe = false;
+        let mut prompt_humain = false;
+        while Instant::now() < deadline {
+            let contenu = fs::read_to_string(&trace).unwrap_or_default();
+            steer_observe |= contenu.contains("\"method\":\"turn/steer\"");
+            for event in transport.drain_events() {
+                prompt_humain |= matches!(
+                    event.kind,
+                    ManagedEventKind::PromptDispatched { ref message_id }
+                        if message_id == "codex-ack-sans-consommation-humain"
+                );
+            }
+            if steer_observe {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        thread::sleep(Duration::from_millis(100));
+        for event in transport.drain_events() {
+            prompt_humain |= matches!(
+                event.kind,
+                ManagedEventKind::PromptDispatched { ref message_id }
+                    if message_id == "codex-ack-sans-consommation-humain"
+            );
+        }
+        transport.stop();
+
+        assert!(steer_observe, "turn/steer attendu");
+        assert!(
+            !prompt_humain,
+            "un accusé turn/steer sans item/completed userMessage ne doit pas acquitter la remise"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// La même remise est acquittée dès que le flux natif atteste exactement le
+    /// `clientUserMessageId` dans un `item/completed userMessage` du tour actif.
+    #[allow(non_snake_case)]
+    #[test]
+    fn TEMOIN_I_codex_user_message_corrige_acquitte_la_remise_humaine() {
+        let root = root("temoin-steer-consomme");
+        let trace = root.join("trace.jsonl");
+        let mut options = fake_options(&trace);
+        options.notify_timeout_secs = 8;
+        let mut transport = CodexAppServerTransport::spawn_with_environment(
+            options,
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
+                ("BRIDGET_CODEX_STEER_CONSUME".to_string(), "1".to_string()),
+            ],
+            false,
+        )
+        .expect("session native steering consommé");
+
+        let mut ancien = message("consomme-ancien");
+        ancien.id = "codex-consomme-ancien".to_string();
+        transport
+            .deliver(&ancien)
+            .expect("livraison du tour ancien");
+        let attente = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < attente {
+            if fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("\"method\":\"turn/start\"")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        let mut humain = message("consomme-humain");
+        humain.id = "codex-consomme-humain".to_string();
+        humain.from = "humain".to_string();
+        humain.intent = Some(MessageIntent::SteerCurrent);
+        humain.deadline_at = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("horloge")
+                .as_secs()
+                + 30,
+        );
+        transport.deliver(&humain).expect("livraison humaine");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut prompt_humain = false;
+        while Instant::now() < deadline {
+            for event in transport.drain_events() {
+                prompt_humain |= matches!(
+                    event.kind,
+                    ManagedEventKind::PromptDispatched { ref message_id }
+                        if message_id == "codex-consomme-humain"
+                );
+            }
+            if prompt_humain {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        transport.stop();
+
+        assert!(
+            prompt_humain,
+            "la preuve userMessage corrélée devait déclencher PromptDispatched"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn active_steer_turn_detail() -> ActiveTurnDetail {
+        Arc::new(Mutex::new(Some(CodexTurnDetail {
+            message_id: "tour-courant".to_string(),
+            thread_id: "thread-native".to_string(),
+            turn_id: Some("turn-native".to_string()),
+            ..Default::default()
+        })))
+    }
+
+    fn user_message_started(client_id: Option<&str>, turn_id: &str) -> Value {
+        let mut item = json!({
+            "id": "provider-item-001",
+            "type": "userMessage",
+            "content": [],
+        });
+        if let Some(client_id) = client_id {
+            item["clientId"] = Value::String(client_id.to_string());
+        }
+        json!({
+            "params": {
+                "threadId": "thread-native",
+                "turnId": turn_id,
+                "item": item,
+            },
+        })
+    }
+
+    #[test]
+    fn provider_item_id_est_observe_uniquement_sur_le_tour_actif() {
+        let active_detail = active_steer_turn_detail();
+        let event = user_message_started(Some("message-humain-001"), "turn-native");
+
+        observe_provider_item_id(&active_detail, &event);
+        let mut late = user_message_started(Some("message-humain-001"), "tour-tardif");
+        late["params"]["item"]["id"] = Value::String("provider-item-tardif".to_string());
+        observe_provider_item_id(&active_detail, &late);
+
+        let observed = active_detail
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        assert_eq!(
+            observed
+                .as_ref()
+                .expect("tour actif")
+                .provider_item_id
+                .as_deref(),
+            Some("provider-item-001")
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_J_codex_item_started_client_id_distingue_id_fournisseur() {
+        let observations = Arc::new((Mutex::new(Observations::default()), Condvar::new()));
+        let active_detail = active_steer_turn_detail();
+        let event = user_message_started(Some("message-humain-001"), "turn-native");
+
+        observe_steered_user_message_visibility(&observations, &active_detail, &event);
+
+        let mut observed = observations
+            .0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let consumed = observed
+            .consumed_steers_by_turn
+            .get(&("thread-native".to_string(), "turn-native".to_string()))
+            .expect("clientId visible pour le tour actif");
+        assert!(
+            consumed.contains("message-humain-001"),
+            "la corrélation doit utiliser clientId, pas l'identifiant interne"
+        );
+        assert!(
+            !consumed.contains("provider-item-001"),
+            "l'identifiant interne fournisseur ne doit jamais acquitter Bridget"
+        );
+        let mut accepted = vec![message("message-humain-001")];
+        let confirmed =
+            consume_accepted_steers(&mut observed, "thread-native", "turn-native", &mut accepted);
+        assert_eq!(confirmed.len(), 1, "une seule remise est attestée");
+        assert!(
+            accepted.is_empty(),
+            "aucune remise distincte ne doit rester"
+        );
+        assert!(
+            consume_accepted_steers(&mut observed, "thread-native", "turn-native", &mut accepted,)
+                .is_empty(),
+            "la même preuve ne peut pas produire un second acquittement"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_K_codex_item_started_refuse_mauvais_client_id_et_tour_tardif() {
+        let observations = Arc::new((Mutex::new(Observations::default()), Condvar::new()));
+        let active_detail = active_steer_turn_detail();
+        let wrong_id = user_message_started(Some("client-inconnu"), "turn-native");
+        observe_steered_user_message_visibility(&observations, &active_detail, &wrong_id);
+
+        let mut observed = observations
+            .0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut accepted = vec![message("message-humain-001")];
+        assert!(
+            consume_accepted_steers(&mut observed, "thread-native", "turn-native", &mut accepted,)
+                .is_empty(),
+            "un clientId inconnu ne doit pas produire d'acquittement"
+        );
+        drop(observed);
+
+        let late = user_message_started(Some("message-humain-001"), "tour-termine");
+        let late_observations = Arc::new((Mutex::new(Observations::default()), Condvar::new()));
+        observe_steered_user_message_visibility(&late_observations, &active_detail, &late);
+        assert!(
+            late_observations
+                .0
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .consumed_steers_by_turn
+                .is_empty(),
+            "un événement d'un autre tour ne doit laisser aucune preuve"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TEMOIN_L_codex_item_started_sans_client_id_ne_consomme_pas() {
+        let observations = Arc::new((Mutex::new(Observations::default()), Condvar::new()));
+        let active_detail = active_steer_turn_detail();
+        let event = user_message_started(None, "turn-native");
+
+        observe_steered_user_message_visibility(&observations, &active_detail, &event);
+
+        assert!(
+            observations
+                .0
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .consumed_steers_by_turn
+                .is_empty(),
+            "sans clientId il n'existe aucune preuve de consommation"
+        );
+    }
+
     fn journal_echeance_fixture(label: &str) -> Vec<Value> {
         let root = root(label);
         let trace = root.join("trace.jsonl");
@@ -2956,6 +4223,12 @@ mod tests {
             rejected,
             "DeliveryRejected échéance attendu; trace={}",
             fs::read_to_string(&trace).unwrap_or_else(|error| error.to_string())
+        );
+        assert!(
+            fs::read_to_string(&trace)
+                .unwrap_or_default()
+                .contains("\"method\":\"turn/interrupt\""),
+            "l'échéance fournisseur doit interrompre le tour avant le terminal"
         );
         transport.stop();
 
@@ -3023,9 +4296,7 @@ mod tests {
         let (present, _outbound) = journal_detail_fixture("temoin-tool-command", true);
         let commands: Vec<_> = present
             .iter()
-            .filter(|event| {
-                event["event"] == "update" && event["payload"]["kind"] == "command"
-            })
+            .filter(|event| event["event"] == "update" && event["payload"]["kind"] == "command")
             .collect();
         assert_eq!(
             commands.len(),
@@ -3184,8 +4455,11 @@ mod tests {
         );
         assert_eq!(deny_payload["decision"], "decline");
         assert!(
-            approval_response(&json!({ "method": "item/commandExecution/requestApproval" }), "allow")
-                .is_none(),
+            approval_response(
+                &json!({ "method": "item/commandExecution/requestApproval" }),
+                "allow"
+            )
+            .is_none(),
             "sans id: aucune réponse inventée"
         );
     }
@@ -3696,5 +4970,55 @@ mod tests {
         let mute: Value =
             serde_json::from_str(r#"{"method":"modelRerouted","params":{}}"#).unwrap();
         assert!(served_model_from_codex(&mute).is_none());
+    }
+
+    #[test]
+    fn reprise_et_bifurcation_codex_emettent_la_requete_attestee_ou_refusent() {
+        let compatible = ProviderObservation {
+            binary_path: "/fixtures/codex".to_string(),
+            binary_version: "0.150.1".to_string(),
+            binary_digest: "0".repeat(64),
+            contract_version: "codex-app-server-fixture-v1".to_string(),
+            operations: vec![ProviderOperation::Resume, ProviderOperation::Fork],
+        };
+        let cwd = Path::new("/workspace");
+        let resume = CodexThreadBootstrap::Resume {
+            thread_id: "thread-parent".to_string(),
+        };
+        let fork = CodexThreadBootstrap::Fork {
+            thread_id: "thread-parent".to_string(),
+        };
+        assert!(validate_thread_bootstrap(&Some(compatible.clone()), &resume).is_ok());
+        assert!(validate_thread_bootstrap(&Some(compatible.clone()), &fork).is_ok());
+        assert_eq!(
+            thread_bootstrap_request(&resume, cwd, None),
+            ("thread/resume", json!({ "threadId": "thread-parent" }))
+        );
+        assert_eq!(
+            thread_bootstrap_request(&fork, cwd, None),
+            ("thread/fork", json!({ "threadId": "thread-parent" }))
+        );
+        assert!(matches!(
+            validate_thread_bootstrap(&None, &resume),
+            Err(TransportError::DeliveryFailed(reason)) if reason.contains("thread/resume")
+        ));
+        let fork_incompatible = ProviderObservation {
+            operations: vec![ProviderOperation::Resume],
+            ..compatible
+        };
+        assert!(matches!(
+            validate_thread_bootstrap(&Some(fork_incompatible), &fork),
+            Err(TransportError::DeliveryFailed(reason)) if reason.contains("thread/fork")
+        ));
+    }
+    #[test]
+    fn consigne_privee_preserve_le_corps_visible_du_message() {
+        let body = "Demande utilisateur visible.";
+        let prompt = private_prompt(Some("Privilégie les sources attestées."), body);
+
+        assert!(prompt.contains("Privilégie les sources attestées."));
+        assert!(prompt.ends_with(body));
+        assert_eq!(body, "Demande utilisateur visible.");
+        assert_eq!(private_prompt(None, body), body);
     }
 }

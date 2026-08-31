@@ -189,6 +189,7 @@ fn prepared(issuer_scope: &str) -> PreparedDelegation {
         objectif_id: objective.id,
         constat_id: None,
         review_target: None,
+        limites_autonomie: Default::default(),
         participant: "prospective".to_string(),
         instruction: "Vérifie une issue".to_string(),
         duree: ClasseDuree::Normale,

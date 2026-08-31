@@ -1,0 +1,58 @@
+#!/bin/sh
+set -eu
+
+mode="${BRIDGET_DOCKER_FIXTURE_MODE:-ok}"
+if [ -z "$mode" ]; then
+  mode=ok
+fi
+command="$1"
+
+case "$mode" in
+  timeout)
+    timeout_secs="$BRIDGET_DOCKER_FIXTURE_TIMEOUT_SECS"
+    if [ -z "$timeout_secs" ]; then
+      timeout_secs=3
+    fi
+    sleep "$timeout_secs"
+    ;;
+  daemon-unavailable)
+    printf '%s\n' 'Cannot connect to the Docker daemon' >&2
+    exit 1
+    ;;
+  hostile-json)
+    printf '%s\n' '{not-valid-json'
+    exit 0
+    ;;
+  image-missing)
+    printf '%s\n' 'No such image: fixture-missing' >&2
+    exit 1
+    ;;
+  ok)
+    ;;
+  *)
+    printf '%s\n' "unknown fixture mode: $mode" >&2
+    exit 64
+    ;;
+esac
+
+case "$command" in
+  version)
+    printf '%s\n' '{"Client":{"Version":"fixture"},"Server":{"Version":"fixture"}}'
+    ;;
+  image)
+    printf '%s\n' '{"Id":"sha256:fixture"}'
+    ;;
+  inspect)
+    printf '%s\n' '{"Id":"fixture-container","Config":{"Image":"sha256:fixture"}}'
+    ;;
+  create)
+    printf '%s\n' 'fixture-container'
+    ;;
+  start|stop|rm|exec)
+    exit 0
+    ;;
+  *)
+    printf '%s\n' "unexpected docker command: $command" >&2
+    exit 64
+    ;;
+esac

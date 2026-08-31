@@ -1,0 +1,537 @@
+:root {
+  --fleet-line: color-mix(in srgb, #9ca3af 22%, transparent);
+  --fleet-muted: #a3a3a3;
+  --fleet-panel: #151515;
+  --fleet-panel-alt: #1c1c1c;
+  --fleet-selected: #313644;
+}
+
+body {
+  margin: 0;
+  min-width: 0;
+  background: #101010;
+  color: #f5f5f5;
+}
+
+.server-list {
+  display: grid;
+  gap: 0.55rem;
+  min-width: min(34rem, 80vw);
+}
+
+.server-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--fleet-line);
+  padding: 0.55rem 0;
+}
+
+.server-list li > div:first-child {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.server-list li > div:last-child,
+.target-choices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  gap: 0.3rem;
+}
+
+.target-choices {
+  min-width: min(25rem, 75vw);
+  padding: 0.4rem 0;
+}
+
+/* La coque locale ne porte que les sources. Le relais conserve son véritable
+   volet d'agents, ses cartes et ses actions. */
+#fleet-shell {
+  --fleet-background: #0a0a0a;
+  --fleet-project-surface: #0d0d0d;
+  --fleet-surface-raised: color-mix(in srgb, #0a0a0a 93%, white);
+  --fleet-surface-hover: color-mix(in srgb, #0a0a0a 89%, white);
+  --fleet-line: color-mix(in srgb, #8d8d8a 12%, transparent);
+  --fleet-muted: #8d8d8a;
+  --fleet-text: #f4f4f2;
+  --fleet-accent: #6695ff;
+  display: grid;
+  grid-template-columns: 12.5rem;
+  width: min(100vw, 12.5rem);
+  height: 100dvh;
+  overflow: hidden;
+  color: var(--fleet-text);
+  color-scheme: dark;
+  background: var(--fleet-background);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+}
+
+#fleet-shell .fleet-sources-pane {
+  min-width: 0;
+  min-height: 0;
+  padding: 2.15rem 0.5rem 0.7rem;
+  border-right: 1px solid var(--fleet-line);
+}
+
+#fleet-shell .fleet-sources-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  background: var(--fleet-project-surface);
+}
+
+#fleet-shell .fleet-sources-header {
+  display: flex;
+  min-height: 2.5rem;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+#fleet-shell .fleet-sources-title {
+  display: grid;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
+#fleet-shell .fleet-sources-title h1 {
+  margin: 0;
+  color: var(--fleet-text);
+  font-size: 0.86rem;
+  font-weight: 720;
+  letter-spacing: -0.015em;
+}
+
+#fleet-shell .fleet-sources-title span {
+  overflow: hidden;
+  color: var(--fleet-muted);
+  font-size: 0.66rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#fleet-shell .fleet-source-actions {
+  display: flex;
+  margin-left: auto;
+  gap: 0.16rem;
+}
+
+#fleet-shell .fleet-sources-pane button {
+  appearance: none;
+  border: 0;
+  border-radius: 0.55rem;
+  color: var(--fleet-muted);
+  background: transparent;
+  box-shadow: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+#fleet-shell .fleet-sources-pane button:focus-visible {
+  outline: 2px solid var(--fleet-accent);
+  outline-offset: 2px;
+}
+
+#fleet-shell .fleet-source-actions button {
+  min-height: 1.8rem;
+  padding: 0.28rem 0.42rem;
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+
+#fleet-shell .fleet-source-actions button:hover,
+#fleet-shell .fleet-source-actions button:focus-visible {
+  color: var(--fleet-text);
+  background: var(--fleet-surface-hover);
+}
+
+#fleet-shell .fleet-global-button {
+  width: 100%;
+  padding: 0.48rem 0.5rem;
+  color: var(--fleet-muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+  text-align: left;
+}
+
+#fleet-shell .fleet-global-button:hover,
+#fleet-shell .fleet-global-button[aria-current="true"] {
+  color: var(--fleet-text);
+  background: color-mix(in srgb, var(--fleet-accent) 14%, transparent);
+}
+
+#fleet-shell .fleet-sources-pane nav {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+#fleet-shell .fleet-sources-pane ul,
+#fleet-shell .fleet-sources-pane li,
+#fleet-shell .server-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+#fleet-shell .source-item {
+  display: grid;
+  gap: 0.08rem;
+  margin: 0.15rem 0;
+}
+
+#fleet-shell .source-button,
+#fleet-shell .project-button {
+  width: 100%;
+  min-height: 2rem;
+  padding: 0.38rem 0.5rem;
+  text-align: left;
+}
+
+#fleet-shell .source-button {
+  color: var(--fleet-text);
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+#fleet-shell .source-button:hover,
+#fleet-shell .source-button[aria-pressed="true"],
+#fleet-shell .project-button:hover,
+#fleet-shell .project-button[aria-pressed="true"] {
+  color: var(--fleet-text);
+  background: var(--fleet-surface-hover);
+}
+
+#fleet-shell .source-item small,
+#fleet-shell .project-button,
+#fleet-shell .server-list small {
+  color: var(--fleet-muted);
+}
+
+#fleet-shell .source-item small {
+  padding: 0 0.5rem;
+  font-size: 0.68rem;
+}
+
+#fleet-shell .source-projects {
+  display: grid;
+  gap: 0.1rem;
+  padding-left: 0.48rem !important;
+}
+
+#fleet-shell .project-button {
+  min-height: 1.75rem;
+  font-size: 0.76rem;
+}
+
+#fleet-shell .fleet-sources-pane footer {
+  display: flex;
+  align-items: center;
+  gap: 0.16rem;
+  margin-top: auto;
+}
+
+#fleet-shell .fleet-sources-pane footer .quiet {
+  padding: 0.34rem 0.42rem;
+  font-size: 0.74rem;
+}
+
+#fleet-shell .fleet-sources-pane footer .quiet:hover {
+  color: var(--fleet-text);
+  background: var(--fleet-surface-hover);
+}
+
+#fleet-shell .fleet-sources-pane .icon-settings {
+  width: 2rem;
+  height: 2rem;
+  margin-left: auto;
+  padding: 0;
+  color: var(--fleet-muted);
+  font-size: 1rem;
+}
+
+#fleet-shell .fleet-sources-pane .icon-settings:hover {
+  color: var(--fleet-text);
+  background: var(--fleet-surface-hover);
+}
+
+/* Centre de contrôle : les connexions et réglages sont des sections d'une
+   même surface, jamais une série de petites boîtes à largeur contrainte. */
+#fleet-shell .settings-launcher-wrap {
+  position: relative;
+  margin-left: auto;
+}
+
+#fleet-shell .settings-launcher {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 0.45rem);
+  z-index: 30;
+  display: grid;
+  width: 13.5rem;
+  gap: 0.18rem;
+  padding: 0.32rem;
+  border: 1px solid var(--fleet-line);
+  border-radius: 0.7rem;
+  background: #181818;
+  box-shadow: 0 0.9rem 2.4rem rgb(0 0 0 / 46%);
+}
+
+#fleet-shell .settings-launcher[hidden] {
+  display: none;
+}
+
+#fleet-shell .settings-launcher button {
+  width: 100%;
+  min-height: 2.1rem;
+  padding: 0.38rem 0.48rem;
+  color: var(--fleet-text);
+  font-size: 0.76rem;
+  font-weight: 610;
+  text-align: left;
+}
+
+#fleet-shell .settings-launcher button:hover,
+#fleet-shell .settings-launcher button:focus-visible {
+  background: var(--fleet-surface-hover);
+}
+
+dialog.settings-dialog {
+  width: min(54rem, calc(100vw - 3rem));
+  max-height: min(43rem, calc(100dvh - 3rem));
+  overflow: hidden;
+  border-color: #303030;
+  border-radius: 0.85rem;
+  color: var(--fleet-text);
+  background: #111;
+  box-shadow: 0 1.4rem 4.4rem rgb(0 0 0 / 52%);
+}
+
+.settings-dialog::backdrop {
+  background: rgb(0 0 0 / 68%);
+}
+
+.settings-dialog-heading {
+  min-height: 4.2rem;
+  padding: 0.9rem 1.1rem;
+  border-bottom: 1px solid var(--fleet-line);
+}
+
+.settings-dialog-heading .eyebrow,
+.settings-section-heading .eyebrow {
+  margin: 0 0 0.16rem;
+  color: var(--fleet-muted);
+  font-size: 0.65rem;
+  font-weight: 720;
+  letter-spacing: 0.08em;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 12.25rem minmax(0, 1fr);
+  min-height: 30rem;
+  max-height: calc(min(43rem, 100dvh - 3rem) - 4.2rem);
+}
+
+.settings-sidebar {
+  display: grid;
+  align-content: start;
+  gap: 0.16rem;
+  padding: 0.7rem 0.52rem;
+  border-right: 1px solid var(--fleet-line);
+  background: #0d0d0d;
+}
+
+#settings-dialog .settings-sidebar button {
+  min-height: 2.2rem;
+  padding: 0.42rem 0.54rem;
+  border: 0;
+  border-radius: 0.52rem;
+  color: var(--fleet-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 620;
+  text-align: left;
+  cursor: pointer;
+}
+
+#settings-dialog .settings-sidebar button:hover,
+#settings-dialog .settings-sidebar button:focus-visible,
+#settings-dialog .settings-sidebar button[aria-current]:not([aria-current="false"]) {
+  outline: none;
+  color: var(--fleet-text);
+  background: var(--fleet-surface-hover);
+}
+
+.settings-sections {
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.settings-sections > section {
+  min-width: 0;
+  padding: 1.35rem 1.45rem 1.5rem;
+}
+
+.settings-section-heading {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 1.25rem;
+}
+
+.settings-section-heading h2 {
+  color: var(--fleet-text);
+  font-size: 1.18rem;
+  font-weight: 710;
+  letter-spacing: -0.02em;
+}
+
+.settings-section-heading > p:not(.eyebrow) {
+  max-width: 38rem;
+  margin: 0;
+  color: var(--fleet-muted);
+  font-size: 0.8rem;
+  line-height: 1.48;
+}
+
+.settings-dialog #preferences-form {
+  display: grid;
+  gap: 0.85rem;
+  padding: 0;
+}
+
+.settings-dialog label,
+.settings-dialog fieldset {
+  color: var(--fleet-text);
+}
+
+.settings-dialog input,
+.settings-dialog select {
+  border-color: #353535;
+  background: #0a0a0a;
+}
+
+.settings-dialog .desktop-about {
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--fleet-line);
+}
+
+.settings-dialog .desktop-about h3 {
+  margin: 0;
+  color: var(--fleet-text);
+  font-size: 0.84rem;
+}
+
+.settings-dialog .desktop-about p {
+  margin: 0.25rem 0 0;
+  color: var(--fleet-muted);
+  font-size: 0.76rem;
+}
+
+.settings-dialog .server-list {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.settings-dialog .server-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.8rem;
+  align-items: center;
+  padding: 0.8rem 0;
+  border-bottom: 1px solid var(--fleet-line);
+}
+
+.settings-dialog .server-list li > div:first-child {
+  min-width: 0;
+}
+
+.settings-dialog .server-list strong,
+.settings-dialog .server-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-dialog .server-list strong {
+  color: var(--fleet-text);
+}
+
+.settings-dialog .server-list small {
+  color: var(--fleet-muted);
+}
+
+.settings-dialog .server-list li > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+#settings-dialog button:not(.icon-button) {
+  border: 1px solid #383838;
+  border-radius: 0.46rem;
+  padding: 0.4rem 0.55rem;
+  color: var(--fleet-text);
+  background: #242424;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+#settings-dialog button:not(.icon-button):hover,
+#settings-dialog button:not(.icon-button):focus-visible {
+  outline: none;
+  border-color: #575757;
+  background: #303030;
+}
+
+#settings-dialog .settings-sidebar button {
+  border: 0;
+  color: var(--fleet-muted);
+  background: transparent;
+}
+
+#settings-dialog .settings-sidebar button:hover,
+#settings-dialog .settings-sidebar button:focus-visible,
+#settings-dialog .settings-sidebar button[aria-current]:not([aria-current="false"]) {
+  color: var(--fleet-text);
+  background: var(--fleet-surface-hover);
+}
+
+.settings-dialog .dialog-actions {
+  margin-top: 1rem;
+}
+
+@media (max-width: 640px) {
+  dialog.settings-dialog {
+    width: calc(100vw - 1.5rem);
+  }
+
+  .settings-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-sidebar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border-right: 0;
+    border-bottom: 1px solid var(--fleet-line);
+  }
+
+  .settings-sidebar button {
+    min-width: 0;
+    font-size: 0.68rem;
+    text-align: center;
+  }
+
+  .settings-dialog .server-list li {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-dialog .server-list li > div:last-child {
+    justify-content: flex-start;
+  }
+}

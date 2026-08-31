@@ -5,23 +5,30 @@
 //! décision durable à `app`. Après le commit, elle délègue l'émission au
 //! réconciliateur d'outbox commun : aucun second chemin d'envoi n'existe.
 
-use bridget_transport::protocol::ReviewTarget;
+use bridget_transport::protocol::{
+    PROJECT_REGISTRY_CONTRACT_VERSION, PROJECT_RUNTIME_CONTRACT_VERSION, ProjectAdminOperation,
+    ProjectAdminRequest, ProjectBindingStatus, ProjectRuntimeOperation, ProjectRuntimeRequest,
+    ReviewTarget,
+};
 use maicie::MAICIE_IDENTITY;
 use maicie::app::{
     CatalogueReconcileError, DelegateError, DelegateRequest, DelegateResult, DelegationCandidate,
     LocalProfileApproval, ObjectiveError, ProfileActivationError, ProfileActivationProposalRequest,
-    add_participant, approve_profile_activation, delegated_participants,
-    propose_profile_activation, reconcile_catalogue_from_store, remove_participant, status,
+    ProjectRegistrationError, ProjectRegistrationRequest, activate_project_identity,
+    add_participant, approve_profile_activation, delegated_participants, disable_project_identity,
+    prepare_project_registration, project_registration_request_bytes, propose_profile_activation,
+    reconcile_catalogue_from_store, remove_participant, resolve_project_registration, status,
     stored_profile_activation_proposal, summarize,
 };
 use maicie::bridget_client::{
-    AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits, DaemonIdentity,
+    AgentInfo, AttachWindow, BridgetClient, BridgetClientError, BridgetClientLimits,
+    DaemonIdentity, ProjectProfileClient, ProjectRegistryClient,
 };
 use maicie::catalogue::{self, AppendOutcome, CatalogueError, CatalogueJournal};
 use maicie::config::{ConfigError, MaicieConfig};
 use maicie::domain::{
     ClasseDuree, CoutMissionAgent, DecisionCoordination, Delegation, EtatFlux, ObjectifCoordonne,
-    ObjectiveOpeningPermit, SourceSnapshot, SuiteObjective,
+    ObjectiveOpeningPermit, ProjectProfile, ProjectProfileStatus, SourceSnapshot, SuiteObjective,
 };
 use maicie::greffe_service::{
     GreffeServiceError, append_registre_add, apply_delegate, candidates_from,
@@ -46,9 +53,10 @@ use maicie::routines::{
 };
 use maicie::runtime::{RuntimeNature, RuntimeObservation, RuntimeSignal, RuntimeSubscription};
 use maicie::store::{
-    CompteursRefusDelegationLocale, MaicieStore, ObjectiveSnapshot, ResourceRangeReservation,
-    SchemaPreflight, StoreError,
+    CompteursRefusDelegationLocale, MaicieStore, ObjectiveSnapshot, ProjectRegistrationState,
+    ResourceRangeReservation, SchemaPreflight, StoreError,
 };
+use maicie::ui_projection::{UiProjectionError, publish_ui_mission_projection_v1};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -67,10 +75,8 @@ const EXIT_BRIDGET: u8 = 4;
 const EXIT_DELEGATE: u8 = 5;
 const EXIT_STORE: u8 = 6;
 const MAX_STATUS_RUNTIME_OBSERVATIONS: usize = 256;
-use maicie::{
-    LOCALITY_GUARD_ISSUER_SCOPE, MIN_ISSUER_SCOPE_LEN, ROUTINES_ISSUER_SCOPE, STATUS_ISSUER_SCOPE,
-    USAGE_ISSUER_SCOPE,
-};
+const PROJECT_REGISTRATION_HORIZON_SECS: i64 = 300;
+use maicie::{LOCALITY_GUARD_ISSUER_SCOPE, ROUTINES_ISSUER_SCOPE, STATUS_ISSUER_SCOPE};
 
 fn main() -> ExitCode {
     match run(env::args().skip(1).collect()) {
@@ -88,11 +94,16 @@ fn main() -> ExitCode {
 fn run(arguments: Vec<String>) -> Result<String, CliError> {
     let (migrate, rest) = peel_migrate_flag(&arguments)?;
     let command = parse_command(&rest)?;
-    match command {
+    let projection_config = mission_projection_config(&command);
+    let result = match command {
         Command::Delegate(delegate_args) => run_delegate(delegate_args, migrate),
         Command::Status(status_args) => run_status(status_args, migrate),
         Command::Objective(objective_args) => run_objective(objective_args, migrate),
         Command::Profile(profile_args) => run_profile(profile_args, migrate),
+        Command::Project(project_args) => run_project(project_args, migrate),
+        Command::ProjectProfile(project_profile_args) => {
+            run_project_profile(project_profile_args, migrate)
+        }
         Command::Registre(registre_args) => run_registre(registre_args, migrate),
         Command::Plage(plage_args) => run_plage(plage_args, migrate),
         Command::Routine(routine_args) => run_routine(routine_args, migrate),
@@ -110,6 +121,30 @@ fn run(arguments: Vec<String>) -> Result<String, CliError> {
             }
             run_migrate(migrate_args)
         }
+    };
+    if result.is_ok()
+        && let Some(config_path) = projection_config
+    {
+        publish_ui_mission_projection_v1(config_path).map_err(CliError::Projection)?;
+    }
+    result
+}
+
+/// Chaque commande Maicie qui a atteint une issue réussie rafraîchit le même
+/// contrat public atomique. Cette publication n'ajoute aucune boucle résidente.
+fn mission_projection_config(command: &Command) -> Option<PathBuf> {
+    match command {
+        Command::Delegate(arguments) => Some(arguments.config.clone()),
+        Command::Status(arguments) => Some(arguments.config.clone()),
+        Command::Objective(arguments) => Some(arguments.config.clone()),
+        Command::Profile(arguments) => Some(arguments.config.clone()),
+        Command::Project(arguments) => Some(arguments.config.clone()),
+        Command::ProjectProfile(arguments) => Some(arguments.config.clone()),
+        Command::Registre(arguments) => Some(arguments.config.clone()),
+        Command::Plage(arguments) => Some(arguments.config.clone()),
+        Command::Routine(arguments) => Some(arguments.config.clone()),
+        Command::Migrate(arguments) => Some(arguments.config.clone()),
+        Command::Preflight(_) => None,
     }
 }
 
@@ -230,7 +265,7 @@ fn capture_status_sources(config: &MaicieConfig, participants: &[String]) -> Sta
         .filter(|agent| {
             participants
                 .iter()
-                .any(|participant| participant == &agent.name)
+                .any(|participant| participant == &agent.agent_id)
         })
         .map(|agent| AvailabilityOutput::from_agent(agent, started_at))
         .collect::<Vec<_>>();
@@ -243,7 +278,7 @@ fn capture_status_sources(config: &MaicieConfig, participants: &[String]) -> Sta
             ));
             continue;
         }
-        let Some(agent) = agents.iter().find(|agent| agent.name == *participant) else {
+        let Some(agent) = agents.iter().find(|agent| agent.agent_id == *participant) else {
             runtime.push(RuntimeAgentOutput::unknown(
                 participant,
                 "agent_absent_annuaire",
@@ -356,9 +391,7 @@ fn capture_reason(error: &BridgetClientError) -> String {
         BridgetClientError::Timeout { .. } => "budget_capture_epuise".to_string(),
         BridgetClientError::ClientRejected { .. }
         | BridgetClientError::VersionUnsupported { .. }
-        | BridgetClientError::CapabilityMissing { .. } => {
-            "negociation_daemon_refusee".to_string()
-        }
+        | BridgetClientError::CapabilityMissing { .. } => "negociation_daemon_refusee".to_string(),
         BridgetClientError::Closed | BridgetClientError::ConnectionUnusable => {
             "liaison_bridget_fermee".to_string()
         }
@@ -621,6 +654,511 @@ fn reconcile_pending(
         .map_err(CliError::Reconcile)
 }
 
+fn run_project_profile(arguments: ProjectProfileArgs, migrate: bool) -> Result<String, CliError> {
+    let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+    let mut store = open_guarded_maicie_store(
+        &arguments.config,
+        &config,
+        BridgetClientLimits::default(),
+        migrate,
+    )?;
+    match arguments.action {
+        ProjectProfileAction::Propose => {
+            let configured = config
+                .project_profiles
+                .iter()
+                .find(|profile| profile.id == arguments.profile_id)
+                .ok_or(CliError::Usage("profil projet inconnu"))?;
+            let now = unix_now()?;
+            let mut candidate = ProjectProfile::from_config(configured, &config.profiles, now)
+                .map_err(|_| CliError::Usage("profil projet invalide"))?;
+            let profile = match store.save_project_profile(&candidate) {
+                Ok(()) => candidate,
+                Err(StoreError::Conflict(_)) => {
+                    let existing = store
+                        .project_profile(&arguments.profile_id)
+                        .map_err(CliError::Store)?
+                        .ok_or(CliError::Usage("profil projet absent apres conflit"))?;
+                    candidate.generation = existing.generation;
+                    let unchanged = candidate
+                        .digest()
+                        .map_err(|_| CliError::Usage("profil projet invalide"))?
+                        == existing
+                            .digest()
+                            .map_err(|_| CliError::Usage("profil projet invalide"))?;
+                    if unchanged && existing.status != ProjectProfileStatus::Stale {
+                        existing
+                    } else {
+                        candidate.generation = existing
+                            .generation
+                            .checked_add(1)
+                            .ok_or(CliError::Usage("generation profil projet epuisee"))?;
+                        store
+                            .replace_project_profile(&candidate)
+                            .map_err(CliError::Store)?;
+                        candidate
+                    }
+                }
+                Err(error) => return Err(CliError::Store(error)),
+            };
+            let profile = if profile.status == ProjectProfileStatus::Proposed {
+                let request = bridget_transport::protocol::ProjectProfileRequest {
+                    proposal: profile
+                        .proposal(Uuid::new_v4().to_string())
+                        .map_err(|_| CliError::Usage("proposition profil projet invalide"))?,
+                };
+                let mut client =
+                    ProjectProfileClient::connect(&config.bridget_socket, store.issuer_scope())
+                        .map_err(CliError::Bridget)?;
+                let outcome = client.resolve(&request).map_err(CliError::Bridget)?;
+                let resolved = outcome
+                    .profile
+                    .ok_or(CliError::Usage("resolution hote du profil refusee"))?;
+                store
+                    .record_project_profile_resolution(
+                        &profile.profile_id,
+                        resolved,
+                        outcome.observed_at,
+                    )
+                    .map_err(CliError::Store)?
+            } else {
+                profile
+            };
+            render_project_profile_view(&profile, None, arguments.json)
+        }
+        ProjectProfileAction::Approve => {
+            let profile = store
+                .project_profile(&arguments.profile_id)
+                .map_err(CliError::Store)?
+                .ok_or(CliError::Usage("profil projet inconnu"))?;
+            let resolved = profile
+                .resolved
+                .clone()
+                .ok_or(CliError::Usage("resolution projet absente"))?;
+            let now = unix_now()?;
+            let approved = match profile.status {
+                ProjectProfileStatus::Resolved => {
+                    confirm_project_profile_approval(&profile)?;
+                    store
+                        .approve_project_profile(
+                            &profile.profile_id,
+                            resolved.resolved_digest.clone(),
+                            now,
+                        )
+                        .map_err(CliError::Store)?
+                        .0
+                }
+                ProjectProfileStatus::Approved => profile,
+                _ => {
+                    return Err(CliError::Usage("profil projet non resolu"));
+                }
+            };
+            let request = ProjectRuntimeRequest {
+                contract_version: PROJECT_RUNTIME_CONTRACT_VERSION,
+                command_id: Uuid::new_v4().to_string(),
+                issued_at: now,
+                deadline_at: now.saturating_add(60),
+                operation: ProjectRuntimeOperation::Recreate,
+                project_id: approved.project_id.clone(),
+                profile: Some(resolved),
+            };
+            let mut client =
+                ProjectProfileClient::connect(&config.bridget_socket, store.issuer_scope())
+                    .map_err(CliError::Bridget)?;
+            let runtime = client
+                .prepare_runtime(&request)
+                .map_err(CliError::Bridget)?;
+            render_project_profile_view(&approved, Some(runtime), arguments.json)
+        }
+    }
+}
+
+fn render_project_profile_view(
+    profile: &ProjectProfile,
+    runtime: Option<bridget_transport::protocol::ProjectRuntimeOutcome>,
+    json: bool,
+) -> Result<String, CliError> {
+    if json {
+        return serde_json::to_string(&serde_json::json!({
+            "profile": profile,
+            "runtime": runtime,
+            "trust_boundary": "Tous les agents du conteneur peuvent lire les secrets du projet.",
+        }))
+        .map_err(|_| CliError::Usage("sortie JSON profil projet indisponible"));
+    }
+    let resolved = profile.resolved.as_ref();
+    let resolved_policy = resolved
+        .map(serde_json::to_string_pretty)
+        .transpose()
+        .map_err(|_| CliError::Usage("vue locale de politique indisponible"))?;
+    let agents = resolved
+        .map(|value| {
+            value
+                .agents
+                .iter()
+                .map(|agent| {
+                    format!(
+                        "{}:{}:{}:{}",
+                        agent.agent.profile_id,
+                        agent.agent.agent_type,
+                        agent.agent.model,
+                        agent.agent.effort
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    let extensions = resolved
+        .map(|value| {
+            value
+                .resources
+                .iter()
+                .filter(|resource| {
+                    resource.reference.kind
+                        == bridget_transport::protocol::ProjectResourceKind::Extension
+                })
+                .map(|resource| resource.reference.resource_id.clone())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    let secrets = resolved
+        .map(|value| {
+            value
+                .resources
+                .iter()
+                .filter(|resource| {
+                    resource.reference.kind
+                        != bridget_transport::protocol::ProjectResourceKind::Extension
+                })
+                .map(|resource| resource.reference.resource_id.clone())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    Ok(format!(
+        "profil_projet={} etat={:?} agents=[{}] extensions=[{}] secrets=[{}]
+ATTENTION: tous les agents du conteneur peuvent lire les secrets du projet.
+digest={}
+resolution_attestee={},",
+        profile.profile_id,
+        profile.status,
+        agents,
+        extensions,
+        secrets,
+        resolved
+            .map(|value| value.resolved_digest.as_str())
+            .unwrap_or("non_resolu"),
+        resolved_policy.as_deref().unwrap_or("non_resolue"),
+    ))
+}
+
+fn confirm_project_profile_approval(profile: &ProjectProfile) -> Result<(), CliError> {
+    let view = render_project_profile_view(profile, None, false)?;
+    println!("{view}");
+    print!("Tapez oui pour approuver ce profil projet localement : ");
+    io::stdout()
+        .flush()
+        .map_err(|_| CliError::Usage("confirmation locale indisponible"))?;
+    let mut confirmation = String::new();
+    io::stdin()
+        .read_line(&mut confirmation)
+        .map_err(|_| CliError::Usage("confirmation locale illisible"))?;
+    if confirmation.trim() != "oui" {
+        return Err(CliError::Usage("approbation locale refusee"));
+    }
+    Ok(())
+}
+
+fn run_project(arguments: ProjectArgs, migrate: bool) -> Result<String, CliError> {
+    let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+    let mut store = open_guarded_maicie_store(
+        &arguments.config,
+        &config,
+        BridgetClientLimits::default(),
+        migrate,
+    )?;
+    let (mut record, canonical_request) = match arguments.action {
+        ProjectAction::Register {
+            display_name,
+            requested_root,
+            project_id,
+            command_id,
+        } => {
+            let issued_at = unix_now()?;
+            let prepared = prepare_project_registration(
+                &mut store,
+                &ProjectRegistrationRequest {
+                    command_id: command_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+                    project_id: project_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+                    display_name,
+                    requested_root,
+                    issued_at,
+                    deadline_at: issued_at + PROJECT_REGISTRATION_HORIZON_SECS,
+                },
+            )
+            .map_err(CliError::ProjectRegistration)?;
+            (prepared.record, prepared.canonical_request)
+        }
+        ProjectAction::Resume { command_id } => {
+            let record = store
+                .project_registration(&command_id)
+                .map_err(CliError::Store)?
+                .ok_or(CliError::Usage("commande project inconnue"))?;
+            let canonical_request = project_registration_request_bytes(&store, &command_id)
+                .map_err(CliError::ProjectRegistration)?
+                .ok_or(CliError::Usage("outbox project absente"))?;
+            (record, canonical_request)
+        }
+        action @ (ProjectAction::List
+        | ProjectAction::Status { .. }
+        | ProjectAction::Rebind { .. }
+        | ProjectAction::Disable { .. }
+        | ProjectAction::Activate { .. }
+        | ProjectAction::Reconcile { .. }) => {
+            return run_project_admin(&mut store, &config, action, arguments.json);
+        }
+    };
+
+    if record.outcome.is_none() {
+        let mut client =
+            ProjectRegistryClient::connect(&config.bridget_socket, store.issuer_scope())
+                .map_err(CliError::Bridget)?;
+        let outcome = client
+            .bind_exact_bytes(&canonical_request)
+            .map_err(CliError::Bridget)?;
+        record = resolve_project_registration(&mut store, &outcome)
+            .map_err(CliError::ProjectRegistration)?;
+    }
+    render_project_registration_output(&record, arguments.json)
+}
+
+fn run_project_admin(
+    store: &mut MaicieStore,
+    config: &MaicieConfig,
+    action: ProjectAction,
+    json: bool,
+) -> Result<String, CliError> {
+    let (operation, project_id, requested_root, command_id) = match action {
+        ProjectAction::List => (
+            ProjectAdminOperation::List,
+            None,
+            None,
+            Uuid::new_v4().to_string(),
+        ),
+        ProjectAction::Status {
+            project_id,
+            command_id,
+        } => (
+            ProjectAdminOperation::Status,
+            Some(project_id),
+            None,
+            command_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+        ),
+        ProjectAction::Rebind {
+            project_id,
+            requested_root,
+            command_id,
+        } => (
+            ProjectAdminOperation::Rebind,
+            Some(project_id),
+            Some(requested_root),
+            command_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+        ),
+        ProjectAction::Disable {
+            project_id,
+            command_id,
+        } => (
+            ProjectAdminOperation::Disable,
+            Some(project_id),
+            None,
+            command_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+        ),
+        ProjectAction::Activate {
+            project_id,
+            requested_root,
+            command_id,
+        } => (
+            ProjectAdminOperation::Activate,
+            Some(project_id),
+            Some(requested_root),
+            command_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+        ),
+        ProjectAction::Reconcile {
+            dry_run,
+            command_id,
+        } => {
+            let review = config.review_project.as_ref().ok_or(CliError::Usage(
+                "review-project reconcile exige review_project dans la configuration",
+            ))?;
+            if dry_run {
+                return render_review_project_reconcile_preview(review, json);
+            }
+            (
+                ProjectAdminOperation::ReviewProjectReconcile,
+                Some(review.project_id.clone()),
+                Some(review.repository_root.display().to_string()),
+                command_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+            )
+        }
+        ProjectAction::Register { .. } | ProjectAction::Resume { .. } => {
+            return Err(CliError::Usage("action project administrative attendue"));
+        }
+    };
+    let issued_at = unix_now()?;
+    let request = ProjectAdminRequest {
+        contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+        command_id,
+        issued_at,
+        deadline_at: issued_at + PROJECT_REGISTRATION_HORIZON_SECS,
+        operation,
+        project_id: project_id.clone(),
+        requested_root,
+    };
+    let mut client = ProjectRegistryClient::connect(&config.bridget_socket, store.issuer_scope())
+        .map_err(CliError::Bridget)?;
+    let outcome = client.administer(&request).map_err(CliError::Bridget)?;
+    if outcome.reason.is_none()
+        && outcome.operation == ProjectAdminOperation::Activate
+        && outcome
+            .bindings
+            .first()
+            .is_some_and(|binding| binding.state == ProjectBindingStatus::Active)
+        && let (Some(project_id), Some(binding_generation)) = (
+            project_id.as_deref(),
+            outcome
+                .bindings
+                .first()
+                .and_then(|binding| binding.binding_generation),
+        )
+    {
+        activate_project_identity(store, project_id, binding_generation, outcome.observed_at)
+            .map_err(CliError::ProjectRegistration)?;
+    }
+    if outcome.reason.is_none()
+        && outcome.operation == ProjectAdminOperation::Disable
+        && outcome
+            .bindings
+            .first()
+            .is_some_and(|binding| binding.state == ProjectBindingStatus::Disabled)
+        && let Some(project_id) = project_id.as_deref()
+    {
+        disable_project_identity(store, project_id, outcome.observed_at)
+            .map_err(CliError::ProjectRegistration)?;
+    }
+    render_project_admin_output(&outcome, json)
+}
+
+fn render_project_admin_output(
+    outcome: &bridget_transport::protocol::ProjectAdminOutcome,
+    json: bool,
+) -> Result<String, CliError> {
+    if json {
+        return serde_json::to_string(&ProjectAdminOutput {
+            outcome,
+            next_action: if outcome.reason.is_some() {
+                "correct_request"
+            } else {
+                "none"
+            },
+        })
+        .map_err(|_| CliError::Usage("sortie administrative project JSON indisponible"));
+    }
+    let reason = outcome
+        .reason
+        .map(|reason| format!("{reason:?}"))
+        .unwrap_or_else(|| "none".to_string());
+    Ok(format!(
+        "project command_id={} operation={:?} bindings={} reason={}",
+        outcome.command_id,
+        outcome.operation,
+        outcome.bindings.len(),
+        reason,
+    ))
+}
+
+#[derive(Serialize)]
+struct ProjectAdminOutput<'a> {
+    outcome: &'a bridget_transport::protocol::ProjectAdminOutcome,
+    next_action: &'static str,
+}
+
+#[derive(Serialize)]
+struct ReviewProjectReconcilePreview<'a> {
+    project_id: &'a str,
+    requested_root: String,
+    next_action: &'static str,
+}
+
+fn render_review_project_reconcile_preview(
+    review: &maicie::config::ReviewProjectConfig,
+    json: bool,
+) -> Result<String, CliError> {
+    let preview = ReviewProjectReconcilePreview {
+        project_id: &review.project_id,
+        requested_root: review.repository_root.display().to_string(),
+        next_action: "review-project reconcile --confirm",
+    };
+    if json {
+        return serde_json::to_string(&preview)
+            .map_err(|_| CliError::Usage("prévisualisation review-project JSON indisponible"));
+    }
+    Ok(format!(
+        "review-project project_id={} requested_root={} next_action={}",
+        preview.project_id, preview.requested_root, preview.next_action
+    ))
+}
+
+#[derive(Serialize)]
+struct ProjectRegistrationOutput<'a> {
+    command_id: &'a str,
+    project_id: &'a str,
+    state: &'static str,
+    resolved_project_id: Option<&'a str>,
+    outcome: Option<&'a bridget_transport::protocol::ProjectBindOutcome>,
+    next_action: &'static str,
+}
+
+fn render_project_registration_output(
+    record: &maicie::store::ProjectRegistrationRecord,
+    json: bool,
+) -> Result<String, CliError> {
+    let state = match record.state {
+        ProjectRegistrationState::Prepared => "prepared",
+        ProjectRegistrationState::Binding => "binding",
+        ProjectRegistrationState::Bound => "bound",
+        ProjectRegistrationState::Failed => "failed",
+        ProjectRegistrationState::Expired => "expired",
+    };
+    let next_action = if record.outcome.is_some() {
+        "none"
+    } else {
+        "project resume --command-id"
+    };
+    let output = ProjectRegistrationOutput {
+        command_id: &record.command_id,
+        project_id: &record.identity.project_id,
+        state,
+        resolved_project_id: record.resolved_project_id.as_deref(),
+        outcome: record.outcome.as_ref(),
+        next_action,
+    };
+    if json {
+        serde_json::to_string(&output)
+            .map_err(|_| CliError::Usage("sortie project JSON indisponible"))
+    } else {
+        Ok(format!(
+            "project command_id={} project_id={} state={} resolved_project_id={} next_action={}",
+            output.command_id,
+            output.project_id,
+            output.state,
+            output.resolved_project_id.unwrap_or("-"),
+            output.next_action,
+        ))
+    }
+}
+
 fn run_delegate(arguments: DelegateArgs, migrate: bool) -> Result<String, CliError> {
     let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
     let limits = BridgetClientLimits::default();
@@ -704,6 +1242,7 @@ fn run_profile(arguments: ProfileArgs, migrate: bool) -> Result<String, CliError
                     resolved_definition_digest: &screen.definition_digest,
                     context_scope: &context_scope,
                     cwd: &cwd,
+                    project: None,
                     persistent,
                     now,
                     spawn_deadline_at: deadline_from(now, config.durations.normal_secs)?,
@@ -887,12 +1426,12 @@ fn delegate_error_for_cli(
     if target == MAICIE_IDENTITY {
         return CliError::TargetIsPilot(target);
     }
-    let Some(agent) = agents.iter().find(|agent| agent.name == target) else {
+    let Some(agent) = agents.iter().find(|agent| agent.agent_id == target) else {
         return CliError::TargetUnknownBridget(target);
     };
     let has_profile = profiles
         .iter()
-        .any(|profile| profile.agent_name.as_deref().unwrap_or(&profile.id) == agent.name);
+        .any(|profile| profile.agent_id.as_deref().unwrap_or(&profile.id) == agent.agent_id);
     if !has_profile {
         return CliError::TargetMissingMaicieProfile {
             target,
@@ -925,6 +1464,8 @@ enum Command {
     Status(StatusArgs),
     Objective(ObjectiveArgs),
     Profile(ProfileArgs),
+    Project(ProjectArgs),
+    ProjectProfile(ProjectProfileArgs),
     Registre(RegistreArgs),
     Plage(PlageArgs),
     Routine(RoutineArgs),
@@ -1081,6 +1622,63 @@ struct ProfileArgs {
 }
 
 #[derive(Debug)]
+struct ProjectArgs {
+    config: PathBuf,
+    action: ProjectAction,
+    json: bool,
+}
+
+#[derive(Debug)]
+struct ProjectProfileArgs {
+    config: PathBuf,
+    profile_id: String,
+    action: ProjectProfileAction,
+    json: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectProfileAction {
+    Propose,
+    Approve,
+}
+
+#[derive(Debug)]
+enum ProjectAction {
+    Register {
+        display_name: String,
+        requested_root: String,
+        project_id: Option<String>,
+        command_id: Option<String>,
+    },
+    Resume {
+        command_id: String,
+    },
+    List,
+    Status {
+        project_id: String,
+        command_id: Option<String>,
+    },
+    Rebind {
+        project_id: String,
+        requested_root: String,
+        command_id: Option<String>,
+    },
+    Disable {
+        project_id: String,
+        command_id: Option<String>,
+    },
+    Activate {
+        project_id: String,
+        requested_root: String,
+        command_id: Option<String>,
+    },
+    Reconcile {
+        dry_run: bool,
+        command_id: Option<String>,
+    },
+}
+
+#[derive(Debug)]
 enum ProfileAction {
     Propose {
         objective_id: Uuid,
@@ -1105,15 +1703,240 @@ fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
         "status" => parse_status(tail).map(Command::Status),
         "objective" => parse_objective(tail).map(Command::Objective),
         "profile" => parse_profile(tail).map(Command::Profile),
+        "project" => parse_project(tail).map(Command::Project),
+        "project-profile" => parse_project_profile(tail).map(Command::ProjectProfile),
+        "review-project" => parse_review_project(tail).map(Command::Project),
         "registre" => parse_registre(tail).map(Command::Registre),
         "plage" => parse_plage(tail).map(Command::Plage),
         "routine" => parse_routine(tail).map(Command::Routine),
         "preflight" => parse_preflight(tail).map(Command::Preflight),
         "migrate" => parse_migrate(tail).map(Command::Migrate),
         _ => Err(CliError::Usage(
-            "commande inconnue : delegate, status, objective, profile, registre, plage, routine, preflight ou migrate",
+            "commande inconnue : delegate, status, objective, profile, project, review-project, registre, plage, routine, preflight ou migrate",
         )),
     }
+}
+
+fn parse_project_profile(arguments: &[String]) -> Result<ProjectProfileArgs, CliError> {
+    let Some((action, tail)) = arguments.split_first() else {
+        return Err(CliError::Usage(
+            "action project-profile obligatoire : propose ou approve",
+        ));
+    };
+    let mut config = None;
+    let mut profile_id = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < tail.len() {
+        match tail[index].as_str() {
+            "--config" => set_once_path(&mut config, next_value(tail, &mut index, "--config")?)?,
+            "--profile-id" => set_once_string(
+                &mut profile_id,
+                next_value(tail, &mut index, "--profile-id")?,
+                "profile-id",
+            )?,
+            "--json" => {
+                if json {
+                    return Err(CliError::Usage("option --json dupliquee"));
+                }
+                json = true;
+            }
+            _ => return Err(CliError::Usage("option project-profile inconnue")),
+        }
+        index += 1;
+    }
+    let action = match action.as_str() {
+        "propose" => ProjectProfileAction::Propose,
+        "approve" => ProjectProfileAction::Approve,
+        _ => {
+            return Err(CliError::Usage(
+                "action project-profile inconnue : propose ou approve",
+            ));
+        }
+    };
+    Ok(ProjectProfileArgs {
+        config: config.ok_or(CliError::Usage("--config est obligatoire"))?,
+        profile_id: profile_id.ok_or(CliError::Usage("--profile-id est obligatoire"))?,
+        action,
+        json,
+    })
+}
+
+fn parse_project(arguments: &[String]) -> Result<ProjectArgs, CliError> {
+    let Some((action, tail)) = arguments.split_first() else {
+        return Err(CliError::Usage(
+            "action project obligatoire : register, resume, list, status, rebind, disable, activate ou reconcile",
+        ));
+    };
+    let mut config = None;
+    let mut display_name = None;
+    let mut requested_root = None;
+    let mut project_id = None;
+    let mut command_id = None;
+    let mut json = false;
+    let mut dry_run = false;
+    let mut confirm = false;
+    let mut index = 0;
+    while index < tail.len() {
+        match tail[index].as_str() {
+            "--config" => set_once_path(&mut config, next_value(tail, &mut index, "--config")?)?,
+            "--name" => set_once_string(
+                &mut display_name,
+                next_value(tail, &mut index, "--name")?,
+                "name",
+            )?,
+            "--root" => set_once_string(
+                &mut requested_root,
+                next_value(tail, &mut index, "--root")?,
+                "root",
+            )?,
+            "--project-id" => set_once_string(
+                &mut project_id,
+                next_value(tail, &mut index, "--project-id")?,
+                "project-id",
+            )?,
+            "--command-id" => set_once_string(
+                &mut command_id,
+                next_value(tail, &mut index, "--command-id")?,
+                "command-id",
+            )?,
+            "--json" => {
+                if json {
+                    return Err(CliError::Usage("option --json dupliquée"));
+                }
+                json = true;
+            }
+            "--dry-run" => {
+                if dry_run {
+                    return Err(CliError::Usage("option --dry-run dupliquée"));
+                }
+                dry_run = true;
+            }
+            "--confirm" => {
+                if confirm {
+                    return Err(CliError::Usage("option --confirm dupliquée"));
+                }
+                confirm = true;
+            }
+            _ => return Err(CliError::Usage("option project inconnue")),
+        }
+        index += 1;
+    }
+    let config = config.ok_or(CliError::Usage("--config est obligatoire"))?;
+    if action != "reconcile" && (dry_run || confirm) {
+        return Err(CliError::Usage(
+            "--dry-run et --confirm sont réservés à review-project reconcile",
+        ));
+    }
+    let action = match action.as_str() {
+        "register" => ProjectAction::Register {
+            display_name: display_name.ok_or(CliError::Usage("--name est obligatoire"))?,
+            requested_root: requested_root.ok_or(CliError::Usage("--root est obligatoire"))?,
+            project_id,
+            command_id,
+        },
+        "resume" => {
+            if display_name.is_some() || requested_root.is_some() || project_id.is_some() {
+                return Err(CliError::Usage(
+                    "project resume n'accepte ni --name, ni --root, ni --project-id",
+                ));
+            }
+            ProjectAction::Resume {
+                command_id: command_id
+                    .ok_or(CliError::Usage("project resume exige --command-id"))?,
+            }
+        }
+        "list" => {
+            if display_name.is_some()
+                || requested_root.is_some()
+                || project_id.is_some()
+                || command_id.is_some()
+            {
+                return Err(CliError::Usage(
+                    "project list n'accepte ni --name, ni --root, ni --project-id, ni --command-id",
+                ));
+            }
+            ProjectAction::List
+        }
+        "status" => {
+            if display_name.is_some() || requested_root.is_some() {
+                return Err(CliError::Usage(
+                    "project status n'accepte ni --name ni --root",
+                ));
+            }
+            ProjectAction::Status {
+                project_id: project_id.ok_or(CliError::Usage("--project-id est obligatoire"))?,
+                command_id,
+            }
+        }
+        "rebind" => {
+            if display_name.is_some() {
+                return Err(CliError::Usage("project rebind n'accepte pas --name"));
+            }
+            ProjectAction::Rebind {
+                project_id: project_id.ok_or(CliError::Usage("--project-id est obligatoire"))?,
+                requested_root: requested_root.ok_or(CliError::Usage("--root est obligatoire"))?,
+                command_id,
+            }
+        }
+        "activate" => {
+            if display_name.is_some() {
+                return Err(CliError::Usage("project activate n accepte pas --name"));
+            }
+            ProjectAction::Activate {
+                project_id: project_id.ok_or(CliError::Usage("--project-id est obligatoire"))?,
+                requested_root: requested_root.ok_or(CliError::Usage("--root est obligatoire"))?,
+                command_id,
+            }
+        }
+        "disable" => {
+            if display_name.is_some() || requested_root.is_some() {
+                return Err(CliError::Usage(
+                    "project disable n'accepte ni --name ni --root",
+                ));
+            }
+            ProjectAction::Disable {
+                project_id: project_id.ok_or(CliError::Usage("--project-id est obligatoire"))?,
+                command_id,
+            }
+        }
+        "reconcile" => {
+            if display_name.is_some() || requested_root.is_some() || project_id.is_some() {
+                return Err(CliError::Usage(
+                    "review-project reconcile n'accepte ni --name, ni --root, ni --project-id",
+                ));
+            }
+            if dry_run == confirm {
+                return Err(CliError::Usage(
+                    "review-project reconcile exige exactement --dry-run ou --confirm",
+                ));
+            }
+            ProjectAction::Reconcile {
+                dry_run,
+                command_id,
+            }
+        }
+        _ => {
+            return Err(CliError::Usage(
+                "action project inconnue : register, resume, list, status, rebind, disable, activate ou reconcile",
+            ));
+        }
+    };
+    Ok(ProjectArgs {
+        config,
+        action,
+        json,
+    })
+}
+
+fn parse_review_project(arguments: &[String]) -> Result<ProjectArgs, CliError> {
+    let parsed = parse_project(arguments)?;
+    if !matches!(parsed.action, ProjectAction::Reconcile { .. }) {
+        return Err(CliError::Usage(
+            "review-project accepte uniquement l'action reconcile",
+        ));
+    }
+    Ok(parsed)
 }
 
 fn parse_preflight(arguments: &[String]) -> Result<PreflightArgs, CliError> {
@@ -2979,7 +3802,7 @@ struct AvailabilityOutput {
 impl AvailabilityOutput {
     fn from_agent(agent: &AgentInfo, observed_at: i64) -> Self {
         Self {
-            agent: agent.name.clone(),
+            agent: agent.agent_id.clone(),
             state: agent.state.clone(),
             transport: agent.transport.clone(),
             observed_at,
@@ -3420,12 +4243,14 @@ enum CliError {
     },
     TargetEligibilityDivergence(String),
     Objective(ObjectiveError),
+    ProjectRegistration(ProjectRegistrationError),
     Store(StoreError),
     Reconcile(ReconcileError),
     Profile(ProfileError),
     ProfileActivation(ProfileActivationError),
     Routine(RoutineError),
     InstallPublish(InstallPublishError),
+    Projection(UiProjectionError),
 }
 
 impl CliError {
@@ -3439,6 +4264,7 @@ impl CliError {
             | Self::CatalogueReconcile(CatalogueReconcileError::Store(_)) => EXIT_STORE,
             Self::Reconcile(ReconcileError::Store(_)) => EXIT_STORE,
             Self::Objective(ObjectiveError::Store(_)) => EXIT_STORE,
+            Self::ProjectRegistration(ProjectRegistrationError::Store(_)) => EXIT_STORE,
             Self::ProfileActivation(ProfileActivationError::Store(_)) => EXIT_STORE,
             Self::Routine(RoutineError::Store(_)) => EXIT_STORE,
             Self::CatalogueReconcile(CatalogueReconcileError::Catalogue(_)) => EXIT_CONFIGURATION,
@@ -3451,8 +4277,9 @@ impl CliError {
             | Self::TargetUnavailableState { .. }
             | Self::TargetEligibilityDivergence(_) => EXIT_DELEGATE,
             Self::Objective(_) => EXIT_DELEGATE,
+            Self::ProjectRegistration(_) => EXIT_DELEGATE,
             Self::Profile(_) | Self::ProfileActivation(_) | Self::Routine(_) => EXIT_DELEGATE,
-            Self::InstallPublish(_) => EXIT_STORE,
+            Self::InstallPublish(_) | Self::Projection(_) => EXIT_STORE,
         }
     }
 
@@ -3483,6 +4310,8 @@ impl CliError {
             Self::Objective(ObjectiveError::NotFound(_)) => "objective_not_found",
             Self::Objective(ObjectiveError::Store(_)) => "store",
             Self::Objective(ObjectiveError::Invalid(_)) => "objective_invalid",
+            Self::ProjectRegistration(ProjectRegistrationError::Store(_)) => "store",
+            Self::ProjectRegistration(_) => "project_registration_invalid",
             Self::Profile(_) => "profile_invalid",
             Self::ProfileActivation(ProfileActivationError::Store(_)) => "store",
             Self::ProfileActivation(_) => "profile_activation_invalid",
@@ -3490,6 +4319,7 @@ impl CliError {
             Self::Routine(RoutineError::NotFound(_)) => "routine_not_found",
             Self::Routine(_) => "routine_invalid",
             Self::InstallPublish(_) => "install_publish",
+            Self::Projection(_) => "mission_projection",
         }
     }
 
@@ -3506,6 +4336,7 @@ impl fmt::Display for CliError {
             Self::Catalogue(error) => error.fmt(formatter),
             Self::CatalogueReconcile(error) => error.fmt(formatter),
             Self::Bridget(error) => error.fmt(formatter),
+            Self::Projection(error) => error.fmt(formatter),
             Self::DaemonStoreLocality(detail) => write!(formatter, "écriture refusée : {detail}"),
             Self::Delegate(error) => error.fmt(formatter),
             Self::TargetUnknownBridget(target) => write!(
@@ -3518,7 +4349,7 @@ impl fmt::Display for CliError {
                 config_path,
             } => write!(
                 formatter,
-                "agent Bridget sans profil Maicie : {}; ajoutez un profil dans {} avec \"agent_name\": \"{}\"",
+                "agent Bridget sans profil Maicie : {}; ajoutez un profil dans {} avec \"agent_id\": \"{}\"",
                 sanitize_terminal(target),
                 config_path.display(),
                 sanitize_terminal(target)
@@ -3550,6 +4381,7 @@ impl fmt::Display for CliError {
                 sanitize_terminal(target)
             ),
             Self::Objective(error) => error.fmt(formatter),
+            Self::ProjectRegistration(error) => error.fmt(formatter),
             Self::Store(error) => error.fmt(formatter),
             Self::Reconcile(error) => error.fmt(formatter),
             Self::Profile(error) => error.fmt(formatter),
@@ -3564,12 +4396,11 @@ impl fmt::Display for CliError {
 mod tests {
     use super::{
         CliError, Command, DelegateError, DelegateOutput, MigrateArgs, PlageAction, PlageArgs,
-        RegistreAction, RegistreArgs, SchemaPreflightOutput, candidates_from,
-        daemon_identity_failure_detail, daemon_store_is_local, delegate_error_for_cli,
-        capture_reason,
-        format_routine_approval_screen, open_store_with_reconciliation, parse_command,
-        peel_migrate_flag, routine_approval_preflight, run, run_migrate, run_plage, run_registre,
-        sanitize_terminal,
+        ProjectAction, RegistreAction, RegistreArgs, SchemaPreflightOutput, candidates_from,
+        capture_reason, daemon_identity_failure_detail, daemon_store_is_local,
+        delegate_error_for_cli, format_routine_approval_screen, open_store_with_reconciliation,
+        parse_command, peel_migrate_flag, routine_approval_preflight, run, run_migrate, run_plage,
+        run_registre, sanitize_terminal,
     };
     use bridget_transport::protocol::ReviewTarget;
     use maicie::bridget_client::{AgentInfo, BridgetClientError, DaemonIdentity};
@@ -3587,7 +4418,8 @@ mod tests {
 
     fn agent_info(name: &str, state: &str, domain: Option<&str>) -> AgentInfo {
         AgentInfo {
-            name: name.to_string(),
+            agent_id: name.to_string(),
+            display_name: name.to_string(),
             agent_type: "codex".to_string(),
             connection_id: format!("conn-{name}"),
             host: "fixture".to_string(),
@@ -3602,14 +4434,14 @@ mod tests {
         }
     }
 
-    fn profile_config(agent_name: &str) -> ProfileConfig {
+    fn profile_config(agent_id: &str) -> ProfileConfig {
         ProfileConfig {
-            id: format!("profil-{agent_name}"),
-            agent_name: Some(agent_name.to_string()),
+            id: format!("profil-{agent_id}"),
+            agent_id: Some(agent_id.to_string()),
             agent_type: None,
             model: None,
             effort: None,
-            display_name: agent_name.to_string(),
+            display_name: agent_id.to_string(),
             tags: vec!["review".to_string()],
             personality_ref: "profiles/reviewer.md".to_string(),
             tools: Vec::new(),
@@ -3802,6 +4634,7 @@ mod tests {
             catalogue_path: None,
             coordination_policies: None,
             review_project: None,
+            project_profiles: Vec::new(),
             profiles: Vec::new(),
         };
         let error = match open_store_with_reconciliation(
@@ -3846,6 +4679,7 @@ mod tests {
             catalogue_path: Some(catalogue.clone()),
             coordination_policies: None,
             review_project: None,
+            project_profiles: Vec::new(),
             profiles: Vec::new(),
         };
         fs::write(
@@ -4095,10 +4929,11 @@ mod tests {
             status_capture_budget_ms: None,
             catalogue_path: None,
             coordination_policies: None,
+            project_profiles: Vec::new(),
             review_project: None,
             profiles: vec![ProfileConfig {
                 id: "code-review".to_string(),
-                agent_name: Some("coderBridget".to_string()),
+                agent_id: Some("coderBridget".to_string()),
                 agent_type: None,
                 model: None,
                 effort: None,
@@ -4110,7 +4945,8 @@ mod tests {
             }],
         };
         let agents = vec![AgentInfo {
-            name: "coderBridget".to_string(),
+            agent_id: "coderBridget".to_string(),
+            display_name: "Code review".to_string(),
             agent_type: "codex".to_string(),
             connection_id: "conn-1".to_string(),
             host: "local".to_string(),
@@ -4150,7 +4986,8 @@ mod tests {
     #[test]
     fn agent_connecte_sans_profil_indique_le_champ_a_ajouter() {
         let agents = vec![AgentInfo {
-            name: "cursorbridget".to_string(),
+            agent_id: "cursorbridget".to_string(),
+            display_name: "cursorbridget".to_string(),
             agent_type: "cursor".to_string(),
             connection_id: "conn-cursor".to_string(),
             host: "local".to_string(),
@@ -4277,6 +5114,7 @@ mod tests {
             status_capture_budget_ms: None,
             catalogue_path: None,
             coordination_policies: None,
+            project_profiles: Vec::new(),
             review_project: None,
             profiles: profiles.clone(),
         };
@@ -4452,6 +5290,60 @@ mod tests {
         assert!(migrate);
         assert_eq!(rest, vec!["status".to_string()]);
         assert!(peel_migrate_flag(&["--migrate".to_string(), "--migrate".to_string()]).is_err());
+    }
+
+    #[test]
+    fn review_project_reconcile_exige_un_consentement_explicite() {
+        let dry_run = parse_command(&[
+            "review-project".to_string(),
+            "reconcile".to_string(),
+            "--config".to_string(),
+            "/tmp/maicie.json".to_string(),
+            "--dry-run".to_string(),
+        ])
+        .expect("prévisualisation valide");
+        assert!(matches!(
+            dry_run,
+            Command::Project(arguments)
+                if matches!(arguments.action, ProjectAction::Reconcile { dry_run: true, .. })
+        ));
+
+        let confirmed = parse_command(&[
+            "review-project".to_string(),
+            "reconcile".to_string(),
+            "--config".to_string(),
+            "/tmp/maicie.json".to_string(),
+            "--confirm".to_string(),
+        ])
+        .expect("confirmation valide");
+        assert!(matches!(
+            confirmed,
+            Command::Project(arguments)
+                if matches!(arguments.action, ProjectAction::Reconcile { dry_run: false, .. })
+        ));
+
+        assert!(
+            parse_command(&[
+                "review-project".to_string(),
+                "reconcile".to_string(),
+                "--config".to_string(),
+                "/tmp/maicie.json".to_string(),
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_command(&[
+                "review-project".to_string(),
+                "register".to_string(),
+                "--config".to_string(),
+                "/tmp/maicie.json".to_string(),
+                "--name".to_string(),
+                "invalide".to_string(),
+                "--root".to_string(),
+                "/tmp".to_string(),
+            ])
+            .is_err()
+        );
     }
 
     #[test]

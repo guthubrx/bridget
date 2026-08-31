@@ -131,16 +131,18 @@ fn next_raw(reader: &mut BufReader<UnixStream>) -> String {
 fn register(
     reader: &mut BufReader<UnixStream>,
     writer: &mut BufWriter<UnixStream>,
-    name: &str,
+    _name: &str,
     instance_id: &str,
 ) {
+    let agent_id = uuid::Uuid::new_v4().to_string();
     assert!(matches!(
         request(
             reader,
             writer,
             WrapperToDaemon::Register {
+                identity_version: 2,
                 agent_type: "codex".to_string(),
-                name: Some(name.to_string()),
+                agent_id,
                 host: None,
                 transport: Some("unix".to_string()),
                 channel: None.into(),

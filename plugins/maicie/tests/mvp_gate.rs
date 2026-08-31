@@ -222,7 +222,7 @@ impl Fixture {
             if BridgetClient::list_agents_at(&self.socket)
                 .unwrap_or_default()
                 .iter()
-                .any(|agent| agent.name == name && agent.state == "connected")
+                .any(|agent| agent.agent_id == name && agent.state == "connected")
             {
                 return;
             }
@@ -261,7 +261,7 @@ impl Fixture {
             if BridgetClient::list_agents_at(&self.socket)
                 .unwrap_or_default()
                 .iter()
-                .any(|agent| agent.name == "mvp-agent" && agent.state == "stopped")
+                .any(|agent| agent.agent_id == "mvp-agent" && agent.state == "stopped")
             {
                 let pgid: i32 = fs::read_to_string(&self.adapter_pgid)
                     .unwrap()

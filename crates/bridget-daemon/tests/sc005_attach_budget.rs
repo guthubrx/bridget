@@ -61,6 +61,9 @@ fn daemon_config(root: &Path) -> DaemonConfig {
         dedup_window: 180,
         quarantine_window: 3_600,
         retention_days: 7,
+        project_root_policy_path: None,
+        project_runtime_policy_path: None,
+        project_resource_catalog_path: None,
     }
 }
 
@@ -99,13 +102,13 @@ fn query_agent_list(socket: &Path) -> Option<Vec<AgentInfo>> {
 fn agent_state(socket: &Path, name: &str) -> Option<String> {
     query_agent_list(socket)?
         .into_iter()
-        .find(|agent| agent.name == name)
+        .find(|agent| agent.agent_id == name)
         .map(|agent| agent.state)
 }
 
 fn agent_ready_for_send(socket: &Path, name: &str) -> bool {
     query_agent_list(socket).into_iter().flatten().any(|agent| {
-        agent.name == name && agent.state == "connected" && !agent.connection_id.is_empty()
+        agent.agent_id == name && agent.state == "connected" && !agent.connection_id.is_empty()
     })
 }
 
@@ -251,7 +254,8 @@ fn connect_sender(socket: &Path) -> (BufWriter<UnixStream>, BufReader<UnixStream
         &mut writer,
         &WrapperToDaemon::Register {
             agent_type: "fixture".to_string(),
-            name: Some("bench-sender".to_string()),
+            identity_version: 2,
+            agent_id: "bench-sender".to_string(),
             host: Some("test-host".to_string()),
             transport: Some("unix".to_string()),
             channel: None.into(),
@@ -265,7 +269,7 @@ fn connect_sender(socket: &Path) -> (BufWriter<UnixStream>, BufReader<UnixStream
         },
     );
     match read_message(&mut reader) {
-        DaemonToWrapper::Registered { name } if name == "bench-sender" => {}
+        DaemonToWrapper::Registered { agent_id: name } if name == "bench-sender" => {}
         other => panic!("Register bench-sender inattendu: {other:?}"),
     }
     (writer, reader)
@@ -773,7 +777,7 @@ fn sc002_rejeu_vers_suivi_traverse_la_rotation_sans_perte_ni_doublon() {
 
     harness.send_turn(0);
     wait_until(deadline, "suivi live absent après rotation", || {
-        final_fragments.load(Ordering::SeqCst) >= 1 + JOURNAL_EVENTS_PER_TURN
+        final_fragments.load(Ordering::SeqCst) > JOURNAL_EVENTS_PER_TURN
     });
     let seqs = final_sequences
         .lock()

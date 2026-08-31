@@ -14,10 +14,13 @@ use crate::registry::{
     validate_launch_capabilities,
 };
 use bridget_transport::{ResolvedAgentDefinition, SpawnRefusal};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::os::unix::fs::PermissionsExt;
+use std::fs;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 const BASELINE_ENV: &[&str] = &["HOME", "PATH", "USER", "LANG", "TMPDIR"];
 const FALLBACK_PATH: &str = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
@@ -51,6 +54,47 @@ pub fn source_environment() -> SourceEnvironment {
     std::env::vars_os()
         .filter_map(|(name, value)| name.into_string().ok().map(|name| (name, value)))
         .collect()
+}
+
+fn validate_provider_observation(
+    agent_type: &str,
+    definition: &AgentDefinition,
+) -> Result<(), SpawnRefusal> {
+    let Some(observed) = definition.capabilities.observed.as_ref() else {
+        return Ok(());
+    };
+    let refusal = |capability: &str| SpawnRefusal::UnsupportedCapability {
+        agent_type: agent_type.to_string(),
+        model: "<non déclaré>".to_string(),
+        capability: capability.to_string(),
+    };
+    if observed.binary_path.trim().is_empty()
+        || !Path::new(&observed.binary_path).is_absolute()
+        || observed.binary_path != definition.command
+    {
+        return Err(refusal("source du binaire fournisseur observée"));
+    }
+    if observed.binary_version.trim().is_empty() {
+        return Err(refusal("version du binaire fournisseur observée"));
+    }
+    if observed.contract_version.trim().is_empty() {
+        return Err(refusal("version du contrat fournisseur observée"));
+    }
+    if observed.binary_digest.len() != 64
+        || !observed
+            .binary_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(refusal("empreinte du binaire fournisseur observé"));
+    }
+    let bytes = std::fs::read(&observed.binary_path)
+        .map_err(|_| refusal("binaire fournisseur observé lisible"))?;
+    let actual_digest = format!("{:x}", Sha256::digest(bytes));
+    if actual_digest != observed.binary_digest {
+        return Err(refusal("empreinte du binaire fournisseur observé"));
+    }
+    Ok(())
 }
 
 /// Les deux machines d'un ordre de lancement : celle dont le système de
@@ -89,6 +133,91 @@ pub fn submit_spawn(
     recovering: bool,
     hosts: &SpawnHosts,
 ) -> Result<SpawnDecision, FleetError> {
+    submit_spawn_for_project(
+        supervisor, registry, source, order, now, recovering, hosts, None,
+    )
+}
+
+/// Variante réservée aux admissions dont la référence projet a été résolue
+/// dans le store Bridget. Une référence présente exige cette racine déjà
+/// attestée : elle ne peut pas être redéduite du `cwd` demandé.
+#[allow(clippy::too_many_arguments)]
+pub fn submit_spawn_for_project(
+    supervisor: &FleetSupervisor,
+    registry: &AgentRegistry,
+    source: &SourceEnvironment,
+    order: &SpawnOrder,
+    now: i64,
+    recovering: bool,
+    hosts: &SpawnHosts,
+    canonical_project_root: Option<&Path>,
+) -> Result<SpawnDecision, FleetError> {
+    submit_spawn_for_project_with_policy(
+        supervisor,
+        registry,
+        source,
+        order,
+        now,
+        recovering,
+        hosts,
+        canonical_project_root,
+        false,
+        false,
+        true,
+    )
+}
+
+/// Admission Docker : la commande fournisseur est attestée par la politique
+/// de runtime et doit rester absente de l'hôte du daemon.
+#[allow(clippy::too_many_arguments)]
+pub fn submit_spawn_for_project_in_runtime(
+    supervisor: &FleetSupervisor,
+    registry: &AgentRegistry,
+    source: &SourceEnvironment,
+    order: &SpawnOrder,
+    now: i64,
+    recovering: bool,
+    hosts: &SpawnHosts,
+    canonical_project_root: Option<&Path>,
+) -> Result<SpawnDecision, FleetError> {
+    submit_spawn_for_project_with_policy(
+        supervisor,
+        registry,
+        source,
+        order,
+        now,
+        recovering,
+        hosts,
+        canonical_project_root,
+        false,
+        false,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn submit_spawn_for_project_with_policy(
+    supervisor: &FleetSupervisor,
+    registry: &AgentRegistry,
+    source: &SourceEnvironment,
+    order: &SpawnOrder,
+    now: i64,
+    recovering: bool,
+    hosts: &SpawnHosts,
+    canonical_project_root: Option<&Path>,
+    relaunch: bool,
+    recovery: bool,
+    verify_host_command: bool,
+) -> Result<SpawnDecision, FleetError> {
+    if let Some(project) = order.project.as_ref() {
+        let matches_root = canonical_project_root
+            .is_some_and(|root| project_cwd_belongs_to_binding(&order.cwd, root));
+        if !matches_root && !supervisor.knows_command(&order.command_id) {
+            return Ok(SpawnDecision::Rejected(SpawnRefusal::ProjectCwdMismatch {
+                project_id: project.project_id.clone(),
+            }));
+        }
+    }
     if recovering && !supervisor.knows_command(&order.command_id) {
         return Ok(SpawnDecision::Rejected(SpawnRefusal::DaemonRecovering));
     }
@@ -108,13 +237,15 @@ pub fn submit_spawn(
     if !supervisor.knows_command(&order.command_id)
         && let Ok(definition) = registry.get(&order.agent_type)
         && let Err(reason) = validate_launch_capabilities(&order.agent_type, definition)
+            .and_then(|_| validate_provider_observation(&order.agent_type, definition))
     {
         return Ok(SpawnDecision::Rejected(reason));
     }
     // Une commande absente est une erreur de préparation locale, corrigeable
-    // dans le registre. Elle doit donc rester hors de la saga durable : le
-    // même command_id pourra être rejoué une fois la définition corrigée.
-    if !supervisor.knows_command(&order.command_id)
+    // dans le registre. Une admission Docker en a une autre autorité : le
+    // chemin interne est vérifié dans la politique et l'image, jamais ici.
+    if verify_host_command
+        && !supervisor.knows_command(&order.command_id)
         && let Ok(definition) = registry.get(&order.agent_type)
         && let Ok(env) = build_environment(definition, source)
         && !command_exists(&definition.command, &env)
@@ -124,9 +255,23 @@ pub fn submit_spawn(
             registry: registry.source().display().to_string(),
         }));
     }
-    match supervisor.request_spawn(order, now)? {
+    let submission = if relaunch {
+        supervisor.request_relaunch(order, now)?
+    } else if recovery {
+        supervisor.request_recovery(order, now)?
+    } else {
+        supervisor.request_spawn(order, now)?
+    };
+    match submission {
         SpawnSubmission::Start(lease) => {
-            let prepared = match prepare_spawn(registry, source, order, lease.clone(), hosts) {
+            let prepared = match prepare_spawn(
+                registry,
+                source,
+                order,
+                lease.clone(),
+                hosts,
+                verify_host_command,
+            ) {
                 Ok(prepared) => prepared,
                 Err(reason) => {
                     let (category, detail) = refusal_record(&reason);
@@ -146,6 +291,46 @@ pub fn submit_spawn(
     }
 }
 
+/// Vérifie localement une appartenance de répertoire sans confiance dans le
+/// chemin déclaré. Une descendance de la racine canonique est admise. Sinon,
+/// les deux répertoires doivent attester le même `git-common-dir`, ce qui
+/// couvre un worktree lié mais refuse tout clone ou dépôt voisin.
+pub fn project_cwd_belongs_to_binding(cwd: &Path, canonical_root: &Path) -> bool {
+    let Ok(cwd) = cwd.canonicalize() else {
+        return false;
+    };
+    let Ok(root) = canonical_root.canonicalize() else {
+        return false;
+    };
+    if cwd.starts_with(&root) {
+        return true;
+    }
+    let Some(root_common_dir) = git_common_dir(&root) else {
+        return false;
+    };
+    let Some(cwd_common_dir) = git_common_dir(&cwd) else {
+        return false;
+    };
+    root_common_dir == cwd_common_dir
+}
+
+fn git_common_dir(path: &Path) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let common_dir = std::str::from_utf8(&output.stdout).ok()?.trim();
+    if common_dir.is_empty() {
+        return None;
+    }
+    PathBuf::from(common_dir).canonicalize().ok()
+}
+
 /// Variante réservée à la reprise d'une entrée persistante déjà connectée :
 /// elle crée une nouvelle saga, mais sa préparation consomme la définition
 /// durable de `fleet.json` plutôt que le registre courant.
@@ -159,7 +344,38 @@ pub fn submit_spawn_from_resolved(
 ) -> Result<SpawnDecision, FleetError> {
     let registry = AgentRegistry::from_resolved(&order.agent_type, resolved)
         .map_err(|_| FleetError::InvalidOrder("définition figée de reprise invalide"))?;
-    submit_spawn(supervisor, &registry, source, order, now, false, hosts)
+    submit_spawn_for_project_with_policy(
+        supervisor, &registry, source, order, now, false, hosts, None, false, true, true,
+    )
+}
+
+/// Relance explicite d'une entrée arrêtée à partir de sa définition figée. Le
+/// chemin de préparation reste identique au spawn, mais la réservation admet
+/// uniquement le nom stopped déjà présent dans l'inventaire.
+pub fn submit_relaunch_from_resolved(
+    supervisor: &FleetSupervisor,
+    source: &SourceEnvironment,
+    order: &SpawnOrder,
+    now: i64,
+    resolved: &ResolvedAgentDefinition,
+    hosts: &SpawnHosts,
+    canonical_project_root: Option<&Path>,
+) -> Result<SpawnDecision, FleetError> {
+    let registry = AgentRegistry::from_resolved(&order.agent_type, resolved)
+        .map_err(|_| FleetError::InvalidOrder("définition figée de relance invalide"))?;
+    submit_spawn_for_project_with_policy(
+        supervisor,
+        &registry,
+        source,
+        order,
+        now,
+        false,
+        hosts,
+        canonical_project_root,
+        true,
+        false,
+        true,
+    )
 }
 
 fn prepare_spawn(
@@ -168,6 +384,7 @@ fn prepare_spawn(
     order: &SpawnOrder,
     lease: SpawnLease,
     hosts: &SpawnHosts,
+    verify_host_command: bool,
 ) -> Result<PreparedSpawn, SpawnRefusal> {
     prepare_spawn_parts(
         registry,
@@ -176,6 +393,7 @@ fn prepare_spawn(
         &order.cwd,
         lease,
         hosts,
+        verify_host_command,
     )
 }
 
@@ -201,6 +419,7 @@ pub fn prepare_recovery(
         &candidate.cwd,
         candidate.lease,
         &SpawnHosts::local(),
+        true,
     )
 }
 
@@ -211,6 +430,7 @@ fn prepare_spawn_parts(
     cwd: &Path,
     lease: SpawnLease,
     hosts: &SpawnHosts,
+    verify_host_command: bool,
 ) -> Result<PreparedSpawn, SpawnRefusal> {
     let definition = registry
         .get(agent_type)
@@ -220,6 +440,7 @@ fn prepare_spawn_parts(
             registry: registry.source().display().to_string(),
         })?;
     validate_launch_capabilities(agent_type, definition)?;
+    validate_provider_observation(agent_type, definition)?;
     if let Some(variable) = forbidden_environment_variable(
         definition,
         allow_api_key_value(
@@ -236,12 +457,13 @@ fn prepare_spawn_parts(
         "acp" | "claude_stream_json" | "codex_app_server"
     ) {
         return Err(SpawnRefusal::NegotiationFailed {
-            detail: format!("le protocole '{}' n'est pas ACP", definition.protocol),
+            detail: format!(
+                "le protocole '{}' n'utilise pas une session gérée",
+                definition.protocol
+            ),
         });
     }
     if !cwd.is_dir() {
-        // Le verdict porte la machine qui l'a rendu : c'est ICI que le chemin a
-        // été cherché, et le demandeur peut être ailleurs.
         return Err(SpawnRefusal::CwdGone {
             searched_on: hosts.searched_on.clone(),
             requested_from: hosts.requested_from.clone(),
@@ -260,7 +482,7 @@ fn prepare_spawn_parts(
             OsString::from(max),
         );
     }
-    if !command_exists(&definition.command, &env) {
+    if verify_host_command && !command_exists(&definition.command, &env) {
         return Err(SpawnRefusal::CommandMissing {
             command: definition.command.clone(),
             registry: registry.source().display().to_string(),
@@ -311,7 +533,44 @@ pub fn build_environment(
             env.insert(name.clone(), value.clone());
         }
     }
+    if let Some(profile) = definition.claude_config_dir.as_deref() {
+        validate_claude_profile_directory(profile)?;
+        env.insert("CLAUDE_CONFIG_DIR".to_string(), OsString::from(profile));
+    }
     Ok(env)
+}
+
+fn validate_claude_profile_directory(profile: &str) -> Result<(), SpawnRefusal> {
+    let path = Path::new(profile);
+    let metadata = fs::symlink_metadata(path).map_err(|err| SpawnRefusal::EnvUnfit {
+        detail: format!("profil Claude indisponible {}: {err}", path.display()),
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(SpawnRefusal::EnvUnfit {
+            detail: format!(
+                "profil Claude invalide {}: répertoire réel requis",
+                path.display()
+            ),
+        });
+    }
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return Err(SpawnRefusal::EnvUnfit {
+            detail: format!(
+                "profil Claude invalide {}: propriétaire inattendu",
+                path.display()
+            ),
+        });
+    }
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(SpawnRefusal::EnvUnfit {
+            detail: format!(
+                "profil Claude invalide {}: permissions {mode:04o}, attendu 0700 ou plus restrictif",
+                path.display()
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Intention : le répertoire du binaire courant est le **premier** élément du
@@ -371,6 +630,8 @@ fn refusal_record(reason: &SpawnRefusal) -> (&'static str, String) {
         SpawnRefusal::NameActive => "name_active",
         SpawnRefusal::EnvUnfit { .. } => "env_unfit",
         SpawnRefusal::CwdGone { .. } => "cwd_gone",
+        SpawnRefusal::ProjectCwdMismatch { .. } => "project_cwd_mismatch",
+        SpawnRefusal::DockerRuntimeUnavailable { .. } => "docker_runtime_unavailable",
         SpawnRefusal::NegotiationFailed { .. } => "negotiation_failed",
         SpawnRefusal::SpawnTimeout => "spawn_timeout",
         SpawnRefusal::QuotaExceeded { .. } => "quota_exceeded",
@@ -422,6 +683,9 @@ fn decision_from_issue(issue: SpawnCommandIssue, quota: usize) -> SpawnDecision 
                     searched_on: String::new(),
                     requested_from: String::new(),
                 },
+                "project_cwd_mismatch" => SpawnRefusal::ProjectCwdMismatch {
+                    project_id: String::new(),
+                },
                 "spawn_timeout" => SpawnRefusal::SpawnTimeout,
                 "quota_exceeded" => SpawnRefusal::QuotaExceeded { limit: quota },
                 "daemon_recovering" => SpawnRefusal::DaemonRecovering,
@@ -439,6 +703,7 @@ mod tests {
     use crate::desired_state::DesiredStateStore;
     use crate::fleet::FleetConfig;
     use std::fs;
+    use std::process::Command;
 
     const NOW: i64 = 2_000_000;
 
@@ -532,7 +797,48 @@ mod tests {
             command_id: id.to_string(),
             issued_at: NOW,
             deadline_at: NOW + 10,
+            ownership: None,
+            project: None,
         }
+    }
+
+    #[test]
+    fn cwd_projet_accepte_racine_descendante_et_worktree_lie_mais_refuse_un_voisin() {
+        let root = root("project-cwd");
+        let project = root.join("project");
+        let linked = root.join("linked");
+        let foreign = root.join("foreign");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&foreign).unwrap();
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(&project)
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "--initial-branch=main"]);
+        git(&["config", "user.name", "fixture"]);
+        git(&["config", "user.email", "fixture@example.invalid"]);
+        fs::write(project.join("README"), "fixture\n").unwrap();
+        git(&["add", "README"]);
+        git(&["commit", "-m", "fixture"]);
+        git(&["worktree", "add", "--detach", linked.to_str().unwrap()]);
+
+        assert!(
+            !project_cwd_belongs_to_binding(&project.join("nested"), &project),
+            "un sous-répertoire inexistant est refusé"
+        );
+        fs::create_dir_all(project.join("nested")).unwrap();
+        assert!(project_cwd_belongs_to_binding(
+            &project.join("nested"),
+            &project
+        ));
+        assert!(project_cwd_belongs_to_binding(&linked, &project));
+        assert!(!project_cwd_belongs_to_binding(&foreign, &project));
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn rejection(decision: SpawnDecision) -> SpawnRefusal {
@@ -568,6 +874,34 @@ mod tests {
             Some(directory.as_str()),
             "PATH géré sans préfixe du binaire courant: {path}"
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn profil_claude_prive_ecrase_toute_valeur_ambiante_et_refuse_les_droits_larges() {
+        let root = root("claude-profile");
+        let profile = root.join("profile");
+        fs::create_dir_all(&profile).unwrap();
+        fs::set_permissions(&profile, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut definition = registry("/bin/sh", "claude_stream_json", &[])
+            .get("fixture")
+            .unwrap()
+            .clone();
+        definition.claude_config_dir = Some(profile.to_string_lossy().into_owned());
+        let mut source = source(&root);
+        source.insert("CLAUDE_CONFIG_DIR".to_string(), OsString::from("/ambient"));
+        let env = build_environment(&definition, &source).unwrap();
+        assert_eq!(
+            env.get("CLAUDE_CONFIG_DIR"),
+            Some(&profile.as_os_str().to_owned())
+        );
+
+        fs::set_permissions(&profile, fs::Permissions::from_mode(0o755)).unwrap();
+        let refusal = build_environment(&definition, &source).unwrap_err();
+        assert!(matches!(
+            refusal,
+            SpawnRefusal::EnvUnfit { detail } if detail.contains("attendu 0700")
+        ));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -652,6 +986,48 @@ mod tests {
     }
 
     #[test]
+    fn observation_fournisseur_incoherente_refuse_avant_reservation() {
+        let root = root("provider-observation-preflight");
+        fs::create_dir_all(&root).unwrap();
+        let supervisor = supervisor(&root, 1);
+        let registry = registry_with_capabilities(
+            &[],
+            serde_json::json!({
+                "execution_paths": ["acp"],
+                "models": {},
+                "observed": {
+                    "binary_path": "/bin/sh",
+                    "binary_version": "fixture-1",
+                    "binary_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "contract_version": "acp-v1",
+                    "operations": []
+                }
+            }),
+        );
+        let order = order(&root, "command-provider-observation", "never-started");
+        let refusal = rejection(
+            submit_spawn(
+                &supervisor,
+                &registry,
+                &source(&root),
+                &order,
+                NOW,
+                false,
+                &hosts_fixture(),
+            )
+            .unwrap(),
+        );
+        assert!(matches!(
+            refusal,
+            SpawnRefusal::UnsupportedCapability { ref capability, .. }
+                if capability == "empreinte du binaire fournisseur observé"
+        ));
+        assert!(!supervisor.knows_command(&order.command_id));
+        assert_eq!(supervisor.active_count(), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn effort_non_declare_est_refuse_et_reprise_revalidee_sur_definition_figee() {
         let root = root("capability-effort");
         fs::create_dir_all(&root).unwrap();
@@ -682,6 +1058,10 @@ mod tests {
                 generation: 1,
                 deadline_at: NOW + 10,
                 persistent: true,
+                project: None,
+                link_id: None,
+                ownership: None,
+                agent_path: None,
             },
             agent_type: "fixture".to_string(),
             cwd: root.clone(),
@@ -979,6 +1359,39 @@ mod tests {
             }
             other => panic!("refus attendu CwdGone, obtenu {other:?}"),
         }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_066_runtime_docker_n_exige_jamais_la_commande_fournisseur_sur_l_hote() {
+        let root = root("runtime-command");
+        fs::create_dir_all(&root).unwrap();
+        let supervisor = supervisor(&root, 1);
+        let registry = registry("/usr/local/bin/fixture-agent", "acp", &[]);
+        let env = source(&root);
+        let mut spawn = order(&root, "runtime-command-066", "runtime-agent-066");
+        spawn.project = Some(bridget_transport::protocol::ProjectReference {
+            project_id: "project-066".to_string(),
+            binding_generation: 1,
+        });
+
+        let decision = submit_spawn_for_project_in_runtime(
+            &supervisor,
+            &registry,
+            &env,
+            &spawn,
+            NOW,
+            false,
+            &hosts_fixture(),
+            Some(&root),
+        )
+        .unwrap();
+        assert!(matches!(
+            decision,
+            SpawnDecision::Ready(ref prepared)
+                if prepared.command == "/usr/local/bin/fixture-agent"
+        ));
+        drop(supervisor);
         let _ = fs::remove_dir_all(root);
     }
 }

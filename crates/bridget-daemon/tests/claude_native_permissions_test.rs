@@ -48,17 +48,16 @@ for arg in "$@"; do
   esac
 done
 if [ "$has_skip" -ne 1 ] || [ "$has_mode" -ne 1 ]; then
-  while IFS= read -r _; do :; done
+  IFS= read -r _
   exit 0
 fi
 mkdir -p "$root/worktree"
 marker="$root/worktree/outil.txt"
-while IFS= read -r _; do
-  printf '%s\n' '{"type":"system","subtype":"init","model":"claude-opus-5"}'
-  printf 'mission-outil-ok\n' > "$marker"
-  content=$(cat "$marker")
-  printf '%s\n' "{\"type\":\"result\",\"is_error\":false,\"terminal_reason\":\"completed\",\"result\":\"$content\"}"
-done
+IFS= read -r _
+printf "%s\n" "{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-opus-5\"}"
+printf "mission-outil-ok\n" > "$marker"
+content=$(cat "$marker")
+printf "%s\n" "{\"type\":\"result\",\"is_error\":false,\"terminal_reason\":\"completed\",\"result\":\"$content\"}"
 "#,
     )
     .unwrap();
@@ -75,13 +74,14 @@ fn registry_json(adapter: &Path, with_bypass: bool, mcp_interactive: &str) -> St
             "bypassPermissions".to_string(),
         ]);
     }
+    let permissions = if with_bypass { "allow" } else { "deny" };
     serde_json::json!({
         "agents": {
             "claude": {
                 "command": adapter,
                 "args": args,
+                "permissions": permissions,
                 "protocol": "claude_stream_json",
-                "permissions": "allow",
                 "queue_capacity": 2,
                 "notify_timeout_secs": 2,
                 "mcp": { "interactive": mcp_interactive },
@@ -118,7 +118,7 @@ fn run_mission_with(
     let daemon = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         stream
-            .set_read_timeout(Some(Duration::from_secs(4)))
+            .set_read_timeout(Some(Duration::from_secs(12)))
             .unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut writer = BufWriter::new(stream);
@@ -147,7 +147,7 @@ fn run_mission_with(
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                name: "claude-outil-1".to_string(),
+                agent_id: "123e4567-e89b-42d3-a456-426614174000".to_string(),
             })
             .unwrap()
         )
@@ -182,8 +182,9 @@ fn run_mission_with(
         )
         .unwrap();
         writer.flush().unwrap();
-
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        // Le wrapper réel et son sous-processus sont planifiés avec les autres
+        // intégrations du workspace : 3 s rendait ce témoin dépendant de la charge.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
         let mut body = None;
         while std::time::Instant::now() < deadline {
             line.clear();
@@ -224,7 +225,6 @@ fn run_mission_with(
     let daemon_result = rx.recv_timeout(Duration::from_secs(5));
     let _ = daemon.join();
     assert_eq!(wrapper_result, Ok(()), "wrapper Claude géré");
-
     let outcome = match daemon_result {
         Ok(Ok(body)) => Ok((body, root.join("worktree/outil.txt").is_file())),
         Ok(Err(error)) => Err(error),

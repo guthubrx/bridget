@@ -3,12 +3,12 @@
 
 use crate::journal::{JournalLiveFeed, JournalWriter, with_turn_failed_kind};
 use crate::managed_session::{
-    ManagedEvent, ManagedEventKind, ManagedEventSource, ManagedSession, ManagedSessionDescriptor,
-    ManagedTerminal,
+    ManagedEvent, ManagedEventKind, ManagedEventSource, ManagedProviderIdentity, ManagedSession,
+    ManagedSessionDescriptor, ManagedTerminal,
 };
-use crate::protocol::PresenceMode;
+use crate::protocol::{PresenceMode, ProviderObservation};
 use crate::transport::{Transport, TransportError};
-use bridget_core::BridgetMessage;
+use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -31,6 +31,8 @@ pub struct AcpOptions {
     pub queue_capacity: usize,
     pub permissions: String,
     pub notify_timeout_secs: u64,
+    /// Baseline relevée avant lancement, absente pour un registre historique.
+    pub provider_observation: Option<ProviderObservation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,6 +180,7 @@ struct TurnWorker {
     poll_interval: Duration,
     child: Arc<Mutex<Child>>,
     journal: Journal,
+    private_profile_instructions: Arc<Mutex<Option<String>>>,
     clock: Clock,
     test_observer: Option<mpsc::Sender<AcpEvent>>,
 }
@@ -189,6 +192,7 @@ pub struct AcpTransport {
     state: Arc<Mutex<TurnState>>,
     events: Arc<Mutex<AcpEventQueue>>,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
+    provider_observation: Option<ProviderObservation>,
     queue_capacity: usize,
     writer: Writer,
     session_id: String,
@@ -196,7 +200,9 @@ pub struct AcpTransport {
     reader_handle: Mutex<Option<thread::JoinHandle<()>>>,
     worker_handle: Mutex<Option<thread::JoinHandle<()>>>,
     journal: Journal,
+    private_profile_instructions: Arc<Mutex<Option<String>>>,
     clock: Clock,
+    context_published: AtomicBool,
 }
 
 impl AcpTransport {
@@ -420,6 +426,7 @@ impl AcpTransport {
         *active_session.lock().unwrap_or_else(|err| err.into_inner()) = Some(session_id.clone());
 
         let state = Arc::new(Mutex::new(TurnState::Idle));
+        let private_profile_instructions = Arc::new(Mutex::new(None));
         let worker_handle = spawn_worker(TurnWorker {
             queue: queue.clone(),
             writer: writer.clone(),
@@ -437,12 +444,14 @@ impl AcpTransport {
             poll_interval,
             child: child.clone(),
             journal: journal.clone(),
+            private_profile_instructions: private_profile_instructions.clone(),
             clock: clock.clone(),
             test_observer,
         });
         Ok(Self {
             connection_id: format!("acp-{pid}"),
             alive,
+            provider_observation: options.provider_observation,
             shutdown_started,
             state,
             events,
@@ -454,7 +463,9 @@ impl AcpTransport {
             reader_handle: Mutex::new(Some(reader_handle)),
             worker_handle: Mutex::new(Some(worker_handle)),
             journal,
+            private_profile_instructions,
             clock,
+            context_published: AtomicBool::new(false),
         })
     }
 
@@ -606,7 +617,26 @@ impl Transport for AcpTransport {
                 });
             return Ok(());
         }
-        if !enqueue(&self.queue, self.queue_capacity, msg.clone()) {
+        if msg.intent == Some(MessageIntent::SteerCurrent) {
+            self.events
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push_back(AcpEvent::DeliveryRejected {
+                    message_id: msg.id.clone(),
+                    reason: "pilotage ACP indisponible".to_string(),
+                });
+            return Ok(());
+        }
+        let active_message_id = if msg.intent == Some(MessageIntent::InterruptAndStart)
+            || msg.origin == Some(MessageOrigin::Human)
+        {
+            enqueue_and_capture_active_message_id(&self.queue, self.queue_capacity, msg.clone())
+        } else if enqueue(&self.queue, self.queue_capacity, msg.clone()) {
+            Some(None)
+        } else {
+            None
+        };
+        let Some(active_message_id) = active_message_id else {
             self.events
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner())
@@ -615,6 +645,10 @@ impl Transport for AcpTransport {
                     reason: "file ACP pleine".to_string(),
                 });
             return Ok(());
+        };
+        // InterruptAndStart reste FIFO, et vise seulement le tour capturé.
+        if let Some(active_message_id) = active_message_id {
+            let _ = self.cancel_delivery(&active_message_id, "interruption explicite");
         }
         Ok(())
     }
@@ -628,6 +662,17 @@ impl Transport for AcpTransport {
 }
 
 impl ManagedSession for AcpTransport {
+    fn set_private_profile_instructions(
+        &mut self,
+        instructions: &str,
+    ) -> Result<(), TransportError> {
+        *self
+            .private_profile_instructions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(instructions.to_string());
+        Ok(())
+    }
+
     fn descriptor(&self) -> ManagedSessionDescriptor {
         ManagedSessionDescriptor {
             transport: "acp".to_string(),
@@ -636,6 +681,20 @@ impl ManagedSession for AcpTransport {
         }
     }
 
+    fn provider_identity(&self) -> Option<ManagedProviderIdentity> {
+        Some(ManagedProviderIdentity {
+            provider_kind: "acp".to_string(),
+            provider_session_id: Some(self.session_id.clone()),
+            provider_thread_id: None,
+            active_turn_id: None,
+            provider_item_id: None,
+            capabilities_revision: self
+                .provider_observation
+                .as_ref()
+                .map(|observation| observation.contract_version.clone()),
+            provider_observation: self.provider_observation.clone(),
+        })
+    }
     fn process_id(&self) -> u32 {
         AcpTransport::process_id(self)
     }
@@ -650,12 +709,27 @@ impl ManagedSession for AcpTransport {
     }
 
     fn drain_events(&self) -> Vec<ManagedEvent> {
-        self.events
+        let mut events = self
+            .events
             .lock()
             .unwrap_or_else(|err| err.into_inner())
-            .drain_managed()
+            .drain_managed();
+        if !self.context_published.swap(true, Ordering::SeqCst) {
+            events.insert(
+                0,
+                ManagedEvent::internal(
+                    ManagedEventSource::Acp,
+                    Vec::new(),
+                    ManagedEventKind::ProviderContextObserved {
+                        identity: self
+                            .provider_identity()
+                            .expect("identité ACP disponible après session/new"),
+                    },
+                ),
+            );
+        }
+        events
     }
-
     fn cancel_delivery(&self, message_id: &str, reason: &str) -> bool {
         AcpTransport::cancel_delivery(self, message_id, reason)
     }
@@ -834,6 +908,11 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 .lock()
                 .unwrap_or_else(|err| err.into_inner())
                 .clear();
+            let instructions = worker
+                .private_profile_instructions
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clone();
             let result = prompt_request(
                 &worker.writer,
                 &worker.waiters,
@@ -842,7 +921,7 @@ fn spawn_worker(worker: TurnWorker) -> thread::JoinHandle<()> {
                 "session/prompt",
                 json!({
                     "sessionId": &worker.session_id,
-                    "prompt": [{ "type": "text", "text": prompt_for(&message) }]
+                    "prompt": [{ "type": "text", "text": prompt_for_with_private_instructions(&message, instructions.as_deref()) }]
                 }),
                 // L'échéance absolue vient du daemon (relue à chaque livraison).
                 // Sans elle, repli sur la valeur figée au spawn — qui ne suit
@@ -986,6 +1065,22 @@ fn enqueue(
     queue.messages.push_back(message);
     wakeup.notify_one();
     true
+}
+
+fn enqueue_and_capture_active_message_id(
+    queue: &Arc<(Mutex<QueueState>, Condvar)>,
+    capacity: usize,
+    message: BridgetMessage,
+) -> Option<Option<String>> {
+    let (queue, wakeup) = &**queue;
+    let mut queue = queue.lock().unwrap_or_else(|err| err.into_inner());
+    if queue.messages.len() >= capacity || queue.closed {
+        return None;
+    }
+    let active_message_id = queue.active.as_ref().map(|turn| turn.message_id.clone());
+    queue.messages.push_back(message);
+    wakeup.notify_one();
+    Some(active_message_id)
 }
 
 fn finish_turn(
@@ -1727,14 +1822,7 @@ fn tool_call_journal_payload(
         .title
         .clone()
         .unwrap_or_else(|| "inconnu".to_string());
-    build_tool_journal_payload(
-        &tool,
-        &detail,
-        tool_call_id,
-        title,
-        name,
-        tool_kind,
-    )
+    build_tool_journal_payload(&tool, &detail, tool_call_id, title, name, tool_kind)
 }
 
 /// Enrichit le fil quand la permission porte le vrai nom (MCP Cursor).
@@ -1771,10 +1859,7 @@ fn permission_tool_journal_payload(
     if !gained_title && !gained_detail {
         return None;
     }
-    let tool = memory
-        .title
-        .clone()
-        .unwrap_or_else(|| title.to_string());
+    let tool = memory.title.clone().unwrap_or_else(|| title.to_string());
     Some(build_tool_journal_payload(
         &tool,
         &memory.detail,
@@ -1907,12 +1992,26 @@ fn method_not_found_response(value: &Value, method: &str) -> Option<Value> {
 }
 
 pub fn prompt_for(message: &BridgetMessage) -> String {
-    format!(
+    prompt_for_with_private_instructions(message, None)
+}
+
+fn prompt_for_with_private_instructions(
+    message: &BridgetMessage,
+    instructions: Option<&str>,
+) -> String {
+    let prompt = format!(
         "[message Bridget de {} — réponse attendue : {}]\n\n{}",
         message.from,
         if message.reply { "oui" } else { "non" },
         message.body
-    )
+    );
+    let Some(instructions) = instructions
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return prompt;
+    };
+    format!("[Instructions individuelles Bridget]\n{instructions}\n\n{prompt}")
 }
 
 #[cfg(test)]
@@ -2467,6 +2566,7 @@ while read line; do :; done
                 queue_capacity: 1,
                 permissions: "allow".to_string(),
                 notify_timeout_secs: 1,
+                provider_observation: None,
             },
             &[],
             vec![json!({ "name": "bridget", "command": "bridget", "args": ["mcp"], "env": [] })],
@@ -2606,6 +2706,7 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             queue_capacity: 2,
             permissions: "allow".to_string(),
             notify_timeout_secs: 1,
+            provider_observation: None,
         })
         .unwrap();
         let message = message("fixture-message");
@@ -2654,6 +2755,7 @@ while read request; do :; done
             queue_capacity: 1,
             permissions: "allow".to_string(),
             notify_timeout_secs: 5,
+            provider_observation: None,
         })
         .unwrap();
         transport.enable_journal(&root, "acp-live").unwrap();
@@ -2766,6 +2868,7 @@ while read request; do :; done
             queue_capacity: 1,
             permissions: "allow".to_string(),
             notify_timeout_secs: 1,
+            provider_observation: None,
         })
         .unwrap();
 
@@ -2803,6 +2906,7 @@ done
             queue_capacity: 1,
             permissions: "allow".to_string(),
             notify_timeout_secs: 1,
+            provider_observation: None,
         })
         .unwrap();
         transport.enable_journal(root, "codex-bench").unwrap();
@@ -2902,6 +3006,7 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
                 queue_capacity: 1,
                 permissions: "allow".to_string(),
                 notify_timeout_secs: 1,
+                provider_observation: None,
             },
             Arc::new(SystemTime::now),
             CANCEL_GRACE,
@@ -2953,6 +3058,7 @@ sleep 30
                 queue_capacity: 1,
                 permissions: "allow".to_string(),
                 notify_timeout_secs: 1,
+                provider_observation: None,
             },
             Arc::new(SystemTime::now),
             CANCEL_GRACE,
@@ -3005,6 +3111,7 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             queue_capacity: 2,
             permissions: "allow".to_string(),
             notify_timeout_secs: 1,
+            provider_observation: None,
         })
         .unwrap();
         transport.enable_journal(&root, "codex-1").unwrap();
@@ -3135,6 +3242,7 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             queue_capacity: 2,
             permissions: "allow".to_string(),
             notify_timeout_secs: 1,
+            provider_observation: None,
         })
         .unwrap();
         transport.deliver(&message("permission-message")).unwrap();
@@ -3173,6 +3281,7 @@ esac
             queue_capacity: 2,
             permissions: "allow".to_string(),
             notify_timeout_secs: 1,
+            provider_observation: None,
         })
         .unwrap();
         transport.deliver(&message("permission-raw")).unwrap();
@@ -3206,6 +3315,7 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             queue_capacity: 2,
             permissions: "allow".to_string(),
             notify_timeout_secs: 1,
+            provider_observation: None,
         })
         .unwrap();
         transport.deliver(&message("foreign-update")).unwrap();
@@ -3239,6 +3349,7 @@ echo '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}'
             queue_capacity: 2,
             permissions: "allow".to_string(),
             notify_timeout_secs: 1,
+            provider_observation: None,
         })
         .unwrap();
         transport.deliver(&message("cancelled")).unwrap();
@@ -3265,6 +3376,68 @@ echo '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}'
             }
         }
         panic!("le tour annulé a empêché ou contaminé le prompt suivant");
+    }
+
+    #[test]
+    fn message_humain_actif_interrompt_le_tour_acp_et_garde_fifo() {
+        let script = r#"
+read request
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read request
+echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"fixture-session"}}'
+read first_prompt
+read cancel
+echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"cancelled"}}'
+read human_prompt
+echo '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}'
+read system_prompt
+echo '{"jsonrpc":"2.0","id":5,"result":{"stopReason":"end_turn"}}'
+"#;
+        let mut transport = AcpTransport::spawn(AcpOptions {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), script.to_string()],
+            queue_capacity: 3,
+            permissions: "allow".to_string(),
+            notify_timeout_secs: 1,
+            provider_observation: None,
+        })
+        .unwrap();
+        transport.deliver(&message("acp-actif")).unwrap();
+        let start_deadline = Instant::now() + Duration::from_secs(2);
+        while !transport.is_busy() && Instant::now() < start_deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(transport.is_busy(), "le tour ACP initial doit être actif");
+
+        let mut human = message("acp-humain");
+        human.from = "superviseur".to_string();
+        human.origin = Some(MessageOrigin::Human);
+        transport.deliver(&human).unwrap();
+        transport.deliver(&message("acp-systeme")).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut active_rejected = false;
+        let mut completed = Vec::new();
+        while Instant::now() < deadline {
+            for event in transport.drain_events() {
+                match event {
+                    AcpEvent::DeliveryRejected { message_id, .. } if message_id == "acp-actif" => {
+                        active_rejected = true;
+                    }
+                    AcpEvent::TurnFinished { message, .. } => completed.push(message.id),
+                    _ => {}
+                }
+            }
+            if active_rejected
+                && completed == vec!["acp-humain".to_string(), "acp-systeme".to_string()]
+            {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "le message humain devait interrompre seulement le tour actif et rester avant le système, annulé={active_rejected}, terminés={completed:?}"
+        );
     }
 
     #[test]
@@ -3297,6 +3470,7 @@ while :; do :; done
                 queue_capacity: 2,
                 permissions: "allow".to_string(),
                 notify_timeout_secs: 1,
+                provider_observation: None,
             },
             clock,
             Duration::from_millis(100),
@@ -3366,6 +3540,7 @@ sleep 2
             queue_capacity: 2,
             permissions: "allow".to_string(),
             notify_timeout_secs: 1,
+            provider_observation: None,
         })
         .unwrap();
         transport.deliver(&message("active")).unwrap();
@@ -3421,6 +3596,7 @@ sleep 2
             queue_capacity: 2,
             permissions: "allow".to_string(),
             notify_timeout_secs: 0,
+            provider_observation: None,
         })
         .unwrap();
         transport.deliver(&message("timeout-active")).unwrap();
@@ -3465,6 +3641,7 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             queue_capacity: 2,
             permissions: "allow".to_string(),
             notify_timeout_secs: 1,
+            provider_observation: None,
         })
         .unwrap();
         transport_ok.enable_journal(&root, "ok").unwrap();
@@ -3484,7 +3661,10 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
                 break;
             }
         }
-        assert!(saw_ok, "contrôle positif : un tour court doit aboutir d'abord");
+        assert!(
+            saw_ok,
+            "contrôle positif : un tour court doit aboutir d'abord"
+        );
 
         // Tour long : notify figé à 1 s, mais deadline_at (daemon) à +30 s.
         // Le faux ACP répond après 2 s → survit grâce au deadline daemon.
@@ -3507,6 +3687,7 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             queue_capacity: 2,
             permissions: "allow".to_string(),
             notify_timeout_secs: 1,
+            provider_observation: None,
         })
         .unwrap();
         transport_long.enable_journal(&root, "long").unwrap();
@@ -3520,9 +3701,7 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             thread::sleep(Duration::from_millis(50));
             for event in transport_long.drain_events() {
                 match event {
-                    AcpEvent::TurnFinished { message, .. }
-                        if message.id == "tour-deadline-hot" =>
-                    {
+                    AcpEvent::TurnFinished { message, .. } if message.id == "tour-deadline-hot" => {
                         saw_long = true;
                     }
                     AcpEvent::DeliveryRejected { message_id, reason }
@@ -3550,6 +3729,7 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             queue_capacity: 2,
             permissions: "allow".to_string(),
             notify_timeout_secs: 1,
+            provider_observation: None,
         })
         .unwrap();
         transport_kill.enable_journal(&root, "kill").unwrap();
@@ -3561,10 +3741,10 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
         for _ in 0..80 {
             thread::sleep(Duration::from_millis(50));
             for event in transport_kill.drain_events() {
-                if let AcpEvent::DeliveryRejected { message_id, reason } = event {
-                    if message_id == "tour-tue" {
-                        kill_reason = Some(reason);
-                    }
+                if let AcpEvent::DeliveryRejected { message_id, reason } = event
+                    && message_id == "tour-tue"
+                {
+                    kill_reason = Some(reason);
                 }
             }
             if kill_reason.is_some() {
@@ -3581,13 +3761,12 @@ echo '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
             .filter_map(Result::ok)
             .flat_map(|entry| crate::journal::valid_events(&entry.path()))
             .collect::<Vec<_>>();
-        let terminal = kill_events.iter().find(|event| {
-            event["event"] == "error" && event["message_id"] == "tour-tue"
-        });
+        let terminal = kill_events
+            .iter()
+            .find(|event| event["event"] == "error" && event["message_id"] == "tour-tue");
         assert!(
-            terminal.is_some_and(|event| {
-                event["payload"]["terminal_kind"] == json!("turn_failed")
-            }),
+            terminal
+                .is_some_and(|event| { event["payload"]["terminal_kind"] == json!("turn_failed") }),
             "un tour tué DOIT porter terminal_kind=turn_failed ; reçu {kill_events:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -3609,6 +3788,7 @@ exit 0
             queue_capacity: 2,
             permissions: "allow".to_string(),
             notify_timeout_secs: 1,
+            provider_observation: None,
         })
         .unwrap();
         transport.deliver(&message("eof-message")).unwrap();
@@ -3622,5 +3802,26 @@ exit 0
             }
         }
         panic!("EOF actif non propagé au tour");
+    }
+    #[test]
+    fn consigne_privee_preserve_le_corps_visible_du_message() {
+        let mut message = message("profile-body");
+        message.body = "Demande utilisateur visible.".to_string();
+        let prompt = prompt_for_with_private_instructions(
+            &message,
+            Some("Privilégie les sources attestées."),
+        );
+
+        assert!(prompt.contains("Privilégie les sources attestées."));
+        assert!(prompt.ends_with(&message.body));
+        assert_eq!(
+            prompt_for(&message),
+            format!(
+                "[message Bridget de {} — réponse attendue : {}]\n\n{}",
+                message.from,
+                if message.reply { "oui" } else { "non" },
+                message.body
+            )
+        );
     }
 }

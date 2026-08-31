@@ -17,7 +17,7 @@ use uuid::Uuid;
 const CHILD_MODE: &str = "MAICIE_T007_CHILD_MODE";
 const CHILD_ROOT: &str = "MAICIE_T007_CHILD_ROOT";
 const BARRIER: &str = "MAICIE_T007_BARRIER";
-const SPAWN_BYTES: &[u8] = br#"{"type":"SpawnOrder","agent_type":"codex","name":null,"cwd":"/tmp/maicie","persistent":false,"command_id":"33333333-3333-4333-8333-333333333333","issued_at":10,"deadline_at":100}"#;
+const SPAWN_BYTES: &[u8] = br#"{"type":"SpawnOrder","agent_type":"codex","agent_id":null,"cwd":"/tmp/maicie","persistent":false,"command_id":"33333333-3333-4333-8333-333333333333","issued_at":10,"deadline_at":100}"#;
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 #[test]
@@ -88,7 +88,7 @@ fn approbation_et_activation_sont_atomiques_et_les_octets_restent_immuables() {
             approval.command_id,
             &SpawnOutcome::Accepted {
                 command_id: "55555555-5555-4555-8555-555555555555".to_string(),
-                name: "codex-1".to_string(),
+                agent_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             },
             20,
         ),
@@ -113,7 +113,7 @@ fn approbation_et_activation_sont_atomiques_et_les_octets_restent_immuables() {
             approval.command_id,
             &SpawnOutcome::Accepted {
                 command_id: approval.command_id.to_string(),
-                name: "codex-1".to_string(),
+                agent_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             },
             21,
         )
@@ -123,7 +123,7 @@ fn approbation_et_activation_sont_atomiques_et_les_octets_restent_immuables() {
             approval.command_id,
             &SpawnOutcome::Accepted {
                 command_id: approval.command_id.to_string(),
-                name: "codex-1".to_string(),
+                agent_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             },
             22,
         )
@@ -214,7 +214,7 @@ fn relations_corrompues_refusent_les_deux_transitions_activation() {
             approval.command_id,
             &SpawnOutcome::Accepted {
                 command_id: approval.command_id.to_string(),
-                name: "codex-1".to_string(),
+                agent_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             },
             20,
         ),

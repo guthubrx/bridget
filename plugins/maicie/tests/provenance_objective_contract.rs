@@ -126,10 +126,27 @@ fn spec_056_toutes_les_frontieres_d_ouverture_exigent_un_permit() {
         "la frontière delegate n'exige aucun permit typé"
     );
     assert_eq!(domain.matches("pub fn auto_generated() -> Self").count(), 1);
-    assert!(
-        !domain.contains("fn human_request"),
-        "la voie humaine ne doit pas être constructible avant l'attestation daemon"
+    // T5611 retourne ce verrou : la voie humaine devient constructible, mais
+    // par un seul chemin et seulement après vérification. L'oracle garde donc
+    // désormais que ce chemin est unique et qu'aucune de ses gardes n'a sauté.
+    assert_eq!(
+        domain.matches("pub fn human_request(").count(),
+        1,
+        "la voie humaine doit avoir exactement un constructeur"
     );
+    for garde in [
+        "HumanOriginRefusal::VersionInconnue",
+        "HumanOriginRefusal::PerimetreEmetteurDivergent",
+        "HumanOriginRefusal::EmetteurNonHumain",
+        "HumanOriginRefusal::ScelleDeContenuDivergent",
+        "HumanOriginRefusal::HashCanoniqueDivergent",
+        "HumanOriginRefusal::AttestationDejaConsommee",
+    ] {
+        assert!(
+            domain.contains(garde),
+            "garde d'attestation absente du constructeur humain : {garde}"
+        );
+    }
 
     for function in [
         "pub fn lookup_or_reserve_delegate(",

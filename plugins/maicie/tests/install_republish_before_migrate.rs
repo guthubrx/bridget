@@ -41,6 +41,9 @@ impl Drop for FixtureRoot {
 
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
+// Fixture historique figée à v19. Les oracles exercent donc toutes les migrations ultérieures.
+const FIXTURE_SCHEMA_VERSION: i64 = 19;
+
 fn unique_root(label: &str) -> FixtureRoot {
     let n = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
     let root = std::env::temp_dir().join(format!(
@@ -161,7 +164,7 @@ fn fabricate_divergence(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
             .map(Result::unwrap)
             .collect()
     };
-    assert_eq!(versions, (1..=19).collect::<Vec<i64>>());
+    assert_eq!(versions, (1..=FIXTURE_SCHEMA_VERSION).collect::<Vec<i64>>());
     let ddl: String = connection
         .query_row(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='guichet_receptions'",
@@ -262,7 +265,7 @@ fn echec_reel_republication_avant_migration_ne_laisse_pas_greffe_en_avance() {
     let (database, config, install_bin) = fabricate_divergence(&root);
     let migrateur = PathBuf::from(env!("CARGO_BIN_EXE_maicie"));
     let install_avant = fs::read(&install_bin).unwrap();
-    assert_eq!(database_user_version(&database), SCHEMA_VERSION - 1);
+    assert_eq!(database_user_version(&database), FIXTURE_SCHEMA_VERSION);
 
     let install_dir = install_bin.parent().unwrap();
     fs::set_permissions(install_dir, fs::Permissions::from_mode(0o500)).unwrap();
@@ -288,7 +291,7 @@ fn echec_reel_republication_avant_migration_ne_laisse_pas_greffe_en_avance() {
 
     assert_eq!(
         database_user_version(&database),
-        SCHEMA_VERSION - 1,
+        FIXTURE_SCHEMA_VERSION,
         "le greffe ne doit pas être migré si la republication échoue avant migrate"
     );
     assert_eq!(
@@ -334,7 +337,7 @@ fn lien_installe_est_remplace_par_un_fichier_independant_avant_migration() {
     );
     assert_eq!(
         database_user_version(&database),
-        SCHEMA_VERSION - 1,
+        FIXTURE_SCHEMA_VERSION,
         "la primitive de publication ne doit pas migrer le greffe"
     );
 
@@ -347,7 +350,7 @@ fn lien_installe_est_remplace_par_un_fichier_independant_avant_migration() {
         String::from_utf8_lossy(&execution.stdout).trim(),
         "SOURCE-INDEPENDANTE"
     );
-    assert_eq!(database_user_version(&database), SCHEMA_VERSION - 1);
+    assert_eq!(database_user_version(&database), FIXTURE_SCHEMA_VERSION);
 }
 
 #[test]
@@ -372,7 +375,7 @@ fn lien_intermediaire_vers_le_chantier_est_refuse_sans_migrer() {
         "refus explicite attendu, reçu={error}"
     );
     assert_eq!(fs::read(&install_bin).unwrap(), install_avant);
-    assert_eq!(database_user_version(&database), SCHEMA_VERSION - 1);
+    assert_eq!(database_user_version(&database), FIXTURE_SCHEMA_VERSION);
     fs::remove_file(install_dir).unwrap();
 }
 
@@ -394,7 +397,7 @@ fn memes_octets_avec_mode_invalide_sont_republies() {
         .mode()
         & 0o777;
     assert_eq!(mode, 0o755);
-    assert_eq!(database_user_version(&database), SCHEMA_VERSION - 1);
+    assert_eq!(database_user_version(&database), FIXTURE_SCHEMA_VERSION);
 }
 
 #[test]
@@ -406,7 +409,7 @@ fn binaire_neuf_sur_greffe_ancien_refuse_parlant_puis_reprend_la_migration() {
     let outcome = republish_exe_before_migrate(&migrateur, &install_bin, &database).unwrap();
     assert!(outcome.was_published());
     assert!(files_equal(&install_bin, &migrateur));
-    assert_eq!(database_user_version(&database), SCHEMA_VERSION - 1);
+    assert_eq!(database_user_version(&database), FIXTURE_SCHEMA_VERSION);
     let daemon = start_local_daemon_identity(&root.join("bridget.sock"));
 
     let refusal = Command::new(&install_bin)
@@ -422,7 +425,7 @@ fn binaire_neuf_sur_greffe_ancien_refuse_parlant_puis_reprend_la_migration() {
             && stderr.contains("relancer avec : maicie migrate --config"),
         "le refus doit rendre la reprise lisible, stderr={stderr}"
     );
-    assert_eq!(database_user_version(&database), SCHEMA_VERSION - 1);
+    assert_eq!(database_user_version(&database), FIXTURE_SCHEMA_VERSION);
 
     let daemon = start_local_daemon_identity(&root.join("bridget.sock"));
     let reprise = Command::new(&install_bin)
@@ -483,7 +486,7 @@ fn echec_migration_et_restauration_est_signale_sans_masquer_les_deux_etats() {
     );
     assert_eq!(
         database_user_version(&database),
-        SCHEMA_VERSION - 1,
+        FIXTURE_SCHEMA_VERSION,
         "le verrou doit laisser le greffe à son ancienne version"
     );
     assert_ne!(
@@ -563,7 +566,7 @@ fn relecture_durable_impossible_conserve_le_binaire_neuf() {
     let message = error.to_string();
     assert!(message.contains("état durable du schéma illisible"));
     assert!(message.contains("installé neuf conservé par sûreté"));
-    assert_eq!(database_user_version(&database), SCHEMA_VERSION - 1);
+    assert_eq!(database_user_version(&database), FIXTURE_SCHEMA_VERSION);
     assert_ne!(fs::read(&install_bin).unwrap(), ancien);
     assert!(files_equal(&install_bin, &migrateur));
 }
@@ -646,7 +649,7 @@ fn exclusion_commune_interdit_commit_19_pendant_restauration_ancien() {
     );
     assert_eq!(
         database_user_version(&database),
-        SCHEMA_VERSION - 1,
+        FIXTURE_SCHEMA_VERSION,
         "aucun commit ne peut s'intercaler pendant la restauration"
     );
     assert!(
@@ -658,7 +661,7 @@ fn exclusion_commune_interdit_commit_19_pendant_restauration_ancien() {
     drop(writer);
     let premiere_erreur = premier.join().unwrap();
     assert!(premiere_erreur.contains("locked"), "{premiere_erreur}");
-    assert_eq!(database_user_version(&database), SCHEMA_VERSION - 1);
+    assert_eq!(database_user_version(&database), FIXTURE_SCHEMA_VERSION);
     assert_eq!(fs::read(&install_bin).unwrap(), ancien);
 
     // Contrôle positif : après libération de l'exclusion, une nouvelle preuve
@@ -692,7 +695,7 @@ fn preuve_invalidee_avant_consommation_ne_peut_pas_migrer() {
             InstallPublishError::PublishedMismatch
         )
     ));
-    assert_eq!(database_user_version(&database), SCHEMA_VERSION - 1);
+    assert_eq!(database_user_version(&database), FIXTURE_SCHEMA_VERSION);
     assert_eq!(fs::read(&install_bin).unwrap(), ancien);
 }
 

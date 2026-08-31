@@ -6,8 +6,8 @@
 //! cette frontière.
 
 use crate::journal::JournalLiveFeed;
-use crate::protocol::PresenceMode;
-use crate::transport::Transport;
+use crate::protocol::{PresenceMode, ProviderObservation, ProviderOperation};
+use crate::transport::{Transport, TransportError};
 use bridget_core::BridgetMessage;
 use std::path::Path;
 
@@ -46,6 +46,26 @@ pub struct ManagedSessionDescriptor {
     pub location: Option<String>,
 }
 
+/// Identité et corrélations réellement observées par une session fournisseur.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedProviderIdentity {
+    pub provider_kind: String,
+    pub provider_session_id: Option<String>,
+    pub provider_thread_id: Option<String>,
+    pub active_turn_id: Option<String>,
+    pub provider_item_id: Option<String>,
+    pub capabilities_revision: Option<String>,
+    /// Baseline attestée du binaire, absente tant qu'aucune sonde versionnée
+    /// ne l'a réellement fournie à la session.
+    pub provider_observation: Option<ProviderObservation>,
+}
+
+/// Attente explicite d une décision externe, distincte d un tour actif.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManagedWaitState {
+    Approval { request_id: String },
+    UserInput { request_id: String },
+}
 /// Projection neutre des événements que le wrapper consomme aujourd'hui.
 ///
 /// Chaque événement conserve les octets émis par son pilote à cette frontière
@@ -126,8 +146,23 @@ pub enum ManagedEventKind {
         cache_creation_input_tokens: u64,
         cache_read_input_tokens: u64,
     },
+    /// Corrélations attestées sans faire dériver un état local par le wrapper.
+    ProviderContextObserved {
+        identity: ManagedProviderIdentity,
+    },
+    /// Attente explicite d autorisation ou de saisie, corrélée au fournisseur.
+    Waiting {
+        state: ManagedWaitState,
+    },
     Update {
         detail: String,
+    },
+    /// Incident récupérable projeté par un adaptateur. Il ne transporte ni
+    /// corps fournisseur ni argument d'outil: seuls un code stable et une
+    /// référence pseudonymisée franchissent la frontière commune.
+    Diagnostic {
+        code: String,
+        reference: String,
     },
     Error {
         detail: String,
@@ -149,12 +184,82 @@ pub enum ManagedTerminal {
     Failed { detail: String },
 }
 
+/// Issue fermée d'une demande de continuité. `Reconstructed` est un repli
+/// déclaré: il ne signifie jamais que le fil fournisseur a été repris.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManagedContinuation {
+    Native {
+        provider_thread_id: String,
+    },
+    Forked {
+        provider_thread_id: String,
+        parent_thread_id: String,
+    },
+    Reconstructed {
+        reason: String,
+    },
+    Refused {
+        reason: String,
+    },
+}
+
+fn continuation_fallback(
+    observation: Option<ProviderObservation>,
+    operation: ProviderOperation,
+) -> ManagedContinuation {
+    if observation.is_none_or(|observation| !observation.supports(operation)) {
+        return ManagedContinuation::Reconstructed {
+            reason: match operation {
+                ProviderOperation::Resume => "resume_not_attested".to_string(),
+                ProviderOperation::Fork => "fork_not_attested".to_string(),
+                _ => "continuation_not_attested".to_string(),
+            },
+        };
+    }
+    ManagedContinuation::Refused {
+        reason: "continuation_not_implemented".to_string(),
+    }
+}
+
 /// Contrat commun d'une session enfant gérée.
 ///
 /// `Transport` porte la livraison et l'état de vie ; ce trait ajoute
 /// exclusivement les opérations de session dont le wrapper a besoin. Il ne
 /// déclare ni modèle, ni quota, ni sémantique de protocole fournisseur.
 pub trait ManagedSession: Transport {
+    /// Consigne individuelle conservée uniquement par le pilote en mémoire.
+    ///
+    /// Elle ne devient jamais un `BridgetMessage`: les implémentations qui la
+    /// prennent en charge l'ajoutent à la prochaine vraie demande fournisseur,
+    /// sans l'écrire dans le journal Bridget ni l'exposer comme conversation.
+    fn set_private_profile_instructions(
+        &mut self,
+        _instructions: &str,
+    ) -> Result<(), TransportError> {
+        Err(TransportError::DeliveryFailed(
+            "contexte privé de profil non pris en charge".to_string(),
+        ))
+    }
+
+    /// Reprise neutre: sans contrat attesté, le seul repli est explicitement
+    /// reconstruit et l'implémentation ne peut pas appeler le fournisseur.
+    fn resume_thread(&self, _provider_thread_id: &str) -> ManagedContinuation {
+        continuation_fallback(
+            self.provider_identity()
+                .and_then(|identity| identity.provider_observation),
+            ProviderOperation::Resume,
+        )
+    }
+
+    /// Bifurcation neutre, soumise à la même fermeture par capacité.
+    fn fork_thread(&self, _provider_thread_id: &str) -> ManagedContinuation {
+        continuation_fallback(
+            self.provider_identity()
+                .and_then(|identity| identity.provider_observation),
+            ProviderOperation::Fork,
+        )
+    }
+
     fn descriptor(&self) -> ManagedSessionDescriptor;
     fn process_id(&self) -> u32;
     fn activate_journal(
@@ -164,7 +269,78 @@ pub trait ManagedSession: Transport {
         live_feed: Option<JournalLiveFeed>,
     ) -> std::io::Result<()>;
     fn drain_events(&self) -> Vec<ManagedEvent>;
+    /// Une implémentation qui ne peut pas attester son identité la laisse
+    /// absente : le consommateur doit refuser les opérations qui la requièrent.
+    fn provider_identity(&self) -> Option<ManagedProviderIdentity> {
+        None
+    }
+
+    /// La capacité se lit uniquement depuis la baseline associée à cette
+    /// session. Son absence ferme le contrôle : le nom du fournisseur ne vaut
+    /// pas capacité et un registre historique ne peut pas injecter un prompt.
+    fn supports_operation(&self, operation: ProviderOperation) -> bool {
+        self.provider_identity()
+            .and_then(|identity| identity.provider_observation)
+            .is_some_and(|observation| observation.supports(operation))
+    }
+
+    /// Compatibilité locale avec les appelants historiques de steering.
+    fn supports_steering(&self) -> bool {
+        self.supports_operation(ProviderOperation::Steer)
+    }
     fn cancel_delivery(&self, message_id: &str, reason: &str) -> bool;
     fn stop(&self);
     fn is_busy(&self) -> bool;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contexte_fournisseur_et_attente_restent_deux_faits_distincts() {
+        let identity = ManagedProviderIdentity {
+            provider_kind: "codex".to_string(),
+            provider_session_id: Some("session-1".to_string()),
+            provider_thread_id: Some("thread-1".to_string()),
+            active_turn_id: Some("turn-1".to_string()),
+            provider_item_id: Some("item-1".to_string()),
+            capabilities_revision: Some("contrat-1".to_string()),
+            provider_observation: None,
+        };
+        let event = ManagedEvent::internal(
+            ManagedEventSource::CodexAppServer,
+            Vec::new(),
+            ManagedEventKind::ProviderContextObserved { identity },
+        );
+        assert!(matches!(
+            event.kind,
+            ManagedEventKind::ProviderContextObserved { identity }
+                if identity.active_turn_id.as_deref() == Some("turn-1")
+        ));
+        let wait = ManagedWaitState::Approval {
+            request_id: "approval-1".to_string(),
+        };
+        assert!(
+            matches!(wait, ManagedWaitState::Approval { request_id } if request_id == "approval-1")
+        );
+    }
+    #[test]
+    fn reprise_sans_capacite_est_reconstruite_et_capacite_non_implantee_est_refusee() {
+        assert!(matches!(
+            continuation_fallback(None, ProviderOperation::Resume),
+            ManagedContinuation::Reconstructed { reason } if reason == "resume_not_attested"
+        ));
+        let observed = ProviderObservation {
+            binary_path: "/fixture/codex".to_string(),
+            binary_version: "fixture".to_string(),
+            binary_digest: "a".repeat(64),
+            contract_version: "fixture-v1".to_string(),
+            operations: vec![ProviderOperation::Resume],
+        };
+        assert!(matches!(
+            continuation_fallback(Some(observed), ProviderOperation::Resume),
+            ManagedContinuation::Refused { reason } if reason == "continuation_not_implemented"
+        ));
+    }
 }

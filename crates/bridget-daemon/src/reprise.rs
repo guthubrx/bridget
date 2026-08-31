@@ -272,7 +272,8 @@ fn send_ledger_both(
 
     let reg = WrapperToDaemon::Register {
         agent_type: "cli".to_string(),
-        name: Some(format!("cli-reprise-{}", std::process::id())),
+        identity_version: 2,
+        agent_id: uuid::Uuid::new_v4().to_string(),
         host: Some(crate::build_info::local_host()),
         transport: None,
         channel: bridget_transport::ChannelReport::Unknown,
@@ -645,7 +646,10 @@ fn render_recovery_losses(out: &mut String, snapshot: &RepriseSnapshot) {
 }
 
 fn format_agent(agent: &AgentInfo) -> String {
-    format!("{} ({}, {})", agent.name, agent.agent_type, agent.state)
+    format!(
+        "{} ({}, {})",
+        agent.display_name, agent.agent_type, agent.state
+    )
 }
 
 fn render_chantier(out: &mut String, snapshot: &RepriseSnapshot) {
@@ -1135,7 +1139,8 @@ mod tests {
                 running: true,
                 agents_inventory_available: true,
                 agents: vec![AgentInfo {
-                    name: "coderBridget".to_string(),
+                    agent_id: uuid::Uuid::new_v4().to_string(),
+                    display_name: "coderBridget".to_string(),
                     agent_type: "codex".to_string(),
                     connection_id: "conn-1".to_string(),
                     host: "local".to_string(),
@@ -1153,7 +1158,10 @@ mod tests {
                     rate_limits: Default::default(),
                     model_mismatch: None,
                     disk_space: None,
+                    provider: None,
                     persistent: None,
+                    execution: None,
+                    agent_link: None,
                 }],
                 message_count: Some(3),
                 build_id: Some("abc123".to_string()),

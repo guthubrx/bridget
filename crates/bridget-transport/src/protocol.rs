@@ -8,6 +8,14 @@ use bridget_core::BridgetMessage;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+#[path = "project_profile_protocol.rs"]
+pub mod project_profile;
+pub use project_profile::{
+    PROJECT_PROFILE_CONTRACT_VERSION, ProjectProfileAgent, ProjectProfileOutcome,
+    ProjectProfileProposal, ProjectProfileRefusal, ProjectProfileRequest, ProjectResourceKind,
+    ProjectResourceRef, ProjectRuntimeView, ResolvedProjectAgent, ResolvedProjectProfile,
+    ResolvedProjectResource,
+};
 /// Rôle négocié au début d'une connexion persistante avec le daemon.
 ///
 /// L'absence de négociation reste implicitement un wrapper pour préserver les
@@ -112,6 +120,8 @@ where
 pub const CLIENT_CONTRACT_VERSION: u16 = 1;
 /// Version du contrat de service du guichet Maicie.
 pub const SERVICE_CONTRACT_VERSION: u16 = 1;
+/// Version du contrat local de registre de projets.
+pub const PROJECT_REGISTRY_CONTRACT_VERSION: u16 = 1;
 /// Version requise uniquement lorsqu'une délégation transporte une cible de
 /// revue. Les autres opérations restent en v1 afin que `ServiceHello` et les
 /// clients historiques ne négocient pas une capacité qu'ils n'utilisent pas.
@@ -132,6 +142,128 @@ pub const COORDINATION_STREAM_VERSION: u16 = 2;
 pub enum ClientCapability {
     SendIdempotent,
     Lookup,
+    ExecutionControlV1,
+    ProjectRoundPolicyV1,
+}
+
+/// Commande neutre et versionnée du plan de contrôle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionControlOperation {
+    QueueOnly,
+    TriggerTurn,
+    SteerCurrent,
+    Interrupt,
+    PauseQueue,
+    ResumeQueue,
+    CancelQueued,
+}
+
+/// Commande de contrôle rejouable, toujours corrélée à une exécution Bridget.
+///
+/// Le message est présent uniquement pour une opération qui injecte du texte
+/// dans un tour fournisseur. Les opérations sans prompt le laissent absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionControlCommand {
+    pub version: u16,
+    pub command_id: String,
+    pub execution_id: String,
+    pub generation: u64,
+    pub revision: u64,
+    pub operation: ExecutionControlOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<BridgetMessage>,
+}
+
+/// Refus fermé : une commande absente de la négociation ne devient jamais un
+/// best effort fondé sur le nom du fournisseur.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionControlRefusal {
+    CapabilityNotNegotiated,
+    CapabilityUnavailable,
+    GenerationMismatch,
+    RevisionMismatch,
+    ExecutionNotFound,
+    TerminalExecution,
+    InvalidCommand,
+    TargetUnavailable,
+    MessageRequired,
+}
+
+/// Issue publique immédiate d'une commande de contrôle.
+///
+/// `OutcomeUnknown` indique la remise au wrapper sans résultat connu. `Accepted`
+/// ou `Refused` ne sont publiés qu'après son accusé durable. L'issue fournisseur
+/// reste une transition d'exécution corrélée, pas une promesse.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionControlOutcome {
+    Accepted,
+    Refused(ExecutionControlRefusal),
+    OutcomeUnknown,
+}
+
+/// Issue technique d une politique d autonomie. Ces états ne portent aucune
+/// décision de mission : ils expliquent uniquement pourquoi Bridget ne crée
+/// pas de tour supplémentaire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionBudgetOutcome {
+    Paused,
+    Blocked,
+    UsageLimit,
+    BudgetLimit,
+    Terminated,
+}
+
+/// Transition runtime corrélée à une exécution Bridget.
+///
+/// Les identifiants fournisseur restent hors de cette trame : le wrapper ne
+/// rapporte que le fait déjà normalisé par son adaptateur et le daemon vérifie
+/// état, révision et génération avant toute écriture durable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionStateTransition {
+    pub execution_id: String,
+    pub generation: u64,
+    pub expected_state: String,
+    pub expected_revision: u64,
+    pub next_state: String,
+    pub reason: String,
+    pub observed_at: i64,
+}
+
+/// Référence fournisseur attestée, attachée à une exécution Bridget précise.
+///
+/// Elle est distincte d'une transition d'état : le daemon vérifie le propriétaire
+/// et la génération avant de la persister et ne l'emploie jamais pour déduire
+/// une décision métier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionProviderContext {
+    pub execution_id: String,
+    pub generation: u64,
+    pub provider_kind: String,
+    pub execution_path: String,
+    pub observation: ProviderObservation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_turn_id: Option<String>,
+    pub observed_at: i64,
+}
+
+/// Corrélation Bridget d'une remise aval idempotente.
+///
+/// Le champ reste optionnel dans `DeliverIdempotent` afin que les remises
+/// historiques sans plan d'exécution conservent exactement leur comportement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionDeliveryContext {
+    pub execution_id: String,
+    pub generation: u64,
+    pub revision: u64,
 }
 
 /// Capacité explicitement négociée par un service local.
@@ -139,13 +271,459 @@ pub enum ClientCapability {
 #[serde(rename_all = "snake_case")]
 pub enum ServiceCapability {
     MaicieGuichet,
+    /// Registre local Bridget, exclusivement négocié par le service Maicie.
+    ProjectRegistryV1,
+    ProjectProfilesV1,
     CoordinationEventsV1,
     /// Relève bornée et cursée des faits 016. La v1 reste disponible pour les
     /// consommateurs qui n'ont besoin que du rejeu initial historique.
     CoordinationEventsV2,
 }
 
+/// Backend d'exécution admis par le registre de projets.
+///
+/// La v1 n'accepte qu'une racine validée directement sur l'hôte du daemon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectBackend {
+    Host,
+    Docker,
+}
+
+/// Politique hôte effectivement attestée pour une liaison Docker.
+///
+/// Les champs sont absents des projections historiques et ne transportent
+/// aucune option Docker libre, aucun chemin hôte ni aucun secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRuntimePolicyReference {
+    pub policy_id: String,
+    pub policy_version: u64,
+    pub policy_digest: String,
+    pub environment_epoch: u64,
+}
+
+/// Requête de liaison de projet portée par la variante dédiée du protocole.
+///
+/// Le contrôle de l'UID pair reste hors du JSON : il est effectué par le
+/// daemon sur la socket Unix avant de décoder cette charge métier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBindRequest {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub issued_at: i64,
+    pub deadline_at: i64,
+    pub project_id: String,
+    pub requested_root: String,
+    pub backend: ProjectBackend,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_version: Option<u64>,
+}
+
+/// État terminal d'une tentative de liaison de projet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectBindStatus {
+    Active,
+    BindingFailed,
+    RegistrationConflict,
+}
+
+/// Raisons fermées exposées par le registre de projets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRegistryRefusal {
+    InvalidContract,
+    InvalidProjectId,
+    InvalidAbsoluteRoot,
+    RootMissing,
+    RootNotDirectory,
+    RootOutsideAllowedPrefixes,
+    RootTooBroad,
+    RootAlreadyBound,
+    ProjectAlreadyBoundElsewhere,
+    RebindRequired,
+    ProjectDisabled,
+    EnvelopeMismatch,
+    IdempotencyExpired,
+    StoreUnavailable,
+    RegistrationConflict,
+    ProjectRegistryCapabilityMissing,
+    ProjectRegistryVersionUnsupported,
+    LocalOperatorRequired,
+    PeerUidMismatch,
+    ProjectRootPolicyUnavailable,
+    ProjectRootPolicyInvalid,
+    ProjectRootPolicyPermissionsInvalid,
+}
+
+/// Issue terminale d'une demande de liaison, sans chemin canonique exposé.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBindOutcome {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub project_id: String,
+    pub status: ProjectBindStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<ProjectBackend>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_policy: Option<ProjectRuntimePolicyReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProjectRegistryRefusal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub existing_project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub existing_binding_generation: Option<u64>,
+    pub observed_at: i64,
+}
+
+/// Opération administrative locale du registre. Les mutations restent
+/// strictement sur la connexion Service Maicie négociée; `List` et `Status`
+/// sont des lectures explicites et ne créent aucune liaison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectAdminOperation {
+    List,
+    Status,
+    Rebind,
+    Disable,
+    Activate,
+    ReviewProjectReconcile,
+}
+
+/// Requête versionnée dédiée aux lectures et mutations administratives. Une
+/// action porte un command_id stable, y compris quand elle n'écrit rien, pour
+/// garder diagnostics et retentatives corrélables sans détourner ServiceRequest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectAdminRequest {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub issued_at: i64,
+    pub deadline_at: i64,
+    pub operation: ProjectAdminOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_root: Option<String>,
+}
+
+/// Projection technique publique d'une liaison, sans racine hôte ni contenu
+/// de dépôt. La référence de racine auditée ne quitte jamais le store Bridget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectBindingStatus {
+    Active,
+    Disabled,
+    PathMissing,
+    PendingBinding,
+    BindingFailed,
+    Unregistered,
+}
+
+/// Référence opaque et durable d'un projet admis. Elle ne contient jamais de
+/// racine hôte, de domaine ou de donnée fournisseur: Bridget peut la propager
+/// sans devenir autorité métier sur le projet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectReference {
+    pub project_id: String,
+    pub binding_generation: u64,
+}
+
+/// Synthèse non sensible du dernier audit durable d une liaison projet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectAuditOperationKind {
+    Register,
+    Rebind,
+    Activate,
+    Disable,
+    ReviewProjectReconcile,
+}
+
+/// Issue fermée de la synthèse d audit publiée au relais administratif local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectAuditOutcomeKind {
+    Applied,
+    Refused,
+}
+
+/// Dernier fait d audit d une liaison, sans command_id ni référence de racine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectAuditProjection {
+    pub operation: ProjectAuditOperationKind,
+    pub outcome: ProjectAuditOutcomeKind,
+    pub binding_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProjectRegistryRefusal>,
+    pub observed_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBindingProjection {
+    pub project_id: String,
+    /// Racine canonique exposée uniquement par les surfaces administratives locales.
+    /// Elle ne transite jamais par MCP ni par une API réseau générale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_root: Option<String>,
+    pub state: ProjectBindingStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<ProjectBackend>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_policy: Option<ProjectRuntimePolicyReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProjectRegistryRefusal>,
+    /// Dernier audit durable, réservé à la projection administrative locale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_audit: Option<ProjectAuditProjection>,
+    pub observed_at: i64,
+}
+
+/// Issue corrélée de l'administration du registre. Une mutation effective
+/// renvoie une seule projection et un rejet ne fabrique jamais d'audit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectAdminOutcome {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub operation: ProjectAdminOperation,
+    pub bindings: Vec<ProjectBindingProjection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProjectRegistryRefusal>,
+    pub observed_at: i64,
+}
+
+/// Version du contrat local de politique de ronde par projet.
+pub const PROJECT_ROUND_POLICY_CONTRACT_VERSION: u16 = 1;
+
+/// Opération fermée du contrôle de ronde. Les lectures ne modifient jamais la
+/// politique et les mutations exigent la génération exacte de la liaison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRoundOperation {
+    List,
+    Status,
+    Enable,
+    Disable,
+}
+
+/// Requête locale corrélée. project_id est absent uniquement pour List et la
+/// génération est obligatoire uniquement pour Enable et Disable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRoundRequest {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub issued_at: i64,
+    pub deadline_at: i64,
+    pub operation: ProjectRoundOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_generation: Option<u64>,
+}
+
+/// Refus fermé du contrôle de ronde, sans chemin hôte ni détail fournisseur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRoundRefusal {
+    InvalidContract,
+    PolicyDisabled,
+    InvalidRequest,
+    IdempotencyExpired,
+    PeerUidMismatch,
+    ProjectNotFound,
+    ProjectInactive,
+    BindingGenerationMismatch,
+    EnvelopeMismatch,
+    StoreUnavailable,
+}
+
+/// Résultat opératoire fermé du dernier passage effectivement admis par la
+/// politique. Il décrit la remise de la ronde, jamais la réponse d'un agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRoundDispatchState {
+    Deposited,
+    Refused,
+    Indeterminate,
+}
+
+/// Projection effective. configured distingue une désactivation explicite de
+/// l'état sûr par défaut, lui aussi disabled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRoundProjection {
+    pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_generation: Option<u64>,
+    pub active: bool,
+    pub configured: bool,
+    pub enabled: bool,
+    pub revision: u64,
+    pub updated_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_occurrence_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_dispatch_state: Option<ProjectRoundDispatchState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_dispatch_observed_at: Option<i64>,
+}
+
+/// Issue rejouable d'une commande de politique.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRoundOutcome {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub operation: ProjectRoundOperation,
+    pub policies: Vec<ProjectRoundProjection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProjectRoundRefusal>,
+    pub observed_at: i64,
+}
+
+/// Période canonique de la ronde globale. L'occurrence est calculée par le
+/// client, puis contrôlée par le daemon avant toute remise.
+pub const PROJECT_ROUND_INTERVAL_SECS: i64 = 7 * 60;
+
+/// Demande interne d'émission d'une occurrence pour une cible déjà sélectionnée.
+/// La référence projet est structurée et ne peut pas être déduite du texte.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRoundDispatchRequest {
+    pub contract_version: u16,
+    pub occurrence_at: i64,
+    pub project: ProjectReference,
+}
+
+/// Issue d'une occurrence projet. Le résultat de remise reste celui du socle
+/// idempotent commun aux fournisseurs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRoundDispatchOutcome {
+    pub contract_version: u16,
+    pub occurrence_at: i64,
+    pub project: ProjectReference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<IdempotencyIssue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProjectRoundRefusal>,
+    pub observed_at: i64,
+}
+
+/// Opération locale explicitement bornée sur l'environnement Docker d'un projet.
+/// Elle n'accepte ni argument Docker, ni chemin hôte, ni image fournie par l'appelant.
+pub const PROJECT_RUNTIME_CONTRACT_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRuntimeOperation {
+    Prepare,
+    Status,
+    Stop,
+    Remove,
+    Recreate,
+    SwitchBackend,
+}
+
+/// Requête locale versionnée du pilote d'environnement. Seul le daemon lit la
+/// liaison durable et la politique hôte fermée correspondante.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRuntimeRequest {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub issued_at: i64,
+    pub deadline_at: i64,
+    pub operation: ProjectRuntimeOperation,
+    pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ResolvedProjectProfile>,
+}
+
+/// Refus fermé du pilote Docker, sans détail de commande ni chemin local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRuntimeRefusal {
+    InvalidContract,
+    InvalidProjectId,
+    IdempotencyExpired,
+    PeerUidMismatch,
+    ProjectNotDocker,
+    ProjectNotFound,
+    PolicyUnavailable,
+    EnvironmentBusy,
+    PrepareFailed,
+    RecreateFailed,
+    StoreUnavailable,
+}
+
+/// Projection d'exploitation d'un environnement. Les références de racine,
+/// les identifiants complets de conteneur et les détails Docker restent privés
+/// au daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRuntimeOutcome {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub project_id: String,
+    pub operation: ProjectRuntimeOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_policy: Option<ProjectRuntimePolicyReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProjectRuntimeRefusal>,
+    pub observed_at: i64,
+}
+
 /// Refus structurés de la frontière réservée aux services.
+/// Version fermée du handshake du socket privé d'un environnement Docker.
+pub const RUNTIME_INGRESS_CONTRACT_VERSION: u16 = 1;
+
+/// Preuve déclarée par le wrapper avant toute inscription sur l'ingress privé.
+/// Le daemon compare chaque champ à l'environnement durable et à la réservation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeIngressHandshake {
+    pub contract_version: u16,
+    pub project_id: String,
+    pub binding_generation: u64,
+    pub container_id: String,
+    pub environment_epoch: u64,
+    pub agent_generation: u64,
+    pub instance_id: String,
+}
+
+/// Refus fermé de l'ingress. Aucune information de chemin hôte ou Docker n'est
+/// rendue au conteneur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeIngressRefusal {
+    InvalidContract,
+    IdentityMismatch,
+    GenerationMismatch,
+    EnvironmentEpochStale,
+    ReservationMissing,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ServiceRefusal {
@@ -609,6 +1187,15 @@ pub enum SpawnRefusal {
         #[serde(default)]
         requested_from: String,
     },
+    /// Le `cwd` d'un lancement projet ne correspond ni à la racine liée ni à
+    /// un worktree Git rattaché à cette racine. Aucun chemin hôte n'est révélé
+    /// au demandeur.
+    ProjectCwdMismatch {
+        project_id: String,
+    },
+    DockerRuntimeUnavailable {
+        project_id: String,
+    },
     NegotiationFailed {
         detail: String,
     },
@@ -629,6 +1216,43 @@ pub enum StopOutcome {
     NotManaged,
     NotFound,
     Timeout { state: String },
+}
+
+/// Résultat fermé d'une relance du même agent logique.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RelaunchOutcome {
+    Started { agent_id: String, generation: u64 },
+    AlreadyRunning,
+    NotManaged,
+    NotFound,
+    NotRelaunchable { reason: String },
+    Rejected { reason: SpawnRefusal },
+    Timeout { state: String },
+}
+
+/// Résultat fermé du retrait d'un agent de la flotte visible.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DecommissionOutcome {
+    Decommissioned,
+    DecommissionedForced { survivors_killed: usize },
+    AlreadyDecommissioned,
+    NotManaged,
+    NotFound,
+    Timeout { state: String },
+}
+
+/// Résultat fermé de l'import explicite d'un ancien agent arrêté dans le
+/// registre durable du cycle de vie.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AdoptStoppedOutcome {
+    Adopted { generation: u64 },
+    AlreadyManaged,
+    NotStopped,
+    NoManagedHistory,
+    IncompleteHistory { reason: String },
 }
 
 /// Issue calculée d'une opération client idempotente. `OutcomeUnknown` est
@@ -767,12 +1391,92 @@ mod base64_bytes {
     }
 }
 
+/// Contexte de propriété transmis avec une création d'équipier. Bridget le
+/// persiste comme un fait runtime sans en déduire de transition métier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpawnOwnership {
+    pub parent_instance_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectReference>,
+    pub role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_children: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_depth: Option<usize>,
+}
+
+/// Événement cursé de la descendance d'un wrapper. Le parent est déduit de la
+/// connexion qui interroge et n'est donc jamais choisi par son pair.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentLinkEventFrame {
+    pub cursor: u64,
+    pub event_id: String,
+    pub link_id: String,
+    pub child_instance_id: String,
+    pub state: String,
+    pub observed_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectReference>,
+}
+
+/// Catégorie fermée d'un fait runtime d'enfant destiné à son coordinateur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegatedRuntimeEventKind {
+    Warning,
+    Failed,
+}
+
+impl DelegatedRuntimeEventKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Warning => "warning",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "warning" => Some(Self::Warning),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// Projection durable, redacted et cursée d'un incident runtime délégué.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegatedRuntimeEventFrame {
+    pub cursor: u64,
+    pub event_id: String,
+    pub link_id: String,
+    pub child_instance_id: String,
+    pub child_execution_id: String,
+    pub kind: DelegatedRuntimeEventKind,
+    pub code: String,
+    pub reference: String,
+    pub observed_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectReference>,
+}
+
 /// Messages envoyés par le wrapper vers le daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
     /// Négocie un rôle avant l'usage d'une connexion persistante.
-    RoleHandshake { role: ConnectionRole },
+    RoleHandshake {
+        role: ConnectionRole,
+    },
     /// Négocie le contrat client public, uniquement après RoleAccepted(Client).
     ClientHello {
         contract_version: u16,
@@ -785,6 +1489,49 @@ pub enum WrapperToDaemon {
         service: String,
         issuer_scope: String,
         capabilities: Vec<ServiceCapability>,
+    },
+    /// Demande locale Maicie vers Bridget. Elle ne reprend pas le sens inverse
+    /// de `ServiceRequest`, qui reste un dépôt Bridget vers le guichet Maicie.
+    #[serde(rename = "project_registry_request")]
+    ProjectRegistryRequest {
+        request: ProjectBindRequest,
+    },
+    /// Lecture ou mutation administrative du registre, toujours sur le même
+    /// rôle Service authentifié que l'enregistrement initial.
+    #[serde(rename = "project_registry_admin_request")]
+    ProjectRegistryAdminRequest {
+        request: ProjectAdminRequest,
+    },
+    /// Lecture ou mutation locale de la ronde par projet.
+    #[serde(rename = "project_round_request")]
+    ProjectRoundRequest {
+        request: ProjectRoundRequest,
+    },
+    /// Émission interne d'une occurrence déjà filtrée par le registre projet.
+    #[serde(rename = "project_round_dispatch")]
+    ProjectRoundDispatch {
+        request: ProjectRoundDispatchRequest,
+    },
+    #[serde(rename = "project_profile_request")]
+    ProjectProfileRequest {
+        request: ProjectProfileRequest,
+    },
+    /// Commande locale du pilote Docker. L'authentification reste fondée sur
+    /// le pair Unix observé par le daemon, jamais sur un champ JSON.
+    #[serde(rename = "project_runtime_request")]
+    ProjectRuntimeRequest {
+        request: ProjectRuntimeRequest,
+    },
+    /// Handshake obligatoire avant toute inscription via le socket privé d'un
+    /// environnement Docker. Il n'est jamais envoyé sur le socket utilisateur.
+    #[serde(rename = "runtime_ingress_hello")]
+    RuntimeIngressHello {
+        hello: RuntimeIngressHandshake,
+    },
+    // Verification non consommatrice avant lecture locale dun secret process-env.
+    #[serde(rename = "runtime_ingress_preflight")]
+    RuntimeIngressPreflight {
+        hello: RuntimeIngressHandshake,
     },
     /// Ouvre une relève bornée des faits de coordination v2. Le curseur est
     /// opaque pour le consommateur : Bridget seul lui donne un ordre durable.
@@ -856,6 +1603,21 @@ pub enum WrapperToDaemon {
         operation_kind: String,
         idempotency_key: String,
     },
+    /// Commande de contrôle corrélée réservée aux clients ayant négocié
+    /// `execution_control_v1`.
+    ControlExecution {
+        command: ExecutionControlCommand,
+    },
+    /// Le wrapper a traité l'ordre de contrôle. Il ne rapporte pas l'issue du
+    /// fournisseur, qui reste publiée comme transition d'exécution.
+    ControlExecutionReported {
+        issuer_scope: String,
+        command_id: String,
+        execution_id: String,
+        accepted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refusal_reason: Option<String>,
+    },
     /// Accusé durable de remise envoyé exclusivement par un wrapper.
     DeliverAcked {
         delivery_id: String,
@@ -867,10 +1629,35 @@ pub enum WrapperToDaemon {
         delivery_generation: u64,
     },
     /// Ordre idempotent de lancement d'un équipier supervisé.
+    /// Attend un changement de descendance du wrapper connecté. Le curseur
+    /// permet une reprise exacte après déconnexion ; le délai est borné daemon.
+    WaitAgentLinks {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after_cursor: Option<u64>,
+        timeout_ms: u64,
+    },
+    /// Fait runtime redacted émis par l'enfant. Le daemon déduit le lien et
+    /// le parent depuis la connexion, jamais depuis cette trame.
+    #[serde(rename = "delegated_runtime_event")]
+    DelegatedRuntimeEvent {
+        execution_id: String,
+        kind: DelegatedRuntimeEventKind,
+        code: String,
+        reference: String,
+    },
+    /// Accusé de la remise observée par le wrapper parent.
+    #[serde(rename = "delegated_runtime_event_acknowledged")]
+    DelegatedRuntimeEventAcknowledged {
+        event_id: String,
+    },
     SpawnOrder {
         agent_type: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        name: Option<String>,
+        project: Option<ProjectReference>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ownership: Option<SpawnOwnership>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
         cwd: String,
         persistent: bool,
         command_id: String,
@@ -878,13 +1665,38 @@ pub enum WrapperToDaemon {
         deadline_at: i64,
     },
     /// Ordre corrélé d'arrêt d'un équipier supervisé.
-    StopOrder { name: String, command_id: String },
+    StopOrder {
+        agent_id: String,
+        command_id: String,
+    },
+    /// Relance corrélée d'un agent géré durablement arrêté.
+    RelaunchOrder {
+        agent_id: String,
+        command_id: String,
+    },
+    /// Retrait corrélé de la flotte visible, sans purge d'historique.
+    DecommissionOrder {
+        agent_id: String,
+        command_id: String,
+    },
+    /// Migration explicite d'un agent historique arrêté vers le registre v4.
+    AdoptStoppedOrder {
+        agent_id: String,
+        command_id: String,
+    },
     /// Ouvrir un abonnement à la vue d'un équipier.
-    Subscribe { agent: String, window: AttachWindow },
+    Subscribe {
+        agent: String,
+        window: AttachWindow,
+    },
     /// Fermer un abonnement sans fermer la connexion attach.
-    Unsubscribe { subscription_id: String },
+    Unsubscribe {
+        subscription_id: String,
+    },
     /// Confirmation du wrapper : le daemon peut alors l'annoncer à la vue.
-    Subscribed { subscription_id: String },
+    Subscribed {
+        subscription_id: String,
+    },
     /// Fragment binaire d'une ligne JSONL versionnée.
     JournalFragment {
         subscription_id: String,
@@ -939,11 +1751,13 @@ pub enum WrapperToDaemon {
     },
     /// S'enregistrer auprès du daemon.
     Register {
+        /// Version du contrat d'identité. La version 2 interdit tout nom de
+        /// routage historique et évite qu'un wrapper ancien soit admis comme
+        /// une nouvelle identité.
+        identity_version: u8,
         agent_type: String,
-        /// Identité déclarée une fois à l'ouverture de la connexion. Le daemon
-        /// ne vérifie pas encore la filiation du processus pair : un client
-        /// local parlant le protocole brut peut donc déclarer un autre nom.
-        name: Option<String>,
+        /// Identifiant opaque créé par Bridget et stable sur les reconnexions.
+        agent_id: String,
         #[serde(default)]
         host: Option<String>,
         #[serde(default)]
@@ -990,20 +1804,37 @@ pub enum WrapperToDaemon {
     /// Fait d'espace disque relevé par le wrapper juste après son
     /// enregistrement. Informatif uniquement : le daemon le projette dans
     /// l'annuaire sans l'utiliser pour accepter, refuser ou arrêter un agent.
-    DiskSpace { fact: DiskSpaceFact },
+    DiskSpace {
+        fact: DiskSpaceFact,
+    },
     /// Le pilote a ouvert son journal append-only pour cette connexion. Ce
     /// signal distinct du Register évite de déduire attach du mode ACP.
     JournalReady,
+    /// Fait fournisseur corrélé à une exécution. Les versions anciennes ne
+    /// l'émettent pas, ce qui laisse le contexte explicitement absent.
+    ExecutionProviderObserved {
+        context: ExecutionProviderContext,
+    },
     /// Se désenregistrer.
     Unregister,
-    /// Renommer un agent déjà enregistré.
-    Rename { current_name: String, name: String },
     /// Envoyer un message à un autre agent.
     Send(BridgetMessage),
     /// Refus terminal asynchrone d'une livraison déjà acquittée par le daemon.
-    DeliveryRejected { id: String, reason: String },
+    DeliveryRejected {
+        id: String,
+        reason: String,
+    },
     /// Transition dédiée du tour ACP, distincte de l'observation `Runtime`.
-    TurnState { in_progress: bool },
+    /// Fait runtime corrélé émis par un wrapper managed.
+    ///
+    /// Le daemon applique cette transition par comparaison état-révision-
+    /// génération et ignore donc une sortie tardive ou mal corrélée.
+    ExecutionStateChanged {
+        transition: ExecutionStateTransition,
+    },
+    TurnState {
+        in_progress: bool,
+    },
     /// Annuler une demande suivie appartenant à l'agent courant.
     CancelRequest {
         id: String,
@@ -1011,10 +1842,16 @@ pub enum WrapperToDaemon {
         reason: Option<String>,
     },
     /// Lister les demandes suivies de l'agent courant.
-    ListRequests { sender: String, limit: u16 },
+    ListRequests {
+        sender: String,
+        limit: u16,
+    },
     /// Projeter le ledger détenu par le daemon, pour un client fédéré qui ne
     /// possède pas sa base SQLite locale.
-    LedgerProjection { scope: LedgerScope, limit: u16 },
+    LedgerProjection {
+        scope: LedgerScope,
+        limit: u16,
+    },
     /// Signal de vie (périodique).
     Heartbeat,
     /// Demander la liste des agents connectés.
@@ -1049,7 +1886,10 @@ pub enum WrapperToDaemon {
     /// ajoutée. L'absence de ce message n'autorise aucun verdict d'écart.
     /// Le daemon compare au modèle épinglé et n'en tire aucune décision
     /// automatique — affichage et journal seulement.
-    ServedModel { agent: String, model: String },
+    ServedModel {
+        agent: String,
+        model: String,
+    },
     /// Rapporter un fait de limite attesté par le pilote d'un agent.
     ///
     /// L'absence de ce message ne permet aucune déduction : une limite inconnue
@@ -1075,13 +1915,24 @@ pub enum WrapperToDaemon {
     Usage {
         agent: String,
         input_tokens: u64,
+        /// Corrélation facultative vers l exécution qui a produit l échantillon.
+        /// Sans elle, le fait reste consultable par agent mais ne peut pas
+        /// alimenter un budget d autonomie.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution_generation: Option<u64>,
         output_tokens: u64,
         cache_creation_input_tokens: u64,
         cache_read_input_tokens: u64,
+        /// Fournisseur choisi par le wrapper au moment de l'échantillon. Les
+        /// wrappers historiques ne le transmettent pas : l'absence reste
+        /// explicite et ne doit jamais être remplacée par une inférence UI.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_kind: Option<String>,
         source: UsageSource,
     },
     /// Agréger les échantillons d'usage d'un agent dans une fenêtre fermée.
-    ///
     /// Réponse : `UsageWindowResult`. Aucun échantillon → `aggregate: None`
     /// (inconnu), jamais un agrégat à zéro inventé.
     UsageWindow {
@@ -1240,6 +2091,10 @@ pub struct AdapterCapabilities {
     pub execution_paths: Vec<String>,
     #[serde(default)]
     pub models: BTreeMap<String, ModelCapabilities>,
+    /// Faits de fournisseur relevés avant activation. Leur absence garde la
+    /// compatibilité de registre mais interdit toute opération qui les exige.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed: Option<ProviderObservation>,
 }
 
 impl Default for AdapterCapabilities {
@@ -1250,8 +2105,52 @@ impl Default for AdapterCapabilities {
         Self {
             execution_paths: vec!["acp".to_string()],
             models: BTreeMap::new(),
+            observed: None,
         }
     }
+}
+
+/// Opération effectivement attestée par une version fournisseur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderOperation {
+    Interrupt,
+    Steer,
+    Resume,
+    Fork,
+    Approval,
+}
+
+/// Baseline versionnée, sans environnement ni contenu utilisateur.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderObservation {
+    pub binary_path: String,
+    pub binary_version: String,
+    pub binary_digest: String,
+    pub contract_version: String,
+    #[serde(default)]
+    pub operations: Vec<ProviderOperation>,
+}
+impl ProviderObservation {
+    /// Une capacité absente ou refusée reste indisponible. Cette vérification
+    /// commune évite que chaque superviseur interprète la baseline autrement.
+    pub fn supports(&self, operation: ProviderOperation) -> bool {
+        self.operations.contains(&operation)
+    }
+}
+
+/// Vue publique réduite d'une baseline fournisseur. Les chemins et empreintes
+/// restent dans le registre de lancement: l'UI ne reçoit que la version, le
+/// contrat et les opérations effectivement attestées.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderUiProjection {
+    pub binary_version: String,
+    pub contract_version: String,
+    #[serde(default)]
+    pub operations: Vec<ProviderOperation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
 }
 
 /// Capacités opaques déclarées pour un modèle précis, sans substitution.
@@ -1272,6 +2171,9 @@ pub struct ResolvedAgentDefinition {
     /// persistées ni exposées dans la preuve publique.
     pub pass_env: Vec<String>,
     pub permissions: String,
+    /// Non-secret profile directory passed to the spawn without serializing its secrets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_config_dir: Option<String>,
     pub queue_capacity: usize,
     pub notify_timeout_secs: u64,
     pub mcp: ResolvedMcpDefinition,
@@ -1284,6 +2186,14 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    #[serde(rename = "runtime_ingress_accepted")]
+    RuntimeIngressAccepted {
+        project_id: String,
+        binding_generation: u64,
+        environment_epoch: u64,
+    },
+    #[serde(rename = "runtime_ingress_rejected")]
+    RuntimeIngressRejected { reason: RuntimeIngressRefusal },
     /// Le rôle demandé est accepté pour cette connexion.
     RoleAccepted { role: ConnectionRole },
     /// Contrat et capacités réellement négociés avec un client public.
@@ -1306,6 +2216,24 @@ pub enum DaemonToWrapper {
     },
     /// Refus motivé de la négociation ou de la matrice de service.
     ServiceRejected { reason: ServiceRefusal },
+    /// Issue terminale du registre local, corrélée à la commande Maicie.
+    #[serde(rename = "project_registry_outcome")]
+    ProjectRegistryOutcome { outcome: ProjectBindOutcome },
+    /// Issue corrélée d'une lecture ou mutation administrative du registre.
+    #[serde(rename = "project_registry_admin_outcome")]
+    ProjectRegistryAdminOutcome { outcome: ProjectAdminOutcome },
+    /// Issue locale de la politique de ronde par projet.
+    #[serde(rename = "project_round_outcome")]
+    ProjectRoundOutcome { outcome: ProjectRoundOutcome },
+    #[serde(rename = "project_round_dispatch_outcome")]
+    ProjectRoundDispatchOutcome {
+        outcome: ProjectRoundDispatchOutcome,
+    },
+    #[serde(rename = "project_profile_outcome")]
+    ProjectProfileOutcome { outcome: ProjectProfileOutcome },
+    /// Issue bornée d'une opération locale d'environnement Docker.
+    #[serde(rename = "project_runtime_outcome")]
+    ProjectRuntimeOutcome { outcome: ProjectRuntimeOutcome },
     /// Issue durable ou calculée d'une opération du guichet.
     #[serde(rename = "guichet_result")]
     GuichetResult {
@@ -1415,10 +2343,34 @@ pub enum DaemonToWrapper {
         idempotency_key: String,
         issue: IdempotencyIssue,
     },
+    /// Issue immédiate de la validation Bridget d'une commande de contrôle.
+    ControlExecutionResult {
+        command_id: String,
+        execution_id: String,
+        outcome: ExecutionControlOutcome,
+    },
+    /// Ordre à destination du wrapper qui porte l'exécution ciblée.
+    /// Delta de descendance du wrapper demandeur, lu ou réveillé à partir du
+    /// journal durable. Une réponse vide indique uniquement le timeout borné.
+    AgentLinkEvents {
+        events: Vec<AgentLinkEventFrame>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        through_cursor: Option<u64>,
+        timed_out: bool,
+    },
+    /// Fait runtime durable à convertir en notification système non intrusive.
+    #[serde(rename = "delegated_runtime_event")]
+    DelegatedRuntimeEvent { event: DelegatedRuntimeEventFrame },
+    ///
+    /// Cette trame ne franchit jamais la frontière client publique.
+    ControlExecutionDispatch {
+        issuer_scope: String,
+        command: ExecutionControlCommand,
+    },
     /// Succès d'un spawn, émis seulement après le `Register` réel.
     SpawnAccepted {
         command_id: String,
-        name: String,
+        agent_id: String,
         /// `None` n'est toléré que pour le rejeu d'une issue créée avant la
         /// migration du registre résolu ; tout nouveau spawn fournit `Some`.
         definition: Option<ResolvedAgentDefinition>,
@@ -1433,6 +2385,21 @@ pub enum DaemonToWrapper {
         command_id: String,
         outcome: StopOutcome,
     },
+    /// Issue synchrone d'une relance, émise après connexion réelle.
+    RelaunchResult {
+        command_id: String,
+        outcome: RelaunchOutcome,
+    },
+    /// Issue synchrone d'un décommissionnement.
+    DecommissionResult {
+        command_id: String,
+        outcome: DecommissionOutcome,
+    },
+    /// Issue synchrone de l'adoption d'un agent historique arrêté.
+    AdoptStoppedResult {
+        command_id: String,
+        outcome: AdoptStoppedOutcome,
+    },
     /// Remise aval réservée au wrapper destinataire.
     DeliverIdempotent {
         delivery_id: String,
@@ -1440,6 +2407,8 @@ pub enum DaemonToWrapper {
         delivery_generation: u64,
         expires_at: i64,
         message: BridgetMessage,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution: Option<ExecutionDeliveryContext>,
     },
     /// Souscription du daemon vers le wrapper lecteur du journal.
     Subscribe {
@@ -1502,12 +2471,21 @@ pub enum DaemonToWrapper {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         location: Option<String>,
     },
-    /// Confirmation d'enregistrement avec le nom final.
-    Registered { name: String },
-    /// Confirmation d'un renommage.
-    Renamed { old_name: String, name: String },
+    /// Confirmation d'enregistrement avec l'identifiant stable.
+    Registered { agent_id: String },
     /// Livrer un message à l'agent.
     Deliver(BridgetMessage),
+    /// Livrer un travail dont l'exécution durable a déjà été admise.
+    ///
+    /// Les wrappers historiques continuent de recevoir Deliver. Cette
+    /// variante n'est utilisée qu'après activation explicite de la double
+    /// écriture du plan de contrôle.
+    DeliverExecution {
+        message: BridgetMessage,
+        execution_id: String,
+        generation: u64,
+        revision: u64,
+    },
     /// Retirer un message de la file du transport, sans l'injecter.
     CancelDelivery { id: String, reason: String },
     /// Acquittement d'un envoi.
@@ -1678,7 +2656,10 @@ pub struct DiskSpaceFact {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "AgentInfoWire")]
 pub struct AgentInfo {
-    pub name: String,
+    /// Identifiant opaque utilisé pour les opérations techniques.
+    pub agent_id: String,
+    /// Nom humain projeté par le daemon. Les clients ne reconstruisent jamais cette valeur.
+    pub display_name: String,
     pub agent_type: String,
     pub connection_id: String,
     pub host: String,
@@ -1732,6 +2713,17 @@ pub struct AgentInfo {
     /// « indéterminable » d'un daemon trop ancien pour publier le champ.
     #[serde(default)]
     pub persistent: Option<bool>,
+    /// Baseline fournisseur réduite, absente tant qu'elle n'est pas attestée.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderUiProjection>,
+    /// Projection durable de l'exécution en cours, absente tant que la bascule
+    /// de double écriture n'est pas activée pour l'agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ExecutionUiProjection>,
+    /// Relation durable entre cet agent, son parent et son mandat. Absente pour
+    /// les agents qui ne proviennent pas d'un spawn propriétaire Bridget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_link: Option<AgentLinkUiProjection>,
 }
 
 /// Forme fil de lecture : accepte l'ancien champ mono-fenêtre `rate_limit`
@@ -1739,7 +2731,8 @@ pub struct AgentInfo {
 /// sans inventer de fenêtre.
 #[derive(Debug, Deserialize)]
 struct AgentInfoWire {
-    name: String,
+    agent_id: String,
+    display_name: String,
     agent_type: String,
     connection_id: String,
     host: String,
@@ -1767,11 +2760,17 @@ struct AgentInfoWire {
     #[serde(default)]
     rate_limit: Option<RateLimitFact>,
     #[serde(default)]
+    agent_link: Option<AgentLinkUiProjection>,
+    #[serde(default)]
     model_mismatch: Option<ModelMismatchFact>,
+    #[serde(default)]
+    execution: Option<ExecutionUiProjection>,
     #[serde(default)]
     disk_space: Option<DiskSpaceFact>,
     #[serde(default)]
     persistent: Option<bool>,
+    #[serde(default)]
+    provider: Option<ProviderUiProjection>,
 }
 
 impl From<AgentInfoWire> for AgentInfo {
@@ -1782,7 +2781,8 @@ impl From<AgentInfoWire> for AgentInfo {
             wire.rate_limit.into_iter().collect()
         };
         Self {
-            name: wire.name,
+            agent_id: wire.agent_id,
+            display_name: wire.display_name,
             agent_type: wire.agent_type,
             connection_id: wire.connection_id,
             host: wire.host,
@@ -1794,15 +2794,60 @@ impl From<AgentInfoWire> for AgentInfo {
             state: wire.state,
             last_seen_secs: wire.last_seen_secs,
             reconnect_count: wire.reconnect_count,
+            execution: wire.execution,
             domain: wire.domain,
+            agent_link: wire.agent_link,
             model: wire.model,
             effort: wire.effort,
             rate_limits,
             model_mismatch: wire.model_mismatch,
             disk_space: wire.disk_space,
             persistent: wire.persistent,
+            provider: wire.provider,
         }
     }
+}
+/// Vue compacte d'une exécution durable pour l'annuaire public.
+/// Les absences restent des absences attestées : aucune activité fournisseur ne
+/// se déduit de la seule présence réseau.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionUiProjection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_age_secs: Option<u64>,
+    #[serde(default)]
+    pub queue_depth: u64,
+    /// Mode native, forked ou reconstructed, absent sans ascendance attestée.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation_mode: Option<String>,
+}
+
+/// Projection publique d'un lien d'agent. Elle rend visibles l'ascendance et
+/// le mandat sans déduire un état métier depuis la présence du processus.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentLinkUiProjection {
+    pub link_id: String,
+    pub parent_instance_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_id: Option<String>,
+    /// Référence projet reçue à l'admission du spawn. Le domaine historique
+    /// reste volontairement un champ distinct de l'annuaire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectReference>,
+    pub role: String,
+    pub agent_path: String,
+    pub state: String,
+    /// Descendants directs dont le lien propriétaire reste ouvert.
+    pub direct_descendants: u64,
+    /// Descendants ouverts à toute profondeur, sans inférer de coût ou d'état.
+    pub descendants: u64,
 }
 
 /// Fait de limite exposé dans l'annuaire. Les chaînes fournisseur restent
@@ -2071,8 +3116,9 @@ mod tests {
     #[test]
     fn test_encode_decode_register() {
         let msg = WrapperToDaemon::Register {
+            identity_version: 2,
             agent_type: "codex".to_string(),
-            name: None,
+            agent_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             host: Some("test-host".to_string()),
             transport: Some("unix".to_string()),
             channel: ChannelReport::Known("unix".to_string()),
@@ -2089,8 +3135,9 @@ mod tests {
         let decoded: WrapperToDaemon = decode(&json).unwrap();
         match decoded {
             WrapperToDaemon::Register {
+                identity_version,
                 agent_type,
-                name,
+                agent_id,
                 host,
                 transport,
                 channel,
@@ -2102,8 +3149,9 @@ mod tests {
                 turn_in_progress,
                 journal_available,
             } => {
+                assert_eq!(identity_version, 2);
                 assert_eq!(agent_type, "codex");
-                assert!(name.is_none());
+                assert_eq!(agent_id, "550e8400-e29b-41d4-a716-446655440000");
                 assert_eq!(host.as_deref(), Some("test-host"));
                 assert_eq!(transport.as_deref(), Some("unix"));
                 assert_eq!(channel.as_deref(), Some("unix"));
@@ -2120,57 +3168,35 @@ mod tests {
     }
 
     #[test]
-    fn register_historique_conserve_un_mode_inconnu() {
-        let json =
-            r#"{"type":"Register","agent_type":"codex","name":null,"turn_in_progress":false}"#;
-        let decoded: WrapperToDaemon = decode(json).unwrap();
-        assert!(matches!(
-            decoded,
-            WrapperToDaemon::Register {
-                channel: ChannelReport::Omitted,
-                mode: None,
-                location: None,
-                ..
-            }
-        ));
+    fn register_historique_est_refuse_sans_contrat_identite_v2() {
+        let json = r#"{\"type\":\"Register\",\"agent_type\":\"codex\",\"name\":null}"#;
+        assert!(decode::<WrapperToDaemon>(json).is_err());
     }
 
     #[test]
-    fn spec_024_register_distingue_omission_inconnu_et_attestation() {
-        let omitted_json = r#"{"type":"Register","agent_type":"ui","name":"humain"}"#;
-        let omitted: WrapperToDaemon = decode(omitted_json).unwrap();
+    fn register_v2_conserve_la_distinction_de_canal() {
+        let base = "\"type\":\"Register\",\"identity_version\":2,\"agent_type\":\"ui\",\"agent_id\":\"550e8400-e29b-41d4-a716-446655440000\"";
+        let omitted: WrapperToDaemon = decode(&format!("{{{base}}}")).unwrap();
         assert!(matches!(
-            &omitted,
+            omitted,
             WrapperToDaemon::Register {
                 channel: ChannelReport::Omitted,
                 ..
             }
         ));
-        assert!(!encode(&omitted).unwrap().contains("\"channel\""));
-
-        let unknown_json =
-            r#"{"type":"Register","agent_type":"ui","name":"humain","channel":null}"#;
-        let unknown: WrapperToDaemon = decode(unknown_json).unwrap();
+        let unknown: WrapperToDaemon = decode(&format!("{{{base},\"channel\":null}}")).unwrap();
         assert!(matches!(
-            &unknown,
+            unknown,
             WrapperToDaemon::Register {
                 channel: ChannelReport::Unknown,
                 ..
             }
         ));
-        assert!(encode(&unknown).unwrap().contains("\"channel\":null"));
-
-        let known_json =
-            r#"{"type":"Register","agent_type":"ui","name":"humain","channel":"ssh-unix"}"#;
-        let known: WrapperToDaemon = decode(known_json).unwrap();
-        assert!(matches!(
-            &known,
-            WrapperToDaemon::Register {
-                channel: ChannelReport::Known(value),
-                ..
-            } if value == "ssh-unix"
-        ));
-        assert!(encode(&known).unwrap().contains("\"channel\":\"ssh-unix\""));
+        let known: WrapperToDaemon =
+            decode(&format!("{{{base},\"channel\":\"ssh-unix\"}}")).unwrap();
+        assert!(
+            matches!(known, WrapperToDaemon::Register { channel: ChannelReport::Known(value), .. } if value == "ssh-unix")
+        );
     }
 
     #[test]
@@ -2187,6 +3213,52 @@ mod tests {
             }
             _ => panic!("mauvais type"),
         }
+    }
+
+    #[test]
+    fn spec_079_deliver_idempotent_projette_le_contexte_execution_optionnel() {
+        let message = BridgetMessage::new("humain", "codex-1", "reprends ce travail");
+        let frame = DaemonToWrapper::DeliverIdempotent {
+            delivery_id: "delivery-079".to_string(),
+            recipient_instance_id: "instance-079".to_string(),
+            delivery_generation: 7,
+            expires_at: 1_900_000_000,
+            message,
+            execution: Some(ExecutionDeliveryContext {
+                execution_id: "execution-079".to_string(),
+                generation: 2,
+                revision: 0,
+            }),
+        };
+
+        let encoded = encode(&frame).unwrap();
+        let decoded: DaemonToWrapper = decode(&encoded).unwrap();
+        assert!(matches!(
+            decoded,
+            DaemonToWrapper::DeliverIdempotent {
+                execution: Some(ExecutionDeliveryContext {
+                    execution_id,
+                    generation: 2,
+                    revision: 0,
+                }),
+                ..
+            } if execution_id == "execution-079"
+        ));
+    }
+
+    #[test]
+    fn spec_079_deliver_idempotent_historique_sans_contexte_reste_decodable() {
+        let json = r#"{"type":"DeliverIdempotent","delivery_id":"delivery-old","recipient_instance_id":"instance-old","delivery_generation":1,"expires_at":1900000000,"message":{"id":"message-old","from":"humain","to":"codex-1","body":"historique","reply":false,"references":[],"timestamp":"2026-08-31T00:00:00Z"}}"#;
+
+        let decoded: DaemonToWrapper = decode(json).unwrap();
+        assert!(matches!(
+            decoded,
+            DaemonToWrapper::DeliverIdempotent {
+                delivery_id,
+                execution: None,
+                ..
+            } if delivery_id == "delivery-old"
+        ));
     }
 
     #[test]
@@ -2223,27 +3295,6 @@ mod tests {
             decode(&encode(&WrapperToDaemon::TurnState { in_progress: true }).unwrap()).unwrap(),
             WrapperToDaemon::TurnState { in_progress: true }
         ));
-    }
-
-    #[test]
-    fn test_encode_decode_rename() {
-        let msg = WrapperToDaemon::Rename {
-            current_name: "codex-1".to_string(),
-            name: "analyse".to_string(),
-        };
-        let json = encode(&msg).unwrap();
-        assert!(json.contains("\"type\":\"Rename\""));
-        assert!(
-            matches!(decode(&json).unwrap(), WrapperToDaemon::Rename { current_name, name } if current_name == "codex-1" && name == "analyse")
-        );
-
-        let response = DaemonToWrapper::Renamed {
-            old_name: "codex-1".to_string(),
-            name: "analyse".to_string(),
-        };
-        assert!(
-            matches!(decode(&encode(&response).unwrap()).unwrap(), DaemonToWrapper::Renamed { old_name, name } if old_name == "codex-1" && name == "analyse")
-        );
     }
 
     #[test]
@@ -2363,9 +3414,12 @@ mod tests {
         let sample = WrapperToDaemon::Usage {
             agent: "claude-1".to_string(),
             input_tokens: 2,
+            execution_id: Some("execution-1".to_string()),
+            execution_generation: Some(1),
             output_tokens: 175,
             cache_creation_input_tokens: 40_804,
             cache_read_input_tokens: 13_907,
+            provider_kind: Some("claude".to_string()),
             source: UsageSource::ClaudeStreamJson,
         };
         let encoded = encode(&sample).unwrap();
@@ -2375,12 +3429,14 @@ mod tests {
             decode(&encoded).unwrap(),
             WrapperToDaemon::Usage {
                 input_tokens: 2,
+                execution_id: Some(execution_id),
+                execution_generation: Some(1),
                 output_tokens: 175,
                 cache_creation_input_tokens: 40_804,
                 cache_read_input_tokens: 13_907,
                 source: UsageSource::ClaudeStreamJson,
                 ..
-            }
+            } if execution_id == "execution-1"
         ));
 
         let window = WrapperToDaemon::UsageWindow {
@@ -2420,7 +3476,7 @@ mod tests {
     fn test_agent_info_sans_runtime_reste_decodable() {
         // Compatibilité ascendante : un daemon d'une version antérieure ne
         // sérialise ni model ni effort.
-        let json = r#"{"name":"agent-2","agent_type":"claude","connection_id":"conn-1",
+        let json = r#"{"agent_id":"550e8400-e29b-41d4-a716-446655440002","display_name":"Agent 2","agent_type":"claude","connection_id":"conn-1",
             "host":"h","transport":"unix","os":"macOS","state":"connected",
             "last_seen_secs":0,"reconnect_count":0}"#;
         let info: AgentInfo = decode(json).unwrap();
@@ -2453,7 +3509,7 @@ mod tests {
 
     #[test]
     fn spec_024_agent_info_expose_protocole_et_canal_independants() {
-        let json = r#"{"name":"lab-agent","agent_type":"codex","connection_id":"conn-1",
+        let json = r#"{"agent_id":"550e8400-e29b-41d4-a716-446655440003","display_name":"Lab Agent","agent_type":"codex","connection_id":"conn-1",
             "host":"lab-host","transport":"tmux","channel":"ssh-unix","mode":"tmux",
             "os":"Linux","state":"connected","last_seen_secs":0,"reconnect_count":0}"#;
         let info: AgentInfo = decode(json).unwrap();
@@ -2470,7 +3526,7 @@ mod tests {
         // Ancien fil : un seul champ `rate_limit`. Doit devenir Vec d'1 élément
         // avec la fenêtre attestée telle quelle — aucune fenêtre inventée.
         let json = r#"{
-            "name":"claude-1","agent_type":"claude","connection_id":"c1",
+            "agent_id":"550e8400-e29b-41d4-a716-446655440004","display_name":"Claude","agent_type":"claude","connection_id":"c1",
             "host":"h","transport":"unix","os":"macOS","state":"connected",
             "last_seen_secs":0,"reconnect_count":0,
             "rate_limit":{"window":"five_hour","status":"rejected","resets_at":1787572200}
@@ -2484,7 +3540,7 @@ mod tests {
 
         // Nouveau fil : `rate_limits` gagne ; l'ancien champ s'il coexiste est ignoré.
         let both = r#"{
-            "name":"claude-1","agent_type":"claude","connection_id":"c1",
+            "agent_id":"550e8400-e29b-41d4-a716-446655440004","display_name":"Claude","agent_type":"claude","connection_id":"c1",
             "host":"h","transport":"unix","os":"macOS","state":"connected",
             "last_seen_secs":0,"reconnect_count":0,
             "rate_limits":[{"window":"seven_day","status":"allowed","used_percent":61}],
@@ -3034,7 +4090,24 @@ mod tests {
     fn lifecycle_messages_roundtrip_and_stay_outside_attach() {
         let spawn = WrapperToDaemon::SpawnOrder {
             agent_type: "codex".to_string(),
-            name: Some("codex-1".to_string()),
+            project: Some(ProjectReference {
+                project_id: "project-1".to_string(),
+                binding_generation: 2,
+            }),
+            ownership: Some(SpawnOwnership {
+                parent_instance_id: "instance-parent".to_string(),
+                parent_execution_id: Some("execution-parent".to_string()),
+                objective_id: Some("objective-1".to_string()),
+                delegation_id: Some("delegation-1".to_string()),
+                project: Some(ProjectReference {
+                    project_id: "project-1".to_string(),
+                    binding_generation: 2,
+                }),
+                role: "verification".to_string(),
+                max_children: Some(3),
+                max_depth: Some(2),
+            }),
+            agent_id: Some("550e8400-e29b-41d4-a716-446655440000".to_string()),
             cwd: "/tmp".to_string(),
             persistent: true,
             command_id: "command-1".to_string(),
@@ -3045,15 +4118,58 @@ mod tests {
             decode(&encode(&spawn).unwrap()).unwrap(),
             WrapperToDaemon::SpawnOrder {
                 agent_type,
-                name: Some(name),
+                agent_id: Some(agent_id),
                 command_id,
+                ownership: Some(ownership),
                 ..
-            } if agent_type == "codex" && name == "codex-1" && command_id == "command-1"
+            } if agent_type == "codex"
+                && agent_id == "550e8400-e29b-41d4-a716-446655440000"
+                && command_id == "command-1"
+                && ownership.parent_instance_id == "instance-parent"
         ));
         assert_eq!(
             spawn.attach_refusal(),
             Some(AttachRefusal::MessageOutsideAttachRole)
         );
+        let wait = WrapperToDaemon::WaitAgentLinks {
+            after_cursor: Some(41),
+            timeout_ms: 3_000,
+        };
+        assert!(matches!(
+            decode(&encode(&wait).unwrap()).unwrap(),
+            WrapperToDaemon::WaitAgentLinks {
+                after_cursor: Some(41),
+                timeout_ms: 3_000,
+            }
+        ));
+        assert_eq!(
+            wait.attach_refusal(),
+            Some(AttachRefusal::MessageOutsideAttachRole)
+        );
+        let events = DaemonToWrapper::AgentLinkEvents {
+            events: vec![AgentLinkEventFrame {
+                cursor: 42,
+                event_id: "link-1:2".to_string(),
+                link_id: "link-1".to_string(),
+                child_instance_id: "child-1".to_string(),
+                state: "orphaned".to_string(),
+                observed_at: 1_788_000_000,
+                project: Some(ProjectReference {
+                    project_id: "project-1".to_string(),
+                    binding_generation: 2,
+                }),
+            }],
+            through_cursor: Some(42),
+            timed_out: false,
+        };
+        assert!(matches!(
+            decode(&encode(&events).unwrap()).unwrap(),
+            DaemonToWrapper::AgentLinkEvents {
+                through_cursor: Some(42),
+                timed_out: false,
+                events,
+            } if events.len() == 1 && events[0].state == "orphaned"
+        ));
         let rejection = DaemonToWrapper::SpawnRejected {
             command_id: "command-1".to_string(),
             reason: SpawnRefusal::BillingGuard {
@@ -3080,6 +4196,46 @@ mod tests {
                 outcome: StopOutcome::StoppedForced {
                     survivors_killed: 2
                 },
+                ..
+            }
+        ));
+        let relaunch = DaemonToWrapper::RelaunchResult {
+            command_id: "relaunch-1".to_string(),
+            outcome: RelaunchOutcome::Started {
+                agent_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+                generation: 12,
+            },
+        };
+        assert!(matches!(
+            decode(&encode(&relaunch).unwrap()).unwrap(),
+            DaemonToWrapper::RelaunchResult {
+                outcome: RelaunchOutcome::Started { generation: 12, .. },
+                ..
+            }
+        ));
+        let decommission = DaemonToWrapper::DecommissionResult {
+            command_id: "decommission-1".to_string(),
+            outcome: DecommissionOutcome::DecommissionedForced {
+                survivors_killed: 3,
+            },
+        };
+        assert!(matches!(
+            decode(&encode(&decommission).unwrap()).unwrap(),
+            DaemonToWrapper::DecommissionResult {
+                outcome: DecommissionOutcome::DecommissionedForced {
+                    survivors_killed: 3
+                },
+                ..
+            }
+        ));
+        let adoption = DaemonToWrapper::AdoptStoppedResult {
+            command_id: "adopt-1".to_string(),
+            outcome: AdoptStoppedOutcome::Adopted { generation: 7 },
+        };
+        assert!(matches!(
+            decode(&encode(&adoption).unwrap()).unwrap(),
+            DaemonToWrapper::AdoptStoppedResult {
+                outcome: AdoptStoppedOutcome::Adopted { generation: 7 },
                 ..
             }
         ));
@@ -3246,13 +4402,14 @@ mod tests {
     fn spawn_accepted_transporte_la_definition_resolue_complete() {
         let message = DaemonToWrapper::SpawnAccepted {
             command_id: "command-1".to_string(),
-            name: "reviewer".to_string(),
+            agent_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             definition: Some(ResolvedAgentDefinition {
                 command: "npx".to_string(),
                 args: vec!["adapter@1.2.3".to_string()],
                 protocol: "acp".to_string(),
                 forbidden_env: vec!["API_KEY".to_string()],
                 pass_env: vec!["HOME".to_string()],
+                claude_config_dir: None,
                 permissions: "allow".to_string(),
                 queue_capacity: 32,
                 notify_timeout_secs: 600,
@@ -3268,6 +4425,7 @@ mod tests {
                             efforts: vec!["high".to_string()],
                         },
                     )]),
+                    observed: None,
                 },
                 digest: "a".repeat(64),
             }),
@@ -3285,7 +4443,7 @@ mod tests {
         ));
         assert!(matches!(
             decode::<DaemonToWrapper>(
-                r#"{"type":"SpawnAccepted","command_id":"legacy","name":"ancien"}"#
+                r#"{"type":"SpawnAccepted","command_id":"legacy","agent_id":"550e8400-e29b-41d4-a716-446655440000"}"#
             )
             .unwrap(),
             DaemonToWrapper::SpawnAccepted {
@@ -3380,13 +4538,9 @@ mod tests {
     }
 
     #[test]
-    fn protocol_007_reste_compatible_sans_handshake() {
-        let json =
-            r#"{"type":"Register","agent_type":"codex","name":null,"turn_in_progress":false}"#;
-        assert!(matches!(
-            decode::<WrapperToDaemon>(json).unwrap(),
-            WrapperToDaemon::Register { agent_type, .. } if agent_type == "codex"
-        ));
+    fn protocol_007_register_legacy_est_refuse() {
+        let json = r#"{\"type\":\"Register\",\"agent_type\":\"codex\",\"name\":null}"#;
+        assert!(decode::<WrapperToDaemon>(json).is_err());
     }
 
     #[test]
@@ -3462,5 +4616,392 @@ mod tests {
         assert_eq!(LedgerDeliveryStatus::Indetermine.label_fr(), "indéterminé");
         assert_eq!(LedgerDeliveryStatus::Orphelin.label_fr(), "orphelin");
         assert_eq!(LedgerDeliveryStatus::from_phase("autre"), None);
+    }
+    #[test]
+    fn execution_control_contract_roundtrip_et_version_explicit() {
+        let mut message = BridgetMessage::new("humain", "agent-fixture", "corrige ce point");
+        message.id = "message-steer-fixture".to_string();
+        message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        let command = ExecutionControlCommand {
+            version: 1,
+            command_id: "control-fixture".to_string(),
+            execution_id: "execution-fixture".to_string(),
+            generation: 7,
+            revision: 3,
+            operation: ExecutionControlOperation::SteerCurrent,
+            message: Some(message),
+        };
+        let wire = encode(&command).unwrap();
+        let decoded: ExecutionControlCommand = decode(&wire).unwrap();
+        assert_eq!(decoded, command);
+        assert!(wire.contains("\"version\":1"));
+    }
+
+    #[test]
+    fn execution_control_refusal_reste_ferme_sur_le_fil() {
+        let refusal = ExecutionControlRefusal::CapabilityUnavailable;
+        assert_eq!(
+            serde_json::to_string(&refusal).unwrap(),
+            "\"capability_unavailable\""
+        );
+        assert!(serde_json::from_str::<ExecutionControlRefusal>("\"unknown\"").is_err());
+    }
+    #[test]
+    fn spec_068_trames_incident_deleguees_sont_fermees_et_redacted() {
+        let emitted = WrapperToDaemon::DelegatedRuntimeEvent {
+            execution_id: "execution-child-42".to_string(),
+            kind: DelegatedRuntimeEventKind::Warning,
+            code: "unsupported_provider_request".to_string(),
+            reference: "sha256:ab12".to_string(),
+        };
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encode(&emitted).unwrap()).unwrap(),
+            WrapperToDaemon::DelegatedRuntimeEvent {
+                execution_id,
+                kind: DelegatedRuntimeEventKind::Warning,
+                code,
+                reference,
+            } if execution_id == "execution-child-42"
+                && code == "unsupported_provider_request"
+                && reference == "sha256:ab12"
+        ));
+
+        let delivery = DaemonToWrapper::DelegatedRuntimeEvent {
+            event: DelegatedRuntimeEventFrame {
+                cursor: 7,
+                event_id: "runtime-link-1-execution-child-42-warning".to_string(),
+                link_id: "link-1".to_string(),
+                child_instance_id: "instance-child".to_string(),
+                child_execution_id: "execution-child-42".to_string(),
+                kind: DelegatedRuntimeEventKind::Warning,
+                code: "unsupported_provider_request".to_string(),
+                reference: "sha256:ab12".to_string(),
+                observed_at: 1_788_000_000,
+                project: Some(ProjectReference {
+                    project_id: "project-1".to_string(),
+                    binding_generation: 2,
+                }),
+            },
+        };
+        let wire = encode(&delivery).unwrap();
+        assert!(matches!(
+            decode::<DaemonToWrapper>(&wire).unwrap(),
+            DaemonToWrapper::DelegatedRuntimeEvent { event }
+                if event.cursor == 7
+                    && event.kind == DelegatedRuntimeEventKind::Warning
+                    && event.code == "unsupported_provider_request"
+                    && event.reference == "sha256:ab12"
+        ));
+        assert!(!wire.contains("params"));
+        assert!(!wire.contains("secret"));
+
+        let acknowledgement = WrapperToDaemon::DelegatedRuntimeEventAcknowledged {
+            event_id: "runtime-link-1-execution-child-42-warning".to_string(),
+        };
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encode(&acknowledgement).unwrap()).unwrap(),
+            WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id }
+                if event_id == "runtime-link-1-execution-child-42-warning"
+        ));
+        assert!(serde_json::from_str::<DelegatedRuntimeEventKind>("\"other\"").is_err());
+    }
+
+    #[test]
+    fn spec_065_registre_projet_est_ferme_directionnel_et_negocie() {
+        let request = ProjectBindRequest {
+            contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+            command_id: "project-command-1".to_string(),
+            issued_at: 1_787_997_600,
+            deadline_at: 1_787_998_200,
+            project_id: "project-opaque-1".to_string(),
+            requested_root: "/srv/projects/fixture".to_string(),
+            backend: ProjectBackend::Host,
+            policy_id: None,
+            policy_version: None,
+        };
+        let message = WrapperToDaemon::ProjectRegistryRequest {
+            request: request.clone(),
+        };
+        let wire = encode(&message).unwrap();
+        assert!(wire.contains(r#""type":"project_registry_request""#));
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&wire).unwrap(),
+            WrapperToDaemon::ProjectRegistryRequest { request: decoded }
+                if decoded == request
+        ));
+        assert!(serde_json::from_str::<ProjectBindRequest>(
+            r#"{"contract_version":1,"command_id":"project-command-1","issued_at":1,"deadline_at":2,"project_id":"project-opaque-1","requested_root":"/srv/projects/fixture","backend":"host","unexpected":true}"#
+        )
+        .is_err());
+
+        let hello = WrapperToDaemon::ServiceHello {
+            version: SERVICE_CONTRACT_VERSION,
+            service: "maicie".to_string(),
+            issuer_scope: "065_scope_0123456789abcdef0123456789abcdef".to_string(),
+            capabilities: vec![ServiceCapability::ProjectRegistryV1],
+        };
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encode(&hello).unwrap()).unwrap(),
+            WrapperToDaemon::ServiceHello {
+                service,
+                capabilities,
+                ..
+            } if service == "maicie" && capabilities == vec![ServiceCapability::ProjectRegistryV1]
+        ));
+
+        let conflict = ProjectBindOutcome {
+            contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+            command_id: "project-command-2".to_string(),
+            project_id: "project-loser".to_string(),
+            status: ProjectBindStatus::RegistrationConflict,
+            binding_generation: None,
+            backend: None,
+            runtime_policy: None,
+            reason: Some(ProjectRegistryRefusal::RootAlreadyBound),
+            existing_project_id: Some("project-winner".to_string()),
+            existing_binding_generation: Some(4),
+            observed_at: 1_787_997_601,
+        };
+        let outcome = DaemonToWrapper::ProjectRegistryOutcome {
+            outcome: conflict.clone(),
+        };
+        assert!(matches!(
+            decode::<DaemonToWrapper>(&encode(&outcome).unwrap()).unwrap(),
+            DaemonToWrapper::ProjectRegistryOutcome { outcome: decoded }
+                if decoded == conflict
+        ));
+
+        let admin_request = ProjectAdminRequest {
+            contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+            command_id: "project-rebind-1".to_string(),
+            issued_at: 1_787_997_602,
+            deadline_at: 1_787_998_202,
+            operation: ProjectAdminOperation::Rebind,
+            project_id: Some("project-winner".to_string()),
+            requested_root: Some("/srv/projects/other".to_string()),
+        };
+        let admin_wire = encode(&WrapperToDaemon::ProjectRegistryAdminRequest {
+            request: admin_request.clone(),
+        })
+        .unwrap();
+        assert!(admin_wire.contains(r#""type":"project_registry_admin_request""#));
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&admin_wire).unwrap(),
+            WrapperToDaemon::ProjectRegistryAdminRequest { request }
+                if request == admin_request
+        ));
+        let admin_outcome = ProjectAdminOutcome {
+            contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+            command_id: admin_request.command_id.clone(),
+            operation: ProjectAdminOperation::Rebind,
+            bindings: vec![ProjectBindingProjection {
+                project_id: "project-winner".to_string(),
+                canonical_root: None,
+                state: ProjectBindingStatus::Active,
+                binding_generation: Some(2),
+                backend: Some(ProjectBackend::Host),
+                runtime_policy: None,
+                reason: None,
+                last_audit: None,
+                observed_at: 1_787_997_603,
+            }],
+            reason: None,
+            observed_at: 1_787_997_603,
+        };
+        assert!(matches!(
+            decode::<DaemonToWrapper>(
+                &encode(&DaemonToWrapper::ProjectRegistryAdminOutcome {
+                    outcome: admin_outcome.clone(),
+                })
+                .unwrap()
+            )
+            .unwrap(),
+            DaemonToWrapper::ProjectRegistryAdminOutcome { outcome }
+                if outcome == admin_outcome
+        ));
+
+        let version_refusal = ProjectRegistryRefusal::ProjectRegistryVersionUnsupported;
+        assert_eq!(
+            serde_json::to_string(&version_refusal).unwrap(),
+            "\"project_registry_version_unsupported\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ProjectRegistryRefusal::PeerUidMismatch).unwrap(),
+            "\"peer_uid_mismatch\""
+        );
+        assert!(serde_json::from_str::<ProjectRegistryRefusal>("\"unknown\"").is_err());
+    }
+    #[test]
+    fn spec_066_runtime_local_est_versionne_ferme_et_sans_chemin_hote() {
+        let request = ProjectRuntimeRequest {
+            contract_version: 1,
+            command_id: "runtime-command-1".to_string(),
+            issued_at: 1_788_000_000,
+            deadline_at: 1_788_000_060,
+            operation: ProjectRuntimeOperation::Prepare,
+            project_id: "project-066".to_string(),
+            profile: None,
+        };
+        let wire = encode(&WrapperToDaemon::ProjectRuntimeRequest {
+            request: request.clone(),
+        })
+        .unwrap();
+        assert!(wire.contains(r#""type":"project_runtime_request""#));
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&wire).unwrap(),
+            WrapperToDaemon::ProjectRuntimeRequest { request: decoded } if decoded == request
+        ));
+        assert!(serde_json::from_str::<ProjectRuntimeRequest>(
+            r#"{"contract_version":1,"command_id":"runtime-command-1","issued_at":1,"deadline_at":2,"operation":"prepare","project_id":"project-066","path":"/srv/private"}"#
+        )
+        .is_err());
+
+        let outcome = ProjectRuntimeOutcome {
+            contract_version: 1,
+            command_id: request.command_id.clone(),
+            project_id: request.project_id.clone(),
+            operation: request.operation,
+            binding_generation: Some(2),
+            state: Some("ready".to_string()),
+            runtime_policy: Some(ProjectRuntimePolicyReference {
+                policy_id: "fixture-local".to_string(),
+                policy_version: 1,
+                policy_digest: format!("sha256:{}", "a".repeat(64)),
+                environment_epoch: 3,
+            }),
+            last_reason: Some("runtime_exec_lost".to_string()),
+            reason: None,
+            observed_at: 1_788_000_001,
+        };
+        assert!(matches!(
+            decode::<DaemonToWrapper>(
+                &encode(&DaemonToWrapper::ProjectRuntimeOutcome {
+                    outcome: outcome.clone(),
+                })
+                .unwrap()
+            )
+            .unwrap(),
+            DaemonToWrapper::ProjectRuntimeOutcome { outcome: decoded } if decoded == outcome
+        ));
+    }
+    #[test]
+    fn spec_066_handshake_ingress_est_ferme_et_versionne() {
+        let hello = RuntimeIngressHandshake {
+            contract_version: RUNTIME_INGRESS_CONTRACT_VERSION,
+            project_id: "project-066".to_string(),
+            binding_generation: 2,
+            container_id: "a".repeat(64),
+            environment_epoch: 3,
+            agent_generation: 4,
+            instance_id: "00000000-0000-4000-8000-000000000066".to_string(),
+        };
+        let wire = encode(&WrapperToDaemon::RuntimeIngressHello {
+            hello: hello.clone(),
+        })
+        .unwrap();
+        assert!(wire.contains(r#""type":"runtime_ingress_hello""#));
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&wire).unwrap(),
+            WrapperToDaemon::RuntimeIngressHello { hello: decoded } if decoded == hello
+        ));
+        assert!(serde_json::from_str::<RuntimeIngressHandshake>(
+            r#"{"contract_version":1,"project_id":"project-066","binding_generation":2,"container_id":"abc","environment_epoch":3,"agent_generation":4,"host_path":"/srv/private"}"#
+        )
+        .is_err());
+        assert_eq!(
+            serde_json::to_string(&RuntimeIngressRefusal::EnvironmentEpochStale).unwrap(),
+            "\"environment_epoch_stale\""
+        );
+    }
+    #[test]
+    fn spec_079_contrat_ronde_projet_est_ferme_versionne_et_rejouable() {
+        let request = ProjectRoundRequest {
+            contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+            command_id: "round-enable-1".to_string(),
+            issued_at: 1_788_000_000,
+            deadline_at: 1_788_000_060,
+            operation: ProjectRoundOperation::Enable,
+            project_id: Some("project-079".to_string()),
+            binding_generation: Some(4),
+        };
+        let wire = encode(&WrapperToDaemon::ProjectRoundRequest {
+            request: request.clone(),
+        })
+        .unwrap();
+        assert!(wire.contains(r#""type":"project_round_request""#));
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&wire).unwrap(),
+            WrapperToDaemon::ProjectRoundRequest { request: decoded } if decoded == request
+        ));
+        assert!(serde_json::from_str::<ProjectRoundRequest>(
+            r#"{"contract_version":1,"command_id":"round-enable-1","issued_at":1,"deadline_at":2,"operation":"enable","project_id":"project-079","binding_generation":4,"provider":"codex"}"#
+        )
+        .is_err());
+
+        let legacy_projection: ProjectRoundProjection = serde_json::from_str(
+            r#"{"project_id":"project-079","binding_generation":4,"active":true,"configured":true,"enabled":true,"revision":1,"updated_at":1788000000}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy_projection.last_occurrence_at, None);
+        assert_eq!(legacy_projection.last_dispatch_state, None);
+        assert_eq!(legacy_projection.last_dispatch_observed_at, None);
+
+        let observed_projection = ProjectRoundProjection {
+            last_occurrence_at: Some(1_788_000_000),
+            last_dispatch_state: Some(ProjectRoundDispatchState::Deposited),
+            last_dispatch_observed_at: Some(1_788_000_001),
+            ..legacy_projection
+        };
+        let projection_wire = serde_json::to_string(&observed_projection).unwrap();
+        assert!(projection_wire.contains(r#""last_dispatch_state":"deposited""#));
+        assert_eq!(
+            serde_json::from_str::<ProjectRoundProjection>(&projection_wire).unwrap(),
+            observed_projection
+        );
+
+        let dispatch = ProjectRoundDispatchRequest {
+            contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+            occurrence_at: 1_788_000_000,
+            project: ProjectReference {
+                project_id: "project-079".to_string(),
+                binding_generation: 4,
+            },
+        };
+        let wire = encode(&WrapperToDaemon::ProjectRoundDispatch {
+            request: dispatch.clone(),
+        })
+        .unwrap();
+        assert!(wire.contains(r#""type":"project_round_dispatch""#));
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&wire).unwrap(),
+            WrapperToDaemon::ProjectRoundDispatch { request: decoded } if decoded == dispatch
+        ));
+        assert!(serde_json::from_str::<ProjectRoundDispatchRequest>(
+            r#"{"contract_version":1,"occurrence_at":1788000000,"project":{"project_id":"project-079","binding_generation":4},"cwd":"/srv/private"}"#
+        )
+        .is_err());
+
+        let outcome = ProjectRoundDispatchOutcome {
+            contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+            occurrence_at: dispatch.occurrence_at,
+            project: dispatch.project,
+            issue: Some(IdempotencyIssue::OutcomeUnknown {
+                expires_at: 1_788_604_800,
+                delivery_id: Some("delivery-079".to_string()),
+            }),
+            reason: None,
+            observed_at: 1_788_000_001,
+        };
+        assert!(matches!(
+            decode::<DaemonToWrapper>(
+                &encode(&DaemonToWrapper::ProjectRoundDispatchOutcome {
+                    outcome: outcome.clone(),
+                })
+                .unwrap()
+            )
+            .unwrap(),
+            DaemonToWrapper::ProjectRoundDispatchOutcome { outcome: decoded }
+                if decoded == outcome
+        ));
     }
 }

@@ -96,7 +96,7 @@ done
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                name: "claude-native-1".to_string(),
+                agent_id: "claude-native-1".to_string(),
             })
             .unwrap()
         )
@@ -119,16 +119,38 @@ done
         writeln!(
             writer,
             "{}",
-            encode(&DaemonToWrapper::Deliver(mission)).unwrap()
+            encode(&DaemonToWrapper::DeliverExecution {
+                message: mission,
+                execution_id: "execution-claude-native".to_string(),
+                generation: 4,
+                revision: 0,
+            })
+            .unwrap()
         )
         .unwrap();
         writer.flush().unwrap();
 
         let mut answered = false;
+        let mut started = false;
+        let mut completed = false;
         loop {
             line.clear();
             reader.read_line(&mut line).unwrap();
             match decode(line.trim_end()).unwrap() {
+                WrapperToDaemon::ExecutionStateChanged { transition } => {
+                    assert_eq!(transition.execution_id, "execution-claude-native");
+                    assert_eq!(transition.generation, 4);
+                    if transition.next_state == "running" {
+                        assert_eq!(transition.expected_state, "starting");
+                        assert_eq!(transition.expected_revision, 0);
+                        started = true;
+                    } else {
+                        assert_eq!(transition.next_state, "completed");
+                        assert_eq!(transition.expected_state, "running");
+                        assert_eq!(transition.expected_revision, 1);
+                        completed = true;
+                    }
+                }
                 WrapperToDaemon::Send(reply) => {
                     assert_eq!(reply.from, "claude-native-1");
                     assert_eq!(reply.to, "demandeur");
@@ -138,7 +160,7 @@ done
                     writeln!(writer, "{}", encode(&DaemonToWrapper::Disconnect).unwrap()).unwrap();
                     writer.flush().unwrap();
                 }
-                WrapperToDaemon::Unregister => return answered,
+                WrapperToDaemon::Unregister => return answered && started && completed,
                 _ => {}
             }
         }
@@ -222,7 +244,7 @@ while IFS= read -r line; do :; done
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                name: "claude-manage-1".to_string(),
+                agent_id: "claude-manage-1".to_string(),
             })
             .unwrap()
         )
@@ -286,7 +308,7 @@ while IFS= read -r line; do :; done
     match register_rx.recv_timeout(Duration::from_secs(2)).unwrap() {
         WrapperToDaemon::Register {
             agent_type,
-            name,
+            agent_id,
             transport,
             channel,
             mode,
@@ -295,7 +317,7 @@ while IFS= read -r line; do :; done
             ..
         } => {
             assert_eq!(agent_type, "claude");
-            assert_eq!(name.as_deref(), Some("claude-manage-1"));
+            assert_eq!(agent_id, "claude-manage-1".to_string());
             assert_eq!(transport.as_deref(), Some("claude_stream_json"));
             assert!(
                 channel
@@ -382,7 +404,7 @@ while :; do :; done
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                name: "fixture-ignore-cancel-1".to_string(),
+                agent_id: "fixture-ignore-cancel-1".to_string(),
             })
             .unwrap()
         )
@@ -497,6 +519,221 @@ while :; do :; done
     assert!(
         daemon.join().unwrap(),
         "le wrapper n'a pas envoyé Unregister"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn wrapper_borne_le_silence_et_signale_la_saturation_sans_confondre_les_tours() {
+    let root = test_root();
+    let socket = root.join(".cache/bridget/bridget.sock");
+    let registry_path = root.join(".config/bridget/agents.json");
+    let adapter = root.join("claude-silencieux.sh");
+    fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+    fs::write(
+        &adapter,
+        r#"#!/bin/sh
+while IFS= read -r line; do :; done
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&adapter, fs::Permissions::from_mode(0o700)).unwrap();
+    let registry_json = serde_json::json!({
+        "agents": {
+            "claude-silencieux": {
+                "command": adapter,
+                "protocol": "claude_stream_json",
+                "permissions": "allow",
+                "queue_capacity": 1,
+                "notify_timeout_secs": 5
+            }
+        }
+    })
+    .to_string();
+    fs::write(&registry_path, &registry_json).unwrap();
+    fs::set_permissions(&registry_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let listener = UnixListener::bind(&socket).unwrap();
+    let daemon = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(15)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(
+            decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
+            WrapperToDaemon::Register { .. }
+        ));
+        writeln!(
+            writer,
+            "{}",
+            encode(&DaemonToWrapper::Registered {
+                agent_id: "claude-silencieux-1".to_string(),
+            })
+            .unwrap()
+        )
+        .unwrap();
+        writer.flush().unwrap();
+        loop {
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            if matches!(
+                decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
+                WrapperToDaemon::JournalReady
+            ) {
+                break;
+            }
+        }
+
+        let id = "silence";
+        let mut message = BridgetMessage::new("maicie", "claude-silencieux-1", id);
+        message.id = id.to_string();
+        writeln!(
+            writer,
+            "{}",
+            encode(&DaemonToWrapper::DeliverExecution {
+                message,
+                execution_id: format!("execution-{id}"),
+                generation: 1,
+                revision: 0,
+            })
+            .unwrap()
+        )
+        .unwrap();
+        writer.flush().unwrap();
+
+        // Barrière : le premier tour doit être actif avant de remplir la file.
+        // Sans elle, le worker peut retirer `silence` entre les trois writes
+        // et transformer aléatoirement `saturation` en second tour réel.
+        let mut silence_running = false;
+        let start_deadline = std::time::Instant::now() + Duration::from_secs(8);
+        while std::time::Instant::now() < start_deadline && !silence_running {
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            if let WrapperToDaemon::ExecutionStateChanged { transition } =
+                decode(line.trim_end()).unwrap()
+                && transition.execution_id == "execution-silence"
+                && transition.next_state == "running"
+            {
+                assert_eq!(transition.expected_state, "starting");
+                assert_eq!(transition.expected_revision, 0);
+                silence_running = true;
+            }
+        }
+        assert!(silence_running, "le démarrage du premier tour manque");
+
+        for id in ["en-file", "saturation"] {
+            let mut message = BridgetMessage::new("maicie", "claude-silencieux-1", id);
+            message.id = id.to_string();
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::DeliverExecution {
+                    message,
+                    execution_id: format!("execution-{id}"),
+                    generation: 1,
+                    revision: 0,
+                })
+                .unwrap()
+            )
+            .unwrap();
+        }
+        writer.flush().unwrap();
+
+        let mut silence_failed = false;
+        let mut saturation_failed = false;
+        let deadline = std::time::Instant::now() + Duration::from_secs(12);
+        while std::time::Instant::now() < deadline && !(silence_failed && saturation_failed) {
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            if let WrapperToDaemon::ExecutionStateChanged { transition } =
+                decode(line.trim_end()).unwrap()
+            {
+                match (
+                    transition.execution_id.as_str(),
+                    transition.next_state.as_str(),
+                ) {
+                    ("execution-silence", "running") => {
+                        assert_eq!(transition.expected_state, "starting");
+                        assert_eq!(transition.expected_revision, 0);
+                        silence_running = true;
+                    }
+                    ("execution-silence", "failed") => {
+                        assert_eq!(transition.expected_state, "running");
+                        assert_eq!(transition.expected_revision, 1);
+                        silence_failed = true;
+                    }
+                    ("execution-saturation", "failed") => {
+                        assert_eq!(transition.expected_state, "starting");
+                        assert_eq!(transition.expected_revision, 0);
+                        assert_eq!(transition.reason, "provider_queue_full");
+                        saturation_failed = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(silence_running, "le démarrage du premier tour manque");
+        assert!(
+            silence_failed,
+            "le fournisseur silencieux doit atteindre une issue bornée"
+        );
+        assert!(
+            saturation_failed,
+            "la troisième remise doit être refusée par la file bornée"
+        );
+        writeln!(writer, "{}", encode(&DaemonToWrapper::Disconnect).unwrap()).unwrap();
+        writer.flush().unwrap();
+
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => return false,
+                Ok(_)
+                    if matches!(
+                        decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
+                        WrapperToDaemon::Unregister
+                    ) =>
+                {
+                    return true;
+                }
+                Ok(_) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    return false;
+                }
+                Err(error) => panic!("lecture daemon impossible: {error}"),
+            }
+        }
+    });
+
+    let registry = AgentRegistry::from_json(&registry_json, &registry_path).unwrap();
+    let wrapper_root = root.clone();
+    let wrapper_socket = socket.clone();
+    let wrapper = thread::spawn(move || {
+        launch_acp_with(
+            "claude-silencieux",
+            &[],
+            Some("claude-silencieux-1"),
+            &registry,
+            &wrapper_socket,
+            &wrapper_root,
+        )
+        .map_err(|error| error.to_string())
+    });
+
+    assert_eq!(wrapper.join().unwrap(), Ok(()));
+    assert!(
+        daemon.join().unwrap(),
+        "le wrapper ne se ferme pas proprement"
     );
     fs::remove_dir_all(root).unwrap();
 }

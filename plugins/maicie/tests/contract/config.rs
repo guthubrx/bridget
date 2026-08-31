@@ -38,6 +38,18 @@ fn charge_une_configuration_entierement_declarative() {
 }
 
 #[test]
+fn spec_067_charge_un_profil_projet_reference_sans_valeur_secrete() {
+    let body = VALID_CONFIG.replace(
+        "\"profiles\": [{",
+        "\"project_profiles\": [{\"id\":\"runtime\",\"project_id\":\"project-a\",\"binding_generation\":2,\"runtime_policy_version\":3,\"policy_digest\":\"sha256:policy\",\"agent_profile_ids\":[\"prospective\"]}],\n  \"profiles\": [{",
+    );
+    let fixture = Fixture::new("project-profile", &body);
+    let config = MaicieConfig::load(&fixture.path).unwrap();
+    assert_eq!(config.project_profiles[0].project_id, "project-a");
+    assert!(config.project_profiles[0].secrets.is_empty());
+}
+
+#[test]
 fn accepte_un_budget_explicit_de_capture_status_sans_en_inventer_un() {
     let enabled = VALID_CONFIG.replace(
         "\"profiles\": [{",
@@ -138,10 +150,10 @@ fn refuse_un_budget_status_nul_ou_hors_borne() {
 }
 
 #[test]
-fn accepte_un_nom_d_agent_runtime_distinct_du_slug_de_profil() {
+fn accepte_un_identifiant_d_agent_opaque_distinct_du_slug_de_profil() {
     let body = VALID_CONFIG.replace(
         "\"id\": \"prospective\",",
-        "\"id\": \"reviewer\",\n    \"agent_name\": \"coderBridget\",",
+        "\"id\": \"reviewer\",\n    \"agent_id\": \"550e8400-e29b-41d4-a716-446655440000\",",
     );
     let fixture = Fixture::new("agent-name", &body);
 
@@ -149,8 +161,8 @@ fn accepte_un_nom_d_agent_runtime_distinct_du_slug_de_profil() {
 
     assert_eq!(config.profiles[0].id, "reviewer");
     assert_eq!(
-        config.profiles[0].agent_name.as_deref(),
-        Some("coderBridget")
+        config.profiles[0].agent_id.as_deref(),
+        Some("550e8400-e29b-41d4-a716-446655440000")
     );
 }
 

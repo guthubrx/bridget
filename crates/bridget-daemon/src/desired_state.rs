@@ -2,6 +2,7 @@
 
 use bridget_transport::ResolvedAgentDefinition;
 use bridget_transport::fsutil::{AtomicWritePhase, write_private_file_atomic_observed};
+use bridget_transport::protocol::ProjectReference;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -10,16 +11,78 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// Schéma écrit par ce binaire. Le schéma 1 (sans `domain`, ou avec `domain`
-/// posé par le premier lot D20) reste lisible.
-pub const FLEET_SCHEMA_VERSION: u64 = 2;
+/// Schéma écrit par ce binaire. Les schémas 1 à 3 décrivaient uniquement des
+/// agents persistants à reprendre. Le schéma 4 devient l'inventaire durable du
+/// cycle de vie de tous les agents gérés.
+pub const FLEET_SCHEMA_VERSION: u64 = 4;
 pub const FLEET_SCHEMA_MIN: u64 = 1;
+
+fn default_persistent() -> bool {
+    true
+}
+
+/// État désiré du processus, indépendant de sa politique de reprise au boot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DesiredLifecycleState {
+    #[default]
+    Running,
+    Stopped,
+    Decommissioned,
+}
 
 fn schema_lisible(version: u64) -> bool {
     (FLEET_SCHEMA_MIN..=FLEET_SCHEMA_VERSION).contains(&version)
 }
 
-/// Entrée persistante d'un équipier que le daemon doit maintenir.
+/// Références opaques qui relient un équipier persistant à son parent.
+/// Les limites restent la politique du lanceur ; elles ne deviennent pas des
+/// faits durables dans `fleet.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesiredAgentLink {
+    pub link_id: String,
+    pub parent_instance_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectReference>,
+    pub role: String,
+    pub agent_path: String,
+}
+
+/// Corrélation durable entre une génération Bridget et son `docker exec`.
+/// Aucune commande hôte ni donnée secrète n'est conservée : ce relevé sert
+/// uniquement à rétablir l'ingress privé après redémarrage du daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContainerAgentExecution {
+    pub agent_instance_id: String,
+    pub generation: u64,
+    pub project_id: String,
+    pub binding_generation: u64,
+    pub environment_epoch: u64,
+    pub container_id: String,
+    pub exec_id: String,
+    pub cwd: PathBuf,
+    pub state: ContainerAgentExecutionState,
+    pub provider_identity: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContainerAgentExecutionState {
+    Starting,
+    Running,
+    Terminal,
+    Lost,
+}
+
+/// Entrée durable d'un équipier dont le daemon possède le cycle de vie.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DesiredEquipier {
@@ -29,6 +92,14 @@ pub struct DesiredEquipier {
     pub command_id: String,
     pub generation: u64,
     pub created: String,
+    /// Reprise automatique d'une entrée `running` au démarrage du daemon.
+    /// Les anciens schémas ne contenaient que des agents persistants.
+    #[serde(default = "default_persistent")]
+    pub persistent: bool,
+    /// Une entrée arrêtée reste visible et relançable. Une entrée
+    /// décommissionnée est cachée et réserve son nom.
+    #[serde(default)]
+    pub lifecycle_state: DesiredLifecycleState,
     /// Définition runtime figée lors de la connexion initiale. `None` ne sert
     /// qu'à lire les anciens fichiers : leur reprise est refusée fail-closed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -36,6 +107,15 @@ pub struct DesiredEquipier {
     /// Domaine du protocole, persisté pour recomposer l'équipe après crash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
+    /// Projet opaque conservé entre reprise et reconstruction de flotte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectReference>,
+    /// Parent, mandat et rôle issus du lien durable Bridget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_link: Option<DesiredAgentLink>,
+    /// Exécution Docker corrélée, absente pour les agents host historiques.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_execution: Option<ContainerAgentExecution>,
 }
 
 /// Contenu versionné de `fleet.json`.
@@ -204,6 +284,32 @@ impl DesiredStateStore {
         self.persist_unlocked_observed(fleet, observer)
     }
 
+    /// Réindexe la flotte par agent_id. Une collision prouve que la
+    /// migration serait ambiguë et laisse le fichier intact.
+    pub fn migrate_agent_ids(
+        &self,
+        mapping: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), DesiredStateError> {
+        let _transition = self
+            .transition_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut fleet = self.load_unlocked()?;
+        let mut migrated = BTreeMap::new();
+        for (legacy, entry) in std::mem::take(&mut fleet.equipiers) {
+            let agent_id = mapping.get(&legacy).cloned().unwrap_or(legacy);
+            if migrated.insert(agent_id.clone(), entry).is_some() {
+                return Err(DesiredStateError::InvalidEntry {
+                    path: self.path.clone(),
+                    name: agent_id,
+                    reason: "collision identité de migration",
+                });
+            }
+        }
+        fleet.equipiers = migrated;
+        self.persist_unlocked(&fleet)
+    }
+
     /// Insère une génération sous sa clé stable, puis retourne l'ancienne.
     pub fn upsert(
         &self,
@@ -232,6 +338,81 @@ impl DesiredStateStore {
             self.persist_unlocked(&fleet)?;
         }
         Ok(removed)
+    }
+
+    /// Applique une transition explicite de cycle de vie et retourne l'entrée
+    /// mise à jour. L'absence n'est jamais transformée en création implicite.
+    pub fn set_lifecycle_state(
+        &self,
+        name: &str,
+        lifecycle_state: DesiredLifecycleState,
+    ) -> Result<Option<DesiredEquipier>, DesiredStateError> {
+        let _transition = self
+            .transition_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut fleet = self.load_unlocked()?;
+        let Some(entry) = fleet.equipiers.get_mut(name) else {
+            return Ok(None);
+        };
+        if entry.lifecycle_state != lifecycle_state {
+            entry.lifecycle_state = lifecycle_state;
+            let updated = entry.clone();
+            self.persist_unlocked(&fleet)?;
+            return Ok(Some(updated));
+        }
+        Ok(Some(entry.clone()))
+    }
+
+    /// Marque une génération arrêtée uniquement si elle possède encore
+    /// l'entrée. Une relance échouée ne peut ainsi effacer l'ancienne
+    /// définition `stopped` qu'elle tentait de remplacer.
+    pub fn mark_stopped_if_generation(
+        &self,
+        name: &str,
+        command_id: &str,
+        generation: u64,
+    ) -> Result<bool, DesiredStateError> {
+        let _transition = self
+            .transition_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut fleet = self.load_unlocked()?;
+        let Some(entry) = fleet.equipiers.get_mut(name) else {
+            return Ok(false);
+        };
+        if entry.command_id != command_id
+            || entry.generation != generation
+            || entry.lifecycle_state == DesiredLifecycleState::Decommissioned
+        {
+            return Ok(false);
+        }
+        if entry.lifecycle_state != DesiredLifecycleState::Stopped {
+            entry.lifecycle_state = DesiredLifecycleState::Stopped;
+            self.persist_unlocked(&fleet)?;
+        }
+        Ok(true)
+    }
+
+    /// Les agents non persistants ne sont pas repris après un redémarrage,
+    /// mais leur identité logique demeure consultable comme arrêtée.
+    pub fn stop_non_persistent_running(&self) -> Result<Vec<String>, DesiredStateError> {
+        let _transition = self
+            .transition_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let mut fleet = self.load_unlocked()?;
+        let mut changed = Vec::new();
+        for (name, entry) in &mut fleet.equipiers {
+            if !entry.persistent && entry.lifecycle_state == DesiredLifecycleState::Running {
+                entry.lifecycle_state = DesiredLifecycleState::Stopped;
+                changed.push(name.clone());
+            }
+        }
+        if !changed.is_empty() {
+            self.persist_unlocked(&fleet)?;
+        }
+        Ok(changed)
     }
 
     /// Met à jour le domain d'une entrée existante sous le même verrou que
@@ -340,6 +521,13 @@ fn validate_fleet(path: &Path, fleet: &DesiredFleet) -> Result<(), DesiredStateE
             Some("génération nulle")
         } else if equipier.created.trim().is_empty() {
             Some("date de création vide")
+        } else if equipier.agent_link.as_ref().is_some_and(|link| {
+            link.link_id.trim().is_empty()
+                || link.parent_instance_id.trim().is_empty()
+                || link.role.trim().is_empty()
+                || link.agent_path.trim().is_empty()
+        }) {
+            Some("lien agent incomplet")
         } else {
             None
         };
@@ -382,8 +570,13 @@ mod tests {
             command_id: command_id.to_string(),
             generation,
             created: "2026-08-22T20:14:00Z".to_string(),
+            persistent: true,
+            lifecycle_state: DesiredLifecycleState::Running,
             resolved_definition: None,
             domain: None,
+            project: None,
+            agent_link: None,
+            runtime_execution: None,
         }
     }
 
@@ -534,6 +727,129 @@ mod tests {
     }
 
     #[test]
+    fn schema_ancien_devient_running_persistent_par_defaut() {
+        let root = test_root("schema-legacy-lifecycle");
+        let path = root.join("fleet.json");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            &path,
+            r#"{
+  "schema": 3,
+  "equipiers": {
+    "ancien": {
+      "type": "codex",
+      "cwd": "/tmp/projet",
+      "command_id": "legacy-command",
+      "generation": 7,
+      "created": "2026-08-22T20:14:00Z"
+    }
+  }
+}"#,
+        )
+        .unwrap();
+        let entry = DesiredStateStore::at_path(&path)
+            .load()
+            .unwrap()
+            .equipiers
+            .remove("ancien")
+            .unwrap();
+        assert!(entry.persistent);
+        assert_eq!(entry.lifecycle_state, DesiredLifecycleState::Running);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn transitions_de_cycle_de_vie_sont_atomiques_et_bornees() {
+        let root = test_root("lifecycle");
+        let path = root.join("fleet.json");
+        let store = DesiredStateStore::at_path(&path);
+        let entry = equipier("command-lifecycle", 8);
+        store.upsert("agent".to_string(), entry).unwrap();
+
+        assert!(
+            store
+                .mark_stopped_if_generation("agent", "command-lifecycle", 8)
+                .unwrap()
+        );
+        assert_eq!(
+            store.load().unwrap().equipiers["agent"].lifecycle_state,
+            DesiredLifecycleState::Stopped
+        );
+        assert!(
+            !store
+                .mark_stopped_if_generation("agent", "autre-command", 8)
+                .unwrap()
+        );
+        let retired = store
+            .set_lifecycle_state("agent", DesiredLifecycleState::Decommissioned)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            retired.lifecycle_state,
+            DesiredLifecycleState::Decommissioned
+        );
+        assert!(
+            !store
+                .mark_stopped_if_generation("agent", "command-lifecycle", 8)
+                .unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn redemarrage_arrete_uniquement_les_non_persistants_running() {
+        let root = test_root("non-persistent");
+        let path = root.join("fleet.json");
+        let store = DesiredStateStore::at_path(&path);
+        let mut ephemeral = equipier("ephemeral", 1);
+        ephemeral.persistent = false;
+        store.upsert("ephemeral".to_string(), ephemeral).unwrap();
+        let mut persistent = equipier("persistent", 2);
+        persistent.persistent = true;
+        store.upsert("persistent".to_string(), persistent).unwrap();
+
+        assert_eq!(
+            store.stop_non_persistent_running().unwrap(),
+            vec!["ephemeral".to_string()]
+        );
+        let fleet = store.load().unwrap();
+        assert_eq!(
+            fleet.equipiers["ephemeral"].lifecycle_state,
+            DesiredLifecycleState::Stopped
+        );
+        assert_eq!(
+            fleet.equipiers["persistent"].lifecycle_state,
+            DesiredLifecycleState::Running
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn lien_agent_optionnel_survit_au_roundtrip_fleet() {
+        let root = test_root("agent-link");
+        let path = root.join("fleet.json");
+        let store = DesiredStateStore::at_path(&path);
+        let mut entry = equipier("command-link", 1);
+        entry.agent_link = Some(DesiredAgentLink {
+            link_id: "link-1".to_string(),
+            parent_instance_id: "instance-parent".to_string(),
+            parent_execution_id: Some("execution-parent".to_string()),
+            objective_id: Some("objective-1".to_string()),
+            delegation_id: Some("delegation-1".to_string()),
+            project: None,
+            role: "verification".to_string(),
+            agent_path: "instance-parent/instance-child".to_string(),
+        });
+        store.upsert("child".to_string(), entry).unwrap();
+        let loaded = store.load().unwrap();
+        let link = loaded.equipiers["child"].agent_link.as_ref().unwrap();
+        assert_eq!(loaded.schema, FLEET_SCHEMA_VERSION);
+        assert_eq!(link.parent_instance_id, "instance-parent");
+        assert_eq!(link.delegation_id.as_deref(), Some("delegation-1"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn fleet_json_schema_1_sans_domain_se_relit() {
         let root = test_root("ancien");
         let path = root.join("fleet.json");
@@ -562,7 +878,10 @@ mod tests {
             .set_domain("codex-1", Some("bridget"))
             .unwrap();
         let rewritten = fs::read_to_string(&path).unwrap();
-        assert!(rewritten.contains("\"schema\": 2"), "{rewritten}");
+        assert!(
+            rewritten.contains(&format!("\"schema\": {FLEET_SCHEMA_VERSION}")),
+            "{rewritten}"
+        );
         assert!(rewritten.contains("\"domain\": \"bridget\""), "{rewritten}");
         fs::remove_dir_all(root).unwrap();
     }
@@ -620,12 +939,12 @@ mod tests {
         let root = test_root("version");
         let path = root.join("fleet.json");
         fs::create_dir_all(&root).unwrap();
-        fs::write(&path, r#"{"schema":3,"equipiers":{}}"#).unwrap();
+        fs::write(&path, r#"{"schema":5,"equipiers":{}}"#).unwrap();
         let error = DesiredStateStore::at_path(&path).load().unwrap_err();
 
         assert!(matches!(
             error,
-            DesiredStateError::UnsupportedSchema { found: Some(3), .. }
+            DesiredStateError::UnsupportedSchema { found: Some(5), .. }
         ));
         assert!(error.to_string().contains(path.to_str().unwrap()));
         fs::write(&path, r#"{"equipiers":{}}"#).unwrap();

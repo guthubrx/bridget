@@ -1,12 +1,22 @@
 //! CLI — point d'entrée unifié pour toutes les sous-commandes bridget.
 
 use crate::daemon::{self, DaemonConfig};
-use bridget_core::{BridgetMessage, router::validate_agent_name};
+use bridget_core::{
+    BridgetMessage,
+    router::{validate_agent_id, validate_technical_label},
+};
 use bridget_transport::protocol::{
-    AgentInfo, AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole,
-    GuichetDurationClass, IdempotencyIssue, LedgerMessage, LedgerScope, PresenceMode, RequestInfo,
-    ReviewTarget, ReviewVerdict, ReviewVerdictEvidence, RuntimeSource, ServiceRequestOperation,
-    ServiceRequestPayload, ServiceSuiteDeclaration, decode, encode, is_canonical_git_sha,
+    AdoptStoppedOutcome, AgentInfo, AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability,
+    ConnectionRole, DecommissionOutcome, GuichetDurationClass, IdempotencyIssue, LedgerMessage,
+    LedgerScope, PresenceMode, ProjectRuntimeOperation, ProjectRuntimeRequest, RelaunchOutcome,
+    RequestInfo, ReviewTarget, ReviewVerdict, ReviewVerdictEvidence, RuntimeSource,
+    ServiceRequestOperation, ServiceRequestPayload, ServiceSuiteDeclaration, decode, encode,
+    is_canonical_git_sha,
+};
+use bridget_transport::protocol::{
+    PROJECT_ROUND_INTERVAL_SECS, PROJECT_ROUND_POLICY_CONTRACT_VERSION, ProjectReference,
+    ProjectRoundDispatchOutcome, ProjectRoundDispatchRequest, ProjectRoundOperation,
+    ProjectRoundOutcome, ProjectRoundRequest,
 };
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::fmt::Write as _;
@@ -65,16 +75,7 @@ fn unknown_argument(command: &str, argument: &str) -> String {
 fn validate_zero_arity_command(command: &str, args: &[String]) -> Result<(), String> {
     if matches!(
         command,
-        "daemon"
-            | "mcp"
-            | "discover"
-            | "status"
-            | "version"
-            | "--version"
-            | "-v"
-            | "help"
-            | "--help"
-            | "-h"
+        "mcp" | "discover" | "status" | "version" | "--version" | "-v" | "help" | "--help" | "-h"
     ) && let Some(argument) = args.first()
     {
         return Err(unknown_argument(command, argument));
@@ -127,21 +128,29 @@ pub fn run() {
 
     // --- Sous-commandes daemon / client ---
     match cmd.as_str() {
-        "daemon" => cmd_daemon(),
+        "daemon" => cmd_daemon(&args[2..]),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
+        "managed-runtime-wrapper" => cmd_managed_runtime_wrapper(&args[2..]),
+        "managed-runtime-stop" => cmd_managed_runtime_stop(&args[2..]),
         "mcp" => cmd_mcp(),
         "ui" => cmd_ui(&args[2..]),
         "attach" => cmd_attach(&args[2..]),
         "spawn" => cmd_spawn(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
+        "relaunch" => cmd_relaunch(&args[2..]),
+        "decommission" => cmd_decommission(&args[2..]),
+        "adopt-stopped" => cmd_adopt_stopped(&args[2..]),
         "send" => cmd_send(&args[2..]),
         "guichet" => cmd_guichet(&args[2..]),
         "cancel" => cmd_cancel(&args[2..]),
         "requests" => cmd_requests(&args[2..]),
         "rename" => cmd_rename(&args[2..]),
         "runtime" => cmd_runtime(&args[2..]),
+        "identity" => cmd_identity(&args[2..]),
         "domain" => cmd_domain(&args[2..]),
+        "project-runtime" => cmd_project_runtime(&args[2..]),
+        "project-round" => cmd_project_round(&args[2..]),
         "dnd" => cmd_dnd(&args[2..]),
         "hook" => cmd_hook(&args[2..]),
         "install-hooks" => cmd_install_hooks(&args[2..]),
@@ -187,8 +196,169 @@ fn cmd_mcp() {
     }
 }
 
-fn cmd_ui(args: &[String]) {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum IdentityCommand {
+    Migrate {
+        apply: bool,
+        db_path: PathBuf,
+        fleet_path: Option<PathBuf>,
+        maicie_config: Option<PathBuf>,
+    },
+}
+
+fn parse_identity_command(args: &[String]) -> Result<IdentityCommand, String> {
+    if args.first().map(String::as_str) != Some("migrate") {
+        return Err("usage: bridget identity migrate --dry-run|--apply [--db <chemin>] [--fleet <chemin>] [--maicie-config <chemin>]".to_string());
+    }
+    let mut apply = None;
+    let mut db_path = None;
+    let mut fleet_path = None;
     let mut maicie_config = None;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--dry-run" => {
+                if apply.replace(false).is_some() {
+                    return Err("bridget identity migrate: mode dupliqué".to_string());
+                }
+            }
+            "--apply" => {
+                if apply.replace(true).is_some() {
+                    return Err("bridget identity migrate: mode dupliqué".to_string());
+                }
+            }
+            "--db" => {
+                index += 1;
+                db_path = args.get(index).map(PathBuf::from);
+                if db_path.is_none() {
+                    return Err(
+                        "bridget identity migrate: --db requiert un chemin absolu".to_string()
+                    );
+                }
+            }
+            "--fleet" => {
+                index += 1;
+                fleet_path = args.get(index).map(PathBuf::from);
+                if fleet_path.is_none() {
+                    return Err(
+                        "bridget identity migrate: --fleet requiert un chemin absolu".to_string(),
+                    );
+                }
+            }
+            "--maicie-config" => {
+                index += 1;
+                maicie_config = args.get(index).map(PathBuf::from);
+                if maicie_config.is_none() {
+                    return Err(
+                        "bridget identity migrate: --maicie-config requiert un chemin absolu"
+                            .to_string(),
+                    );
+                }
+            }
+            option => return Err(unknown_argument("identity migrate", option)),
+        }
+        index += 1;
+    }
+    let db_path = db_path.unwrap_or_else(|| DaemonConfig::default().db_path);
+    for path in [&db_path, fleet_path.as_ref().unwrap_or(&PathBuf::new())] {
+        if !path.as_os_str().is_empty() && !path.is_absolute() {
+            return Err("bridget identity migrate: les chemins doivent être absolus".to_string());
+        }
+    }
+    if maicie_config
+        .as_ref()
+        .is_some_and(|path| !path.is_absolute())
+    {
+        return Err("bridget identity migrate: --maicie-config doit être absolu".to_string());
+    }
+    Ok(IdentityCommand::Migrate {
+        apply: apply.ok_or_else(|| {
+            "bridget identity migrate: --dry-run ou --apply est obligatoire".to_string()
+        })?,
+        db_path,
+        fleet_path,
+        maicie_config,
+    })
+}
+
+fn cmd_identity(args: &[String]) {
+    let command = parse_identity_command(args).unwrap_or_else(|error| exit_argument_error(&error));
+    let IdentityCommand::Migrate {
+        apply,
+        db_path,
+        fleet_path,
+        maicie_config,
+    } = command;
+    let mut paths =
+        crate::identity_migration::IdentityMigrationPaths::for_bridget_db(db_path, maicie_config);
+    if let Some(fleet_path) = fleet_path {
+        paths.fleet_path = fleet_path;
+    }
+    if apply && socket_path().exists() {
+        eprintln!(
+            "bridget identity migrate: daemon actif ou socket encore présent; arrêtez Bridget avant --apply"
+        );
+        std::process::exit(1);
+    }
+    let plan = crate::identity_migration::plan(paths).unwrap_or_else(|error| {
+        eprintln!("bridget identity migrate: {error}");
+        std::process::exit(1);
+    });
+    if !apply {
+        let output = serde_json::json!({
+            "mode": "dry_run",
+            "agents_a_migrer": plan.mapping.len(),
+            "references_legacy": plan.mapping.keys().collect::<Vec<_>>(),
+            "agent_ids_a_retargeter": plan.requires_retarget.iter().collect::<Vec<_>>(),
+            "bridget_db": plan.paths.bridget_db,
+            "fleet_path": plan.paths.fleet_path,
+            "maicie_config": plan.paths.maicie_config,
+            "maicie_db": plan.maicie_db,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output).expect("rapport sérialisable")
+        );
+        return;
+    }
+    let outcome = crate::identity_migration::apply(&plan).unwrap_or_else(|error| {
+        eprintln!("bridget identity migrate: {error}");
+        std::process::exit(1);
+    });
+    let output = serde_json::json!({
+        "mode": "applied",
+        "agents_migres": outcome.migrated_agents,
+        "sauvegardes": outcome.backup_paths,
+        "journal": outcome.journal_path,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&output).expect("rapport sérialisable")
+    );
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum UiCommand {
+    Serve {
+        maicie_config: PathBuf,
+        project_root_policy_path: Option<PathBuf>,
+    },
+    EndpointJson,
+}
+
+/// Grammaire fermée de `bridget ui`: démarrer le relais exige sa configuration
+/// explicite, tandis que Desktop ne peut lire que le contrat JSON versionné.
+fn parse_ui_command(args: &[String]) -> Result<UiCommand, String> {
+    if matches!(args.first().map(String::as_str), Some("endpoint")) {
+        return match &args[1..] {
+            [format] if format == "--json" => Ok(UiCommand::EndpointJson),
+            [] => Err("bridget ui endpoint: --json est obligatoire".to_string()),
+            [option, ..] => Err(unknown_argument("ui endpoint", option)),
+        };
+    }
+
+    let mut maicie_config = None;
+    let mut project_root_policy_path = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -196,28 +366,82 @@ fn cmd_ui(args: &[String]) {
                 index += 1;
                 maicie_config = args.get(index).map(PathBuf::from);
                 if maicie_config.is_none() {
-                    eprintln!("bridget ui: --maicie-config requiert un chemin absolu");
-                    std::process::exit(2);
+                    return Err("bridget ui: --maicie-config requiert un chemin absolu".to_string());
+                }
+            }
+            "--project-root-policy" => {
+                if project_root_policy_path.is_some() {
+                    return Err("bridget ui: --project-root-policy dupliqué".to_string());
+                }
+                index += 1;
+                project_root_policy_path = args.get(index).map(PathBuf::from);
+                if project_root_policy_path.is_none() {
+                    return Err(
+                        "bridget ui: --project-root-policy requiert un chemin absolu".to_string(),
+                    );
+                }
+                if !project_root_policy_path
+                    .as_ref()
+                    .is_some_and(|path| path.is_absolute())
+                {
+                    return Err(
+                        "bridget ui: le chemin --project-root-policy doit être absolu".to_string(),
+                    );
                 }
             }
             option => {
-                eprintln!("bridget ui: option inconnue {option}");
-                std::process::exit(2);
+                return Err(unknown_argument("ui", option));
             }
         }
         index += 1;
     }
-    let maicie_config = maicie_config.unwrap_or_else(|| {
-        eprintln!("bridget ui: --maicie-config <chemin-absolu> est obligatoire");
-        std::process::exit(2);
-    });
+    let maicie_config = maicie_config
+        .ok_or_else(|| "bridget ui: --maicie-config <chemin-absolu> est obligatoire".to_string())?;
     if !maicie_config.is_absolute() {
-        eprintln!("bridget ui: le chemin --maicie-config doit être absolu");
-        std::process::exit(2);
+        return Err("bridget ui: le chemin --maicie-config doit être absolu".to_string());
     }
-    if let Err(error) = crate::ui::run(socket_path(), maicie_config) {
-        eprintln!("bridget ui: {error}");
-        std::process::exit(1);
+    Ok(UiCommand::Serve {
+        maicie_config,
+        project_root_policy_path,
+    })
+}
+
+fn render_ui_endpoint_json(endpoint: &crate::ui::UiEndpoint) -> String {
+    serde_json::json!({
+        "version": 1,
+        "port": endpoint.port,
+        "token": endpoint.token,
+    })
+    .to_string()
+}
+
+fn cmd_ui(args: &[String]) {
+    match parse_ui_command(args) {
+        Ok(UiCommand::Serve {
+            maicie_config,
+            project_root_policy_path,
+        }) => {
+            if let Err(error) = crate::ui::run_with_project_root_policy(
+                socket_path(),
+                maicie_config,
+                project_root_policy_path,
+            ) {
+                eprintln!("bridget ui: {error}");
+                std::process::exit(1);
+            }
+        }
+        Ok(UiCommand::EndpointJson) => {
+            let endpoint = crate::ui::load_ui_endpoint(&crate::ui::ui_endpoint_state_path())
+                .unwrap_or_else(|error| {
+                    eprintln!("bridget ui endpoint: endpoint UI indisponible: {error}");
+                    std::process::exit(1);
+                });
+            println!("{}", render_ui_endpoint_json(&endpoint));
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
     }
 }
 
@@ -246,21 +470,58 @@ fn cmd_managed_wrapper(args: &[String]) {
     }
 }
 
-/// Extrait --name des arguments du wrapper et retourne (name_option, args_restants).
+/// Entrée interne réservée au `docker exec` d'un environnement de projet.
+/// La commande fournisseur est issue de la politique runtime hôte et jamais
+/// du registre utilisateur ou des arguments d'un agent.
+fn cmd_managed_runtime_wrapper(args: &[String]) {
+    if args.len() != 4 {
+        eprintln!(
+            "bridget managed-runtime-wrapper: type, Agent ID, commande interne et définition figée requis"
+        );
+        std::process::exit(2);
+    }
+    let definition = match serde_json::from_str(&args[3]) {
+        Ok(definition) => definition,
+        Err(error) => {
+            eprintln!("bridget managed-runtime-wrapper: définition figée invalide: {error}");
+            std::process::exit(2);
+        }
+    };
+    if let Err(error) =
+        crate::wrapper::launch_runtime_acp(&args[0], &args[1], &args[2], &definition)
+    {
+        eprintln!("bridget managed-runtime-wrapper: {error}");
+        std::process::exit(1);
+    }
+}
+
+/// Entrée interne réservée au superviseur Docker. Elle ne reçoit qu'un UUID
+/// déjà attesté par le lease; aucun nom ni chemin libre n'est accepté.
+fn cmd_managed_runtime_stop(args: &[String]) {
+    if args.len() != 1 {
+        eprintln!("bridget managed-runtime-stop: instance_id requis");
+        std::process::exit(2);
+    }
+    if let Err(error) = crate::wrapper::stop_runtime_acp(&args[0]) {
+        eprintln!("bridget managed-runtime-stop: {error}");
+        std::process::exit(1);
+    }
+}
+
 fn extract_wrapper_args(args: &[String]) -> (Option<String>, Vec<String>) {
-    let mut name = None;
+    let mut agent_id = None;
     let mut rest = Vec::new();
     let mut i = 0;
     while i < args.len() {
-        if args[i] == "--name" && i + 1 < args.len() {
-            name = Some(args[i + 1].clone());
+        if args[i] == "--agent-id" && i + 1 < args.len() {
+            agent_id = Some(args[i + 1].clone());
             i += 2;
         } else {
             rest.push(args[i].clone());
             i += 1;
         }
     }
-    (name, rest)
+    (agent_id, rest)
 }
 
 fn which(cmd: &str) -> bool {
@@ -293,14 +554,20 @@ fn print_usage() {
            daemon                 Lance le daemon\n  \
            mcp                    Lance le serveur MCP sur stdio\n  \
            ui --maicie-config <P> Lance le relais UI (port+jeton stables)\n  \
+           ui endpoint --json     Lit l'endpoint UI existant pour un client SSH\n  \
            attach <N>             Suit un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
-           spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--name N]\n  \
+           spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID]\n  \
            stop <N>               Arrête un équipier géré\n  \
+           relaunch <N>           Relance un équipier géré arrêté\n  \
+           decommission <N>       Retire un équipier de la flotte visible\n  \
+           adopt-stopped <N>...   Importe explicitement d'anciens agents arrêtés\n  \
            send --to <N> [--] <MSG> Envoie un message\n  \
            reply [--] <MSG>       Répond au dernier expéditeur\n  \
            cancel <ID>            Annule une demande suivie [--reason <T>]\n  \
            requests [--all]       Mes demandes (défaut) ou toutes les ouvertes\n  \
            rename <N>             Renomme l'agent courant\n  \
+           project-runtime <OP> --project <ID> Prépare, consulte ou recrée Docker\n  \
+           project-round <OP>       Pilote ou déclenche la ronde par projet\n  \
            runtime --model <M>    Déclare le modèle courant [--effort <E>]\n  \
            domain <N> | --reset   Change le domaine de l'agent courant\n  \
            dnd [off]              Ne pas déranger [--duration 30m]\n  \
@@ -315,6 +582,7 @@ fn print_usage() {
            version                Version\n  \
            help                   Cette aide\n\n\
          Options de send :\n  \
+           identity migrate --dry-run|--apply [--db <P>] [--fleet <P>] [--maicie-config <P>]\n  \
            --to <nom>             Destinataire (requis)\n  \
            --from <nom>           Se nommer ; le nom doit être adressable en\n  \
            \x20                      retour, sinon l'envoi est refusé\n  \
@@ -378,7 +646,7 @@ const SPAWN_SURVIE_CONTRADICTOIRE: &str =
 #[derive(Debug)]
 struct ParsedSpawnArgs {
     agent_type: String,
-    name: Option<String>,
+    agent_id: Option<String>,
     cwd: Option<std::path::PathBuf>,
     persistent: bool,
     persistent_was_set: bool,
@@ -390,7 +658,7 @@ struct ParsedSpawnArgs {
 fn cmd_spawn(args: &[String]) {
     let parsed = parse_spawn_args(args).unwrap_or_else(|error| {
         eprintln!(
-            "usage: bridget spawn <type> (--persistent | --no-persistent) [--name N] \
+            "usage: bridget spawn <type> (--persistent | --no-persistent) [--agent-id UUID] \
              [--cwd CHEMIN] [--timeout S] [--command-id ID]"
         );
         eprintln!("erreur: {error}");
@@ -411,12 +679,12 @@ fn cmd_spawn(args: &[String]) {
         eprintln!("bridget spawn: {error}");
         std::process::exit(1);
     });
-    if let Some(name) = parsed.name.as_deref()
+    if let Some(agent_id) = parsed.agent_id.as_deref()
         && !parsed.persistent
     {
         eprintln!(
             "avertissement: {}",
-            crate::recovery_trace::non_persistent_spawn_warning(name)
+            crate::recovery_trace::non_persistent_spawn_warning(agent_id)
         );
     }
     let command_id = match &order {
@@ -425,8 +693,8 @@ fn cmd_spawn(args: &[String]) {
     };
     println!("command_id: {command_id}");
     match send_control_to_daemon(order) {
-        Ok(DaemonToWrapper::SpawnAccepted { name, .. }) => {
-            println!("Équipier connecté : {name}");
+        Ok(DaemonToWrapper::SpawnAccepted { .. }) => {
+            println!("Équipier connecté.");
         }
         Ok(DaemonToWrapper::SpawnRejected { reason, .. }) => {
             eprintln!("SPAWN REFUSÉ: {}", display_spawn_refusal(&reason));
@@ -458,7 +726,7 @@ fn cmd_stop(args: &[String]) {
     });
     println!("command_id: {command_id}");
     match send_control_to_daemon(WrapperToDaemon::StopOrder {
-        name,
+        agent_id: name,
         command_id: command_id.clone(),
     }) {
         Ok(DaemonToWrapper::StopResult { outcome, .. }) => match outcome {
@@ -490,16 +758,165 @@ fn cmd_stop(args: &[String]) {
     }
 }
 
+fn cmd_relaunch(args: &[String]) {
+    let (name, command_id) = parse_lifecycle_args(args, "relaunch").unwrap_or_else(|error| {
+        eprintln!("usage: bridget relaunch <nom> [--command-id ID]");
+        eprintln!("erreur: {error}");
+        std::process::exit(2);
+    });
+    println!("command_id: {command_id}");
+    match send_control_to_daemon(WrapperToDaemon::RelaunchOrder {
+        agent_id: name,
+        command_id: command_id.clone(),
+    }) {
+        Ok(DaemonToWrapper::RelaunchResult { outcome, .. }) => match outcome {
+            RelaunchOutcome::Started { generation, .. } => {
+                println!("Équipier relancé (génération {generation}).")
+            }
+            RelaunchOutcome::AlreadyRunning => {
+                eprintln!("RELANCE REFUSÉE: l'équipier est déjà actif");
+                std::process::exit(1);
+            }
+            RelaunchOutcome::NotManaged => {
+                eprintln!("RELANCE REFUSÉE: l'agent n'est pas géré par le daemon");
+                std::process::exit(1);
+            }
+            RelaunchOutcome::NotFound => {
+                eprintln!("RELANCE REFUSÉE: équipier introuvable");
+                std::process::exit(1);
+            }
+            RelaunchOutcome::NotRelaunchable { reason } => {
+                eprintln!("RELANCE REFUSÉE: {reason}");
+                std::process::exit(1);
+            }
+            RelaunchOutcome::Rejected { reason } => {
+                eprintln!("RELANCE REFUSÉE: {}", display_spawn_refusal(&reason));
+                std::process::exit(1);
+            }
+            RelaunchOutcome::Timeout { state } => {
+                eprintln!("RELANCE INCOMPLÈTE: délai dépassé dans l'état {state}");
+                std::process::exit(1);
+            }
+        },
+        Ok(other) => {
+            eprintln!("réponse relaunch inattendue du daemon: {other:?}");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("daemon inaccessible: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_decommission(args: &[String]) {
+    let (name, command_id) = parse_lifecycle_args(args, "decommission").unwrap_or_else(|error| {
+        eprintln!("usage: bridget decommission <nom> [--command-id ID]");
+        eprintln!("erreur: {error}");
+        std::process::exit(2);
+    });
+    println!("command_id: {command_id}");
+    match send_control_to_daemon(WrapperToDaemon::DecommissionOrder {
+        agent_id: name,
+        command_id: command_id.clone(),
+    }) {
+        Ok(DaemonToWrapper::DecommissionResult { outcome, .. }) => match outcome {
+            DecommissionOutcome::Decommissioned => {
+                println!("Équipier décommissionné. Historique conservé.")
+            }
+            DecommissionOutcome::DecommissionedForced { survivors_killed } => println!(
+                "Équipier décommissionné après arrêt forcé ({survivors_killed} processus survivants terminés). Historique conservé."
+            ),
+            DecommissionOutcome::AlreadyDecommissioned => {
+                println!("Équipier déjà décommissionné.")
+            }
+            DecommissionOutcome::NotManaged => {
+                eprintln!("DÉCOMMISSIONNEMENT REFUSÉ: l'agent n'est pas géré par le daemon");
+                std::process::exit(1);
+            }
+            DecommissionOutcome::NotFound => {
+                eprintln!("DÉCOMMISSIONNEMENT REFUSÉ: équipier introuvable");
+                std::process::exit(1);
+            }
+            DecommissionOutcome::Timeout { state } => {
+                eprintln!("DÉCOMMISSIONNEMENT INCOMPLET: {state}");
+                std::process::exit(1);
+            }
+        },
+        Ok(other) => {
+            eprintln!("réponse decommission inattendue du daemon: {other:?}");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("daemon inaccessible: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_adopt_stopped(args: &[String]) {
+    if args.is_empty() {
+        eprintln!("usage: bridget adopt-stopped <nom>...");
+        std::process::exit(2);
+    }
+    for name in args {
+        if let Err(error) = validate_agent_id(name) {
+            eprintln!("adopt-stopped: agent_id invalide {name}: {error}");
+            std::process::exit(2);
+        }
+    }
+    let mut refused = false;
+    for name in args {
+        let command_id = uuid::Uuid::new_v4().to_string();
+        match send_control_to_daemon(WrapperToDaemon::AdoptStoppedOrder {
+            agent_id: name.clone(),
+            command_id,
+        }) {
+            Ok(DaemonToWrapper::AdoptStoppedResult { outcome, .. }) => match outcome {
+                AdoptStoppedOutcome::Adopted { generation } => {
+                    println!("{name}: adopté en état arrêté (génération {generation})")
+                }
+                AdoptStoppedOutcome::AlreadyManaged => {
+                    println!("{name}: déjà géré par le registre durable")
+                }
+                AdoptStoppedOutcome::NotStopped => {
+                    eprintln!("{name}: refusé, l'agent est encore actif ou injoignable");
+                    refused = true;
+                }
+                AdoptStoppedOutcome::NoManagedHistory => {
+                    eprintln!("{name}: refusé, aucune génération gérée connectée n'est prouvée");
+                    refused = true;
+                }
+                AdoptStoppedOutcome::IncompleteHistory { reason } => {
+                    eprintln!("{name}: refusé, historique géré incomplet: {reason}");
+                    refused = true;
+                }
+            },
+            Ok(other) => {
+                eprintln!("{name}: réponse d'adoption inattendue du daemon: {other:?}");
+                refused = true;
+            }
+            Err(error) => {
+                eprintln!("{name}: daemon inaccessible: {error}");
+                refused = true;
+            }
+        }
+    }
+    if refused {
+        std::process::exit(1);
+    }
+}
+
 fn parse_spawn_args(args: &[String]) -> Result<ParsedSpawnArgs, String> {
     let agent_type = args
         .first()
         .filter(|value| !value.starts_with('-'))
         .cloned()
         .ok_or_else(|| "type d'agent manquant".to_string())?;
-    validate_agent_name(&agent_type)?;
+    validate_technical_label(&agent_type)?;
     let mut parsed = ParsedSpawnArgs {
         agent_type,
-        name: None,
+        agent_id: None,
         cwd: None,
         persistent: false,
         persistent_was_set: false,
@@ -526,15 +943,15 @@ fn parse_spawn_args(args: &[String]) -> Result<ParsedSpawnArgs, String> {
                 parsed.persistent_was_set = true;
                 index += 1;
             }
-            "--name" | "--cwd" | "--command-id" | "--timeout" => {
+            "--agent-id" | "--cwd" | "--command-id" | "--timeout" => {
                 let option = args[index].as_str();
                 let value = args
                     .get(index + 1)
                     .ok_or_else(|| format!("valeur manquante pour {option}"))?;
                 match option {
-                    "--name" => {
-                        validate_agent_name(value)?;
-                        parsed.name = Some(value.clone());
+                    "--agent-id" => {
+                        validate_agent_id(value)?;
+                        parsed.agent_id = Some(value.clone());
                     }
                     "--cwd" => parsed.cwd = Some(std::path::PathBuf::from(value)),
                     "--command-id" => {
@@ -562,18 +979,22 @@ fn parse_spawn_args(args: &[String]) -> Result<ParsedSpawnArgs, String> {
 }
 
 fn parse_stop_args(args: &[String]) -> Result<(String, String), String> {
+    parse_lifecycle_args(args, "stop")
+}
+
+fn parse_lifecycle_args(args: &[String], action: &str) -> Result<(String, String), String> {
     let name = args
         .first()
         .cloned()
         .ok_or_else(|| "nom manquant".to_string())?;
-    validate_agent_name(&name)?;
+    validate_agent_id(&name)?;
     let command_id = match args.get(1).map(String::as_str) {
         None => uuid::Uuid::new_v4().to_string(),
         Some("--command-id") if args.len() == 3 => {
             validate_command_id(&args[2])?;
             args[2].clone()
         }
-        Some(_) => return Err("options stop invalides".to_string()),
+        Some(_) => return Err(format!("options {action} invalides")),
     };
     Ok((name, command_id))
 }
@@ -610,12 +1031,19 @@ fn resolve_spawn_order(
     }
     let order = WrapperToDaemon::SpawnOrder {
         agent_type: parsed.agent_type.clone(),
-        name: parsed.name.clone(),
+        project: None,
+        agent_id: Some(
+            parsed
+                .agent_id
+                .clone()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        ),
         cwd: cwd.to_string_lossy().into_owned(),
         persistent: parsed.persistent,
         command_id,
         issued_at: now,
         deadline_at: now.saturating_add(parsed.timeout_secs),
+        ownership: None,
     };
     let bytes = format!("{}\n", encode(&order).map_err(|error| error.to_string())?).into_bytes();
     bridget_transport::fsutil::write_private_file_atomic(&path, &bytes).map_err(|error| {
@@ -656,7 +1084,7 @@ mod spawn_executor_tests {
                 writer,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
-                    name: "cli-cwd-oracle".to_string(),
+                    agent_id: "cli-cwd-oracle".to_string(),
                 })
                 .expect("Registered encodable")
             )
@@ -771,14 +1199,14 @@ mod spawn_executor_tests {
             &socket_valide,
             DaemonToWrapper::SpawnAccepted {
                 command_id: "cwd-executor-valide".to_string(),
-                name: "fixture-cwd".to_string(),
+                agent_id: "fixture-cwd".to_string(),
                 definition: None,
             },
         );
         assert!(matches!(
             send_control_to_daemon_at(&socket_valide, ordre_valide),
-            Ok(DaemonToWrapper::SpawnAccepted { command_id, name, .. })
-                if command_id == "cwd-executor-valide" && name == "fixture-cwd"
+            Ok(DaemonToWrapper::SpawnAccepted { command_id, agent_id, .. })
+                if command_id == "cwd-executor-valide" && agent_id == "fixture-cwd"
         ));
         assert!(matches!(
             daemon_valide.join().expect("daemon valide termine"),
@@ -795,7 +1223,7 @@ fn validate_retry_options(
 ) -> Result<(), String> {
     let WrapperToDaemon::SpawnOrder {
         agent_type,
-        name,
+        agent_id: name,
         cwd,
         persistent,
         ..
@@ -805,7 +1233,7 @@ fn validate_retry_options(
     };
     if &parsed.agent_type != agent_type
         || parsed
-            .name
+            .agent_id
             .as_ref()
             .is_some_and(|value| Some(value) != name.as_ref())
         || parsed
@@ -917,6 +1345,14 @@ fn display_spawn_refusal(reason: &SpawnRefusal) -> String {
                 "répertoire de travail introuvable sur {searched_on}, demandé depuis {requested_from}"
             )
         }
+        SpawnRefusal::ProjectCwdMismatch { project_id } => {
+            format!("répertoire de travail hors de la liaison du projet '{project_id}'")
+        }
+        SpawnRefusal::DockerRuntimeUnavailable { project_id } => {
+            format!(
+                "lancement Docker indisponible pour le projet {project_id}; aucun repli hote n a ete execute"
+            )
+        }
         SpawnRefusal::NegotiationFailed { detail } => format!("négociation échouée: {detail}"),
         SpawnRefusal::SpawnTimeout => "délai de lancement dépassé".to_string(),
         SpawnRefusal::QuotaExceeded { limit } => format!("quota de flotte atteint ({limit})"),
@@ -934,9 +1370,9 @@ fn unix_timestamp() -> i64 {
 
 fn parse_attach_args(args: &[String]) -> Result<(String, AttachWindow), String> {
     let Some(agent) = args.first() else {
-        return Err("nom d'équipier manquant".to_string());
+        return Err("agent_id d'équipier manquant".to_string());
     };
-    validate_agent_name(agent)?;
+    validate_agent_id(agent)?;
     let window = match args.get(1).map(String::as_str) {
         None => AttachWindow::Today,
         Some("--from-seq") if args.len() == 3 => {
@@ -958,67 +1394,118 @@ fn cmd_rename(args: &[String]) {
     }
 
     // Validation du nouveau nom (H-001)
-    if let Err(e) = validate_agent_name(&args[0]) {
+    if let Err(e) = validate_technical_label(&args[0]) {
         eprintln!("erreur: {}", e);
         std::process::exit(2);
     }
 
-    let current_name = current_agent_name();
-    if current_name == "human" {
+    let current_agent_id = current_agent_id();
+    if current_agent_id == "human" {
         eprintln!("rename indisponible hors d'un agent Bridget");
         std::process::exit(1);
     }
-    match send_rename_to_daemon(&current_name, &args[0]) {
-        Ok(DaemonToWrapper::Renamed { old_name, name }) => {
-            if let Ok(path) = std::env::var("BRIDGET_AGENT_NAME_FILE") {
-                let _ = std::fs::write(path, &name);
-            }
-            let parent = socket_path().parent().unwrap().to_path_buf();
-            let _ = std::fs::rename(
-                parent.join(format!("last-sender-{}", old_name)),
-                parent.join(format!("last-sender-{}", name)),
-            );
-            println!("Renommé : « {} » → « {} »", old_name, name);
-        }
-        Ok(DaemonToWrapper::Nack { reason, .. }) => {
-            eprintln!("REJET: {}", reason);
-            std::process::exit(1);
-        }
-        Ok(_) => {
-            eprintln!("réponse inattendue du daemon");
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("daemon inaccessible: {}", e);
-            std::process::exit(1);
-        }
-    }
+    eprintln!("rename de route supprimé : modifiez le nom affiché dans les réglages de l’agent");
+    std::process::exit(2);
 }
 
-fn current_agent_name() -> String {
-    let file_name = std::env::var("BRIDGET_AGENT_NAME_FILE")
+fn current_agent_id() -> String {
+    let file_agent_id = std::env::var("BRIDGET_AGENT_ID_FILE")
         .ok()
         .and_then(|path| std::fs::read_to_string(path).ok());
-    resolve_cli_agent_name(
-        file_name.as_deref(),
-        std::env::var("BRIDGET_AGENT_NAME").ok().as_deref(),
+    resolve_cli_agent_id(
+        file_agent_id.as_deref(),
+        std::env::var("BRIDGET_AGENT_ID").ok().as_deref(),
     )
 }
 
-/// Repli binaire : le nom vient du fichier puis de l'env. Sans les deux, on
+/// Repli binaire : l'identifiant vient du fichier puis de l'env. Sans les deux, on
 /// n'invente pas d'identité d'équipier — le daemon conserve `cli-send-<pid>`.
-fn resolve_cli_agent_name(file_name: Option<&str>, env_name: Option<&str>) -> String {
-    if let Some(name) = file_name.map(str::trim).filter(|name| !name.is_empty()) {
-        return name.to_string();
+fn resolve_cli_agent_id(file_agent_id: Option<&str>, env_agent_id: Option<&str>) -> String {
+    if let Some(agent_id) = file_agent_id
+        .map(str::trim)
+        .filter(|agent_id| validate_agent_id(agent_id).is_ok())
+    {
+        return agent_id.to_string();
     }
-    if let Some(name) = env_name.map(str::trim).filter(|name| !name.is_empty()) {
-        return name.to_string();
+    if let Some(agent_id) = env_agent_id
+        .map(str::trim)
+        .filter(|agent_id| validate_agent_id(agent_id).is_ok())
+    {
+        return agent_id.to_string();
     }
     "human".to_string()
 }
 
-fn cmd_daemon() {
-    let config = DaemonConfig::default();
+fn cmd_daemon(args: &[String]) {
+    let mut project_root_policy_path = None;
+    let mut project_runtime_policy_path = None;
+    let mut project_resource_catalog_path = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--project-root-policy" => {
+                if project_root_policy_path.is_some() {
+                    eprintln!("bridget daemon: --project-root-policy dupliqué");
+                    std::process::exit(2);
+                }
+                index += 1;
+                let Some(path) = args.get(index).map(PathBuf::from) else {
+                    eprintln!("bridget daemon: --project-root-policy requiert un chemin absolu");
+                    std::process::exit(2);
+                };
+                if !path.is_absolute() {
+                    eprintln!("bridget daemon: --project-root-policy doit être absolu");
+                    std::process::exit(2);
+                }
+                project_root_policy_path = Some(path);
+            }
+            "--project-runtime-policy" => {
+                if project_runtime_policy_path.is_some() {
+                    eprintln!("bridget daemon: --project-runtime-policy dupliqué");
+                    std::process::exit(2);
+                }
+                index += 1;
+                let Some(path) = args.get(index).map(PathBuf::from) else {
+                    eprintln!("bridget daemon: --project-runtime-policy requiert un chemin absolu");
+                    std::process::exit(2);
+                };
+                if !path.is_absolute() {
+                    eprintln!("bridget daemon: --project-runtime-policy doit être absolu");
+                    std::process::exit(2);
+                }
+                project_runtime_policy_path = Some(path);
+            }
+            "--project-resource-catalog" => {
+                if project_resource_catalog_path.is_some() {
+                    eprintln!("bridget daemon: --project-resource-catalog dupliqué");
+                    std::process::exit(2);
+                }
+                index += 1;
+                let Some(path) = args.get(index).map(PathBuf::from) else {
+                    eprintln!(
+                        "bridget daemon: --project-resource-catalog requiert un chemin absolu"
+                    );
+                    std::process::exit(2);
+                };
+                if !path.is_absolute() {
+                    eprintln!("bridget daemon: --project-resource-catalog doit être absolu");
+                    std::process::exit(2);
+                }
+                project_resource_catalog_path = Some(path);
+            }
+            option => {
+                eprintln!("bridget daemon: option inconnue {option}");
+                std::process::exit(2);
+            }
+        }
+        index += 1;
+    }
+    let config = DaemonConfig {
+        project_root_policy_path,
+        project_resource_catalog_path,
+        project_runtime_policy_path,
+        ..DaemonConfig::default()
+    };
     match daemon::run(config) {
         Ok(_) => {}
         Err(e) => {
@@ -1096,14 +1583,15 @@ fn cmd_send(args: &[String]) {
         Some(t) => t,
         None => {
             eprintln!(
-                "usage: bridget send --to <nom> [--from <nom>] [--in-reply-to ID] [--reply] [--hops N] [--] <message>"
+                "usage: bridget send --to <agent_id> [--from <agent_id>] [--in-reply-to ID] [--reply] [--hops N] [--] <message>"
             );
             std::process::exit(2);
         }
     };
 
-    // Validation du destinataire (H-001)
-    if let Err(e) = validate_agent_name(&to) {
+    // Le transport ne connaît que les principaux opaques : aucun alias
+    // historique ne peut être accepté par la CLI.
+    if let Err(e) = validate_agent_id(&to) {
         eprintln!("erreur: {}", e);
         std::process::exit(2);
     }
@@ -1124,7 +1612,12 @@ fn cmd_send(args: &[String]) {
     // d'un nom de repli, sans quoi il ne sait pas s'il a le droit de le
     // remplacer par l'identité éphémère de la connexion.
     let from_declared = from.is_some();
-    let sender = from.unwrap_or_else(current_agent_name);
+    let sender = from.unwrap_or_else(current_agent_id);
+    if sender != "human"
+        && let Err(error) = validate_agent_id(&sender)
+    {
+        exit_argument_error(&error);
+    }
     if let Err(error) = validate_reply_options(&sender, reply, timeout_secs) {
         exit_argument_error(&error);
     }
@@ -1331,11 +1824,11 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
         index += 1;
     }
 
-    let from = from.unwrap_or_else(current_agent_name);
+    let from = from.unwrap_or_else(current_agent_id);
     if from == "human" {
         return Err("--from est requis hors wrapper Bridget".to_string());
     }
-    validate_agent_name(&from)?;
+    validate_agent_id(&from)?;
     let retry = idempotent_options(id, issued_at, issuer_scope)?;
     let scope_identity =
         std::env::var("BRIDGET_AGENT_INSTANCE_ID").unwrap_or_else(|_| from.clone());
@@ -1854,10 +2347,11 @@ fn send_control_to_daemon(command: WrapperToDaemon) -> Result<DaemonToWrapper, S
 /// de lancement ne pouvait pas nommer la machine demandeuse. Trois copies du
 /// même bloc, c'est trois occasions d'oublier la même chose ; il n'y en a plus
 /// qu'une.
-fn cli_register(usage: &str) -> WrapperToDaemon {
+fn cli_register(_usage: &str) -> WrapperToDaemon {
     WrapperToDaemon::Register {
         agent_type: "cli".to_string(),
-        name: Some(format!("cli-{usage}-{}", std::process::id())),
+        identity_version: 2,
+        agent_id: uuid::Uuid::new_v4().to_string(),
         host: Some(crate::build_info::local_host()),
         transport: None,
         channel: bridget_transport::ChannelReport::Unknown,
@@ -1939,7 +2433,7 @@ fn cmd_cancel(args: &[String]) {
     });
     match send_control_to_daemon(WrapperToDaemon::CancelRequest {
         id: parsed.id.clone(),
-        sender: current_agent_name(),
+        sender: current_agent_id(),
         reason: parsed.reason,
     }) {
         Ok(DaemonToWrapper::RequestCancelled { state, .. }) => {
@@ -1984,7 +2478,7 @@ fn cmd_requests(args: &[String]) {
         })
     } else {
         send_control_to_daemon(WrapperToDaemon::ListRequests {
-            sender: current_agent_name(),
+            sender: current_agent_id(),
             limit: 200,
         })
     };
@@ -2123,30 +2617,6 @@ fn request_report(request: &RequestInfo) -> String {
         .unwrap_or_else(|| "—".to_string())
 }
 
-fn send_rename_to_daemon(current_name: &str, name: &str) -> Result<DaemonToWrapper, String> {
-    let stream = UnixStream::connect(socket_path()).map_err(|e| e.to_string())?;
-    let read_stream = stream.try_clone().map_err(|e| e.to_string())?;
-    let mut writer = BufWriter::new(stream);
-    let mut reader = BufReader::new(read_stream);
-    let register = cli_register("rename");
-    writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    writer.flush().map_err(|e| e.to_string())?;
-    let mut line = String::new();
-    reader.read_line(&mut line).map_err(|e| e.to_string())?;
-    let _: DaemonToWrapper = decode(line.trim()).map_err(|e| e.to_string())?;
-    let rename = WrapperToDaemon::Rename {
-        current_name: current_name.to_string(),
-        name: name.to_string(),
-    };
-    writeln!(writer, "{}", encode(&rename).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    writer.flush().map_err(|e| e.to_string())?;
-    line.clear();
-    reader.read_line(&mut line).map_err(|e| e.to_string())?;
-    decode(line.trim()).map_err(|e| e.to_string())
-}
-
 /// Transmet une observation de runtime au daemon depuis le client CLI.
 ///
 /// Le client s'enregistre sous une identité éphémère : c'est le champ `agent`
@@ -2191,6 +2661,474 @@ fn send_runtime_to_daemon(
     decode(line.trim()).map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectRoundCliOperation {
+    Policy(ProjectRoundOperation),
+    Dispatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectRoundCliCommand {
+    operation: ProjectRoundCliOperation,
+    project_id: Option<String>,
+    binding_generation: Option<u64>,
+    command_id: Option<String>,
+    occurrence_at: Option<i64>,
+    json: bool,
+}
+
+fn parse_project_round_args(args: &[String]) -> Result<ProjectRoundCliCommand, String> {
+    let operation = match args.first().map(String::as_str) {
+        Some("list") => ProjectRoundCliOperation::Policy(ProjectRoundOperation::List),
+        Some("status") => ProjectRoundCliOperation::Policy(ProjectRoundOperation::Status),
+        Some("enable") => ProjectRoundCliOperation::Policy(ProjectRoundOperation::Enable),
+        Some("disable") => ProjectRoundCliOperation::Policy(ProjectRoundOperation::Disable),
+        Some("dispatch") => ProjectRoundCliOperation::Dispatch,
+        Some(other) => {
+            return Err(format!(
+                "project-round: opération inconnue: {other}; attendu list, status, enable, disable ou dispatch"
+            ));
+        }
+        None => return Err("project-round: opération manquante".to_string()),
+    };
+    let mut project_id = None;
+    let mut binding_generation = None;
+    let mut command_id = None;
+    let mut occurrence_at = None;
+    let mut json = false;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--project" => {
+                if project_id.is_some() {
+                    return Err("project-round: --project dupliqué".to_string());
+                }
+                index += 1;
+                project_id = args.get(index).cloned();
+                if project_id
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    return Err("project-round: --project requiert un identifiant".to_string());
+                }
+            }
+            "--binding-generation" => {
+                if binding_generation.is_some() {
+                    return Err("project-round: --binding-generation dupliqué".to_string());
+                }
+                index += 1;
+                binding_generation = Some(
+                    args.get(index)
+                        .ok_or_else(|| {
+                            "project-round: --binding-generation requiert un entier".to_string()
+                        })?
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|value| *value > 0)
+                        .ok_or_else(|| {
+                            "project-round: --binding-generation requiert un entier positif"
+                                .to_string()
+                        })?,
+                );
+            }
+            "--command-id" => {
+                if command_id.is_some() {
+                    return Err("project-round: --command-id dupliqué".to_string());
+                }
+                index += 1;
+                let value = args
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| "project-round: --command-id requiert une valeur".to_string())?;
+                validate_command_id(&value)?;
+                command_id = Some(value);
+            }
+            "--occurrence" => {
+                if occurrence_at.is_some() {
+                    return Err("project-round: --occurrence dupliqué".to_string());
+                }
+                index += 1;
+                occurrence_at = Some(
+                    args.get(index)
+                        .ok_or_else(|| {
+                            "project-round: --occurrence requiert un instant Unix".to_string()
+                        })?
+                        .parse::<i64>()
+                        .ok()
+                        .filter(|value| *value >= 0)
+                        .ok_or_else(|| {
+                            "project-round: --occurrence requiert un instant Unix positif ou nul"
+                                .to_string()
+                        })?,
+                );
+            }
+            "--json" if !json => json = true,
+            "--json" => return Err("project-round: --json dupliqué".to_string()),
+            option => return Err(unknown_argument("project-round", option)),
+        }
+        index += 1;
+    }
+
+    match operation {
+        ProjectRoundCliOperation::Policy(ProjectRoundOperation::List)
+            if project_id.is_none() && binding_generation.is_none() && occurrence_at.is_none() => {}
+        ProjectRoundCliOperation::Policy(ProjectRoundOperation::Status)
+            if project_id.is_some() && binding_generation.is_none() && occurrence_at.is_none() => {}
+        ProjectRoundCliOperation::Policy(
+            ProjectRoundOperation::Enable | ProjectRoundOperation::Disable,
+        ) if project_id.is_some() && binding_generation.is_some() && occurrence_at.is_none() => {}
+        ProjectRoundCliOperation::Dispatch
+            if project_id.is_none() && binding_generation.is_none() && command_id.is_none() => {}
+        ProjectRoundCliOperation::Policy(_) => {
+            return Err(
+                "project-round: forme invalide pour list/status/enable/disable".to_string(),
+            );
+        }
+        ProjectRoundCliOperation::Dispatch => {
+            return Err(
+                "project-round dispatch: seuls --occurrence et --json sont acceptés".to_string(),
+            );
+        }
+    }
+
+    Ok(ProjectRoundCliCommand {
+        operation,
+        project_id,
+        binding_generation,
+        command_id,
+        occurrence_at,
+        json,
+    })
+}
+
+fn send_project_round_client_request(request: WrapperToDaemon) -> Result<DaemonToWrapper, String> {
+    let stream = UnixStream::connect(socket_path()).map_err(|error| error.to_string())?;
+    let read_stream = stream.try_clone().map_err(|error| error.to_string())?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+
+    write_control_message(
+        &mut writer,
+        &WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Client,
+        },
+    )?;
+    match read_control_message(&mut reader)? {
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client,
+        } => {}
+        response => return Err(format!("handshake project-round refusé: {response:?}")),
+    }
+
+    write_control_message(
+        &mut writer,
+        &WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: crate::mcp::issuer_scope("project-round-cli-v1"),
+            capabilities: vec![ClientCapability::ProjectRoundPolicyV1],
+        },
+    )?;
+    match read_control_message(&mut reader)? {
+        DaemonToWrapper::ClientWelcome {
+            capabilities,
+            build_id,
+            ..
+        } if capabilities.contains(&ClientCapability::ProjectRoundPolicyV1) => {
+            if let Some(warning) = crate::build_info::stale_daemon_warning(&build_id) {
+                eprintln!("{warning}");
+            }
+        }
+        DaemonToWrapper::ClientRejected { reason } => {
+            return Ok(DaemonToWrapper::ClientRejected { reason });
+        }
+        response => return Err(format!("négociation project-round refusée: {response:?}")),
+    }
+
+    write_control_message(&mut writer, &request)?;
+    read_control_message(&mut reader)
+}
+
+fn request_project_round_policies(
+    operation: ProjectRoundOperation,
+    project_id: Option<String>,
+    binding_generation: Option<u64>,
+    command_id: Option<String>,
+) -> Result<ProjectRoundOutcome, String> {
+    let issued_at = unix_timestamp();
+    let request = ProjectRoundRequest {
+        contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+        command_id: command_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        issued_at,
+        deadline_at: issued_at.saturating_add(60),
+        operation,
+        project_id,
+        binding_generation,
+    };
+    match send_project_round_client_request(WrapperToDaemon::ProjectRoundRequest { request })? {
+        DaemonToWrapper::ProjectRoundOutcome { outcome } => Ok(outcome),
+        response => Err(format!(
+            "réponse de politique de ronde inattendue: {response:?}"
+        )),
+    }
+}
+
+fn dispatch_project_round(
+    occurrence_at: i64,
+    project: ProjectReference,
+) -> Result<ProjectRoundDispatchOutcome, String> {
+    let request = ProjectRoundDispatchRequest {
+        contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+        occurrence_at,
+        project,
+    };
+    match send_project_round_client_request(WrapperToDaemon::ProjectRoundDispatch { request })? {
+        DaemonToWrapper::ProjectRoundDispatchOutcome { outcome } => Ok(outcome),
+        response => Err(format!(
+            "réponse de dispatch de ronde inattendue: {response:?}"
+        )),
+    }
+}
+
+fn print_project_round_policy(outcome: &ProjectRoundOutcome, json: bool) {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(outcome).expect("issue de ronde sérialisable")
+        );
+        return;
+    }
+    if outcome.policies.is_empty() {
+        println!("Aucun projet enregistré.");
+        return;
+    }
+    for policy in &outcome.policies {
+        let state = if policy.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        let configured = if policy.configured {
+            "configurée"
+        } else {
+            "implicite"
+        };
+        println!(
+            "{}: {} ({}, active={}, génération={:?}, révision={})",
+            policy.project_id,
+            state,
+            configured,
+            policy.active,
+            policy.binding_generation,
+            policy.revision
+        );
+    }
+}
+
+fn cmd_project_round(args: &[String]) {
+    let command = parse_project_round_args(args).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        eprintln!(
+            "usage: bridget project-round <list|status|enable|disable|dispatch> [--project ID] [--binding-generation N] [--command-id ID] [--occurrence UNIX] [--json]"
+        );
+        std::process::exit(2);
+    });
+
+    match command.operation {
+        ProjectRoundCliOperation::Policy(operation) => {
+            let outcome = request_project_round_policies(
+                operation,
+                command.project_id,
+                command.binding_generation,
+                command.command_id,
+            )
+            .unwrap_or_else(|error| {
+                eprintln!("project-round: {error}");
+                std::process::exit(1);
+            });
+            if let Some(reason) = outcome.reason {
+                eprintln!("PROJECT-ROUND REFUSÉ: {reason:?}");
+                std::process::exit(1);
+            }
+            print_project_round_policy(&outcome, command.json);
+        }
+        ProjectRoundCliOperation::Dispatch => {
+            let now = unix_timestamp();
+            let occurrence_at = command
+                .occurrence_at
+                .unwrap_or_else(|| now - now.rem_euclid(PROJECT_ROUND_INTERVAL_SECS));
+            let listed =
+                request_project_round_policies(ProjectRoundOperation::List, None, None, None)
+                    .unwrap_or_else(|error| {
+                        eprintln!("project-round dispatch: {error}");
+                        std::process::exit(1);
+                    });
+            if let Some(reason) = listed.reason {
+                eprintln!("PROJECT-ROUND REFUSÉ: {reason:?}");
+                std::process::exit(1);
+            }
+            let mut outcomes = Vec::new();
+            for policy in listed
+                .policies
+                .into_iter()
+                .filter(|policy| policy.active && policy.configured && policy.enabled)
+            {
+                let binding_generation = policy
+                    .binding_generation
+                    .expect("une politique active porte sa génération");
+                let outcome = dispatch_project_round(
+                    occurrence_at,
+                    ProjectReference {
+                        project_id: policy.project_id,
+                        binding_generation,
+                    },
+                )
+                .unwrap_or_else(|error| {
+                    eprintln!("project-round dispatch: {error}");
+                    std::process::exit(1);
+                });
+                outcomes.push(outcome);
+            }
+            if command.json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&outcomes)
+                        .expect("issues de dispatch de ronde sérialisables")
+                );
+            } else if outcomes.is_empty() {
+                println!("Ronde: aucun projet activé.");
+            } else {
+                for outcome in &outcomes {
+                    println!(
+                        "Ronde {}@{} occurrence {}: {}",
+                        outcome.project.project_id,
+                        outcome.project.binding_generation,
+                        outcome.occurrence_at,
+                        if outcome.issue.as_ref().is_some_and(send_deposited) {
+                            "déposée"
+                        } else {
+                            "refusée"
+                        }
+                    );
+                }
+            }
+            if outcomes.iter().any(|outcome| {
+                outcome.reason.is_some()
+                    || outcome
+                        .issue
+                        .as_ref()
+                        .is_none_or(|issue| !send_deposited(issue))
+            }) {
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectRuntimeCliCommand {
+    operation: ProjectRuntimeOperation,
+    project_id: String,
+    command_id: String,
+}
+
+fn parse_project_runtime_args(args: &[String]) -> Result<ProjectRuntimeCliCommand, String> {
+    let operation = match args.first().map(String::as_str) {
+        Some("prepare") => ProjectRuntimeOperation::Prepare,
+        Some("status") => ProjectRuntimeOperation::Status,
+        Some("stop") => ProjectRuntimeOperation::Stop,
+        Some("remove") => ProjectRuntimeOperation::Remove,
+        Some("recreate") => ProjectRuntimeOperation::Recreate,
+        Some("switch-backend") => ProjectRuntimeOperation::SwitchBackend,
+        Some(other) => {
+            return Err(format!(
+                "project-runtime: opération inconnue: {other}; attendu prepare, status, stop, remove, recreate ou switch-backend"
+            ));
+        }
+        None => return Err("project-runtime: opération manquante".to_string()),
+    };
+    let mut project_id = None;
+    let mut command_id = None;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--project" => {
+                index += 1;
+                project_id = args.get(index).cloned();
+                if project_id
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    return Err("project-runtime: --project requiert un identifiant".to_string());
+                }
+            }
+            "--command-id" => {
+                index += 1;
+                command_id = args.get(index).cloned();
+                if command_id
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    return Err("project-runtime: --command-id requiert une valeur".to_string());
+                }
+            }
+            option => return Err(unknown_argument("project-runtime", option)),
+        }
+        index += 1;
+    }
+    let project_id = project_id
+        .ok_or_else(|| "project-runtime: --project <identifiant> est obligatoire".to_string())?;
+    Ok(ProjectRuntimeCliCommand {
+        operation,
+        project_id,
+        command_id: command_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+    })
+}
+
+fn cmd_project_runtime(args: &[String]) {
+    let command = parse_project_runtime_args(args).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        eprintln!(
+            "usage: bridget project-runtime <prepare|status|stop|remove|recreate|switch-backend> --project <identifiant> [--command-id <id>]"
+        );
+        std::process::exit(2);
+    });
+    let issued_at = unix_timestamp();
+    let request = ProjectRuntimeRequest {
+        contract_version: crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION,
+        command_id: command.command_id,
+        issued_at,
+        deadline_at: issued_at.saturating_add(60),
+        operation: command.operation,
+        project_id: command.project_id,
+        profile: None,
+    };
+    match send_control_to_daemon(WrapperToDaemon::ProjectRuntimeRequest { request }) {
+        Ok(DaemonToWrapper::ProjectRuntimeOutcome { outcome }) => {
+            if let Some(reason) = outcome.reason {
+                eprintln!("RUNTIME PROJET REFUSÉ: {reason:?}");
+                std::process::exit(1);
+            }
+            let state = outcome.state.unwrap_or_else(|| "inconnu".to_string());
+            let policy = outcome
+                .runtime_policy
+                .map(|policy| format!("{}@{}", policy.policy_id, policy.policy_version))
+                .unwrap_or_else(|| "sans politique".to_string());
+            println!(
+                "Projet {}: état {}, politique {}, génération {:?}",
+                outcome.project_id, state, policy, outcome.binding_generation
+            );
+        }
+        Ok(other) => {
+            eprintln!("project-runtime: réponse inattendue du daemon: {other:?}");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("project-runtime: daemon inaccessible: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn cmd_runtime(args: &[String]) {
     let mut model: Option<String> = None;
     let mut effort: Option<String> = None;
@@ -2218,7 +3156,7 @@ fn cmd_runtime(args: &[String]) {
         std::process::exit(2);
     };
 
-    let agent = current_agent_name();
+    let agent = current_agent_id();
     if agent == "human" {
         eprintln!("runtime indisponible hors d'un agent Bridget");
         std::process::exit(1);
@@ -2288,7 +3226,7 @@ fn cmd_hook(args: &[String]) {
 fn hook_claude_runtime() {
     // Hors d'un agent Bridget, le hook est inerte : les sessions Claude
     // ordinaires de l'utilisateur ne doivent subir aucun effet.
-    let agent = current_agent_name();
+    let agent = current_agent_id();
     if agent == "human" {
         return;
     }
@@ -2390,7 +3328,7 @@ struct StatusLineLimit {
 fn hook_claude_statusline() {
     // Hors d'un agent Bridget, le hook est inerte : les sessions Claude
     // ordinaires de l'utilisateur ne doivent subir aucun effet.
-    let agent = current_agent_name();
+    let agent = current_agent_id();
     if agent == "human" {
         return;
     }
@@ -2764,7 +3702,7 @@ fn parse_domain_args(args: &[String]) -> Result<Option<String>, String> {
     match args {
         [option] if option == "--reset" => Ok(None),
         [domain] if !domain.starts_with('-') => {
-            validate_agent_name(domain).map_err(|reason| format!("domain: {reason}"))?;
+            validate_technical_label(domain).map_err(|reason| format!("domain: {reason}"))?;
             Ok(Some(domain.clone()))
         }
         [] => Err("domain: nom ou --reset requis".to_string()),
@@ -2782,7 +3720,7 @@ fn cmd_domain(args: &[String]) {
         std::process::exit(2);
     });
 
-    let agent = current_agent_name();
+    let agent = current_agent_id();
     if agent == "human" {
         eprintln!("domain indisponible hors d'un agent Bridget");
         std::process::exit(1);
@@ -2887,7 +3825,7 @@ fn cmd_dnd(args: &[String]) {
         DndArgs::Disable => (true, None),
     };
 
-    let agent = current_agent_name();
+    let agent = current_agent_id();
     if agent == "human" {
         eprintln!("dnd indisponible hors d'un agent Bridget");
         std::process::exit(1);
@@ -2995,14 +3933,14 @@ fn cmd_reply(args: &[String]) {
         i += 1;
     }
 
-    let agent_name = current_agent_name();
-    if let Err(error) = validate_reply_options(&agent_name, reply_flag, timeout_secs) {
+    let agent_id = current_agent_id();
+    if let Err(error) = validate_reply_options(&agent_id, reply_flag, timeout_secs) {
         exit_argument_error(&error);
     }
     let reply_file = socket_path()
         .parent()
         .unwrap()
-        .join(format!("last-sender-{agent_name}"));
+        .join(format!("last-sender-{agent_id}"));
     let previous = match std::fs::read_to_string(&reply_file) {
         Ok(content) => content.trim().to_string(),
         Err(_) => {
@@ -3031,7 +3969,7 @@ fn cmd_reply(args: &[String]) {
         std::process::exit(2);
     }
 
-    let sender = agent_name.clone();
+    let sender = agent_id.clone();
 
     let mut msg = BridgetMessage::new(&sender, &to, &body);
     msg.in_reply_to = explicit_in_reply_to.or(implicit_in_reply_to);
@@ -3157,7 +4095,7 @@ fn cmd_agents(args: &[String]) {
         for agent in &status.agents {
             println!(
                 "  {} ({}) [{}] — {} / {} via {} (canal {}) — {} / {} [{}] — persiste {}",
-                agent.name,
+                agent.display_name,
                 agent.agent_type,
                 cell(agent.domain.as_deref()),
                 agent.host,
@@ -3198,6 +4136,7 @@ fn cmd_who(args: &[String]) {
 
     print!("{}", render_who(&agents, parsed.domain.as_deref()));
     println!("Daemon build-id: {build_id}");
+    emit_disk_trend();
     emit_stale_daemon_warning(status.build_id.as_deref(), status.daemon_host.as_deref());
     emit_disk_warning();
 }
@@ -3220,7 +4159,7 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
             .unwrap_or(0)
             .max(header.chars().count())
     };
-    let name_w = column("NOM", &|a: &AgentInfo| a.name.clone());
+    let name_w = column("NOM", &|a: &AgentInfo| a.display_name.clone());
     let type_w = column("TYPE", &|a: &AgentInfo| a.agent_type.clone());
     let host_w = column("HÔTE", &|a: &AgentInfo| a.host.clone());
     let os_w = column("OS", &|a: &AgentInfo| a.os.clone());
@@ -3260,7 +4199,7 @@ fn render_who(agents: &[AgentInfo], filter: Option<&str>) -> String {
         writeln!(
             output,
             "  {:<name_w$}  {:<type_w$}  {:<host_w$}  {:<os_w$}  {:<transport_w$}  {:<channel_w$}  {:<mode_w$}  {:<location_w$}  {:<domain_w$}  {:<model_w$}  {:<effort_w$}  {:<rate_limit_w$}  {:<disk_w$}  {:<persistent_w$}  {}",
-            agent.name,
+            agent.display_name,
             agent.agent_type,
             agent.host,
             agent.os,
@@ -3711,6 +4650,40 @@ fn emit_disk_warning() {
     }
 }
 
+/// Relève l'espace libre, l'ajoute à l'historique, et publie la pente en pied
+/// d'annuaire.
+///
+/// La colonne DISQUE de `who` est une photographie : elle dit l'espace libre à
+/// l'instant, jamais la vitesse à laquelle il s'en va. Calculer cette vitesse
+/// demande deux relevés espacés, et aucun observateur ne conserve le précédent.
+/// C'est l'historique qui s'en souvient — chaque `who` alimente la mesure que
+/// le `who` suivant pourra lire.
+///
+/// Sous la fenêtre minimale, on affiche un refus nommé plutôt qu'un nombre :
+/// une dérivée sur 90 secondes mesure une compilation, pas une tendance.
+fn emit_disk_trend() {
+    let Some(free_bytes) = crate::disk_hygiene::free_bytes_for(Path::new("/")) else {
+        return;
+    };
+    let observed_at_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or_default();
+    let path = crate::disk_trend::history_path(&crate::reaper::default_state_dir());
+    let trend = crate::disk_trend::record_and_assess(
+        &path,
+        crate::disk_trend::DiskSample {
+            observed_at_unix,
+            free_bytes,
+        },
+    );
+    println!(
+        "Disque / : {:.1} Gio libres · {}",
+        free_bytes as f64 / 1024_f64.powi(3),
+        crate::disk_trend::format_trend(&trend, free_bytes)
+    );
+}
+
 /// Borne d'affichage par défaut du ledger : le maximum que la projection
 /// accepte de lire.
 ///
@@ -3959,6 +4932,27 @@ mod hook_tests {
     }
 
     #[test]
+    fn endpoint_ui_exige_un_contrat_json_ferme() {
+        assert!(matches!(
+            parse_ui_command(&argv(&["endpoint", "--json"])),
+            Ok(UiCommand::EndpointJson)
+        ));
+
+        for invalid in [
+            argv(&["endpoint"]),
+            argv(&["endpoint", "--text"]),
+            argv(&["endpoint", "--json", "surplus"]),
+            argv(&["endpoint", "--maicie-config", "/tmp/config"]),
+        ] {
+            let error = parse_ui_command(&invalid).expect_err("forme endpoint refusée");
+            assert!(
+                !error.contains("jeton-de-test-074"),
+                "une erreur de grammaire ne divulgue jamais un jeton: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn reaper_exige_une_racine_explicitement_choisie() {
         assert!(
             require_explicit_reaper_tmp(None)
@@ -3974,7 +4968,6 @@ mod hook_tests {
     #[test]
     fn commandes_sans_arguments_refusent_le_surplus_qu_elles_recevront_en_production() {
         for command in [
-            "daemon",
             "mcp",
             "discover",
             "status",
@@ -3991,6 +4984,10 @@ mod hook_tests {
             assert!(error.contains("SURPLUS"), "argument absent de {error}");
             assert!(validate_zero_arity_command(command, &[]).is_ok());
         }
+        assert!(
+            validate_zero_arity_command("daemon", &argv(&["--project-root-policy", "/tmp/policy"]))
+                .is_ok()
+        );
         // `ledger` a quitté cette grammaire en recevant `--limit` : il ne doit
         // plus être refusé en amont, sinon l'option n'atteindrait jamais son
         // parseur. Le refus du surplus lui reste dû, mais par `parse_ledger_args`.
@@ -4058,21 +5055,14 @@ mod hook_tests {
     }
 
     #[test]
-    fn repli_cli_prend_le_nom_dans_l_environnement() {
-        assert_eq!(
-            resolve_cli_agent_name(None, Some("fable-reviewer")),
-            "fable-reviewer"
-        );
-        assert_eq!(
-            resolve_cli_agent_name(Some("  "), Some("codex-1")),
-            "codex-1"
-        );
-        assert_eq!(
-            resolve_cli_agent_name(Some("renamed"), Some("old")),
-            "renamed"
-        );
-        assert_eq!(resolve_cli_agent_name(None, None), "human");
-        assert_eq!(resolve_cli_agent_name(None, Some("")), "human");
+    fn repli_cli_n_accepte_que_l_identifiant_uuid_dans_l_environnement() {
+        let first = "550e8400-e29b-41d4-a716-446655440000";
+        let second = "550e8400-e29b-41d4-a716-446655440001";
+        assert_eq!(resolve_cli_agent_id(None, Some(first)), first);
+        assert_eq!(resolve_cli_agent_id(Some("  "), Some(second)), second);
+        assert_eq!(resolve_cli_agent_id(Some(first), Some(second)), first);
+        assert_eq!(resolve_cli_agent_id(None, None), "human");
+        assert_eq!(resolve_cli_agent_id(None, Some("legacy-name")), "human");
     }
 
     #[test]
@@ -4132,10 +5122,14 @@ mod hook_tests {
     fn rendu_ledger_compte_une_ligne_par_message_apres_refus_d_un_nom_avec_lf() {
         let mut router = bridget_core::Router::new();
         router
-            .register(Some("temoin"), &bridget_core::AgentType::Codex, "conn-1")
+            .register(
+                "550e8400-e29b-41d4-a716-446655440000",
+                &bridget_core::AgentType::Codex,
+                "conn-1",
+            )
             .unwrap();
         let _ = router.register(
-            Some("relec\nbridget-faux"),
+            "invalid-agent-id",
             &bridget_core::AgentType::Codex,
             "conn-2",
         );
@@ -4145,7 +5139,7 @@ mod hook_tests {
             .map(|agent| LedgerMessage {
                 id: format!("message-{}", agent.connection_id),
                 ts: 42,
-                sender: agent.name.clone(),
+                sender: agent.agent_id.clone(),
                 target: "victime".to_string(),
                 body: "corps".to_string(),
                 delivery_status: None,
@@ -4451,13 +5445,16 @@ mod hook_tests {
     fn spawn_nomme_sans_persistent_avertit_qu_il_ne_survivra_pas() {
         let parsed = parse_spawn_args(&[
             "cursor".to_string(),
-            "--name".to_string(),
-            "cursor3".to_string(),
+            "--agent-id".to_string(),
+            "550e8400-e29b-41d4-a716-446655440002".to_string(),
             "--no-persistent".to_string(),
         ])
         .unwrap();
         assert!(!parsed.persistent);
-        assert_eq!(parsed.name.as_deref(), Some("cursor3"));
+        assert_eq!(
+            parsed.agent_id.as_deref(),
+            Some("550e8400-e29b-41d4-a716-446655440002")
+        );
         let warning = crate::recovery_trace::non_persistent_spawn_warning("cursor3");
         assert!(warning.contains("cursor3"));
         assert!(warning.contains("ne survivra pas au redémarrage"));
@@ -4663,7 +5660,7 @@ mod hook_tests {
                     writer,
                     "{}",
                     encode(&DaemonToWrapper::Registered {
-                        name: "cli-test".to_string()
+                        agent_id: "cli-test".to_string()
                     })
                     .unwrap()
                 )
@@ -4677,13 +5674,14 @@ mod hook_tests {
                     "{}",
                     encode(&DaemonToWrapper::SpawnAccepted {
                         command_id: "command-lost".to_string(),
-                        name: "codex-managed".to_string(),
+                        agent_id: "codex-managed".to_string(),
                         definition: Some(bridget_transport::ResolvedAgentDefinition {
                             command: "npx".to_string(),
                             args: vec!["fixture-acp".to_string()],
                             protocol: "acp".to_string(),
                             forbidden_env: vec!["OPENAI_API_KEY".to_string()],
                             pass_env: Vec::new(),
+                            claude_config_dir: None,
                             permissions: "allow".to_string(),
                             queue_capacity: 32,
                             notify_timeout_secs: 600,
@@ -4704,18 +5702,20 @@ mod hook_tests {
         });
         let order = WrapperToDaemon::SpawnOrder {
             agent_type: "codex".to_string(),
-            name: Some("codex-managed".to_string()),
+            agent_id: Some("codex-managed".to_string()),
             cwd: "/tmp".to_string(),
             persistent: false,
             command_id: "command-lost".to_string(),
             issued_at: 100,
             deadline_at: 110,
+            project: None,
+            ownership: None,
         };
         for _ in 0..2 {
             assert!(matches!(
                 send_control_to_daemon_at(&socket, order.clone()).unwrap(),
-                DaemonToWrapper::SpawnAccepted { ref command_id, ref name, .. }
-                    if command_id == "command-lost" && name == "codex-managed"
+                DaemonToWrapper::SpawnAccepted { ref command_id, ref agent_id, .. }
+                    if command_id == "command-lost" && agent_id == "codex-managed"
             ));
         }
         let observed = server.join().unwrap();
@@ -4869,7 +5869,8 @@ mod hook_tests {
     fn statusline_remplit_la_colonne_du_referent() {
         let facts = rate_limit_facts_from_statusline(&statusline_payload_complet());
         let agent = AgentInfo {
-            name: "bridget".to_string(),
+            agent_id: uuid::Uuid::new_v4().to_string(),
+            display_name: "bridget".to_string(),
             agent_type: "claude".to_string(),
             connection_id: "conn-referent".to_string(),
             host: "local".to_string(),
@@ -4895,7 +5896,10 @@ mod hook_tests {
                 .collect(),
             model_mismatch: None,
             disk_space: None,
+            provider: None,
             persistent: None,
+            execution: None,
+            agent_link: None,
         };
         let rendered = format_rate_limit(&agent);
         assert!(rendered.contains("5h 19% rst "), "{rendered}");
@@ -5029,7 +6033,8 @@ mod hook_tests {
         let mut referent_reader = BufReader::new(referent);
         let register = WrapperToDaemon::Register {
             agent_type: "claude".to_string(),
-            name: Some("referent-oracle".to_string()),
+            identity_version: 2,
+            agent_id: "referent-oracle".to_string(),
             host: None,
             transport: None,
             channel: None.into(),
@@ -5075,7 +6080,7 @@ mod hook_tests {
         // propriété-là se prouve à la source, dans l'oracle précédent.
         let referent_info = agents
             .iter()
-            .find(|agent| agent.name == "referent-oracle")
+            .find(|agent| agent.display_name == "referent-oracle")
             .expect("le référent doit rester à l'annuaire");
         let mut windows: Vec<_> = referent_info
             .rate_limits
@@ -5151,6 +6156,9 @@ mod idempotency_projection_tests {
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
+            project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         };
         std::thread::spawn(move || {
             let _ = daemon::run(config);
@@ -5659,7 +6667,8 @@ mod idempotency_projection_tests {
     #[test]
     fn who_distingue_persistant_ephemere_et_non_atteste() {
         let agent = |name: &str, persistent: Option<bool>| AgentInfo {
-            name: name.to_string(),
+            agent_id: uuid::Uuid::new_v4().to_string(),
+            display_name: name.to_string(),
             agent_type: "fixture".to_string(),
             connection_id: format!("conn-{name}"),
             host: "local".to_string(),
@@ -5677,7 +6686,10 @@ mod idempotency_projection_tests {
             rate_limits: vec![],
             model_mismatch: None,
             disk_space: None,
+            provider: None,
             persistent,
+            agent_link: None,
+            execution: None,
         };
         let rendered = render_who(
             &[
@@ -5725,7 +6737,8 @@ mod idempotency_projection_tests {
     #[test]
     fn json_publie_la_persistance_meme_indeterminee() {
         let agent = |persistent: Option<bool>| AgentInfo {
-            name: "jc1-flux".to_string(),
+            agent_id: uuid::Uuid::new_v4().to_string(),
+            display_name: "jc1-flux".to_string(),
             agent_type: "claude".to_string(),
             connection_id: "conn-182".to_string(),
             host: "cartae".to_string(),
@@ -5743,7 +6756,10 @@ mod idempotency_projection_tests {
             rate_limits: vec![],
             model_mismatch: None,
             disk_space: None,
+            provider: None,
+            agent_link: None,
             persistent,
+            execution: None,
         };
 
         let atteste = serde_json::to_value(agent(Some(true))).unwrap();
@@ -5772,7 +6788,8 @@ mod idempotency_projection_tests {
     #[test]
     fn who_affiche_mode_et_localisation_sans_dependre_d_un_tty() {
         let agent = |name: &str, mode: Option<PresenceMode>, location: Option<&str>| AgentInfo {
-            name: name.to_string(),
+            agent_id: uuid::Uuid::new_v4().to_string(),
+            display_name: name.to_string(),
             agent_type: "fixture".to_string(),
             connection_id: format!("conn-{name}"),
             host: "local".to_string(),
@@ -5789,8 +6806,11 @@ mod idempotency_projection_tests {
             effort: None,
             rate_limits: vec![],
             model_mismatch: None,
+            agent_link: None,
             disk_space: None,
+            provider: None,
             persistent: None,
+            execution: None,
         };
         let mut acp = agent("acp-gere", Some(PresenceMode::Acp), None);
         acp.disk_space = Some(bridget_transport::protocol::DiskSpaceFact {
@@ -5832,7 +6852,8 @@ mod idempotency_projection_tests {
     #[test]
     fn who_rend_une_limite_compacte_par_fenetre_et_garde_l_absence() {
         let mut agent = AgentInfo {
-            name: "claude-1".to_string(),
+            agent_id: uuid::Uuid::new_v4().to_string(),
+            display_name: "claude-1".to_string(),
             agent_type: "claude".to_string(),
             connection_id: "conn-claude".to_string(),
             host: "local".to_string(),
@@ -5853,9 +6874,12 @@ mod idempotency_projection_tests {
                 resets_at: Some(1_787_572_200),
                 used_percent: Some(19),
             }],
+            agent_link: None,
             model_mismatch: None,
             disk_space: None,
+            provider: None,
             persistent: None,
+            execution: None,
         };
         let rendered = format_rate_limit(&agent);
         assert!(rendered.starts_with("5h 19% rst "), "{rendered}");
@@ -5901,7 +6925,8 @@ mod idempotency_projection_tests {
     #[test]
     fn who_marque_l_ecart_de_modele_et_reste_muet_sans_signal() {
         let mut agent = AgentInfo {
-            name: "claude-1".to_string(),
+            agent_id: uuid::Uuid::new_v4().to_string(),
+            display_name: "claude-1".to_string(),
             agent_type: "claude".to_string(),
             connection_id: "conn-claude".to_string(),
             host: "local".to_string(),
@@ -5916,10 +6941,13 @@ mod idempotency_projection_tests {
             domain: None,
             model: Some("claude-opus-5".to_string()),
             effort: None,
+            agent_link: None,
             rate_limits: vec![],
             model_mismatch: None,
             disk_space: None,
+            provider: None,
             persistent: None,
+            execution: None,
         };
         assert_eq!(format_model(&agent), "claude-opus-5");
         agent.model_mismatch = Some(bridget_transport::protocol::ModelMismatchFact {
@@ -6070,21 +7098,132 @@ mod depot_tests {
         let attendu = crate::build_info::local_host();
         for usage in ["send", "rename", "runtime"] {
             match cli_register(usage) {
-                WrapperToDaemon::Register { host, name, .. } => {
+                WrapperToDaemon::Register { host, agent_id, .. } => {
                     assert_eq!(
                         host.as_deref(),
                         Some(attendu.as_str()),
                         "usage {usage} : le CLI doit attester sa machine"
                     );
-                    // Contrôle de sens : les trois usages restent distincts, la
-                    // mise en facteur n'a pas confondu les noms.
                     assert!(
-                        name.is_some_and(|name| name.starts_with(&format!("cli-{usage}-"))),
-                        "usage {usage} : le nom doit rester distinct"
+                        uuid::Uuid::parse_str(&agent_id).is_ok(),
+                        "usage {usage} : l'identifiant doit être opaque"
                     );
                 }
                 autre => panic!("Register attendu, obtenu {autre:?}"),
             }
+        }
+    }
+    #[test]
+    fn spec_066_cli_runtime_projet_exige_operation_et_identifiant_fermes() {
+        let argv = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>()
+        };
+        let status =
+            parse_project_runtime_args(&argv(&["status", "--project", "project-066"])).unwrap();
+        assert_eq!(status.operation, ProjectRuntimeOperation::Status);
+        assert_eq!(status.project_id, "project-066");
+        assert!(!status.command_id.is_empty());
+
+        let stable = parse_project_runtime_args(&argv(&[
+            "prepare",
+            "--project",
+            "project-066",
+            "--command-id",
+            "stable",
+        ]))
+        .unwrap();
+        assert_eq!(stable.command_id, "stable");
+
+        for (operation, expected) in [
+            ("stop", ProjectRuntimeOperation::Stop),
+            ("remove", ProjectRuntimeOperation::Remove),
+            ("switch-backend", ProjectRuntimeOperation::SwitchBackend),
+        ] {
+            let parsed =
+                parse_project_runtime_args(&argv(&[operation, "--project", "project-066"]))
+                    .unwrap();
+            assert_eq!(parsed.operation, expected);
+        }
+        for invalid in [
+            argv(&[]),
+            argv(&["unknown", "--project", "project-066"]),
+            argv(&["prepare"]),
+            argv(&["prepare", "--project", "project-066", "--unexpected"]),
+        ] {
+            assert!(parse_project_runtime_args(&invalid).is_err());
+        }
+    }
+    #[test]
+    fn spec_079_cli_ronde_separe_politique_projet_et_tick_global() {
+        let argv = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>()
+        };
+        let list = parse_project_round_args(&argv(&["list", "--json"])).unwrap();
+        assert_eq!(
+            list.operation,
+            ProjectRoundCliOperation::Policy(ProjectRoundOperation::List)
+        );
+        assert!(list.json);
+
+        let status =
+            parse_project_round_args(&argv(&["status", "--project", "project-079"])).unwrap();
+        assert_eq!(
+            status.operation,
+            ProjectRoundCliOperation::Policy(ProjectRoundOperation::Status)
+        );
+        assert_eq!(status.project_id.as_deref(), Some("project-079"));
+
+        let enable = parse_project_round_args(&argv(&[
+            "enable",
+            "--project",
+            "project-079",
+            "--binding-generation",
+            "4",
+            "--command-id",
+            "enable-round-079",
+        ]))
+        .unwrap();
+        assert_eq!(
+            enable.operation,
+            ProjectRoundCliOperation::Policy(ProjectRoundOperation::Enable)
+        );
+        assert_eq!(enable.binding_generation, Some(4));
+        assert_eq!(enable.command_id.as_deref(), Some("enable-round-079"));
+
+        let dispatch =
+            parse_project_round_args(&argv(&["dispatch", "--occurrence", "1788000000"])).unwrap();
+        assert_eq!(dispatch.operation, ProjectRoundCliOperation::Dispatch);
+        assert_eq!(dispatch.occurrence_at, Some(1_788_000_000));
+
+        for invalid in [
+            argv(&[]),
+            argv(&["list", "--project", "project-079"]),
+            argv(&["status"]),
+            argv(&[
+                "status",
+                "--project",
+                "project-079",
+                "--binding-generation",
+                "4",
+            ]),
+            argv(&["enable", "--project", "project-079"]),
+            argv(&[
+                "dispatch",
+                "--project",
+                "project-079",
+                "--occurrence",
+                "1788000000",
+            ]),
+            argv(&["dispatch", "--command-id", "forbidden"]),
+            argv(&["disable", "--project", "project-079", "--unexpected"]),
+        ] {
+            assert!(parse_project_round_args(&invalid).is_err(), "{invalid:?}");
         }
     }
 }

@@ -242,7 +242,8 @@ fn wrapper_interactif_avec_journal_actif_est_attachable() {
         &mut sender_writer,
         &WrapperToDaemon::Register {
             agent_type: "cli".into(),
-            name: Some("sender-journal".into()),
+            identity_version: 2,
+            agent_id: "sender-journal".into(),
             host: Some("test".into()),
             transport: Some("unix".into()),
             channel: None.into(),
@@ -304,7 +305,8 @@ fn pilote_sans_journal_reste_refuse_par_le_gate() {
         &mut writer,
         &WrapperToDaemon::Register {
             agent_type: "fixture".into(),
-            name: Some("sans-journal".into()),
+            identity_version: 2,
+            agent_id: "sans-journal".into(),
             host: Some("test".into()),
             transport: Some("unix".into()),
             channel: None.into(),

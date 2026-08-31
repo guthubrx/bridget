@@ -146,14 +146,27 @@ affirment une NON-intégration, c'est-à-dire le sens qui devient faux tout seul
 | `c76c2379` (lot 040) | **pas ancêtre** |
 | `afda09fb` (republication) | **pas ancêtre** |
 
-> **PIÈGE MORTEL POUR MON SUCCESSEUR, mesuré le 28/08 à 18h06.** Le worktree
-> `/home/moi/revue/essai-distant` — celui où tu vis — a pour `origin` **le miroir local
-> figé** `/home/moi/revue/bridget`, dont `main` vaut `7592091`, inchangé depuis avant
-> 12h07. **Ce n'est pas le dépôt GitHub.** Si tu refais la mesure ci-dessus depuis ton
-> propre worktree, tu interrogeras un dépôt gelé et tu concluras faux. Fais-la depuis
-> `/home/moi/bridget-registre`, dont l'`origin` est bien
-> `https://github.com/guthubrx/bridget.git`, ou nomme l'URL explicitement. Formule de
-> cartae0-flux, reprise mot pour mot : **écris l'URL, pas l'alias**.
+> **PIÈGE MORTEL POUR MON SUCCESSEUR, mesuré le 28/08 à 18h06 — partiellement corrigé à
+> 22h16.** Le worktree `/home/moi/revue/essai-distant` — celui où tu vis — a pour `origin`
+> **le miroir local figé** `/home/moi/revue/bridget`, dont `main` vaut `7592091`, daté du
+> 25/08 : **trois jours et ~728 commits de retard**. Ce n'est pas une dérive, c'est un
+> autre dépôt. Trois checkouts du parc sont dans ce cas — `cartae0`, `essai-distant`,
+> `essai-equipier` — fait tenu du référent.
+>
+> **Ce qui a changé** : un remote **`github`** a été ajouté à ce worktree. Vérifié par moi
+> depuis ici le 28/08 à 22:16:41Z — `git remote -v` rend
+> `github → https://github.com/guthubrx/bridget.git`, et
+> `git ls-remote --heads github travail/claude-interrupt` rend bien `474cb6f…`, branche
+> qui était invisible vingt minutes plus tôt.
+>
+> **CONSIGNE POUR TOI : utilise `github`, jamais `origin`, dans ce worktree.**
+> `git fetch github` puis `git merge-base --is-ancestor <sha> github/main`. Le nom
+> trompeur n'a **pas** été retiré — ajouter un nom ne casse rien, en redéfinir un casse
+> tout ce qui l'employait, et repointer `origin` reste une décision humaine en attente.
+> Formule de cartae0-flux, reprise mot pour mot : **écris l'URL, pas l'alias** — et
+> son second étage, que j'ai mesuré : la règle corrige l'émetteur, **le piège vit chez le
+> récepteur**. Un agent qui fait sa propre vérification depuis un checkout mal pointé
+> obtient un faux négatif même si personne ne lui a jamais écrit un alias.
 >
 > Ordre de grandeur de la dérive : entre 18:06:05Z et 18:06:45Z, `main` sur GitHub est
 > passé de `ca4100c` à `07fbe92`. **Quarante secondes.** Un SHA cité dans un message est
@@ -225,6 +238,17 @@ Deux points restent ouverts côté référent, sans action de ma part :
 - `/home/moi/bridget-registre/docs/cartes-reprise-28-08/essai-distant-flux.md` — cette carte
 - `/home/moi/.local/bin/maicie` — le binaire Maicie **réel** de cet hôte, contrairement à
   ce qu'affirme la skill
+- `/home/moi/.claude/projects/-home-moi-revue-essai-distant/73dfa5a9-f614-4f7b-b067-edf6a753c1d7.jsonl`
+  — **le fichier qui porte mon contexte**, 789 463 octets et en croissance au 28/08
+  19:25Z. `persistent=1` ne préserve pas un processus : il relance `claude --resume <uuid>`
+  sur ce fichier. Le bien à préserver est donc ce `.jsonl`, sur un disque à 91 %.
+  **Trouver le bon fichier pour un agent donné** : lire l'UUID de `--resume` dans la ligne
+  de commande du processus (`ps -eo pid,lstart,args | grep -- --resume`), puis chercher
+  *ce* fichier — ne jamais partir d'un répertoire de projet et supposer à qui il
+  appartient. Le référent s'est trompé de cible le 28/08 à 19h25 en me prêtant
+  `-home-moi-bridget-referent-bridget/23adb133-….jsonl`, figé à 18:49:03. Le répertoire de
+  projet est dérivé du **CWD** de l'agent, même famille de dérivation par nom de
+  répertoire que le bug de domaine : un agent lancé ailleurs journalise ailleurs.
 - `/home/moi/.config/maicie/config.json` — la configuration Maicie, obligatoire pour
   toute commande via `--config`. **Aucun emplacement implicite : ne jamais le deviner.**
   Communiqué par le référent le 28/08 à 16h30 ; permissions 600, même utilisateur que nous

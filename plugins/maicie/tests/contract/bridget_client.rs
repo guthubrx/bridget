@@ -273,7 +273,7 @@ fn spawn_order_negocie_le_role_wrapper_sur_sa_connexion_ephemere() {
         assert_eq!(order["agent_type"], "codex");
         write_json(
             &mut writer,
-            json!({"type": "SpawnAccepted", "command_id": "command-1", "name": "sentry"}),
+            json!({"type": "SpawnAccepted", "command_id": "command-1", "agent_id": "550e8400-e29b-41d4-a716-446655440000"}),
         );
     });
 
@@ -281,17 +281,19 @@ fn spawn_order_negocie_le_role_wrapper_sur_sa_connexion_ephemere() {
     let outcome = client
         .spawn_order(&SpawnOrder {
             agent_type: "codex".to_string(),
-            name: Some("sentry".to_string()),
+            agent_id: Some("550e8400-e29b-41d4-a716-446655440000".to_string()),
             cwd: "/tmp".to_string(),
             persistent: true,
             command_id: "command-1".to_string(),
             issued_at: 1_700_000_000,
             deadline_at: 1_700_000_600,
+            project: None,
         })
         .unwrap();
     assert!(matches!(
         outcome,
-        SpawnOutcome::Accepted { command_id, name } if command_id == "command-1" && name == "sentry"
+        SpawnOutcome::Accepted { command_id, agent_id }
+            if command_id == "command-1" && agent_id == "550e8400-e29b-41d4-a716-446655440000"
     ));
     server.join().expect("serveur termine");
 }
@@ -300,7 +302,7 @@ fn spawn_order_negocie_le_role_wrapper_sur_sa_connexion_ephemere() {
 fn replay_spawn_order_reemet_les_octets_approuves_sans_reserialisation() {
     let fixture = SocketFixture::new("spawn-replay-exact");
     let listener = fixture.bind();
-    let bytes = br#"{"type":"SpawnOrder","agent_type":"claude","name":null,"cwd":"/tmp","persistent":true,"command_id":"command-exact","issued_at":100,"deadline_at":160,"future_extension":true}"#.to_vec();
+    let bytes = br#"{"type":"SpawnOrder","agent_type":"claude","agent_id":null,"cwd":"/tmp","persistent":true,"command_id":"command-exact","issued_at":100,"deadline_at":160,"future_extension":true}"#.to_vec();
     let expected = bytes.clone();
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().expect("connexion spawn attendue");
@@ -321,7 +323,7 @@ fn replay_spawn_order_reemet_les_octets_approuves_sans_reserialisation() {
             json!({
                 "type": "SpawnAccepted",
                 "command_id": "command-exact",
-                "name": "claude-review",
+                "agent_id": "550e8400-e29b-41d4-a716-446655440001",
                 "definition": {"digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
             }),
         );
@@ -335,8 +337,8 @@ fn replay_spawn_order_reemet_les_octets_approuves_sans_reserialisation() {
     .unwrap();
     assert!(matches!(
         replay.outcome,
-        SpawnOutcome::Accepted { command_id, name }
-            if command_id == "command-exact" && name == "claude-review"
+        SpawnOutcome::Accepted { command_id, agent_id }
+            if command_id == "command-exact" && agent_id == "550e8400-e29b-41d4-a716-446655440001"
     ));
     assert_eq!(
         replay.definition_digest.as_deref(),
@@ -358,7 +360,8 @@ fn annuaire_est_lisible_sans_negociation_et_une_base_bridget_ne_peut_etre_lue() 
             json!({
                 "type": "AgentList",
                 "agents": [{
-                    "name": "prospective",
+                    "agent_id": "prospective",
+                    "display_name": "prospective",
                     "agent_type": "codex",
                     "connection_id": "conn-1",
                     "host": "local",
@@ -377,7 +380,7 @@ fn annuaire_est_lisible_sans_negociation_et_une_base_bridget_ne_peut_etre_lue() 
 
     let agents = BridgetClient::list_agents_at(fixture.path()).unwrap();
     assert_eq!(agents.len(), 1);
-    assert_eq!(agents[0].name, "prospective");
+    assert_eq!(agents[0].agent_id, "prospective");
     server.join().expect("serveur termine");
 
     let database_path = fixture.path().with_file_name("bridget.db");

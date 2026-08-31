@@ -95,7 +95,7 @@ fn write_native_registry(root: &Path, script: &str) {
                 "command": "sh",
                 "args": ["-c", script],
                 "protocol": "codex_app_server",
-                "permissions": "allow",
+                "permissions": "deny",
                 "queue_capacity": 4,
                 "notify_timeout_secs": 3,
                 "forbidden_env": [],
@@ -124,7 +124,8 @@ fn sender(socket: &Path) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
         &mut writer,
         &WrapperToDaemon::Register {
             agent_type: "cli".to_string(),
-            name: Some("sender-native".to_string()),
+            identity_version: 2,
+            agent_id: "sender-native".to_string(),
             host: None,
             transport: Some("unix".to_string()),
             channel: None.into(),
@@ -213,7 +214,7 @@ fn wrapper_codex_natif_repond_et_reste_attachable() {
     };
     let codex = agents
         .iter()
-        .find(|agent| agent.name == "codex-native")
+        .find(|agent| agent.agent_id == "codex-native")
         .expect("agent Codex natif absent de l'annuaire");
     assert_eq!(codex.model.as_deref(), Some("gpt-5.6-terra"));
     assert_eq!(codex.effort.as_deref(), Some("high"));
@@ -304,11 +305,11 @@ fn wrapper_codex_sans_signal_laisse_effort_et_limite_inconnus() {
         write_frame(&mut sender_writer, &WrapperToDaemon::ListAgents);
         match read_frame(&mut sender_reader) {
             DaemonToWrapper::AgentList { agents }
-                if agents.iter().any(|agent| agent.name == "codex-native") =>
+                if agents.iter().any(|agent| agent.agent_id == "codex-native") =>
             {
                 let codex = agents
                     .iter()
-                    .find(|agent| agent.name == "codex-native")
+                    .find(|agent| agent.agent_id == "codex-native")
                     .expect("agent Codex natif absent");
                 assert!(codex.effort.is_none(), "effort inventé: {codex:?}");
                 assert!(codex.rate_limits.is_empty(), "limite inventée: {codex:?}");
@@ -397,7 +398,7 @@ fn gate_reel_codex_app_server_gpt_5_6_terra_et_attach() {
     };
     let codex = agents
         .iter()
-        .find(|agent| agent.name == "codex-native")
+        .find(|agent| agent.agent_id == "codex-native")
         .expect("agent Codex réel absent de l'annuaire");
     assert_eq!(codex.model.as_deref(), Some("gpt-5.6-terra"));
     assert!(

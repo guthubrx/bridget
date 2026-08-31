@@ -1,8 +1,8 @@
 //! Garde RAII du thread superviseur managed.
 //!
 //! Propriété : à la sortie du scope (fin de test, panic, interruption cargo),
-//! le canal commandes est fermé et le thread superviseur est rejoint —
-//! jamais laissé détaché avec un `Sender` vivant.
+//! un ordre d'arrêt explicite est envoyé et le thread superviseur est rejoint —
+//! même si un autre `Sender` vit encore dans l'état du daemon.
 
 use log::warn;
 use std::path::PathBuf;
@@ -16,10 +16,59 @@ use crate::daemon::{
 };
 use crate::fleet::FleetSupervisor;
 
+use crate::execution_store::{ContinuationReservation, ExecutionStore};
+use crate::fleet::{AutonomyBudgetPolicy, AutonomyRuntimeState, evaluate_autonomy_budget};
+use bridget_transport::protocol::ExecutionBudgetOutcome;
+
+/// Verdict de la garde de continuation. Une limite est une issue Bridget :
+/// elle ne modifie aucune délégation ni objectif Maicie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GovernedContinuation {
+    Reserved,
+    Budget(ExecutionBudgetOutcome),
+    Reservation(ContinuationReservation),
+    MissingFacts,
+}
+
+/// Point unique de réservation d une continuation gouvernée. Les faits sont
+/// relus dans la même passe de contrôle puis la réservation SQLite atomique
+/// refuse une course entre deux continuations ou un tour concurrent.
+#[allow(clippy::too_many_arguments)]
+pub fn reserve_governed_continuation(
+    store: &ExecutionStore,
+    policy: AutonomyBudgetPolicy,
+    runtime: AutonomyRuntimeState,
+    parent_execution_id: &str,
+    expected_generation: u64,
+    expected_revision: u64,
+    continuation_id: &str,
+    proof_idle_at: i64,
+    observed_at: i64,
+) -> rusqlite::Result<GovernedContinuation> {
+    let Some(facts) = store.execution_budget_facts(parent_execution_id, observed_at)? else {
+        return Ok(GovernedContinuation::MissingFacts);
+    };
+    if let Some(outcome) = evaluate_autonomy_budget(policy, &facts, runtime) {
+        return Ok(GovernedContinuation::Budget(outcome));
+    }
+    Ok(
+        match store.reserve_continuation_if_idle(
+            parent_execution_id,
+            expected_generation,
+            expected_revision,
+            continuation_id,
+            proof_idle_at,
+            observed_at,
+        )? {
+            ContinuationReservation::Reserved => GovernedContinuation::Reserved,
+            reservation => GovernedContinuation::Reservation(reservation),
+        },
+    )
+}
 /// Possède le `Sender` canonique et le `JoinHandle` du superviseur managed.
 ///
-/// Déclarer **après** les clones du sender (ex. `DaemonState`) pour que le Drop
-/// libère le canal une fois les autres détenteurs relâchés.
+/// La garde envoie `Shutdown` avant de déposer son sender : l'arrêt ne dépend
+/// donc pas du cycle de vie des clones détenus par `DaemonState` ou ses threads.
 pub(crate) struct ManagedSupervisorGuard {
     sender: Option<Sender<ManagedSupervisorCommand>>,
     join: Option<JoinHandle<()>>,
@@ -42,6 +91,7 @@ impl ManagedSupervisorGuard {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn start_with_executable(
         fleet: Arc<FleetSupervisor>,
         config: &DaemonConfig,
@@ -56,16 +106,22 @@ impl ManagedSupervisorGuard {
             join: Some(join),
         }
     }
-
+    #[cfg(test)]
     pub(crate) fn sender(&self) -> &Sender<ManagedSupervisorCommand> {
         self.sender
             .as_ref()
             .expect("ManagedSupervisorGuard consommé")
     }
 
-    /// Ferme le canal puis attend la fin du thread (hors Drop automatique).
+    fn request_shutdown(&mut self) {
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.send(ManagedSupervisorCommand::Shutdown);
+        }
+    }
+
+    /// Ordonne l'arrêt puis attend la fin du thread (hors Drop automatique).
     pub(crate) fn shutdown(mut self) {
-        self.sender.take();
+        self.request_shutdown();
         self.join_supervisor();
     }
 
@@ -110,7 +166,7 @@ impl ManagedSupervisorGuard {
 
 impl Drop for ManagedSupervisorGuard {
     fn drop(&mut self) {
-        self.sender.take();
+        self.request_shutdown();
         self.join_supervisor();
     }
 }
@@ -132,6 +188,9 @@ mod tests {
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
+            project_root_policy_path: None,
+            project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
         }
     }
 
@@ -162,7 +221,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn TEMOIN_managed_supervisor_guard_libere_le_canal_a_la_sortie() {
+    fn TEMOIN_managed_supervisor_guard_arrete_meme_avec_un_sender_survivant() {
         let root = std::env::temp_dir().join(format!(
             "bridget-ms-guard-ok-{}-{}",
             std::process::id(),
@@ -174,9 +233,11 @@ mod tests {
         {
             let guard =
                 ManagedSupervisorGuard::start_with_executable(fleet, &config, events_tx, None);
+            // Reproduit le sender détenu par DaemonState pendant son arrêt.
+            // Sans ordre explicite, le superviseur ne verrait jamais Disconnect.
             let extra = guard.sender().clone();
-            drop(extra);
             guard.shutdown();
+            drop(extra);
         }
         let _ = std::fs::remove_dir_all(&root);
     }

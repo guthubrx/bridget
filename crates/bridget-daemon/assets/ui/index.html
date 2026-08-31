@@ -5,25 +5,48 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
     <title>Bridget</title>
+    <link id="highlight-theme-light" rel="stylesheet" href="/vendor/highlight-github-light.min.css" media="(prefers-color-scheme: light)">
+    <link id="highlight-theme-dark" rel="stylesheet" href="/vendor/highlight-github-dark.min.css" media="(prefers-color-scheme: dark)">
     <link rel="stylesheet" href="/theme.css">
     <script src="/vendor/marked.min.js"></script>
     <script src="/vendor/purify.min.js"></script>
+    <script src="/vendor/highlight.min.js"></script>
     <script type="module" src="/app.js"></script>
   </head>
   <body>
     <div class="workspace" id="workspace">
-      <aside class="agent-pane" aria-label="Agents Bridget">
-        <header class="agent-pane__header">
-          <div>
-            <p class="eyebrow">Bridget</p>
-            <h1>Agents</h1>
+      <aside class="project-pane" id="project-pane" aria-label="Projets">
+        <header class="project-pane__header">
+          <button id="project-collapse" type="button" aria-label="Replier la barre des projets" aria-expanded="true">‹</button>
+          <div class="project-pane__title">
+            <strong>Projets</strong>
+            <span>Ajouter, organiser et filtrer</span>
           </div>
+          <div class="project-pane__actions">
+            <button id="project-new" type="button" aria-label="Créer un projet">+</button>
+            <button id="project-import" type="button">Importer</button>
+          </div>
+        </header>
+        <nav id="project-list" class="project-list" aria-label="Projets ouverts"></nav>
+      </aside>
+      <aside class="agent-pane" aria-label="Agents Bridget">
+        <header class="agent-pane__header" data-tauri-drag-region>
           <span class="fleet-count" id="fleet-count" aria-live="polite">—</span>
+          <button class="attention-control" id="attention-control" type="button" aria-label="Ouvrir l’activité">
+            <span aria-hidden="true">●</span>
+            <span class="attention-control__count" id="attention-count" hidden>0</span>
+          </button>
         </header>
 
         <p class="source-state" id="source-state" data-state="loading">
           Lecture de la flotte…
         </p>
+
+        <section class="agent-sort" aria-label="Tri et regroupement des agents">
+          <div class="agent-sort__chips" id="agent-sort-chips" aria-label="Tris actifs"></div>
+          <button class="agent-sort__add" id="agent-sort-add" type="button" aria-expanded="false" aria-controls="agent-sort-menu">+ Trier</button>
+          <div class="agent-sort__menu" id="agent-sort-menu" role="menu" aria-label="Ajouter un tri" hidden></div>
+        </section>
 
         <form class="message-search" id="message-search" novalidate>
           <label class="sr-only" for="message-search-input">Chercher dans les messages</label>
@@ -35,7 +58,7 @@
             autocomplete="off"
             spellcheck="true"
           >
-          <button type="submit">Chercher</button>
+          <span class="message-search__icon" aria-hidden="true">⌕</span>
         </form>
         <ol
           class="message-search-results"
@@ -54,12 +77,52 @@
           </summary>
           <nav id="stopped-agent-list" aria-label="Agents arrêtés"></nav>
         </details>
+
+        <details class="hidden-agents" id="hidden-agents" hidden>
+          <summary>
+            <span>Agents masqués</span>
+            <span id="hidden-count">0</span>
+          </summary>
+          <nav id="hidden-agent-list" aria-label="Agents masqués"></nav>
+        </details>
+        <div class="agent-pane__footer">
+          <button
+            class="agent-pane__settings"
+            id="control-center"
+            type="button"
+            aria-controls="control-center-overlay"
+            aria-label="Ouvrir le centre de contrôle Bridget"
+          >
+            <span aria-hidden="true">⚙</span>
+          </button>
+        </div>
       </aside>
+
+      <div
+        class="agent-pane-resizer"
+        id="agent-pane-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Redimensionner la colonne des agents"
+        aria-valuemin="224"
+        aria-valuenow="320"
+        aria-valuemax="560"
+        tabindex="0"
+      ></div>
 
       <section class="conversation" aria-label="Conversation courante">
         <header class="conversation-header">
           <div class="agent-heading">
-            <span class="state-dot" id="selected-state-dot" aria-hidden="true"></span>
+            <div class="agent-avatar-control">
+              <button
+                class="selected-agent-avatar"
+                id="selected-agent-avatar"
+                type="button"
+                aria-label="Ouvrir les réglages de cet agent"
+                aria-controls="detail-panel"
+                aria-expanded="false"
+              ></button>
+            </div>
             <div>
               <h2 id="selected-agent">Aucun agent</h2>
               <p id="selected-meta">Sélectionnez un agent dans la liste.</p>
@@ -68,12 +131,14 @@
           <span class="connection-indicator" id="connection-indicator">hors ligne</span>
         </header>
 
-        <p class="relay-banner" id="relay-banner" data-state="connecting">
-          Connexion au relais…
-        </p>
-        <p class="stopped-banner" id="stopped-banner" hidden>
-          Cet agent est arrêté ; envoyer un message le relance.
-        </p>
+        <div class="conversation-status" id="conversation-status">
+          <p class="relay-banner" id="relay-banner" data-state="connecting">
+            Connexion au relais…
+          </p>
+          <p class="stopped-banner" id="stopped-banner" hidden>
+            Cet agent est arrêté ; envoyer un message le relance.
+          </p>
+        </div>
 
         <div class="thread-shell" id="thread-shell">
           <main
@@ -83,7 +148,6 @@
             aria-live="polite"
             aria-relevant="additions"
             aria-label="Messages"
-            tabindex="0"
           >
             <p class="empty-state">Les messages de l’agent apparaîtront ici.</p>
           </main>
@@ -95,6 +159,17 @@
 
         <!-- Le compositeur est volontairement frère du fil. Le rendu du fil
              peut remplacer #thread sans atteindre le brouillon ni son focus. -->
+        <div
+          class="delivery-activity"
+          id="delivery-activity"
+          role="status"
+          aria-live="polite"
+          aria-label="Message remis, en attente d’une trace de l’agent"
+          hidden
+        >
+          <span class="delivery-activity__dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        </div>
+        <div class="agent-activity" id="agent-activity" aria-live="polite" hidden></div>
         <footer class="composer-shell" id="composer-shell">
           <form class="composer" id="composer" novalidate>
             <label class="sr-only" for="draft">Message</label>
@@ -111,6 +186,7 @@
                 <input id="reply" name="reply" type="checkbox" checked>
                 <span>Attendre une réponse</span>
               </label>
+              <button class="notification-control" id="notification-control" type="button">Activer les notifications</button>
               <div class="send-controls">
                 <span class="send-state" id="send-state" aria-live="polite">prêt</span>
                 <button class="send-button" id="send" type="submit" aria-label="Envoyer">
@@ -119,7 +195,6 @@
               </div>
             </div>
           </form>
-          <p class="context-line" id="context-line">Dépôt et branche non fournis par le relais.</p>
         </footer>
       </section>
 
@@ -131,5 +206,28 @@
         <div id="detail-content"></div>
       </aside>
     </div>
+    <dialog class="control-center-overlay" id="control-center-overlay" aria-labelledby="control-center-title">
+      <div class="control-center-overlay__shell">
+        <aside class="control-center-overlay__navigation" aria-label="Navigation des réglages">
+          <div class="control-center-overlay__brand">
+            <p>CENTRE DE CONTRÔLE</p>
+            <h2>Bridget</h2>
+          </div>
+          <div id="control-center-navigation"></div>
+        </aside>
+        <section class="control-center-overlay__content" aria-label="Réglage sélectionné">
+          <header class="control-center-overlay__header">
+            <div>
+              <p>Réglages</p>
+              <h2 id="control-center-title">Général</h2>
+            </div>
+            <button class="quiet-action" id="close-control-center" type="button">Fermer</button>
+          </header>
+          <div id="control-center-content"></div>
+        </section>
+      </div>
+    </dialog>
+    <dialog class="project-presentation-overlay" id="project-presentation-overlay" aria-labelledby="project-presentation-title"></dialog>
+    <dialog class="project-onboarding-overlay" id="project-onboarding-overlay" aria-labelledby="project-onboarding-title"></dialog>
   </body>
 </html>
