@@ -571,12 +571,13 @@ impl Transport for CodexAppServerTransport {
         let mut queue = queue.lock().unwrap_or_else(|poison| poison.into_inner());
         let human_message = message.origin == Some(MessageOrigin::Human);
         let has_active_turn = queue.active.is_some();
-        let steering_requested = message.intent == Some(MessageIntent::SteerCurrent)
-            || (human_message && has_active_turn && queue.steering_open);
+        // Un message humain doit toujours obtenir son propre tour. Le piloter
+        // dans un tour en cours mélange sa réponse à celle du message actif :
+        // l'utilisateur voit alors son envoi mais jamais sa réponse dédiée.
+        // Le pilotage reste réservé au contrôle explicite.
+        let steering_requested = message.intent == Some(MessageIntent::SteerCurrent);
         let interrupt_requested = message.intent == Some(MessageIntent::InterruptAndStart)
-            || (human_message && has_active_turn && !queue.steering_open);
-        // Le contrôle explicite reste strict ; un message humain ne pilote que
-        // si Codex expose un tour actif ouvert au steering.
+            || (human_message && has_active_turn);
         if steering_requested && (queue.active.is_none() || !queue.steering_open) {
             drop(queue);
             self.push_internal(ManagedEventKind::DeliveryRejected {
@@ -1712,12 +1713,28 @@ fn unsupported_provider_request_response(value: &Value) -> Option<(Value, Value,
 /// serveur et ne demande aucun champ. Les formulaires avec données, les URL et
 /// les serveurs tiers restent explicitement déclinés : ils nécessitent une
 /// décision humaine dans une surface dédiée.
+fn is_mcp_elicitation_request(method: &str) -> bool {
+    // Le relais app-server a déjà reçu des variantes avec terminaison blanche.
+    // JSON-RPC interdit cette variante, mais la normaliser ici évite de perdre
+    // une publication Bridget alors que la requête reste sans ambiguïté.
+    method.trim() == "mcpServer/elicitation/request"
+}
+
 fn mcp_elicitation_response(value: &Value) -> Option<(Value, Value)> {
     let id = value.get("id")?;
-    let params = value.get("params")?;
-    let server_name = params.get("serverName")?.as_str()?;
-    let mode = params.get("mode")?.as_str()?;
-    let required_fields = params
+    let params = value.get("params").unwrap_or(&Value::Null);
+    // `mode: form` est implicite dans MCP. Certains app-servers placent les
+    // paramètres MCP sous `request.params`, d'autres les exposent directement.
+    let request_params = params.pointer("/request/params").unwrap_or(params);
+    let server_name = params
+        .get("serverName")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let mode = request_params
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("form");
+    let required_fields = request_params
         .pointer("/requestedSchema/required")
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
@@ -2281,7 +2298,7 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                         );
                     }
                 }
-                Some("mcpServer/elicitation/request") => {
+                Some(method) if is_mcp_elicitation_request(method) => {
                     if let Some((reply, payload)) = mcp_elicitation_response(&value) {
                         let message_id = queue
                             .0
@@ -3983,16 +4000,12 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// Un accusé `turn/steer` sans `item/completed userMessage` n'est pas une
-    /// remise. Le délai du message humain doit donc interrompre le tour ancien
-    /// bloqué, restituer ce message en tête de FIFO, puis laisser le système
-    /// démarrer son tour AVANT tout message système arrivé entre-temps.
-    ///
-    /// Sans ce repli, le délai suivi est celui du tour ancien (60 s ici) : la
-    /// remise humaine reste `dispatching` jusqu'à cette échéance étrangère.
+    /// Un message humain reçu pendant un tour actif doit interrompre ce tour et
+    /// démarrer le sien. Il ne doit jamais être injecté via `turn/steer`, car
+    /// Codex rattache alors sa réponse au message précédent.
     #[allow(non_snake_case)]
     #[test]
-    fn TEMOIN_G_codex_steer_sans_consommation_interrompt_et_priorise_l_humain() {
+    fn TEMOIN_G_codex_message_humain_interrompt_et_recoit_un_tour_dedie() {
         let root = root("temoin-steer-sans-consommation");
         let trace = root.join("trace.jsonl");
         let mut options = fake_options(&trace);
@@ -4005,14 +4018,10 @@ mod tests {
                     trace.to_string_lossy().into_owned(),
                 ),
                 ("BRIDGET_CODEX_HOLD_TURN".to_string(), "1".to_string()),
-                (
-                    "BRIDGET_CODEX_REQUEST_APPROVAL".to_string(),
-                    "1".to_string(),
-                ),
             ],
             false,
         )
-        .expect("session native steering non consommé");
+        .expect("session native interruption humaine");
 
         let mut ancien = message("ancien-bloque");
         ancien.id = "codex-ancien-bloque".to_string();
@@ -4069,20 +4078,12 @@ mod tests {
             .expect("turn/start humain attendu");
         let position_systeme = contenu.find("codex-systeme-apres-humain");
         assert!(
-            contenu.contains("\"method\":\"turn/steer\""),
-            "le message humain devait d'abord tenter turn/steer; trace={contenu}"
-        );
-        assert!(
-            contenu.contains("\"decision\":\"accept\""),
-            "la demande d'autorisation du tour ancien devait être soldée avant le repli; trace={contenu}"
-        );
-        assert!(
             contenu.contains("\"method\":\"turn/interrupt\""),
-            "le steering non consommé devait interrompre le tour ancien; trace={contenu}"
+            "le message humain doit interrompre le tour ancien; trace={contenu}"
         );
         assert!(
             humain_repris,
-            "le message humain non consommé devait repartir en tête avant 60 s; trace={contenu}"
+            "le message humain doit démarrer son propre tour avant le système; trace={contenu}"
         );
         assert!(
             position_systeme.is_none_or(|position| position_humain < position),
@@ -5291,5 +5292,52 @@ mod tests {
         let (reply, detail) = dynamic_tool_response(&request, Some(&handler)).expect("réponse");
         assert_eq!(detail, "outil dynamique Bridget refusé");
         assert_eq!(reply["result"]["success"], false);
+    }
+
+    #[test]
+    fn elicitation_bridget_formulaire_implicite_est_acceptee() {
+        let request = json!({
+            "id": "elicitation-1",
+            "method": "mcpServer/elicitation/request\n",
+            "params": {
+                "serverName": "bridget",
+                "request": {
+                    "method": "elicitation/create",
+                    "params": {
+                        "message": "Publication prête.",
+                        "requestedSchema": { "type": "object", "properties": {} }
+                    }
+                }
+            }
+        });
+
+        assert!(is_mcp_elicitation_request(
+            request["method"].as_str().expect("méthode")
+        ));
+        let (reply, payload) = mcp_elicitation_response(&request).expect("réponse MCP");
+        assert_eq!(reply["result"]["action"], "accept");
+        assert_eq!(reply["result"]["content"], json!({}));
+        assert_eq!(payload["code"], "mcp_elicitation_autoaccepted");
+    }
+
+    #[test]
+    fn elicitation_mcp_externe_ou_avec_champ_requis_est_declinee() {
+        let request = json!({
+            "id": "elicitation-2",
+            "method": "mcpServer/elicitation/request",
+            "params": {
+                "serverName": "externe",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": { "secret": { "type": "string" } },
+                    "required": ["secret"]
+                }
+            }
+        });
+
+        let (reply, payload) = mcp_elicitation_response(&request).expect("réponse MCP");
+        assert_eq!(reply["result"]["action"], "decline");
+        assert!(reply["result"].get("content").is_none());
+        assert_eq!(payload["code"], "mcp_elicitation_declined");
     }
 }
