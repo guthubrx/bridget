@@ -83,6 +83,20 @@ impl PanelRegistry {
     pub fn close(&mut self, label: &str) -> Option<Panel> {
         self.panels.remove(label)
     }
+
+    /// Met à jour l'URL d'un panneau conservé après recréation de son tunnel.
+    /// L'URL reste soumise à la même règle loopback que lors de l'ouverture.
+    pub fn replace_relay_url(&mut self, label: &str, url: impl Into<String>) -> bool {
+        let url = url.into();
+        if !is_loopback_relay_url(&url) {
+            return false;
+        }
+        let Some(panel) = self.panels.get_mut(label) else {
+            return false;
+        };
+        panel.url = url;
+        true
+    }
     pub fn panels(&self) -> impl Iterator<Item = &Panel> {
         self.panels.values()
     }
@@ -159,6 +173,12 @@ mod tests {
             Err(PanelError::LimitReached)
         ));
         assert_eq!(registry.panels().count(), MAXIMUM_OPEN_PANELS);
+        assert!(registry.replace_relay_url(&first.label, "http://127.0.0.1:39003/?token=fixture"));
+        assert_eq!(
+            registry.panels().next().unwrap().url,
+            "http://127.0.0.1:39003/?token=fixture"
+        );
+        assert!(!registry.replace_relay_url(&first.label, "https://example.com"));
         assert!(matches!(
             PanelRegistry::default().open("bad", "https://example.com/?token=fixture"),
             Err(PanelError::InvalidRelayUrl)

@@ -51,6 +51,46 @@
         assert.equal(state.sendCount, 0);
       });
 
+      test("demande_fournisseur_d_approbation_ne_casse_pas_le_snapshot", () => {
+        const events = [{
+          kind: "record",
+          record: {
+            message_id: "approval-1",
+            event: "provider_request",
+            payload: { state: "pending", method: "approval.request" },
+          },
+        }];
+        assert.equal(api.countNewAgentTextSegments(events, events), 0);
+        assert.doesNotThrow(() => api.projectTimeline(events));
+      });
+
+      test("reference_d_artefact_publiee_reste_normalisable", () => {
+        const state = api.applyReconnectSnapshot(api.createUiState(), {
+          agents: [],
+          artifact_references: {
+            state: "ready",
+            items: [{
+              reference_id: "artifact-reference:test",
+              artifact_ref: "artifact:test",
+              version_ref: "artifact-version:test",
+              turn_reference: "turn:test",
+              kind: "html",
+              title: "Simulateur de trajet",
+              state: "published",
+              created_at: 1,
+            }],
+          },
+        });
+        assert.deepEqual(state.artifactReferences.items[0].title, "Simulateur de trajet");
+      });
+
+      test("ticket_sandbox_conserve_la_reference_canonique_dans_le_corps", () => {
+        assert.deepEqual(
+          api.sandboxTicketRequest("agent-test", "artifact-version:test"),
+          { version: 1, agent: "agent-test", version_ref: "artifact-version:test" },
+        );
+      });
+
       test("largeur_colonne_agents_bornee_par_le_panneau_central", () => {
         assert.deepEqual(api.agentPaneWidthBounds(960), { min: 224, max: 560 });
         assert.equal(api.clampAgentPaneWidth(180, 960), 224);
@@ -4714,6 +4754,14 @@
     return `${path}?${query.toString()}`;
   }
 
+  function sandboxTicketRequest(agent, versionRef) {
+    return {
+      version: 1,
+      agent: text(agent),
+      version_ref: text(versionRef),
+    };
+  }
+
   // Une référence de tour reste figée sur sa version publiée. Cette petite
   // projection indique explicitement si le registre possède depuis une
   // version plus récente, sans remplacer le contenu historique à l'écran.
@@ -5155,6 +5203,11 @@
     });
   }
 
+  function isProviderApprovalRequest(payload) {
+    return text(payload && payload.state) === "pending"
+      && /approval|permission/i.test(text(payload && payload.method));
+  }
+
   function countNewAgentTextSegments(events, incoming) {
     const lastSegmentByTurn = new Map();
     let count = 0;
@@ -5326,13 +5379,13 @@
     const items = (Array.isArray(source.items) ? source.items : []).map((item) => {
       const reference = item && typeof item === "object" && !Array.isArray(item) ? item : {};
       return {
-        reference_id: string(reference.reference_id),
-        artifact_ref: string(reference.artifact_ref),
-        version_ref: string(reference.version_ref),
-        turn_reference: string(reference.turn_reference),
-        kind: string(reference.kind),
-        title: string(reference.title, "Artefact Bridget"),
-        state: string(reference.state, "published"),
+        reference_id: text(reference.reference_id),
+        artifact_ref: text(reference.artifact_ref),
+        version_ref: text(reference.version_ref),
+        turn_reference: text(reference.turn_reference),
+        kind: text(reference.kind),
+        title: text(reference.title, "Artefact Bridget"),
+        state: text(reference.state, "published"),
         pinned: reference.pinned === true,
         created_at: Number.isFinite(reference.created_at) ? Number(reference.created_at) : 0,
       };
@@ -6105,11 +6158,6 @@
       };
       turn.acts.push(next);
       return next;
-    }
-
-    function isProviderApprovalRequest(payload) {
-      return text(payload && payload.state) === "pending"
-        && /approval|permission/i.test(text(payload && payload.method));
     }
 
     function appendTextSegment(turn, content, at) {
@@ -9975,11 +10023,7 @@
               {
                 method: "POST",
                 headers: { "content-type": "application/json" },
-                body: JSON.stringify({
-                  version: 1,
-                  agent: state.selectedAgent,
-                  version_ref: versionRef.replace(/^artifact-version:/, "artifact-version."),
-                }),
+                body: JSON.stringify(sandboxTicketRequest(state.selectedAgent, versionRef)),
               },
             );
             const ticket = await ticketResponse.json();
@@ -11216,7 +11260,8 @@
             nodes.sourceState.textContent = "Flotte et traces synchronisées.";
             nodes.sourceState.dataset.state = "ready";
           }
-        } catch (_error) {
+        } catch (error) {
+          console.error("snapshot_apply_failed", error);
           nodes.sourceState.textContent = "Instantané du relais illisible.";
           nodes.sourceState.dataset.state = "error";
         }
@@ -11906,6 +11951,7 @@
     isInactiveAgent,
     agentRosterSignature,
     agentResourceUrl,
+    sandboxTicketRequest,
     controlResourceUrl,
     usageDashboardProjection,
     formatTokenCount,

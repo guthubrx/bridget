@@ -3,10 +3,10 @@
  * ni le jeton du relais ni un bridge Tauri : seul le parent local valide le
  * protocole minuscule ci-dessous. */
 (function bootstrapArtifactSandbox(root, factory) {
-  const api = factory();
+  const api = factory(root);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.BridgetArtifactSandbox = api;
-})(typeof globalThis !== "undefined" ? globalThis : null, function artifactSandboxFactory() {
+})(typeof globalThis !== "undefined" ? globalThis : null, function artifactSandboxFactory(root) {
   "use strict";
   const MAX_HEIGHT = 1200;
   const MAX_STATE_BYTES = 128 * 1024;

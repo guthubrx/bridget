@@ -347,10 +347,10 @@ pub fn connect_remote<T: RemoteTransport, P: RelayProbe>(
     Ok(session)
 }
 
-/// Une perte de tunnel ne devient jamais un état connecté artificiel. La
-/// transition `Reconnecting` est volontairement unique : l'interface propose
-/// ensuite une relance explicite au lieu de boucler silencieusement.
-pub fn mark_tunnel_lost(session: &mut ConnectionSession) -> ConnectionStatus {
+/// Une perte de tunnel ne devient jamais un état connecté artificiel. Le
+/// Desktop conserve l'état `Reconnecting` afin de pouvoir recréer son tunnel
+/// sans laisser le panneau attaché à un port local mort.
+pub fn begin_tunnel_reconnect(session: &mut ConnectionSession) -> ConnectionStatus {
     if session.state != ConnectionState::Connected {
         return ConnectionStatus::from_session(session);
     }
@@ -358,9 +358,8 @@ pub fn mark_tunnel_lost(session: &mut ConnectionSession) -> ConnectionStatus {
     session.retry_count = session.retry_count.saturating_add(1);
     session.last_error = Some(crate::profile::RedactedConnectionError {
         category: crate::profile::ConnectionErrorCategory::Tunnel,
-        message: "Le tunnel SSH s'est arrêté. Relancez explicitement ce serveur.".into(),
+        message: "Le tunnel SSH s'est arrêté. Reconnexion automatique en cours.".into(),
     });
-    let _ = transition(session, ConnectionState::Failed);
     ConnectionStatus::from_session(session)
 }
 
@@ -527,9 +526,10 @@ fn percent_encode(value: &str) -> String {
 mod tests {
     use super::{
         ConnectionError, HttpRelayProbe, LOCAL_ENDPOINT_ARGS, LOCAL_ENDPOINT_PROGRAM, RelayProbe,
-        RemoteTransport, attention_request_path, attention_state_request_path, connect_remote,
-        desktop_panel_url, desktop_relay_url, fleet_projects_path, fleet_snapshot_path,
-        local_endpoint_path, mark_tunnel_lost, parse_endpoint_document, transition,
+        RemoteTransport, attention_request_path, attention_state_request_path,
+        begin_tunnel_reconnect, connect_remote, desktop_panel_url, desktop_relay_url,
+        fleet_projects_path, fleet_snapshot_path, local_endpoint_path, parse_endpoint_document,
+        transition,
     };
     use crate::profile::{
         ConnectionProfile, ConnectionSession, ConnectionState, ProfileCapability, RelayEndpoint,
@@ -741,23 +741,23 @@ mod tests {
     }
 
     #[test]
-    fn perte_de_tunnel_declenche_une_seule_reconnexion_puis_un_echec_honnete() {
+    fn perte_de_tunnel_garde_un_etat_de_reconnexion_automatique() {
         let mut session = ConnectionSession::disconnected("remote");
         session.set_endpoint(RelayEndpoint::new(17888, "fixture-token".into()).unwrap());
         transition(&mut session, ConnectionState::ConnectingSsh).unwrap();
         transition(&mut session, ConnectionState::OpeningTunnel).unwrap();
         transition(&mut session, ConnectionState::CheckingRelay).unwrap();
         transition(&mut session, ConnectionState::Connected).unwrap();
-        let status = mark_tunnel_lost(&mut session);
-        assert_eq!(status.state, ConnectionState::Failed);
+        let status = begin_tunnel_reconnect(&mut session);
+        assert_eq!(status.state, ConnectionState::Reconnecting);
         assert_eq!(
             status.category,
             Some(crate::profile::ConnectionErrorCategory::Tunnel)
         );
         assert_eq!(session.retry_count, 1);
         assert_eq!(
-            mark_tunnel_lost(&mut session).state,
-            ConnectionState::Failed
+            begin_tunnel_reconnect(&mut session).state,
+            ConnectionState::Reconnecting
         );
         assert_eq!(session.retry_count, 1);
     }

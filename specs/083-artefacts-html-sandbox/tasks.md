@@ -3,8 +3,8 @@
 **Entrée**: `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/`,
 `quickstart.md`, `reuse-audit.md`
 **Précondition**: les contrats, versions et blobs de SPEC-082 sont livrés.
-**Statut de ce fichier**: planifié uniquement. Aucune tâche ci-dessous n'est
-implémentée dans cette session de préparation.
+**Statut de ce fichier**: implémenté et validé sur la cible Desktop le
+2026-09-01. Les corrections de recette sont consignées dans `implementation.md`.
 
 ## Dépendances et stratégie
 

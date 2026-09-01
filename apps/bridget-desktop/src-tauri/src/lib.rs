@@ -21,8 +21,9 @@ pub mod ssh;
 pub fn run() {
     use crate::connection::{
         ConnectionStatus, HttpRelayProbe, RemoteTransport, SshRemoteTransport,
-        attention_request_path, attention_state_request_path, connect_remote, desktop_panel_url,
-        discover_local_endpoint, fleet_projects_path, fleet_snapshot_path, mark_tunnel_lost,
+        attention_request_path, attention_state_request_path, begin_tunnel_reconnect,
+        connect_remote, desktop_panel_url, discover_local_endpoint, fleet_projects_path,
+        fleet_snapshot_path,
     };
     use crate::fleet::{
         DesktopFleetSnapshotV1, FleetSourceInput, LOCAL_SOURCE_ID, LOCAL_SOURCE_LABEL, SourceKind,
@@ -41,7 +42,10 @@ pub fn run() {
     use std::io::{Read, Write};
     use std::net::{Ipv4Addr, SocketAddr, TcpStream};
     use std::path::PathBuf;
-    use std::sync::Mutex;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    };
     use std::time::Duration;
     use tauri::webview::{PageLoadEvent, WebviewBuilder};
     use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl};
@@ -54,6 +58,7 @@ pub fn run() {
         known_hosts: PathBuf,
         pending_host_tickets: Mutex<HashMap<String, HostIdentityTicket>>,
         sessions: Mutex<HashMap<String, ActiveConnection>>,
+        connection_generation: AtomicU64,
         panels: Mutex<PanelRegistry>,
         notified_attention_events: Mutex<HashSet<String>>,
     }
@@ -66,6 +71,7 @@ pub fn run() {
         session: crate::profile::ConnectionSession,
         transport: Option<SshRemoteTransport>,
         local_port: u16,
+        generation: u64,
     }
 
     #[derive(Clone)]
@@ -376,7 +382,109 @@ pub fn run() {
         });
     }
 
-    fn watch_remote_tunnel(app: tauri::AppHandle, profile_id: String) {
+    fn retarget_relay_panel(
+        app: &tauri::AppHandle,
+        state: &DesktopState,
+        profile_id: &str,
+        local_port: u16,
+        endpoint: &crate::profile::RelayEndpoint,
+    ) -> Result<(), String> {
+        let (label, next_url) = {
+            let mut panels = state.panels.lock().map_err(as_message)?;
+            let Some(panel) = panels
+                .panels()
+                .find(|panel| panel.profile_id == profile_id)
+                .cloned()
+            else {
+                return Ok(());
+            };
+            let mut relay_url = url::Url::parse(&panel.url)
+                .map_err(|_| "L'URL du panneau relayé est invalide.".to_owned())?;
+            relay_url
+                .set_port(Some(local_port))
+                .map_err(|_| "Le port du panneau relayé est invalide.".to_owned())?;
+            let query = relay_url
+                .query_pairs()
+                .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                .collect::<Vec<_>>();
+            {
+                let mut pairs = relay_url.query_pairs_mut();
+                pairs.clear();
+                for (key, value) in query {
+                    if key == "token" {
+                        pairs.append_pair(&key, endpoint.token());
+                    } else {
+                        pairs.append_pair(&key, &value);
+                    }
+                }
+            }
+            let next_url: String = relay_url.into();
+            if !panels.replace_relay_url(&panel.label, next_url.clone()) {
+                return Err("Le panneau relayé n'a pas pu être mis à jour.".to_owned());
+            }
+            (panel.label, next_url)
+        };
+        if let Some(webview) = app.get_webview(&label) {
+            let url = next_url
+                .parse()
+                .map_err(|_| "L'URL de reconnexion du panneau est invalide.".to_owned())?;
+            webview.navigate(url).map_err(as_message)?;
+        }
+        Ok(())
+    }
+
+    fn reconnect_remote_tunnel(
+        app: &tauri::AppHandle,
+        state: &DesktopState,
+        profile_id: &str,
+        generation: u64,
+    ) -> Result<ConnectionStatus, String> {
+        let profile = state
+            .profiles
+            .lock()
+            .map_err(as_message)?
+            .list()
+            .map_err(as_message)?
+            .into_iter()
+            .find(|candidate| candidate.id() == profile_id)
+            .ok_or_else(|| "Profil introuvable.".to_owned())?;
+        let mut transport = SshRemoteTransport::new(state.known_hosts.clone());
+        let mut probe = HttpRelayProbe;
+        let mut session =
+            connect_remote(&profile, &mut transport, &mut probe).map_err(as_message)?;
+        let local_port = transport
+            .local_port()
+            .ok_or_else(|| "Le tunnel SSH est indisponible.".to_owned())?;
+        let endpoint = session
+            .endpoint()
+            .cloned()
+            .ok_or_else(|| "Le relais connecté ne fournit pas d'endpoint.".to_owned())?;
+        {
+            let mut sessions = state.sessions.lock().map_err(as_message)?;
+            let Some(active) = sessions.get_mut(profile_id) else {
+                transport.close();
+                return Err("La reconnexion a été remplacée par une autre session.".to_owned());
+            };
+            if active.generation != generation
+                || active.session.state != crate::profile::ConnectionState::Reconnecting
+            {
+                transport.close();
+                return Err("La reconnexion a été remplacée par une autre session.".to_owned());
+            }
+            session.retry_count = active.session.retry_count;
+            active.session = session;
+            active.transport = Some(transport);
+            active.local_port = local_port;
+        }
+        retarget_relay_panel(app, state, profile_id, local_port, &endpoint)?;
+        Ok(ConnectionStatus {
+            profile_id: profile_id.to_owned(),
+            state: crate::profile::ConnectionState::Connected,
+            category: None,
+        })
+    }
+
+    fn watch_remote_tunnel(app: tauri::AppHandle, profile_id: String, generation: u64) {
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(1));
@@ -391,23 +499,49 @@ pub fn run() {
                     let Some(active) = sessions.get_mut(&profile_id) else {
                         return;
                     };
-                    let running = active
-                        .transport
-                        .as_mut()
-                        .and_then(|transport| transport.is_running().ok())
-                        .unwrap_or(false);
-                    if running {
+                    if active.generation != generation {
+                        return;
+                    }
+                    if active.session.state == crate::profile::ConnectionState::Reconnecting {
                         None
+                    } else if active.session.state != crate::profile::ConnectionState::Connected {
+                        return;
                     } else {
-                        if let Some(mut transport) = active.transport.take() {
-                            transport.close();
+                        let running = active
+                            .transport
+                            .as_mut()
+                            .and_then(|transport| transport.is_running().ok())
+                            .unwrap_or(false);
+                        if running {
+                            None
+                        } else {
+                            if let Some(mut transport) = active.transport.take() {
+                                transport.close();
+                            }
+                            Some(begin_tunnel_reconnect(&mut active.session))
                         }
-                        Some(mark_tunnel_lost(&mut active.session))
                     }
                 };
                 if let Some(status) = status {
                     publish_connection_state(&app, &status);
-                    return;
+                }
+                let reconnecting = state
+                    .sessions
+                    .lock()
+                    .map(|sessions| {
+                        sessions.get(&profile_id).is_some_and(|active| {
+                            active.generation == generation
+                                && active.session.state
+                                    == crate::profile::ConnectionState::Reconnecting
+                        })
+                    })
+                    .unwrap_or(false);
+                if !reconnecting {
+                    continue;
+                }
+                match reconnect_remote_tunnel(&app, state.inner(), &profile_id, generation) {
+                    Ok(status) => publish_connection_state(&app, &status),
+                    Err(_) => std::thread::sleep(Duration::from_secs(4)),
                 }
             }
         });
@@ -959,16 +1093,18 @@ pub fn run() {
             .ok_or_else(|| "Le tunnel SSH est indisponible.".to_owned())?;
         let status = ConnectionStatus::from_session(&session);
         let monitor_id = profile_id.clone();
+        let generation = state.connection_generation.fetch_add(1, Ordering::Relaxed);
         state.sessions.lock().map_err(as_message)?.insert(
             profile_id,
             ActiveConnection {
                 session,
                 transport: Some(transport),
                 local_port,
+                generation,
             },
         );
         publish_connection_state(&app, &status);
-        watch_remote_tunnel(app.clone(), monitor_id);
+        watch_remote_tunnel(app.clone(), monitor_id, generation);
         watch_attention(app, profile.id().to_owned());
         Ok(status)
     }
@@ -1195,6 +1331,7 @@ pub fn run() {
                 known_hosts: app_data_dir.join("known_hosts"),
                 pending_host_tickets: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashMap::new()),
+                connection_generation: AtomicU64::new(1),
                 panels: Mutex::new(PanelRegistry::default()),
                 notified_attention_events: Mutex::new(HashSet::new()),
             });

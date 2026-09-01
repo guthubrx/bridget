@@ -11,6 +11,29 @@
 - Preuve ciblée : `cargo test -p bridget-transport --lib
   codex_app_server::tests::consigne_outil_bridget_exige_la_publication_html_avant_un_refus -- --exact`.
 
+## Validation runtime finale - 2026-09-01
+
+- Observation de production : le Desktop pouvait conserver un panneau attaché
+  à un tunnel SSH local mort. Le serveur publiait alors bien l'artefact, mais
+  la conversation affichait un relais illisible et ne recevait pas le rendu.
+- Correction Desktop : la perte de tunnel passe désormais par une reconnexion
+  automatique, recrée le tunnel et retargete la WebView existante vers son
+  nouveau port local. Une génération de connexion empêche qu'un ancien watcher
+  remplace une session reconnectée plus récente.
+- Corrections renderer : la projection de snapshot référence désormais le
+  normaliseur disponible pour les références publiées et le prédicat de
+  demandes fournisseur est défini dans la portée partagée. Le corps JSON d'un
+  ticket sandbox conserve la référence canonique, distincte de la forme URL.
+- Correction sandbox : l'hôte transmet explicitement sa racine au factory,
+  permettant la création de l'iframe sans accéder à une variable hors portée.
+- Preuves : `node --test crates/bridget-daemon/assets/ui/app.js` (129 verts),
+  `cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml` (60
+  verts), puis test navigateur local sur le relais distant : deux détails,
+  deux tickets et deux lectures sandbox répondent 200, avec deux iframes
+  créées sans erreur JavaScript. La même publication apparaît ensuite dans la
+  fenêtre Bridget installée, avec son cadre sandbox, Agrandir, Enregistrer et
+  Exporter JSON.
+
 ## Correctif du canal dynamique Codex - 2026-09-01
 
 - Cause observée : le catalogue MCP était bien chargé par Codex, mais le moteur

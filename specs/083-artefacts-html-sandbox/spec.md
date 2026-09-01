@@ -5,7 +5,7 @@
 
 Spec: 083-artefacts-html-sandbox
 Titre: Artefacts HTML/JavaScript isolés et navigateur Bridget latéral
-Statut: Prête à implémenter
+Statut: Livrée et validée en environnement Desktop
 Priorité: P1
 
 Résumé:
@@ -16,7 +16,7 @@ Résumé:
 
 **Branche**: 082-artifact-publication
 **Créée**: 2026-08-31
-**Statut**: Prête à implémenter
+**Statut**: Livrée et validée en environnement Desktop
 **Priorité**: P1
 **Dépendances**: SPEC-074, SPEC-080, SPEC-081, SPEC-082
 
