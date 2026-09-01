@@ -9,6 +9,10 @@
 - L'état d'interaction est limité à 128 Kio, ne peut pas contenir d'URL et son enregistrement crée explicitement une version enfant. L'original n'est jamais modifié.
 - Le Browser est un unique WebView droit à profil `Ce Mac` séparé : URLs HTTPS et publications locales seulement, aucune capability Tauri, suppression explicite des données WebView et conservation des artefacts canoniques.
 - Les onglets Browser, Artefacts, Fichiers, Liens et Activité réutilisent les données attestées de Bridget. La portée reste le projet actif jusqu'à l'action explicite de recherche globale.
+- Le schéma MCP `bridget_publish_artifact` expose `kind: html` et explique le
+  payload sandboxé. Il interdit explicitement à l'agent de recopier le HTML
+  dans son message après publication : le renderer inline reste l'unique vue
+  exécutée.
 - Le renderer HTML n'a aucun accès réseau, cookie, secret, fichier local ou IPC. Une source ne peut être ouverte dans Browser qu'après un clic opérateur.
 
 ## Commandes vertes

@@ -1611,14 +1611,14 @@ fn tools() -> Vec<Value> {
     vec![
         json!({
             "name": "bridget_publish_artifact",
-            "description": "Publier un unique artefact structuré et sourcé. Bridget atteste le projet, la conversation et le tour depuis l'identité connectée. Les formats HTML sont refusés ici et relèvent du contrat HTML sandboxé.",
+            "description": "Publier un unique artefact structuré et sourcé. Bridget atteste le projet, la conversation et le tour depuis l'identité connectée. Utiliser kind=html pour une visualisation HTML/JavaScript interactive : payload.html contient le document complet, payload.data les seules données déclarées et payload.inline_height_hint une hauteur souhaitée entre 0 et 1200. Bridget stocke le HTML comme blob canonique et le rend inline dans une sandbox sans réseau, fichiers, cookies, Tauri ni accès à la conversation. Après une publication HTML réussie, répondre brièvement que l’artefact est publié : ne jamais recopier le HTML dans Markdown.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 128 },
-                    "kind": { "enum": ["chart", "kpi", "table", "timeline", "image", "file"] },
+                    "kind": { "enum": ["chart", "kpi", "table", "timeline", "image", "file", "html"] },
                     "title": { "type": "string", "minLength": 1, "maxLength": 240 },
-                    "payload": { "type": "object", "description": "Données structurées de l'artefact. Pour image/fichier avec blob, inclure blob_digest SHA-256 et media_type." },
+                    "payload": { "type": "object", "description": "Données structurées de l'artefact. Pour kind=html, inclure html (document complet autonome), data (données injectées) et inline_height_hint (0..1200) ; aucune URL, CDN ou dépendance externe. Pour image/fichier avec blob, inclure blob_digest SHA-256 et media_type." },
                     "sources": {
                         "type": "array", "minItems": 1, "maxItems": 100,
                         "items": {
@@ -1881,6 +1881,23 @@ mod tests {
                 "l'action humaine {forbidden} ne doit jamais être un outil MCP"
             );
         }
+    }
+
+    #[test]
+    fn publication_html_est_annoncee_au_moteur_comme_un_artefact_sandboxe() {
+        let publication = tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "bridget_publish_artifact")
+            .expect("outil de publication présent");
+        let kinds = publication["inputSchema"]["properties"]["kind"]["enum"]
+            .as_array()
+            .expect("énumération des types présente");
+        assert!(kinds.iter().any(|kind| kind == "html"));
+        let description = publication["description"]
+            .as_str()
+            .expect("description présente");
+        assert!(description.contains("kind=html"));
+        assert!(description.contains("ne jamais recopier le HTML dans Markdown"));
     }
 
     #[test]

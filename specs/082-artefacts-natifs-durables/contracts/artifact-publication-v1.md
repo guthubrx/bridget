@@ -17,7 +17,7 @@ interprété depuis Markdown.
 | Champ | Obligatoire | Règle |
 |---|---|---|
 | idempotency_key | oui | clé non vide réutilisable seulement pour le même contenu |
-| kind | oui | chart, kpi, table, timeline, image ou file |
+| kind | oui | chart, kpi, table, timeline, image, file ou html |
 | title | oui | titre humain borné |
 | payload | oui | données structurées ou contenu déclaré propre au type |
 | sources | oui | provenance, éventuellement user_supplied ou agent_computed |
@@ -27,6 +27,15 @@ interprété depuis Markdown.
 
 Les identités de projet, conversation et tour viennent du contexte attesté du
 fournisseur. Une entrée ne peut pas les redéfinir.
+
+### Publication HTML sandboxée
+
+Pour `kind: html`, `payload.html` contient le document complet autonome,
+`payload.data` les seules données injectées et `payload.inline_height_hint` une
+hauteur demandée entre 0 et 1 200 px. Le document ne référence ni CDN, ni URL
+distante, ni fichier local. Bridget l'enregistre comme blob canonique puis le
+rend uniquement dans la sandbox HTML. Après un reçu de succès, l'agent répond
+par une confirmation brève et ne recopie jamais le document dans Markdown.
 
 ## Réponse de succès
 
@@ -67,4 +76,3 @@ paths exacts seront figés durant implémentation, mais le contrat fonctionnel e
 
 Aucune route ne prend un chemin de fichier arbitraire, une URL non validée ou un
 identifiant de projet non autorisé.
-
