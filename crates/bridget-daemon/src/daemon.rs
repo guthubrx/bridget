@@ -3798,7 +3798,7 @@ fn defer_idempotent_delivery(
         .map_err(|error| format!("enveloppe de remise idempotente corrompue: {error}"))?;
     // Le journal et l'idempotence conservent l'Agent ID. Le seul nom destiné
     // au fournisseur est une projection de présentation ajoutée à la remise.
-    message.from_display_name = state.store.agent_display_name(&message.from).ok().flatten();
+    message.from_display_name = provider_display_name(state, &message.from);
     // Même autorité que Deliver classique : relire à la poussée. Les octets
     // persistés (souvent sans deadline pour reply=false) ne doivent pas
     // condamner le tour au notify figé du fleet (600 s mesuré sur relec6).
@@ -7156,6 +7156,25 @@ fn routing_agent_id(agent_id: &str) -> &str {
     }
 }
 
+/// Le libellé `humain` est conservé dans le fil, mais le fournisseur ne doit
+/// jamais le résoudre via un profil historique homonyme. Sans cette exception,
+/// l'agent peut croire que la demande vient d'un autre agent et répondre au
+/// mauvais destinataire.
+fn provider_display_name(st: &DaemonState, sender: &str) -> Option<String> {
+    if sender == UI_HUMAN_SENDER {
+        Some("Utilisateur".to_string())
+    } else {
+        st.store.agent_display_name(sender).ok().flatten()
+    }
+}
+
+/// Une conversation sans projet explicite reste une portée privée et stable.
+/// Son identifiant est dérivé de l'agent déjà authentifié par Bridget, jamais
+/// d'un paramètre fourni par le navigateur ou le fournisseur.
+fn artifact_scope_for_agent(agent_id: &str) -> String {
+    format!("conversation-agent:{agent_id}")
+}
+
 fn prepare_dispatch(
     st: &mut DaemonState,
     message: &mut bridget_core::BridgetMessage,
@@ -8411,28 +8430,27 @@ fn handle_wrapper_message(
                         "La publication exige une instance d'agent attestée.",
                     ));
                 };
-                let Some(project) = st.fleet.project_for_agent(&agent_name) else {
-                    return Some(artifact_publication_refusal(
-                        "project_context_unavailable",
-                        "Cet agent n'est rattaché à aucun projet actif.",
-                    ));
+                let project_id = match st.fleet.project_for_agent(&agent_name) {
+                    Some(project) => {
+                        let binding_matches = st
+                            .store
+                            .project_binding(&project.project_id)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|binding| {
+                                binding.state == crate::store::ProjectBindingState::Active
+                                    && binding.generation == project.binding_generation
+                            });
+                        if !binding_matches {
+                            return Some(artifact_publication_refusal(
+                                "project_binding_unavailable",
+                                "La liaison de projet n'est plus active ou n'est plus cohérente.",
+                            ));
+                        }
+                        project.project_id
+                    }
+                    None => artifact_scope_for_agent(&agent_name),
                 };
-                let binding_matches = st
-                    .store
-                    .project_binding(&project.project_id)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|binding| {
-                        binding.state == crate::store::ProjectBindingState::Active
-                            && binding.generation == project.binding_generation
-                    });
-                if !binding_matches {
-                    return Some(artifact_publication_refusal(
-                        "project_binding_unavailable",
-                        "La liaison de projet n'est plus active ou n'est plus cohérente.",
-                    ));
-                }
-                let project_id = project.project_id;
                 let context = ArtifactPublicationContext {
                     conversation_reference: format!("conversation:{project_id}:{agent_name}"),
                     project_id,
@@ -12081,8 +12099,7 @@ fn handle_wrapper_message(
             // Ne jamais remplacer l'Agent ID dans le message routé : le
             // wrapper a encore besoin de `from` pour reply. Le display name
             // est une projection d'injection sans sémantique de routage.
-            delivered_message.from_display_name =
-                st.store.agent_display_name(&bridge_msg.from).ok().flatten();
+            delivered_message.from_display_name = provider_display_name(&st, &bridge_msg.from);
             let agent_type = st
                 .conn_instances
                 .get(&target_conn)
@@ -14672,7 +14689,63 @@ mod presence_tests {
                 && pending.from == UI_HUMAN_SENDER
                 && pending.from_conn == "ui-human"
         }));
+        assert_eq!(
+            provider_display_name(&state, UI_HUMAN_SENDER).as_deref(),
+            Some("Utilisateur"),
+            "le fournisseur ne doit jamais recevoir le profil historique du libellé humain"
+        );
         let _ = std::fs::remove_file(config.db_path);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn publication_artefact_sans_projet_reste_dans_la_portee_de_conversation() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-artifact-unbound-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let (mut state, config) = recovery_fixture_state(&root);
+        let agent_id = "a3d27a89-80d5-4e0f-9b84-cf5523ecb026";
+        state
+            .conn_names
+            .insert("conn-artifact".to_string(), agent_id.to_string());
+        state
+            .conn_instances
+            .insert("conn-artifact".to_string(), "instance-artifact".to_string());
+        state.artifact_root = config.db_path.with_extension("artifacts");
+        let publication: ArtifactPublicationV1 = serde_json::from_str(include_str!(
+            "../tests/fixtures/artifacts/chart-external-v1.json"
+        ))
+        .unwrap();
+        let shared = Arc::new(Mutex::new(state));
+
+        let response = handle_wrapper_message(
+            "conn-artifact",
+            WrapperToDaemon::ArtifactPublish {
+                contract_version: ARTIFACT_CONTRACT_VERSION,
+                canonical_publication: publication.canonical_bytes(),
+            },
+            &shared,
+        );
+        let Some(DaemonToWrapper::ArtifactPublicationResult {
+            receipt_json: Some(receipt_json),
+            refusal_code: None,
+            ..
+        }) = response
+        else {
+            panic!("publication de conversation attendue: {response:?}");
+        };
+        let receipt: crate::artifact_types::ArtifactReceiptV1 =
+            serde_json::from_slice(&receipt_json).unwrap();
+        assert_eq!(
+            receipt.conversation_reference,
+            format!(
+                "conversation:{}:{agent_id}",
+                artifact_scope_for_agent(agent_id)
+            )
+        );
+        drop(shared);
         let _ = std::fs::remove_dir_all(root);
     }
 

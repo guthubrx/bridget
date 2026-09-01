@@ -244,6 +244,16 @@ ni secret, ni jeton de relais, ni contenu de conversation de production.
 - Vérification : test Rust
   `envoi_ui_avec_reponse_route_lhumain_canonique_sans_perdre_son_libelle`.
 
+## Correctif - identité affichée au fournisseur - 2026-09-01
+
+- La même observation a révélé un second défaut : le profil historique du
+  libellé `humain` pouvait projeter « Agent (870) » dans le prompt Codex.
+  L'agent répondait alors à cet agent fictif, au lieu de répondre à
+  l'opérateur.
+- Le message conserve `humain` pour le ledger et le routage. Seule la
+  projection destinée au fournisseur devient désormais `Utilisateur`, valeur
+  fixe qui ne peut pas être contaminée par un profil ancien.
+
 ## Self-review Article XIX/XX - T014 à T037
 
 - Pourquoi cette solution est nécessaire : un fil riche sans séparation de

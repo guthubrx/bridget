@@ -24,6 +24,26 @@
 - Preuve ciblée : `cargo test -p bridget-transport --lib
   codex_app_server::tests::outil_dynamique -- --nocapture`.
 
+## Correctif - portée de conversation sans projet - 2026-09-01
+
+- Une conversation de test sans projet actif recevait correctement la demande
+  mais refusait ensuite la publication avec `project_context_unavailable`.
+- Bridget crée désormais une portée privée stable `conversation-agent:<agent>`
+  depuis l'identité déjà authentifiée du wrapper. Le navigateur ne fournit
+  jamais cette valeur. Dès qu'un projet actif existe, sa portée attestée reste
+  prioritaire.
+
+## Correctif - élicitation MCP de publication - 2026-09-01
+
+- Le protocole Codex peut demander une élicitation MCP avant l'appel de
+  publication. Bridget accepte uniquement son formulaire vide, issu de son
+  propre serveur, et répond `decline` à toute demande de donnée, URL ou serveur
+  tiers. Cela ne contourne aucune autorisation et ne journalise ni le texte de
+  la demande ni une éventuelle valeur sensible.
+- Preuve ciblée : `cargo test -p bridget-transport --lib
+  elicitation_mcp_vide_de_bridget_est_acceptee_et_un_formulaire_est_refuse
+  -- --nocapture`.
+
 **Date** : 2026-08-31
 **Branche** : `082-artifact-publication`
 

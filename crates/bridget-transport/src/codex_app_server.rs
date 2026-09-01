@@ -1707,6 +1707,42 @@ fn unsupported_provider_request_response(value: &Value) -> Option<(Value, Value,
     ))
 }
 
+/// Répond à une élicitation MCP sans la transformer en permission générale.
+/// Bridget ne l'accepte automatiquement que lorsqu'elle vient de son propre
+/// serveur et ne demande aucun champ. Les formulaires avec données, les URL et
+/// les serveurs tiers restent explicitement déclinés : ils nécessitent une
+/// décision humaine dans une surface dédiée.
+fn mcp_elicitation_response(value: &Value) -> Option<(Value, Value)> {
+    let id = value.get("id")?;
+    let params = value.get("params")?;
+    let server_name = params.get("serverName")?.as_str()?;
+    let mode = params.get("mode")?.as_str()?;
+    let required_fields = params
+        .pointer("/requestedSchema/required")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let auto_accepted = server_name == "bridget" && mode == "form" && required_fields == 0;
+    let action = if auto_accepted { "accept" } else { "decline" };
+    let mut result = json!({ "action": action });
+    if auto_accepted {
+        result["content"] = json!({});
+    }
+    Some((
+        json!({ "id": id, "result": result }),
+        json!({
+            "provider": "codex",
+            "code": if auto_accepted {
+                "mcp_elicitation_autoaccepted"
+            } else {
+                "mcp_elicitation_declined"
+            },
+            "server": project_provider_method(server_name),
+            "mode": mode,
+            "required_field_count": required_fields,
+        }),
+    ))
+}
+
 fn codex_journal_payload(event: &str, payload: Value) -> Value {
     // Dans ce pilote, `error` est exclusivement l'issue terminale du worker.
     // La passerelle porte le code ici afin que les enrichissements de payload
@@ -2245,6 +2281,50 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                         );
                     }
                 }
+                Some("mcpServer/elicitation/request") => {
+                    if let Some((reply, payload)) = mcp_elicitation_response(&value) {
+                        let message_id = queue
+                            .0
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .active
+                            .as_ref()
+                            .map(|active| active.message_id.clone());
+                        record_or_terminal(
+                            &journal,
+                            &observations,
+                            "provider_request",
+                            message_id.as_deref(),
+                            payload,
+                        );
+                        if let Err(error) = write_value(&writer, reply) {
+                            push_source(
+                                &observations,
+                                raw.clone(),
+                                ManagedEventKind::Error {
+                                    detail: format!(
+                                        "réponse à l’élicitation MCP Codex impossible: {error}"
+                                    ),
+                                },
+                            );
+                        }
+                    } else {
+                        push_source(
+                            &observations,
+                            raw.clone(),
+                            ManagedEventKind::Error {
+                                detail: "élicitation MCP Codex invalide".to_string(),
+                            },
+                        );
+                    }
+                    push_source(
+                        &observations,
+                        raw,
+                        ManagedEventKind::Update {
+                            detail: "mcpServer/elicitation/request Codex".to_string(),
+                        },
+                    );
+                }
                 Some(method) if is_approval_request(method) => {
                     record_active_act(
                         &journal,
@@ -2583,6 +2663,49 @@ mod tests {
         assert_ne!(delegated_reference, sentinel);
         assert!(!delegated_reference.contains("commandExecution"));
         assert!(!delegated_reference.contains("ne-pas-publier"));
+    }
+
+    #[test]
+    fn elicitation_mcp_vide_de_bridget_est_acceptee_et_un_formulaire_est_refuse() {
+        let (reply, payload) = mcp_elicitation_response(&json!({
+            "id": "elicitation-vide",
+            "method": "mcpServer/elicitation/request",
+            "params": {
+                "serverName": "bridget",
+                "mode": "form",
+                "message": "ne pas enregistrer ce texte",
+                "requestedSchema": {"type": "object", "properties": {}, "required": []}
+            }
+        }))
+        .expect("élicitation MCP valide");
+        assert_eq!(reply["id"], "elicitation-vide");
+        assert_eq!(reply["result"]["action"], "accept");
+        assert_eq!(reply["result"]["content"], json!({}));
+        assert_eq!(payload["code"], "mcp_elicitation_autoaccepted");
+        assert!(
+            !serde_json::to_string(&payload)
+                .expect("payload sérialisable")
+                .contains("ne pas enregistrer ce texte")
+        );
+
+        let (reply, payload) = mcp_elicitation_response(&json!({
+            "id": "elicitation-secret",
+            "method": "mcpServer/elicitation/request",
+            "params": {
+                "serverName": "bridget",
+                "mode": "form",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {"secret": {"type": "string"}},
+                    "required": ["secret"]
+                }
+            }
+        }))
+        .expect("élicitation MCP valide");
+        assert_eq!(reply["result"]["action"], "decline");
+        assert_eq!(reply["result"].get("content"), None);
+        assert_eq!(payload["code"], "mcp_elicitation_declined");
+        assert_eq!(payload["required_field_count"], 1);
     }
 
     #[test]

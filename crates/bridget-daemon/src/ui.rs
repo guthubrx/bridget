@@ -4125,19 +4125,25 @@ fn ledger_db_path_for_socket(socket_path: &Path) -> PathBuf {
     socket_path.with_extension("db")
 }
 
-/// Déduit le seul projet lisible dans le contexte d'un agent depuis la
-/// projection attestée du daemon. Aucune route d'artefact n'accepte de projet
-/// fourni par le navigateur.
-fn artifact_project_for_agent(
+/// Déduit la seule portée d'artefact lisible dans le contexte d'un agent
+/// attesté. Un projet actif l'emporte. Sinon la conversation reçoit une portée
+/// privée et stable dérivée de l'agent connu du daemon. Aucune route
+/// d'artefact n'accepte de portée fournie par le navigateur.
+fn artifact_scope_for_agent(
     agents: &[bridget_transport::protocol::AgentInfo],
     agent: &str,
 ) -> Option<String> {
     agents
         .iter()
         .find(|candidate| candidate.agent_id == agent)
-        .and_then(|candidate| candidate.agent_link.as_ref())
-        .and_then(|link| link.project.as_ref())
-        .map(|project| project.project_id.clone())
+        .map(|candidate| {
+            candidate
+                .agent_link
+                .as_ref()
+                .and_then(|link| link.project.as_ref())
+                .map(|project| project.project_id.clone())
+                .unwrap_or_else(|| format!("conversation-agent:{agent}"))
+        })
 }
 
 fn read_artifact_references(
@@ -4145,7 +4151,7 @@ fn read_artifact_references(
     agents: &[bridget_transport::protocol::AgentInfo],
     agent: &str,
 ) -> UiArtifactReferenceProjectionV1 {
-    let Some(project_id) = artifact_project_for_agent(agents, agent) else {
+    let Some(project_id) = artifact_scope_for_agent(agents, agent) else {
         return UiArtifactReferenceProjectionV1 {
             state: "not_scoped",
             items: Vec::new(),
@@ -4248,11 +4254,11 @@ fn artifact_ui_scope(
             "Le contexte projet Bridget est temporairement indisponible.".to_string(),
         )
     })?;
-    let Some(project_id) = artifact_project_for_agent(&facts.agents, agent) else {
+    let Some(project_id) = artifact_scope_for_agent(&facts.agents, agent) else {
         return Err((
-            403,
-            "artifact_project_unavailable",
-            "Cet agent n’est rattaché à aucun projet actif.".to_string(),
+            404,
+            "artifact_agent_unavailable",
+            "Cet agent n’est pas visible dans Bridget.".to_string(),
         ));
     };
     Ok((project_id, agent.clone()))
