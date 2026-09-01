@@ -175,6 +175,22 @@ ni secret, ni jeton de relais, ni contenu de conversation de production.
 - Le rappel de retour au direct, les repères de tour, les petits écrans et
   `prefers-reduced-motion` possèdent des styles dédiés.
 
+## Reprise US4 - suivi du direct pendant le streaming - 2026-09-01
+
+- La capture utilisateur a infirmé l'hypothèse d'un simple calcul géométrique
+  du bas du fil : entre deux fragments, le re-rendu peut modifier la hauteur
+  avant la mesure suivante. Le lecteur se retrouve alors artificiellement
+  hors du bas et l'ancre de lecture le ramène vers le haut.
+- `renderThread` conserve désormais l'intention `followLatest` séparément de
+  la position instantanée. Elle reste active tant que l'opérateur suit le
+  direct, est désactivée par un défilement vers le haut, et l'ancre existante
+  reste seule responsable de cette lecture historique.
+- `node crates/bridget-daemon/assets/ui/app.js` : succès, avec le test de
+  non-régression `suivi_du_flux_reste_actif_pendant_une_generation`.
+- La vérification visuelle complète reste T034 : elle doit couvrir un vrai
+  flux de fragments dans Bridget Desktop, sans prétendre qu'un test Node
+  reproduit le layout WebView.
+
 ## Self-review Article XIX/XX - T014 à T037
 
 - Pourquoi cette solution est nécessaire : un fil riche sans séparation de

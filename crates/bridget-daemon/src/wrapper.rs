@@ -4322,11 +4322,20 @@ fn apply_managed_mcp(
             ]);
             Ok(Some(config))
         }
-        // Codex app-server géré tourne dans le mode exec de Codex. Les outils
-        // MCP dynamiques y sont visibles mais ne peuvent pas être invoqués,
-        // ce qui laissait le tour en attente sans réponse. Le CLI Bridget est
-        // déjà placé dans PATH par managed_adapter_environment.
-        ("codex_app_server", "codex") => Ok(None),
+        // Le pilote app-server relit bien les serveurs déclarés dans la
+        // configuration Codex, y compris pour un tour géré. Les exposer ici
+        // donne au fournisseur les outils Bridget réels, au lieu de lui
+        // demander de deviner une commande CLI qui n'existe pas pour publier
+        // un artefact.
+        ("codex_app_server", "codex") => {
+            let override_ = codex_mcp_override(&interactive_mcp_server_entry()?)?;
+            let insertion = args
+                .iter()
+                .position(|argument| argument == "app-server")
+                .unwrap_or(args.len());
+            args.splice(insertion..insertion, ["-c".to_string(), override_]);
+            Ok(None)
+        }
         _ => Ok(None),
     }
 }
@@ -7279,7 +7288,9 @@ mod reconnect_tests {
             .unwrap()
             .is_none()
         );
-        assert_eq!(codex_args, vec!["app-server".to_string()]);
+        assert_eq!(codex_args[0], "-c");
+        assert!(codex_args[1].contains("mcp_servers.bridget"));
+        assert_eq!(codex_args[2], "app-server");
 
         let mut none_args = Vec::new();
         assert!(

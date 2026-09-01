@@ -865,6 +865,14 @@
         assert.equal(clicked.showNewMessages, false);
       });
 
+      test("suivi_du_flux_reste_actif_pendant_une_generation", () => {
+        const before = { scrollTop: 560, scrollHeight: 1200, clientHeight: 600 };
+        const after = { scrollTop: 0, scrollHeight: 1320, clientHeight: 600 };
+        const decision = api.decideScroll(before, after, 1, true);
+        assert.equal(decision.scrollTop, 720);
+        assert.equal(decision.showNewMessages, false);
+      });
+
       test("puce_nouveaux_messages_persiste_sur_rendu_sans_incrément", () => {
         const before = {
           scrollTop: 180,
@@ -5049,8 +5057,8 @@
     return metrics.scrollHeight - metrics.clientHeight - metrics.scrollTop <= BOTTOM_THRESHOLD_PX;
   }
 
-  function decideScroll(before, after, incomingCount) {
-    const keepAtBottom = isAtBottom(before);
+  function decideScroll(before, after, incomingCount, followLatest = isAtBottom(before)) {
+    const keepAtBottom = followLatest || isAtBottom(before);
     const pendingCount = keepAtBottom
       ? 0
       : Math.max(0, (before.pendingCount || 0) + incomingCount);
@@ -10598,9 +10606,16 @@
       );
     };
 
+    // L'intention de lecture n'est pas déductible de la seule hauteur au
+    // moment d'un delta : entre deux fragments, le nouveau texte peut déjà
+    // avoir éloigné le viewport du bas. On retient donc explicitement le
+    // suivi du dernier message tant que l'utilisateur ne remonte pas le fil.
+    let followLatest = true;
+
     const renderThread = (incomingCount = 0) => {
       const before = currentMetrics();
-      const readingAnchor = isAtBottom(before) ? null : captureReadingAnchor();
+      const keepFollowingLatest = followLatest || isAtBottom(before);
+      const readingAnchor = keepFollowingLatest ? null : captureReadingAnchor();
       const entries = projectTimeline(state.timelines[state.selectedAgent] || []);
       const turns = deriveConversationTurns(state.timelines[state.selectedAgent] || []);
       const timeline = make("div", "timeline");
@@ -10660,10 +10675,11 @@
       renderDeliveryActivity(entries, state.timelines[state.selectedAgent] || []);
       nodes.thread.replaceChildren(timeline);
       const after = currentMetrics();
-      const decision = decideScroll(before, after, incomingCount);
+      const decision = decideScroll(before, after, incomingCount, keepFollowingLatest);
       const restoredScrollTop = restoreReadingAnchor(readingAnchor);
       const scrollTop = restoredScrollTop === null ? decision.scrollTop : restoredScrollTop;
       nodes.thread.scrollTop = scrollTop;
+      followLatest = keepFollowingLatest;
       state = {
         ...state,
         viewport: {
@@ -11351,6 +11367,7 @@
     nodes.draft.addEventListener("select", storeCurrentDraft);
     nodes.thread.addEventListener("scroll", () => {
       const metrics = currentMetrics();
+      followLatest = isAtBottom(metrics);
       state = { ...state, viewport: { ...state.viewport, ...metrics } };
       if (isAtBottom(metrics)) {
         state = {
@@ -11364,6 +11381,7 @@
     nodes.newMessages.addEventListener("click", () => {
       const latest = scrollToLatest(currentMetrics());
       nodes.thread.scrollTop = latest.scrollTop;
+      followLatest = true;
       nodes.newMessages.hidden = true;
       state = { ...state, viewport: latest };
       markSelectedReadIfEligible();

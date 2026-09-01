@@ -115,6 +115,7 @@ traverse le contrat.
 - [x] T036 Vérifier les licences, attribution et limites de réutilisation des contrôles T3 dans `docs/decisions/023-artefacts-structures-et-sandbox.md`, sans importer de code T3 inutile.
 - [x] T037 Jouer la recette `specs/083-artefacts-html-sandbox/quickstart.md` sur macOS et instance distante, puis consigner les résultats dans `specs/083-artefacts-html-sandbox/implementation.md`.
 - [x] T038 Documenter l'exclusion explicite des actions DOM et d'automatisation agent dans `docs/decisions/023-artefacts-structures-et-sandbox.md` afin qu'aucune évolution ne les introduise par défaut.
+- [x] T039 Raccorder les agents Codex gérés au serveur MCP Bridget déclaré statiquement avant `app-server` dans `crates/bridget-daemon/src/wrapper.rs`, puis vérifier que le catalogue fournisseur contient `bridget_publish_artifact` et son contrat `kind: html`.
 
 ## Opportunités de parallélisme
 

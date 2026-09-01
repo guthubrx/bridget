@@ -108,6 +108,7 @@ réponse agent sans bulle n'était pas pour autant assez structurée.
 - [X] T031 [P] [US4] Ajouter dans `crates/bridget-daemon/assets/ui/app.js` les fixtures et assertions Node sur ancre de lecture, nœuds de tour stables, messages non lus et conservation du brouillon sur ré-affichage.
 - [X] T032 [US4] Modifier la stratégie de `renderThread` dans `crates/bridget-daemon/assets/ui/app.js` pour mettre à jour seulement les tours changés ou restaurer précisément l'ancre de lecture, plutôt que réinitialiser le fil entier lors de toute sortie.
 - [X] T033 [US4] Ajouter dans `crates/bridget-daemon/assets/ui/theme.css` les repères de tour et l'action de retour au direct visibles mais discrets, y compris sous taille de police élevée et réduction de mouvement.
+- [X] T043 [US4] Conserver explicitement l'intention de suivre le direct dans `crates/bridget-daemon/assets/ui/app.js` pendant les fragments en cours de génération, tout en désactivant ce suivi dès que l'opérateur remonte le fil et en restaurant alors l'ancre de lecture.
 - [ ] T034 [US4] Vérifier le scénario vingt tours de `specs/081-conversation-renderer/quickstart.md`, puis consigner la mesure ou limite factuelle dans `specs/081-conversation-renderer/evidence/validation.md`.
 
 **Checkpoint** : US4 préserve la lecture d'historique sans casser les stories P1 déjà validées.
