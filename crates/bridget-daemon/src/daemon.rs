@@ -98,6 +98,9 @@ const HUMAN_STEER_TIMEOUT_SECS: u64 = 30;
 /// génération doit pouvoir remplacer proprement une socket morte ou devenue
 /// muette après un redémarrage, sans jamais ouvrir cette reprise aux agents.
 const UI_HUMAN_AGENT_ID: &str = "550e8400-e29b-41d4-a716-4466554400f0";
+/// Libellé conversationnel de l'opérateur dans le ledger. Ce n'est pas un
+/// agent routable : le relais UI s'enregistre sous `UI_HUMAN_AGENT_ID`.
+const UI_HUMAN_SENDER: &str = "humain";
 pub struct Metrics {
     pub messages_sent: AtomicU64,
     pub messages_received: AtomicU64,
@@ -7141,6 +7144,18 @@ struct PreparedDispatch {
     valid_tracked_reply: bool,
 }
 
+/// Les échanges affichent « humain », alors que le routeur ne connaît que
+/// l'UUID canonique du relais UI. Ne jamais modifier le message : son libellé
+/// reste une donnée métier et historique. Cette translation est strictement
+/// interne au routage et vaut dans les deux sens.
+fn routing_agent_id(agent_id: &str) -> &str {
+    if agent_id == UI_HUMAN_SENDER {
+        UI_HUMAN_AGENT_ID
+    } else {
+        agent_id
+    }
+}
+
 fn prepare_dispatch(
     st: &mut DaemonState,
     message: &mut bridget_core::BridgetMessage,
@@ -7149,9 +7164,11 @@ fn prepare_dispatch(
     content_key: String,
     message_guard_id: String,
 ) -> Result<PreparedDispatch, (&'static str, String)> {
+    let routing_from = routing_agent_id(&message.from).to_string();
+    let routing_to = routing_agent_id(&message.to).to_string();
     let reply_sender_conn = st
         .router
-        .get_agent(&message.from)
+        .get_agent(&routing_from)
         .map(|agent| agent.connection_id.clone());
     if message.reply && reply_sender_conn.is_none() {
         return Err((
@@ -7198,7 +7215,7 @@ fn prepare_dispatch(
         return Err(("hops_exhausted", "budget de sauts épuisé".to_string()));
     }
     if !valid_tracked_reply
-        && let Some(presence) = presence_of_agent(st, &message.to)
+        && let Some(presence) = presence_of_agent(st, &routing_to)
         && presence.is_dnd()
     {
         let minutes = presence.dnd_minutes_left();
@@ -7210,7 +7227,7 @@ fn prepare_dispatch(
     }
     let target_conn = match st
         .router
-        .resolve(&message.from, &message.to, message.hops, conn_id)
+        .resolve(&routing_from, &routing_to, message.hops, conn_id)
     {
         RouterAction::Deliver { target_conn } => target_conn,
         RouterAction::Reject(error) => return Err(("routing", error.to_string())),
@@ -14579,6 +14596,82 @@ mod presence_tests {
         );
         assert!(state.presences.contains_key("bridget-ui-new"));
         assert!(!state.presences.contains_key("bridget-ui-old"));
+        let _ = std::fs::remove_file(config.db_path);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn envoi_ui_avec_reponse_route_lhumain_canonique_sans_perdre_son_libelle() {
+        let root =
+            std::env::temp_dir().join(format!("bridget-ui-reply-routing-{}", std::process::id()));
+        let (mut state, config) = recovery_fixture_state(&root);
+        let target = "61d32f19-3e02-4cbe-91a9-37d38066b4ab";
+        assert!(matches!(
+            handle_register_with_channel(
+                "target-agent",
+                2,
+                "codex".to_string(),
+                target.to_string(),
+                Some("cartae".to_string()),
+                Some("codex_app_server".to_string()),
+                ChannelReport::Omitted,
+                Some(PresenceMode::Cli),
+                None,
+                Some("Linux".to_string()),
+                Some("target-instance".to_string()),
+                Some("bridget".to_string()),
+                false,
+                Some(true),
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        assert!(matches!(
+            handle_register_with_channel(
+                "ui-human",
+                2,
+                "ui".to_string(),
+                UI_HUMAN_AGENT_ID.to_string(),
+                Some("localhost".to_string()),
+                None,
+                ChannelReport::Omitted,
+                Some(PresenceMode::Cli),
+                None,
+                Some("macOS".to_string()),
+                Some("bridget-ui-test".to_string()),
+                Some("bridget".to_string()),
+                false,
+                Some(false),
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        let shared = Arc::new(Mutex::new(state));
+        negotiate_idempotent_client(&shared, "ui-client", "081_scope_ui_replyrouting");
+        let mut message = BridgetMessage::new(UI_HUMAN_SENDER, target, "message humain");
+        message.reply = true;
+
+        assert!(matches!(
+            handle_wrapper_message(
+                "ui-client",
+                WrapperToDaemon::SendIdempotent {
+                    message,
+                    message_id: "ui-human-reply".to_string(),
+                    issued_at: unix_now_secs(),
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::OutcomeUnknown { .. },
+                ..
+            })
+        ));
+        let state = shared.lock().unwrap();
+        assert!(state.pending_replies.iter().any(|pending| {
+            pending.msg_id == "ui-human-reply"
+                && pending.from == UI_HUMAN_SENDER
+                && pending.from_conn == "ui-human"
+        }));
         let _ = std::fs::remove_file(config.db_path);
         let _ = std::fs::remove_dir_all(root);
     }

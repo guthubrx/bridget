@@ -232,6 +232,18 @@ ni secret, ni jeton de relais, ni contenu de conversation de production.
 - Vérification : `node crates/bridget-daemon/assets/ui/app.js` réussit avec
   le témoin `activite_sans_fin_ne_reste_pas_vivante_sans_execution_attestee`.
 
+## Correctif - réponse attendue de l'opérateur - 2026-09-01
+
+- Observation réelle : le relais UI était bien inscrit sous son UUID canonique,
+  mais les messages de la conversation utilisent le libellé métier `humain`.
+  Le routeur cherchait ce libellé comme un second agent, puis refusait
+  `--reply` avec `reply_sender_unavailable`.
+- La traduction vers l'UUID n'existe désormais qu'à la frontière de routage,
+  dans les deux sens. Le ledger, le fil et les demandes suivies conservent le
+  libellé `humain`.
+- Vérification : test Rust
+  `envoi_ui_avec_reponse_route_lhumain_canonique_sans_perdre_son_libelle`.
+
 ## Self-review Article XIX/XX - T014 à T037
 
 - Pourquoi cette solution est nécessaire : un fil riche sans séparation de
