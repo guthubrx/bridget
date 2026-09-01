@@ -4722,11 +4722,14 @@ body[data-desktop-shell="true"] .conversation {
   font-size: 0.78rem;
 }
 
-.artifact-sandbox { border: 1px solid var(--border-subtle, #3a3a3a); border-radius: 12px; overflow: hidden; background: var(--surface-raised, #191919); }
-.artifact-sandbox--expanded { position: fixed; inset: 4vh 4vw; z-index: 40; display: grid; grid-template-rows: 1fr auto; padding: 12px; border: 1px solid var(--accent); }
-.artifact-sandbox__frame { display: block; width: 100%; max-height: 1200px; min-height: 120px; border: 0; background: white; }
-.artifact-sandbox__actions { display: flex; gap: 8px; padding: 8px; }
-.artifact-sandbox__actions button { border: 1px solid var(--border-subtle, #555); border-radius: 7px; background: transparent; color: inherit; padding: 6px 10px; }
+.artifact-sandbox { border: 1px solid color-mix(in srgb, var(--text-secondary) 28%, transparent); border-radius: var(--radius-medium); overflow: hidden; background: var(--surface-raised); }
+.artifact-sandbox--expanded { position: fixed; inset: 4vh 4vw; z-index: 40; display: grid; grid-template-rows: auto 1fr; border-color: var(--accent); }
+.artifact-sandbox__frame { display: block; width: 100%; max-height: 1200px; min-height: 120px; border: 0; background: var(--surface-raised); }
+.artifact-sandbox__actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.24rem; min-height: 2.5rem; padding: 0.34rem 0.45rem; border-bottom: 1px solid color-mix(in srgb, var(--text-secondary) 18%, transparent); background: color-mix(in srgb, var(--surface-raised) 84%, var(--background)); }
+.artifact-sandbox__action { display: grid; width: 2rem; height: 2rem; padding: 0; place-items: center; border: 0; border-radius: 0.5rem; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.artifact-sandbox__action:hover, .artifact-sandbox__action:focus-visible { background: var(--surface-hover); color: var(--text-primary); }
+.artifact-sandbox__action:disabled { cursor: wait; opacity: 0.62; }
+.artifact-sandbox__action svg { width: 1.05rem; height: 1.05rem; }
 .artifact-sandbox__error, .artifact-sandbox__notice { margin: 8px; color: var(--text-muted, #aaa); }
 .artifact-sandbox--error { padding: 14px; color: var(--text-muted, #aaa); }
 

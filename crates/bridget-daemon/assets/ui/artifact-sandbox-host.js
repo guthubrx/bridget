@@ -42,6 +42,39 @@
     return false;
   }
 
+  const ICON_PATHS = {
+    expand: ["M8 3H3v5", "m3 3 6 6", "M16 3h5v5", "m21 3-6 6", "M3 16v5h5", "m3 21 6-6", "M21 16v5h-5", "m21 21-6-6"],
+    reduce: ["m9 3-6 6", "M3 3h5v5", "m15 3 6 6", "M21 3h-5v5", "m9 21-6-6", "M3 21h5v-5", "m15 21 6-6", "M21 21h-5v-5"],
+    save: ["M5 3h12l3 3v15H5z", "M8 3v6h8V3", "M8 21v-7h8v7"],
+    cancel: ["M3 7v5h5", "M3 12a8 8 0 1 0 2.3-5.7L3 7"],
+  };
+
+  function setButtonIcon(button, icon, label) {
+    const svg = button.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "1.9");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    for (const pathData of ICON_PATHS[icon] || []) {
+      const path = button.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", pathData);
+      svg.append(path);
+    }
+    button.replaceChildren(svg);
+    button.setAttribute("aria-label", label);
+    button.title = label;
+  }
+
+  function actionButton(documentRef, icon, label) {
+    const button = documentRef.createElement("button");
+    button.type = "button";
+    button.className = "artifact-sandbox__action";
+    setButtonIcon(button, icon, label);
+    return button;
+  }
+
   function render(documentRef, artifact, options = {}) {
     const payload = artifact && artifact.publication && artifact.publication.payload || {};
     const frameInstanceId = (root.crypto && root.crypto.randomUUID ? root.crypto.randomUUID() : `frame-${Date.now()}-${Math.random()}`);
@@ -60,18 +93,37 @@
     iframe.style.height = `${Math.min(MAX_HEIGHT, Number(payload.inline_height_hint) || 360)}px`;
     const error = documentRef.createElement("p"); error.className = "artifact-sandbox__error"; error.hidden = true;
     const actions = documentRef.createElement("div"); actions.className = "artifact-sandbox__actions";
-    const expand = documentRef.createElement("button"); expand.type = "button"; expand.textContent = "Agrandir";
-    expand.addEventListener("click", () => { section.classList.toggle("artifact-sandbox--expanded"); expand.textContent = section.classList.contains("artifact-sandbox--expanded") ? "Réduire" : "Agrandir"; options.onExpand && options.onExpand(artifact); });
-    const save = documentRef.createElement("button"); save.type = "button"; save.textContent = "Enregistrer comme nouvelle version";
-    const cancel = documentRef.createElement("button"); cancel.type = "button"; cancel.textContent = "Annuler";
-    let latestState = {};
-    save.addEventListener("click", async () => {
-      save.disabled = true; save.textContent = "Enregistrement…";
-      try { const result = await (options.onSave && options.onSave(latestState)); save.textContent = result && result.version_ref ? "Nouvelle version enregistrée" : "Enregistrement indisponible"; }
-      catch (cause) { save.textContent = (cause && cause.message) || "Enregistrement indisponible"; save.disabled = false; }
+    const expand = actionButton(documentRef, "expand", "Agrandir");
+    expand.addEventListener("click", () => {
+      section.classList.toggle("artifact-sandbox--expanded");
+      setButtonIcon(expand, section.classList.contains("artifact-sandbox--expanded") ? "reduce" : "expand", section.classList.contains("artifact-sandbox--expanded") ? "Réduire" : "Agrandir");
+      options.onExpand && options.onExpand(artifact);
     });
-    cancel.addEventListener("click", () => { latestState = {}; options.onCancel && options.onCancel(); cancel.textContent = "État temporaire annulé"; });
-    actions.append(expand, save, cancel); section.append(iframe, error, actions);
+    const save = actionButton(documentRef, "save", "Enregistrer comme nouvelle version");
+    const cancel = actionButton(documentRef, "cancel", "Rétablir le dernier état enregistré");
+    let savedState = payload && payload.ui_state && typeof payload.ui_state === "object" ? payload.ui_state : null;
+    let latestState = savedState || {};
+    save.addEventListener("click", async () => {
+      save.disabled = true; save.title = "Enregistrement…";
+      try {
+        const result = await (options.onSave && options.onSave(latestState));
+        if (!result || !result.version_ref) throw new Error("Enregistrement indisponible");
+        savedState = latestState;
+        setButtonIcon(save, "save", "Nouvelle version enregistrée");
+        save.disabled = false;
+      } catch (cause) {
+        save.title = (cause && cause.message) || "Enregistrement indisponible";
+        save.disabled = false;
+      }
+    });
+    cancel.addEventListener("click", () => {
+      const restore = savedState || null;
+      iframe.contentWindow.postMessage({ type: "sandbox.restore", frame_instance_id: frameInstanceId, ui_state: restore }, "*");
+      latestState = restore || {};
+      cancel.title = restore ? "Dernier état enregistré rétabli" : "Valeurs initiales rétablies";
+      options.onCancel && options.onCancel();
+    });
+    actions.append(expand, save, cancel); section.append(actions, iframe, error);
     const onMessage = (event) => {
       if (event.source !== iframe.contentWindow || !validMessage(event.data, frameInstanceId)) { return; }
       const message = event.data;
@@ -89,7 +141,7 @@
     parentWindow.addEventListener("message", onMessage);
     parentWindow.addEventListener("bridget-theme-changed", onThemeChange);
     iframe.addEventListener("load", () => {
-      iframe.contentWindow.postMessage({ type: "sandbox.bootstrap", frame_instance_id: frameInstanceId, data: payload.data || null, limits: { max_height: MAX_HEIGHT, max_state_bytes: MAX_STATE_BYTES } }, "*");
+      iframe.contentWindow.postMessage({ type: "sandbox.bootstrap", frame_instance_id: frameInstanceId, data: payload.data || null, ui_state: savedState, limits: { max_height: MAX_HEIGHT, max_state_bytes: MAX_STATE_BYTES } }, "*");
       sendTheme();
     });
     return section;

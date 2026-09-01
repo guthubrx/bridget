@@ -10026,7 +10026,7 @@
       const renderLoaded = async (artifact) => {
         const artifactKind = text(artifact && artifact.publication && artifact.publication.kind);
         if (artifactKind === "html") {
-          const versionRef = text(artifact && artifact.item && artifact.item.version_ref, text(artifact && artifact.version_ref));
+          let versionRef = text(artifact && artifact.item && artifact.item.version_ref, text(artifact && artifact.version_ref));
           const sandbox = windowRef.BridgetArtifactSandbox;
           if (!sandbox || typeof sandbox.render !== "function") {
             placeholder.replaceChildren(make("p", "artifact-renderer__error", "Le runtime sandboxé est indisponible. Le manifeste et l’export restent accessibles via Bridget."));
@@ -10069,6 +10069,7 @@
               );
               const payload = await response.json();
               if (!response.ok) throw new Error(text(payload && payload.message, "Nouvelle version indisponible."));
+              versionRef = text(payload && payload.version_ref, versionRef);
               return payload;
             },
             onOpenSource: (sourceRefId) => {
@@ -10087,7 +10088,6 @@
               placeholder.append(status, open);
             },
           });
-          renderArtifactActions(card, artifact, state.selectedAgent);
           placeholder.replaceChildren(card);
           return;
         }
