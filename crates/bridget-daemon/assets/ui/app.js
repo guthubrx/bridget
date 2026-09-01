@@ -1980,6 +1980,36 @@
         assert.equal(replies[0].messageId, "demande-1");
       });
 
+      test("reponse_ledger_miroir_apres_un_long_outil_n_est_pas_dupliquee", () => {
+        const events = [
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 10,
+            record: { message_id: "demande-longue", session_id: "s", seq: 1, event: "update", payload: { kind: "text", content: "Artefact publié." } },
+          },
+          {
+            kind: "record",
+            agent: "bridget",
+            at: 160,
+            record: { message_id: "demande-longue", session_id: "s", seq: 2, event: "turn_end", payload: { stop_reason: "completed" } },
+          },
+          {
+            kind: "message",
+            role: "agent",
+            agent: "bridget",
+            text: "Artefact publié.",
+            at: 161,
+            messageId: "reponse-ledger-longue",
+            deliveryId: "reponse-ledger-longue",
+          },
+        ];
+        const replies = api.projectTimeline(events)
+          .filter((entry) => entry.kind === "message" && entry.role === "agent");
+        assert.equal(replies.length, 1);
+        assert.equal(replies[0].messageId, "demande-longue");
+      });
+
       test("reponse_ledger_distincte_du_flux_journal_reste_visible", () => {
         const events = [
           {
@@ -6371,8 +6401,9 @@
     );
     // Une réponse native est visible en flux dans le journal, puis enregistrée
     // dans le ledger pour la conversation durable. Ces deux projections n'ont
-    // pas le même identifiant : dédoublonner par agent, contenu et proximité
-    // temporelle conserve les réponses directes qui ne passent pas par le flux.
+    // pas le même identifiant. Une publication peut prendre plusieurs minutes
+    // entre le premier fragment journal et son écriture durable : l'identité
+    // est donc le même agent et le même contenu, pas une fenêtre arbitraire.
     const journalAgentResponses = projected.filter((entry) => (
       entry.kind === "message"
       && entry.role === "agent"
@@ -6389,11 +6420,9 @@
         return false;
       }
       const entryText = text(entry.text).replace(/\s+/g, " ").trim();
-      const entryAt = Number(entry.at) || 0;
       return journalAgentResponses.some((journal) => (
         journal.agent === entry.agent
         && text(journal.text).replace(/\s+/g, " ").trim() === entryText
-        && Math.abs((Number(journal.at) || 0) - entryAt) <= 60
       ));
     };
     return projected
