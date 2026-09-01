@@ -19,9 +19,17 @@
   function escapedBase64(value) { return btoa(unescape(encodeURIComponent(asText(value)))); }
 
   function srcdoc(html, bootstrap) {
-    const content = escapedBase64(html);
     const init = escapedBase64(JSON.stringify(bootstrap || {}));
-    return `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapeAttribute(CSP)}"><script>const __bridgetHtml=decodeURIComponent(escape(atob('${content}')));document.write(__bridgetHtml);const __b=JSON.parse(decodeURIComponent(escape(atob('${init}'))));parent.postMessage({type:'sandbox.ready',frame_instance_id:__b.frame_instance_id},'*');window.addEventListener('message',e=>{if(e.data&&e.data.type==='sandbox.bootstrap')window.dispatchEvent(new CustomEvent('bridget-sandbox-bootstrap',{detail:e.data}));if(e.data&&e.data.type==='sandbox.close')window.close()});</script>`;
+    const prelude = `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapeAttribute(CSP)}"><script>const __b=JSON.parse(decodeURIComponent(escape(atob('${init}'))));parent.postMessage({type:'sandbox.ready',frame_instance_id:__b.frame_instance_id},'*');window.addEventListener('message',e=>{if(e.data&&e.data.type==='sandbox.bootstrap')window.dispatchEvent(new CustomEvent('bridget-sandbox-bootstrap',{detail:e.data}));if(e.data&&e.data.type==='sandbox.close')window.close()});</script>`;
+    // WebKit laisse l'iframe blanche lorsque le document complet est injecté
+    // par document.write pendant le parsing de srcdoc. Le document reste donc
+    // dans son propre flux de parsing, avec le CSP et le protocole ajoutés au
+    // début de son <head>.
+    const documentHtml = asText(html).replace(/^\s*<!doctype[^>]*>/i, "");
+    if (/<head\b[^>]*>/i.test(documentHtml)) {
+      return documentHtml.replace(/<head\b[^>]*>/i, (head) => `${head}${prelude}`);
+    }
+    return `<!doctype html><html><head>${prelude}</head><body>${documentHtml}</body></html>`;
   }
 
   function validMessage(value, instanceId) {
