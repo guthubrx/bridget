@@ -19,10 +19,9 @@ use bridget_transport::protocol::{
     ProjectRoundOperation, ProjectRoundOutcome, ProjectRoundProjection, ProjectRoundRefusal,
     ProjectRoundRequest, ProjectRuntimeOperation, ProjectRuntimeOutcome, ProjectRuntimeRefusal,
     ProjectRuntimeRequest, ProjectSystemDogfoodingMode, ProjectSystemOperation,
-    ProjectSystemOutcome, ProjectSystemRefusal, ProjectSystemRequest,
-    REVIEW_DELEGATE_CONTRACT_VERSION, RelaunchOutcome, RuntimeIngressRefusal,
-    SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal, SpawnRefusal, StopOutcome, decode,
-    encode,
+    ProjectSystemOutcome, ProjectSystemRefusal, REVIEW_DELEGATE_CONTRACT_VERSION, RelaunchOutcome,
+    RuntimeIngressRefusal, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal,
+    SpawnRefusal, StopOutcome, decode, encode,
 };
 use bridget_transport::protocol::{
     PROJECT_ROUND_INTERVAL_SECS, ProjectReference, ProjectRoundDispatchOutcome,
