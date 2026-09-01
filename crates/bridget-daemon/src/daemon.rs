@@ -11,13 +11,15 @@ use bridget_transport::protocol::{
     ConnectionRole, DecommissionOutcome, DelegatedRuntimeEventFrame, DiskSpaceFact,
     ExecutionControlCommand, ExecutionControlOperation, ExecutionControlOutcome,
     ExecutionControlRefusal, ExecutionDeliveryContext, IdempotencyIssue,
-    PROJECT_REGISTRY_CONTRACT_VERSION, PROJECT_ROUND_POLICY_CONTRACT_VERSION, PresenceMode,
-    ProjectAdminOperation, ProjectAdminOutcome, ProjectAdminRequest, ProjectBackend,
-    ProjectBindOutcome, ProjectBindRequest, ProjectBindStatus, ProjectBindingProjection,
-    ProjectBindingStatus, ProjectProfileOutcome, ProjectProfileRefusal, ProjectProfileRequest,
-    ProjectRegistryRefusal, ProjectRoundDispatchState, ProjectRoundOperation, ProjectRoundOutcome,
-    ProjectRoundProjection, ProjectRoundRefusal, ProjectRoundRequest, ProjectRuntimeOperation,
-    ProjectRuntimeOutcome, ProjectRuntimeRefusal, ProjectRuntimeRequest,
+    PROJECT_REGISTRY_CONTRACT_VERSION, PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+    PROJECT_SYSTEM_CONTRACT_VERSION, PresenceMode, ProjectAdminOperation, ProjectAdminOutcome,
+    ProjectAdminRequest, ProjectBackend, ProjectBindOutcome, ProjectBindRequest, ProjectBindStatus,
+    ProjectBindingProjection, ProjectBindingStatus, ProjectProfileOutcome, ProjectProfileRefusal,
+    ProjectProfileRequest, ProjectRegistryRefusal, ProjectRoundDispatchState,
+    ProjectRoundOperation, ProjectRoundOutcome, ProjectRoundProjection, ProjectRoundRefusal,
+    ProjectRoundRequest, ProjectRuntimeOperation, ProjectRuntimeOutcome, ProjectRuntimeRefusal,
+    ProjectRuntimeRequest, ProjectSystemDogfoodingMode, ProjectSystemOperation,
+    ProjectSystemOutcome, ProjectSystemRefusal, ProjectSystemRequest,
     REVIEW_DELEGATE_CONTRACT_VERSION, RelaunchOutcome, RuntimeIngressRefusal,
     SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal, SpawnRefusal, StopOutcome, decode,
     encode,
@@ -74,12 +76,14 @@ use crate::{
     },
     project_policy::ProjectRootPolicy,
     project_runtime::{
-        CONTAINER_INGRESS_DIRECTORY, DockerCli, DockerRuntimeLaunch, ProjectEnvironment,
-        ProjectEnvironmentState, ProjectMount, ProjectProfileRuntimeAdmission,
-        ProjectResourceCatalog, ProjectRuntimePolicyConfig, RuntimeIngressEndpoint,
-        RuntimeIngressExpectation, RuntimeIssue, admit_project_profile_runtime,
-        bind_runtime_ingress, prepare_environment, remove_environment, resolve_project_mounts,
-        runtime_state_root, stop_environment, stop_remove_environment,
+        BridgetDogfoodingMode, BridgetSystemMountContext, CONTAINER_INGRESS_DIRECTORY, DockerCli,
+        DockerRuntimeLaunch, ProjectEnvironment, ProjectEnvironmentState, ProjectMount,
+        ProjectProfileRuntimeAdmission, ProjectResourceCatalog, ProjectRuntimePolicyConfig,
+        RuntimeIngressEndpoint, RuntimeIngressExpectation, RuntimeIssue,
+        admit_project_profile_runtime, attest_bridget_checkout, bind_runtime_ingress,
+        discover_bridget_worktrees, mount_topology_digest, prepare_environment, remove_environment,
+        resolve_project_mounts, resolve_project_mounts_for_role, runtime_state_root,
+        stop_environment, stop_remove_environment,
     },
     recovery_trace::{
         REASON_ABSENT_FROM_FLEET, REASON_FROZEN_DEFINITION, REASON_NON_PERSISTENT, REASON_QUOTA,
@@ -729,6 +733,10 @@ struct DaemonState {
     managed_tx: Sender<ManagedSupervisorCommand>,
     marker_store: ManagedMarkerStore,
     managed_spawns: HashMap<String, ManagedSpawnRecord>,
+    /// Lease de worktree attribuée à un lancement système. Elle est volatile
+    /// parce que la table SQLite reste l'autorité ; la carte sert uniquement à
+    /// libérer exactement le worktree quand ce lancement devient terminal.
+    system_worktree_leases_by_command: HashMap<String, (String, String, String)>,
     /// Demandeurs d'une nouvelle génération qui attendent un résultat de
     /// relance, distinct du résultat public d'un spawn neuf.
     relaunch_requesters: HashMap<String, Vec<String>>,
@@ -2412,6 +2420,7 @@ fn drain_managed_events(
                         },
                     };
                     if let Some(record) = st.managed_spawns.remove(&lease.command_id) {
+                        release_system_worktree_lease_for_command(&mut st, &lease.command_id);
                         if record.stop.is_requested() {
                             stop_completion =
                                 Some((Arc::clone(&record.stop), StopOutcome::Stopped));
@@ -2472,6 +2481,7 @@ fn drain_managed_events(
                         .unwrap_or_default();
                     let _ = st.fleet.mark_stopped(&lease.name);
                     let record = st.managed_spawns.remove(&lease.command_id);
+                    release_system_worktree_lease_for_command(&mut st, &lease.command_id);
                     st.managed_by_instance.remove(&lease.instance_id);
                     st.managed_terminal_instances
                         .insert(lease.instance_id.clone());
@@ -2550,6 +2560,7 @@ fn drain_managed_events(
                         .remove(&lease.command_id)
                         .unwrap_or_default();
                     let record = st.managed_spawns.remove(&lease.command_id);
+                    release_system_worktree_lease_for_command(&mut st, &lease.command_id);
                     st.managed_by_instance.remove(&lease.instance_id);
                     st.managed_terminal_instances
                         .insert(lease.instance_id.clone());
@@ -2667,6 +2678,20 @@ fn clear_runtime_ingress_for_lease(state: &mut DaemonState, lease: &SpawnLease) 
     state.runtime_ingress_reconnections.remove(&key);
 }
 
+fn release_system_worktree_lease_for_command(state: &mut DaemonState, command_id: &str) {
+    let Some((project_id, agent_id, worktree)) =
+        state.system_worktree_leases_by_command.remove(command_id)
+    else {
+        return;
+    };
+    if let Err(error) = state
+        .store
+        .release_system_worktree_lease(&project_id, &agent_id, &worktree)
+    {
+        warn!("libération lease worktree système différée: {error}");
+    }
+}
+
 fn finish_recovery_command(state: &mut DaemonState, command_id: &str) {
     state.recovery_commands.remove(command_id);
     if state.recovery_commands.is_empty() {
@@ -2738,6 +2763,7 @@ impl DaemonState {
                     .join("managed"),
             ),
             managed_spawns: HashMap::new(),
+            system_worktree_leases_by_command: HashMap::new(),
             relaunch_requesters: HashMap::new(),
             decommissioning_names: HashSet::new(),
             managed_by_instance: HashMap::new(),
@@ -4353,6 +4379,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         if sent.is_err() {
             let mut st = state.lock().unwrap_or_else(|poison| poison.into_inner());
             if let Some(record) = st.managed_spawns.remove(&command_id) {
+                release_system_worktree_lease_for_command(&mut st, &command_id);
                 let _ = st.fleet.fail(
                     &record.lease,
                     "negotiation_failed",
@@ -5090,6 +5117,82 @@ fn project_runtime_outcome(
     }
 }
 
+/// Résout le jeu complet de mounts d'un projet système pour un mode candidat.
+/// Cette fonction est volontairement la seule porte de la transition expert :
+/// elle atteste les worktrees loués, conserve les chemins hôte dans le
+/// conteneur et n'ajoute jamais de repli Host.
+fn project_system_mounts_for_mode(
+    state: &mut DaemonState,
+    binding: &crate::store::ProjectBinding,
+    policy: &crate::project_runtime::ProjectRuntimePolicy,
+    environment: &ProjectEnvironment,
+    mode: BridgetDogfoodingMode,
+) -> Result<Vec<ProjectMount>, RuntimeIssue> {
+    let state_root = runtime_state_root(policy, &binding.project_id)?;
+    let worktrees = discover_bridget_worktrees(std::path::Path::new(&binding.canonical_root))?;
+    let resolution = resolve_project_mounts_for_role(
+        bridget_transport::protocol::ProjectRole::BridgetSystem,
+        std::path::Path::new(&binding.canonical_root),
+        &state_root,
+        Some(&BridgetSystemMountContext {
+            checkout_root: PathBuf::from(&binding.canonical_root),
+            worktrees,
+            mode,
+        }),
+    )?;
+    let ingress_socket = state.ensure_runtime_ingress(policy, environment)?;
+    let ingress_directory = ingress_socket
+        .parent()
+        .ok_or(RuntimeIssue::UnsupportedWorktreeLayout)?
+        .to_path_buf();
+    let mut mounts = resolution.mounts;
+    mounts.push(ProjectMount {
+        host_path: ingress_directory,
+        container_path: CONTAINER_INGRESS_DIRECTORY.to_string(),
+        writable: false,
+    });
+    Ok(mounts)
+}
+
+/// Compense une transition expert après l'arrêt de l'environnement candidat.
+/// Le réglage reste inchangé tant que cette restauration n'a pas été tentée.
+/// Il n'existe volontairement aucun repli vers le backend Host.
+fn restore_system_dogfooding_environment(
+    store: &mut Store,
+    project_id: &str,
+    docker: &DockerCli,
+    candidate: &mut ProjectEnvironment,
+    original: &ProjectEnvironment,
+    policy: &crate::project_runtime::ProjectRuntimePolicy,
+    previous_mounts: &[ProjectMount],
+    resolved_image_id: Option<String>,
+    observed_at: i64,
+) {
+    let _ = stop_remove_environment(docker, candidate);
+    let mut rollback = original.clone();
+    let Some(next_epoch) = original.environment_epoch.checked_add(1) else {
+        return;
+    };
+    rollback.environment_epoch = next_epoch;
+    rollback.container_id = None;
+    rollback.state = ProjectEnvironmentState::Absent;
+    rollback.last_reason = None;
+    if rollback
+        .apply_mount_topology(mount_topology_digest(previous_mounts))
+        .is_err()
+    {
+        return;
+    }
+    if original.state == ProjectEnvironmentState::Ready
+        && prepare_environment(docker, &mut rollback, policy, previous_mounts).is_err()
+    {
+        rollback = original.clone();
+        rollback.last_reason = Some("dogfooding_rollback_recreate_failed".to_string());
+    }
+    let replacement = runtime_binding_from_environment(&rollback, resolved_image_id);
+    let _ = store.update_project_runtime(project_id, &replacement, observed_at);
+}
+
 fn project_environment_state_text(state: ProjectEnvironmentState) -> String {
     match state {
         ProjectEnvironmentState::Absent => "absent",
@@ -5370,6 +5473,7 @@ fn project_environment_from_binding(
         binding_generation: binding.generation,
         state: runtime.state,
         environment_epoch: runtime.environment_epoch,
+        topology_digest: runtime.topology_digest.clone(),
         container_id: runtime.container_id.clone(),
         policy_id: runtime.policy_id.clone(),
         policy_version: runtime.policy_version,
@@ -5395,6 +5499,7 @@ fn runtime_binding_from_environment(
         run_as_uid: environment.run_as_uid,
         run_as_gid: environment.run_as_gid,
         environment_epoch: environment.environment_epoch,
+        topology_digest: environment.topology_digest.clone(),
         container_id: environment.container_id.clone(),
         last_reason: environment.last_reason.clone(),
     }
@@ -5457,6 +5562,7 @@ fn unregistered_project_projection(
         state: ProjectBindingStatus::Unregistered,
         binding_generation: None,
         backend: None,
+        role: bridget_transport::protocol::ProjectRole::Standard,
         runtime_policy: None,
         reason: None,
         last_audit: None,
@@ -5470,6 +5576,7 @@ fn is_guichet_frame(message: &WrapperToDaemon) -> bool {
         WrapperToDaemon::ServiceHello { .. }
             | WrapperToDaemon::ProjectRegistryRequest { .. }
             | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
+            | WrapperToDaemon::ProjectSystemRequest { .. }
             | WrapperToDaemon::ProjectProfileRequest { .. }
             | WrapperToDaemon::CoordinationSubscribe { .. }
             | WrapperToDaemon::ServiceRequest { .. }
@@ -8410,6 +8517,7 @@ fn handle_wrapper_message(
             WrapperToDaemon::ServiceHello { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
+                | WrapperToDaemon::ProjectSystemRequest { .. }
                 | WrapperToDaemon::ProjectProfileRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
                 | WrapperToDaemon::GuichetClaimNext { .. }
@@ -8430,6 +8538,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::GuichetReply { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
+                | WrapperToDaemon::ProjectSystemRequest { .. }
                 | WrapperToDaemon::ProjectProfileRequest { .. }
                 | WrapperToDaemon::ProjectRuntimeRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
@@ -8468,6 +8577,7 @@ fn handle_wrapper_message(
                 }
                 WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
+                | WrapperToDaemon::ProjectSystemRequest { .. }
                     if !st
                         .service_negotiations
                         .get(conn_id)
@@ -8503,6 +8613,7 @@ fn handle_wrapper_message(
                 WrapperToDaemon::ServiceHello { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
+                | WrapperToDaemon::ProjectSystemRequest { .. }
                 | WrapperToDaemon::ProjectProfileRequest { .. }
                 | WrapperToDaemon::ProjectRuntimeRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
@@ -8676,6 +8787,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::RuntimeIngressPreflight { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
                 | WrapperToDaemon::ProjectRegistryAdminRequest { .. }
+                | WrapperToDaemon::ProjectSystemRequest { .. }
                 | WrapperToDaemon::ProjectProfileRequest { .. }
                 | WrapperToDaemon::ProjectRuntimeRequest { .. }
                 | WrapperToDaemon::CoordinationSubscribe { .. }
@@ -8930,6 +9042,13 @@ fn handle_wrapper_message(
                 Ok(root) => root,
                 Err(reason) => return Some(project_registry_failure(request, reason, observed_at)),
             };
+            if policy.is_system_only_root(&canonical_root) {
+                return Some(project_registry_failure(
+                    request,
+                    ProjectRegistryRefusal::RootOutsideAllowedPrefixes,
+                    observed_at,
+                ));
+            }
             let runtime = if request.backend == ProjectBackend::Docker {
                 let policy = match state
                     .lock()
@@ -8960,6 +9079,7 @@ fn handle_wrapper_message(
                     run_as_uid: policy.run_as_uid,
                     run_as_gid: policy.run_as_gid,
                     environment_epoch: 1,
+                    topology_digest: "sha256:legacy".to_string(),
                     container_id: None,
                     last_reason: None,
                 })
@@ -9160,6 +9280,436 @@ fn handle_wrapper_message(
                         observed_at,
                     )
                 }
+            })
+        }
+        WrapperToDaemon::ProjectSystemRequest { request } => {
+            let observed_at = unix_now_secs();
+            let failure = |reason| DaemonToWrapper::ProjectSystemOutcome {
+                outcome: ProjectSystemOutcome {
+                    contract_version: request.contract_version,
+                    command_id: request.command_id.clone(),
+                    operation: request.operation,
+                    project_id: request.project_id.clone(),
+                    binding_generation: None,
+                    role: None,
+                    setting_generation: None,
+                    dogfooding_mode: None,
+                    runtime_state: None,
+                    reason: Some(reason),
+                    observed_at,
+                },
+            };
+            if request.contract_version != PROJECT_SYSTEM_CONTRACT_VERSION {
+                return Some(failure(ProjectSystemRefusal::InvalidContract));
+            }
+            if request.command_id.trim().is_empty()
+                || request.project_id.trim().is_empty()
+                || (request.operation != ProjectSystemOperation::Status
+                    && request.expected_binding_generation == 0)
+                || request.issued_at < 0
+                || request.deadline_at < request.issued_at
+                || observed_at > request.deadline_at
+            {
+                return Some(failure(
+                    if request.project_id.trim().is_empty()
+                        || request.expected_binding_generation == 0
+                    {
+                        ProjectSystemRefusal::InvalidRequest
+                    } else {
+                        ProjectSystemRefusal::IdempotencyExpired
+                    },
+                ));
+            }
+            let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+            if st.peer_uids.get(conn_id).copied() != Some(unsafe { libc::geteuid() }) {
+                return Some(failure(ProjectSystemRefusal::PeerUidMismatch));
+            }
+            let binding = match st.store.project_binding(&request.project_id) {
+                Ok(Some(binding)) => binding,
+                Ok(None) if request.operation == ProjectSystemOperation::Reconcile => {
+                    let Some(system_root) = st
+                        .project_root_policy
+                        .as_ref()
+                        .ok()
+                        .and_then(ProjectRootPolicy::system_project_root)
+                        .map(std::path::Path::to_path_buf)
+                    else {
+                        return Some(failure(ProjectSystemRefusal::SystemLocationRequired));
+                    };
+                    let (Some(runtime_policy_id), Some(runtime_policy_version)) = (
+                        request.runtime_policy_id.as_deref(),
+                        request.runtime_policy_version,
+                    ) else {
+                        return Some(failure(ProjectSystemRefusal::RuntimePolicyRequired));
+                    };
+                    let runtime_policy = match st
+                        .resolve_project_runtime_policy(runtime_policy_id, runtime_policy_version)
+                    {
+                        Ok(policy) => policy,
+                        Err(error) => {
+                            warn!("politique Docker projet système indisponible: {error}");
+                            return Some(failure(ProjectSystemRefusal::RuntimePolicyRequired));
+                        }
+                    };
+                    let environment = match ProjectEnvironment::absent(
+                        request.project_id.clone(),
+                        1,
+                        &runtime_policy,
+                    ) {
+                        Ok(environment) => environment,
+                        Err(error) => {
+                            warn!("environnement initial projet système invalide: {error}");
+                            return Some(failure(ProjectSystemRefusal::RuntimePolicyRequired));
+                        }
+                    };
+                    let reconcile_id = format!("system-reconcile:{}", request.command_id);
+                    match st.store.bind_project_docker_registration(
+                        &reconcile_id,
+                        &request.project_id,
+                        &system_root.to_string_lossy(),
+                        runtime_binding_from_environment(&environment, None),
+                        observed_at,
+                    ) {
+                        Ok(outcome) if outcome.status == ProjectBindStatus::Active => {
+                            match st.store.project_binding(&request.project_id) {
+                                Ok(Some(binding)) => binding,
+                                Ok(None) => {
+                                    return Some(failure(ProjectSystemRefusal::ProjectNotFound));
+                                }
+                                Err(error) => {
+                                    warn!("lecture projet système indisponible: {error}");
+                                    return Some(failure(ProjectSystemRefusal::StoreUnavailable));
+                                }
+                            }
+                        }
+                        Ok(_) => {
+                            return Some(failure(ProjectSystemRefusal::SystemLocationRequired));
+                        }
+                        Err(error) => {
+                            warn!("réconciliation projet système indisponible: {error}");
+                            return Some(failure(ProjectSystemRefusal::StoreUnavailable));
+                        }
+                    }
+                }
+                Ok(None) => return Some(failure(ProjectSystemRefusal::ProjectNotFound)),
+                Err(error) => {
+                    warn!("lecture projet système indisponible: {error}");
+                    return Some(failure(ProjectSystemRefusal::StoreUnavailable));
+                }
+            };
+            if binding.state != crate::store::ProjectBindingState::Active {
+                return Some(failure(ProjectSystemRefusal::ProjectInactive));
+            }
+            if request.operation != ProjectSystemOperation::Status
+                && binding.generation != request.expected_binding_generation
+            {
+                return Some(failure(ProjectSystemRefusal::BindingGenerationMismatch));
+            }
+            let system_location = st.project_root_policy.as_ref().ok().and_then(|policy| {
+                policy
+                    .validate_system_project_root(std::path::Path::new(&binding.canonical_root))
+                    .ok()
+            });
+            if system_location.is_none() {
+                return Some(failure(ProjectSystemRefusal::SystemLocationRequired));
+            }
+            if matches!(
+                request.operation,
+                ProjectSystemOperation::Declare | ProjectSystemOperation::Reconcile
+            ) && st
+                .store
+                .declare_bridget_system_project(&request.project_id, observed_at)
+                .is_err()
+            {
+                return Some(failure(ProjectSystemRefusal::SystemProjectAlreadyDeclared));
+            }
+            let role = match st.store.project_role(&request.project_id) {
+                Ok(role) => role,
+                Err(error) => {
+                    warn!("projection projet système indisponible: {error}");
+                    return Some(failure(ProjectSystemRefusal::StoreUnavailable));
+                }
+            };
+            let mut setting_generation = None;
+            let mut dogfooding_mode = None;
+            if request.operation == ProjectSystemOperation::Status {
+                if role != bridget_transport::protocol::ProjectRole::BridgetSystem {
+                    return Some(failure(ProjectSystemRefusal::SystemProjectRequired));
+                }
+                let current = match st
+                    .store
+                    .dogfooding_bridget_state(&request.project_id, binding.generation)
+                {
+                    Ok(current) => current,
+                    Err(error) => {
+                        warn!("réglage dogfooding indisponible: {error}");
+                        return Some(failure(ProjectSystemRefusal::StoreUnavailable));
+                    }
+                };
+                setting_generation = Some(current.setting_generation);
+                dogfooding_mode = Some(match current.mode {
+                    crate::control_settings::DogfoodingBridgetMode::Disabled => {
+                        ProjectSystemDogfoodingMode::Disabled
+                    }
+                    crate::control_settings::DogfoodingBridgetMode::Enabled => {
+                        ProjectSystemDogfoodingMode::Enabled
+                    }
+                });
+            }
+            if matches!(
+                request.operation,
+                ProjectSystemOperation::DogfoodingPreview | ProjectSystemOperation::DogfoodingApply
+            ) {
+                if role != bridget_transport::protocol::ProjectRole::BridgetSystem {
+                    return Some(failure(ProjectSystemRefusal::SystemProjectRequired));
+                }
+                let (Some(expected_setting_generation), Some(requested_mode)) =
+                    (request.expected_setting_generation, request.requested_mode)
+                else {
+                    return Some(failure(ProjectSystemRefusal::DogfoodingModeRequired));
+                };
+                let current = match st
+                    .store
+                    .dogfooding_bridget_state(&request.project_id, binding.generation)
+                {
+                    Ok(current) => current,
+                    Err(error) => {
+                        warn!("réglage dogfooding indisponible: {error}");
+                        return Some(failure(ProjectSystemRefusal::StoreUnavailable));
+                    }
+                };
+                let requested_mode = match requested_mode {
+                    ProjectSystemDogfoodingMode::Disabled => {
+                        crate::control_settings::DogfoodingBridgetMode::Disabled
+                    }
+                    ProjectSystemDogfoodingMode::Enabled => {
+                        crate::control_settings::DogfoodingBridgetMode::Enabled
+                    }
+                };
+                let active_system_agent = project_has_active_agents(&st.fleet, &request.project_id)
+                    || st.managed_spawns.values().any(|spawn| {
+                        spawn
+                            .lease
+                            .project
+                            .as_ref()
+                            .is_some_and(|project| project.project_id == request.project_id)
+                    });
+                let preview = match crate::control_settings::preview_dogfooding_bridget(
+                    &current,
+                    &crate::control_settings::DogfoodingBridgetChange {
+                        command_id: request.command_id.clone(),
+                        expected_setting_generation,
+                        expected_binding_generation: request.expected_binding_generation,
+                        requested_mode,
+                    },
+                    binding.backend,
+                    active_system_agent,
+                ) {
+                    Ok(preview) => preview,
+                    Err(crate::control_settings::DogfoodingBridgetRefusal::GenerationMismatch) => {
+                        return Some(failure(ProjectSystemRefusal::SettingGenerationMismatch));
+                    }
+                    Err(crate::control_settings::DogfoodingBridgetRefusal::BindingGenerationMismatch) => {
+                        return Some(failure(ProjectSystemRefusal::BindingGenerationMismatch));
+                    }
+                    Err(crate::control_settings::DogfoodingBridgetRefusal::DockerRequired) => {
+                        return Some(failure(ProjectSystemRefusal::DockerRequired));
+                    }
+                    Err(crate::control_settings::DogfoodingBridgetRefusal::ActiveSystemAgent) => {
+                        return Some(failure(ProjectSystemRefusal::ActiveSystemAgent));
+                    }
+                    Err(crate::control_settings::DogfoodingBridgetRefusal::InvalidRequest) => {
+                        return Some(failure(ProjectSystemRefusal::InvalidRequest));
+                    }
+                };
+                if request.operation == ProjectSystemOperation::DogfoodingApply
+                    && preview.requires_recreate
+                {
+                    let Some(runtime) = binding.runtime.as_ref() else {
+                        return Some(failure(ProjectSystemRefusal::DockerRequired));
+                    };
+                    let policy = match st
+                        .resolve_project_runtime_policy(&runtime.policy_id, runtime.policy_version)
+                    {
+                        Ok(policy) => policy,
+                        Err(error) => {
+                            warn!("politique Docker transition dogfooding indisponible: {error}");
+                            return Some(failure(ProjectSystemRefusal::DockerRequired));
+                        }
+                    };
+                    let original = match project_environment_from_binding(&binding) {
+                        Ok(environment) => environment,
+                        Err(error) => {
+                            warn!("environnement Docker transition dogfooding invalide: {error}");
+                            return Some(failure(ProjectSystemRefusal::DockerRequired));
+                        }
+                    };
+                    if matches!(
+                        original.state,
+                        ProjectEnvironmentState::Creating | ProjectEnvironmentState::Stopping
+                    ) {
+                        return Some(failure(ProjectSystemRefusal::RecreateRequired));
+                    }
+                    let previous_mode = match current.mode {
+                        crate::control_settings::DogfoodingBridgetMode::Disabled => {
+                            BridgetDogfoodingMode::Disabled
+                        }
+                        crate::control_settings::DogfoodingBridgetMode::Enabled => {
+                            BridgetDogfoodingMode::Enabled
+                        }
+                    };
+                    let next_mode = match preview.next.mode {
+                        crate::control_settings::DogfoodingBridgetMode::Disabled => {
+                            BridgetDogfoodingMode::Disabled
+                        }
+                        crate::control_settings::DogfoodingBridgetMode::Enabled => {
+                            BridgetDogfoodingMode::Enabled
+                        }
+                    };
+                    let previous_mounts = match project_system_mounts_for_mode(
+                        &mut st,
+                        &binding,
+                        &policy,
+                        &original,
+                        previous_mode,
+                    ) {
+                        Ok(mounts) => mounts,
+                        Err(error) => {
+                            warn!("mounts précédents dogfooding non attestables: {error}");
+                            return Some(failure(ProjectSystemRefusal::RecreateFailed));
+                        }
+                    };
+                    let candidate_mounts = match project_system_mounts_for_mode(
+                        &mut st, &binding, &policy, &original, next_mode,
+                    ) {
+                        Ok(mounts) => mounts,
+                        Err(error) => {
+                            warn!("mounts candidats dogfooding non attestables: {error}");
+                            return Some(failure(ProjectSystemRefusal::RecreateFailed));
+                        }
+                    };
+                    let mut environment = original.clone();
+                    let docker = DockerCli::new(PathBuf::from("docker"), Duration::from_secs(20));
+                    if environment.state != ProjectEnvironmentState::Absent
+                        && let Err(error) = stop_remove_environment(&docker, &mut environment)
+                    {
+                        let replacement = runtime_binding_from_environment(
+                            &environment,
+                            runtime.resolved_image_id.clone(),
+                        );
+                        let _ = st.store.update_project_runtime(
+                            &request.project_id,
+                            &replacement,
+                            observed_at,
+                        );
+                        warn!("arrêt contrôlé transition dogfooding refusé: {error}");
+                        return Some(failure(ProjectSystemRefusal::RecreateFailed));
+                    }
+                    let Some(next_epoch) = original.environment_epoch.checked_add(1) else {
+                        return Some(failure(ProjectSystemRefusal::RecreateFailed));
+                    };
+                    environment.environment_epoch = next_epoch;
+                    environment.last_reason = None;
+                    if environment
+                        .apply_mount_topology(mount_topology_digest(&candidate_mounts))
+                        .is_err()
+                    {
+                        return Some(failure(ProjectSystemRefusal::RecreateFailed));
+                    }
+                    let inspection =
+                        prepare_environment(&docker, &mut environment, &policy, &candidate_mounts);
+                    if inspection.is_err() {
+                        restore_system_dogfooding_environment(
+                            &mut st.store,
+                            &request.project_id,
+                            &docker,
+                            &mut environment,
+                            &original,
+                            &policy,
+                            &previous_mounts,
+                            runtime.resolved_image_id.clone(),
+                            observed_at,
+                        );
+                        return Some(failure(ProjectSystemRefusal::RecreateFailed));
+                    }
+                    let resolved_image_id = inspection.ok().and_then(|inspection| {
+                        inspection
+                            .get("Image")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    });
+                    let replacement =
+                        runtime_binding_from_environment(&environment, resolved_image_id);
+                    if let Err(error) = st.store.update_project_runtime(
+                        &request.project_id,
+                        &replacement,
+                        observed_at,
+                    ) {
+                        warn!("persistance runtime dogfooding indisponible: {error}");
+                        restore_system_dogfooding_environment(
+                            &mut st.store,
+                            &request.project_id,
+                            &docker,
+                            &mut environment,
+                            &original,
+                            &policy,
+                            &previous_mounts,
+                            runtime.resolved_image_id.clone(),
+                            observed_at,
+                        );
+                        return Some(failure(ProjectSystemRefusal::RecreateFailed));
+                    }
+                    if let Err(error) = st.store.apply_dogfooding_bridget_state(
+                        &current,
+                        &preview.next,
+                        observed_at,
+                    ) {
+                        warn!("publication dogfooding refusée après recréation: {error}");
+                        restore_system_dogfooding_environment(
+                            &mut st.store,
+                            &request.project_id,
+                            &docker,
+                            &mut environment,
+                            &original,
+                            &policy,
+                            &previous_mounts,
+                            runtime.resolved_image_id.clone(),
+                            observed_at,
+                        );
+                        return Some(failure(ProjectSystemRefusal::RecreateFailed));
+                    }
+                }
+                setting_generation = Some(preview.next.setting_generation);
+                dogfooding_mode = Some(match preview.next.mode {
+                    crate::control_settings::DogfoodingBridgetMode::Disabled => {
+                        ProjectSystemDogfoodingMode::Disabled
+                    }
+                    crate::control_settings::DogfoodingBridgetMode::Enabled => {
+                        ProjectSystemDogfoodingMode::Enabled
+                    }
+                });
+            }
+            let runtime_state = st
+                .store
+                .project_binding(&request.project_id)
+                .ok()
+                .flatten()
+                .and_then(|current| current.runtime)
+                .map(|runtime| project_environment_state_text(runtime.state));
+            Some(DaemonToWrapper::ProjectSystemOutcome {
+                outcome: ProjectSystemOutcome {
+                    contract_version: request.contract_version,
+                    command_id: request.command_id,
+                    operation: request.operation,
+                    project_id: request.project_id,
+                    binding_generation: Some(binding.generation),
+                    role: Some(role),
+                    setting_generation,
+                    dogfooding_mode,
+                    runtime_state,
+                    reason: None,
+                    observed_at,
+                },
             })
         }
         WrapperToDaemon::ProjectRoundRequest { request } => {
@@ -10068,11 +10618,84 @@ fn handle_wrapper_message(
                     ));
                 }
             };
-            let mut mounts = match resolve_project_mounts(
+            let system_context = {
+                let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                match st.store.project_role(&request.project_id) {
+                    Ok(bridget_transport::protocol::ProjectRole::Standard) => None,
+                    Ok(bridget_transport::protocol::ProjectRole::BridgetSystem) => {
+                        let mode = match st
+                            .store
+                            .dogfooding_bridget_state(&request.project_id, binding.generation)
+                        {
+                            Ok(state) => match state.mode {
+                                crate::control_settings::DogfoodingBridgetMode::Disabled => {
+                                    BridgetDogfoodingMode::Disabled
+                                }
+                                crate::control_settings::DogfoodingBridgetMode::Enabled => {
+                                    BridgetDogfoodingMode::Enabled
+                                }
+                            },
+                            Err(error) => {
+                                warn!("réglage dogfooding indisponible: {error}");
+                                return Some(project_runtime_failure(
+                                    &request,
+                                    ProjectRuntimeRefusal::PrepareFailed,
+                                    observed_at,
+                                ));
+                            }
+                        };
+                        let worktrees = match discover_bridget_worktrees(std::path::Path::new(
+                            &binding.canonical_root,
+                        )) {
+                            Ok(worktrees) => worktrees,
+                            Err(error) => {
+                                warn!("worktrees système indisponibles: {error}");
+                                return Some(project_runtime_failure(
+                                    &request,
+                                    ProjectRuntimeRefusal::PrepareFailed,
+                                    observed_at,
+                                ));
+                            }
+                        };
+                        Some(BridgetSystemMountContext {
+                            checkout_root: PathBuf::from(&binding.canonical_root),
+                            worktrees,
+                            mode,
+                        })
+                    }
+                    Err(error) => {
+                        warn!("rôle projet indisponible: {error}");
+                        return Some(project_runtime_failure(
+                            &request,
+                            ProjectRuntimeRefusal::PrepareFailed,
+                            observed_at,
+                        ));
+                    }
+                }
+            };
+            let role = match state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .store
+                .project_role(&request.project_id)
+            {
+                Ok(role) => role,
+                Err(error) => {
+                    warn!("rôle projet indisponible: {error}");
+                    return Some(project_runtime_failure(
+                        &request,
+                        ProjectRuntimeRefusal::PrepareFailed,
+                        observed_at,
+                    ));
+                }
+            };
+            let resolution = match resolve_project_mounts_for_role(
+                role,
                 std::path::Path::new(&binding.canonical_root),
                 &state_root,
+                system_context.as_ref(),
             ) {
-                Ok(mounts) => mounts,
+                Ok(resolution) => resolution,
                 Err(error) => {
                     warn!("layout worktree runtime refusé: {error}");
                     return Some(project_runtime_failure(
@@ -10082,6 +10705,7 @@ fn handle_wrapper_message(
                     ));
                 }
             };
+            let mut mounts = resolution.mounts;
             mounts.extend(
                 profile_admission
                     .as_ref()
@@ -10103,6 +10727,30 @@ fn handle_wrapper_message(
                 container_path: CONTAINER_INGRESS_DIRECTORY.to_string(),
                 writable: false,
             });
+            let topology_digest = mount_topology_digest(&mounts);
+            if let Err(error) = environment.apply_mount_topology(topology_digest) {
+                let replacement =
+                    runtime_binding_from_environment(&environment, resolved_image_id.clone());
+                if state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .store
+                    .update_project_runtime(&request.project_id, &replacement, observed_at)
+                    .is_err()
+                {
+                    return Some(project_runtime_failure(
+                        &request,
+                        ProjectRuntimeRefusal::StoreUnavailable,
+                        observed_at,
+                    ));
+                }
+                warn!("topologie de mounts runtime modifiée: {error}");
+                return Some(project_runtime_failure(
+                    &request,
+                    ProjectRuntimeRefusal::EnvironmentBusy,
+                    observed_at,
+                ));
+            }
             let docker = DockerCli::new(PathBuf::from("docker"), Duration::from_secs(20));
             let inspection = prepare_environment(&docker, &mut environment, &policy, &mounts);
             let replacement = runtime_binding_from_environment(
@@ -11390,6 +12038,91 @@ fn handle_wrapper_message(
                             stop: Arc::clone(&stop),
                         }
                     };
+                    let is_system_project = if let Some(project) = prepared.lease.project.as_ref() {
+                        match st.store.project_role(&project.project_id) {
+                            Ok(bridget_transport::protocol::ProjectRole::Standard) => false,
+                            Ok(bridget_transport::protocol::ProjectRole::BridgetSystem) => true,
+                            Err(error) => {
+                                warn!(
+                                    "registre projet indisponible pendant le démarrage pour {}: {error}",
+                                    project.project_id
+                                );
+                                let _ = st.fleet.fail(
+                                    &prepared.lease,
+                                    "negotiation_failed",
+                                    "registre projet indisponible",
+                                );
+                                return Some(DaemonToWrapper::SpawnRejected {
+                                    command_id,
+                                    reason: SpawnRefusal::ProjectCwdMismatch {
+                                        project_id: project.project_id.clone(),
+                                    },
+                                });
+                            }
+                        }
+                    } else {
+                        false
+                    };
+                    if is_system_project {
+                        let project = prepared
+                            .lease
+                            .project
+                            .as_ref()
+                            .expect("projet requis lorsque le rôle système est établi");
+                        let binding = match st.store.project_binding(&project.project_id) {
+                            Ok(Some(binding)) => binding,
+                            _ => {
+                                let _ = st.fleet.fail(
+                                    &prepared.lease,
+                                    "negotiation_failed",
+                                    "liaison projet système absente",
+                                );
+                                return Some(DaemonToWrapper::SpawnRejected {
+                                    command_id,
+                                    reason: SpawnRefusal::ProjectCwdMismatch {
+                                        project_id: project.project_id.clone(),
+                                    },
+                                });
+                            }
+                        };
+                        if binding.backend != ProjectBackend::Docker
+                            || attest_bridget_checkout(
+                                std::path::Path::new(&binding.canonical_root),
+                                &prepared.cwd,
+                            )
+                            .is_err()
+                            || st
+                                .store
+                                .acquire_system_worktree_lease(
+                                    &project.project_id,
+                                    &prepared.lease.name,
+                                    &prepared.cwd.to_string_lossy(),
+                                    project.binding_generation,
+                                    unix_now_secs(),
+                                )
+                                .is_err()
+                        {
+                            let _ = st.fleet.fail(
+                                &prepared.lease,
+                                "negotiation_failed",
+                                "worktree système non attribuable",
+                            );
+                            return Some(DaemonToWrapper::SpawnRejected {
+                                command_id,
+                                reason: SpawnRefusal::ProjectCwdMismatch {
+                                    project_id: project.project_id.clone(),
+                                },
+                            });
+                        }
+                        st.system_worktree_leases_by_command.insert(
+                            prepared.lease.command_id.clone(),
+                            (
+                                project.project_id.clone(),
+                                prepared.lease.name.clone(),
+                                prepared.cwd.to_string_lossy().into_owned(),
+                            ),
+                        );
+                    }
                     st.managed_by_instance.insert(
                         prepared.lease.instance_id.clone(),
                         prepared.lease.command_id.clone(),
@@ -11415,6 +12148,10 @@ fn handle_wrapper_message(
                                 .remove(&(project.project_id.clone(), prepared.lease.generation));
                         }
                         st.managed_spawns.remove(&prepared.lease.command_id);
+                        release_system_worktree_lease_for_command(
+                            &mut st,
+                            &prepared.lease.command_id,
+                        );
                         st.managed_by_instance.remove(&prepared.lease.instance_id);
                         st.managed_terminal_instances
                             .insert(prepared.lease.instance_id.clone());
@@ -11629,6 +12366,10 @@ fn handle_wrapper_message(
                         );
                         st.relaunch_requesters.remove(&prepared.lease.command_id);
                         st.managed_spawns.remove(&prepared.lease.command_id);
+                        release_system_worktree_lease_for_command(
+                            &mut st,
+                            &prepared.lease.command_id,
+                        );
                         st.managed_by_instance.remove(&prepared.lease.instance_id);
                         return Some(DaemonToWrapper::RelaunchResult {
                             command_id,
@@ -13161,6 +13902,7 @@ mod matrice_roles_tests {
                         run_as_uid: 1002,
                         run_as_gid: 1002,
                         environment_epoch: 1,
+                        topology_digest: "sha256:fixture".to_string(),
                         container_id: Some("d".repeat(64)),
                         last_reason: None,
                     },
@@ -13303,6 +14045,245 @@ mod matrice_roles_tests {
     }
 
     #[test]
+    fn spec_086_contrat_systeme_exige_service_local_et_emplacement_systeme() {
+        let (shared, config) = etat_nu("project-system-contract");
+        let allowed_root = configure_project_policy(&mut shared.lock().unwrap());
+        let policy_path = allowed_root
+            .parent()
+            .unwrap()
+            .join("project-root-policy.json");
+        let system_root = policy_path.parent().unwrap().join("bridget-system");
+        std::fs::create_dir_all(&system_root).unwrap();
+        std::fs::create_dir_all(allowed_root.join("other")).unwrap();
+        std::fs::write(
+            &policy_path,
+            serde_json::json!({
+                "contract_version": 2,
+                "policy_generation": 2,
+                "locations": [
+                    {
+                        "location_id": "workspace",
+                        "label": "Projets",
+                        "canonical_path": allowed_root,
+                        "kind": "workspace",
+                        "default_creation": true
+                    },
+                    {
+                        "location_id": "bridget-system",
+                        "label": "Bridget",
+                        "canonical_path": system_root,
+                        "kind": "exact_project",
+                        "system_only": true
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        shared.lock().unwrap().project_root_policy = ProjectRootPolicy::load(&policy_path);
+        let runtime_state_root = allowed_root.join("runtime-state");
+        std::fs::create_dir_all(&runtime_state_root).unwrap();
+        shared.lock().unwrap().project_runtime_policy = Ok(ProjectRuntimePolicyConfig {
+            contract_version: 1,
+            state_root_parent: runtime_state_root,
+            policies: vec![crate::project_runtime::ProjectRuntimePolicyDefinition {
+                policy_id: "system-fixture".to_string(),
+                policy_version: 1,
+                image_reference_kind: crate::project_runtime::ImageReferenceKind::LocalImageId,
+                image_reference: format!("sha256:{}", "a".repeat(64)),
+                run_as_uid: unsafe { libc::geteuid() },
+                run_as_gid: unsafe { libc::getegid() },
+                cpu_limit: 1.0,
+                memory_limit_bytes: 512 * 1024 * 1024,
+                pids_limit: 64,
+                tmpfs: vec!["/tmp".to_string()],
+                network_mode: "bridge".to_string(),
+                runtime_launcher: None,
+                runtime_executables: Vec::new(),
+            }],
+        });
+        let service = "project-system-service";
+        let now = unix_now_secs();
+        shared
+            .lock()
+            .unwrap()
+            .peer_uids
+            .insert(service.to_string(), unsafe { libc::geteuid() });
+        assert!(matches!(
+            handle_wrapper_message(
+                service,
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Service,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Service
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                service,
+                WrapperToDaemon::ServiceHello {
+                    version: SERVICE_CONTRACT_VERSION,
+                    service: "maicie".to_string(),
+                    issuer_scope: "086_project_system_0123456789abcdef".to_string(),
+                    capabilities: vec![ServiceCapability::ProjectRegistryV1],
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ServiceWelcome { .. })
+        ));
+        let bind =
+            |project_id: &str, root: std::path::PathBuf| WrapperToDaemon::ProjectRegistryRequest {
+                request: ProjectBindRequest {
+                    contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
+                    command_id: format!("bind-{project_id}"),
+                    issued_at: now,
+                    deadline_at: now + 60,
+                    project_id: project_id.to_string(),
+                    requested_root: root.display().to_string(),
+                    backend: ProjectBackend::Host,
+                    policy_id: None,
+                    policy_version: None,
+                },
+            };
+        assert!(matches!(
+            handle_wrapper_message(service, bind("ordinary-system-root", system_root.clone()), &shared),
+            Some(DaemonToWrapper::ProjectRegistryOutcome { outcome })
+                if outcome.reason == Some(ProjectRegistryRefusal::RootOutsideAllowedPrefixes)
+        ));
+        let request =
+            |operation, project_id: &str, command_id: &str| WrapperToDaemon::ProjectSystemRequest {
+                request: ProjectSystemRequest {
+                    contract_version: PROJECT_SYSTEM_CONTRACT_VERSION,
+                    command_id: command_id.to_string(),
+                    issued_at: now,
+                    deadline_at: now + 60,
+                    operation,
+                    project_id: project_id.to_string(),
+                    expected_binding_generation: 1,
+                    runtime_policy_id: (operation == ProjectSystemOperation::Reconcile)
+                        .then(|| "system-fixture".to_string()),
+                    runtime_policy_version: (operation == ProjectSystemOperation::Reconcile)
+                        .then_some(1),
+                    expected_setting_generation: None,
+                    requested_mode: None,
+                },
+            };
+        assert!(matches!(
+            handle_wrapper_message(
+                service,
+                request(ProjectSystemOperation::Reconcile, "bridget-system", "reconcile-system"),
+                &shared,
+            ),
+            Some(DaemonToWrapper::ProjectSystemOutcome { outcome })
+                if outcome.role == Some(bridget_transport::protocol::ProjectRole::BridgetSystem)
+                    && outcome.reason.is_none()
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                service,
+                request(ProjectSystemOperation::Status, "bridget-system", "system-status"),
+                &shared,
+            ),
+            Some(DaemonToWrapper::ProjectSystemOutcome { outcome })
+                if outcome.setting_generation == Some(1)
+                    && outcome.dogfooding_mode == Some(ProjectSystemDogfoodingMode::Disabled)
+        ));
+        let dogfooding = |operation| WrapperToDaemon::ProjectSystemRequest {
+            request: ProjectSystemRequest {
+                contract_version: PROJECT_SYSTEM_CONTRACT_VERSION,
+                command_id: format!("dogfooding-{operation:?}").to_lowercase(),
+                issued_at: now,
+                deadline_at: now + 60,
+                operation,
+                project_id: "bridget-system".to_string(),
+                expected_binding_generation: 1,
+                runtime_policy_id: None,
+                runtime_policy_version: None,
+                expected_setting_generation: Some(1),
+                requested_mode: Some(ProjectSystemDogfoodingMode::Enabled),
+            },
+        };
+        assert!(matches!(
+            handle_wrapper_message(
+                service,
+                dogfooding(ProjectSystemOperation::DogfoodingPreview),
+                &shared,
+            ),
+            Some(DaemonToWrapper::ProjectSystemOutcome { outcome })
+                if outcome.reason.is_none()
+                    && outcome.setting_generation == Some(2)
+                    && outcome.dogfooding_mode == Some(ProjectSystemDogfoodingMode::Enabled)
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                service,
+                dogfooding(ProjectSystemOperation::DogfoodingApply),
+                &shared,
+            ),
+            Some(DaemonToWrapper::ProjectSystemOutcome { outcome })
+                if outcome.reason == Some(ProjectSystemRefusal::RecreateFailed)
+        ));
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .store
+                .dogfooding_bridget_state("bridget-system", 1)
+                .unwrap()
+                .mode,
+            crate::control_settings::DogfoodingBridgetMode::Disabled
+        );
+
+        let client = "project-system-client";
+        assert!(matches!(
+            handle_wrapper_message(
+                client,
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                client,
+                request(
+                    ProjectSystemOperation::Status,
+                    "bridget-system",
+                    "client-denied"
+                ),
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::MessageOutsideClientRole
+            })
+        ));
+
+        assert!(matches!(
+            handle_wrapper_message(service, bind("another-project", allowed_root.join("other")), &shared),
+            Some(DaemonToWrapper::ProjectRegistryOutcome { outcome })
+                if outcome.status == ProjectBindStatus::Active
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                service,
+                request(ProjectSystemOperation::Declare, "another-project", "declare-other"),
+                &shared,
+            ),
+            Some(DaemonToWrapper::ProjectSystemOutcome { outcome })
+                if outcome.reason == Some(ProjectSystemRefusal::SystemLocationRequired)
+        ));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
     fn spec_065_daemon_refuse_la_mutation_projet_sans_uid_pair() {
         let (shared, config) = etat_nu("project-registry-uid");
         let connection = "project-registry-no-peer";
@@ -13373,6 +14354,7 @@ mod matrice_roles_tests {
                         run_as_uid: 1002,
                         run_as_gid: 1002,
                         environment_epoch: 1,
+                        topology_digest: "sha256:fixture".to_string(),
                         container_id: None,
                         last_reason: None,
                     },
@@ -23619,6 +24601,7 @@ fn spec_066_redemarrage_retablit_ingress_sans_dupliquer_l_agent_docker() {
                 run_as_uid,
                 run_as_gid,
                 environment_epoch: 1,
+                topology_digest: "sha256:fixture".to_string(),
                 container_id: Some("d".repeat(64)),
                 last_reason: None,
             },
@@ -23799,6 +24782,7 @@ fn spec_066_lifecycle_refuse_l_action_destructive_si_agent_projet_actif() {
                 run_as_uid: 1002,
                 run_as_gid: 1002,
                 environment_epoch: 1,
+                topology_digest: "sha256:fixture".to_string(),
                 container_id: Some("c".repeat(64)),
                 last_reason: None,
             },
@@ -24059,6 +25043,7 @@ fn spec_085_operations_destructives_refusees_agent_actif_et_rejeu() {
                 run_as_uid: unsafe { libc::geteuid() },
                 run_as_gid: unsafe { libc::getegid() },
                 environment_epoch: 1,
+                topology_digest: "sha256:fixture".to_string(),
                 container_id: Some("c".repeat(64)),
                 last_reason: None,
             },
@@ -24221,6 +25206,7 @@ fn spec_085_redemarrage_reconcilie_runtime_sans_creer_un_second_conteneur() {
                 run_as_uid: uid,
                 run_as_gid: gid,
                 environment_epoch: 1,
+                topology_digest: "sha256:fixture".to_string(),
                 container_id: Some("c".repeat(64)),
                 last_reason: None,
             },

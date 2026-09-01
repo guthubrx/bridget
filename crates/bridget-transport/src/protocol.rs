@@ -492,6 +492,21 @@ pub struct ProjectAuditProjection {
     pub observed_at: i64,
 }
 
+/// Rôle fermé d'un projet dans un daemon Bridget. Seul le rôle système peut
+/// participer au dogfooding expert ; aucun chemin ni libellé ne l'infère.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectRole {
+    Standard,
+    BridgetSystem,
+}
+
+impl Default for ProjectRole {
+    fn default() -> Self {
+        Self::Standard
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectBindingProjection {
@@ -505,6 +520,8 @@ pub struct ProjectBindingProjection {
     pub binding_generation: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<ProjectBackend>,
+    #[serde(default)]
+    pub role: ProjectRole,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_policy: Option<ProjectRuntimePolicyReference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -526,6 +543,99 @@ pub struct ProjectAdminOutcome {
     pub bindings: Vec<ProjectBindingProjection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<ProjectRegistryRefusal>,
+    pub observed_at: i64,
+}
+
+/// Contrat réservé au seul projet système Bridget. Il ne réemploie pas les
+/// mutations du registre standard : déclarer ou réconcilier ce rôle ne doit
+/// jamais rendre un projet ordinaire administrable comme le système.
+pub const PROJECT_SYSTEM_CONTRACT_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectSystemOperation {
+    Status,
+    Declare,
+    Reconcile,
+    DogfoodingPreview,
+    DogfoodingApply,
+}
+
+/// Valeur fermée du réglage expert du seul projet système Bridget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectSystemDogfoodingMode {
+    Disabled,
+    Enabled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectSystemRequest {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub issued_at: i64,
+    pub deadline_at: i64,
+    pub operation: ProjectSystemOperation,
+    pub project_id: String,
+    pub expected_binding_generation: u64,
+    /// Politique Docker déjà déclarée par le serveur. Obligatoire lors de la
+    /// première réconciliation : le projet système ne possède pas de mode
+    /// Host de repli.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_policy_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_policy_version: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_setting_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_mode: Option<ProjectSystemDogfoodingMode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectSystemRefusal {
+    InvalidContract,
+    InvalidRequest,
+    IdempotencyExpired,
+    PeerUidMismatch,
+    ProjectNotFound,
+    BindingGenerationMismatch,
+    ProjectInactive,
+    SystemLocationRequired,
+    SystemProjectAlreadyDeclared,
+    SystemProjectRequired,
+    RuntimePolicyRequired,
+    SettingGenerationMismatch,
+    DogfoodingModeRequired,
+    ActiveSystemAgent,
+    DockerRequired,
+    RecreateRequired,
+    RecreateFailed,
+    StoreUnavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectSystemOutcome {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub operation: ProjectSystemOperation,
+    pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<ProjectRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setting_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dogfooding_mode: Option<ProjectSystemDogfoodingMode>,
+    /// Etat attesté du runtime Docker du projet système, sans détail de chemin
+    /// ni d'identifiant de conteneur.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ProjectSystemRefusal>,
     pub observed_at: i64,
 }
 
@@ -1549,6 +1659,12 @@ pub enum WrapperToDaemon {
     ProjectRegistryAdminRequest {
         request: ProjectAdminRequest,
     },
+    /// Déclaration et relève du projet système, surface séparée du registre
+    /// standard et admise seulement par le daemon local.
+    #[serde(rename = "project_system_request")]
+    ProjectSystemRequest {
+        request: ProjectSystemRequest,
+    },
     /// Lecture ou mutation locale de la ronde par projet.
     #[serde(rename = "project_round_request")]
     ProjectRoundRequest {
@@ -2284,6 +2400,8 @@ pub enum DaemonToWrapper {
     /// Issue corrélée d'une lecture ou mutation administrative du registre.
     #[serde(rename = "project_registry_admin_outcome")]
     ProjectRegistryAdminOutcome { outcome: ProjectAdminOutcome },
+    #[serde(rename = "project_system_outcome")]
+    ProjectSystemOutcome { outcome: ProjectSystemOutcome },
     /// Issue locale de la politique de ronde par projet.
     #[serde(rename = "project_round_outcome")]
     ProjectRoundOutcome { outcome: ProjectRoundOutcome },
@@ -4862,6 +4980,7 @@ mod tests {
                 state: ProjectBindingStatus::Active,
                 binding_generation: Some(2),
                 backend: Some(ProjectBackend::Host),
+                role: ProjectRole::Standard,
                 runtime_policy: None,
                 reason: None,
                 last_audit: None,
@@ -5091,5 +5210,61 @@ mod tests {
             DaemonToWrapper::ProjectRoundDispatchOutcome { outcome: decoded }
                 if decoded == outcome
         ));
+    }
+
+    #[test]
+    fn spec_086_role_projet_est_ferme_et_ancien_projection_reste_standard() {
+        let legacy: ProjectBindingProjection =
+            serde_json::from_str(r#"{"project_id":"legacy","state":"active","observed_at":1}"#)
+                .unwrap();
+        assert_eq!(legacy.role, ProjectRole::Standard);
+        let system = ProjectBindingProjection {
+            project_id: "bridget-system".to_string(),
+            canonical_root: None,
+            state: ProjectBindingStatus::Active,
+            binding_generation: Some(1),
+            backend: Some(ProjectBackend::Docker),
+            role: ProjectRole::BridgetSystem,
+            runtime_policy: None,
+            reason: None,
+            last_audit: None,
+            observed_at: 2,
+        };
+        let wire = serde_json::to_string(&system).unwrap();
+        assert!(wire.contains(r#""role":"bridget_system""#));
+        assert_eq!(
+            serde_json::from_str::<ProjectBindingProjection>(&wire).unwrap(),
+            system
+        );
+    }
+
+    #[test]
+    fn spec_086_contrat_systeme_est_separe_du_registre_standard() {
+        let request = ProjectSystemRequest {
+            contract_version: PROJECT_SYSTEM_CONTRACT_VERSION,
+            command_id: "system-declare-086".to_string(),
+            issued_at: 1,
+            deadline_at: 2,
+            operation: ProjectSystemOperation::Declare,
+            project_id: "bridget-system".to_string(),
+            expected_binding_generation: 3,
+            runtime_policy_id: None,
+            runtime_policy_version: None,
+            expected_setting_generation: None,
+            requested_mode: None,
+        };
+        let wire = encode(&WrapperToDaemon::ProjectSystemRequest {
+            request: request.clone(),
+        })
+        .unwrap();
+        assert!(wire.contains(r#""type":"project_system_request""#));
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&wire).unwrap(),
+            WrapperToDaemon::ProjectSystemRequest { request: decoded } if decoded == request
+        ));
+        assert!(serde_json::from_str::<ProjectSystemRequest>(
+            r#"{"contract_version":1,"command_id":"x","issued_at":1,"deadline_at":2,"operation":"declare","project_id":"project","expected_binding_generation":1,"root":"/tmp"}"#,
+        )
+        .is_err());
     }
 }

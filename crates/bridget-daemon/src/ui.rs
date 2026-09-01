@@ -17,12 +17,14 @@ use bridget_transport::journal::valid_events;
 use bridget_transport::protocol::{
     AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
     LedgerMessage, LedgerScope, PROJECT_REGISTRY_CONTRACT_VERSION, PROJECT_ROUND_INTERVAL_SECS,
-    PROJECT_ROUND_POLICY_CONTRACT_VERSION, PresenceMode, ProjectAdminOperation,
-    ProjectAdminRequest, ProjectBackend, ProjectBindRequest, ProjectBindStatus,
-    ProjectBindingProjection, ProjectBindingStatus, ProjectRoundDispatchState,
+    PROJECT_ROUND_POLICY_CONTRACT_VERSION, PROJECT_SYSTEM_CONTRACT_VERSION, PresenceMode,
+    ProjectAdminOperation, ProjectAdminRequest, ProjectBackend, ProjectBindRequest,
+    ProjectBindStatus, ProjectBindingProjection, ProjectBindingStatus, ProjectRoundDispatchState,
     ProjectRoundOperation, ProjectRoundOutcome, ProjectRoundProjection, ProjectRoundRefusal,
     ProjectRoundRequest, ProjectRuntimeOperation, ProjectRuntimeRefusal, ProjectRuntimeRequest,
-    SERVICE_CONTRACT_VERSION, ServiceCapability, decode, encode,
+    ProjectSystemDogfoodingMode, ProjectSystemOperation, ProjectSystemOutcome,
+    ProjectSystemRefusal, ProjectSystemRequest, SERVICE_CONTRACT_VERSION, ServiceCapability,
+    decode, encode,
 };
 use bridget_transport::{ChannelReport, DaemonToWrapper, WrapperToDaemon};
 use serde::{Deserialize, Serialize};
@@ -1109,6 +1111,39 @@ struct UiProjectRuntimeActionV1 {
     policy_version: Option<u64>,
 }
 
+/// Projection bornée du seul projet qui peut dogfood Bridget. Le chemin source
+/// et les détails Git restent hors de cette route : l'opérateur dispose de
+/// l'état, de la génération et des limites de confiance nécessaires au choix.
+#[derive(Debug, Serialize)]
+struct UiSystemDogfoodingV1 {
+    version: u8,
+    project_id: String,
+    binding_generation: u64,
+    setting_generation: u64,
+    mode: &'static str,
+    backend: &'static str,
+    runtime_state: String,
+    checkout_main_read_only: bool,
+    worktree_required: bool,
+    shared_git_trust: bool,
+    delivery_excluded: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiSystemDogfoodingRequestV1 {
+    version: u8,
+    command_id: String,
+    project_id: String,
+    binding_generation: u64,
+    setting_generation: u64,
+    mode: String,
+    /// La confirmation est délibérément portée par la requête qui applique.
+    /// Une prévisualisation ne modifie jamais l'état même si elle vaut false.
+    #[serde(default)]
+    confirmed: bool,
+}
+
 #[derive(Debug, Serialize)]
 struct UiProjectSettingsV1 {
     version: u8,
@@ -1130,6 +1165,7 @@ struct UiProjectListEntryV1 {
     canonical_path: String,
     state: &'static str,
     binding_generation: u64,
+    role: &'static str,
     round: UiProjectRoundV1,
 }
 
@@ -1916,6 +1952,52 @@ fn serve_connection(
                 },
             ),
         },
+        ("GET", "/v1/control/dogfooding") => {
+            let project_id = request
+                .query
+                .get("project")
+                .ok_or_else(|| UiError::Protocol("paramètre project absent".to_string()))?;
+            match read_system_dogfooding(&config.daemon_socket, project_id) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("POST", "/v1/control/dogfooding/preview") => {
+            match post_system_dogfooding(config, &request.body, false) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("POST", "/v1/control/dogfooding/apply") => {
+            match post_system_dogfooding(config, &request.body, true) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
         ("POST", "/v1/control/settings/preview") => {
             match post_control_project_roots_preview(config, &request.body) {
                 Ok(response) => write_json(stream, 200, &response),
@@ -4231,12 +4313,17 @@ fn ui_project_list_entry(
         ProjectBindingStatus::BindingFailed => "binding_failed",
         ProjectBindingStatus::Unregistered => "unregistered",
     };
+    let role = match binding.role {
+        bridget_transport::protocol::ProjectRole::Standard => "standard",
+        bridget_transport::protocol::ProjectRole::BridgetSystem => "bridget_system",
+    };
     Ok(Some(UiProjectListEntryV1 {
         project_id: binding.project_id,
         display_name,
         canonical_path,
         state,
         binding_generation,
+        role,
         round: ui_project_round(policy),
     }))
 }
@@ -4350,7 +4437,13 @@ fn post_project_confirm(
         request.policy_id.as_deref(),
         request.policy_version,
     )?;
-    confirm_project_preview(config, request.command_id, request.initialize_git, preview, backend)
+    confirm_project_preview(
+        config,
+        request.command_id,
+        request.initialize_git,
+        preview,
+        backend,
+    )
 }
 
 fn confirm_project_preview(
@@ -4790,6 +4883,201 @@ fn request_project_runtime(
             format!("Réponse runtime inattendue: {response:?}"),
         )),
     }
+}
+
+fn valid_ui_project_id(project_id: &str) -> bool {
+    !project_id.is_empty()
+        && project_id.len() <= 128
+        && project_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+fn system_dogfooding_error(reason: ProjectSystemRefusal) -> UiProjectError {
+    match reason {
+        ProjectSystemRefusal::ProjectNotFound | ProjectSystemRefusal::SystemProjectRequired => (
+            404,
+            "system_project_not_found",
+            "Ce projet n’est pas le projet système Bridget.".to_string(),
+        ),
+        ProjectSystemRefusal::BindingGenerationMismatch
+        | ProjectSystemRefusal::SettingGenerationMismatch => (
+            409,
+            "dogfooding_generation_conflict",
+            "Le projet système a changé. Relisez son état avant de confirmer.".to_string(),
+        ),
+        ProjectSystemRefusal::ActiveSystemAgent
+        | ProjectSystemRefusal::RecreateRequired
+        | ProjectSystemRefusal::RecreateFailed => (
+            409,
+            "dogfooding_recreate_refused",
+            "Le changement de dogfooding exige un environnement sans agent actif et une recréation attestée."
+                .to_string(),
+        ),
+        ProjectSystemRefusal::DockerRequired | ProjectSystemRefusal::RuntimePolicyRequired => (
+            409,
+            "dogfooding_docker_required",
+            "Le projet système doit utiliser une politique Docker disponible.".to_string(),
+        ),
+        ProjectSystemRefusal::InvalidContract
+        | ProjectSystemRefusal::InvalidRequest
+        | ProjectSystemRefusal::DogfoodingModeRequired => (
+            400,
+            "dogfooding_invalid_request",
+            "La demande de dogfooding est invalide.".to_string(),
+        ),
+        ProjectSystemRefusal::ProjectInactive => (
+            409,
+            "system_project_inactive",
+            "Le projet système n’est pas actif.".to_string(),
+        ),
+        ProjectSystemRefusal::IdempotencyExpired
+        | ProjectSystemRefusal::PeerUidMismatch
+        | ProjectSystemRefusal::SystemLocationRequired
+        | ProjectSystemRefusal::SystemProjectAlreadyDeclared
+        | ProjectSystemRefusal::StoreUnavailable => project_daemon_unavailable(),
+    }
+}
+
+fn system_dogfooding_request(
+    socket_path: &Path,
+    command_id: String,
+    project_id: String,
+    operation: ProjectSystemOperation,
+    binding_generation: u64,
+    setting_generation: Option<u64>,
+    requested_mode: Option<ProjectSystemDogfoodingMode>,
+) -> Result<ProjectSystemOutcome, UiProjectError> {
+    if !valid_ui_project_id(&project_id) || command_id.trim().is_empty() {
+        return Err((
+            400,
+            "dogfooding_invalid_request",
+            "Identifiant de projet ou commande invalide.".to_string(),
+        ));
+    }
+    let issued_at = now_secs();
+    let request = ProjectSystemRequest {
+        contract_version: PROJECT_SYSTEM_CONTRACT_VERSION,
+        command_id,
+        issued_at,
+        deadline_at: issued_at.saturating_add(30),
+        operation,
+        project_id,
+        expected_binding_generation: binding_generation,
+        runtime_policy_id: None,
+        runtime_policy_version: None,
+        expected_setting_generation: setting_generation,
+        requested_mode,
+    };
+    let (mut reader, mut writer) = open_project_registry_service(socket_path)?;
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::ProjectSystemRequest { request },
+    )
+    .map_err(|_| project_daemon_unavailable())?;
+    let DaemonToWrapper::ProjectSystemOutcome { outcome } =
+        read_daemon(&mut reader).map_err(|_| project_daemon_unavailable())?
+    else {
+        return Err(project_daemon_unavailable());
+    };
+    if let Some(reason) = outcome.reason {
+        return Err(system_dogfooding_error(reason));
+    }
+    Ok(outcome)
+}
+
+fn ui_system_dogfooding(
+    outcome: ProjectSystemOutcome,
+) -> Result<UiSystemDogfoodingV1, UiProjectError> {
+    let binding_generation = outcome
+        .binding_generation
+        .ok_or_else(project_daemon_unavailable)?;
+    let setting_generation = outcome
+        .setting_generation
+        .ok_or_else(project_daemon_unavailable)?;
+    let mode = match outcome
+        .dogfooding_mode
+        .ok_or_else(project_daemon_unavailable)?
+    {
+        ProjectSystemDogfoodingMode::Disabled => "disabled",
+        ProjectSystemDogfoodingMode::Enabled => "enabled",
+    };
+    Ok(UiSystemDogfoodingV1 {
+        version: UI_VERSION,
+        project_id: outcome.project_id,
+        binding_generation,
+        setting_generation,
+        mode,
+        backend: "docker",
+        runtime_state: outcome
+            .runtime_state
+            .unwrap_or_else(|| "unavailable".to_string()),
+        checkout_main_read_only: true,
+        worktree_required: true,
+        shared_git_trust: true,
+        delivery_excluded: true,
+    })
+}
+
+fn read_system_dogfooding(
+    socket_path: &Path,
+    project_id: &str,
+) -> Result<UiSystemDogfoodingV1, UiProjectError> {
+    ui_system_dogfooding(system_dogfooding_request(
+        socket_path,
+        format!("ui-system-status-{}", uuid::Uuid::new_v4()),
+        project_id.to_string(),
+        ProjectSystemOperation::Status,
+        0,
+        None,
+        None,
+    )?)
+}
+
+fn post_system_dogfooding(
+    config: &UiRelayConfig,
+    body: &[u8],
+    apply: bool,
+) -> Result<UiSystemDogfoodingV1, UiProjectError> {
+    let request: UiSystemDogfoodingRequestV1 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "dogfooding_invalid_request",
+            "Le corps dogfooding doit être un objet v1 fermé.".to_string(),
+        )
+    })?;
+    if request.version != UI_VERSION || (apply && !request.confirmed) {
+        return Err((
+            400,
+            "dogfooding_confirmation_required",
+            "La confirmation explicite est obligatoire avant d’appliquer le dogfooding."
+                .to_string(),
+        ));
+    }
+    let requested_mode = match request.mode.as_str() {
+        "disabled" => ProjectSystemDogfoodingMode::Disabled,
+        "enabled" => ProjectSystemDogfoodingMode::Enabled,
+        _ => {
+            return Err((
+                400,
+                "dogfooding_invalid_mode",
+                "Le mode dogfooding doit être disabled ou enabled.".to_string(),
+            ));
+        }
+    };
+    ui_system_dogfooding(system_dogfooding_request(
+        &config.daemon_socket,
+        request.command_id,
+        request.project_id,
+        if apply {
+            ProjectSystemOperation::DogfoodingApply
+        } else {
+            ProjectSystemOperation::DogfoodingPreview
+        },
+        request.binding_generation,
+        Some(request.setting_generation),
+        Some(requested_mode),
+    )?)
 }
 
 fn send_ui_stop(
@@ -10446,6 +10734,7 @@ mod tests {
                 canonical_path: "/srv/projects/inside".to_string(),
                 state: "active",
                 binding_generation: 1,
+                role: "standard",
                 round: round.clone(),
             },
             UiProjectListEntryV1 {
@@ -10454,6 +10743,7 @@ mod tests {
                 canonical_path: "/srv/other/outside".to_string(),
                 state: "active",
                 binding_generation: 1,
+                role: "standard",
                 round,
             },
         ];
@@ -10735,6 +11025,7 @@ mod tests {
             state: ProjectBindingStatus::Active,
             binding_generation: Some(3),
             backend: Some(ProjectBackend::Host),
+            role: bridget_transport::protocol::ProjectRole::Standard,
             runtime_policy: None,
             reason: None,
             last_audit: None,
@@ -11233,6 +11524,173 @@ mod tests {
             .1,
             "invalid_request"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_086_projection_ui_dogfooding_bornee_confirmee_et_sans_livraison() {
+        let state = ui_system_dogfooding(ProjectSystemOutcome {
+            contract_version: PROJECT_SYSTEM_CONTRACT_VERSION,
+            command_id: "status-system".to_string(),
+            operation: ProjectSystemOperation::Status,
+            project_id: "bridget-system".to_string(),
+            binding_generation: Some(3),
+            role: Some(bridget_transport::protocol::ProjectRole::BridgetSystem),
+            setting_generation: Some(7),
+            dogfooding_mode: Some(ProjectSystemDogfoodingMode::Disabled),
+            runtime_state: Some("degraded".to_string()),
+            reason: None,
+            observed_at: 42,
+        })
+        .unwrap();
+        assert_eq!(state.project_id, "bridget-system");
+        assert_eq!(state.mode, "disabled");
+        assert_eq!(state.runtime_state, "degraded");
+        assert!(state.checkout_main_read_only);
+        assert!(state.worktree_required);
+        assert!(state.shared_git_trust);
+        assert!(state.delivery_excluded);
+        assert_eq!(
+            system_dogfooding_error(ProjectSystemRefusal::SettingGenerationMismatch).0,
+            409
+        );
+        assert_eq!(
+            system_dogfooding_error(ProjectSystemRefusal::SystemProjectRequired).0,
+            404
+        );
+        assert!(serde_json::from_slice::<UiSystemDogfoodingRequestV1>(
+            br#"{"version":1,"command_id":"x","project_id":"p","binding_generation":1,"setting_generation":1,"mode":"enabled","extra":true}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn spec_086_relais_dogfooding_exige_confirmation_et_projette_les_etats() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-086-ui-dogfooding-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("bridget.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            for expected_operation in [
+                ProjectSystemOperation::Status,
+                ProjectSystemOperation::DogfoodingPreview,
+                ProjectSystemOperation::DogfoodingApply,
+            ] {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(
+                    decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                    WrapperToDaemon::RoleHandshake {
+                        role: ConnectionRole::Service
+                    }
+                ));
+                writeln!(
+                    writer,
+                    "{}",
+                    encode(&DaemonToWrapper::RoleAccepted {
+                        role: ConnectionRole::Service
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                writer.flush().unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(
+                    decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                    WrapperToDaemon::ServiceHello { capabilities, .. }
+                        if capabilities == vec![ServiceCapability::ProjectRegistryV1]
+                ));
+                writeln!(
+                    writer,
+                    "{}",
+                    encode(&DaemonToWrapper::ServiceWelcome {
+                        version: SERVICE_CONTRACT_VERSION,
+                        horizon_secs: 60,
+                        issued_at_tolerance_secs: 30,
+                        capabilities: vec![ServiceCapability::ProjectRegistryV1],
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                writer.flush().unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                let WrapperToDaemon::ProjectSystemRequest { request } =
+                    decode::<WrapperToDaemon>(line.trim()).unwrap()
+                else {
+                    panic!("le relais doit utiliser le contrat système fermé");
+                };
+                assert_eq!(request.operation, expected_operation);
+                writeln!(
+                    writer,
+                    "{}",
+                    encode(&DaemonToWrapper::ProjectSystemOutcome {
+                        outcome: ProjectSystemOutcome {
+                            contract_version: PROJECT_SYSTEM_CONTRACT_VERSION,
+                            command_id: request.command_id,
+                            operation: request.operation,
+                            project_id: request.project_id,
+                            binding_generation: Some(3),
+                            role: Some(bridget_transport::protocol::ProjectRole::BridgetSystem),
+                            setting_generation: Some(8),
+                            dogfooding_mode: Some(ProjectSystemDogfoodingMode::Enabled),
+                            runtime_state: Some("ready".to_string()),
+                            reason: None,
+                            observed_at: 42,
+                        },
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                writer.flush().unwrap();
+            }
+        });
+        let config = UiRelayConfig {
+            daemon_socket: socket.clone(),
+            maicie_config: root.join("maicie.json"),
+            project_root_policy_path: None,
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "test".to_string(),
+        };
+        let unavailable =
+            read_system_dogfooding(&root.join("absent.sock"), "bridget-system").unwrap_err();
+        assert_eq!(unavailable.0, 503);
+        let status = read_system_dogfooding(&socket, "bridget-system").unwrap();
+        assert_eq!(status.mode, "enabled");
+        let body = serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "command_id": "dogfooding-preview-086",
+            "project_id": "bridget-system",
+            "binding_generation": 3,
+            "setting_generation": 7,
+            "mode": "enabled",
+            "confirmed": false,
+        }))
+        .unwrap();
+        let preview = post_system_dogfooding(&config, &body, false).unwrap();
+        assert_eq!(preview.mode, "enabled");
+        let refused = post_system_dogfooding(&config, &body, true).unwrap_err();
+        assert_eq!(refused.1, "dogfooding_confirmation_required");
+        let confirmed = serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "command_id": "dogfooding-apply-086",
+            "project_id": "bridget-system",
+            "binding_generation": 3,
+            "setting_generation": 8,
+            "mode": "enabled",
+            "confirmed": true,
+        }))
+        .unwrap();
+        let applied = post_system_dogfooding(&config, &confirmed, true).unwrap();
+        assert_eq!(applied.setting_generation, 8);
+        server.join().unwrap();
         let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -1,13 +1,16 @@
 //! Persistance SQLite — ledger, compteurs disjoncteur, historique.
 
-use crate::project_runtime::ProjectEnvironmentState;
+use crate::{
+    control_settings::{DogfoodingBridgetMode, DogfoodingBridgetState},
+    project_runtime::ProjectEnvironmentState,
+};
 use bridget_transport::greffe_authorization::GreffeAuthorizationAttestation;
 use bridget_transport::protocol::{
     CoordinationEventKind, GuichetLifecycleState, GuichetOutcome,
     PROJECT_REGISTRY_CONTRACT_VERSION, PROJECT_ROUND_POLICY_CONTRACT_VERSION,
     ProjectAdminOperation, ProjectAdminOutcome, ProjectAuditOperationKind, ProjectAuditOutcomeKind,
     ProjectAuditProjection, ProjectBackend, ProjectBindOutcome, ProjectBindStatus,
-    ProjectBindingProjection, ProjectBindingStatus, ProjectRegistryRefusal,
+    ProjectBindingProjection, ProjectBindingStatus, ProjectRegistryRefusal, ProjectRole,
     ProjectRoundDispatchState, ProjectRoundOperation, ProjectRoundOutcome, ProjectRoundProjection,
     ProjectRoundRefusal, ProjectRuntimePolicyReference, ServiceRequestOperation,
     ServiceRequestPayload,
@@ -382,6 +385,7 @@ pub struct ProjectRuntimeBinding {
     pub run_as_uid: u32,
     pub run_as_gid: u32,
     pub environment_epoch: u64,
+    pub topology_digest: String,
     pub container_id: Option<String>,
     pub last_reason: Option<String>,
 }
@@ -404,6 +408,7 @@ impl ProjectRuntimeBinding {
             || self.run_as_uid == 0
             || self.run_as_gid == 0
             || self.environment_epoch == 0
+            || !self.topology_digest.starts_with("sha256:")
         {
             return Err(StoreError::Invariant("runtime projet docker invalide"));
         }
@@ -676,10 +681,33 @@ impl Store {
                  run_as_uid INTEGER,
                  run_as_gid INTEGER,
                  environment_epoch INTEGER NOT NULL DEFAULT 0,
+                 topology_digest TEXT NOT NULL DEFAULT 'sha256:legacy',
                  container_id TEXT
              );
              CREATE UNIQUE INDEX IF NOT EXISTS idx_project_bindings_live_root
                  ON project_bindings(canonical_root) WHERE state != 'disabled';
+             CREATE TABLE IF NOT EXISTS project_system_roles (
+                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                 project_id TEXT NOT NULL UNIQUE,
+                 declared_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS project_system_dogfooding (
+                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                 project_id TEXT NOT NULL UNIQUE,
+                 binding_generation INTEGER NOT NULL CHECK (binding_generation > 0),
+                 setting_generation INTEGER NOT NULL CHECK (setting_generation > 0),
+                 mode TEXT NOT NULL CHECK (mode IN ('disabled', 'enabled')),
+                 updated_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS project_system_worktree_leases (
+                 canonical_worktree TEXT PRIMARY KEY,
+                 project_id TEXT NOT NULL,
+                 agent_id TEXT NOT NULL,
+                 binding_generation INTEGER NOT NULL CHECK (binding_generation > 0),
+                 acquired_at INTEGER NOT NULL
+             );
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_project_system_worktree_leases_agent
+                 ON project_system_worktree_leases(project_id, agent_id);
              CREATE TABLE IF NOT EXISTS project_audit_events (
                  audit_event_id TEXT PRIMARY KEY,
                  command_id TEXT NOT NULL,
@@ -839,10 +867,10 @@ impl Store {
                      project_id, canonical_root, backend, state, generation,
                      bound_at, updated_at, last_reason, runtime_state, runtime_last_reason, policy_id,
                      policy_version, policy_digest, image_reference, resolved_image_id,
-                     run_as_uid, run_as_gid, environment_epoch, container_id
+                     run_as_uid, run_as_gid, environment_epoch, topology_digest, container_id
                  ) VALUES (
                      ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                     ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
+                     ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
                  )",
                 params![
                     &binding.project_id,
@@ -866,6 +894,9 @@ impl Store {
                     runtime.map(|runtime| i64::from(runtime.run_as_uid)),
                     runtime.map(|runtime| i64::from(runtime.run_as_gid)),
                     environment_epoch,
+                    runtime
+                        .map(|runtime| runtime.topology_digest.as_str())
+                        .unwrap_or("sha256:legacy"),
                     runtime.and_then(|runtime| runtime.container_id.as_deref()),
                 ],
             )
@@ -1080,10 +1111,10 @@ impl Store {
                      project_id, canonical_root, backend, state, generation,
                      bound_at, updated_at, last_reason, runtime_state, runtime_last_reason, policy_id,
                      policy_version, policy_digest, image_reference, resolved_image_id,
-                     run_as_uid, run_as_gid, environment_epoch, container_id
+                     run_as_uid, run_as_gid, environment_epoch, topology_digest, container_id
                  ) VALUES (
                      ?1, ?2, 'docker', ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-                     ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
+                     ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
                  )",
                 params![
                     &binding.project_id,
@@ -1105,6 +1136,7 @@ impl Store {
                     i64::from(runtime.run_as_gid),
                     i64::try_from(runtime.environment_epoch)
                         .map_err(|_| StoreError::Invariant("epoch runtime invalide"))?,
+                    &runtime.topology_digest,
                     runtime.container_id.as_deref(),
                 ],
             )
@@ -1174,8 +1206,8 @@ impl Store {
                  SET runtime_state = ?1, runtime_last_reason = ?2, policy_id = ?3, policy_version = ?4,
                      policy_digest = ?5, image_reference = ?6, resolved_image_id = ?7,
                      run_as_uid = ?8, run_as_gid = ?9, environment_epoch = ?10,
-                     container_id = ?11, updated_at = ?12
-                 WHERE project_id = ?13",
+                     topology_digest = ?11, container_id = ?12, updated_at = ?13
+                 WHERE project_id = ?14",
                 params![
                     project_environment_state_name(runtime.state),
                     runtime.last_reason.as_deref(),
@@ -1187,6 +1219,7 @@ impl Store {
                     i64::from(runtime.run_as_uid),
                     i64::from(runtime.run_as_gid),
                     environment_epoch,
+                    &runtime.topology_digest,
                     runtime.container_id.as_deref(),
                     observed_at,
                     project_id,
@@ -1251,7 +1284,7 @@ impl Store {
                  updated_at = ?2, last_reason = NULL, runtime_state = NULL,
                  policy_id = NULL, policy_version = NULL, policy_digest = NULL,
                  image_reference = NULL, resolved_image_id = NULL, run_as_uid = NULL,
-                 run_as_gid = NULL, environment_epoch = 0, container_id = NULL
+                 run_as_gid = NULL, environment_epoch = 0, topology_digest = 'sha256:legacy', container_id = NULL
              WHERE project_id = ?3",
             params![generation as i64, observed_at, project_id],
         )
@@ -1322,8 +1355,9 @@ impl Store {
                  last_reason = NULL, runtime_state = ?3, runtime_last_reason = ?4,
                  policy_id = ?5, policy_version = ?6, policy_digest = ?7,
                  image_reference = ?8, resolved_image_id = ?9, run_as_uid = ?10,
-                 run_as_gid = ?11, environment_epoch = ?12, container_id = ?13
-             WHERE project_id = ?14",
+                 run_as_gid = ?11, environment_epoch = ?12, topology_digest = ?13,
+                 container_id = ?14
+             WHERE project_id = ?15",
             params![
                 generation as i64,
                 observed_at,
@@ -1339,6 +1373,7 @@ impl Store {
                 i64::from(runtime.run_as_gid),
                 i64::try_from(runtime.environment_epoch)
                     .map_err(|_| StoreError::Invariant("epoch runtime invalide"))?,
+                &runtime.topology_digest,
                 runtime.container_id.as_deref(),
                 project_id,
             ],
@@ -1375,6 +1410,269 @@ impl Store {
         .map_err(StoreError::Sqlite)?;
         tx.commit().map_err(StoreError::Sqlite)?;
         Ok(activated)
+    }
+
+    /// Déclare l'unique projet système Bridget. Cette transition ne modifie ni
+    /// le backend ni la racine de la liaison : la politique expert distincte
+    /// reste nécessaire avant tout montage écrivable.
+    pub fn declare_bridget_system_project(
+        &mut self,
+        project_id: &str,
+        observed_at: i64,
+    ) -> Result<(), StoreError> {
+        if project_id.trim().is_empty() || observed_at < 0 {
+            return Err(StoreError::Invariant("projet système invalide"));
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sqlite)?;
+        let binding = project_binding_for_project(&tx, project_id)?
+            .ok_or(StoreError::Invariant("liaison projet système absente"))?;
+        if binding.state != ProjectBindingState::Active {
+            return Err(StoreError::Invariant("liaison projet système non active"));
+        }
+        let existing = tx
+            .query_row(
+                "SELECT project_id FROM project_system_roles WHERE singleton = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(StoreError::Sqlite)?;
+        match existing {
+            Some(existing) if existing == project_id => {}
+            Some(_) => return Err(StoreError::Invariant("projet système déjà déclaré")),
+            None => {
+                tx.execute(
+                    "INSERT INTO project_system_roles (singleton, project_id, declared_at)
+                     VALUES (1, ?1, ?2)",
+                    params![project_id, observed_at],
+                )
+                .map_err(StoreError::Sqlite)?;
+            }
+        }
+        tx.commit().map_err(StoreError::Sqlite)?;
+        Ok(())
+    }
+
+    pub fn project_role(&self, project_id: &str) -> Result<ProjectRole, StoreError> {
+        project_role_for_project(&self.conn, project_id)
+    }
+
+    /// L'absence de ligne est volontairement projetée en `disabled` : une
+    /// installation antérieure ne reçoit jamais des mounts inscriptibles lors
+    /// de sa première migration.
+    pub fn dogfooding_bridget_state(
+        &self,
+        project_id: &str,
+        binding_generation: u64,
+    ) -> Result<DogfoodingBridgetState, StoreError> {
+        if project_role_for_project(&self.conn, project_id)? != ProjectRole::BridgetSystem {
+            return Err(StoreError::Invariant("réglage réservé au projet système"));
+        }
+        let persisted = self
+            .conn
+            .query_row(
+                "SELECT project_id, binding_generation, setting_generation, mode
+                 FROM project_system_dogfooding WHERE singleton = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(StoreError::Sqlite)?;
+        match persisted {
+            None => Ok(DogfoodingBridgetState {
+                project_id: project_id.to_string(),
+                binding_generation,
+                setting_generation: 1,
+                mode: DogfoodingBridgetMode::Disabled,
+            }),
+            Some((stored_project, stored_binding, setting_generation, mode))
+                if stored_project == project_id
+                    && stored_binding >= 1
+                    && setting_generation >= 1 =>
+            {
+                let mode = match mode.as_str() {
+                    "disabled" => DogfoodingBridgetMode::Disabled,
+                    "enabled" => DogfoodingBridgetMode::Enabled,
+                    _ => return Err(StoreError::Invariant("mode dogfooding inconnu")),
+                };
+                Ok(DogfoodingBridgetState {
+                    project_id: stored_project,
+                    binding_generation: stored_binding as u64,
+                    setting_generation: setting_generation as u64,
+                    mode,
+                })
+            }
+            Some(_) => Err(StoreError::Invariant("réglage dogfooding incohérent")),
+        }
+    }
+
+    /// Persiste uniquement une transition déjà attestée par le daemon. La
+    /// comparaison de générations maintient l'apply idempotent et empêche une
+    /// publication tardive après une recréation concurrente.
+    pub fn apply_dogfooding_bridget_state(
+        &mut self,
+        previous: &DogfoodingBridgetState,
+        next: &DogfoodingBridgetState,
+        observed_at: i64,
+    ) -> Result<(), StoreError> {
+        if observed_at < 0
+            || previous.project_id != next.project_id
+            || previous.binding_generation != next.binding_generation
+            || next.setting_generation < previous.setting_generation
+        {
+            return Err(StoreError::Invariant("transition dogfooding invalide"));
+        }
+        let current =
+            self.dogfooding_bridget_state(&previous.project_id, previous.binding_generation)?;
+        if current != *previous {
+            return Err(StoreError::Invariant("transition dogfooding obsolète"));
+        }
+        let mode = match next.mode {
+            DogfoodingBridgetMode::Disabled => "disabled",
+            DogfoodingBridgetMode::Enabled => "enabled",
+        };
+        self.conn
+            .execute(
+                "INSERT INTO project_system_dogfooding
+                 (singleton, project_id, binding_generation, setting_generation, mode, updated_at)
+                 VALUES (1, ?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(singleton) DO UPDATE SET
+                   project_id = excluded.project_id,
+                   binding_generation = excluded.binding_generation,
+                   setting_generation = excluded.setting_generation,
+                   mode = excluded.mode,
+                   updated_at = excluded.updated_at",
+                params![
+                    next.project_id,
+                    next.binding_generation as i64,
+                    next.setting_generation as i64,
+                    mode,
+                    observed_at
+                ],
+            )
+            .map_err(StoreError::Sqlite)?;
+        Ok(())
+    }
+
+    /// Réserve un linked worktree déjà attesté par le daemon. La persistance
+    /// ne crée jamais de worktree et ne permet jamais le checkout principal.
+    pub fn acquire_system_worktree_lease(
+        &mut self,
+        project_id: &str,
+        agent_id: &str,
+        canonical_worktree: &str,
+        binding_generation: u64,
+        observed_at: i64,
+    ) -> Result<(), StoreError> {
+        if project_id.trim().is_empty()
+            || agent_id.trim().is_empty()
+            || !Path::new(canonical_worktree).is_absolute()
+            || binding_generation == 0
+            || observed_at < 0
+        {
+            return Err(StoreError::Invariant("lease worktree invalide"));
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sqlite)?;
+        if project_role_for_project(&tx, project_id)? != ProjectRole::BridgetSystem {
+            return Err(StoreError::Invariant("lease reservee au projet système"));
+        }
+        let binding = project_binding_for_project(&tx, project_id)?
+            .ok_or(StoreError::Invariant("liaison projet système absente"))?;
+        if binding.generation != binding_generation
+            || binding.canonical_root == canonical_worktree
+            || binding.state != ProjectBindingState::Active
+        {
+            return Err(StoreError::Invariant(
+                "worktree ou génération non admissible",
+            ));
+        }
+        let existing = tx
+            .query_row(
+                "SELECT project_id, agent_id, binding_generation
+                 FROM project_system_worktree_leases WHERE canonical_worktree = ?1",
+                [canonical_worktree],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(StoreError::Sqlite)?;
+        match existing {
+            Some((existing_project, existing_agent, existing_generation))
+                if existing_project == project_id
+                    && existing_agent == agent_id
+                    && existing_generation == binding_generation as i64 => {}
+            Some(_) => return Err(StoreError::Invariant("worktree déjà attribué")),
+            None => {
+                tx.execute(
+                    "INSERT INTO project_system_worktree_leases
+                     (canonical_worktree, project_id, agent_id, binding_generation, acquired_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        canonical_worktree,
+                        project_id,
+                        agent_id,
+                        binding_generation as i64,
+                        observed_at
+                    ],
+                )
+                .map_err(StoreError::Sqlite)?;
+            }
+        }
+        tx.commit().map_err(StoreError::Sqlite)?;
+        Ok(())
+    }
+
+    pub fn release_system_worktree_lease(
+        &mut self,
+        project_id: &str,
+        agent_id: &str,
+        canonical_worktree: &str,
+    ) -> Result<bool, StoreError> {
+        let changed = self
+            .conn
+            .execute(
+                "DELETE FROM project_system_worktree_leases
+                 WHERE canonical_worktree = ?1 AND project_id = ?2 AND agent_id = ?3",
+                params![canonical_worktree, project_id, agent_id],
+            )
+            .map_err(StoreError::Sqlite)?;
+        Ok(changed == 1)
+    }
+
+    /// Liste bornée des worktrees actuellement attribués au projet système.
+    /// Le daemon l'utilise pour calculer une topologie de mounts complète avant
+    /// une recréation : il n'infère jamais un worktree depuis un chemin agent.
+    pub fn system_worktree_leases(&self, project_id: &str) -> Result<Vec<String>, StoreError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT canonical_worktree FROM project_system_worktree_leases
+                 WHERE project_id = ?1 ORDER BY canonical_worktree ASC LIMIT 64",
+            )
+            .map_err(StoreError::Sqlite)?;
+        statement
+            .query_map([project_id], |row| row.get::<_, String>(0))
+            .map_err(StoreError::Sqlite)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::Sqlite)
     }
     /// Résout le nom visible depuis la source d'autorité locale. L'absence est
     /// un fait possible tant qu'une migration n'a pas encore créé le profil.
@@ -1530,7 +1828,7 @@ impl Store {
                     "SELECT project_id, canonical_root, backend, state, generation,
                             bound_at, updated_at, last_reason, runtime_state, runtime_last_reason, policy_id,
                             policy_version, policy_digest, image_reference, resolved_image_id,
-                            run_as_uid, run_as_gid, environment_epoch, container_id
+                            run_as_uid, run_as_gid, environment_epoch, topology_digest, container_id
                      FROM project_bindings ORDER BY project_id ASC",
                 )
                 .map_err(StoreError::Sqlite)?;
@@ -3310,17 +3608,18 @@ fn ensure_project_bindings_runtime_schema(conn: &Connection) -> Result<(), Store
              run_as_uid INTEGER,
              run_as_gid INTEGER,
              environment_epoch INTEGER NOT NULL DEFAULT 0,
+             topology_digest TEXT NOT NULL DEFAULT 'sha256:legacy',
              container_id TEXT
          );
          INSERT INTO project_bindings (
              project_id, canonical_root, backend, state, generation, bound_at,
              updated_at, last_reason, runtime_state, runtime_last_reason, policy_id, policy_version,
              policy_digest, image_reference, resolved_image_id, run_as_uid,
-             run_as_gid, environment_epoch, container_id
+             run_as_gid, environment_epoch, topology_digest, container_id
          )
          SELECT project_id, canonical_root, \x27host\x27, state, generation, bound_at,
                 updated_at, last_reason, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-                NULL, NULL, 0, NULL
+                NULL, NULL, 0, 'sha256:legacy', NULL
          FROM project_bindings_065;
          DROP TABLE project_bindings_065;
          CREATE UNIQUE INDEX idx_project_bindings_live_root
@@ -3333,6 +3632,13 @@ fn ensure_project_bindings_runtime_schema(conn: &Connection) -> Result<(), Store
     if !columns.iter().any(|column| column == "runtime_last_reason") {
         conn.execute(
             "ALTER TABLE project_bindings ADD COLUMN runtime_last_reason TEXT",
+            [],
+        )
+        .map_err(StoreError::Sqlite)?;
+    }
+    if !columns.iter().any(|column| column == "topology_digest") {
+        conn.execute(
+            "ALTER TABLE project_bindings ADD COLUMN topology_digest TEXT NOT NULL DEFAULT 'sha256:legacy'",
             [],
         )
         .map_err(StoreError::Sqlite)?;
@@ -3704,6 +4010,7 @@ struct StoredProjectBinding {
     run_as_uid: Option<i64>,
     run_as_gid: Option<i64>,
     environment_epoch: i64,
+    topology_digest: String,
     container_id: Option<String>,
 }
 
@@ -3727,7 +4034,8 @@ fn project_binding_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredP
         run_as_uid: row.get(15)?,
         run_as_gid: row.get(16)?,
         environment_epoch: row.get(17)?,
-        container_id: row.get(18)?,
+        topology_digest: row.get(18)?,
+        container_id: row.get(19)?,
     })
 }
 
@@ -3771,6 +4079,7 @@ fn decode_project_binding(row: StoredProjectBinding) -> Result<ProjectBinding, S
                 || row.run_as_uid.is_some()
                 || row.run_as_gid.is_some()
                 || row.environment_epoch != 0
+                || row.topology_digest != "sha256:legacy"
                 || row.container_id.is_some()
             {
                 return Err(StoreError::Invariant("runtime docker sur backend host"));
@@ -3820,6 +4129,7 @@ fn decode_project_binding(row: StoredProjectBinding) -> Result<ProjectBinding, S
                     run_as_uid,
                     run_as_gid,
                     environment_epoch,
+                    topology_digest: row.topology_digest,
                     container_id: row.container_id,
                     last_reason: row.runtime_last_reason,
                 }),
@@ -3858,7 +4168,7 @@ fn project_binding_for_project(
             "SELECT project_id, canonical_root, backend, state, generation,
                     bound_at, updated_at, last_reason, runtime_state, runtime_last_reason, policy_id,
                     policy_version, policy_digest, image_reference, resolved_image_id,
-                    run_as_uid, run_as_gid, environment_epoch, container_id
+                    run_as_uid, run_as_gid, environment_epoch, topology_digest, container_id
              FROM project_bindings WHERE project_id = ?1",
             [project_id],
             project_binding_from_row,
@@ -3877,7 +4187,7 @@ fn project_binding_for_root(
             "SELECT project_id, canonical_root, backend, state, generation,
                     bound_at, updated_at, last_reason, runtime_state, runtime_last_reason, policy_id,
                     policy_version, policy_digest, image_reference, resolved_image_id,
-                    run_as_uid, run_as_gid, environment_epoch, container_id
+                    run_as_uid, run_as_gid, environment_epoch, topology_digest, container_id
              FROM project_bindings
              WHERE canonical_root = ?1 AND state != 'disabled'",
             [canonical_root],
@@ -4056,6 +4366,26 @@ fn project_round_failure(
     }
 }
 
+fn project_role_for_project(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<ProjectRole, StoreError> {
+    let declared = conn
+        .query_row(
+            "SELECT 1 FROM project_system_roles WHERE singleton = 1 AND project_id = ?1",
+            [project_id],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(StoreError::Sqlite)?
+        .is_some();
+    Ok(if declared {
+        ProjectRole::BridgetSystem
+    } else {
+        ProjectRole::Standard
+    })
+}
+
 fn project_binding_projection(
     conn: &Connection,
     binding: &ProjectBinding,
@@ -4074,6 +4404,7 @@ fn project_binding_projection(
         state,
         binding_generation: Some(binding.generation),
         backend: Some(binding.backend),
+        role: project_role_for_project(conn, &binding.project_id)?,
         runtime_policy: binding
             .runtime
             .as_ref()
@@ -5613,6 +5944,7 @@ mod tests {
             run_as_uid: 1002,
             run_as_gid: 1002,
             environment_epoch: 3,
+            topology_digest: "sha256:fixture".to_string(),
             container_id: Some("container-opaque".to_string()),
             last_reason: None,
         };
@@ -5683,6 +6015,7 @@ mod tests {
             run_as_uid: 1002,
             run_as_gid: 1002,
             environment_epoch: 1,
+            topology_digest: "sha256:fixture".to_string(),
             container_id: Some("d".repeat(64)),
             last_reason: None,
         };
@@ -5710,6 +6043,141 @@ mod tests {
                 ProjectRegistryRefusal::RebindRequired
             ))
         ));
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn spec_086_un_seul_projet_systeme_et_lease_worktree_exclusive() {
+        let path =
+            std::env::temp_dir().join(format!("bridget-project-system-role-{}.db", Uuid::new_v4()));
+        let mut store = Store::open(&path).unwrap();
+        for project_id in ["bridget-system", "ordinary"] {
+            store
+                .insert_project_binding(
+                    &ProjectBinding::active(
+                        project_id.to_string(),
+                        format!("/srv/projects/{project_id}"),
+                        ProjectBackend::Host,
+                        10,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            store.project_role("ordinary").unwrap(),
+            ProjectRole::Standard
+        );
+        store
+            .declare_bridget_system_project("bridget-system", 11)
+            .unwrap();
+        assert_eq!(
+            store.project_role("bridget-system").unwrap(),
+            ProjectRole::BridgetSystem
+        );
+        let disabled = store.dogfooding_bridget_state("bridget-system", 1).unwrap();
+        assert_eq!(disabled.mode, DogfoodingBridgetMode::Disabled);
+        let enabled = DogfoodingBridgetState {
+            mode: DogfoodingBridgetMode::Enabled,
+            setting_generation: 2,
+            ..disabled.clone()
+        };
+        store
+            .apply_dogfooding_bridget_state(&disabled, &enabled, 12)
+            .unwrap();
+        assert_eq!(
+            store.dogfooding_bridget_state("bridget-system", 1).unwrap(),
+            enabled
+        );
+        assert!(
+            store
+                .apply_dogfooding_bridget_state(&disabled, &enabled, 13)
+                .is_err()
+        );
+        assert!(
+            store
+                .declare_bridget_system_project("ordinary", 12)
+                .is_err()
+        );
+        assert!(
+            store
+                .acquire_system_worktree_lease(
+                    "ordinary",
+                    "agent-a",
+                    "/srv/worktrees/ordinary-a",
+                    1,
+                    13,
+                )
+                .is_err()
+        );
+        store
+            .acquire_system_worktree_lease(
+                "bridget-system",
+                "agent-a",
+                "/srv/worktrees/bridget-a",
+                1,
+                13,
+            )
+            .unwrap();
+        store
+            .acquire_system_worktree_lease(
+                "bridget-system",
+                "agent-a",
+                "/srv/worktrees/bridget-a",
+                1,
+                14,
+            )
+            .unwrap();
+        assert_eq!(
+            store.system_worktree_leases("bridget-system").unwrap(),
+            vec!["/srv/worktrees/bridget-a".to_string()]
+        );
+        assert!(
+            store
+                .acquire_system_worktree_lease(
+                    "bridget-system",
+                    "agent-b",
+                    "/srv/worktrees/bridget-a",
+                    1,
+                    15,
+                )
+                .is_err()
+        );
+        store
+            .acquire_system_worktree_lease(
+                "bridget-system",
+                "agent-b",
+                "/srv/worktrees/bridget-b",
+                1,
+                16,
+            )
+            .unwrap();
+        assert_eq!(
+            store.system_worktree_leases("bridget-system").unwrap(),
+            vec![
+                "/srv/worktrees/bridget-a".to_string(),
+                "/srv/worktrees/bridget-b".to_string()
+            ]
+        );
+        assert!(
+            store
+                .release_system_worktree_lease(
+                    "bridget-system",
+                    "agent-a",
+                    "/srv/worktrees/bridget-a",
+                )
+                .unwrap()
+        );
+        assert!(
+            !store
+                .release_system_worktree_lease(
+                    "bridget-system",
+                    "agent-a",
+                    "/srv/worktrees/bridget-a",
+                )
+                .unwrap()
+        );
         drop(store);
         let _ = std::fs::remove_file(path);
     }
@@ -6039,6 +6507,7 @@ mod tests {
             run_as_uid: 1002,
             run_as_gid: 1002,
             environment_epoch: 1,
+            topology_digest: "sha256:fixture".to_string(),
             container_id: None,
             last_reason: None,
         };
@@ -6099,6 +6568,7 @@ mod tests {
             run_as_uid: 1002,
             run_as_gid: 1002,
             environment_epoch: 3,
+            topology_digest: "sha256:fixture".to_string(),
             container_id: Some("d".repeat(64)),
             last_reason: None,
         };
@@ -6279,6 +6749,7 @@ mod tests {
             run_as_uid: 1002,
             run_as_gid: 1002,
             environment_epoch: 4,
+            topology_digest: "sha256:fixture".to_string(),
             container_id: None,
             last_reason: None,
         };

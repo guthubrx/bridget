@@ -9,7 +9,7 @@ use crate::project_policy::{
     ProjectLocation, ProjectLocationCatalogReceipt, ProjectLocationCatalogReplacementPreview,
     ProjectRootPolicy, ProjectRootPolicyReceipt, ProjectRootPolicyReplacementPreview,
 };
-use bridget_transport::protocol::ProjectRegistryRefusal;
+use bridget_transport::protocol::{ProjectBackend, ProjectRegistryRefusal};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -177,6 +177,22 @@ pub fn server_setting_descriptors(policy_available: bool) -> Vec<SettingDescript
     ]
 }
 
+/// Descripteur isolé de la surface experte. Il ne se mélange pas aux réglages
+/// ordinaires et reste lecture seule tant qu'aucun projet système attesté n'est
+/// disponible sur ce serveur.
+pub fn dogfooding_bridget_descriptor(system_available: bool) -> SettingDescriptor {
+    SettingDescriptor {
+        key: "dogfooding.bridget",
+        scope: "server",
+        access: if system_available {
+            SettingAccess::Writable
+        } else {
+            SettingAccess::ReadOnly
+        },
+        summary: "Mode expert Bridget : édition et commits dans un worktree attribué; jamais merge, push, installation, redémarrage ou déploiement automatiques.",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectRootsChange {
     pub command_id: String,
@@ -269,6 +285,86 @@ pub enum ControlSettingsRefusal {
     RuntimeCapabilityIncomplete,
 }
 
+/// Valeur fermée du réglage expert. Le défaut explicite évite qu'une migration
+/// ou une absence de ligne transforme un ancien serveur en serveur inscriptible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DogfoodingBridgetMode {
+    Disabled,
+    Enabled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DogfoodingBridgetState {
+    pub project_id: String,
+    pub binding_generation: u64,
+    pub setting_generation: u64,
+    pub mode: DogfoodingBridgetMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DogfoodingBridgetChange {
+    pub command_id: String,
+    pub expected_setting_generation: u64,
+    pub expected_binding_generation: u64,
+    pub requested_mode: DogfoodingBridgetMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DogfoodingBridgetPreview {
+    pub current: DogfoodingBridgetState,
+    pub next: DogfoodingBridgetState,
+    pub requires_recreate: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DogfoodingBridgetRefusal {
+    InvalidRequest,
+    GenerationMismatch,
+    BindingGenerationMismatch,
+    DockerRequired,
+    ActiveSystemAgent,
+}
+
+/// Prépare un basculement sans muter le réglage. Le daemon doit effectuer le
+/// stop/recreate attesté avant de persister `next` : l'échec conserve donc
+/// mécaniquement la valeur confirmée `current`.
+pub fn preview_dogfooding_bridget(
+    current: &DogfoodingBridgetState,
+    change: &DogfoodingBridgetChange,
+    backend: ProjectBackend,
+    active_system_agent: bool,
+) -> Result<DogfoodingBridgetPreview, DogfoodingBridgetRefusal> {
+    if !valid_command_id(&change.command_id)
+        || current.project_id.trim().is_empty()
+        || current.binding_generation == 0
+        || current.setting_generation == 0
+    {
+        return Err(DogfoodingBridgetRefusal::InvalidRequest);
+    }
+    if change.expected_setting_generation != current.setting_generation {
+        return Err(DogfoodingBridgetRefusal::GenerationMismatch);
+    }
+    if change.expected_binding_generation != current.binding_generation {
+        return Err(DogfoodingBridgetRefusal::BindingGenerationMismatch);
+    }
+    if backend != ProjectBackend::Docker {
+        return Err(DogfoodingBridgetRefusal::DockerRequired);
+    }
+    if active_system_agent && change.requested_mode != current.mode {
+        return Err(DogfoodingBridgetRefusal::ActiveSystemAgent);
+    }
+    let mut next = current.clone();
+    if next.mode != change.requested_mode {
+        next.mode = change.requested_mode;
+        next.setting_generation = next.setting_generation.saturating_add(1);
+    }
+    Ok(DogfoodingBridgetPreview {
+        requires_recreate: next.mode != current.mode,
+        current: current.clone(),
+        next,
+    })
+}
+
 pub fn preview_project_roots(
     policy_path: Option<&Path>,
     change: &ProjectRootsChange,
@@ -315,13 +411,10 @@ pub fn apply_project_roots(
 }
 
 fn validate_change(change: &ProjectRootsChange) -> Result<(), ControlSettingsRefusal> {
-    let id = change.command_id.as_bytes();
-    let valid_id = !id.is_empty()
-        && id.len() <= 160
-        && id
-            .iter()
-            .all(|byte| (*byte).is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_'));
-    if valid_id && change.expected_generation > 0 && !change.allowed_project_roots.is_empty() {
+    if valid_command_id(&change.command_id)
+        && change.expected_generation > 0
+        && !change.allowed_project_roots.is_empty()
+    {
         Ok(())
     } else {
         Err(ControlSettingsRefusal::InvalidRequest)
@@ -342,6 +435,15 @@ fn validate_catalog_change(
     } else {
         Err(ControlSettingsRefusal::InvalidRequest)
     }
+}
+
+fn valid_command_id(value: &str) -> bool {
+    let id = value.as_bytes();
+    !id.is_empty()
+        && id.len() <= 160
+        && id
+            .iter()
+            .all(|byte| (*byte).is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_'))
 }
 
 fn map_policy_error(error: ProjectRegistryRefusal) -> ControlSettingsRefusal {
@@ -768,5 +870,56 @@ mod tests {
             });
             self
         }
+    }
+
+    #[test]
+    fn spec_086_dogfooding_est_desactive_par_defaut_et_refuse_les_transitions_non_admissibles() {
+        let current = DogfoodingBridgetState {
+            project_id: "bridget-system".to_string(),
+            binding_generation: 4,
+            setting_generation: 1,
+            mode: DogfoodingBridgetMode::Disabled,
+        };
+        let change = DogfoodingBridgetChange {
+            command_id: "dogfooding-086-enable".to_string(),
+            expected_setting_generation: 1,
+            expected_binding_generation: 4,
+            requested_mode: DogfoodingBridgetMode::Enabled,
+        };
+        let preview =
+            preview_dogfooding_bridget(&current, &change, ProjectBackend::Docker, false).unwrap();
+        assert!(preview.requires_recreate);
+        assert_eq!(preview.next.setting_generation, 2);
+        assert_eq!(preview.next.mode, DogfoodingBridgetMode::Enabled);
+        assert_eq!(current.mode, DogfoodingBridgetMode::Disabled);
+        assert_eq!(
+            dogfooding_bridget_descriptor(false).access,
+            SettingAccess::ReadOnly
+        );
+        assert!(
+            dogfooding_bridget_descriptor(true)
+                .summary
+                .contains("jamais merge")
+        );
+        assert_eq!(
+            preview_dogfooding_bridget(&current, &change, ProjectBackend::Host, false),
+            Err(DogfoodingBridgetRefusal::DockerRequired)
+        );
+        assert_eq!(
+            preview_dogfooding_bridget(&current, &change, ProjectBackend::Docker, true),
+            Err(DogfoodingBridgetRefusal::ActiveSystemAgent)
+        );
+        let mut stale = change.clone();
+        stale.expected_setting_generation = 2;
+        assert_eq!(
+            preview_dogfooding_bridget(&current, &stale, ProjectBackend::Docker, false),
+            Err(DogfoodingBridgetRefusal::GenerationMismatch)
+        );
+        let mut stale_binding = change;
+        stale_binding.expected_binding_generation = 5;
+        assert_eq!(
+            preview_dogfooding_bridget(&current, &stale_binding, ProjectBackend::Docker, false),
+            Err(DogfoodingBridgetRefusal::BindingGenerationMismatch)
+        );
     }
 }
