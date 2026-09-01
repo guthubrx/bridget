@@ -323,8 +323,8 @@ mod tests {
         // Montre POURQUOI le parse source est abandonné : même littéraux via
         // `.map` → le parse forme reste vert ; seul le runtime distingue une
         // transformation qui change le sens.
-        let equivalent = r#"const JOURNAL_ACT_KINDS = new Set(["command","file","tool","tool_call","plan","approval"].map((k) => k));"#;
-        let mutated_sense = r#"const JOURNAL_ACT_KINDS = new Set(["command","file","tool","tool_call","plan","approval"].map((k) => k === "tool" ? "intent" : k));"#;
+        let equivalent = r#"const JOURNAL_ACT_KINDS = new Set(["command","file","tool","artifact","tool_call","plan","approval"].map((k) => k));"#;
+        let mutated_sense = r#"const JOURNAL_ACT_KINDS = new Set(["command","file","tool","artifact","tool_call","plan","approval"].map((k) => k === "tool" ? "intent" : k));"#;
         fn parse_form(source: &str) -> BTreeSet<String> {
             let marker = "const JOURNAL_ACT_KINDS = new Set([";
             let start = source.find(marker).expect("marker");
@@ -357,11 +357,18 @@ mod tests {
         );
         // Le runtime, lui, verrait "intent" à la place de "tool". Contrôle
         // positif : l'oracle runtime du TEMOIN principal compare des Sets réels.
-        let runtime_mutated: BTreeSet<String> =
-            ["command", "file", "intent", "tool_call", "plan", "approval"]
-                .into_iter()
-                .map(str::to_string)
-                .collect();
+        let runtime_mutated: BTreeSet<String> = [
+            "command",
+            "file",
+            "intent",
+            "artifact",
+            "tool_call",
+            "plan",
+            "approval",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
         assert_ne!(
             runtime_mutated, expected,
             "runtime distingue la mutation de sens que le parse rate"

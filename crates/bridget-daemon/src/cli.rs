@@ -3029,10 +3029,14 @@ struct ProjectRuntimeCliCommand {
     operation: ProjectRuntimeOperation,
     project_id: String,
     command_id: String,
+    expected_binding_generation: Option<u64>,
+    policy_id: Option<String>,
+    policy_version: Option<u64>,
 }
 
 fn parse_project_runtime_args(args: &[String]) -> Result<ProjectRuntimeCliCommand, String> {
     let operation = match args.first().map(String::as_str) {
+        Some("activate-docker") => ProjectRuntimeOperation::ActivateDocker,
         Some("prepare") => ProjectRuntimeOperation::Prepare,
         Some("status") => ProjectRuntimeOperation::Status,
         Some("stop") => ProjectRuntimeOperation::Stop,
@@ -3041,13 +3045,16 @@ fn parse_project_runtime_args(args: &[String]) -> Result<ProjectRuntimeCliComman
         Some("switch-backend") => ProjectRuntimeOperation::SwitchBackend,
         Some(other) => {
             return Err(format!(
-                "project-runtime: opération inconnue: {other}; attendu prepare, status, stop, remove, recreate ou switch-backend"
+                "project-runtime: opération inconnue: {other}; attendu activate-docker, prepare, status, stop, remove, recreate ou switch-backend"
             ));
         }
         None => return Err("project-runtime: opération manquante".to_string()),
     };
     let mut project_id = None;
     let mut command_id = None;
+    let mut expected_binding_generation = None;
+    let mut policy_id = None;
+    let mut policy_version = None;
     let mut index = 1;
     while index < args.len() {
         match args[index].as_str() {
@@ -3071,16 +3078,61 @@ fn parse_project_runtime_args(args: &[String]) -> Result<ProjectRuntimeCliComman
                     return Err("project-runtime: --command-id requiert une valeur".to_string());
                 }
             }
+            "--expected-generation" => {
+                index += 1;
+                expected_binding_generation = args
+                    .get(index)
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .filter(|value| *value > 0);
+                if expected_binding_generation.is_none() {
+                    return Err(
+                        "project-runtime: --expected-generation requiert un entier positif"
+                            .to_string(),
+                    );
+                }
+            }
+            "--policy" => {
+                index += 1;
+                policy_id = args.get(index).cloned();
+                if policy_id
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    return Err("project-runtime: --policy requiert un identifiant".to_string());
+                }
+            }
+            "--policy-version" => {
+                index += 1;
+                policy_version = args
+                    .get(index)
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .filter(|value| *value > 0);
+                if policy_version.is_none() {
+                    return Err(
+                        "project-runtime: --policy-version requiert un entier positif".to_string(),
+                    );
+                }
+            }
             option => return Err(unknown_argument("project-runtime", option)),
         }
         index += 1;
     }
     let project_id = project_id
         .ok_or_else(|| "project-runtime: --project <identifiant> est obligatoire".to_string())?;
+    if operation == ProjectRuntimeOperation::ActivateDocker
+        && (expected_binding_generation.is_none()
+            || policy_id.is_none()
+            || policy_version.is_none())
+    {
+        return Err("project-runtime: activate-docker exige --expected-generation, --policy et --policy-version".to_string());
+    }
     Ok(ProjectRuntimeCliCommand {
         operation,
         project_id,
         command_id: command_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        expected_binding_generation,
+        policy_id,
+        policy_version,
     })
 }
 
@@ -3088,7 +3140,7 @@ fn cmd_project_runtime(args: &[String]) {
     let command = parse_project_runtime_args(args).unwrap_or_else(|error| {
         eprintln!("{error}");
         eprintln!(
-            "usage: bridget project-runtime <prepare|status|stop|remove|recreate|switch-backend> --project <identifiant> [--command-id <id>]"
+            "usage: bridget project-runtime <activate-docker|prepare|status|stop|remove|recreate|switch-backend> --project <identifiant> [--command-id <id>] [--expected-generation <n> --policy <id> --policy-version <n>]"
         );
         std::process::exit(2);
     });
@@ -3100,6 +3152,9 @@ fn cmd_project_runtime(args: &[String]) {
         deadline_at: issued_at.saturating_add(60),
         operation: command.operation,
         project_id: command.project_id,
+        expected_binding_generation: command.expected_binding_generation,
+        policy_id: command.policy_id,
+        policy_version: command.policy_version,
         profile: None,
     };
     match send_control_to_daemon(WrapperToDaemon::ProjectRuntimeRequest { request }) {
@@ -7137,6 +7192,29 @@ mod depot_tests {
         .unwrap();
         assert_eq!(stable.command_id, "stable");
 
+        let activation = parse_project_runtime_args(&argv(&[
+            "activate-docker",
+            "--project",
+            "project-085",
+            "--expected-generation",
+            "1",
+            "--policy",
+            "production-linux-amd64",
+            "--policy-version",
+            "1",
+        ]))
+        .unwrap();
+        assert_eq!(
+            activation.operation,
+            ProjectRuntimeOperation::ActivateDocker
+        );
+        assert_eq!(activation.expected_binding_generation, Some(1));
+        assert_eq!(
+            activation.policy_id.as_deref(),
+            Some("production-linux-amd64")
+        );
+        assert_eq!(activation.policy_version, Some(1));
+
         for (operation, expected) in [
             ("stop", ProjectRuntimeOperation::Stop),
             ("remove", ProjectRuntimeOperation::Remove),
@@ -7152,6 +7230,7 @@ mod depot_tests {
             argv(&["unknown", "--project", "project-066"]),
             argv(&["prepare"]),
             argv(&["prepare", "--project", "project-066", "--unexpected"]),
+            argv(&["activate-docker", "--project", "project-085"]),
         ] {
             assert!(parse_project_runtime_args(&invalid).is_err());
         }

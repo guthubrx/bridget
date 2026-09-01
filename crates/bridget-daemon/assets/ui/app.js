@@ -341,6 +341,31 @@
         assert.doesNotMatch(roundSource, /(claude|codex|cursor|gemini)/i);
       });
 
+      test("spec_085_actions_runtime_sont_fermees_et_attendent_le_recu", () => {
+        const host = { backend: "host", binding_generation: 2, state: "host" };
+        const dockerDefault = {
+          default_backend: "docker",
+          default_policy_id: "production-linux-amd64",
+          default_policy_version: 7,
+        };
+        assert.deepEqual(api.projectRuntimeActionEligibility(host, dockerDefault), {
+          activate: true, stop: false, remove: false, recreate: false, switchHost: false,
+        });
+        assert.equal(api.projectRuntimeActionEligibility(host, { default_backend: "host" }).activate, false);
+        assert.deepEqual(
+          api.projectRuntimeActionEligibility({ backend: "docker", binding_generation: 2, state: "stopped" }, null),
+          { activate: false, stop: false, remove: true, recreate: true, switchHost: true },
+        );
+        const source = fs.readFileSync(__filename, "utf8");
+        assert.match(source, /\/v1\/projects\/runtime\?project=/);
+        assert.match(source, /"activate_docker"/);
+        assert.match(source, /"switch_backend"/);
+        const runtimeMenuStart = source.lastIndexOf("const projectRuntimeMenu =");
+        const runtimeMenu = source.slice(runtimeMenuStart, source.indexOf("const openProjectContextMenu", runtimeMenuStart));
+        assert.match(runtimeMenu, /await refreshProjects\(\);\s*closeMenu\(\)/);
+        assert.doesNotMatch(runtimeMenu, /projects\s*=|runtime\.state\s*=/);
+      });
+
       test("apparence_agent_stable_et_etat_visuel_honnete", () => {
         assert.equal(api.agentAvatarShape("jc1"), api.agentAvatarShape("jc1"));
         assert.equal(api.agentAvatarShape("jc1", { jc1: { shape: "cloud" } }), "cloud");
@@ -7364,6 +7389,39 @@
     };
   }
 
+  // Les actions restent dérivées d'un état attesté par le daemon. Cette
+  // fonction ne change rien localement : le menu attend toujours la réponse HTTP
+  // puis relit la liste des projets.
+  function projectRuntimeActionEligibility(runtime, defaultExecution) {
+    if (!runtime || !Number.isInteger(runtime.binding_generation) || runtime.binding_generation <= 0) {
+      return { activate: false, stop: false, remove: false, recreate: false, switchHost: false };
+    }
+    if (runtime.backend === "host") {
+      const execution = defaultExecution && defaultExecution.default_backend === "docker"
+        ? defaultExecution
+        : null;
+      const activate = Boolean(
+        execution
+        && typeof execution.default_policy_id === "string"
+        && execution.default_policy_id
+        && Number.isInteger(execution.default_policy_version)
+        && execution.default_policy_version > 0,
+      );
+      return { activate, stop: false, remove: false, recreate: false, switchHost: false };
+    }
+    if (runtime.backend !== "docker") {
+      return { activate: false, stop: false, remove: false, recreate: false, switchHost: false };
+    }
+    const state = String(runtime.state || "");
+    return {
+      activate: false,
+      stop: state === "ready" || state === "running" || state === "recreate_required" || state === "degraded",
+      remove: state === "stopped" || state === "absent",
+      recreate: state === "ready" || state === "stopped" || state === "recreate_required" || state === "degraded",
+      switchHost: state === "absent" || state === "stopped",
+    };
+  }
+
   function buildProjectRoundMutation(project, commandId) {
     return {
       version: 1,
@@ -9380,6 +9438,92 @@
         nodes.sourceState.dataset.state = "error";
       });
     };
+    const projectRuntimeMenu = (project, closeMenu) => {
+      const section = make("section", "project-context-menu__runtime");
+      section.append(make("p", "project-context-menu__round-detail", "Environnement : lecture en cours…"));
+      const setError = (message) => {
+        section.replaceChildren(make("p", "project-context-menu__round-detail", message));
+      };
+      void Promise.all([
+        requestProject(`/v1/projects/runtime?project=${encodeURIComponent(project.project_id)}`),
+        requestProject("/v1/control/settings"),
+      ]).then(([runtime, control]) => {
+        const eligibility = projectRuntimeActionEligibility(runtime, control && control.execution);
+        const detail = make(
+          "p",
+          "project-context-menu__round-detail",
+          runtime.backend === "docker"
+            ? `Environnement : Docker · ${runtime.state}${runtime.policy_id ? ` · ${runtime.policy_id}@${runtime.policy_version}` : ""}`
+            : "Environnement : Host",
+        );
+        const actions = make("div", "project-context-menu__runtime-actions");
+        const addAction = (label, operation, enabled, extra = {}) => {
+          const action = make("button", "project-context-menu__item", label);
+          action.type = "button";
+          action.disabled = !enabled;
+          action.setAttribute("role", "menuitem");
+          action.addEventListener("click", () => {
+            if (!enabled) return;
+            const confirmation = operation === "activate_docker"
+              ? "Activer Docker pour ce projet avec la politique affichée ?"
+              : operation === "recreate"
+                ? "Recréer le conteneur de ce projet ? Le dossier et Git restent intacts."
+                : operation === "remove"
+              ? "Supprimer le conteneur de ce projet ? Le dossier et Git restent intacts."
+              : operation === "switch_backend"
+                ? "Revenir à Host ? Le conteneur sera retiré, le dossier et Git restent intacts."
+                : null;
+            if (confirmation && !windowRef.confirm(confirmation)) return;
+            action.disabled = true;
+            void requestProject("/v1/projects/runtime", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                version: 1,
+                command_id: `project-runtime-${operation}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                project_id: project.project_id,
+                operation,
+                expected_binding_generation: runtime.binding_generation,
+                ...extra,
+              }),
+            }).then(async () => {
+              await refreshProjects();
+              closeMenu();
+            }).catch((error) => {
+              action.disabled = false;
+              setError(error.message || "Action d’environnement refusée.");
+              nodes.sourceState.textContent = error.message || "Action d’environnement refusée.";
+              nodes.sourceState.dataset.state = "error";
+            });
+          });
+          actions.append(action);
+        };
+        if (runtime.backend === "host") {
+          const execution = control && control.execution;
+          addAction(
+            "Activer Docker",
+            "activate_docker",
+            eligibility.activate,
+            eligibility.activate ? {
+              policy_id: execution.default_policy_id,
+              policy_version: execution.default_policy_version,
+            } : {},
+          );
+          if (!eligibility.activate) {
+            detail.textContent += " · Docker indisponible ou non attesté";
+          }
+        } else {
+          addAction("Arrêter", "stop", eligibility.stop);
+          addAction("Recréer", "recreate", eligibility.recreate);
+          addAction("Supprimer le conteneur", "remove", eligibility.remove);
+          addAction("Revenir à Host", "switch_backend", eligibility.switchHost);
+        }
+        section.replaceChildren(detail, actions);
+      }).catch((error) => {
+        setError(error.message || "État d’environnement indisponible.");
+      });
+      return section;
+    };
     const openProjectContextMenu = (project, trigger, anchor) => {
       closeProjectContextMenu(false);
       const menu = make("div", "project-context-menu");
@@ -9457,6 +9601,8 @@
         heading,
         round,
         roundDetail,
+        make("div", "project-context-menu__separator"),
+        projectRuntimeMenu(project, () => closeProjectContextMenu(false)),
         make("div", "project-context-menu__separator"),
         customize,
         make("div", "project-context-menu__separator"),
@@ -9664,6 +9810,7 @@
           throw new Error(mode === "create"
             ? "Aucun espace de travail n’est configuré sur ce serveur. Ouvrez Réglages, puis Serveur."
             : "Aucun emplacement de projet n’est configuré sur ce serveur. Ouvrez Réglages, puis Serveur.");
+        const serverControl = await requestProject("/v1/control/settings");
         }
         const dialog = nodes.projectOnboardingOverlay;
         dialog.replaceChildren();
@@ -9743,6 +9890,24 @@
         } else {
           form.append(header, intro, locationField, rootField);
         }
+        const executionField = make("label", "project-onboarding-overlay__field", "Environnement d’exécution");
+        const executionControl = documentRef.createElement("select");
+        const configuredExecution = serverControl && serverControl.execution && typeof serverControl.execution === "object"
+          ? serverControl.execution
+          : { default_backend: "host" };
+        const serverChoice = documentRef.createElement("option");
+        serverChoice.value = "server";
+        const configuredPolicy = configuredExecution.default_policy_id && configuredExecution.default_policy_version
+          ? ` · politique ${configuredExecution.default_policy_id}@${configuredExecution.default_policy_version}`
+          : "";
+        serverChoice.textContent = `Défaut du serveur : ${configuredExecution.default_backend === "docker" ? "Docker" : "Host"}${configuredPolicy}`;
+        executionControl.append(serverChoice);
+        const hostChoice = documentRef.createElement("option");
+        hostChoice.value = "host";
+        hostChoice.textContent = "Host - ne pas utiliser Docker";
+        executionControl.append(hostChoice);
+        executionField.append(executionControl);
+        form.append(executionField);
         const status = make("p", "project-onboarding-overlay__status", "Choisissez le dossier, puis prévisualisez l’opération.");
         status.setAttribute("role", "status");
         const previewCard = make("div", "project-onboarding-overlay__preview");
@@ -9774,6 +9939,7 @@
         rootControl.addEventListener("input", clearPreview);
         locationControl.addEventListener("change", clearPreview);
         if (folderControl) folderControl.addEventListener("input", clearPreview);
+        executionControl.addEventListener("change", clearPreview);
         previewAction.addEventListener("click", async () => {
           const root = rootControl.value.trim();
           const folder = folderControl ? folderControl.value.trim() : null;
@@ -9797,12 +9963,16 @@
                 operation: mode,
                 root: mode === "import" ? root : undefined,
                 requested_name: mode === "create" ? folder : undefined,
+                backend: executionControl.value === "server" ? undefined : executionControl.value,
               }),
             });
             previewCard.replaceChildren(
               make("strong", null, preview.display_name),
               make("span", null, preview.canonical_path),
               make("span", null, `Git : ${preview.git === "absent" ? "absent" : preview.git}`),
+              make("span", null, preview.backend === "docker"
+                ? `Exécution : Docker · politique ${preview.policy_id}@${preview.policy_version}`
+                : "Exécution : Host"),
               gitLabel,
             );
             initializeGit.checked = Boolean(preview.git_initialization_proposed);
@@ -9843,6 +10013,7 @@
                 root: mode === "import" ? root : undefined,
                 requested_name: mode === "create" ? folder : undefined,
                 initialize_git: Boolean(initializeGit.checked),
+                backend: executionControl.value === "server" ? undefined : executionControl.value,
               }),
             });
             selectedProjectId = confirmed.project_id;
@@ -12104,6 +12275,7 @@
     controlCenterRouteForSearch,
     projectInitials,
     projectRoundView,
+    projectRuntimeActionEligibility,
     buildProjectRoundMutation,
     defaultProjectPresentation,
     normalizeProjectPresentation,

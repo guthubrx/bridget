@@ -104,6 +104,7 @@ pub enum RuntimeIssue {
     DockerOutputInvalid,
     ContainerAttestationInvalid,
     RuntimeUserIncompatible,
+    UnsupportedPlatform,
     RuntimeExecutableUnavailable,
     RuntimeLaunchInvalid(String),
 }
@@ -136,6 +137,7 @@ impl fmt::Display for RuntimeIssue {
             Self::DockerOutputInvalid => write!(formatter, "docker_output_invalid"),
             Self::ContainerAttestationInvalid => write!(formatter, "container_attestation_invalid"),
             Self::RuntimeUserIncompatible => write!(formatter, "runtime_user_incompatible"),
+            Self::UnsupportedPlatform => write!(formatter, "runtime_platform_unsupported"),
             Self::RuntimeExecutableUnavailable => {
                 write!(formatter, "runtime_executable_unavailable")
             }
@@ -344,6 +346,7 @@ pub struct ProjectRuntimePolicy {
 
 impl ProjectRuntimePolicyConfig {
     pub fn load(path: &Path) -> Result<Self, RuntimeIssue> {
+        ensure_supported_host_platform()?;
         validate_policy_file_permissions(path)?;
         let bytes = fs::read(path).map_err(|_| RuntimeIssue::PolicyUnavailable)?;
         let config: Self = serde_json::from_slice(&bytes)
@@ -417,6 +420,21 @@ impl ProjectRuntimePolicyConfig {
             digest: format!("sha256:{:x}", Sha256::digest(canonical)),
         })
     }
+}
+
+/// Le runtime de production est volontairement borné à l'image attestée Linux
+/// amd64. Les installations sur une autre plateforme gardent Host disponible,
+/// mais ne peuvent ni charger ni activer une politique Docker.
+fn ensure_supported_host_platform() -> Result<(), RuntimeIssue> {
+    if runtime_platform_supported(std::env::consts::OS, std::env::consts::ARCH) {
+        Ok(())
+    } else {
+        Err(RuntimeIssue::UnsupportedPlatform)
+    }
+}
+
+fn runtime_platform_supported(os: &str, architecture: &str) -> bool {
+    os == "linux" && matches!(architecture, "x86_64" | "amd64")
 }
 
 impl ProjectRuntimePolicy {
@@ -869,20 +887,27 @@ pub fn resolve_project_mounts(
         &root,
         ["rev-parse", "--path-format=absolute", "--git-common-dir"],
     ) {
-        Ok(common_dir) => PathBuf::from(common_dir.trim()),
+        Ok(common_dir) => fs::canonicalize(PathBuf::from(common_dir.trim()))
+            .map_err(|_| RuntimeIssue::UnsupportedWorktreeLayout)?,
         Err(_) => return project_mounts_from_hosts(hosts, state_root),
     };
+    // Les worktrees liés partagent ce répertoire de métadonnées Git. Il doit
+    // être monté explicitement au même chemin absolu, même lorsqu'il se trouve
+    // sous le checkout principal, afin que Git retrouve ses HEAD et index
+    // partagés depuis le conteneur.
+    hosts.insert(common_dir.clone());
     let output = git_text(&root, ["worktree", "list", "--porcelain"])?;
     for candidate in parse_worktree_list(&output)? {
         let candidate =
             fs::canonicalize(candidate).map_err(|_| RuntimeIssue::UnsupportedWorktreeLayout)?;
-        let candidate_common = PathBuf::from(
+        let candidate_common = fs::canonicalize(PathBuf::from(
             git_text(
                 &candidate,
                 ["rev-parse", "--path-format=absolute", "--git-common-dir"],
             )?
             .trim(),
-        );
+        ))
+        .map_err(|_| RuntimeIssue::UnsupportedWorktreeLayout)?;
         if candidate_common != common_dir {
             return Err(RuntimeIssue::UnsupportedWorktreeLayout);
         }
@@ -970,6 +995,11 @@ pub fn docker_create_arguments(
         format!(
             "bridget.binding_generation={}",
             environment.binding_generation
+        ),
+        "--label".to_string(),
+        format!(
+            "bridget.environment_epoch={}",
+            environment.environment_epoch
         ),
         "--label".to_string(),
         format!("bridget.policy_digest={}", policy.digest),
@@ -1301,6 +1331,7 @@ pub fn preflight_runtime(
     docker: &DockerCli,
     policy: &ProjectRuntimePolicy,
 ) -> Result<String, RuntimeIssue> {
+    ensure_supported_host_platform()?;
     docker.invoke_json(&["version", "--format", "{{json .}}"], &[])?;
     assert_runtime_user_compatible(policy)?;
     let image = docker.invoke_json(
@@ -1343,6 +1374,33 @@ pub fn classify_runtime_failure(
         return "resource_pid_limit";
     }
     "runtime_exec_lost"
+}
+
+/// Réduit toute cause interne à un vocabulaire public fermé. Une raison peut
+/// provenir d'une erreur système, d'une politique ou d'un outil fournisseur ;
+/// elle ne doit donc jamais être relayée telle quelle à l'UI ou au ledger.
+pub fn public_runtime_reason(value: Option<&str>) -> Option<String> {
+    value.map(|value| {
+        match value {
+            "runtime_policy_changed"
+            | "runtime_exec_lost"
+            | "resource_oom"
+            | "resource_pid_limit"
+            | "docker_restarted"
+            | "docker_unavailable"
+            | "docker_timeout"
+            | "docker_command_failed"
+            | "docker_output_invalid"
+            | "container_attestation_invalid"
+            | "runtime_user_incompatible"
+            | "unsupported_platform"
+            | "runtime_executable_unavailable"
+            | "runtime_policy_config_unavailable"
+            | "image_not_pinned" => value,
+            _ => "runtime_unavailable",
+        }
+        .to_string()
+    })
 }
 
 pub fn prepare_environment(
@@ -1538,6 +1596,7 @@ fn attest_container(
     let expected = [
         ("bridget.project_id", environment.project_id.as_str()),
         ("bridget.binding_generation", ""),
+        ("bridget.environment_epoch", ""),
         ("bridget.policy_digest", policy.digest.as_str()),
         ("bridget.runtime_contract", "1"),
     ];
@@ -1546,10 +1605,10 @@ fn attest_container(
             .get(name)
             .and_then(serde_json::Value::as_str)
             .ok_or(RuntimeIssue::ContainerAttestationInvalid)?;
-        let expected_value = if name == "bridget.binding_generation" {
-            environment.binding_generation.to_string()
-        } else {
-            expected_value.to_string()
+        let expected_value = match name {
+            "bridget.binding_generation" => environment.binding_generation.to_string(),
+            "bridget.environment_epoch" => environment.environment_epoch.to_string(),
+            _ => expected_value.to_string(),
         };
         if value != expected_value {
             return Err(RuntimeIssue::ContainerAttestationInvalid);
@@ -1831,6 +1890,15 @@ mod tests {
             ProjectRuntimePolicyConfig::load(absent),
             Err(RuntimeIssue::PolicyUnavailable)
         ));
+    }
+
+    #[test]
+    fn spec_085_la_politique_docker_est_bornee_a_linux_amd64() {
+        assert!(runtime_platform_supported("linux", "x86_64"));
+        assert!(runtime_platform_supported("linux", "amd64"));
+        assert!(!runtime_platform_supported("darwin", "aarch64"));
+        assert!(!runtime_platform_supported("linux", "aarch64"));
+        assert!(!runtime_platform_supported("windows", "x86_64"));
     }
 
     #[test]
@@ -2249,5 +2317,88 @@ mod tests {
         );
         assert_eq!(classify_runtime_failure(None, true), "runtime_exec_lost");
         assert_eq!(classify_runtime_failure(None, false), "docker_restarted");
+    }
+
+    #[test]
+    fn spec_085_montages_incluent_checkout_et_worktrees_lies_aux_memes_chemins() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-runtime-worktrees-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let checkout = root.join("checkout");
+        let feature_one = root.join("feature-one");
+        let feature_two = root.join("feature-two");
+        let state = root.join("state");
+        fs::create_dir_all(&checkout).unwrap();
+        fs::create_dir_all(&state).unwrap();
+        let run = |directory: &Path, args: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(directory)
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        };
+        run(&checkout, &["init", "-b", "main"]);
+        run(
+            &checkout,
+            &[
+                "-c",
+                "user.name=Bridget test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+        run(
+            &checkout,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature-one",
+                feature_one.to_str().unwrap(),
+            ],
+        );
+        run(
+            &checkout,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature-two",
+                feature_two.to_str().unwrap(),
+            ],
+        );
+
+        let mounts = resolve_project_mounts(&checkout, &state).unwrap();
+        for path in [&checkout, &feature_one, &feature_two] {
+            let canonical = fs::canonicalize(path).unwrap();
+            assert!(mounts.iter().any(|mount| mount.host_path == canonical
+                && mount.container_path == canonical.to_string_lossy()
+                && mount.writable));
+        }
+        let common_dir = fs::canonicalize(
+            git_text(
+                &checkout,
+                ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            )
+            .unwrap()
+            .trim(),
+        )
+        .unwrap();
+        assert!(mounts.iter().any(|mount| {
+            mount.host_path == common_dir
+                && mount.container_path == common_dir.to_string_lossy()
+                && mount.writable
+        }));
+        assert!(mounts.iter().any(|mount| mount.host_path == state
+            && mount.container_path == CONTAINER_STATE_ROOT
+            && mount.writable));
+        let _ = fs::remove_dir_all(root);
     }
 }

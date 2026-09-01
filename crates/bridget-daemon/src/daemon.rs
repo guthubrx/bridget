@@ -2904,6 +2904,148 @@ impl DaemonState {
         }
     }
 
+    /// Au boot, le binding SQLite ne suffit pas à déclarer un runtime sain.
+    /// Cette relève relit seulement les conteneurs déjà attestés par leur ID
+    /// durable : elle ne crée, ne démarre et ne supprime jamais de conteneur.
+    fn reconcile_project_runtime_bindings_with_docker(
+        &mut self,
+        docker: &DockerCli,
+        observed_at: i64,
+    ) {
+        let project_ids = match self.store.project_binding_projections(observed_at) {
+            Ok(bindings) => bindings
+                .into_iter()
+                .map(|binding| binding.project_id)
+                .collect::<Vec<_>>(),
+            Err(error) => {
+                warn!("réconciliation runtime ignorée: bindings indisponibles: {error}");
+                return;
+            }
+        };
+        for project_id in project_ids {
+            let binding = match self.store.project_binding(&project_id) {
+                Ok(Some(binding))
+                    if binding.state == crate::store::ProjectBindingState::Active
+                        && binding.backend == ProjectBackend::Docker =>
+                {
+                    binding
+                }
+                _ => continue,
+            };
+            let Some(previous_runtime) = binding.runtime.clone() else {
+                continue;
+            };
+            let mut environment = match project_environment_from_binding(&binding) {
+                Ok(environment) => environment,
+                Err(error) => {
+                    warn!("réconciliation runtime {project_id} ignorée: binding invalide: {error}");
+                    continue;
+                }
+            };
+            let mut reason = None;
+            if matches!(
+                environment.state,
+                ProjectEnvironmentState::Creating | ProjectEnvironmentState::Stopping
+            ) {
+                reason = Some("runtime_unavailable");
+            } else {
+                let policy = self.resolve_project_runtime_policy(
+                    &environment.policy_id,
+                    environment.policy_version,
+                );
+                match policy {
+                    Ok(policy) if policy.digest == environment.policy_digest => {
+                        let expected_image =
+                            crate::project_runtime::preflight_runtime(docker, &policy);
+                        let inspection = environment
+                            .container_id
+                            .as_deref()
+                            .ok_or(RuntimeIssue::ContainerAttestationInvalid)
+                            .and_then(|container_id| {
+                                docker.invoke_json(
+                                    &["inspect", "--format", "{{json .}}", container_id],
+                                    &[],
+                                )
+                            });
+                        match (expected_image, inspection) {
+                            (Ok(expected_image), Ok(inspection)) => {
+                                let labels = inspection
+                                    .pointer("/Config/Labels")
+                                    .and_then(serde_json::Value::as_object);
+                                let labels_match = labels.is_some_and(|labels| {
+                                    labels
+                                        .get("bridget.project_id")
+                                        .and_then(serde_json::Value::as_str)
+                                        == Some(project_id.as_str())
+                                        && labels
+                                            .get("bridget.binding_generation")
+                                            .and_then(serde_json::Value::as_str)
+                                            == Some(
+                                                environment.binding_generation.to_string().as_str(),
+                                            )
+                                        && labels
+                                            .get("bridget.environment_epoch")
+                                            .and_then(serde_json::Value::as_str)
+                                            == Some(
+                                                environment.environment_epoch.to_string().as_str(),
+                                            )
+                                        && labels
+                                            .get("bridget.policy_digest")
+                                            .and_then(serde_json::Value::as_str)
+                                            == Some(policy.digest.as_str())
+                                });
+                                let image_matches = inspection
+                                    .pointer("/Image")
+                                    .and_then(serde_json::Value::as_str)
+                                    == Some(expected_image.as_str())
+                                    && previous_runtime
+                                        .resolved_image_id
+                                        .as_deref()
+                                        .is_none_or(|resolved| resolved == expected_image);
+                                if labels_match && image_matches {
+                                    environment.state = if inspection.pointer("/State/Running")
+                                        == Some(&serde_json::Value::Bool(true))
+                                    {
+                                        ProjectEnvironmentState::Running
+                                    } else {
+                                        ProjectEnvironmentState::Stopped
+                                    };
+                                    environment.last_reason = None;
+                                } else {
+                                    reason = Some("runtime_unavailable");
+                                }
+                            }
+                            (Err(_), _) => reason = Some("docker_restarted"),
+                            (_, Err(_)) => reason = Some("runtime_unavailable"),
+                        }
+                    }
+                    Ok(_) => reason = Some("runtime_unavailable"),
+                    Err(_) => reason = Some("runtime_unavailable"),
+                }
+            }
+            if let Some(reason) = reason {
+                environment.state = ProjectEnvironmentState::RecreateRequired;
+                environment.last_reason = Some(reason.to_string());
+                self.runtime_ingresses.remove(&project_id);
+                self.runtime_ingress_reservations
+                    .retain(|(candidate, _), _| candidate != &project_id);
+                self.runtime_ingress_reconnections
+                    .retain(|(candidate, _), _| candidate != &project_id);
+            }
+            let replacement = runtime_binding_from_environment(
+                &environment,
+                previous_runtime.resolved_image_id.clone(),
+            );
+            if replacement != previous_runtime
+                && let Err(error) =
+                    self.store
+                        .update_project_runtime(&project_id, &replacement, observed_at)
+            {
+                warn!("réconciliation runtime {project_id} non persistée: {error}");
+            }
+        }
+    }
+
     fn next_conn_id(&mut self) -> String {
         self.conn_counter += 1;
         format!("conn-{}", self.conn_counter)
@@ -4195,6 +4337,8 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     );
     let recoveries = {
         let mut st = state.lock().unwrap_or_else(|poison| poison.into_inner());
+        let docker = DockerCli::new(PathBuf::from("docker"), Duration::from_secs(20));
+        st.reconcile_project_runtime_bindings_with_docker(&docker, unix_timestamp());
         st.restore_runtime_ingress_reconnections();
         reserve_managed_recoveries(&mut st, unix_timestamp())?
     };
@@ -4937,7 +5081,9 @@ fn project_runtime_outcome(
             binding_generation: Some(binding.generation),
             state: runtime.map(|runtime| project_environment_state_text(runtime.state)),
             runtime_policy: runtime.map(ProjectRuntimeBinding::policy_reference),
-            last_reason: runtime.and_then(|runtime| runtime.last_reason.clone()),
+            last_reason: crate::project_runtime::public_runtime_reason(
+                runtime.and_then(|runtime| runtime.last_reason.as_deref()),
+            ),
             reason: None,
             observed_at,
         },
@@ -4989,6 +5135,227 @@ fn project_runtime_view(
         tmpfs: policy.tmpfs.clone(),
         network_mode: policy.network_mode.clone(),
     }
+}
+
+/// Projection unique de la capacité Docker. Elle ne transporte ni chemin de
+/// configuration, ni sortie Docker, ni détail de l'image : l'UI et le daemon
+/// ne publient que les raisons fermées du contrat de contrôle.
+pub(crate) fn project_runtime_capability(
+    runtime_config: Option<&ProjectRuntimePolicyConfig>,
+    resource_catalog_available: bool,
+    policy_reference: Option<(&str, u64)>,
+    docker: &DockerCli,
+) -> crate::control_settings::RuntimeCapability {
+    use crate::control_settings::{RuntimeCapability, RuntimeCapabilityReason};
+
+    let Some(runtime_config) = runtime_config else {
+        return RuntimeCapability {
+            docker_available: false,
+            policy_available: false,
+            resource_catalog_available: false,
+            image_attested: false,
+            reason: Some(RuntimeCapabilityReason::PolicyUnavailable),
+        };
+    };
+    let policy = match policy_reference {
+        Some((id, version)) => runtime_config.resolve(id, version),
+        None => runtime_config
+            .policies
+            .first()
+            .ok_or(RuntimeIssue::PolicyUnavailable)
+            .and_then(|definition| {
+                runtime_config.resolve(&definition.policy_id, definition.policy_version)
+            }),
+    };
+    let Ok(policy) = policy else {
+        return RuntimeCapability {
+            docker_available: false,
+            policy_available: false,
+            resource_catalog_available: false,
+            image_attested: false,
+            reason: Some(RuntimeCapabilityReason::PolicyUnavailable),
+        };
+    };
+    if !resource_catalog_available {
+        return RuntimeCapability {
+            docker_available: false,
+            policy_available: true,
+            resource_catalog_available: false,
+            image_attested: false,
+            reason: Some(RuntimeCapabilityReason::ResourceCatalogUnavailable),
+        };
+    }
+    match crate::project_runtime::preflight_runtime(docker, &policy) {
+        Ok(_) => RuntimeCapability {
+            docker_available: true,
+            policy_available: true,
+            resource_catalog_available: true,
+            image_attested: true,
+            reason: None,
+        },
+        Err(RuntimeIssue::ImageNotPinned) => RuntimeCapability {
+            docker_available: true,
+            policy_available: true,
+            resource_catalog_available: true,
+            image_attested: false,
+            reason: Some(RuntimeCapabilityReason::ImageUnattested),
+        },
+        Err(_) => RuntimeCapability {
+            docker_available: false,
+            policy_available: true,
+            resource_catalog_available: true,
+            image_attested: false,
+            reason: Some(RuntimeCapabilityReason::DockerUnavailable),
+        },
+    }
+}
+
+/// Conversion atomique Host -> Docker. Le binding SQLite n'est publié qu'après
+/// que le conteneur a été créé, démarré et attesté. En cas d'échec de la
+/// publication finale, le conteneur préparé est retiré et Host demeure la
+/// vérité durable.
+fn activate_host_project_runtime(
+    request: &ProjectRuntimeRequest,
+    binding: &crate::store::ProjectBinding,
+    state: &Arc<Mutex<DaemonState>>,
+    observed_at: i64,
+) -> Result<crate::store::ProjectBinding, ProjectRuntimeRefusal> {
+    let docker = DockerCli::new(PathBuf::from("docker"), Duration::from_secs(20));
+    activate_host_project_runtime_with_docker(request, binding, state, observed_at, &docker)
+}
+
+/// Variante injectée pour les preuves de compensation. Le chemin productif
+/// reste le binaire Docker attesté ci-dessus ; les tests peuvent injecter un
+/// exécutable déterministe sans toucher au daemon hôte.
+fn activate_host_project_runtime_with_docker(
+    request: &ProjectRuntimeRequest,
+    binding: &crate::store::ProjectBinding,
+    state: &Arc<Mutex<DaemonState>>,
+    observed_at: i64,
+    docker: &DockerCli,
+) -> Result<crate::store::ProjectBinding, ProjectRuntimeRefusal> {
+    let (expected_generation, policy_id, policy_version) = match (
+        request.expected_binding_generation,
+        request.policy_id.as_deref(),
+        request.policy_version,
+    ) {
+        (Some(generation), Some(policy_id), Some(policy_version))
+            if generation > 0 && !policy_id.trim().is_empty() && policy_version > 0 =>
+        {
+            (generation, policy_id, policy_version)
+        }
+        _ => return Err(ProjectRuntimeRefusal::PrepareFailed),
+    };
+    if request.profile.is_some() {
+        return Err(ProjectRuntimeRefusal::PrepareFailed);
+    }
+    let policy = {
+        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        st.resolve_project_runtime_policy(policy_id, policy_version)
+            .map_err(|_| ProjectRuntimeRefusal::PolicyUnavailable)?
+    };
+    if binding.backend == ProjectBackend::Docker {
+        let runtime = binding
+            .runtime
+            .clone()
+            .filter(|runtime| {
+                runtime.policy_id == policy.policy_id
+                    && runtime.policy_version == policy.policy_version
+                    && runtime.policy_digest == policy.digest
+            })
+            .ok_or(ProjectRuntimeRefusal::BindingGenerationMismatch)?;
+        return state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .store
+            .activate_project_docker_binding(
+                &request.command_id,
+                &request.project_id,
+                expected_generation,
+                runtime,
+                observed_at,
+            )
+            .map_err(|_| ProjectRuntimeRefusal::BindingGenerationMismatch);
+    }
+    if binding.backend != ProjectBackend::Host || binding.generation != expected_generation {
+        return Err(ProjectRuntimeRefusal::BindingGenerationMismatch);
+    }
+    let next_generation = expected_generation
+        .checked_add(1)
+        .ok_or(ProjectRuntimeRefusal::BindingGenerationMismatch)?;
+    let mut environment = ProjectEnvironment::absent(&request.project_id, next_generation, &policy)
+        .map_err(|_| ProjectRuntimeRefusal::PrepareFailed)?;
+    let state_root = runtime_state_root(&policy, &request.project_id)
+        .map_err(|_| ProjectRuntimeRefusal::PolicyUnavailable)?;
+    let ingress_socket = state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .ensure_runtime_ingress(&policy, &environment)
+        .map_err(|_| ProjectRuntimeRefusal::PrepareFailed)?;
+    let mut mounts =
+        match resolve_project_mounts(std::path::Path::new(&binding.canonical_root), &state_root) {
+            Ok(mounts) => mounts,
+            Err(_) => {
+                discard_runtime_ingress(state, &request.project_id);
+                return Err(ProjectRuntimeRefusal::PrepareFailed);
+            }
+        };
+    let ingress_directory = match ingress_socket.parent() {
+        Some(directory) => directory.to_path_buf(),
+        None => {
+            discard_runtime_ingress(state, &request.project_id);
+            return Err(ProjectRuntimeRefusal::PrepareFailed);
+        }
+    };
+    mounts.push(ProjectMount {
+        host_path: ingress_directory,
+        container_path: CONTAINER_INGRESS_DIRECTORY.to_string(),
+        writable: false,
+    });
+    let inspection = match prepare_environment(docker, &mut environment, &policy, &mounts) {
+        Ok(inspection) => inspection,
+        Err(_) => {
+            // `prepare_environment` compense déjà certains échecs, mais pas
+            // tous (notamment une attestation invalide). Rejouer l'arrêt ciblé
+            // est idempotent et garantit qu'aucun conteneur ni ingress partiel
+            // ne survit alors que Host reste le binding publié.
+            let _ = stop_remove_environment(docker, &mut environment);
+            discard_runtime_ingress(state, &request.project_id);
+            return Err(ProjectRuntimeRefusal::ActivationFailed);
+        }
+    };
+    let resolved_image_id = inspection
+        .get("Image")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let runtime = runtime_binding_from_environment(&environment, resolved_image_id);
+    let activated = state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .store
+        .activate_project_docker_binding(
+            &request.command_id,
+            &request.project_id,
+            expected_generation,
+            runtime,
+            observed_at,
+        );
+    match activated {
+        Ok(binding) => Ok(binding),
+        Err(_) => {
+            let _ = stop_remove_environment(docker, &mut environment);
+            discard_runtime_ingress(state, &request.project_id);
+            Err(ProjectRuntimeRefusal::StoreUnavailable)
+        }
+    }
+}
+
+fn discard_runtime_ingress(state: &Arc<Mutex<DaemonState>>, project_id: &str) {
+    state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .runtime_ingresses
+        .remove(project_id);
 }
 
 fn project_environment_from_binding(
@@ -9297,6 +9664,14 @@ fn handle_wrapper_message(
                     }
                 }
             };
+            if request.operation == ProjectRuntimeOperation::ActivateDocker {
+                return Some(
+                    match activate_host_project_runtime(&request, &binding, state, observed_at) {
+                        Ok(activated) => project_runtime_outcome(&request, &activated, observed_at),
+                        Err(reason) => project_runtime_failure(&request, reason, observed_at),
+                    },
+                );
+            }
             if binding.backend != ProjectBackend::Docker {
                 if request.operation == ProjectRuntimeOperation::Status
                     || request.operation == ProjectRuntimeOperation::SwitchBackend
@@ -9311,6 +9686,30 @@ fn handle_wrapper_message(
             }
             if request.operation == ProjectRuntimeOperation::Status {
                 return Some(project_runtime_outcome(&request, &binding, observed_at));
+            }
+            // Recreate doit respecter la même barrière d'activité que les
+            // opérations destructives déjà traitées ci-dessous. La vérifier
+            // avant de relire une politique évite qu'une configuration
+            // manquante masque un agent réellement en cours d'exécution.
+            if request.operation == ProjectRuntimeOperation::Recreate {
+                let active_project_agent = {
+                    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    project_has_active_agents(&st.fleet, &request.project_id)
+                        || st.managed_spawns.values().any(|spawn| {
+                            spawn
+                                .lease
+                                .project
+                                .as_ref()
+                                .is_some_and(|project| project.project_id == request.project_id)
+                        })
+                };
+                if active_project_agent {
+                    return Some(project_runtime_failure(
+                        &request,
+                        ProjectRuntimeRefusal::EnvironmentBusy,
+                        observed_at,
+                    ));
+                }
             }
             let mut environment = match project_environment_from_binding(&binding) {
                 Ok(environment) => environment,
@@ -12992,6 +13391,9 @@ mod matrice_roles_tests {
                     deadline_at: now + 60,
                     operation: ProjectRuntimeOperation::Status,
                     project_id: "project-066".to_string(),
+                    expected_binding_generation: None,
+                    policy_id: None,
+                    policy_version: None,
                     profile: None,
                 },
             },
@@ -12999,7 +13401,7 @@ mod matrice_roles_tests {
         );
         assert!(matches!(
             response,
-            Some(DaemonToWrapper::ProjectRuntimeOutcome { outcome })
+                Some(DaemonToWrapper::ProjectRuntimeOutcome { ref outcome })
                 if outcome.state.as_deref() == Some("absent")
                     && outcome.binding_generation == Some(1)
                     && outcome.runtime_policy.is_some()
@@ -13015,6 +13417,9 @@ mod matrice_roles_tests {
                         deadline_at: now + 60,
                         operation: ProjectRuntimeOperation::Status,
                         project_id: "project-066".to_string(),
+                        expected_binding_generation: None,
+                        policy_id: None,
+                        policy_version: None,
                         profile: None,
                     },
                 },
@@ -23412,6 +23817,9 @@ fn spec_066_lifecycle_refuse_l_action_destructive_si_agent_projet_actif() {
                     deadline_at: now + 60,
                     operation: ProjectRuntimeOperation::Remove,
                     project_id: "project-runtime-active".to_string(),
+                    expected_binding_generation: None,
+                    policy_id: None,
+                    policy_version: None,
                     profile: None,
                 },
             },
@@ -23434,4 +23842,456 @@ fn spec_066_lifecycle_refuse_l_action_destructive_si_agent_projet_actif() {
     drop(state);
     let _ = std::fs::remove_file(config.socket_path);
     let _ = std::fs::remove_file(config.db_path);
+}
+
+#[cfg(test)]
+#[test]
+fn spec_085_capacite_runtime_daemon_ne_projette_que_des_raisons_fermees() {
+    use crate::control_settings::RuntimeCapabilityReason;
+
+    let docker = DockerCli::new(
+        PathBuf::from("/docker-inexistant-085"),
+        Duration::from_secs(1),
+    );
+    let unavailable = project_runtime_capability(None, false, None, &docker);
+    assert_eq!(
+        unavailable.reason,
+        Some(RuntimeCapabilityReason::PolicyUnavailable)
+    );
+    let runtime_config = ProjectRuntimePolicyConfig {
+        contract_version: crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION,
+        state_root_parent: PathBuf::from("/tmp"),
+        policies: vec![crate::project_runtime::ProjectRuntimePolicyDefinition {
+            policy_id: "fixture-policy".to_string(),
+            policy_version: 1,
+            image_reference_kind: crate::project_runtime::ImageReferenceKind::LocalImageId,
+            image_reference: format!("sha256:{}", "a".repeat(64)),
+            run_as_uid: unsafe { libc::geteuid() },
+            run_as_gid: unsafe { libc::getegid() },
+            cpu_limit: 1.0,
+            memory_limit_bytes: 64 * 1024 * 1024,
+            pids_limit: 32,
+            tmpfs: vec!["/tmp".to_string()],
+            network_mode: "bridge".to_string(),
+            runtime_launcher: None,
+            runtime_executables: Vec::new(),
+        }],
+    };
+    let missing_catalog = project_runtime_capability(
+        Some(&runtime_config),
+        false,
+        Some(("fixture-policy", 1)),
+        &docker,
+    );
+    assert_eq!(
+        missing_catalog.reason,
+        Some(RuntimeCapabilityReason::ResourceCatalogUnavailable)
+    );
+    let unavailable_docker = project_runtime_capability(
+        Some(&runtime_config),
+        true,
+        Some(("fixture-policy", 1)),
+        &docker,
+    );
+    assert_eq!(
+        unavailable_docker.reason,
+        Some(RuntimeCapabilityReason::DockerUnavailable)
+    );
+}
+
+#[cfg(test)]
+fn assert_spec_085_activation_failure(phase: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture_id = Uuid::new_v4().simple().to_string();
+    let root = std::env::temp_dir().join(format!("b85-{}-{phase}", &fixture_id[..8]));
+    std::fs::create_dir_all(&root).unwrap();
+    let config = DaemonConfig {
+        socket_path: root.join("bridget.sock"),
+        db_path: root.join("bridget.db"),
+        log_path: root.join("daemon.log"),
+        ..DaemonConfig::default()
+    };
+    let (managed_tx, _managed_rx) = mpsc::channel();
+    let mut daemon = DaemonState::new(&config, managed_tx).unwrap();
+    let project_root = root.join("project");
+    let state_root_parent = root.join("state");
+    let docker_log = root.join("docker.log");
+    let docker_script = root.join(format!("docker-{phase}-fails"));
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::create_dir_all(&state_root_parent).unwrap();
+    std::fs::write(
+        &docker_script,
+        format!(
+            "#!/bin/sh\nset -eu\ncase \"$1\" in\n  version) if [ '{phase}' = preflight ]; then exit 42; fi; printf '%s\\n' '{{\"Server\":{{\"Version\":\"fixture\"}}}}' ;;\n  image) printf '%s\\n' '{{\"Id\":\"sha256:{image}\"}}' ;;\n  create) if [ '{phase}' = create ]; then exit 42; fi; printf '%s\\n' '{container}' ;;\n  start) if [ '{phase}' = start ]; then exit 42; fi ;;\n  inspect) if [ '{phase}' = inspect ]; then exit 42; fi; printf '%s\\n' '{{}}' ;;\n  stop|rm) printf '%s\\n' \"$*\" >> '{log}' ;;\n  *) exit 64 ;;\nesac\n",
+            image = "a".repeat(64),
+            container = "c".repeat(64),
+            log = docker_log.display(),
+            phase = phase,
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&docker_script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let uid = unsafe { libc::geteuid() };
+    let gid = unsafe { libc::getegid() };
+    daemon.project_runtime_policy = Ok(ProjectRuntimePolicyConfig {
+        contract_version: crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION,
+        state_root_parent: state_root_parent.clone(),
+        policies: vec![crate::project_runtime::ProjectRuntimePolicyDefinition {
+            policy_id: "fixture-policy".to_string(),
+            policy_version: 1,
+            image_reference_kind: crate::project_runtime::ImageReferenceKind::LocalImageId,
+            image_reference: format!("sha256:{}", "a".repeat(64)),
+            run_as_uid: uid,
+            run_as_gid: gid,
+            cpu_limit: 1.0,
+            memory_limit_bytes: 64 * 1024 * 1024,
+            pids_limit: 32,
+            tmpfs: vec!["/tmp".to_string()],
+            network_mode: "bridge".to_string(),
+            runtime_launcher: None,
+            runtime_executables: Vec::new(),
+        }],
+    });
+    let now = unix_timestamp();
+    daemon
+        .store
+        .bind_project_registration(
+            "register-host-085",
+            "project-runtime-085",
+            project_root.to_str().unwrap(),
+            now,
+        )
+        .unwrap();
+    let binding = daemon
+        .store
+        .project_binding("project-runtime-085")
+        .unwrap()
+        .unwrap();
+    if phase == "mount" {
+        std::fs::remove_dir(&project_root).unwrap();
+    }
+    let shared = Arc::new(Mutex::new(daemon));
+    let request = ProjectRuntimeRequest {
+        contract_version: crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION,
+        command_id: format!("activate-fails-{phase}-085"),
+        issued_at: now,
+        deadline_at: now + 60,
+        operation: ProjectRuntimeOperation::ActivateDocker,
+        project_id: "project-runtime-085".to_string(),
+        expected_binding_generation: Some(1),
+        policy_id: Some("fixture-policy".to_string()),
+        policy_version: Some(1),
+        profile: None,
+    };
+    let docker = DockerCli::new(docker_script, Duration::from_secs(1));
+    let expected_refusal = if phase == "mount" {
+        ProjectRuntimeRefusal::PrepareFailed
+    } else {
+        ProjectRuntimeRefusal::ActivationFailed
+    };
+    assert_eq!(
+        activate_host_project_runtime_with_docker(&request, &binding, &shared, now + 1, &docker),
+        Err(expected_refusal)
+    );
+    let state = shared.lock().unwrap_or_else(|error| error.into_inner());
+    let after = state
+        .store
+        .project_binding("project-runtime-085")
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.backend, ProjectBackend::Host);
+    assert_eq!(after.generation, 1);
+    assert!(!state.runtime_ingresses.contains_key("project-runtime-085"));
+    drop(state);
+    if matches!(phase, "start" | "inspect") {
+        let cleanup = std::fs::read_to_string(&docker_log).unwrap();
+        assert!(
+            cleanup
+                .split('\n')
+                .any(|command| command.starts_with("rm ")),
+            "compensation Docker absente après {phase}: {cleanup}"
+        );
+    }
+    let _ = std::fs::remove_file(config.socket_path);
+    let _ = std::fs::remove_file(config.db_path);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(test)]
+#[test]
+fn spec_085_activation_echouee_compense_conteneur_ingress_et_conserve_host() {
+    for phase in ["preflight", "mount", "create", "start", "inspect"] {
+        assert_spec_085_activation_failure(phase);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn spec_085_operations_destructives_refusees_agent_actif_et_rejeu() {
+    let root = std::env::temp_dir().join(format!(
+        "bridget-spec-085-runtime-busy-{}",
+        Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let config = DaemonConfig {
+        socket_path: root.join("bridget.sock"),
+        db_path: root.join("bridget.db"),
+        log_path: root.join("daemon.log"),
+        ..DaemonConfig::default()
+    };
+    let (managed_tx, _managed_rx) = mpsc::channel();
+    let mut state = DaemonState::new(&config, managed_tx).unwrap();
+    let now = unix_timestamp();
+    state
+        .store
+        .bind_project_docker_registration(
+            "register-runtime-busy-085",
+            "project-runtime-busy-085",
+            root.to_str().unwrap(),
+            ProjectRuntimeBinding {
+                state: ProjectEnvironmentState::Ready,
+                policy_id: "fixture-policy".to_string(),
+                policy_version: 1,
+                policy_digest: format!("sha256:{}", "a".repeat(64)),
+                image_reference: format!("sha256:{}", "b".repeat(64)),
+                resolved_image_id: Some(format!("sha256:{}", "b".repeat(64))),
+                run_as_uid: unsafe { libc::geteuid() },
+                run_as_gid: unsafe { libc::getegid() },
+                environment_epoch: 1,
+                container_id: Some("c".repeat(64)),
+                last_reason: None,
+            },
+            now,
+        )
+        .unwrap();
+    let order = FleetSpawnOrder {
+        agent_type: "fixture".to_string(),
+        requested_name: Some(Uuid::new_v4().hyphenated().to_string()),
+        cwd: root.clone(),
+        persistent: true,
+        command_id: "spawn-runtime-busy-085".to_string(),
+        issued_at: now,
+        deadline_at: now + 60,
+        ownership: None,
+        project: Some(ProjectReference {
+            project_id: "project-runtime-busy-085".to_string(),
+            binding_generation: 1,
+        }),
+    };
+    let lease = match state.fleet.request_spawn(&order, now).unwrap() {
+        crate::fleet::SpawnSubmission::Start(lease) => lease,
+        other => panic!("réservation runtime inattendue: {other:?}"),
+    };
+    let definition = AgentRegistry::from_json(
+        r#"{"agents":{"fixture":{"command":"/bin/sh","protocol":"acp"}}}"#,
+        "/tmp/spec-085-runtime-busy.json",
+    )
+    .unwrap()
+    .resolved_definition("fixture")
+    .unwrap();
+    state.fleet.mark_starting(&lease, now, &definition).unwrap();
+    state
+        .fleet
+        .register_connected(&lease, &lease.instance_id, now + 1)
+        .unwrap();
+    assert!(project_has_active_agents(
+        &state.fleet,
+        "project-runtime-busy-085"
+    ));
+    state
+        .peer_uids
+        .insert("runtime-control-085".to_string(), unsafe {
+            libc::geteuid()
+        });
+    let shared = Arc::new(Mutex::new(state));
+    for operation in [
+        ProjectRuntimeOperation::Stop,
+        ProjectRuntimeOperation::Remove,
+        ProjectRuntimeOperation::Recreate,
+        ProjectRuntimeOperation::SwitchBackend,
+    ] {
+        let request = ProjectRuntimeRequest {
+            contract_version: crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION,
+            command_id: format!("runtime-busy-{operation:?}-085"),
+            issued_at: now,
+            deadline_at: now + 60,
+            operation,
+            project_id: "project-runtime-busy-085".to_string(),
+            expected_binding_generation: None,
+            policy_id: None,
+            policy_version: None,
+            profile: None,
+        };
+        for _ in 0..2 {
+            let response = handle_wrapper_message(
+                "runtime-control-085",
+                WrapperToDaemon::ProjectRuntimeRequest {
+                    request: request.clone(),
+                },
+                &shared,
+            );
+            assert!(
+                matches!(
+                    response,
+                    Some(DaemonToWrapper::ProjectRuntimeOutcome { ref outcome })
+                        if outcome.reason == Some(ProjectRuntimeRefusal::EnvironmentBusy)
+                ),
+                "réponse inattendue pour {operation:?}: {response:?}"
+            );
+        }
+    }
+    let state = match Arc::try_unwrap(shared) {
+        Ok(state) => state
+            .into_inner()
+            .unwrap_or_else(|poison| poison.into_inner()),
+        Err(_) => panic!("aucune référence résiduelle"),
+    };
+    let after = state
+        .store
+        .project_binding("project-runtime-busy-085")
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.backend, ProjectBackend::Docker);
+    assert_eq!(after.runtime.unwrap().state, ProjectEnvironmentState::Ready);
+    let _ = std::fs::remove_file(config.socket_path);
+    let _ = std::fs::remove_file(config.db_path);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(test)]
+#[test]
+fn spec_085_redemarrage_reconcilie_runtime_sans_creer_un_second_conteneur() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = std::env::temp_dir().join(format!(
+        "bridget-spec-085-runtime-reconcile-{}",
+        Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let config = DaemonConfig {
+        socket_path: root.join("bridget.sock"),
+        db_path: root.join("bridget.db"),
+        log_path: root.join("daemon.log"),
+        ..DaemonConfig::default()
+    };
+    let (managed_tx, _managed_rx) = mpsc::channel();
+    let mut first = DaemonState::new(&config, managed_tx).unwrap();
+    let state_root_parent = root.join("state");
+    std::fs::create_dir_all(&state_root_parent).unwrap();
+    let uid = unsafe { libc::geteuid() };
+    let gid = unsafe { libc::getegid() };
+    let policy_config = ProjectRuntimePolicyConfig {
+        contract_version: crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION,
+        state_root_parent,
+        policies: vec![crate::project_runtime::ProjectRuntimePolicyDefinition {
+            policy_id: "fixture-policy".to_string(),
+            policy_version: 1,
+            image_reference_kind: crate::project_runtime::ImageReferenceKind::LocalImageId,
+            image_reference: format!("sha256:{}", "a".repeat(64)),
+            run_as_uid: uid,
+            run_as_gid: gid,
+            cpu_limit: 1.0,
+            memory_limit_bytes: 64 * 1024 * 1024,
+            pids_limit: 32,
+            tmpfs: vec!["/tmp".to_string()],
+            network_mode: "bridge".to_string(),
+            runtime_launcher: None,
+            runtime_executables: Vec::new(),
+        }],
+    };
+    first.project_runtime_policy = Ok(policy_config.clone());
+    let policy = first
+        .resolve_project_runtime_policy("fixture-policy", 1)
+        .unwrap();
+    let now = unix_timestamp();
+    first
+        .store
+        .bind_project_docker_registration(
+            "register-runtime-reconcile-085",
+            "project-runtime-reconcile-085",
+            root.to_str().unwrap(),
+            ProjectRuntimeBinding {
+                state: ProjectEnvironmentState::Ready,
+                policy_id: policy.policy_id.clone(),
+                policy_version: policy.policy_version,
+                policy_digest: policy.digest.clone(),
+                image_reference: policy.image_reference.clone(),
+                resolved_image_id: Some(policy.image_reference.clone()),
+                run_as_uid: uid,
+                run_as_gid: gid,
+                environment_epoch: 1,
+                container_id: Some("c".repeat(64)),
+                last_reason: None,
+            },
+            now,
+        )
+        .unwrap();
+    drop(first);
+
+    let docker_script = root.join("docker-reconcile");
+    let docker_log = root.join("docker.log");
+    std::fs::write(
+        &docker_script,
+        format!(
+            "#!/bin/sh\nset -eu\ncase \"$1\" in\n  version) printf '%s\\n' '{{\"Server\":{{\"Version\":\"fixture\"}}}}' ;;\n  image) printf '%s\\n' '{{\"Id\":\"{image}\"}}' ;;\n  inspect) printf '%s\\n' '{{\"Image\":\"{image}\",\"State\":{{\"Running\":true}},\"Config\":{{\"Labels\":{{\"bridget.project_id\":\"project-runtime-reconcile-085\",\"bridget.binding_generation\":\"1\",\"bridget.environment_epoch\":\"1\",\"bridget.policy_digest\":\"{digest}\"}}}}}}' ;;\n  *) printf '%s\\n' \"$*\" >> '{log}'; exit 64 ;;\nesac\n",
+            image = policy.image_reference,
+            digest = policy.digest,
+            log = docker_log.display(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&docker_script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let (managed_tx, _managed_rx) = mpsc::channel();
+    let mut restarted = DaemonState::new(&config, managed_tx).unwrap();
+    restarted.project_runtime_policy = Ok(policy_config.clone());
+    let docker = DockerCli::new(docker_script.clone(), Duration::from_secs(1));
+    restarted.reconcile_project_runtime_bindings_with_docker(&docker, now + 1);
+    let reconciled = restarted
+        .store
+        .project_binding("project-runtime-reconcile-085")
+        .unwrap()
+        .unwrap()
+        .runtime
+        .unwrap();
+    assert_eq!(reconciled.state, ProjectEnvironmentState::Running);
+    assert_eq!(reconciled.environment_epoch, 1);
+    assert_eq!(
+        reconciled.container_id.as_deref(),
+        Some("c".repeat(64).as_str())
+    );
+    assert!(
+        !docker_log.exists() || std::fs::read_to_string(&docker_log).unwrap().is_empty(),
+        "la relève ne doit ni créer ni supprimer de conteneur"
+    );
+
+    let mut incomplete = reconciled;
+    incomplete.state = ProjectEnvironmentState::Creating;
+    restarted
+        .store
+        .update_project_runtime("project-runtime-reconcile-085", &incomplete, now + 2)
+        .unwrap();
+    drop(restarted);
+    let (managed_tx, _managed_rx) = mpsc::channel();
+    let mut restarted_again = DaemonState::new(&config, managed_tx).unwrap();
+    restarted_again.project_runtime_policy = Ok(policy_config);
+    restarted_again.reconcile_project_runtime_bindings_with_docker(&docker, now + 3);
+    let incomplete_after = restarted_again
+        .store
+        .project_binding("project-runtime-reconcile-085")
+        .unwrap()
+        .unwrap()
+        .runtime
+        .unwrap();
+    assert_eq!(
+        incomplete_after.state,
+        ProjectEnvironmentState::RecreateRequired
+    );
+    assert_eq!(
+        incomplete_after.last_reason.as_deref(),
+        Some("runtime_unavailable")
+    );
+    let _ = std::fs::remove_file(config.socket_path);
+    let _ = std::fs::remove_file(config.db_path);
+    let _ = std::fs::remove_dir_all(root);
 }
