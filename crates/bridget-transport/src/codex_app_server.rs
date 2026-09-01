@@ -13,6 +13,7 @@ use crate::managed_session::{
 use crate::protocol::{PresenceMode, ProviderObservation, ProviderOperation};
 use crate::transport::{Transport, TransportError};
 use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
+use log::info;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -2214,6 +2215,7 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                     );
                 }
                 Some("item/tool/call") => {
+                    info!("requête d'outil dynamique Codex reçue: item/tool/call");
                     if let Some((reply, detail)) =
                         dynamic_tool_response(&value, dynamic_tool_handler.as_ref())
                     {
@@ -2341,6 +2343,10 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                         && let Some((reply, payload, delegated_reference)) =
                             unsupported_provider_request_response(&value)
                     {
+                        // Observation volontairement bornée : seule la méthode
+                        // publique est journalisée pour identifier un nouveau
+                        // contrat app-server sans exposer ses arguments.
+                        info!("requête Codex non prise en charge: {other}");
                         let message_id = queue
                             .0
                             .lock()
