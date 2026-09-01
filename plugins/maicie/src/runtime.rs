@@ -13,7 +13,7 @@ use crate::domain::{
     SourceSnapshot,
 };
 use crate::store::{MaicieStore, StoreError};
-use bridget_transport::protocol::{ProjectBindingProjection, ProjectBindingStatus};
+use bridget_transport::protocol::{ProjectBindingProjection, ProjectBindingStatus, ProjectRole};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fmt;
@@ -723,6 +723,7 @@ mod tests {
                 state: ProjectBindingStatus::Active,
                 binding_generation: Some(1),
                 backend: Some(ProjectBackend::Host),
+                role: ProjectRole::Standard,
                 runtime_policy: None,
                 reason: None,
                 last_audit: None,

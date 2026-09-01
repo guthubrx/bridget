@@ -760,6 +760,9 @@ fn run_project_profile(arguments: ProjectProfileArgs, migrate: bool) -> Result<S
                 deadline_at: now.saturating_add(60),
                 operation: ProjectRuntimeOperation::Recreate,
                 project_id: approved.project_id.clone(),
+                expected_binding_generation: None,
+                policy_id: None,
+                policy_version: None,
                 profile: Some(resolved),
             };
             let mut client =
