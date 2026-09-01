@@ -1112,7 +1112,7 @@ struct UiProjectListEntryV1 {
     round: UiProjectRoundV1,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct UiProjectRoundV1 {
     configured: bool,
     enabled: bool,
@@ -1146,7 +1146,7 @@ struct UiProjectRoundAcceptedV1 {
     round: UiProjectRoundV1,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UiProjectConfirmRequestV1 {
     version: u8,
@@ -1241,6 +1241,46 @@ struct UiControlProjectRootsAppliedV1 {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct UiProjectLocationCatalogChangeV2 {
+    contract_version: u8,
+    command_id: String,
+    expected_generation: u64,
+    locations: Vec<crate::project_policy::ProjectLocation>,
+}
+
+#[derive(Debug, Serialize)]
+struct UiProjectLocationCatalogPreviewV2 {
+    contract_version: u8,
+    command_id: String,
+    expected_generation: u64,
+    resulting_generation: u64,
+    current_locations: Vec<UiProjectLocationV2>,
+    requested_locations: Vec<UiProjectLocationV2>,
+    /// Seulement renseigné lors de la migration d'une politique v1. Les
+    /// liaisons restent intactes: cette liste rend leur présence visible avant
+    /// que l'opérateur ne promeuve explicitement un emplacement.
+    legacy_inventory_available: bool,
+    legacy_projects: Vec<UiLegacyLocationInventoryV2>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct UiLegacyLocationInventoryV2 {
+    location_id: String,
+    project_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct UiProjectLocationCatalogAppliedV2 {
+    contract_version: u8,
+    command_id: String,
+    expected_generation: u64,
+    resulting_generation: u64,
+    location_ids: Vec<String>,
+    observed_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UiProjectPreviewRequestV1 {
     version: u8,
     mode: String,
@@ -1254,6 +1294,53 @@ struct UiProjectPreviewV1 {
     version: u8,
     mode: &'static str,
     canonical_path: String,
+    display_name: String,
+    git: &'static str,
+    git_initialization_proposed: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct UiProjectLocationV2 {
+    location_id: String,
+    label: String,
+    canonical_path: String,
+    kind: &'static str,
+    system_only: bool,
+    default_creation: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct UiProjectLocationsV2 {
+    contract_version: u8,
+    generation: u64,
+    legacy_v1: bool,
+    locations: Vec<UiProjectLocationV2>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiProjectPlacementRequestV2 {
+    contract_version: u8,
+    command_id: String,
+    expected_generation: u64,
+    location_id: String,
+    operation: String,
+    #[serde(default)]
+    root: Option<String>,
+    #[serde(default)]
+    requested_name: Option<String>,
+    #[serde(default)]
+    initialize_git: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct UiProjectPlacementPreviewV2 {
+    contract_version: u8,
+    command_id: String,
+    catalog_generation: u64,
+    location_id: String,
+    operation: &'static str,
+    canonical_target: String,
     display_name: String,
     git: &'static str,
     git_initialization_proposed: bool,
@@ -1682,6 +1769,18 @@ fn serve_connection(
                 },
             ),
         },
+        ("GET", "/v2/projects/locations") => match read_project_locations_v2(config) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
         ("GET", "/v1/projects") => match read_projects(&config.daemon_socket) {
             Ok(response) => write_json(stream, 200, &response),
             Err((status, code, message)) => write_json(
@@ -1734,6 +1833,34 @@ fn serve_connection(
                 ),
             }
         }
+        ("POST", "/v2/control/project-locations/preview") => {
+            match post_project_location_catalog_preview_v2(config, &request.body) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("POST", "/v2/control/project-locations/apply") => {
+            match post_project_location_catalog_apply_v2(config, &request.body) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
         ("GET", "/v1/usage") => {
             match read_usage_dashboard(config, request.query.get("period").map(String::as_str)) {
                 Ok(response) => write_json(stream, 200, &response),
@@ -1774,6 +1901,34 @@ fn serve_connection(
                 },
             ),
         },
+        ("POST", "/v2/projects/placement/preview") => {
+            match post_project_placement_preview_v2(config, &request.body) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("POST", "/v2/projects/placement/apply") => {
+            match post_project_placement_apply_v2(config, &request.body) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
         ("POST", "/v1/projects/confirm") => match post_project_confirm(config, &request.body) {
             Ok(response) => write_json(stream, 200, &response),
             Err((status, code, message)) => write_json(
@@ -2861,6 +3016,140 @@ fn post_control_project_roots_apply(
     })
 }
 
+fn ui_project_location_v2(location: crate::project_policy::ProjectLocation) -> UiProjectLocationV2 {
+    UiProjectLocationV2 {
+        location_id: location.location_id,
+        label: location.label,
+        canonical_path: location.canonical_path.to_string_lossy().into_owned(),
+        kind: match location.kind {
+            crate::project_policy::ProjectLocationKind::Workspace => "workspace",
+            crate::project_policy::ProjectLocationKind::ExactProject => "exact_project",
+        },
+        system_only: location.system_only,
+        default_creation: location.default_creation,
+    }
+}
+
+fn parse_project_location_catalog_change_v2(
+    body: &[u8],
+) -> Result<crate::control_settings::ProjectLocationCatalogChange, (u16, &'static str, String)> {
+    let request: UiProjectLocationCatalogChangeV2 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "invalid_request",
+            "Catalogue d emplacements invalide.".to_string(),
+        )
+    })?;
+    if request.contract_version != 2 {
+        return Err((
+            400,
+            "invalid_request",
+            "Catalogue d emplacements invalide.".to_string(),
+        ));
+    }
+    Ok(crate::control_settings::ProjectLocationCatalogChange {
+        command_id: request.command_id,
+        expected_generation: request.expected_generation,
+        locations: request.locations,
+    })
+}
+
+fn post_project_location_catalog_preview_v2(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiProjectLocationCatalogPreviewV2, (u16, &'static str, String)> {
+    let change = parse_project_location_catalog_change_v2(body)?;
+    let command_id = change.command_id.clone();
+    let expected_generation = change.expected_generation;
+    let preview = crate::control_settings::preview_project_location_catalog(
+        config.project_root_policy_path.as_deref(),
+        &change,
+    )
+    .map_err(control_settings_error)?;
+    let legacy_v1 = config
+        .project_root_policy_path
+        .as_deref()
+        .and_then(|path| ProjectRootPolicy::load(path).ok())
+        .is_some_and(|policy| policy.is_legacy_v1());
+    let (legacy_inventory_available, legacy_projects) = if legacy_v1 {
+        match read_projects(&config.daemon_socket) {
+            Ok(projects) => (
+                true,
+                legacy_location_inventory(&preview.current_locations, &projects.projects),
+            ),
+            // L'indisponibilité du registre ne transforme pas une
+            // prévisualisation de configuration en écriture partielle. La UI
+            // l'affiche comme une preuve manquante et ne prétend pas que la
+            // migration est neutre.
+            Err(_) => (false, Vec::new()),
+        }
+    } else {
+        (true, Vec::new())
+    };
+    Ok(UiProjectLocationCatalogPreviewV2 {
+        contract_version: 2,
+        command_id,
+        expected_generation,
+        resulting_generation: expected_generation.saturating_add(1),
+        current_locations: preview
+            .current_locations
+            .into_iter()
+            .map(ui_project_location_v2)
+            .collect(),
+        requested_locations: preview
+            .requested_locations
+            .into_iter()
+            .map(ui_project_location_v2)
+            .collect(),
+        legacy_inventory_available,
+        legacy_projects,
+    })
+}
+
+fn legacy_location_inventory(
+    locations: &[crate::project_policy::ProjectLocation],
+    projects: &[UiProjectListEntryV1],
+) -> Vec<UiLegacyLocationInventoryV2> {
+    locations
+        .iter()
+        .map(|location| {
+            let mut project_ids = projects
+                .iter()
+                .filter(|project| {
+                    Path::new(&project.canonical_path).starts_with(&location.canonical_path)
+                })
+                .map(|project| project.project_id.clone())
+                .collect::<Vec<_>>();
+            project_ids.sort();
+            UiLegacyLocationInventoryV2 {
+                location_id: location.location_id.clone(),
+                project_ids,
+            }
+        })
+        .collect()
+}
+
+fn post_project_location_catalog_apply_v2(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiProjectLocationCatalogAppliedV2, (u16, &'static str, String)> {
+    let change = parse_project_location_catalog_change_v2(body)?;
+    let applied = crate::control_settings::apply_project_location_catalog(
+        config.project_root_policy_path.as_deref(),
+        change,
+        now_secs(),
+    )
+    .map_err(control_settings_error)?;
+    Ok(UiProjectLocationCatalogAppliedV2 {
+        contract_version: 2,
+        command_id: applied.receipt.command_id,
+        expected_generation: applied.receipt.expected_generation,
+        resulting_generation: applied.receipt.resulting_generation,
+        location_ids: applied.receipt.location_ids,
+        observed_at: applied.receipt.observed_at,
+    })
+}
+
 fn post_project_roots_update(
     config: &UiRelayConfig,
     body: &[u8],
@@ -2912,6 +3201,237 @@ fn post_project_roots_update(
             .map(|root| root.to_string_lossy().into_owned())
             .collect(),
     })
+}
+
+fn read_project_locations_v2(
+    config: &UiRelayConfig,
+) -> Result<UiProjectLocationsV2, (u16, &'static str, String)> {
+    let source = config.project_root_policy_path.as_deref().ok_or_else(|| {
+        (
+            409,
+            "project_settings_unavailable",
+            "Le catalogue projet n est pas configuré sur ce relais.".to_string(),
+        )
+    })?;
+    let policy = ProjectRootPolicy::load(source).map_err(|_| {
+        (
+            409,
+            "project_settings_unavailable",
+            "Le catalogue projet est indisponible.".to_string(),
+        )
+    })?;
+    Ok(UiProjectLocationsV2 {
+        contract_version: 2,
+        generation: policy.generation(),
+        legacy_v1: policy.is_legacy_v1(),
+        locations: policy
+            .locations()
+            .iter()
+            .map(|location| UiProjectLocationV2 {
+                location_id: location.location_id.clone(),
+                label: location.label.clone(),
+                canonical_path: location.canonical_path.to_string_lossy().into_owned(),
+                kind: match location.kind {
+                    crate::project_policy::ProjectLocationKind::Workspace => "workspace",
+                    crate::project_policy::ProjectLocationKind::ExactProject => "exact_project",
+                },
+                system_only: location.system_only,
+                default_creation: location.default_creation,
+            })
+            .collect(),
+    })
+}
+
+fn post_project_placement_preview_v2(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiProjectPlacementPreviewV2, (u16, &'static str, String)> {
+    use crate::project_workspace::{GitDiagnostic, ProjectFolderMode, ProjectPreview};
+    let request: UiProjectPlacementRequestV2 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "invalid_request",
+            "Prévisualisation d emplacement invalide.".to_string(),
+        )
+    })?;
+    let valid = request.contract_version == 2
+        && !request.command_id.is_empty()
+        && request.command_id.len() <= MAX_UI_COMMAND_ID_BYTES
+        && request.command_id.bytes().all(is_query_byte)
+        && !request.location_id.is_empty()
+        && request.location_id.len() <= 80;
+    if !valid {
+        return Err((
+            400,
+            "invalid_request",
+            "Prévisualisation d emplacement invalide.".to_string(),
+        ));
+    }
+    let source = config.project_root_policy_path.as_deref().ok_or_else(|| {
+        (
+            409,
+            "project_settings_unavailable",
+            "Le catalogue projet n est pas configuré sur ce relais.".to_string(),
+        )
+    })?;
+    let policy = ProjectRootPolicy::load(source).map_err(|_| {
+        (
+            409,
+            "project_settings_unavailable",
+            "Le catalogue projet est indisponible.".to_string(),
+        )
+    })?;
+    if policy.generation() != request.expected_generation {
+        return Err((
+            409,
+            "catalog_generation_mismatch",
+            "Le catalogue a changé; relancez la prévisualisation.".to_string(),
+        ));
+    }
+    let preview = match request.operation.as_str() {
+        "create" => request
+            .requested_name
+            .as_deref()
+            .ok_or_else(|| {
+                (
+                    400,
+                    "invalid_name",
+                    "Le nom du nouveau projet est obligatoire.".to_string(),
+                )
+            })
+            .and_then(|name| {
+                ProjectPreview::create_at_location(&policy, &request.location_id, name)
+                    .map_err(|error| (409, "location_not_creatable", error.to_string()))
+            })?,
+        "import" => request
+            .root
+            .as_deref()
+            .ok_or_else(|| {
+                (
+                    400,
+                    "invalid_request",
+                    "Le chemin du projet à importer est obligatoire.".to_string(),
+                )
+            })
+            .and_then(|root| {
+                ProjectPreview::import_at_location(&policy, &request.location_id, Path::new(root))
+                    .map_err(|error| (409, "target_outside_location", error.to_string()))
+            })?,
+        _ => {
+            return Err((
+                400,
+                "invalid_request",
+                "Opération d emplacement inconnue.".to_string(),
+            ));
+        }
+    };
+    let operation = match preview.mode {
+        ProjectFolderMode::Create => "create",
+        ProjectFolderMode::Import => "import",
+    };
+    let git = match preview.git {
+        GitDiagnostic::Absent => "absent",
+        GitDiagnostic::Clean => "clean",
+        GitDiagnostic::Modified => "modified",
+        GitDiagnostic::Worktree => "worktree",
+    };
+    Ok(UiProjectPlacementPreviewV2 {
+        contract_version: 2,
+        command_id: request.command_id,
+        catalog_generation: policy.generation(),
+        location_id: request.location_id,
+        operation,
+        canonical_target: preview.canonical_path.to_string_lossy().into_owned(),
+        display_name: preview.display_name,
+        git,
+        git_initialization_proposed: preview.git_initialization_proposed,
+    })
+}
+
+fn post_project_placement_apply_v2(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiProjectConfirmedV1, UiProjectError> {
+    use crate::project_workspace::ProjectPreview;
+
+    let request: UiProjectPlacementRequestV2 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "invalid_request",
+            "Application d emplacement invalide.".to_string(),
+        )
+    })?;
+    // La prévisualisation rejoue la validation de forme et de génération. Au
+    // moment de l'effet, on relit ensuite le catalogue et on reconstruit le
+    // chemin depuis `location_id`: aucun chemin libre ni route v1 ne peut
+    // contourner l'autorité v2 entre les deux étapes.
+    let preview = post_project_placement_preview_v2(config, body)?;
+    let source = config.project_root_policy_path.as_deref().ok_or_else(|| {
+        (
+            409,
+            "project_settings_unavailable",
+            "Le catalogue projet n est pas configuré sur ce relais.".to_string(),
+        )
+    })?;
+    let policy = ProjectRootPolicy::load(source).map_err(|_| {
+        (
+            409,
+            "project_settings_unavailable",
+            "Le catalogue projet est indisponible.".to_string(),
+        )
+    })?;
+    if policy.generation() != request.expected_generation
+        || preview.catalog_generation != policy.generation()
+    {
+        return Err((
+            409,
+            "catalog_generation_mismatch",
+            "Le catalogue a changé; relancez la prévisualisation.".to_string(),
+        ));
+    }
+    let validated_preview = match request.operation.as_str() {
+        "create" => request
+            .requested_name
+            .as_deref()
+            .ok_or_else(|| {
+                (
+                    400,
+                    "invalid_name",
+                    "Le nom du nouveau projet est obligatoire.".to_string(),
+                )
+            })
+            .and_then(|name| {
+                ProjectPreview::create_at_location(&policy, &request.location_id, name)
+                    .map_err(|error| (409, "location_not_creatable", error.to_string()))
+            })?,
+        "import" => request
+            .root
+            .as_deref()
+            .ok_or_else(|| {
+                (
+                    400,
+                    "invalid_request",
+                    "Le chemin du projet à importer est obligatoire.".to_string(),
+                )
+            })
+            .and_then(|root| {
+                ProjectPreview::import_at_location(&policy, &request.location_id, Path::new(root))
+                    .map_err(|error| (409, "target_outside_location", error.to_string()))
+            })?,
+        _ => {
+            return Err((
+                400,
+                "invalid_request",
+                "Opération d emplacement inconnue.".to_string(),
+            ));
+        }
+    };
+    confirm_project_preview(
+        config,
+        request.command_id,
+        request.initialize_git,
+        validated_preview,
+    )
 }
 
 fn post_project_preview(
@@ -2989,6 +3509,13 @@ fn resolve_project_preview(
             "La politique de racines est indisponible.".to_string(),
         )
     })?;
+    if mode == "create" && policy.is_legacy_v1() {
+        return Err((
+            409,
+            "legacy_policy_restrictive",
+            "Cette politique historique doit être migrée vers un espace de travail avant toute création.".to_string(),
+        ));
+    }
     match mode {
         "create" => {
             let Some(folder_name) = folder_name else {
@@ -3393,9 +3920,6 @@ fn post_project_confirm(
     config: &UiRelayConfig,
     body: &[u8],
 ) -> Result<UiProjectConfirmedV1, UiProjectError> {
-    use crate::project_workspace::ProjectFolderMode;
-    use std::process::Command;
-
     let request: UiProjectConfirmRequestV1 = serde_json::from_slice(body).map_err(|_| {
         (
             400,
@@ -3420,6 +3944,18 @@ fn post_project_confirm(
         &request.root,
         request.folder_name.as_deref(),
     )?;
+    confirm_project_preview(config, request.command_id, request.initialize_git, preview)
+}
+
+fn confirm_project_preview(
+    config: &UiRelayConfig,
+    command_id: String,
+    initialize_git: bool,
+    preview: crate::project_workspace::ProjectPreview,
+) -> Result<UiProjectConfirmedV1, UiProjectError> {
+    use crate::project_workspace::ProjectFolderMode;
+    use std::process::Command;
+
     let created_directory = matches!(preview.mode, ProjectFolderMode::Create);
     if created_directory {
         std::fs::create_dir(&preview.canonical_path).map_err(|error| {
@@ -3430,7 +3966,7 @@ fn post_project_confirm(
             )
         })?;
     }
-    if request.initialize_git && preview.git_initialization_proposed {
+    if initialize_git && preview.git_initialization_proposed {
         let initialized = Command::new("git")
             .arg("init")
             .arg("--quiet")
@@ -3456,7 +3992,7 @@ fn post_project_confirm(
     let project_id = format!("project-{}", uuid::Uuid::new_v4().simple());
     let bind = ProjectBindRequest {
         contract_version: PROJECT_REGISTRY_CONTRACT_VERSION,
-        command_id: request.command_id,
+        command_id,
         issued_at: now,
         deadline_at: now.saturating_add(30),
         project_id: project_id.clone(),
@@ -9185,9 +9721,15 @@ mod tests {
         std::fs::write(
             &policy_path,
             serde_json::to_vec(&serde_json::json!({
-                "contract_version": 1,
+                "contract_version": 2,
                 "policy_generation": 1,
-                "allowed_project_roots": [projects],
+                "locations": [{
+                    "location_id": "workspace-test",
+                    "label": "Projets",
+                    "canonical_path": projects,
+                    "kind": "workspace",
+                    "default_creation": true
+                }]
             }))
             .unwrap(),
         )
@@ -9231,6 +9773,206 @@ mod tests {
     }
 
     #[test]
+    fn spec_084_routes_v2_exposent_catalogue_et_bloquent_generation_invalide() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-084-ui-placement-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let projects = root.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let policy_path = root.join("project-root-policy.json");
+        std::fs::write(
+            &policy_path,
+            serde_json::to_vec(&serde_json::json!({
+                "contract_version": 2,
+                "policy_generation": 4,
+                "locations": [{
+                    "location_id": "workspace-test",
+                    "label": "Projets",
+                    "canonical_path": projects,
+                    "kind": "workspace",
+                    "default_creation": true
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let config = UiRelayConfig {
+            daemon_socket: root.join("bridget.sock"),
+            maicie_config: root.join("maicie.json"),
+            project_root_policy_path: Some(policy_path),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "test".to_string(),
+        };
+
+        let locations = read_project_locations_v2(&config).unwrap();
+        assert_eq!(locations.contract_version, 2);
+        assert_eq!(locations.generation, 4);
+        assert!(!locations.legacy_v1);
+        assert_eq!(locations.locations[0].location_id, "workspace-test");
+        let request = serde_json::to_vec(&serde_json::json!({
+            "contract_version": 2,
+            "command_id": "placement-084",
+            "expected_generation": 4,
+            "location_id": "workspace-test",
+            "operation": "create",
+            "requested_name": "nouveau",
+            "initialize_git": true
+        }))
+        .unwrap();
+        let preview = post_project_placement_preview_v2(&config, &request).unwrap();
+        assert_eq!(preview.operation, "create");
+        assert_eq!(preview.catalog_generation, 4);
+        assert_eq!(
+            preview.canonical_target,
+            projects.join("nouveau").display().to_string()
+        );
+        assert!(!projects.join("nouveau").exists());
+        let policy_path = config.project_root_policy_path.as_ref().unwrap().clone();
+        let current_locations = ProjectRootPolicy::load(&policy_path)
+            .unwrap()
+            .locations()
+            .to_vec();
+        ProjectRootPolicy::replace_catalog_atomically_with_receipt(
+            &policy_path,
+            "catalog-changed-after-preview".to_string(),
+            4,
+            current_locations,
+            100,
+        )
+        .unwrap();
+        assert_eq!(
+            post_project_placement_apply_v2(&config, &request)
+                .unwrap_err()
+                .1,
+            "catalog_generation_mismatch"
+        );
+        let stale = serde_json::to_vec(&serde_json::json!({
+            "contract_version": 2,
+            "command_id": "placement-084-stale",
+            "expected_generation": 4,
+            "location_id": "workspace-test",
+            "operation": "create",
+            "requested_name": "nouveau"
+        }))
+        .unwrap();
+        assert_eq!(
+            post_project_placement_preview_v2(&config, &stale)
+                .unwrap_err()
+                .1,
+            "catalog_generation_mismatch"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_084_routes_catalogue_v2_previsualisent_appliquent_et_rejouent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-084-ui-catalog-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let projects = root.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let policy_path = root.join("project-root-policy.json");
+        std::fs::write(
+            &policy_path,
+            serde_json::to_vec(&serde_json::json!({
+                "contract_version": 1,
+                "policy_generation": 1,
+                "allowed_project_roots": [projects],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let config = UiRelayConfig {
+            daemon_socket: root.join("bridget.sock"),
+            maicie_config: root.join("maicie.json"),
+            project_root_policy_path: Some(policy_path.clone()),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "test".to_string(),
+        };
+        let request = serde_json::to_vec(&serde_json::json!({
+            "contract_version": 2,
+            "command_id": "catalog-084",
+            "expected_generation": 1,
+            "locations": [{
+                "location_id": "workspace-main",
+                "label": "Projets",
+                "canonical_path": projects,
+                "kind": "workspace",
+                "default_creation": true
+            }]
+        }))
+        .unwrap();
+        let preview = post_project_location_catalog_preview_v2(&config, &request).unwrap();
+        assert_eq!(preview.current_locations[0].kind, "exact_project");
+        assert_eq!(preview.requested_locations[0].kind, "workspace");
+        let applied = post_project_location_catalog_apply_v2(&config, &request).unwrap();
+        assert_eq!(applied.resulting_generation, 2);
+        let replay = post_project_location_catalog_apply_v2(&config, &request).unwrap();
+        assert_eq!(replay.resulting_generation, 2);
+        assert_eq!(
+            ProjectRootPolicy::load(&policy_path).unwrap().generation(),
+            2
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_084_inventaire_legacy_associe_les_projets_sans_les_modifier() {
+        let locations = vec![crate::project_policy::ProjectLocation {
+            location_id: "legacy-0".to_string(),
+            label: "Ancien espace".to_string(),
+            canonical_path: PathBuf::from("/srv/projects"),
+            kind: crate::project_policy::ProjectLocationKind::ExactProject,
+            system_only: false,
+            default_creation: false,
+        }];
+        let round = UiProjectRoundV1 {
+            configured: false,
+            enabled: false,
+            revision: 0,
+            updated_at: 0,
+            interval_secs: 420,
+            last_occurrence_at: None,
+            last_dispatch_state: None,
+            last_dispatch_observed_at: None,
+        };
+        let projects = vec![
+            UiProjectListEntryV1 {
+                project_id: "project-inside".to_string(),
+                display_name: "inside".to_string(),
+                canonical_path: "/srv/projects/inside".to_string(),
+                state: "active",
+                binding_generation: 1,
+                round: round.clone(),
+            },
+            UiProjectListEntryV1 {
+                project_id: "project-outside".to_string(),
+                display_name: "outside".to_string(),
+                canonical_path: "/srv/other/outside".to_string(),
+                state: "active",
+                binding_generation: 1,
+                round,
+            },
+        ];
+        assert_eq!(
+            legacy_location_inventory(&locations, &projects),
+            vec![UiLegacyLocationInventoryV2 {
+                location_id: "legacy-0".to_string(),
+                project_ids: vec!["project-inside".to_string()],
+            }]
+        );
+        assert_eq!(projects[0].canonical_path, "/srv/projects/inside");
+    }
+
+    #[test]
     fn spec_080_confirmation_ui_cree_puis_enregistre_le_projet_dans_le_registre() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -9244,9 +9986,15 @@ mod tests {
         std::fs::write(
             &policy_path,
             serde_json::to_vec(&serde_json::json!({
-                "contract_version": 1,
+                "contract_version": 2,
                 "policy_generation": 1,
-                "allowed_project_roots": [projects],
+                "locations": [{
+                    "location_id": "workspace-test",
+                    "label": "Projets",
+                    "canonical_path": projects,
+                    "kind": "workspace",
+                    "default_creation": true
+                }]
             }))
             .unwrap(),
         )

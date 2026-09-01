@@ -1140,6 +1140,7 @@ pub fn run() {
         agent_name: Option<String>,
         project_id: Option<String>,
         desktop_action: Option<String>,
+        desktop_source: Option<String>,
     ) -> Result<PanelView, String> {
         let (local_port, endpoint) = if source_id == LOCAL_SOURCE_ID {
             let endpoint = discover_local_endpoint()
@@ -1170,6 +1171,7 @@ pub fn run() {
             agent_name.as_deref(),
             project_id.as_deref(),
             desktop_action.as_deref(),
+            desktop_source.as_deref(),
         );
         close_open_panels(&app, &state)?;
         let panel = {

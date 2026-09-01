@@ -11,6 +11,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 const PROJECT_ROOT_POLICY_CONTRACT_VERSION: u16 = 1;
+const PROJECT_LOCATION_CATALOG_CONTRACT_VERSION: u16 = 2;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProjectRootPolicyDocument {
@@ -19,6 +20,39 @@ struct ProjectRootPolicyDocument {
     allowed_project_roots: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_control_receipt: Option<ProjectRootPolicyReceipt>,
+}
+
+/// Catégories fermées des emplacements projet déclarés par l'opérateur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectLocationKind {
+    Workspace,
+    ExactProject,
+}
+
+/// Emplacement canonique, nommé et porteur de sa capacité. Le chemin n'est
+/// jamais choisi librement par le client lors d'une création.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectLocation {
+    pub location_id: String,
+    pub label: String,
+    pub canonical_path: PathBuf,
+    pub kind: ProjectLocationKind,
+    #[serde(default)]
+    pub system_only: bool,
+    #[serde(default)]
+    pub default_creation: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectLocationCatalogDocument {
+    contract_version: u16,
+    policy_generation: u64,
+    locations: Vec<ProjectLocation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_control_receipt: Option<ProjectLocationCatalogReceipt>,
 }
 
 /// Reçu compact inclus dans le même document que la politique. Il rend une
@@ -34,11 +68,28 @@ pub struct ProjectRootPolicyReceipt {
     pub observed_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectLocationCatalogReceipt {
+    pub command_id: String,
+    pub expected_generation: u64,
+    pub resulting_generation: u64,
+    pub location_ids: Vec<String>,
+    pub observed_at: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectRootPolicyReplacementPreview {
     pub current_generation: u64,
     pub current_roots: Vec<PathBuf>,
     pub requested_roots: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectLocationCatalogReplacementPreview {
+    pub current_generation: u64,
+    pub current_locations: Vec<ProjectLocation>,
+    pub requested_locations: Vec<ProjectLocation>,
 }
 
 /// Racines canoniques explicitement autorisées pour de nouvelles liaisons.
@@ -49,8 +100,11 @@ pub struct ProjectRootPolicyReplacementPreview {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectRootPolicy {
     allowed_roots: Vec<PathBuf>,
+    locations: Vec<ProjectLocation>,
+    legacy_v1: bool,
     generation: u64,
     last_control_receipt: Option<ProjectRootPolicyReceipt>,
+    last_catalog_receipt: Option<ProjectLocationCatalogReceipt>,
 }
 
 impl ProjectRootPolicy {
@@ -69,8 +123,137 @@ impl ProjectRootPolicy {
         &self.allowed_roots
     }
 
+    /// Le catalogue v2 n'expose que les emplacements validés au chargement.
+    pub fn locations(&self) -> &[ProjectLocation] {
+        &self.locations
+    }
+
+    pub fn is_legacy_v1(&self) -> bool {
+        self.legacy_v1
+    }
+
+    pub fn location(&self, location_id: &str) -> Option<&ProjectLocation> {
+        self.locations
+            .iter()
+            .find(|location| location.location_id == location_id)
+    }
+
+    /// Autorise la création sous un workspace v2 non système seulement.
+    pub fn validate_creation_parent(
+        &self,
+        location_id: &str,
+    ) -> Result<PathBuf, ProjectRegistryRefusal> {
+        if self.legacy_v1 {
+            return Err(ProjectRegistryRefusal::RootOutsideAllowedPrefixes);
+        }
+        let location = self
+            .location(location_id)
+            .filter(|location| {
+                location.kind == ProjectLocationKind::Workspace && !location.system_only
+            })
+            .ok_or(ProjectRegistryRefusal::RootOutsideAllowedPrefixes)?;
+        Ok(location.canonical_path.clone())
+    }
+
+    /// Autorise l'import d'un descendant de workspace ou du chemin exact d'un
+    /// projet déclaré. Les emplacements système restent réservés aux routes
+    /// expertes et ne sont donc pas admis ici.
+    pub fn validate_import_root(
+        &self,
+        location_id: &str,
+        requested_root: &Path,
+    ) -> Result<PathBuf, ProjectRegistryRefusal> {
+        if self.legacy_v1 {
+            return Err(ProjectRegistryRefusal::RootOutsideAllowedPrefixes);
+        }
+        let canonical_root = canonical_directory(requested_root)?;
+        let location = self
+            .location(location_id)
+            .filter(|location| !location.system_only)
+            .ok_or(ProjectRegistryRefusal::RootOutsideAllowedPrefixes)?;
+        let accepted = match location.kind {
+            ProjectLocationKind::Workspace => canonical_root.starts_with(&location.canonical_path),
+            ProjectLocationKind::ExactProject => canonical_root == location.canonical_path,
+        };
+        accepted
+            .then_some(canonical_root)
+            .ok_or(ProjectRegistryRefusal::RootOutsideAllowedPrefixes)
+    }
+
     pub fn last_control_receipt(&self) -> Option<&ProjectRootPolicyReceipt> {
         self.last_control_receipt.as_ref()
+    }
+
+    pub fn last_catalog_receipt(&self) -> Option<&ProjectLocationCatalogReceipt> {
+        self.last_catalog_receipt.as_ref()
+    }
+
+    pub fn replace_catalog_atomically_with_receipt(
+        source: &Path,
+        command_id: String,
+        expected_generation: u64,
+        locations: Vec<ProjectLocation>,
+        observed_at: i64,
+    ) -> Result<Self, ProjectRegistryRefusal> {
+        let current = Self::load(source)?;
+        let requested = validate_locations_for_owner(
+            locations,
+            unsafe { libc::geteuid() },
+            daemon_home().as_deref(),
+        )?;
+        let location_ids = requested
+            .iter()
+            .map(|location| location.location_id.clone())
+            .collect();
+        if let Some(receipt) = current.last_catalog_receipt()
+            && receipt.command_id == command_id
+        {
+            if receipt.expected_generation == expected_generation
+                && receipt.location_ids == location_ids
+            {
+                return Ok(current);
+            }
+            return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+        }
+        if current.generation != expected_generation {
+            return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+        }
+        let resulting_generation = expected_generation.saturating_add(1);
+        let document = ProjectLocationCatalogDocument {
+            contract_version: PROJECT_LOCATION_CATALOG_CONTRACT_VERSION,
+            policy_generation: resulting_generation,
+            locations: requested,
+            last_control_receipt: Some(ProjectLocationCatalogReceipt {
+                command_id,
+                expected_generation,
+                resulting_generation,
+                location_ids,
+                observed_at,
+            }),
+        };
+        write_document_atomically(source, &document)?;
+        Self::load(source)
+    }
+
+    pub fn preview_catalog_replacement(
+        source: &Path,
+        expected_generation: u64,
+        locations: Vec<ProjectLocation>,
+    ) -> Result<ProjectLocationCatalogReplacementPreview, ProjectRegistryRefusal> {
+        let current = Self::load(source)?;
+        if current.generation != expected_generation {
+            return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+        }
+        let requested_locations = validate_locations_for_owner(
+            locations,
+            unsafe { libc::geteuid() },
+            daemon_home().as_deref(),
+        )?;
+        Ok(ProjectLocationCatalogReplacementPreview {
+            current_generation: current.generation,
+            current_locations: current.locations,
+            requested_locations,
+        })
     }
 
     /// Valide une modification sans la persister. La même validation que
@@ -199,39 +382,69 @@ impl ProjectRootPolicy {
         let mut content = String::new();
         std::io::Read::read_to_string(&mut file, &mut content)
             .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
-        let document: ProjectRootPolicyDocument = serde_json::from_str(&content)
+        let value: serde_json::Value = serde_json::from_str(&content)
             .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
-        if document.contract_version != PROJECT_ROOT_POLICY_CONTRACT_VERSION
-            || document.policy_generation == 0
-            || document.allowed_project_roots.is_empty()
-        {
-            return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
-        }
-
-        let policy_generation = document.policy_generation;
-        let last_control_receipt = document.last_control_receipt;
-        let mut seen = BTreeSet::new();
-        let mut allowed_roots = Vec::with_capacity(document.allowed_project_roots.len());
-        for root in document.allowed_project_roots {
-            let canonical_root = canonical_directory(&root)?;
-            if is_broad_root(&canonical_root, daemon_home)
-                || canonical_root
-                    .metadata()
-                    .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?
-                    .uid()
-                    != expected_owner
-                || !seen.insert(canonical_root.clone())
-            {
-                return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+        let contract_version = value
+            .get("contract_version")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or(ProjectRegistryRefusal::ProjectRootPolicyInvalid)?
+            as u16;
+        match contract_version {
+            PROJECT_ROOT_POLICY_CONTRACT_VERSION => {
+                let document: ProjectRootPolicyDocument = serde_json::from_value(value)
+                    .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
+                if document.policy_generation == 0 || document.allowed_project_roots.is_empty() {
+                    return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+                }
+                let allowed_roots = validate_roots_for_owner(
+                    document.allowed_project_roots,
+                    expected_owner,
+                    daemon_home,
+                )?;
+                let locations = allowed_roots
+                    .iter()
+                    .enumerate()
+                    .map(|(index, path)| ProjectLocation {
+                        location_id: format!("legacy-{index}"),
+                        label: path.to_string_lossy().into_owned(),
+                        canonical_path: path.clone(),
+                        kind: ProjectLocationKind::ExactProject,
+                        system_only: false,
+                        default_creation: false,
+                    })
+                    .collect();
+                Ok(Self {
+                    allowed_roots,
+                    locations,
+                    legacy_v1: true,
+                    generation: document.policy_generation,
+                    last_control_receipt: document.last_control_receipt,
+                    last_catalog_receipt: None,
+                })
             }
-            allowed_roots.push(canonical_root);
+            PROJECT_LOCATION_CATALOG_CONTRACT_VERSION => {
+                let document: ProjectLocationCatalogDocument = serde_json::from_value(value)
+                    .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
+                if document.policy_generation == 0 || document.locations.is_empty() {
+                    return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+                }
+                let locations =
+                    validate_locations_for_owner(document.locations, expected_owner, daemon_home)?;
+                let allowed_roots = locations
+                    .iter()
+                    .map(|location| location.canonical_path.clone())
+                    .collect();
+                Ok(Self {
+                    allowed_roots,
+                    locations,
+                    legacy_v1: false,
+                    generation: document.policy_generation,
+                    last_control_receipt: None,
+                    last_catalog_receipt: document.last_control_receipt,
+                })
+            }
+            _ => Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid),
         }
-
-        Ok(Self {
-            allowed_roots,
-            generation: policy_generation,
-            last_control_receipt,
-        })
     }
 
     /// Canonicalise une racine candidate et vérifie qu'elle reste sous une
@@ -294,9 +507,80 @@ fn validate_replacement_roots(
     Ok(canonical_roots)
 }
 
-fn write_document_atomically(
+fn validate_roots_for_owner(
+    roots: Vec<PathBuf>,
+    expected_owner: u32,
+    home: Option<&Path>,
+) -> Result<Vec<PathBuf>, ProjectRegistryRefusal> {
+    let mut seen = BTreeSet::new();
+    let mut canonical_roots = Vec::with_capacity(roots.len());
+    for root in roots {
+        let canonical_root = canonical_directory(&root)?;
+        if is_broad_root(&canonical_root, home)
+            || canonical_root
+                .metadata()
+                .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?
+                .uid()
+                != expected_owner
+            || !seen.insert(canonical_root.clone())
+        {
+            return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+        }
+        canonical_roots.push(canonical_root);
+    }
+    Ok(canonical_roots)
+}
+
+fn validate_locations_for_owner(
+    locations: Vec<ProjectLocation>,
+    expected_owner: u32,
+    home: Option<&Path>,
+) -> Result<Vec<ProjectLocation>, ProjectRegistryRefusal> {
+    let mut location_ids = BTreeSet::new();
+    let mut paths = Vec::<PathBuf>::with_capacity(locations.len());
+    let mut default_creation_seen = false;
+    let mut validated = Vec::with_capacity(locations.len());
+    for mut location in locations {
+        let id = location.location_id.as_bytes();
+        let valid_id = !id.is_empty()
+            && id.len() <= 80
+            && id
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_'));
+        if !valid_id
+            || location.label.trim().is_empty()
+            || location.label.len() > 160
+            || !location_ids.insert(location.location_id.clone())
+        {
+            return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+        }
+        let canonical = canonical_directory(&location.canonical_path)?;
+        if is_broad_root(&canonical, home)
+            || canonical
+                .metadata()
+                .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?
+                .uid()
+                != expected_owner
+            || paths.iter().any(|path| {
+                path == &canonical || path.starts_with(&canonical) || canonical.starts_with(path)
+            })
+            || (location.default_creation
+                && (location.system_only
+                    || location.kind != ProjectLocationKind::Workspace
+                    || std::mem::replace(&mut default_creation_seen, true)))
+        {
+            return Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid);
+        }
+        location.canonical_path = canonical.clone();
+        paths.push(canonical);
+        validated.push(location);
+    }
+    Ok(validated)
+}
+
+fn write_document_atomically<T: Serialize>(
     source: &Path,
-    document: &ProjectRootPolicyDocument,
+    document: &T,
 ) -> Result<(), ProjectRegistryRefusal> {
     let payload = serde_json::to_vec(document)
         .map_err(|_| ProjectRegistryRefusal::ProjectRootPolicyInvalid)?;
@@ -346,7 +630,7 @@ fn daemon_home() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::ProjectRootPolicy;
+    use super::{ProjectLocation, ProjectLocationKind, ProjectRootPolicy};
     use bridget_transport::protocol::ProjectRegistryRefusal;
     use serde_json::json;
     use std::fs;
@@ -586,5 +870,159 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn spec_084_catalogue_v2_separe_creation_import_et_compatibilite_v1() {
+        let fixture = Fixture::new();
+        let exact = fixture.outside.clone();
+        fixture.write_policy(json!({
+            "contract_version": 2,
+            "policy_generation": 7,
+            "locations": [
+                {
+                    "location_id": "workspace-main",
+                    "label": "Espace projets",
+                    "canonical_path": fixture.allowed,
+                    "kind": "workspace",
+                    "default_creation": true
+                },
+                {
+                    "location_id": "project-existing",
+                    "label": "Projet existant",
+                    "canonical_path": exact,
+                    "kind": "exact_project"
+                }
+            ]
+        }));
+        let policy = ProjectRootPolicy::load(&fixture.policy).unwrap();
+
+        assert!(!policy.is_legacy_v1());
+        assert_eq!(policy.generation(), 7);
+        assert_eq!(
+            policy.validate_creation_parent("workspace-main").unwrap(),
+            fixture.allowed.canonicalize().unwrap()
+        );
+        assert_eq!(
+            policy.validate_creation_parent("project-existing"),
+            Err(ProjectRegistryRefusal::RootOutsideAllowedPrefixes)
+        );
+        assert_eq!(
+            policy
+                .validate_import_root("project-existing", &exact)
+                .unwrap(),
+            exact.canonicalize().unwrap()
+        );
+        assert_eq!(
+            policy.validate_import_root("project-existing", &fixture.allowed),
+            Err(ProjectRegistryRefusal::RootOutsideAllowedPrefixes)
+        );
+
+        fixture.write_policy(fixture.valid_document());
+        let legacy = ProjectRootPolicy::load(&fixture.policy).unwrap();
+        assert!(legacy.is_legacy_v1());
+        assert_eq!(
+            legacy.validate_creation_parent("legacy-0"),
+            Err(ProjectRegistryRefusal::RootOutsideAllowedPrefixes)
+        );
+    }
+
+    #[test]
+    fn spec_084_catalogue_v2_refuse_ids_et_chemins_ambigus() {
+        let fixture = Fixture::new();
+        fixture.write_policy(json!({
+            "contract_version": 2,
+            "policy_generation": 1,
+            "locations": [
+                {
+                    "location_id": "dup",
+                    "label": "Premier",
+                    "canonical_path": fixture.allowed,
+                    "kind": "workspace"
+                },
+                {
+                    "location_id": "dup",
+                    "label": "Second",
+                    "canonical_path": fixture.outside,
+                    "kind": "workspace"
+                }
+            ]
+        }));
+        assert_eq!(
+            ProjectRootPolicy::load(&fixture.policy),
+            Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid)
+        );
+
+        let nested = fixture.allowed.join("worktree");
+        fixture.write_policy(json!({
+            "contract_version": 2,
+            "policy_generation": 1,
+            "locations": [
+                {"location_id":"parent","label":"Parent","canonical_path":fixture.allowed,"kind":"workspace"},
+                {"location_id":"child","label":"Enfant","canonical_path":nested,"kind":"exact_project"}
+            ]
+        }));
+        assert_eq!(
+            ProjectRootPolicy::load(&fixture.policy),
+            Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid)
+        );
+
+        fixture.write_policy(json!({
+            "contract_version": 2,
+            "policy_generation": 1,
+            "locations": [
+                {"location_id":"first","label":"Premier","canonical_path":fixture.allowed,"kind":"workspace","default_creation":true},
+                {"location_id":"second","label":"Second","canonical_path":fixture.outside,"kind":"workspace","default_creation":true}
+            ]
+        }));
+        assert_eq!(
+            ProjectRootPolicy::load(&fixture.policy),
+            Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid)
+        );
+
+        fixture.write_policy(json!({
+            "contract_version": 2,
+            "policy_generation": 1,
+            "locations": [{"location_id":"unknown","label":"Invalide","canonical_path":fixture.allowed,"kind":"workspace","unexpected":true}]
+        }));
+        assert_eq!(
+            ProjectRootPolicy::load(&fixture.policy),
+            Err(ProjectRegistryRefusal::ProjectRootPolicyInvalid)
+        );
+    }
+
+    #[test]
+    fn spec_084_catalogue_v2_applique_atomiquement_et_rejoue_le_recu() {
+        let fixture = Fixture::new();
+        let locations = vec![ProjectLocation {
+            location_id: "workspace-main".to_string(),
+            label: "Projets".to_string(),
+            canonical_path: fixture.allowed.clone(),
+            kind: ProjectLocationKind::Workspace,
+            system_only: false,
+            default_creation: true,
+        }];
+        fixture.write_policy(fixture.valid_document());
+        let first = ProjectRootPolicy::replace_catalog_atomically_with_receipt(
+            &fixture.policy,
+            "catalog-1".to_string(),
+            1,
+            locations.clone(),
+            100,
+        )
+        .unwrap();
+        assert_eq!(first.generation(), 2);
+        assert!(!first.is_legacy_v1());
+        assert_eq!(first.last_catalog_receipt().unwrap().observed_at, 100);
+        let replay = ProjectRootPolicy::replace_catalog_atomically_with_receipt(
+            &fixture.policy,
+            "catalog-1".to_string(),
+            1,
+            locations,
+            101,
+        )
+        .unwrap();
+        assert_eq!(replay.generation(), 2);
+        assert_eq!(replay.last_catalog_receipt().unwrap().observed_at, 100);
     }
 }

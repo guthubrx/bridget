@@ -53,6 +53,7 @@ let preferences = null;
 let pendingPanelAction = null;
 let activeSourceId = null;
 let activeProjectId = null;
+let activeProjectKey = null;
 const connectionStates = new Map();
 
 function invoke(command, payload = {}) {
@@ -97,6 +98,10 @@ function sourceById(sourceId) {
   return snapshot.sources.find((source) => source.source_id === sourceId);
 }
 
+function desktopProjectKey(sourceId, projectId) {
+  return projectId === null ? null : `${sourceId}\u0000${projectId}`;
+}
+
 function applyPreferences() {
   if (!preferences) return;
   document.documentElement.dataset.colorScheme = preferences.color_scheme || "system";
@@ -110,7 +115,7 @@ async function savePreferences() {
 
 function renderSources() {
   clear(elements.sources);
-  elements.global.setAttribute("aria-current", String(activeProjectId === null));
+  elements.global.setAttribute("aria-current", String(activeProjectKey === null));
   for (const source of snapshot.sources) {
     const sourceItem = document.createElement("li");
     sourceItem.className = "source-item";
@@ -127,7 +132,7 @@ function renderSources() {
         "project-button",
         () => void openSource(source.source_id, project.project_id),
       );
-      projectButton.setAttribute("aria-pressed", String(activeProjectId === project.project_id));
+      projectButton.setAttribute("aria-pressed", String(activeProjectKey === desktopProjectKey(source.source_id, project.project_id)));
       const projectItem = document.createElement("li");
       projectItem.append(projectButton);
       projects.append(projectItem);
@@ -157,11 +162,13 @@ async function refreshFleet() {
 async function openSource(sourceId, projectId = null) {
   activeSourceId = sourceId;
   activeProjectId = projectId;
+  activeProjectKey = desktopProjectKey(sourceId, projectId);
   render();
   try {
     await invoke("panel_open", {
       source_id: sourceId,
       project_id: projectId,
+      desktop_source: sourceById(sourceId)?.label || sourceId,
     });
     const source = sourceById(sourceId);
     announce(projectId
@@ -197,18 +204,39 @@ function beginPanelAction(action) {
   pendingPanelAction = action;
   elements.targetTitle.textContent = panelActionTitle(action);
   clear(elements.targetChoices);
-  for (const source of selectedTargetSources()) {
-    elements.targetChoices.append(button(source.label, "target-source", () => {
+  for (const source of snapshot.sources) {
+    const available = source.connection_state === "connected" && !source.error;
+    const choice = button(
+      available ? source.label : `${source.label} - indisponible (${source.error || source.connection_state})`,
+      "target-source",
+      () => {
+        if (!available) return;
       elements.targetDialog.close();
       void openPanelAction(source.source_id, pendingPanelAction);
-    }));
+      },
+    );
+    choice.disabled = !available;
+    choice.setAttribute("aria-description", available
+      ? "Source disponible pour l’action projet."
+      : `Source indisponible : ${source.error || source.connection_state}.`);
+    elements.targetChoices.append(choice);
   }
   elements.targetDialog.showModal();
 }
 
 async function openPanelAction(sourceId, action) {
+  const source = sourceById(sourceId);
+  if (!source || source.connection_state !== "connected" || source.error) {
+    announce("La source choisie n’est plus disponible pour cette action.");
+    return;
+  }
   try {
-    await invoke("panel_open", { source_id: sourceId, desktop_action: action });
+    await invoke("panel_open", {
+      source_id: sourceId,
+      desktop_action: action,
+      desktop_source: source.label || sourceId,
+    });
+    pendingPanelAction = null;
   } catch (error) {
     announce(error.message || String(error));
   }

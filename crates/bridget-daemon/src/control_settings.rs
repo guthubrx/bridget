@@ -6,6 +6,7 @@
 //! `ProjectRootPolicy`.
 
 use crate::project_policy::{
+    ProjectLocation, ProjectLocationCatalogReceipt, ProjectLocationCatalogReplacementPreview,
     ProjectRootPolicy, ProjectRootPolicyReceipt, ProjectRootPolicyReplacementPreview,
 };
 use bridget_transport::protocol::ProjectRegistryRefusal;
@@ -37,7 +38,7 @@ pub fn server_setting_descriptors(policy_available: bool) -> Vec<SettingDescript
             } else {
                 SettingAccess::ReadOnly
             },
-            summary: "Racines de projets autorisées par le serveur.",
+            summary: "Catalogue versionné des emplacements de projets autorisés.",
         },
         SettingDescriptor {
             key: "providers.observation",
@@ -77,6 +78,71 @@ pub struct ProjectRootsPreview {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectRootsApplied {
     pub receipt: ProjectRootPolicyReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectLocationCatalogChange {
+    pub command_id: String,
+    pub expected_generation: u64,
+    pub locations: Vec<ProjectLocation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectLocationCatalogPreview {
+    pub current_generation: u64,
+    pub current_locations: Vec<ProjectLocation>,
+    pub requested_locations: Vec<ProjectLocation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectLocationCatalogApplied {
+    pub receipt: ProjectLocationCatalogReceipt,
+}
+
+pub fn preview_project_location_catalog(
+    policy_path: Option<&Path>,
+    change: &ProjectLocationCatalogChange,
+) -> Result<ProjectLocationCatalogPreview, ControlSettingsRefusal> {
+    validate_catalog_change(change)?;
+    let source = policy_path.ok_or(ControlSettingsRefusal::Unavailable)?;
+    let ProjectLocationCatalogReplacementPreview {
+        current_generation,
+        current_locations,
+        requested_locations,
+    } = ProjectRootPolicy::preview_catalog_replacement(
+        source,
+        change.expected_generation,
+        change.locations.clone(),
+    )
+    .map_err(map_policy_error)?;
+    Ok(ProjectLocationCatalogPreview {
+        current_generation,
+        current_locations,
+        requested_locations,
+    })
+}
+
+pub fn apply_project_location_catalog(
+    policy_path: Option<&Path>,
+    change: ProjectLocationCatalogChange,
+    observed_at: i64,
+) -> Result<ProjectLocationCatalogApplied, ControlSettingsRefusal> {
+    validate_catalog_change(&change)?;
+    let source = policy_path.ok_or(ControlSettingsRefusal::Unavailable)?;
+    let policy = ProjectRootPolicy::replace_catalog_atomically_with_receipt(
+        source,
+        change.command_id,
+        change.expected_generation,
+        change.locations,
+        observed_at,
+    )
+    .map_err(map_policy_error)?;
+    Ok(ProjectLocationCatalogApplied {
+        receipt: policy
+            .last_catalog_receipt()
+            .cloned()
+            .ok_or(ControlSettingsRefusal::ConflictOrRefusal)?,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +211,22 @@ fn validate_change(change: &ProjectRootsChange) -> Result<(), ControlSettingsRef
     }
 }
 
+fn validate_catalog_change(
+    change: &ProjectLocationCatalogChange,
+) -> Result<(), ControlSettingsRefusal> {
+    let id = change.command_id.as_bytes();
+    let valid_id = !id.is_empty()
+        && id.len() <= 160
+        && id
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_'));
+    if valid_id && change.expected_generation > 0 && !change.locations.is_empty() {
+        Ok(())
+    } else {
+        Err(ControlSettingsRefusal::InvalidRequest)
+    }
+}
+
 fn map_policy_error(error: ProjectRegistryRefusal) -> ControlSettingsRefusal {
     match error {
         ProjectRegistryRefusal::ProjectRootPolicyUnavailable => ControlSettingsRefusal::Unavailable,
@@ -155,6 +237,9 @@ fn map_policy_error(error: ProjectRegistryRefusal) -> ControlSettingsRefusal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project_policy::ProjectLocationKind;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn catalogue_est_ferme_et_seule_la_politique_projet_devient_modifiable() {
@@ -179,5 +264,82 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn spec_084_catalogue_v2_previsualise_applique_rejoue_et_refuse_generation_obsolete() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-084-control-settings-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let projects = root.join("projects");
+        fs::create_dir_all(&projects).unwrap();
+        let policy = root.join("project-root-policy.json");
+        fs::write(
+            &policy,
+            serde_json::to_vec(&serde_json::json!({
+                "contract_version": 1,
+                "policy_generation": 1,
+                "allowed_project_roots": [projects],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::set_permissions(&policy, fs::Permissions::from_mode(0o600)).unwrap();
+        let change = ProjectLocationCatalogChange {
+            command_id: "catalog-084".to_string(),
+            expected_generation: 1,
+            locations: vec![ProjectLocation {
+                location_id: "workspace-main".to_string(),
+                label: "Projets".to_string(),
+                canonical_path: projects,
+                kind: ProjectLocationKind::Workspace,
+                system_only: false,
+                default_creation: true,
+            }],
+        };
+        let invalid = ProjectLocationCatalogChange {
+            command_id: "catalog-invalid".to_string(),
+            expected_generation: 1,
+            locations: vec![],
+        };
+        assert_eq!(
+            apply_project_location_catalog(Some(&policy), invalid, 99),
+            Err(ControlSettingsRefusal::InvalidRequest)
+        );
+        assert_eq!(ProjectRootPolicy::load(&policy).unwrap().generation(), 1);
+        let preview = preview_project_location_catalog(Some(&policy), &change).unwrap();
+        assert_eq!(preview.current_generation, 1);
+        assert_eq!(
+            preview.current_locations[0].kind,
+            ProjectLocationKind::ExactProject
+        );
+        assert_eq!(
+            preview.requested_locations[0].kind,
+            ProjectLocationKind::Workspace
+        );
+        let applied = apply_project_location_catalog(Some(&policy), change.clone(), 100).unwrap();
+        assert_eq!(applied.receipt.resulting_generation, 2);
+        let replay = apply_project_location_catalog(Some(&policy), change, 101).unwrap();
+        assert_eq!(replay.receipt.observed_at, 100);
+        let stale = ProjectLocationCatalogChange {
+            command_id: "catalog-stale".to_string(),
+            expected_generation: 1,
+            locations: vec![ProjectLocation {
+                location_id: "workspace-main".to_string(),
+                label: "Projets".to_string(),
+                canonical_path: ProjectRootPolicy::load(&policy).unwrap().locations()[0]
+                    .canonical_path
+                    .clone(),
+                kind: ProjectLocationKind::Workspace,
+                system_only: false,
+                default_creation: true,
+            }],
+        };
+        assert_eq!(
+            preview_project_location_catalog(Some(&policy), &stale),
+            Err(ControlSettingsRefusal::ConflictOrRefusal)
+        );
+        let _ = fs::remove_dir_all(root);
     }
 }
