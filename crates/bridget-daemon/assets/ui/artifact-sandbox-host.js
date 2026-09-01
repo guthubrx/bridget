@@ -94,9 +94,19 @@
     const error = documentRef.createElement("p"); error.className = "artifact-sandbox__error"; error.hidden = true;
     const actions = documentRef.createElement("div"); actions.className = "artifact-sandbox__actions";
     const expand = actionButton(documentRef, "expand", "Agrandir");
+    let returnAnchor = null;
     expand.addEventListener("click", () => {
-      section.classList.toggle("artifact-sandbox--expanded");
-      setButtonIcon(expand, section.classList.contains("artifact-sandbox--expanded") ? "reduce" : "expand", section.classList.contains("artifact-sandbox--expanded") ? "Réduire" : "Agrandir");
+      const isExpanded = section.classList.toggle("artifact-sandbox--expanded");
+      if (isExpanded) {
+        returnAnchor = documentRef.createComment("bridget-artifact-position");
+        section.parentNode.insertBefore(returnAnchor, section);
+        documentRef.body.append(section);
+      } else if (returnAnchor && returnAnchor.parentNode) {
+        returnAnchor.parentNode.insertBefore(section, returnAnchor);
+        returnAnchor.remove();
+        returnAnchor = null;
+      }
+      setButtonIcon(expand, isExpanded ? "reduce" : "expand", isExpanded ? "Réduire" : "Agrandir");
       options.onExpand && options.onExpand(artifact);
     });
     const save = actionButton(documentRef, "save", "Enregistrer comme nouvelle version");
