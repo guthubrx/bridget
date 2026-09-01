@@ -7647,9 +7647,16 @@
       month: "long",
       ...(controlTimezone() ? { timeZone: controlTimezone() } : {}),
     });
+    const notifySandboxTheme = () => {
+      if (typeof windowRef.dispatchEvent !== "function" || typeof windowRef.CustomEvent !== "function") return;
+      windowRef.dispatchEvent(new windowRef.CustomEvent("bridget-theme-changed", {
+        detail: { theme: resolvedControlScheme(controlPreferences, windowRef) },
+      }));
+    };
     const saveControlPreferences = (next) => {
       controlPreferences = writeControlCenterPreferences(windowRef.localStorage, next);
       applyControlCenterPreferences(documentRef, controlPreferences);
+      notifySandboxTheme();
       dateFormatter = new Intl.DateTimeFormat("fr-FR", {
         weekday: "long",
         day: "numeric",
@@ -7659,6 +7666,15 @@
       return controlPreferences;
     };
     applyControlCenterPreferences(documentRef, controlPreferences);
+    const systemThemeMedia = typeof windowRef.matchMedia === "function"
+      ? windowRef.matchMedia("(prefers-color-scheme: light)")
+      : null;
+    const onSystemThemeChange = () => {
+      if (controlPreferences.colorScheme === "system") notifySandboxTheme();
+    };
+    if (systemThemeMedia && typeof systemThemeMedia.addEventListener === "function") {
+      systemThemeMedia.addEventListener("change", onSystemThemeChange);
+    }
     let state = createUiState({ selectedAgent: isUiSender(requestedAgent) ? null : requestedAgent });
     let projects = [];
     let selectedProjectId = params.get("project_id") || null;
@@ -10036,6 +10052,7 @@
           const card = sandbox.render(documentRef, artifact, {
             window: windowRef,
             frameUrl,
+            theme: resolvedControlScheme(controlPreferences, windowRef),
             onSave: async (uiState) => {
               const response = await windowRef.fetch(
                 artifactResourceUrl("/v1/artifacts/sandbox/save", token, state.selectedAgent, versionRef),
@@ -10070,15 +10087,6 @@
               placeholder.append(status, open);
             },
           });
-          const details = make("details", "artifact-sandbox__details");
-          details.append(make("summary", "", "Confinement et provenance"));
-          details.append(make("p", "", "HTML isolé sans réseau, cookies, fichiers locaux ni accès Bridget/Tauri."));
-          details.append(make("pre", "", JSON.stringify({
-            runtime: "sandbox-v1",
-            data_injected: artifact.publication && artifact.publication.payload && artifact.publication.payload.data || null,
-            sources: artifact.publication && artifact.publication.sources || [],
-          }, null, 2)));
-          card.append(details);
           renderArtifactActions(card, artifact, state.selectedAgent);
           placeholder.replaceChildren(card);
           return;
@@ -11164,6 +11172,9 @@
     };
 
     const closeAll = () => {
+      if (systemThemeMedia && typeof systemThemeMedia.removeEventListener === "function") {
+        systemThemeMedia.removeEventListener("change", onSystemThemeChange);
+      }
       closeIdentityCard(false);
       if (identityCard && typeof windowRef.removeEventListener === "function") {
         windowRef.removeEventListener("resize", closeIdentityCardForViewportChange);

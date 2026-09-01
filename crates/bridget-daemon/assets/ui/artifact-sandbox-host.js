@@ -14,15 +14,16 @@
 
   function asText(value, fallback = "") { return typeof value === "string" ? value : fallback; }
   function utf8Length(value) { return new TextEncoder().encode(JSON.stringify(value)).length; }
+  function normalizedTheme(value) { return value === "light" ? "light" : "dark"; }
 
-  function sandboxFrameUrl(value, frameInstanceId) {
+  function sandboxFrameUrl(value, frameInstanceId, theme) {
     const source = asText(value).trim();
     if (!source || !frameInstanceId) return "";
     // Le document parent est parfois présenté à WKWebView sous tauri://. Ce
     // schéma ne peut pas servir de base à `new URL` pour notre chemin HTTP
     // relatif, alors que `iframe.src` le résout correctement vers le relais.
     if (!/^\/v1\/artifacts\/sandbox\/frame\?/.test(source)) return "";
-    return `${source}&frame_instance_id=${encodeURIComponent(frameInstanceId)}`;
+    return `${source}&frame_instance_id=${encodeURIComponent(frameInstanceId)}&theme=${normalizedTheme(theme)}`;
   }
 
   function validMessage(value, instanceId) {
@@ -45,7 +46,8 @@
     const payload = artifact && artifact.publication && artifact.publication.payload || {};
     const frameInstanceId = (root.crypto && root.crypto.randomUUID ? root.crypto.randomUUID() : `frame-${Date.now()}-${Math.random()}`);
     const section = documentRef.createElement("section"); section.className = "artifact-sandbox";
-    const frameUrl = sandboxFrameUrl(options.frameUrl, frameInstanceId);
+    let theme = normalizedTheme(options.theme);
+    const frameUrl = sandboxFrameUrl(options.frameUrl, frameInstanceId, theme);
     if (!frameUrl) { section.textContent = "La page sandboxée est indisponible. Rechargez l’artefact via Bridget."; section.classList.add("artifact-sandbox--error"); return section; }
     const iframe = documentRef.createElement("iframe");
     iframe.className = "artifact-sandbox__frame";
@@ -78,9 +80,19 @@
       if (message.type === "sandbox.open_source") options.onOpenSource && options.onOpenSource(message.source_ref_id);
       if (message.type === "sandbox.error") { error.hidden = false; error.textContent = `Rendu dégradé (${message.code}) : ${message.message || "erreur déclarée"}.`; }
     };
-    (options.window || root).addEventListener("message", onMessage);
-    iframe.addEventListener("load", () => iframe.contentWindow.postMessage({ type: "sandbox.bootstrap", frame_instance_id: frameInstanceId, data: payload.data || null, limits: { max_height: MAX_HEIGHT, max_state_bytes: MAX_STATE_BYTES } }, "*"));
+    const parentWindow = options.window || root;
+    const sendTheme = () => iframe.contentWindow.postMessage({ type: "sandbox.theme", frame_instance_id: frameInstanceId, theme }, "*");
+    const onThemeChange = (event) => {
+      theme = normalizedTheme(event && event.detail && event.detail.theme);
+      sendTheme();
+    };
+    parentWindow.addEventListener("message", onMessage);
+    parentWindow.addEventListener("bridget-theme-changed", onThemeChange);
+    iframe.addEventListener("load", () => {
+      iframe.contentWindow.postMessage({ type: "sandbox.bootstrap", frame_instance_id: frameInstanceId, data: payload.data || null, limits: { max_height: MAX_HEIGHT, max_state_bytes: MAX_STATE_BYTES } }, "*");
+      sendTheme();
+    });
     return section;
   }
-  return { MAX_HEIGHT, MAX_STATE_BYTES, sandboxFrameUrl, validMessage, render };
+  return { MAX_HEIGHT, MAX_STATE_BYTES, normalizedTheme, sandboxFrameUrl, validMessage, render };
 });

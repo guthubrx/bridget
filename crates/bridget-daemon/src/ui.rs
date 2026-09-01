@@ -1954,6 +1954,7 @@ fn serve_connection(
                 runtime,
                 request.query.get("ticket"),
                 request.query.get("frame_instance_id"),
+                request.query.get("theme"),
             ) {
                 Ok(html) => write_sandbox_html(stream, &html),
                 Err((status, code, message)) => write_json(
@@ -4749,6 +4750,7 @@ fn read_artifact_sandbox_frame(
     runtime: &UiRelayRuntime,
     ticket: Option<&String>,
     frame_instance_id: Option<&String>,
+    theme: Option<&String>,
 ) -> Result<String, UiArtifactError> {
     let frame_instance_id = frame_instance_id
         .filter(|value| {
@@ -4766,28 +4768,46 @@ fn read_artifact_sandbox_frame(
             )
         })?;
     let html = read_artifact_sandbox_ticket(config, runtime, ticket)?;
-    Ok(sandbox_frame_document(&html, frame_instance_id))
+    Ok(sandbox_frame_document(
+        &html,
+        frame_instance_id,
+        sandbox_theme(theme),
+    ))
 }
 
-fn sandbox_frame_document(html: &str, frame_instance_id: &str) -> String {
+fn sandbox_theme(theme: Option<&String>) -> &'static str {
+    match theme.map(String::as_str) {
+        Some("light") => "light",
+        _ => "dark",
+    }
+}
+
+fn sandbox_frame_document(html: &str, frame_instance_id: &str, theme: &str) -> String {
     let bootstrap = base64_standard(
         serde_json::to_string(&serde_json::json!({ "frame_instance_id": frame_instance_id }))
             .expect("bootstrap sandbox sérialisable")
             .as_bytes(),
     );
-    let prelude = format!(
-        "<meta charset=\"utf-8\"><script>const __b=JSON.parse(decodeURIComponent(escape(atob('{bootstrap}'))));parent.postMessage({{type:'sandbox.ready',frame_instance_id:__b.frame_instance_id}},'*');window.addEventListener('message',e=>{{if(e.data&&e.data.type==='sandbox.bootstrap')window.dispatchEvent(new CustomEvent('bridget-sandbox-bootstrap',{{detail:e.data}}));if(e.data&&e.data.type==='sandbox.close')window.close()}});</script>"
-    );
+    let prelude = r#"<meta charset="utf-8"><script>(()=>{const __b=JSON.parse(decodeURIComponent(escape(atob('__BRIDGET_BOOTSTRAP__'))));const __setTheme=t=>{const next=t==='light'?'light':'dark';document.documentElement.dataset.bridgetTheme=next;document.documentElement.style.colorScheme=next;};const __height=()=>{const body=document.body;const height=Math.ceil(Math.max(body?body.scrollHeight:0,document.documentElement.scrollHeight));parent.postMessage({type:'sandbox.resize',frame_instance_id:__b.frame_instance_id,height:Math.min(1200,height)},'*');};let __queued=false;const __schedule=()=>{if(__queued)return;__queued=true;requestAnimationFrame(()=>{__queued=false;__height();});};__setTheme('__BRIDGET_THEME__');parent.postMessage({type:'sandbox.ready',frame_instance_id:__b.frame_instance_id},'*');window.addEventListener('message',e=>{if(!e.data)return;if(e.data.type==='sandbox.bootstrap')window.dispatchEvent(new CustomEvent('bridget-sandbox-bootstrap',{detail:e.data}));if(e.data.type==='sandbox.theme')__setTheme(e.data.theme);if(e.data.type==='sandbox.close')window.close();});window.addEventListener('load',()=>{if(window.ResizeObserver){const observer=new ResizeObserver(__schedule);observer.observe(document.documentElement);if(document.body)observer.observe(document.body);}new MutationObserver(__schedule).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});window.addEventListener('resize',__schedule);__schedule();});})();</script>"#
+        .replace("__BRIDGET_BOOTSTRAP__", &bootstrap)
+        .replace("__BRIDGET_THEME__", theme);
+    let theme_style = r#"<style id="bridget-runtime-theme">html:root[data-bridget-theme="dark"]{color-scheme:dark;--bridget-background:#10161f;--bridget-foreground:#e8edf5;--bridget-muted:#a8b4c5;--bridget-border:#39495d;--bridget-panel:#182331;--ink:#e8edf5;--muted:#a8b4c5;--line:#39495d;--panel:#182331;--ground:#10161f;--bg:#10161f;--card:#182331;--soft:#223246;--accent:#76b8ff;--blue:#76b8ff;--blue-soft:#223e5e;--orange:#ffb45f;--green:#7acb9a}html:root[data-bridget-theme="light"]{color-scheme:light;--bridget-background:#f4f7fa;--bridget-foreground:#17212b;--bridget-muted:#637180;--bridget-border:#d9e1e8;--bridget-panel:#fff;--ink:#17212b;--muted:#637180;--line:#d9e1e8;--panel:#fff;--ground:#f4f7fa;--bg:#f4f7fa;--card:#fff;--soft:#e1f2f5;--accent:#126e82;--blue:#126e82;--blue-soft:#e1f2f5;--orange:#df6c00;--green:#16866b}html[data-bridget-theme] body{min-height:0!important;min-block-size:0!important;background:var(--bridget-background)!important;color:var(--bridget-foreground)!important}</style>"#;
     let lowercase = html.to_ascii_lowercase();
     if let Some(head_start) = lowercase.find("<head") {
         if let Some(head_end) = lowercase[head_start..].find('>') {
             let insertion = head_start + head_end + 1;
             let mut document = html.to_owned();
             document.insert_str(insertion, &prelude);
+            let closing_head = document.to_ascii_lowercase().find("</head>");
+            if let Some(closing_head) = closing_head {
+                document.insert_str(closing_head, theme_style);
+            } else {
+                document.insert_str(insertion + prelude.len(), theme_style);
+            }
             return document;
         }
     }
-    format!("<!doctype html><html><head>{prelude}</head><body>{html}</body></html>")
+    format!("<!doctype html><html><head>{prelude}{theme_style}</head><body>{html}</body></html>")
 }
 
 fn post_artifact_sandbox_save(
@@ -9783,11 +9803,14 @@ mod tests {
         let page = sandbox_frame_document(
             "<!doctype html><html><head><title>Test</title></head><body><h1>Visible</h1></body></html>",
             "frame-123",
+            "dark",
         );
         assert!(!page.contains("Content-Security-Policy"));
         assert!(page.contains("sandbox.ready"));
         assert!(page.contains("frame_instance_id"));
         assert!(page.contains("<h1>Visible</h1>"));
         assert!(page.contains("<head><meta charset=\"utf-8\">"));
+        assert!(page.contains("bridget-runtime-theme"));
+        assert!(page.contains("sandbox.resize"));
     }
 }
