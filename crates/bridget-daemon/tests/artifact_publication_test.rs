@@ -2,7 +2,7 @@ use bridget_daemon::artifact_service::{ArtifactService, ArtifactServiceError};
 use bridget_daemon::artifact_store::{
     ArtifactPersistResult, ArtifactPublicationContext, ArtifactStoreError,
 };
-use bridget_daemon::artifact_types::{ArtifactPublicationV1, PublicationReason};
+use bridget_daemon::artifact_types::{ArtifactPublicationV1, ArtifactState, PublicationReason};
 use std::fs;
 use std::path::PathBuf;
 
@@ -98,6 +98,54 @@ fn rattachement_tour_et_isolement_projet_restent_attestes() {
             ArtifactStoreError::CrossProject
         ))
     ));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn publication_html_sandboxee_est_acceptee_comme_artefact_canonique() {
+    let root = fixture_root("html-sandbox");
+    fs::create_dir_all(&root).unwrap();
+    let mut service = ArtifactService::open(
+        &root.join("bridget.db"),
+        &root.join("artifacts"),
+        Default::default(),
+    )
+    .unwrap();
+    let publication: ArtifactPublicationV1 = serde_json::from_str(
+        r#"{
+          "idempotency_key":"fixture-html-sandbox-v1",
+          "kind":"html",
+          "title":"Simulateur hors ligne",
+          "payload":{
+            "html":"<!doctype html><title>Simulateur</title><button>Tester</button>",
+            "data":{"distance_km":10},
+            "inline_height_hint":360
+          },
+          "sources":[{
+            "source_kind":"user_supplied",
+            "locator":"conversation:fixture-html",
+            "citation":"Données fournies par l’opérateur",
+            "access_status":"available"
+          }],
+          "publication_reason":"initial"
+        }"#,
+    )
+    .unwrap();
+
+    let result = service
+        .publish(context("project:html", "turn:html"), publication)
+        .unwrap();
+    let receipt = match result {
+        ArtifactPersistResult::Created(receipt) => receipt,
+        ArtifactPersistResult::Replayed(_) => panic!("première publication rejouée"),
+    };
+    assert_eq!(receipt.state, ArtifactState::Published);
+    assert!(
+        receipt
+            .content_digest
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    );
     let _ = fs::remove_dir_all(root);
 }
 
