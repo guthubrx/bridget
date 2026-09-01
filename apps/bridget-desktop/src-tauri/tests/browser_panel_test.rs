@@ -25,12 +25,19 @@ fn navigation_browser_reste_https_ou_publication_locale_et_le_panneau_est_unique
 }
 
 #[test]
-fn accueil_browser_recoit_un_marqueur_de_relais_et_ne_duplique_pas_la_conversation() {
+fn accueil_browser_est_une_coque_locale_distincte_du_relais() {
     let backend = include_str!("../src/lib.rs");
+    let chrome = include_str!("../../ui/browser-chrome.html");
+    let chrome_script = include_str!("../../ui/browser-chrome.js");
 
-    assert!(backend.contains("append_pair(\"browser_panel\", \"1\")"));
-    assert!(backend.contains("WebviewUrl::External(target.parse::<tauri::Url>()"));
-    assert!(backend.contains("second fil de discussion"));
-    assert!(backend.contains("window.__BRIDGET_BROWSER_PANEL__ = true;"));
+    assert!(backend.contains("WebviewUrl::App(\"browser-home.html\".into())"));
+    assert!(backend.contains("WebviewUrl::App(\"browser-chrome.html\".into())"));
+    assert!(backend.contains("BROWSER_CHROME_LABEL"));
+    assert!(backend.contains("PageLoadEvent::Finished"));
+    assert!(!backend.contains("append_pair(\"browser_panel\", \"1\")"));
     assert!(backend.contains("open_browser_home_surface(&app, &state)?;"));
+    assert!(chrome.contains("browser-form"));
+    assert!(chrome.contains("data-action=\"maximize\""));
+    assert!(chrome_script.contains("bridget-browser://"));
+    assert!(backend.contains("\"maximize\" =>"));
 }

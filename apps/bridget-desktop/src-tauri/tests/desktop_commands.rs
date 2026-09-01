@@ -39,10 +39,12 @@ fn un_seul_serveur_est_affiche_a_la_fois() {
     assert!(backend.contains("close_open_panels(&app, &state)?;"));
     assert!(backend.contains("const DESKTOP_SHELL_WIDTH: u32 = 200;"));
     assert!(backend.contains("PhysicalSize::new(relay_width, size.height.max(1))"));
-    assert!(backend.contains("PhysicalSize::new(browser_width.max(1), size.height.max(1))"));
-    assert!(
-        backend.contains("WebviewBuilder::new(browser.label.clone(), WebviewUrl::External(url))")
-    );
+    assert!(backend.contains("const BROWSER_CHROME_HEIGHT: u32 = 52;"));
+    assert!(backend.contains("let browser_available_width = size.width.saturating_sub(DESKTOP_SHELL_WIDTH);"));
+    assert!(backend.contains("browser_available_width.max(1)"));
+    assert!(backend.contains("PhysicalSize::new(browser_width.max(1), content_height)"));
+    assert!(backend.contains("BROWSER_CHROME_HEIGHT.min(size.height).max(1)"));
+    assert!(backend.contains("create_browser_content(app, browser.label, WebviewUrl::External(url)"));
 }
 
 #[test]

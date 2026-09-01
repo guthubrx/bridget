@@ -43,7 +43,7 @@ pub fn run() {
     use std::path::PathBuf;
     use std::sync::Mutex;
     use std::time::Duration;
-    use tauri::webview::WebviewBuilder;
+    use tauri::webview::{PageLoadEvent, WebviewBuilder};
     use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl};
     use tauri_plugin_notification::NotificationExt;
 
@@ -59,6 +59,8 @@ pub fn run() {
     }
 
     const DESKTOP_SHELL_WIDTH: u32 = 200;
+    const BROWSER_CHROME_HEIGHT: u32 = 52;
+    const BROWSER_CHROME_LABEL: &str = "browser-chrome";
 
     struct ActiveConnection {
         session: crate::profile::ConnectionSession,
@@ -439,15 +441,119 @@ pub fn run() {
         Ok(preferences.browser_panel)
     }
 
+    fn sync_browser_chrome_url(app: &tauri::AppHandle, url: &str) {
+        let Ok(url) = serde_json::to_string(url) else {
+            return;
+        };
+        if let Some(chrome) = app.get_webview(BROWSER_CHROME_LABEL) {
+            let _ = chrome.eval(format!("window.__BRIDGET_BROWSER_SET_URL?.({url});"));
+        }
+    }
+
+    fn create_browser_chrome(app: &tauri::AppHandle) -> Result<(), String> {
+        if app.get_webview(BROWSER_CHROME_LABEL).is_some() {
+            return Ok(());
+        }
+        let main = main_window(app)?;
+        let navigation_app = app.clone();
+        let child = WebviewBuilder::new(
+            BROWSER_CHROME_LABEL,
+            WebviewUrl::App("browser-chrome.html".into()),
+        )
+        .on_navigation(move |url| {
+            if url.scheme() == "tauri" {
+                return true;
+            }
+            if url.scheme() != "bridget-browser" {
+                return false;
+            }
+            let action = url.host_str().unwrap_or_default();
+            let Some(state) = navigation_app.try_state::<DesktopState>() else {
+                return false;
+            };
+            match action {
+                "open" => {
+                    let target = url
+                        .query_pairs()
+                        .find_map(|(key, value)| (key == "url").then(|| value.into_owned()))
+                        .and_then(|value| approved_external_https_url(&value));
+                    if let Some(target) = target {
+                        let _ = open_browser_surface(&navigation_app, &state, target.as_str());
+                    }
+                }
+                "back" => {
+                    if let Some(browser) = navigation_app.get_webview("browser-primary") {
+                        let _ = browser.eval("history.back();");
+                    }
+                }
+                "forward" => {
+                    if let Some(browser) = navigation_app.get_webview("browser-primary") {
+                        let _ = browser.eval("history.forward();");
+                    }
+                }
+                "reload" => {
+                    if let Some(browser) = navigation_app.get_webview("browser-primary") {
+                        let _ = browser.reload();
+                    }
+                }
+                "maximize" => {
+                    let _ = save_browser_preferences(&state, |panel| {
+                        panel.right_panel_visible = true;
+                        panel.right_panel_maximized = !panel.right_panel_maximized;
+                    });
+                    let _ = arrange_panels(&navigation_app, &state);
+                }
+                _ => {}
+            }
+            false
+        });
+        main.add_child(
+            child,
+            PhysicalPosition::new(0_i32, 0_i32),
+            PhysicalSize::new(1_u32, 1_u32),
+        )
+        .map(|_| ())
+        .map_err(as_message)
+    }
+
+    fn create_browser_content(
+        app: &tauri::AppHandle,
+        label: String,
+        initial_url: WebviewUrl,
+        preferences: &BrowserPanelStateV1,
+    ) -> Result<(), String> {
+        let main = main_window(app)?;
+        let page_load_app = app.clone();
+        let child = WebviewBuilder::new(label, initial_url)
+            .data_store_identifier(browser_data_store_identifier(
+                preferences.browser_profile_generation,
+            ))
+            .on_navigation(|url| {
+                (url.scheme() == "https" && url.host_str().is_some())
+                    || (url.scheme() == "http" && url.host_str() == Some("127.0.0.1"))
+                    || url.scheme() == "tauri"
+            })
+            .on_page_load(move |_webview, payload| {
+                if payload.event() == PageLoadEvent::Finished {
+                    sync_browser_chrome_url(&page_load_app, payload.url().as_str());
+                }
+            });
+        main.add_child(
+            child,
+            PhysicalPosition::new(0_i32, 0_i32),
+            PhysicalSize::new(1_u32, 1_u32),
+        )
+        .map(|_| ())
+        .map_err(as_message)
+    }
+
     fn open_browser_surface(
         app: &tauri::AppHandle,
         state: &DesktopState,
         target: &str,
     ) -> Result<(), String> {
-        if !is_browser_target(target) {
-            return Err(
-                "La cible Browser doit être HTTPS ou une publication locale Bridget.".to_owned(),
-            );
+        if !is_browser_target(target) || !target.starts_with("https://") {
+            return Err("La cible Browser doit être une URL HTTPS approuvée.".to_owned());
         }
         let url = target
             .parse::<tauri::Url>()
@@ -458,26 +564,13 @@ pub fn run() {
         };
         let preferences =
             save_browser_preferences(state, |panel| panel.right_panel_visible = true)?;
+        create_browser_chrome(app)?;
         if let Some(webview) = app.get_webview(&browser.label) {
             webview.navigate(url).map_err(as_message)?;
-            arrange_panels(app, state)?;
-            return Ok(());
+        } else {
+            create_browser_content(app, browser.label, WebviewUrl::External(url), &preferences)?;
         }
-        let main = main_window(app)?;
-        let child = WebviewBuilder::new(browser.label.clone(), WebviewUrl::External(url))
-            .data_store_identifier(browser_data_store_identifier(
-                preferences.browser_profile_generation,
-            ))
-            .on_navigation(|url| {
-                (url.scheme() == "https" && url.host_str().is_some())
-                    || (url.scheme() == "http" && url.host_str() == Some("127.0.0.1"))
-            });
-        main.add_child(
-            child,
-            PhysicalPosition::new(0_i32, 0_i32),
-            PhysicalSize::new(1_u32, 1_u32),
-        )
-        .map_err(as_message)?;
+        sync_browser_chrome_url(app, target);
         arrange_panels(app, state)
     }
 
@@ -485,61 +578,28 @@ pub fn run() {
         app: &tauri::AppHandle,
         state: &DesktopState,
     ) -> Result<(), String> {
-        let relay_target = state
-            .panels
-            .lock()
-            .map_err(as_message)?
-            .panels()
-            .next()
-            .map(|panel| panel.url.clone());
-        let target = relay_target
-            .map(|value| {
-                let mut url = value.parse::<tauri::Url>().expect("relais déjà validé");
-                // Le marqueur est porté par la query du relais. Contrairement
-                // au chemin, WebKit le conserve lors du rétablissement de la
-                // navigation : cette surface ne peut donc pas devenir un
-                // second fil de discussion.
-                url.query_pairs_mut().append_pair("browser_panel", "1");
-                url.to_string()
-            })
-            .unwrap_or_else(|| "bridget://browser-home".to_owned());
         let browser = {
             let mut panels = state.panels.lock().map_err(as_message)?;
-            panels.open_browser(target.clone()).map_err(as_message)?
+            if let Some(browser) = panels.browser().cloned() {
+                browser
+            } else {
+                panels
+                    .open_browser("bridget://browser-home")
+                    .map_err(as_message)?
+            }
         };
         let preferences =
             save_browser_preferences(state, |panel| panel.right_panel_visible = true)?;
-        if let Some(webview) = app.get_webview(&browser.label) {
-            if target != "bridget://browser-home" {
-                let url = target
-                    .parse::<tauri::Url>()
-                    .map_err(|_| "URL Browser Bridget invalide.".to_owned())?;
-                webview.navigate(url).map_err(as_message)?;
-            }
-            return arrange_panels(app, state);
+        create_browser_chrome(app)?;
+        if app.get_webview(&browser.label).is_none() {
+            create_browser_content(
+                app,
+                browser.label,
+                WebviewUrl::App("browser-home.html".into()),
+                &preferences,
+            )?;
         }
-        let main = main_window(app)?;
-        let initial_url = if target == "bridget://browser-home" {
-            WebviewUrl::App("browser-home.html".into())
-        } else {
-            WebviewUrl::External(target.parse::<tauri::Url>().map_err(as_message)?)
-        };
-        let child = WebviewBuilder::new(browser.label, initial_url)
-            .data_store_identifier(browser_data_store_identifier(
-                preferences.browser_profile_generation,
-            ))
-            .initialization_script("window.__BRIDGET_BROWSER_PANEL__ = true;")
-            .on_navigation(|url| {
-                url.scheme() == "https"
-                    || (url.scheme() == "http" && url.host_str() == Some("127.0.0.1"))
-                    || url.scheme() == "tauri"
-            });
-        main.add_child(
-            child,
-            PhysicalPosition::new(0_i32, 0_i32),
-            PhysicalSize::new(1_u32, 1_u32),
-        )
-        .map_err(as_message)?;
+        sync_browser_chrome_url(app, "");
         arrange_panels(app, state)
     }
 
@@ -629,19 +689,20 @@ pub fn run() {
             return Ok(());
         };
         let browser_preferences = browser_preferences(state)?;
+        let browser_available_width = size.width.saturating_sub(DESKTOP_SHELL_WIDTH);
         let browser_width = if browser_preferences.right_panel_visible && browser.is_some() {
-            size.width
-                .saturating_sub(DESKTOP_SHELL_WIDTH)
-                .clamp(320, 720)
+            if browser_preferences.right_panel_maximized {
+                browser_available_width.max(1)
+            } else {
+                browser_available_width.clamp(320, 720)
+            }
         } else {
             0
         };
         let relay_width = if browser_preferences.right_panel_maximized && browser_width > 0 {
             1
         } else {
-            size.width
-                .saturating_sub(DESKTOP_SHELL_WIDTH + browser_width)
-                .max(1)
+            browser_available_width.saturating_sub(browser_width).max(1)
         };
         if let Some(webview) = app.get_webview(&panel.label) {
             webview
@@ -651,16 +712,29 @@ pub fn run() {
                 .set_size(PhysicalSize::new(relay_width, size.height.max(1)))
                 .map_err(as_message)?;
         }
-        if let Some(browser) = browser
-            && let Some(webview) = app.get_webview(&browser.label)
-        {
+        if let Some(browser) = browser {
             let browser_x = DESKTOP_SHELL_WIDTH.saturating_add(relay_width) as i32;
-            webview
-                .set_position(PhysicalPosition::new(browser_x, 0_i32))
-                .map_err(as_message)?;
-            webview
-                .set_size(PhysicalSize::new(browser_width.max(1), size.height.max(1)))
-                .map_err(as_message)?;
+            let content_y = BROWSER_CHROME_HEIGHT.min(size.height) as i32;
+            let content_height = size.height.saturating_sub(BROWSER_CHROME_HEIGHT).max(1);
+            if let Some(chrome) = app.get_webview(BROWSER_CHROME_LABEL) {
+                chrome
+                    .set_position(PhysicalPosition::new(browser_x, 0_i32))
+                    .map_err(as_message)?;
+                chrome
+                    .set_size(PhysicalSize::new(
+                        browser_width.max(1),
+                        BROWSER_CHROME_HEIGHT.min(size.height).max(1),
+                    ))
+                    .map_err(as_message)?;
+            }
+            if let Some(webview) = app.get_webview(&browser.label) {
+                webview
+                    .set_position(PhysicalPosition::new(browser_x, content_y))
+                    .map_err(as_message)?;
+                webview
+                    .set_size(PhysicalSize::new(browser_width.max(1), content_height))
+                    .map_err(as_message)?;
+            }
         }
         Ok(())
     }
