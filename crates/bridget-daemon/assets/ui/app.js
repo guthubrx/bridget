@@ -865,6 +865,28 @@
         assert.equal(clicked.showNewMessages, false);
       });
 
+      test("envoi_explicite_reprend_le_suivi_du_bas", () => {
+        const before = {
+          scrollTop: 180,
+          scrollHeight: 1380,
+          clientHeight: 480,
+          pendingCount: 2,
+          showNewMessages: true,
+        };
+        const sent = api.explicitSendViewport(before);
+        assert.equal(sent.scrollTop, 900);
+        assert.equal(sent.pendingCount, 0);
+        assert.equal(sent.showNewMessages, false);
+        const response = api.decideScroll(
+          sent,
+          { ...sent, scrollHeight: 1540 },
+          1,
+          true,
+        );
+        assert.equal(response.scrollTop, 1060);
+        assert.equal(response.showNewMessages, false);
+      });
+
       test("suivi_du_flux_reste_actif_pendant_une_generation", () => {
         const before = { scrollTop: 560, scrollHeight: 1200, clientHeight: 600 };
         const after = { scrollTop: 0, scrollHeight: 1320, clientHeight: 600 };
@@ -1912,6 +1934,71 @@
         assert.equal(messages[0].role, "agent");
         assert.equal(messages[0].text, "projection ledger vers le fil");
         assert.equal(messages[0].at, 110);
+      });
+
+      test("reponse_ledger_identique_au_flux_journal_n_est_pas_dupliquee", () => {
+        const events = [
+          {
+            kind: "record",
+            agent: "jim",
+            at: 10,
+            record: { message_id: "demande-1", session_id: "s", seq: 1, event: "turn_start", payload: { body: "salut", from: "humain" } },
+          },
+          {
+            kind: "record",
+            agent: "jim",
+            at: 11,
+            record: { message_id: "demande-1", session_id: "s", seq: 2, event: "update", payload: { kind: "text", content: "Salut !" } },
+          },
+          {
+            kind: "record",
+            agent: "jim",
+            at: 12,
+            record: { message_id: "demande-1", session_id: "s", seq: 3, event: "turn_end", payload: { stop_reason: "completed" } },
+          },
+          {
+            kind: "message",
+            role: "agent",
+            agent: "jim",
+            text: "Salut !",
+            at: 13,
+            messageId: "reponse-ledger-1",
+            deliveryId: "reponse-ledger-1",
+          },
+        ];
+        const replies = api.projectTimeline(events)
+          .filter((entry) => entry.kind === "message" && entry.role === "agent");
+        assert.equal(replies.length, 1);
+        assert.equal(replies[0].messageId, "demande-1");
+      });
+
+      test("reponse_ledger_distincte_du_flux_journal_reste_visible", () => {
+        const events = [
+          {
+            kind: "record",
+            agent: "jim",
+            at: 10,
+            record: { message_id: "demande-2", session_id: "s", seq: 1, event: "update", payload: { kind: "text", content: "Première réponse" } },
+          },
+          {
+            kind: "record",
+            agent: "jim",
+            at: 11,
+            record: { message_id: "demande-2", session_id: "s", seq: 2, event: "turn_end", payload: { stop_reason: "completed" } },
+          },
+          {
+            kind: "message",
+            role: "agent",
+            agent: "jim",
+            text: "Message direct distinct",
+            at: 12,
+            messageId: "reponse-ledger-2",
+            deliveryId: "reponse-ledger-2",
+          },
+        ];
+        const replies = api.projectTimeline(events)
+          .filter((entry) => entry.kind === "message" && entry.role === "agent");
+        assert.equal(replies.length, 2);
       });
 
       test("message_optimiste_est_rattache_au_record_par_delivery_id", () => {
@@ -5107,6 +5194,13 @@
     };
   }
 
+  // Un envoi humain est une intention explicite de reprendre le fil au
+  // dernier message. Cette décision ne dépend donc pas d'un ancien état de
+  // lecture ou d'une animation de défilement encore en cours.
+  function explicitSendViewport(metrics) {
+    return scrollToLatest(metrics);
+  }
+
   function readingAnchorFromTurnRects(viewportTop, turnRects, threshold = 8) {
     for (const turn of turnRects || []) {
       if (!turn || !turn.id || !Number.isFinite(turn.top) || !Number.isFinite(turn.bottom)) continue;
@@ -6257,8 +6351,36 @@
         .map((entry) => uiMessageIdentity(entry))
         .filter(Boolean),
     );
+    // Une réponse native est visible en flux dans le journal, puis enregistrée
+    // dans le ledger pour la conversation durable. Ces deux projections n'ont
+    // pas le même identifiant : dédoublonner par agent, contenu et proximité
+    // temporelle conserve les réponses directes qui ne passent pas par le flux.
+    const journalAgentResponses = projected.filter((entry) => (
+      entry.kind === "message"
+      && entry.role === "agent"
+      && !entry.deliveryId
+      && text(entry.text)
+    ));
+    const isDuplicateLedgerAgentResponse = (entry) => {
+      if (
+        entry.kind !== "message"
+        || entry.role !== "agent"
+        || !entry.deliveryId
+        || !text(entry.text)
+      ) {
+        return false;
+      }
+      const entryText = text(entry.text).replace(/\s+/g, " ").trim();
+      const entryAt = Number(entry.at) || 0;
+      return journalAgentResponses.some((journal) => (
+        journal.agent === entry.agent
+        && text(journal.text).replace(/\s+/g, " ").trim() === entryText
+        && Math.abs((Number(journal.at) || 0) - entryAt) <= 60
+      ));
+    };
     return projected
       .filter((entry) => !isOnlyVigilanceRoundExchange(entry, roundDeliveryIds))
+      .filter((entry) => !isDuplicateLedgerAgentResponse(entry))
       .filter((entry) => {
         if (
           entry.kind === "message"
@@ -11367,6 +11489,7 @@
       state = result.state;
       nodes.send.disabled = true;
       nodes.sendState.textContent = "injection…";
+      let accepted = false;
       try {
         const response = await windowRef.fetch(`/v1/send?token=${encodeURIComponent(token)}`, {
           method: "POST",
@@ -11378,6 +11501,13 @@
         const messageId = uiMessageIdentity(payload);
         const acceptedAt = epochSeconds(payload.issued_at) || Date.now() / 1000;
         rememberPendingUiMessage(pendingUiMessages, messageId, target, acceptedAt);
+        // L'envoi depuis le composeur est une action explicite : même si un
+        // ancien render avait placé la vue en lecture, le nouveau tour doit
+        // partir et rester au bas du fil.
+        const sentViewport = explicitSendViewport(currentMetrics());
+        nodes.thread.scrollTop = sentViewport.scrollTop;
+        followLatest = true;
+        state = { ...state, viewport: sentViewport };
         applyIncoming({
           kind: "message",
           role: "user",
@@ -11388,6 +11518,7 @@
           messageId: messageId || null,
           deliveryId: messageId || null,
         });
+        accepted = true;
         const current = createDraft(
           nodes.draft.value,
           nodes.draft.selectionStart,
@@ -11418,6 +11549,13 @@
         nodes.sendState.textContent = labels[error.message] || "envoi refusé";
       } finally {
         resizeDraft();
+        if (accepted) {
+          const sentViewport = explicitSendViewport(currentMetrics());
+          nodes.thread.scrollTop = sentViewport.scrollTop;
+          followLatest = true;
+          state = { ...state, viewport: sentViewport };
+          nodes.newMessages.hidden = true;
+        }
         nodes.send.disabled = isUiSender(state.selectedAgent)
           || !state.selectedAgent
           || nodes.draft.value.trim().length === 0;
@@ -11679,6 +11817,7 @@
     isAtBottom,
     decideScroll,
     scrollToLatest,
+    explicitSendViewport,
     readingAnchorFromTurnRects,
     restoredReadingScrollTop,
     relayBannerState,
