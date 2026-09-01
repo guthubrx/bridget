@@ -899,13 +899,19 @@ fn private_prompt(instructions: Option<&str>, body: &str) -> String {
     format!("[Instructions individuelles Bridget]\n{instructions}\n\n[Demande]\n{body}")
 }
 
+fn bridget_tool_prompt(body: &str) -> String {
+    format!(
+        "[Outils Bridget disponibles]\nLe serveur MCP Bridget est disponible dans ce tour. Si la demande porte sur un artefact HTML ou JavaScript interactif, appelle `bridget_publish_artifact` avec `kind: html` et son document autonome. Ne réponds jamais que le sandbox ou la publication est indisponible avant d'avoir appelé cet outil. Après succès, réponds brièvement sans recopier le HTML en Markdown.\n\n[Demande]\n{body}"
+    )
+}
+
 fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<String, String> {
     let instructions = worker
         .private_profile_instructions
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .clone();
-    let prompt = private_prompt(instructions.as_deref(), &message.body);
+    let prompt = bridget_tool_prompt(&private_prompt(instructions.as_deref(), &message.body));
     for attempt in 0..=SATURATION_RETRIES {
         match request(
             &worker.writer,
@@ -5020,5 +5026,15 @@ mod tests {
         assert!(prompt.ends_with(body));
         assert_eq!(body, "Demande utilisateur visible.");
         assert_eq!(private_prompt(None, body), body);
+    }
+
+    #[test]
+    fn consigne_outil_bridget_exige_la_publication_html_avant_un_refus() {
+        let prompt = bridget_tool_prompt("Construis un simulateur HTML interactif.");
+
+        assert!(prompt.contains("bridget_publish_artifact"));
+        assert!(prompt.contains("kind: html"));
+        assert!(prompt.contains("Ne réponds jamais que le sandbox"));
+        assert!(prompt.ends_with("Construis un simulateur HTML interactif."));
     }
 }

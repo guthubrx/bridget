@@ -368,6 +368,16 @@ impl UiRelayRuntime {
         )?);
         Ok(())
     }
+
+    fn invalidate_human_presence(&self) {
+        let mut presence = self
+            .human_presence
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(current) = presence.take() {
+            current.alive.store(false, Ordering::Release);
+        }
+    }
 }
 
 fn open_human_presence(
@@ -915,7 +925,7 @@ struct UiAttentionStateRequestV1 {
     action: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UiSendRequestV1 {
     version: u8,
@@ -2355,8 +2365,26 @@ fn post_ui_message(
         }
         eprintln!("relais UI: inscription de l'humain à l'annuaire impossible: {error}");
     }
-    send_ui_message(&config.daemon_socket, request)
-        .map_err(|error| (503, "send_failed", error.to_string()))
+    match send_ui_message(&config.daemon_socket, request.clone()) {
+        Ok(accepted) => Ok(accepted),
+        // Le daemon est l'autorité : ce refus prouve que la socket de présence
+        // est périmée malgré son marqueur local. La rouvrir, puis rejouer une
+        // seule fois exactement la même demande évite de faire choisir entre
+        // envoyer le message et attendre une réponse.
+        Err(error) if request.reply && is_reply_sender_unavailable(&error) => {
+            runtime.invalidate_human_presence();
+            runtime
+                .ensure_human_presence(&config.daemon_socket)
+                .map_err(|error| (503, "human_sender_unregistered", error.to_string()))?;
+            send_ui_message(&config.daemon_socket, request)
+                .map_err(|error| (503, "send_failed", error.to_string()))
+        }
+        Err(error) => Err((503, "send_failed", error.to_string())),
+    }
+}
+
+fn is_reply_sender_unavailable(error: &UiError) -> bool {
+    matches!(error, UiError::Protocol(detail) if detail.contains("reply_sender_unavailable"))
 }
 
 type UiStopError = (u16, &'static str, String);
@@ -6892,6 +6920,17 @@ mod tests {
         assert_ne!("human_sender_unregistered", "daemon_unavailable");
         assert_ne!("send_failed", "daemon_unavailable");
         assert_ne!("human_sender_unregistered", "send_failed");
+    }
+
+    #[test]
+    fn refus_reponse_sans_presence_declenche_la_reinscription() {
+        let refusal = UiError::Protocol(
+            "issue idempotente en vol attendue, reçu reply_sender_unavailable".to_string(),
+        );
+        assert!(is_reply_sender_unavailable(&refusal));
+        assert!(!is_reply_sender_unavailable(&UiError::Protocol(
+            "recipient_unavailable".to_string(),
+        )));
     }
 
     #[test]

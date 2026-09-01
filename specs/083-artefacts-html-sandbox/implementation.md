@@ -1,5 +1,16 @@
 # Preuves d'implémentation - SPEC-083
 
+## Correctif de publication HTML - 2026-09-01
+
+- Observation de production : malgré le serveur MCP déclaré, un agent Codex
+  pouvait répondre par un bloc HTML brut et affirmer à tort que la sandbox
+  était indisponible.
+- Correction : chaque tour Codex géré reçoit désormais une consigne explicite
+  et persistante rappelant `bridget_publish_artifact`, `kind: html` et
+  l'interdiction du faux refus avant l'appel de l'outil.
+- Preuve ciblée : `cargo test -p bridget-transport --lib
+  codex_app_server::tests::consigne_outil_bridget_exige_la_publication_html_avant_un_refus -- --exact`.
+
 **Date** : 2026-08-31
 **Branche** : `082-artifact-publication`
 

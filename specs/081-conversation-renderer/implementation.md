@@ -1,5 +1,17 @@
 # Journal d'implémentation - SPEC-081
 
+## Correctif de présence UI - 2026-09-01
+
+- Observation de production : les envois avec réponse demandée pouvaient être
+  refusés après un redémarrage du daemon avec `reply_sender_unavailable`, alors
+  que le marqueur local de présence UI était encore vivant.
+- Correction : ce refus est désormais le signal d'autorité qui invalide la
+  présence locale, force une réinscription, puis rejoue une seule fois la même
+  demande. L'opérateur conserve donc « Attendre une réponse » sans choisir
+  entre réception et envoi.
+- Preuve ciblée : `cargo test -p bridget-daemon
+  refus_reponse_sans_presence_declenche_la_reinscription --lib` : succès.
+
 Ce journal ne consigne que des opérations réellement observées. Il ne contient
 ni secret, ni jeton de relais, ni contenu de conversation de production.
 
