@@ -5835,9 +5835,24 @@ fn push_live_snapshot(
     http: &mut TcpStream,
     config: &UiRelayConfig,
     focus_agent: &str,
+    last_artifact_signature: &mut Option<String>,
 ) -> Result<(), UiError> {
     let snapshot = read_snapshot(config, Some(focus_agent))?;
+    let artifact_signature = artifact_reference_signature(&snapshot)?;
+    if !should_push_live_snapshot(last_artifact_signature.as_deref(), &artifact_signature) {
+        return Ok(());
+    }
+    *last_artifact_signature = Some(artifact_signature);
     write_sse(http, "snapshot", &snapshot)
+}
+
+fn artifact_reference_signature(snapshot: &UiSnapshotV1) -> Result<String, UiError> {
+    serde_json::to_string(&snapshot.artifact_references)
+        .map_err(|error| UiError::Protocol(format!("signature d'artefact invalide: {error}")))
+}
+
+fn should_push_live_snapshot(last_artifact_signature: Option<&str>, current: &str) -> bool {
+    last_artifact_signature != Some(current)
 }
 
 fn seed_thread_message_ids(snapshot: &UiSnapshotV1, seen: &mut HashSet<String>) {
@@ -5961,6 +5976,10 @@ fn stream_sse_journal(
         write_relay_state(http, "connected", now_secs())?;
     }
     let mut seen_thread_ids = HashSet::new();
+    let mut last_artifact_signature = initial_snapshot
+        .as_ref()
+        .map(artifact_reference_signature)
+        .transpose()?;
     if let Some(snapshot) = &initial_snapshot {
         seed_thread_message_ids(snapshot, &mut seen_thread_ids);
         write_snapshot_sse(http, snapshot)?;
@@ -6013,7 +6032,7 @@ fn stream_sse_journal(
                         agent,
                         &mut seen_thread_ids,
                     );
-                    push_live_snapshot(http, config, agent)?;
+                    push_live_snapshot(http, config, agent, &mut last_artifact_signature)?;
                     last_thread_poll = Instant::now();
                 }
                 continue;
@@ -6046,6 +6065,7 @@ fn stream_sse_journal(
                 write_relay_state(http, "connected", now_secs())?;
                 if let Some(snapshot) = &restored_snapshot {
                     seed_thread_message_ids(snapshot, &mut seen_thread_ids);
+                    last_artifact_signature = Some(artifact_reference_signature(snapshot)?);
                     write_snapshot_sse(http, snapshot)?;
                 }
                 write_sse(
@@ -6107,7 +6127,7 @@ fn stream_sse_journal(
         {
             let _ =
                 push_live_thread_messages(http, &config.daemon_socket, agent, &mut seen_thread_ids);
-            push_live_snapshot(http, config, agent)?;
+            push_live_snapshot(http, config, agent, &mut last_artifact_signature)?;
             last_thread_poll = Instant::now();
         }
         if matches!(event, DaemonToWrapper::End { .. }) {
@@ -6256,13 +6276,14 @@ fn stream_sse_thread_watch_after_headers(
     let snapshot = read_snapshot(config, Some(agent))?;
     write_relay_state(http, "connected", now_secs())?;
     let mut seen_thread_ids = HashSet::new();
+    let mut last_artifact_signature = Some(artifact_reference_signature(&snapshot)?);
     seed_thread_message_ids(&snapshot, &mut seen_thread_ids);
     write_snapshot_sse(http, &snapshot)?;
 
     loop {
         thread::sleep(UI_THREAD_LEDGER_POLL);
         push_live_thread_messages(http, &config.daemon_socket, agent, &mut seen_thread_ids)?;
-        push_live_snapshot(http, config, agent)?;
+        push_live_snapshot(http, config, agent, &mut last_artifact_signature)?;
         write!(http, ": keepalive\n\n")?;
         http.flush()?;
     }
@@ -8047,9 +8068,17 @@ mod tests {
             "le rafraîchissement vivant doit relire la projection attestée"
         );
         assert!(
-            watch_body.contains("push_live_snapshot(http, config, agent)?"),
+            watch_body
+                .contains("push_live_snapshot(http, config, agent, &mut last_artifact_signature)?"),
             "le watch doit pousser les références d'artefacts publiées en direct"
         );
+    }
+
+    #[test]
+    fn snapshot_vivant_nest_pousse_que_si_les_artefacts_changent() {
+        assert!(should_push_live_snapshot(None, "a"));
+        assert!(!should_push_live_snapshot(Some("a"), "a"));
+        assert!(should_push_live_snapshot(Some("a"), "b"));
     }
 
     #[test]

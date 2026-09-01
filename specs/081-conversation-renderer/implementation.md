@@ -1,5 +1,21 @@
 # Journal d'implémentation - SPEC-081
 
+## Correctif de stabilité de lecture - 2026-09-01
+
+- Cause observée : le flux SSE envoyait un snapshot complet toutes les 400 ms,
+  même sans nouveau message ni artefact. Le client reconstruisait alors tout
+  le DOM du fil et réassignait `scrollTop`. Une sélection de texte, un
+  copier-coller ou une lecture vers le haut pouvait donc sauter de position.
+- Correction : le relais ne renvoie désormais un snapshot vivant que lorsque
+  la projection des références d'artefacts change. Le client ne reconstruit
+  le fil que si la sélection d'agent, les messages, les échanges ou les
+  références d'artefacts ont effectivement changé.
+- Preuves ciblées : `node crates/bridget-daemon/assets/ui/app.js` : 121 tests
+  réussis ; `cargo fmt --check` et les tests Rust
+  `snapshot_vivant_nest_pousse_que_si_les_artefacts_changent` et
+  `chemin_productif_snapshot_emprunte_human_referent_thread_messages` : succès
+  sur le serveur de déploiement.
+
 ## Correctif de présence UI - 2026-09-01
 
 - Observation de production : les envois avec réponse demandée pouvaient être

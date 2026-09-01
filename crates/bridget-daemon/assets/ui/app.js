@@ -1466,6 +1466,13 @@
         assert.equal(next.agents[0].name, "rc1");
       });
 
+      test("snapshot_identique_ne_reconstruit_pas_le_fil", () => {
+        assert.equal(api.snapshotNeedsThreadRender({}), false);
+        assert.equal(api.snapshotNeedsThreadRender({ timelineChanged: true }), true);
+        assert.equal(api.snapshotNeedsThreadRender({ artifactReferencesChanged: true }), true);
+        assert.equal(api.snapshotNeedsThreadRender({ selectionChanged: true }), true);
+      });
+
       test("identite_humaine_reste_emetteur_et_n_est_jamais_un_interlocuteur", () => {
         const humain = { agent_id: "humain", type: "ui", state: "connected", host: "localhost" };
         const bridget = { agent_id: "bridget", type: "codex", state: "connected", host: "serveur" };
@@ -5189,6 +5196,28 @@
       };
     }).filter((reference) => reference.reference_id && reference.version_ref);
     return { state, items };
+  }
+
+  function artifactReferenceSignature(value) {
+    const projection = normalizeArtifactReferenceProjection(value);
+    return JSON.stringify([
+      projection.state,
+      projection.items.map((reference) => [
+        reference.reference_id,
+        reference.version_ref,
+        reference.state,
+        reference.pinned,
+        reference.created_at,
+      ]),
+    ]);
+  }
+
+  function snapshotNeedsThreadRender({
+    selectionChanged = false,
+    timelineChanged = false,
+    artifactReferencesChanged = false,
+  } = {}) {
+    return selectionChanged || timelineChanged || artifactReferencesChanged;
   }
 
   function decodeBase64Bytes(encoded) {
@@ -10812,8 +10841,13 @@
     const applySnapshotPayload = (snapshot, watchedAgent) => {
       applyProjectSnapshot(snapshot);
       const previousSelected = state.selectedAgent;
+      const previousArtifactSignature = artifactReferenceSignature(state.artifactReferences);
       state = applyReconnectSnapshot(state, snapshot);
       state = { ...state, agents: applyReadThrough(state.agents) };
+      const selectionChanged = previousSelected !== state.selectedAgent;
+      const artifactReferencesChanged = previousArtifactSignature
+        !== artifactReferenceSignature(state.artifactReferences);
+      let timelineChanged = false;
       if (previousSelected && state.agents.some((agent) => agent.name === previousSelected)) {
         state = { ...state, selectedAgent: previousSelected };
       }
@@ -10825,6 +10859,7 @@
         const key = peerExchangeKey(watchedAgent, exchange);
         if (seenPeers.has(key)) return;
         seenPeers.add(key);
+        timelineChanged = true;
         state = applyWatchEvent(state, {
           ...exchange,
           kind: "peer_exchange",
@@ -10837,7 +10872,7 @@
         && Array.isArray(snapshot.thread_messages)
       ) {
         snapshot.thread_messages.forEach((message) => {
-          ingestThreadMessage(message, watchedAgent);
+          timelineChanged = ingestThreadMessage(message, watchedAgent) || timelineChanged;
         });
       }
       if (peerProjection.state === "not_computed") {
@@ -10846,7 +10881,16 @@
       }
       renderAgents();
       renderHeader();
-      renderThread(0);
+      // Un snapshot est aussi un battement de santé du relais. Il ne doit pas
+      // reconstruire le DOM du fil si son contenu n'a pas changé : sinon une
+      // sélection ou un copier-coller perd sa position toutes les 400 ms.
+      if (snapshotNeedsThreadRender({
+        selectionChanged,
+        timelineChanged,
+        artifactReferencesChanged,
+      })) {
+        renderThread(0);
+      }
       return peerProjection.state;
     };
 
@@ -11639,6 +11683,8 @@
     restoredReadingScrollTop,
     relayBannerState,
     applyReconnectSnapshot,
+    artifactReferenceSignature,
+    snapshotNeedsThreadRender,
     isInactiveAgent,
     agentRosterSignature,
     agentResourceUrl,
