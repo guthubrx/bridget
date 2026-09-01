@@ -49,6 +49,11 @@ type Writer = Arc<Mutex<Option<ChildStdin>>>;
 type Waiters = Arc<Mutex<HashMap<u64, mpsc::Sender<Result<ServerResponse, String>>>>>;
 type Journal = Arc<Mutex<Option<JournalWriter>>>;
 type PendingRequest = Arc<Mutex<Option<PendingProviderRequest>>>;
+/// Certains clients Codex exposent des outils comme requêtes app-server
+/// `item/tool/call`, y compris lorsqu'un serveur MCP statique est présent.
+/// Le daemon injecte ici l'exécuteur attesté correspondant : le pilote ne
+/// possède ni identité Bridget ni accès direct à la socket métier.
+pub type DynamicToolHandler = Arc<dyn Fn(&str, &Value) -> Result<Value, String> + Send + Sync>;
 
 #[derive(Debug)]
 struct ServerResponse {
@@ -56,7 +61,7 @@ struct ServerResponse {
     raw: Vec<u8>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CodexAppServerOptions {
     pub command: String,
     pub args: Vec<String>,
@@ -71,6 +76,9 @@ pub struct CodexAppServerOptions {
     pub provider_observation: Option<ProviderObservation>,
     /// Démarrage de fil demandé par Bridget après vérification de la baseline.
     pub thread_bootstrap: CodexThreadBootstrap,
+    /// Exécuteur des requêtes `item/tool/call` que Codex délègue au client.
+    /// Il reste absent hors wrapper Bridget géré.
+    pub dynamic_tool_handler: Option<DynamicToolHandler>,
 }
 /// Choix de fil au démarrage, explicitement versionné dans les options du
 /// pilote afin qu'une reprise native ne puisse jamais être confondue avec une
@@ -199,6 +207,7 @@ struct ReaderContext {
     active_detail: ActiveTurnDetail,
     writer: Writer,
     permissions: String,
+    dynamic_tool_handler: Option<DynamicToolHandler>,
 }
 
 pub struct CodexAppServerTransport {
@@ -302,6 +311,7 @@ impl CodexAppServerTransport {
                 active_detail: active_detail.clone(),
                 writer: writer.clone(),
                 permissions: options.permissions.clone(),
+                dynamic_tool_handler: options.dynamic_tool_handler.clone(),
             },
         );
 
@@ -1624,6 +1634,50 @@ fn approval_response(value: &Value, permissions: &str) -> Option<(Value, Value)>
     ))
 }
 
+/// Répond à une demande d'outil dynamique de l'app-server. Cette surface est
+/// distincte de MCP, mais les deux chemins passent par le même exécuteur
+/// Bridget attesté. Un nom inconnu reste refusé explicitement au moteur au
+/// lieu de laisser le tour finir sur un faux succès.
+fn dynamic_tool_response(
+    value: &Value,
+    handler: Option<&DynamicToolHandler>,
+) -> Option<(Value, &'static str)> {
+    let id = value.get("id")?;
+    let params = value.get("params")?;
+    let tool = params.get("tool").and_then(Value::as_str)?;
+    let arguments = params.get("arguments").unwrap_or(&Value::Null);
+    let label = if tool == "bridget_publish_artifact" {
+        "publication d’artefact Bridget"
+    } else {
+        "outil dynamique Bridget refusé"
+    };
+    let outcome = match handler {
+        Some(handler) if tool == "bridget_publish_artifact" => handler(tool, arguments)
+            .map(|payload| {
+                serde_json::to_string(&payload).unwrap_or_else(|_| {
+                    "{\"status\":\"refused\",\"code\":\"serialization\"}".to_string()
+                })
+            })
+            .map_err(|_| "La publication Bridget a été refusée.".to_string()),
+        Some(_) => Err("Cet outil dynamique Bridget n’est pas autorisé.".to_string()),
+        None => Err("Aucun exécuteur Bridget n’est disponible dans cette session.".to_string()),
+    };
+    let (success, text) = match outcome {
+        Ok(text) => (true, text),
+        Err(text) => (false, text),
+    };
+    Some((
+        json!({
+            "id": id,
+            "result": {
+                "success": success,
+                "contentItems": [{ "type": "inputText", "text": text }],
+            }
+        }),
+        label,
+    ))
+}
+
 /// Refuse une requête fournisseur inconnue sans reproduire son corps dans les
 /// diagnostics. Le fournisseur reçoit une erreur JSON-RPC exploitable et
 /// l'interface un code stable avec une référence pseudonymisée.
@@ -1900,6 +1954,7 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
         active_detail,
         writer,
         permissions,
+        dynamic_tool_handler,
     } = context;
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
@@ -2157,6 +2212,38 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                             detail: "item/plan/delta Codex".to_string(),
                         },
                     );
+                }
+                Some("item/tool/call") => {
+                    if let Some((reply, detail)) =
+                        dynamic_tool_response(&value, dynamic_tool_handler.as_ref())
+                    {
+                        if let Err(error) = write_value(&writer, reply) {
+                            push_source(
+                                &observations,
+                                raw.clone(),
+                                ManagedEventKind::Error {
+                                    detail: format!(
+                                        "réponse à l’outil dynamique Codex impossible: {error}"
+                                    ),
+                                },
+                            );
+                        }
+                        push_source(
+                            &observations,
+                            raw,
+                            ManagedEventKind::Update {
+                                detail: detail.to_string(),
+                            },
+                        );
+                    } else {
+                        push_source(
+                            &observations,
+                            raw,
+                            ManagedEventKind::Error {
+                                detail: "requête d’outil dynamique Codex invalide".to_string(),
+                            },
+                        );
+                    }
                 }
                 Some(method) if is_approval_request(method) => {
                     record_active_act(
@@ -2798,6 +2885,7 @@ mod tests {
             thread_bootstrap: Default::default(),
             model: Some("gpt-5.6-terra".to_string()),
             permissions: "allow".to_string(),
+            dynamic_tool_handler: None,
         }
     }
 
@@ -5036,5 +5124,45 @@ mod tests {
         assert!(prompt.contains("kind: html"));
         assert!(prompt.contains("Ne réponds jamais que le sandbox"));
         assert!(prompt.ends_with("Construis un simulateur HTML interactif."));
+    }
+
+    #[test]
+    fn outil_dynamique_codex_rejoint_lexecuteur_bridget_atteste() {
+        let request = json!({
+            "id": "dynamic-1",
+            "method": "item/tool/call",
+            "params": {
+                "tool": "bridget_publish_artifact",
+                "arguments": { "kind": "html" },
+            }
+        });
+        let handler: DynamicToolHandler = Arc::new(|tool, arguments| {
+            assert_eq!(tool, "bridget_publish_artifact");
+            assert_eq!(arguments["kind"], "html");
+            Ok(json!({ "status": "published", "receipt": "artifact-1" }))
+        });
+
+        let (reply, detail) = dynamic_tool_response(&request, Some(&handler)).expect("réponse");
+        assert_eq!(detail, "publication d’artefact Bridget");
+        assert_eq!(reply["result"]["success"], true);
+        assert!(
+            reply["result"]["contentItems"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("published"))
+        );
+    }
+
+    #[test]
+    fn outil_dynamique_inconnu_est_refuse_explicitement() {
+        let request = json!({
+            "id": "dynamic-2",
+            "method": "item/tool/call",
+            "params": { "tool": "arbitrary_tool", "arguments": {} }
+        });
+        let handler: DynamicToolHandler = Arc::new(|_, _| Ok(json!({ "unexpected": true })));
+
+        let (reply, detail) = dynamic_tool_response(&request, Some(&handler)).expect("réponse");
+        assert_eq!(detail, "outil dynamique Bridget refusé");
+        assert_eq!(reply["result"]["success"], false);
     }
 }

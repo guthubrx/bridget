@@ -2674,6 +2674,7 @@ mod tests {
             permissions: "allow".to_string(),
             provider_observation: None,
             thread_bootstrap: Default::default(),
+            dynamic_tool_handler: None,
         };
         let mut transport = CodexAppServerTransport::spawn(options).expect("pilote Codex");
         let (record, rendered) =

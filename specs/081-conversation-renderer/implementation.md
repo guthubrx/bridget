@@ -12,6 +12,19 @@
 - Preuve ciblée : `cargo test -p bridget-daemon
   refus_reponse_sans_presence_declenche_la_reinscription --lib` : succès.
 
+## Correctif de reprise de présence humaine - 2026-09-01
+
+- Cause observée : après le redémarrage du relais UI, une ancienne socket
+  pouvait encore retenir l'identité humaine. Le nouveau relais était alors
+  refusé avec `agent_id déjà connecté`, puis les envois `reply=true` devenaient
+  impossibles avec `émetteur humain non inscrit`.
+- Correction : seule l'identité singleton du relais UI peut désormais reprendre
+  sa route. Le daemon envoie `Disconnect` à l'ancienne connexion, libère sa
+  route et inscrit la nouvelle génération. Aucun agent ordinaire ne peut
+  utiliser ce mécanisme.
+- Preuve ciblée : `cargo test -p bridget-daemon --lib
+  relais_ui_redemarre_reprend_lidentite_humaine_sans_rester_non_inscrit -- --nocapture`.
+
 Ce journal ne consigne que des opérations réellement observées. Il ne contient
 ni secret, ni jeton de relais, ni contenu de conversation de production.
 

@@ -11,6 +11,19 @@
 - Preuve ciblée : `cargo test -p bridget-transport --lib
   codex_app_server::tests::consigne_outil_bridget_exige_la_publication_html_avant_un_refus -- --exact`.
 
+## Correctif du canal dynamique Codex - 2026-09-01
+
+- Cause observée : le catalogue MCP était bien chargé par Codex, mais le moteur
+  pouvait demander `bridget_publish_artifact` par la requête app-server
+  `item/tool/call`. Bridget la traitait comme inconnue, écrivait
+  `unsupported_provider_request`, puis Jim terminait sans publication.
+- Correction : ce canal dynamique ne reconnaît que
+  `bridget_publish_artifact` et le délègue au même validateur, à la même
+  identité d'agent et au même reçu que MCP stdio. Les autres outils restent
+  explicitement refusés.
+- Preuve ciblée : `cargo test -p bridget-transport --lib
+  codex_app_server::tests::outil_dynamique -- --nocapture`.
+
 **Date** : 2026-08-31
 **Branche** : `082-artifact-publication`
 

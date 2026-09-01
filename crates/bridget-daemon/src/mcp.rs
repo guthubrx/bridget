@@ -652,6 +652,27 @@ fn execute_tool_at_with_scope(
     }
 }
 
+/// Pont interne pour le canal d'outils dynamiques de Codex app-server. Il
+/// réutilise strictement le même validateur et la même identité que MCP stdio
+/// afin qu'un artefact ne puisse jamais contourner Bridget.
+pub(crate) fn execute_dynamic_tool_at_with_scope(
+    identity: &str,
+    instance_id: &str,
+    name: &str,
+    arguments: &Value,
+    socket: &Path,
+) -> Result<Value, String> {
+    let arguments = arguments
+        .as_object()
+        .ok_or_else(|| "arguments d’outil Bridget invalides".to_string())?;
+    execute_tool_at_with_scope(identity, instance_id, name, arguments, socket).map_err(|error| {
+        match error {
+            ToolError::InvalidParams(_) => "arguments de publication invalides".to_string(),
+            ToolError::Technical { code, .. } => format!("publication Bridget refusée: {code}"),
+        }
+    })
+}
+
 fn execute_publish_artifact(
     identity: &str,
     instance_id: &str,

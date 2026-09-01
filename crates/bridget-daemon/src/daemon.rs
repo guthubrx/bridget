@@ -94,6 +94,10 @@ use uuid::Uuid;
 /// Une interaction humaine non marquée reply doit tout de même obtenir une
 /// issue rapide : sinon un steer peut rester muet pendant 45 minutes.
 const HUMAN_STEER_TIMEOUT_SECS: u64 = 30;
+/// Identité unique du relais UI local. Le service est singleton : une nouvelle
+/// génération doit pouvoir remplacer proprement une socket morte ou devenue
+/// muette après un redémarrage, sans jamais ouvrir cette reprise aux agents.
+const UI_HUMAN_AGENT_ID: &str = "550e8400-e29b-41d4-a716-4466554400f0";
 pub struct Metrics {
     pub messages_sent: AtomicU64,
     pub messages_received: AtomicU64,
@@ -2990,6 +2994,40 @@ impl DaemonState {
         true
     }
 
+    /// Le relais HTTP UI est l'unique propriétaire de l'identité humaine
+    /// canonique. Lorsqu'il redémarre, l'ancienne socket peut encore être
+    /// retenue par le daemon alors que son lecteur local est déjà mort. Une
+    /// reprise UI explicite chasse cette seule route, lui envoie Disconnect,
+    /// puis laisse le nouveau processus s'enregistrer normalement.
+    fn replace_stale_ui_human_route(
+        &mut self,
+        incoming_conn: &str,
+        agent_type: &str,
+        agent_id: &str,
+    ) {
+        if agent_type != "ui" || agent_id != UI_HUMAN_AGENT_ID {
+            return;
+        }
+        let Some(existing) = self.router.get_agent(agent_id).cloned() else {
+            return;
+        };
+        if existing.connection_id == incoming_conn {
+            return;
+        }
+        if let Some(writer) = self.connections.get(&existing.connection_id)
+            && let Ok(mut writer) = writer.lock()
+            && let Ok(frame) = encode(&DaemonToWrapper::Disconnect)
+        {
+            let _ = writeln!(writer, "{frame}");
+            let _ = writer.flush();
+        }
+        self.router.unregister_by_conn(&existing.connection_id);
+        info!(
+            "présence UI humaine reprise: {} remplace {}",
+            incoming_conn, existing.connection_id
+        );
+    }
+
     /// Quand le retain jette une présence, retire aussi le nom du routeur :
     /// sinon `agent_infos` projetait `unix`/`connected` inventés (fantôme).
     fn release_router_for_dangling_instances(&mut self) {
@@ -5623,7 +5661,7 @@ fn handle_register_with_channel(
     let requested_agent_id = agent_id.clone();
     let parsed_type = agent_type
         .parse()
-        .unwrap_or(bridget_core::AgentType::Custom(agent_type));
+        .unwrap_or(bridget_core::AgentType::Custom(agent_type.clone()));
 
     // Un MCP auxiliaire partage parfois identite et instance avec le wrapper
     // vivant. Il ne doit donc jamais tenter de reprendre la route canonique.
@@ -5644,6 +5682,10 @@ fn handle_register_with_channel(
             agent_id: agent_id.clone(),
         };
     }
+    // Le relais UI singleton reprend sa route humaine dédiée après un
+    // redémarrage, puis les routes fantômes ordinaires suivent leur garde
+    // habituelle. Aucun autre type d'agent ne peut emprunter ce chemin.
+    state.replace_stale_ui_human_route(conn_id, &agent_type, &agent_id);
     // Takeover sans stop : une route UUID fantôme est libérée avant la réinscription.
     let _ = state.reclaim_phantom_name(&agent_id);
 
@@ -14491,6 +14533,54 @@ mod presence_tests {
         assert_eq!(info.agent_type, "fixture");
 
         let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn relais_ui_redemarre_reprend_lidentite_humaine_sans_rester_non_inscrit() {
+        let root =
+            std::env::temp_dir().join(format!("bridget-ui-human-takeover-{}", std::process::id()));
+        let (mut state, config) = recovery_fixture_state(&root);
+
+        let register = |connection: &str, instance: &str, state: &mut DaemonState| {
+            handle_register_with_channel(
+                connection,
+                2,
+                "ui".to_string(),
+                UI_HUMAN_AGENT_ID.to_string(),
+                Some("localhost".to_string()),
+                None,
+                ChannelReport::Omitted,
+                Some(PresenceMode::Cli),
+                None,
+                Some("macOS".to_string()),
+                Some(instance.to_string()),
+                Some("bridget".to_string()),
+                false,
+                Some(false),
+                state,
+            )
+        };
+
+        assert!(matches!(
+            register("ui-old", "bridget-ui-old", &mut state),
+            DaemonToWrapper::Registered { .. }
+        ));
+        assert!(matches!(
+            register("ui-new", "bridget-ui-new", &mut state),
+            DaemonToWrapper::Registered { .. }
+        ));
+        assert_eq!(
+            state
+                .router
+                .get_agent(UI_HUMAN_AGENT_ID)
+                .map(|agent| agent.connection_id.as_str()),
+            Some("ui-new"),
+            "le nouveau relais doit redevenir émetteur humain inscrit"
+        );
+        assert!(state.presences.contains_key("bridget-ui-new"));
+        assert!(!state.presences.contains_key("bridget-ui-old"));
+        let _ = std::fs::remove_file(config.db_path);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn recovery_fixture_state(root: &std::path::Path) -> (DaemonState, DaemonConfig) {

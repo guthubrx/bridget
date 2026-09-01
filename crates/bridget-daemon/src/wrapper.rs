@@ -3387,6 +3387,8 @@ fn spawn_managed_session_transport(
     inherit_stderr: bool,
     home: &Path,
     agent_name: Option<String>,
+    instance_id: &str,
+    socket: &Path,
 ) -> Result<Box<dyn ManagedSession>, Box<dyn std::error::Error>> {
     match definition.protocol.as_str() {
         "acp" => {
@@ -3444,6 +3446,19 @@ fn spawn_managed_session_transport(
             }
         }
         "codex_app_server" => {
+            let dynamic_tool_handler = agent_name.clone().map(|identity| {
+                let instance_id = instance_id.to_string();
+                let socket = socket.to_path_buf();
+                Arc::new(move |name: &str, arguments: &serde_json::Value| {
+                    crate::mcp::execute_dynamic_tool_at_with_scope(
+                        &identity,
+                        &instance_id,
+                        name,
+                        arguments,
+                        &socket,
+                    )
+                }) as bridget_transport::codex_app_server::DynamicToolHandler
+            });
             let options = CodexAppServerOptions {
                 command: definition.command.clone(),
                 args: native_args.to_vec(),
@@ -3453,6 +3468,7 @@ fn spawn_managed_session_transport(
                 permissions: definition.permissions.clone(),
                 provider_observation: definition.capabilities.observed.clone(),
                 thread_bootstrap: Default::default(),
+                dynamic_tool_handler,
             };
             let environment = string_environment(mcp_environment);
             if inherit_stderr {
@@ -3736,6 +3752,8 @@ fn launch_acp_with_status(
         inherit_stderr,
         home,
         effective_name.clone(),
+        &instance_id,
+        socket,
     )?;
     let descriptor = transport.descriptor();
     let channel = connection_channel();
@@ -4132,6 +4150,8 @@ fn launch_acp_with_status(
                 inherit_stderr,
                 home,
                 Some(my_name.clone()),
+                &instance_id,
+                socket,
             ) {
                 Ok(new_transport) => {
                     transport = new_transport;
@@ -7860,6 +7880,8 @@ mod reconnect_tests {
             false,
             &root,
             Some("glm-test".to_string()),
+            "test-instance",
+            &root.join("bridget.sock"),
         )
         .unwrap();
         assert!(transport.drain_events().into_iter().any(|event| {
