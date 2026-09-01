@@ -48,6 +48,41 @@ fn un_seul_serveur_est_affiche_a_la_fois() {
 }
 
 #[test]
+fn spec_084_les_sources_restent_visibles_et_indisponibles_sans_mutation() {
+    let frontend = include_str!("../../ui/fleet-app.js");
+
+    assert!(frontend.contains("for (const source of snapshot.sources)"));
+    assert!(frontend.contains("source.error || source.connection_state"));
+    assert!(frontend.contains("const available = source.connection_state === \"connected\" && !source.error"));
+    assert!(frontend.contains("choice.disabled = !available"));
+    assert!(frontend.contains("La source choisie n’est plus disponible pour cette action."));
+}
+
+#[test]
+fn spec_084_le_relais_est_lie_a_la_source_et_purge_l_action_en_cours() {
+    let frontend = include_str!("../../ui/fleet-app.js");
+    let backend = include_str!("../src/lib.rs");
+    let connection = include_str!("../src/connection.rs");
+
+    assert!(frontend.contains("source_id: sourceId"));
+    assert!(frontend.contains("desktop_source: source.label || sourceId"));
+    assert!(frontend.contains("pendingPanelAction = null"));
+    assert!(backend.contains("if source_id == LOCAL_SOURCE_ID"));
+    assert!(backend.contains("let sessions = state.sessions.lock()"));
+    assert!(connection.contains("desktop_source: Option<&str>"));
+    assert!(connection.contains("desktop_source="));
+}
+
+#[test]
+fn spec_084_les_projets_homonymes_restent_scopes_par_source() {
+    let frontend = include_str!("../../ui/fleet-app.js");
+
+    assert!(frontend.contains("function desktopProjectKey(sourceId, projectId)"));
+    assert!(frontend.contains("`${sourceId}\\u0000${projectId}`"));
+    assert!(frontend.contains("desktopProjectKey(source.source_id, project.project_id)"));
+}
+
+#[test]
 fn la_fenetre_principale_est_rendue_visible_au_demarrage() {
     let backend = include_str!("../src/lib.rs");
 

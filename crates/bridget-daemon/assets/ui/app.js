@@ -127,6 +127,20 @@
         assert.match(stylesheet, /body\[data-desktop-shell="true"\] \.project-pane\s*\{\s*display: none;\s*\}/);
       });
 
+      test("spec_084_catalogue_v2_et_source_desktop_restent_visibles", () => {
+        const source = fs.readFileSync(__filename, "utf8");
+        const stylesheet = fs.readFileSync(path.join(__dirname, "theme.css"), "utf8");
+        assert.match(source, /const desktopSource = text\(params\.get\("desktop_source"\)\);/);
+        assert.match(source, /Serveur cible : \$\{desktopSource\}/);
+        assert.match(source, /\/v2\/projects\/locations/);
+        assert.match(source, /\/v2\/projects\/placement\/preview/);
+        assert.match(source, /\/v2\/projects\/placement\/apply/);
+        assert.match(source, /\/v2\/control\/project-locations\/preview/);
+        assert.match(source, /locationsPayload\.legacy_v1/);
+        assert.match(stylesheet, /\.control-center__locations/);
+        assert.match(stylesheet, /\.project-onboarding-overlay__source/);
+      });
+
       test("spec_080_usage_reste_atteste_et_ne_fabrique_aucun_cout", () => {
         assert.equal(
           api.controlResourceUrl("/v1/usage", "jeton +", { period: "30d" }),
@@ -162,8 +176,8 @@
         });
         assert.equal(api.formatTokenCount(4_000), "4.0 k");
         const source = fs.readFileSync(__filename, "utf8");
-        assert.match(source, /\/v1\/control\/settings\/preview/);
-        assert.match(source, /\/v1\/control\/settings\/apply/);
+        assert.match(source, /\/v2\/control\/project-locations\/preview/);
+        assert.match(source, /\/v2\/control\/project-locations\/apply/);
         assert.match(source, /\/v1\/control\/usage/);
       });
 
@@ -7597,6 +7611,7 @@
     const nativeAttentionShell = params.get("native_attention") === "1";
     const desktopShell = params.get("desktop_shell") === "1";
     const desktopAction = params.get("desktop_action");
+    const desktopSource = text(params.get("desktop_source"));
     if (
       params.get("browser_panel") === "1"
       || windowRef.location.pathname === "/browser-panel"
@@ -8190,15 +8205,74 @@
               ? `Serveur Bridget ${payload.daemon_version || "inconnu"}. La liste d'autorisation des projets est disponible.`
               : `Serveur Bridget ${payload.daemon_version || "inconnu"}. Les réglages de projets ne sont pas disponibles.`;
             if (!payload.configuration_available) return;
-            const roots = Array.isArray(payload.allowed_project_roots) ? payload.allowed_project_roots : [];
-            const label = make("label", "control-center__roots-label", "Racines de projets autorisées");
-            const textarea = documentRef.createElement("textarea");
-            textarea.className = "control-center__roots";
-            textarea.rows = Math.max(3, roots.length + 1);
-            textarea.value = roots.join("\n");
-            textarea.spellcheck = false;
-            label.append(textarea);
-            const help = make("p", "control-center__help", "Une racine par ligne. Bridget vérifie les chemins, le propriétaire et la génération avant toute écriture.");
+            const locationsResponse = await windowRef.fetch(controlResourceUrl("/v2/projects/locations", token));
+            const locationsPayload = await locationsResponse.json();
+            if (!locationsResponse.ok || locationsPayload.contract_version !== 2) throw new Error("locations_unavailable");
+            const locations = Array.isArray(locationsPayload.locations) ? locationsPayload.locations : [];
+            const label = make("p", "control-center__roots-label", "Emplacements de projets autorisés");
+            const editor = make("div", "control-center__locations");
+            const help = make("p", "control-center__help", locationsPayload.legacy_v1
+              ? "Cette politique historique est restrictive : choisissez explicitement les emplacements à promouvoir en espace de travail avant toute création."
+              : "Chaque emplacement a un identifiant, un libellé, un chemin et une capacité. Le serveur canonicalise et valide l’ensemble avant toute écriture.");
+            const createLocationRow = (location = {}) => {
+              const row = make("fieldset", "control-center__location");
+              const legend = make("legend", null, "Emplacement projet");
+              const id = documentRef.createElement("input");
+              id.value = location.location_id || `location-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+              id.setAttribute("aria-label", "Identifiant stable");
+              const name = documentRef.createElement("input");
+              name.value = location.label || "Nouvel emplacement";
+              name.setAttribute("aria-label", "Libellé");
+              const path = documentRef.createElement("input");
+              path.value = location.canonical_path || "";
+              path.setAttribute("aria-label", "Chemin absolu");
+              const kind = documentRef.createElement("select");
+              kind.setAttribute("aria-label", "Capacité");
+              for (const [value, copy] of [["workspace", "Espace de travail"], ["exact_project", "Projet existant exact"]]) {
+                const option = documentRef.createElement("option");
+                option.value = value;
+                option.textContent = copy;
+                option.selected = (location.kind || "exact_project") === value;
+                kind.append(option);
+              }
+              const systemOnly = documentRef.createElement("input");
+              systemOnly.type = "checkbox";
+              systemOnly.checked = location.system_only === true;
+              const defaultCreation = documentRef.createElement("input");
+              defaultCreation.type = "checkbox";
+              defaultCreation.checked = location.default_creation === true;
+              const remove = make("button", "quiet", "Retirer");
+              remove.type = "button";
+              remove.addEventListener("click", () => {
+                row.remove();
+                preparedChange = null;
+                apply.hidden = true;
+              });
+              const field = (copy, control) => {
+                const item = documentRef.createElement("label");
+                item.append(make("span", null, copy), control);
+                return item;
+              };
+              row.append(
+                legend,
+                field("Identifiant", id),
+                field("Libellé", name),
+                field("Chemin absolu", path),
+                field("Capacité", kind),
+                field("Réservé système", systemOnly),
+                field("Création par défaut", defaultCreation),
+                remove,
+              );
+              return row;
+            };
+            for (const location of locations) editor.append(createLocationRow(location));
+            const addLocation = make("button", "secondary", "Ajouter un emplacement");
+            addLocation.type = "button";
+            addLocation.addEventListener("click", () => {
+              editor.append(createLocationRow());
+              preparedChange = null;
+              apply.hidden = true;
+            });
             const preview = make("p", "control-center__preview", "Aucune modification préparée.");
             const prepare = make("button", "secondary", "Prévisualiser la modification");
             prepare.type = "button";
@@ -8207,33 +8281,48 @@
             apply.hidden = true;
             const actions = make("div", "control-center__actions");
             actions.append(prepare, apply);
-            section.append(label, help, preview, actions);
+            section.append(label, help, editor, addLocation, preview, actions);
             let preparedChange = null;
             prepare.addEventListener("click", async () => {
-              const candidate = textarea.value.split("\n").map((value) => value.trim()).filter(Boolean);
+              const candidate = Array.from(editor.querySelectorAll(".control-center__location")).map((row) => {
+                const [id, name, path, kind, systemOnly, defaultCreation] = row.querySelectorAll("input, select");
+                return {
+                  location_id: id.value.trim(),
+                  label: name.value.trim(),
+                  canonical_path: path.value.trim(),
+                  kind: kind.value,
+                  system_only: systemOnly.checked,
+                  default_creation: defaultCreation.checked,
+                };
+              });
               if (candidate.length === 0) {
-                preview.textContent = "Au moins une racine est obligatoire.";
+                preview.textContent = "Au moins un emplacement est obligatoire.";
                 return;
               }
               prepare.disabled = true;
               preview.textContent = "Prévisualisation validée par le serveur…";
               try {
                 const request = {
-                  version: 1,
+                  contract_version: 2,
                   command_id: `control-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                  expected_generation: payload.policy_generation,
-                  allowed_project_roots: candidate,
+                  expected_generation: locationsPayload.generation,
+                  locations: candidate,
                 };
-                const response = await windowRef.fetch(controlResourceUrl("/v1/control/settings/preview", token), {
+                const response = await windowRef.fetch(controlResourceUrl("/v2/control/project-locations/preview", token), {
                   method: "POST",
                   headers: { "content-type": "application/json" },
                   body: JSON.stringify(request),
                 });
                 const confirmed = await response.json();
                 if (!response.ok) throw new Error("settings_refused");
-                preparedChange = { ...request, allowed_project_roots: confirmed.requested_roots };
+                preparedChange = { ...request, locations: confirmed.requested_locations };
                 apply.hidden = false;
-                preview.textContent = `${confirmed.current_roots.length} → ${confirmed.requested_roots.length} racine(s), génération ${confirmed.expected_generation} → ${confirmed.resulting_generation}. Confirmez pour écrire.`;
+                const legacySummary = confirmed.legacy_inventory_available === false
+                  ? " L'inventaire des projets historiques est indisponible : la migration ne doit pas être considérée neutre."
+                  : Array.isArray(confirmed.legacy_projects) && confirmed.legacy_projects.length > 0
+                    ? ` ${confirmed.legacy_projects.reduce((count, item) => count + (Array.isArray(item.project_ids) ? item.project_ids.length : 0), 0)} projet(s) historique(s) restent liés et ne seront pas modifiés.`
+                    : "";
+                preview.textContent = `${confirmed.current_locations.length} → ${confirmed.requested_locations.length} emplacement(s), génération ${confirmed.expected_generation} → ${confirmed.resulting_generation}. Confirmez pour écrire.${legacySummary}`;
               } catch (_error) {
                 preparedChange = null;
                 apply.hidden = true;
@@ -8247,16 +8336,14 @@
               apply.disabled = true;
               preview.textContent = "Application en cours…";
               try {
-                const response = await windowRef.fetch(controlResourceUrl("/v1/control/settings/apply", token), {
+                const response = await windowRef.fetch(controlResourceUrl("/v2/control/project-locations/apply", token), {
                   method: "POST",
                   headers: { "content-type": "application/json" },
                   body: JSON.stringify(preparedChange),
                 });
                 const accepted = await response.json();
                 if (!response.ok) throw new Error("settings_refused");
-                textarea.value = (accepted.allowed_project_roots || []).join("\n");
-                payload.allowed_project_roots = accepted.allowed_project_roots;
-                payload.policy_generation = accepted.resulting_generation;
+                locationsPayload.generation = accepted.resulting_generation;
                 preparedChange = null;
                 apply.hidden = true;
                 preview.textContent = `Réglage appliqué - confirmation ${accepted.command_id}, génération ${accepted.resulting_generation}.`;
@@ -9570,10 +9657,13 @@
     };
     const beginProject = async (mode, returnFocus) => {
       try {
-        projectSettingsSnapshot = await requestProject("/v1/projects/settings");
-        const roots = projectSettingsSnapshot.allowed_project_roots || [];
-        if (roots.length === 0 || !projectSettingsSnapshot.configuration_available) {
-          throw new Error("Aucune racine de projets n’est autorisée par ce serveur. Ouvrez Réglages, puis Serveur.");
+        const catalog = await requestProject("/v2/projects/locations");
+        const locations = Array.isArray(catalog.locations) ? catalog.locations : [];
+        const eligibleLocations = locations.filter((location) => !location.system_only && (mode === "create" ? location.kind === "workspace" : true));
+        if (eligibleLocations.length === 0) {
+          throw new Error(mode === "create"
+            ? "Aucun espace de travail n’est configuré sur ce serveur. Ouvrez Réglages, puis Serveur."
+            : "Aucun emplacement de projet n’est configuré sur ce serveur. Ouvrez Réglages, puis Serveur.");
         }
         const dialog = nodes.projectOnboardingOverlay;
         dialog.replaceChildren();
@@ -9586,6 +9676,9 @@
           make("p", "project-onboarding-overlay__eyebrow", "PROJETS"),
           make("h2", null, title),
         );
+        if (desktopSource) {
+          heading.append(make("p", "project-onboarding-overlay__source", `Serveur cible : ${desktopSource}`));
+        }
         const close = make("button", "quiet-action", "Fermer");
         close.type = "button";
         close.addEventListener("click", closeProjectOnboarding);
@@ -9597,27 +9690,40 @@
             ? "Le serveur créera uniquement le dossier confirmé, sous une racine déjà autorisée."
             : "Le dossier existant doit être sous une racine déjà autorisée. Aucun contenu n’est modifié avant confirmation.",
         );
-        const rootField = make("label", "project-onboarding-overlay__field", mode === "create" ? "Racine autorisée" : "Dossier existant");
+        const locationField = make("label", "project-onboarding-overlay__field", "Emplacement projet");
+        const locationControl = documentRef.createElement("select");
+        eligibleLocations.forEach((location) => {
+          const option = documentRef.createElement("option");
+          option.value = location.location_id;
+          option.textContent = `${location.label} - ${location.kind === "workspace" ? "espace de travail" : "projet exact"}`;
+          locationControl.append(option);
+        });
+        locationField.append(locationControl);
+        const rootField = make("label", "project-onboarding-overlay__field", mode === "create" ? "Emplacement sélectionné" : "Dossier existant");
         let rootControl;
         if (mode === "create") {
           rootControl = documentRef.createElement("select");
-          roots.forEach((root) => {
+          eligibleLocations.forEach((location) => {
             const option = documentRef.createElement("option");
-            option.value = root;
-            option.textContent = root;
+            option.value = location.canonical_path;
+            option.textContent = location.canonical_path;
             rootControl.append(option);
+          });
+          locationControl.addEventListener("change", () => {
+            const location = eligibleLocations.find((item) => item.location_id === locationControl.value);
+            if (location) rootControl.value = location.canonical_path;
           });
         } else {
           rootControl = documentRef.createElement("input");
           rootControl.type = "text";
-          rootControl.value = roots[0];
+          rootControl.value = eligibleLocations[0].canonical_path;
           rootControl.spellcheck = false;
           rootControl.setAttribute("list", "project-onboarding-roots");
           const list = documentRef.createElement("datalist");
           list.id = "project-onboarding-roots";
-          roots.forEach((root) => {
+          eligibleLocations.forEach((location) => {
             const option = documentRef.createElement("option");
-            option.value = root;
+            option.value = location.canonical_path;
             list.append(option);
           });
           rootField.append(list);
@@ -9633,9 +9739,9 @@
           folderControl.autocomplete = "off";
           folderControl.required = true;
           folderField.append(folderControl);
-          form.append(header, intro, rootField, folderField);
+          form.append(header, intro, locationField, rootField, folderField);
         } else {
-          form.append(header, intro, rootField);
+          form.append(header, intro, locationField, rootField);
         }
         const status = make("p", "project-onboarding-overlay__status", "Choisissez le dossier, puis prévisualisez l’opération.");
         status.setAttribute("role", "status");
@@ -9666,6 +9772,7 @@
           status.textContent = "Choisissez le dossier, puis prévisualisez l’opération.";
         };
         rootControl.addEventListener("input", clearPreview);
+        locationControl.addEventListener("change", clearPreview);
         if (folderControl) folderControl.addEventListener("input", clearPreview);
         previewAction.addEventListener("click", async () => {
           const root = rootControl.value.trim();
@@ -9679,10 +9786,18 @@
           status.dataset.state = "loading";
           status.textContent = "Vérification du dossier par le serveur…";
           try {
-            preview = await requestProject("/v1/projects/preview", {
+            preview = await requestProject("/v2/projects/placement/preview", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ version: 1, mode, root, folder_name: folder || undefined }),
+              body: JSON.stringify({
+                contract_version: 2,
+                command_id: "project-preview-" + Date.now() + "-" + Math.random().toString(16).slice(2),
+                expected_generation: catalog.generation,
+                location_id: locationControl.value,
+                operation: mode,
+                root: mode === "import" ? root : undefined,
+                requested_name: mode === "create" ? folder : undefined,
+              }),
             });
             previewCard.replaceChildren(
               make("strong", null, preview.display_name),
@@ -9716,15 +9831,17 @@
           status.dataset.state = "loading";
           status.textContent = "Enregistrement durable du projet…";
           try {
-            const confirmed = await requestProject("/v1/projects/confirm", {
+            const confirmed = await requestProject("/v2/projects/placement/apply", {
               method: "POST",
               headers: { "content-type": "application/json" },
               body: JSON.stringify({
-                version: 1,
+                contract_version: 2,
                 command_id: "project-ui-" + Date.now() + "-" + Math.random().toString(16).slice(2),
-                mode,
-                root,
-                folder_name: folder || undefined,
+                expected_generation: catalog.generation,
+                location_id: locationControl.value,
+                operation: mode,
+                root: mode === "import" ? root : undefined,
+                requested_name: mode === "create" ? folder : undefined,
                 initialize_git: Boolean(initializeGit.checked),
               }),
             });

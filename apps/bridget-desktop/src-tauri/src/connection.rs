@@ -455,6 +455,7 @@ pub fn desktop_panel_url(
     agent_name: Option<&str>,
     project_id: Option<&str>,
     desktop_action: Option<&str>,
+    desktop_source: Option<&str>,
 ) -> String {
     let mut url = format!(
         "{}&desktop_shell=1",
@@ -483,6 +484,10 @@ pub fn desktop_panel_url(
         };
         url.push_str("&desktop_action=");
         url.push_str(action);
+    }
+    if let Some(source) = desktop_source.filter(|value| !value.is_empty()) {
+        url.push_str("&desktop_source=");
+        url.push_str(&percent_encode(source));
     }
     url
 }
@@ -679,17 +684,27 @@ mod tests {
             Some("coordinateur / projet"),
             Some("projet bleu"),
             Some("create_project"),
+            Some("Serveur de test"),
         );
         assert!(panel_url.contains("desktop_shell=1"));
         assert!(panel_url.contains("agent=coordinateur%20%2F%20projet"));
         assert!(panel_url.contains("project_id=projet%20bleu"));
         assert!(panel_url.contains("desktop_action=create_project"));
-        let settings_url =
-            desktop_panel_url(39002, &endpoint, client_id, None, None, Some("settings"));
+        assert!(panel_url.contains("desktop_source=Serveur%20de%20test"));
+        let settings_url = desktop_panel_url(
+            39002,
+            &endpoint,
+            client_id,
+            None,
+            None,
+            Some("settings"),
+            None,
+        );
         assert!(settings_url.contains("desktop_shell=1"));
         assert!(settings_url.contains("view=settings"));
         assert!(!settings_url.contains("desktop_action="));
-        let usage_url = desktop_panel_url(39002, &endpoint, client_id, None, None, Some("usage"));
+        let usage_url =
+            desktop_panel_url(39002, &endpoint, client_id, None, None, Some("usage"), None);
         assert!(usage_url.contains("view=usage"));
         assert_eq!(
             fleet_snapshot_path(&endpoint),

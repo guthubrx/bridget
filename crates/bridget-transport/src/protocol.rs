@@ -290,6 +290,30 @@ pub enum ProjectBackend {
     Docker,
 }
 
+/// Opération locale sur un emplacement de projet attesté par le daemon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectPlacementOperation {
+    Create,
+    Import,
+}
+
+/// Commande versionnée de prévisualisation ou d'application d'emplacement.
+/// Elle ne contient jamais un parent de création libre.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectPlacementRequestV2 {
+    pub contract_version: u16,
+    pub command_id: String,
+    pub expected_catalog_generation: u64,
+    pub location_id: String,
+    pub operation: ProjectPlacementOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_root: Option<String>,
+}
+
 /// Politique hôte effectivement attestée pour une liaison Docker.
 ///
 /// Les champs sont absents des projections historiques et ne transportent

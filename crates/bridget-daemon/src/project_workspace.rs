@@ -84,6 +84,52 @@ impl From<ProjectRegistryRefusal> for ProjectWorkspaceError {
 }
 
 impl ProjectPreview {
+    /// Prévisualise une création v2 depuis un emplacement déclaré. Aucun
+    /// parent libre ne traverse cette API.
+    pub fn create_at_location(
+        policy: &ProjectRootPolicy,
+        location_id: &str,
+        folder_name: &str,
+    ) -> Result<Self, ProjectWorkspaceError> {
+        validate_folder_name(folder_name)?;
+        let parent = policy.validate_creation_parent(location_id)?;
+        let candidate = parent.join(folder_name);
+        if candidate.exists() {
+            return Err(ProjectWorkspaceError::FolderAlreadyExists);
+        }
+        Ok(Self {
+            mode: ProjectFolderMode::Create,
+            canonical_path: candidate,
+            display_name: folder_name.to_string(),
+            git: GitDiagnostic::Absent,
+            git_initialization_proposed: true,
+        })
+    }
+
+    /// Prévisualise un import v2 en revalidant le chemin contre l'emplacement
+    /// choisi côté daemon.
+    pub fn import_at_location(
+        policy: &ProjectRootPolicy,
+        location_id: &str,
+        requested_root: &Path,
+    ) -> Result<Self, ProjectWorkspaceError> {
+        let canonical_path = policy.validate_import_root(location_id, requested_root)?;
+        let display_name = canonical_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .ok_or(ProjectWorkspaceError::InvalidFolderName)?
+            .to_string();
+        let git = inspect_git(&canonical_path)?;
+        Ok(Self {
+            mode: ProjectFolderMode::Import,
+            canonical_path,
+            display_name,
+            git_initialization_proposed: git == GitDiagnostic::Absent,
+            git,
+        })
+    }
+
     /// Prévisualise une création sans faire d'I/O mutante.
     pub fn create(
         policy: &ProjectRootPolicy,
@@ -265,6 +311,21 @@ mod tests {
         fn policy(&self) -> ProjectRootPolicy {
             ProjectRootPolicy::load(&self.policy_path).unwrap()
         }
+
+        fn write_v2_policy(&self, locations: serde_json::Value) -> ProjectRootPolicy {
+            fs::write(
+                &self.policy_path,
+                serde_json::to_vec(&json!({
+                    "contract_version": 2,
+                    "policy_generation": 7,
+                    "locations": locations,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            fs::set_permissions(&self.policy_path, fs::Permissions::from_mode(0o600)).unwrap();
+            self.policy()
+        }
     }
 
     impl Drop for Fixture {
@@ -294,6 +355,114 @@ mod tests {
             ProjectPreview::create(&policy, &fixture.projects, "nouveau"),
             Err(ProjectWorkspaceError::FolderAlreadyExists)
         );
+    }
+
+    #[test]
+    fn spec_084_previsualisation_v2_refuse_les_politques_v1_et_parents_libres() {
+        let fixture = Fixture::new();
+        let policy = fixture.policy();
+
+        assert_eq!(
+            ProjectPreview::create_at_location(&policy, "legacy-0", "nouveau"),
+            Err(ProjectWorkspaceError::Refusal(
+                bridget_transport::protocol::ProjectRegistryRefusal::RootOutsideAllowedPrefixes
+            ))
+        );
+
+        let imported = fixture.projects.join("ancien");
+        std::fs::create_dir_all(&imported).unwrap();
+        assert_eq!(
+            ProjectPreview::import_at_location(&policy, "legacy-0", &imported),
+            Err(ProjectWorkspaceError::Refusal(
+                bridget_transport::protocol::ProjectRegistryRefusal::RootOutsideAllowedPrefixes
+            ))
+        );
+    }
+
+    #[test]
+    fn spec_084_previsualisation_v2_limite_creation_import_et_collisions() {
+        let fixture = Fixture::new();
+        let exact = fixture.root.join("bridget-existant");
+        let imported = fixture.projects.join("importable");
+        fs::create_dir_all(&exact).unwrap();
+        fs::create_dir_all(&imported).unwrap();
+        let policy = fixture.write_v2_policy(json!([
+            {
+                "location_id": "workspace",
+                "label": "Projets",
+                "canonical_path": fixture.projects,
+                "kind": "workspace",
+                "default_creation": true,
+            },
+            {
+                "location_id": "exact",
+                "label": "Bridget",
+                "canonical_path": exact,
+                "kind": "exact_project",
+            }
+        ]));
+
+        let created = ProjectPreview::create_at_location(&policy, "workspace", "nouveau").unwrap();
+        assert_eq!(created.canonical_path, fixture.projects.join("nouveau"));
+        assert_eq!(created.mode, ProjectFolderMode::Create);
+        assert_eq!(
+            ProjectPreview::create_at_location(&policy, "workspace", "../sortie"),
+            Err(ProjectWorkspaceError::InvalidFolderName)
+        );
+        assert_eq!(
+            ProjectPreview::create_at_location(&policy, "exact", "interdit"),
+            Err(ProjectWorkspaceError::Refusal(
+                bridget_transport::protocol::ProjectRegistryRefusal::RootOutsideAllowedPrefixes
+            ))
+        );
+        fs::create_dir_all(fixture.projects.join("nouveau")).unwrap();
+        assert_eq!(
+            ProjectPreview::create_at_location(&policy, "workspace", "nouveau"),
+            Err(ProjectWorkspaceError::FolderAlreadyExists)
+        );
+        assert_eq!(
+            ProjectPreview::import_at_location(&policy, "workspace", &imported)
+                .unwrap()
+                .canonical_path,
+            imported
+        );
+        assert_eq!(
+            ProjectPreview::import_at_location(&policy, "exact", &exact)
+                .unwrap()
+                .canonical_path,
+            exact
+        );
+        assert!(ProjectPreview::import_at_location(&policy, "exact", &imported).is_err());
+    }
+
+    #[test]
+    fn spec_084_previsualisation_v2_refuse_lien_symbolique_hors_workspace_et_systeme() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = Fixture::new();
+        let outside = fixture.root.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let escape = fixture.projects.join("escape");
+        symlink(&outside, &escape).unwrap();
+        let policy = fixture.write_v2_policy(json!([
+            {
+                "location_id": "workspace",
+                "label": "Projets",
+                "canonical_path": fixture.projects,
+                "kind": "workspace",
+            },
+            {
+                "location_id": "system",
+                "label": "Système",
+                "canonical_path": outside,
+                "kind": "workspace",
+                "system_only": true,
+            }
+        ]));
+
+        assert!(ProjectPreview::import_at_location(&policy, "workspace", &escape).is_err());
+        assert!(ProjectPreview::create_at_location(&policy, "system", "interdit").is_err());
+        assert!(ProjectPreview::import_at_location(&policy, "system", &outside).is_err());
     }
 
     #[test]
