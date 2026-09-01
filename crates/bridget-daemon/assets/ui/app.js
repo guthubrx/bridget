@@ -895,6 +895,14 @@
         assert.equal(decision.showNewMessages, false);
       });
 
+      test("variation_de_hauteur_ne_casse_pas_le_suivi_du_bas", () => {
+        const before = { scrollTop: 720, scrollHeight: 1320, clientHeight: 600 };
+        const expanded = { scrollTop: 720, scrollHeight: 1480, clientHeight: 600 };
+        assert.equal(api.followsLatestAfterScroll(before, expanded, true), true);
+        const readerScrolledUp = { scrollTop: 680, scrollHeight: 1480, clientHeight: 600 };
+        assert.equal(api.followsLatestAfterScroll(expanded, readerScrolledUp, true), false);
+      });
+
       test("puce_nouveaux_messages_persiste_sur_rendu_sans_incrément", () => {
         const before = {
           scrollTop: 180,
@@ -5169,6 +5177,16 @@
 
   function isAtBottom(metrics) {
     return metrics.scrollHeight - metrics.clientHeight - metrics.scrollTop <= BOTTOM_THRESHOLD_PX;
+  }
+
+  // Un rendu différé peut agrandir scrollHeight sans que le lecteur ait bougé.
+  // Dans ce cas, le fil doit continuer à suivre le bas. Seule une diminution
+  // effective de scrollTop traduit une remontée volontaire de la personne.
+  function followsLatestAfterScroll(previous, current, wasFollowing) {
+    if (isAtBottom(current)) return true;
+    if (!wasFollowing) return false;
+    const previousTop = Number(previous && previous.scrollTop) || 0;
+    return current.scrollTop >= previousTop - BOTTOM_THRESHOLD_PX;
   }
 
   function decideScroll(before, after, incomingCount, followLatest = isAtBottom(before)) {
@@ -11620,7 +11638,7 @@
     nodes.draft.addEventListener("select", storeCurrentDraft);
     nodes.thread.addEventListener("scroll", () => {
       const metrics = currentMetrics();
-      followLatest = isAtBottom(metrics);
+      followLatest = followsLatestAfterScroll(state.viewport, metrics, followLatest);
       state = { ...state, viewport: { ...state.viewport, ...metrics } };
       if (isAtBottom(metrics)) {
         state = {
@@ -11840,6 +11858,7 @@
     completeExplicitSend,
     shouldMarkRead,
     isAtBottom,
+    followsLatestAfterScroll,
     decideScroll,
     scrollToLatest,
     explicitSendViewport,
