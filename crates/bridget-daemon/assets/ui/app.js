@@ -10807,6 +10807,26 @@
     // avoir éloigné le viewport du bas. On retient donc explicitement le
     // suivi du dernier message tant que l'utilisateur ne remonte pas le fil.
     let followLatest = true;
+    let latestLayoutTimer = null;
+
+    // Certaines parties anciennes du fil utilisent content-visibility. Leur
+    // hauteur effective peut donc être connue un battement de rendu après
+    // replaceChildren(). Un unique calcul de scrollTop laisse alors la fin du
+    // dernier message (notamment son horodatage) hors champ au démarrage.
+    // Deux passages courts suffisent à stabiliser la géométrie sans déplacer
+    // une personne qui a volontairement remonté la conversation.
+    const settleLatestAfterLayout = (remainingPasses = 2) => {
+      if (!followLatest || latestLayoutTimer !== null) return;
+      latestLayoutTimer = windowRef.setTimeout(() => {
+        latestLayoutTimer = null;
+        if (!followLatest) return;
+        const latest = scrollToLatest(currentMetrics());
+        nodes.thread.scrollTop = latest.scrollTop;
+        state = { ...state, viewport: latest };
+        nodes.newMessages.hidden = true;
+        if (remainingPasses > 1) settleLatestAfterLayout(remainingPasses - 1);
+      }, 0);
+    };
 
     const renderThread = (incomingCount = 0) => {
       const before = currentMetrics();
@@ -10890,6 +10910,7 @@
         ? `${decision.pendingCount} nouveaux messages`
         : "Nouveau message";
       markSelectedReadIfEligible();
+      if (keepFollowingLatest) settleLatestAfterLayout();
     };
 
     const applyReadThrough = (agents) => agents.map((agent) => {
@@ -11036,6 +11057,10 @@
 
     const closeWatch = () => {
       sourceGeneration += 1;
+      if (latestLayoutTimer !== null) {
+        windowRef.clearTimeout(latestLayoutTimer);
+        latestLayoutTimer = null;
+      }
       if (liveRenderTimer) {
         windowRef.clearTimeout(liveRenderTimer);
         liveRenderTimer = null;
