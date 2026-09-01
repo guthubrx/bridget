@@ -4437,7 +4437,13 @@ fn post_project_confirm(
         request.policy_id.as_deref(),
         request.policy_version,
     )?;
-    confirm_project_preview(config, request.command_id, request.initialize_git, preview, backend)
+    confirm_project_preview(
+        config,
+        request.command_id,
+        request.initialize_git,
+        preview,
+        backend,
+    )
 }
 
 fn confirm_project_preview(
@@ -10728,6 +10734,7 @@ mod tests {
                 canonical_path: "/srv/projects/inside".to_string(),
                 state: "active",
                 binding_generation: 1,
+                role: "standard",
                 round: round.clone(),
             },
             UiProjectListEntryV1 {
@@ -10736,6 +10743,7 @@ mod tests {
                 canonical_path: "/srv/other/outside".to_string(),
                 state: "active",
                 binding_generation: 1,
+                role: "standard",
                 round,
             },
         ];

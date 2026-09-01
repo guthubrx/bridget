@@ -1355,8 +1355,9 @@ impl Store {
                  last_reason = NULL, runtime_state = ?3, runtime_last_reason = ?4,
                  policy_id = ?5, policy_version = ?6, policy_digest = ?7,
                  image_reference = ?8, resolved_image_id = ?9, run_as_uid = ?10,
-                 run_as_gid = ?11, environment_epoch = ?12, container_id = ?13
-             WHERE project_id = ?14",
+                 run_as_gid = ?11, environment_epoch = ?12, topology_digest = ?13,
+                 container_id = ?14
+             WHERE project_id = ?15",
             params![
                 generation as i64,
                 observed_at,
@@ -1372,6 +1373,7 @@ impl Store {
                 i64::from(runtime.run_as_gid),
                 i64::try_from(runtime.environment_epoch)
                     .map_err(|_| StoreError::Invariant("epoch runtime invalide"))?,
+                &runtime.topology_digest,
                 runtime.container_id.as_deref(),
                 project_id,
             ],
@@ -6013,6 +6015,7 @@ mod tests {
             run_as_uid: 1002,
             run_as_gid: 1002,
             environment_epoch: 1,
+            topology_digest: "sha256:fixture".to_string(),
             container_id: Some("d".repeat(64)),
             last_reason: None,
         };
