@@ -32,6 +32,10 @@
     return `<!doctype html><html><head>${prelude}</head><body>${documentHtml}</body></html>`;
   }
 
+  function sandboxDocumentUrl(html, bootstrap) {
+    return `data:text/html;charset=utf-8;base64,${escapedBase64(srcdoc(html, bootstrap))}`;
+  }
+
   function validMessage(value, instanceId) {
     if (!value || typeof value !== "object" || value.frame_instance_id !== instanceId) return false;
     if (value.type === "sandbox.ready") return true;
@@ -59,7 +63,10 @@
     iframe.setAttribute("sandbox", "allow-scripts");
     iframe.setAttribute("referrerpolicy", "no-referrer");
     iframe.title = asText(artifact.publication && artifact.publication.title, "Artefact HTML Bridget");
-    iframe.srcdoc = srcdoc(html, { frame_instance_id: frameInstanceId });
+    // WKWebView monte parfois une iframe srcdoc vide dans une WebView Tauri,
+    // malgré une source valide. Une navigation data: garde le document dans
+    // une origine opaque, sans réseau, et évite ce chemin WebKit.
+    iframe.src = sandboxDocumentUrl(html, { frame_instance_id: frameInstanceId });
     iframe.style.height = `${Math.min(MAX_HEIGHT, Number(payload.inline_height_hint) || 360)}px`;
     const error = documentRef.createElement("p"); error.className = "artifact-sandbox__error"; error.hidden = true;
     const actions = documentRef.createElement("div"); actions.className = "artifact-sandbox__actions";
@@ -87,5 +94,5 @@
     iframe.addEventListener("load", () => iframe.contentWindow.postMessage({ type: "sandbox.bootstrap", frame_instance_id: frameInstanceId, data: payload.data || null, limits: { max_height: MAX_HEIGHT, max_state_bytes: MAX_STATE_BYTES } }, "*"));
     return section;
   }
-  return { CSP, MAX_HEIGHT, MAX_STATE_BYTES, srcdoc, validMessage, render };
+  return { CSP, MAX_HEIGHT, MAX_STATE_BYTES, srcdoc, sandboxDocumentUrl, validMessage, render };
 });
