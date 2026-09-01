@@ -366,6 +366,27 @@
         assert.doesNotMatch(runtimeMenu, /projects\s*=|runtime\.state\s*=/);
       });
 
+      test("spec_086_dogfooding_reste_expert_confirme_et_sans_livraison", () => {
+        const source = fs.readFileSync(__filename, "utf8");
+        const system = api.CONTROL_CENTER_NAVIGATION.find((entry) => entry.key === "bridget-system");
+        assert.deepEqual(system, {
+          key: "bridget-system",
+          label: "Projet système Bridget",
+          keywords: ["dogfooding", "worktree", "docker", "bridget", "expert"],
+        });
+        assert.match(source, /\/v1\/control\/dogfooding/);
+        assert.match(source, /\/v1\/control\/dogfooding\/preview/);
+        assert.match(source, /\/v1\/control\/dogfooding\/apply/);
+        assert.match(source, /if \(!prepared \|\| !checkbox\.checked\)/);
+        assert.match(source, /checkout principal lecture seule/i);
+        assert.match(source, /Merge, push, installation, redémarrage et déploiement restent exclus/i);
+        const dogfoodingRoute = source.slice(
+          source.indexOf('if (entry.key === "bridget-system")'),
+          source.indexOf('if (entry.key === "server")'),
+        );
+        assert.doesNotMatch(dogfoodingRoute, /fetch\([^\n]*(merge|push|deploy|restart|install)/i);
+      });
+
       test("apparence_agent_stable_et_etat_visuel_honnete", () => {
         assert.equal(api.agentAvatarShape("jc1"), api.agentAvatarShape("jc1"));
         assert.equal(api.agentAvatarShape("jc1", { jc1: { shape: "cloud" } }), "cloud");
@@ -7004,6 +7025,7 @@
     { key: "typography", label: "Typographie", keywords: ["police", "taille", "lisibilité"] },
     { key: "content-security", label: "Sécurité du contenu", keywords: ["liens", "fichiers", "images", "sécurité", "contenu"] },
     { key: "server", label: "Serveur", keywords: ["projets", "racines", "capacité", "configuration"] },
+    { key: "bridget-system", label: "Projet système Bridget", keywords: ["dogfooding", "worktree", "docker", "bridget", "expert"] },
     { key: "usage", label: "Usage et facturation", keywords: ["jetons", "tokens", "coût", "fournisseur", "billing"] },
     { key: "updates", label: "Mises à jour", keywords: ["version", "release", "mise à jour"] },
     { key: "diagnostics", label: "Diagnostics", keywords: ["état", "santé", "capacité", "support"] },
@@ -8233,6 +8255,159 @@
           }
           section.append(status);
           body.append(section);
+          return;
+        }
+
+        if (entry.key === "bridget-system") {
+          const section = controlSection(
+            "Projet système Bridget",
+            "Ce réglage expert contrôle uniquement la possibilité, pour les agents du projet système, de modifier Bridget dans des worktrees Git. Il ne donne aucune capacité de livraison.",
+            "Serveur relié - expert",
+          );
+          const status = make("p", "control-center__status", "Lecture du projet système…");
+          status.setAttribute("role", "status");
+          section.append(status);
+          body.append(section);
+          const systemProject = projects.find((project) => project.role === "bridget_system");
+          if (!systemProject) {
+            status.textContent = "Aucun projet système Bridget n’est déclaré sur ce serveur.";
+            return;
+          }
+          try {
+            const load = async () => {
+              const response = await windowRef.fetch(controlResourceUrl("/v1/control/dogfooding", token, {
+                project: systemProject.project_id,
+              }));
+              const payload = await response.json();
+              if (!response.ok) throw new Error(payload.code || "dogfooding_unavailable");
+              return payload;
+            };
+            let current = await load();
+            const details = make("div", "control-center__metrics");
+            const mode = controlSetting(
+              "Dogfooding Bridget",
+              current.mode === "enabled" ? "Activé" : "Désactivé",
+              "Réglage expert",
+            );
+            const runtimeState = {
+              ready: "Disponible",
+              running: "En cours d’utilisation",
+              recreate_required: "Recréation requise",
+              degraded: "Dégradé",
+              unavailable: "Indisponible",
+            }[current.runtime_state] || "Indéterminé";
+            const runtime = controlSetting(
+              "Environnement Docker",
+              runtimeState,
+              "État attesté",
+            );
+            const boundary = controlSetting(
+              "Frontière de travail",
+              "Checkout principal lecture seule. Worktree Git requis. Métadonnées Git partagées entre les agents du même projet.",
+              "Confiance coopérative",
+            );
+            const delivery = controlSetting(
+              "Livraison",
+              "Merge, push, installation, redémarrage et déploiement restent exclus de cette interface et de ce réglage.",
+              "Toujours interdit",
+            );
+            details.append(mode, runtime, boundary, delivery);
+            const choice = make("label", "control-center__field", "Mode dogfooding");
+            const select = documentRef.createElement("select");
+            for (const [value, label] of [["disabled", "Désactivé"], ["enabled", "Activé"]]) {
+              const option = documentRef.createElement("option");
+              option.value = value;
+              option.textContent = label;
+              option.selected = current.mode === value;
+              select.append(option);
+            }
+            choice.append(select);
+            const warning = make(
+              "p",
+              "control-center__help",
+              "Activer autorise édition, tests, builds et commits dans les worktrees. Cela ne constitue pas une isolation entre les agents de ce projet.",
+            );
+            const confirmation = make("label", "control-center__field", "Confirmation expert");
+            const checkbox = documentRef.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.checked = false;
+            confirmation.append(checkbox, documentRef.createTextNode(" Je comprends que les actions de livraison restent interdites."));
+            const preview = make("button", "secondary", "Prévisualiser la transition");
+            preview.type = "button";
+            const apply = make("button", null, "Confirmer et recréer l’environnement");
+            apply.type = "button";
+            apply.hidden = true;
+            const actions = make("div", "control-center__actions");
+            actions.append(preview, apply);
+            section.append(details, choice, warning, confirmation, actions);
+            let prepared = null;
+            const requestFor = (confirmed) => ({
+              version: 1,
+              command_id: `dogfooding-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              project_id: current.project_id,
+              binding_generation: current.binding_generation,
+              setting_generation: current.setting_generation,
+              mode: select.value,
+              confirmed,
+            });
+            preview.addEventListener("click", async () => {
+              preview.disabled = true;
+              status.textContent = "Prévisualisation attestée par le serveur…";
+              try {
+                const response = await windowRef.fetch(controlResourceUrl("/v1/control/dogfooding/preview", token), {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify(requestFor(false)),
+                });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.code || "dogfooding_refused");
+                prepared = payload;
+                apply.hidden = false;
+                status.textContent = `Transition ${current.mode} → ${payload.mode}, génération ${current.setting_generation} → ${payload.setting_generation}. La recréation reste nécessaire.`;
+              } catch (_error) {
+                prepared = null;
+                apply.hidden = true;
+                status.textContent = "Le serveur a refusé la prévisualisation. Aucun réglage n’a changé.";
+                status.dataset.state = "error";
+              } finally {
+                preview.disabled = false;
+              }
+            });
+            apply.addEventListener("click", async () => {
+              if (!prepared || !checkbox.checked) {
+                status.textContent = "Cochez la confirmation expert avant d’appliquer.";
+                return;
+              }
+              apply.disabled = true;
+              status.textContent = "Arrêt contrôlé, recréation et attestation des mounts en cours…";
+              try {
+                const response = await windowRef.fetch(controlResourceUrl("/v1/control/dogfooding/apply", token), {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify(requestFor(true)),
+                });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.code || "dogfooding_refused");
+                current = payload;
+                select.value = current.mode;
+                checkbox.checked = false;
+                prepared = null;
+                apply.hidden = true;
+                status.dataset.state = "ready";
+                status.textContent = `Mode ${current.mode} confirmé après recréation attestée. Aucune action de livraison n’a été exécutée.`;
+              } catch (_error) {
+                prepared = null;
+                apply.hidden = true;
+                status.dataset.state = "error";
+                status.textContent = "La transition a échoué. Le serveur conserve le mode confirmé précédent.";
+              } finally {
+                apply.disabled = false;
+              }
+            });
+          } catch (_error) {
+            status.textContent = "Le projet système ou son réglage expert est indisponible.";
+            status.dataset.state = "error";
+          }
           return;
         }
 

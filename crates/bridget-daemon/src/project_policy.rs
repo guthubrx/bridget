@@ -180,6 +180,44 @@ impl ProjectRootPolicy {
             .ok_or(ProjectRegistryRefusal::RootOutsideAllowedPrefixes)
     }
 
+    /// Réserve le seul chemin exact marqué `system_only` au projet système.
+    /// Cette validation ne donne aucune capacité de création aux routes
+    /// ordinaires : elle est appelée exclusivement par le contrat système.
+    pub fn validate_system_project_root(
+        &self,
+        requested_root: &Path,
+    ) -> Result<PathBuf, ProjectRegistryRefusal> {
+        if self.legacy_v1 {
+            return Err(ProjectRegistryRefusal::RootOutsideAllowedPrefixes);
+        }
+        let canonical_root = canonical_directory(requested_root)?;
+        self.system_project_root()
+            .filter(|system_root| *system_root == canonical_root)
+            .map(|_| canonical_root)
+            .ok_or(ProjectRegistryRefusal::RootOutsideAllowedPrefixes)
+    }
+
+    /// Une politique experte désigne exactement un checkout Bridget. Plusieurs
+    /// emplacements système seraient ambigus : la déclaration est refusée au
+    /// lieu de laisser l'appelant choisir un chemin.
+    pub fn system_project_root(&self) -> Option<&Path> {
+        let mut roots = self.locations.iter().filter_map(|location| {
+            (location.kind == ProjectLocationKind::ExactProject && location.system_only)
+                .then_some(location.canonical_path.as_path())
+        });
+        let root = roots.next()?;
+        roots.next().is_none().then_some(root)
+    }
+
+    /// Les routes standards ne peuvent pas enregistrer un chemin réservé,
+    /// même si elles connaissent encore l'ancien contrat de registre v1.
+    pub fn is_system_only_root(&self, canonical_root: &Path) -> bool {
+        self.locations
+            .iter()
+            .filter(|location| location.system_only)
+            .any(|location| canonical_root.starts_with(&location.canonical_path))
+    }
+
     pub fn last_control_receipt(&self) -> Option<&ProjectRootPolicyReceipt> {
         self.last_control_receipt.as_ref()
     }

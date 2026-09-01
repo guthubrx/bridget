@@ -156,6 +156,9 @@ pub struct ProjectEnvironment {
     pub binding_generation: u64,
     pub state: ProjectEnvironmentState,
     pub environment_epoch: u64,
+    /// Empreinte des mounts effectivement attestés. Toute divergence impose
+    /// une recréation avant qu'un agent puisse réutiliser l'environnement.
+    pub topology_digest: String,
     pub container_id: Option<String>,
     pub policy_id: String,
     pub policy_version: u64,
@@ -181,6 +184,7 @@ impl ProjectEnvironment {
             binding_generation,
             state: ProjectEnvironmentState::Absent,
             environment_epoch: 1,
+            topology_digest: mount_topology_digest(&[]),
             container_id: None,
             policy_id: policy.policy_id.clone(),
             policy_version: policy.policy_version,
@@ -263,6 +267,29 @@ impl ProjectEnvironment {
         self.run_as_gid = policy.run_as_gid;
         self.state = ProjectEnvironmentState::RecreateRequired;
         self.last_reason = Some("runtime_policy_changed".to_string());
+        Err(RuntimeIssue::RuntimePolicyChanged)
+    }
+
+    pub fn apply_mount_topology(&mut self, topology_digest: String) -> Result<(), RuntimeIssue> {
+        if !topology_digest.starts_with("sha256:") {
+            return Err(RuntimeIssue::PolicyInvalid(
+                "digest topologie runtime invalide".to_string(),
+            ));
+        }
+        if self.topology_digest == topology_digest {
+            return Ok(());
+        }
+        self.environment_epoch = self
+            .environment_epoch
+            .checked_add(1)
+            .ok_or_else(|| RuntimeIssue::PolicyInvalid("environment_epoch épuisé".to_string()))?;
+        self.topology_digest = topology_digest;
+        if self.state == ProjectEnvironmentState::Absent {
+            self.last_reason = None;
+            return Ok(());
+        }
+        self.state = ProjectEnvironmentState::RecreateRequired;
+        self.last_reason = Some("mount_topology_changed".to_string());
         Err(RuntimeIssue::RuntimePolicyChanged)
     }
 }
@@ -916,6 +943,255 @@ pub fn resolve_project_mounts(
     project_mounts_from_hosts(hosts, state_root)
 }
 
+/// Preuve structurelle, sans exécuter aucun fichier du dépôt, qu'un worktree
+/// peut être attribué au projet système Bridget. Le checkout principal doit
+/// être la branche `main` et reste distinct du worktree non-main attribuable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BridgetCheckoutAttestation {
+    pub checkout_root: PathBuf,
+    pub worktree_root: PathBuf,
+    pub git_common_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BridgetDogfoodingMode {
+    Disabled,
+    Enabled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BridgetSystemMountPlan {
+    pub mounts: Vec<ProjectMount>,
+    pub topology_digest: String,
+    pub shared_git_common_dir_writable: bool,
+}
+
+/// Contexte explicite, attesté avant toute résolution des mounts du projet
+/// système. Son absence signifie que le projet reste un projet standard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BridgetSystemMountContext {
+    pub checkout_root: PathBuf,
+    pub worktrees: Vec<PathBuf>,
+    pub mode: BridgetDogfoodingMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectMountResolution {
+    pub mounts: Vec<ProjectMount>,
+    pub topology_digest: String,
+    pub shared_git_common_dir_writable: bool,
+}
+
+/// Porte la frontière de rôle au plus près du résolveur. Un appelant ne peut
+/// donc pas ajouter par erreur les mounts Bridget à un projet standard.
+pub fn resolve_project_mounts_for_role(
+    role: bridget_transport::protocol::ProjectRole,
+    project_root: &Path,
+    state_root: &Path,
+    system: Option<&BridgetSystemMountContext>,
+) -> Result<ProjectMountResolution, RuntimeIssue> {
+    match (role, system) {
+        (bridget_transport::protocol::ProjectRole::Standard, None) => {
+            let mounts = resolve_project_mounts(project_root, state_root)?;
+            Ok(ProjectMountResolution {
+                topology_digest: mount_topology_digest(&mounts),
+                mounts,
+                shared_git_common_dir_writable: false,
+            })
+        }
+        (bridget_transport::protocol::ProjectRole::Standard, Some(_)) => {
+            Err(RuntimeIssue::UnsupportedWorktreeLayout)
+        }
+        (bridget_transport::protocol::ProjectRole::BridgetSystem, Some(system)) => {
+            let plan = resolve_bridget_system_mounts_for_worktrees(
+                &system.checkout_root,
+                &system.worktrees,
+                state_root,
+                system.mode,
+            )?;
+            Ok(ProjectMountResolution {
+                mounts: plan.mounts,
+                topology_digest: plan.topology_digest,
+                shared_git_common_dir_writable: plan.shared_git_common_dir_writable,
+            })
+        }
+        (bridget_transport::protocol::ProjectRole::BridgetSystem, None) => {
+            Err(RuntimeIssue::UnsupportedWorktreeLayout)
+        }
+    }
+}
+
+pub fn attest_bridget_checkout(
+    checkout_root: &Path,
+    worktree_root: &Path,
+) -> Result<BridgetCheckoutAttestation, RuntimeIssue> {
+    let checkout_root =
+        fs::canonicalize(checkout_root).map_err(|_| RuntimeIssue::UnsupportedWorktreeLayout)?;
+    let worktree_root =
+        fs::canonicalize(worktree_root).map_err(|_| RuntimeIssue::UnsupportedWorktreeLayout)?;
+    if checkout_root == worktree_root || !checkout_root.is_dir() || !worktree_root.is_dir() {
+        return Err(RuntimeIssue::UnsupportedWorktreeLayout);
+    }
+    let top_level = PathBuf::from(
+        git_text(&checkout_root, ["rev-parse", "--show-toplevel"])
+            .map_err(|_| RuntimeIssue::UnsupportedWorktreeLayout)?
+            .trim(),
+    );
+    if fs::canonicalize(top_level).map_err(|_| RuntimeIssue::UnsupportedWorktreeLayout)?
+        != checkout_root
+    {
+        return Err(RuntimeIssue::UnsupportedWorktreeLayout);
+    }
+    let main_branch = git_text(
+        &checkout_root,
+        ["symbolic-ref", "--quiet", "--short", "HEAD"],
+    )?;
+    if main_branch.trim() != "main" {
+        return Err(RuntimeIssue::UnsupportedWorktreeLayout);
+    }
+    let assigned_branch = git_text(
+        &worktree_root,
+        ["symbolic-ref", "--quiet", "--short", "HEAD"],
+    )?;
+    if assigned_branch.trim().is_empty() || assigned_branch.trim() == "main" {
+        return Err(RuntimeIssue::UnsupportedWorktreeLayout);
+    }
+    let common_dir = fs::canonicalize(PathBuf::from(
+        git_text(
+            &checkout_root,
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )?
+        .trim(),
+    ))
+    .map_err(|_| RuntimeIssue::UnsupportedWorktreeLayout)?;
+    let assigned_common_dir = fs::canonicalize(PathBuf::from(
+        git_text(
+            &worktree_root,
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )?
+        .trim(),
+    ))
+    .map_err(|_| RuntimeIssue::UnsupportedWorktreeLayout)?;
+    if common_dir != assigned_common_dir {
+        return Err(RuntimeIssue::UnsupportedWorktreeLayout);
+    }
+    let listed = parse_worktree_list(&git_text(
+        &checkout_root,
+        ["worktree", "list", "--porcelain"],
+    )?)?;
+    if !listed.into_iter().any(|path| {
+        fs::canonicalize(path)
+            .map(|path| path == worktree_root)
+            .unwrap_or(false)
+    }) {
+        return Err(RuntimeIssue::UnsupportedWorktreeLayout);
+    }
+    Ok(BridgetCheckoutAttestation {
+        checkout_root,
+        worktree_root,
+        git_common_dir: common_dir,
+    })
+}
+
+/// Produit les seuls montages admis pour le projet système. La racine du
+/// checkout principal est toujours lecture seule. En mode expert, le worktree
+/// attesté et le git common dir deviennent écrivable, ce qui constitue le
+/// domaine de confiance coopérative explicitement visible dans la projection.
+pub fn resolve_bridget_system_mounts(
+    attestation: &BridgetCheckoutAttestation,
+    state_root: &Path,
+    mode: BridgetDogfoodingMode,
+) -> Result<BridgetSystemMountPlan, RuntimeIssue> {
+    resolve_bridget_system_mounts_for_worktrees(
+        &attestation.checkout_root,
+        std::slice::from_ref(&attestation.worktree_root),
+        state_root,
+        mode,
+    )
+}
+
+/// Variante de topologie destinée au conteneur partagé du projet système. Les
+/// worktrees passés ont déjà une lease persistée et sont tous attestés contre
+/// le même checkout. Ils appartiennent donc au même domaine de confiance : ce
+/// n'est pas une isolation entre agents.
+pub fn resolve_bridget_system_mounts_for_worktrees(
+    checkout_root: &Path,
+    worktrees: &[PathBuf],
+    state_root: &Path,
+    mode: BridgetDogfoodingMode,
+) -> Result<BridgetSystemMountPlan, RuntimeIssue> {
+    if worktrees.is_empty() {
+        return Err(RuntimeIssue::UnsupportedWorktreeLayout);
+    }
+    let requested_worktree_count = worktrees.len();
+    let attestations = worktrees
+        .iter()
+        .map(|worktree| attest_bridget_checkout(checkout_root, worktree))
+        .collect::<Result<Vec<_>, _>>()?;
+    let checkout_root = attestations[0].checkout_root.clone();
+    let git_common_dir = attestations[0].git_common_dir.clone();
+    if attestations.iter().any(|attestation| {
+        attestation.checkout_root != checkout_root || attestation.git_common_dir != git_common_dir
+    }) {
+        return Err(RuntimeIssue::UnsupportedWorktreeLayout);
+    }
+    let worktrees = attestations
+        .into_iter()
+        .map(|attestation| attestation.worktree_root)
+        .collect::<BTreeSet<_>>();
+    if worktrees.len() != requested_worktree_count || worktrees.is_empty() {
+        return Err(RuntimeIssue::UnsupportedWorktreeLayout);
+    }
+    let state_root = fs::canonicalize(state_root)
+        .map_err(|_| RuntimeIssue::ForbiddenMount(state_root.display().to_string()))?;
+    if !state_root.is_absolute() || !state_root.is_dir() {
+        return Err(RuntimeIssue::ForbiddenMount(
+            state_root.display().to_string(),
+        ));
+    }
+    let mutable = mode == BridgetDogfoodingMode::Enabled;
+    let mut mounts = vec![ProjectMount {
+        host_path: checkout_root.clone(),
+        container_path: checkout_root.to_string_lossy().into_owned(),
+        writable: false,
+    }];
+    mounts.extend(worktrees.into_iter().map(|worktree| ProjectMount {
+        container_path: worktree.to_string_lossy().into_owned(),
+        host_path: worktree,
+        writable: mutable,
+    }));
+    mounts.extend([
+        ProjectMount {
+            host_path: git_common_dir.clone(),
+            container_path: git_common_dir.to_string_lossy().into_owned(),
+            writable: mutable,
+        },
+        ProjectMount {
+            host_path: state_root,
+            container_path: CONTAINER_STATE_ROOT.to_string(),
+            writable: true,
+        },
+    ]);
+    for mount in &mounts {
+        validate_mount(mount)?;
+    }
+    let topology_digest = mount_topology_digest(&mounts);
+    Ok(BridgetSystemMountPlan {
+        mounts,
+        topology_digest,
+        shared_git_common_dir_writable: mutable,
+    })
+}
+
+pub fn mount_topology_digest(mounts: &[ProjectMount]) -> String {
+    let canonical = mounts
+        .iter()
+        .map(|mount| format!("{}:{}", mount.host_path.display(), mount.writable))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("sha256:{:x}", Sha256::digest(canonical))
+}
+
 fn project_mounts_from_hosts(
     hosts: BTreeSet<PathBuf>,
     state_root: &Path,
@@ -956,6 +1232,31 @@ fn parse_worktree_list(output: &str) -> Result<Vec<PathBuf>, RuntimeIssue> {
     }
     if worktrees.is_empty() {
         return Err(RuntimeIssue::UnsupportedWorktreeLayout);
+    }
+    Ok(worktrees)
+}
+
+/// Découvre les worktrees liés déjà connus de Git, sans en créer, supprimer ou
+/// modifier aucun. Chaque résultat est attesté contre le checkout principal et
+/// la branche `main` n'est jamais retournée comme worktree attribuable.
+pub fn discover_bridget_worktrees(checkout_root: &Path) -> Result<Vec<PathBuf>, RuntimeIssue> {
+    let checkout_root =
+        fs::canonicalize(checkout_root).map_err(|_| RuntimeIssue::UnsupportedWorktreeLayout)?;
+    let mut worktrees = parse_worktree_list(&git_text(
+        &checkout_root,
+        ["worktree", "list", "--porcelain"],
+    )?)?
+    .into_iter()
+    .map(|worktree| fs::canonicalize(worktree).map_err(|_| RuntimeIssue::UnsupportedWorktreeLayout))
+    .collect::<Result<Vec<_>, _>>()?;
+    worktrees.retain(|worktree| worktree != &checkout_root);
+    worktrees.sort();
+    worktrees.dedup();
+    if worktrees.is_empty() {
+        return Err(RuntimeIssue::UnsupportedWorktreeLayout);
+    }
+    for worktree in &worktrees {
+        attest_bridget_checkout(&checkout_root, worktree)?;
     }
     Ok(worktrees)
 }
@@ -1884,6 +2185,215 @@ mod tests {
     }
 
     #[test]
+    fn spec_086_topologie_mount_change_epoch_et_exige_recreate() {
+        let policy = policy();
+        let mut environment = ProjectEnvironment::absent("project-a", 1, &policy).unwrap();
+        environment
+            .transition(ProjectEnvironmentState::Creating, None)
+            .unwrap();
+        environment
+            .transition(ProjectEnvironmentState::Ready, None)
+            .unwrap();
+        let reservation = environment.reserve_spawn().unwrap();
+        assert_eq!(
+            environment.apply_mount_topology("sha256:changed-topology".to_string()),
+            Err(RuntimeIssue::RuntimePolicyChanged)
+        );
+        assert_eq!(environment.state, ProjectEnvironmentState::RecreateRequired);
+        assert_eq!(
+            environment.environment_epoch,
+            reservation.environment_epoch + 1
+        );
+        assert!(matches!(
+            environment.assert_reservation(&reservation),
+            Err(RuntimeIssue::EnvironmentEpochStale { .. })
+        ));
+    }
+
+    #[test]
+    fn spec_086_attestation_checkout_refuse_absent_faux_main_et_common_dir_etranger() {
+        let root = std::env::temp_dir().join(format!("bridget-checkout-{}", uuid::Uuid::new_v4()));
+        let main = root.join("main");
+        let feature = root.join("feature");
+        let foreign = root.join("foreign");
+        fs::create_dir_all(&main).unwrap();
+        test_git(&main, &["init", "-b", "main"]);
+        test_git(
+            &main,
+            &[
+                "-c",
+                "user.name=Bridget test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+        test_git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature-086",
+                feature.to_str().unwrap(),
+            ],
+        );
+
+        let attestation = attest_bridget_checkout(&main, &feature).unwrap();
+        assert_eq!(attestation.checkout_root, fs::canonicalize(&main).unwrap());
+        assert_eq!(
+            discover_bridget_worktrees(&main).unwrap(),
+            vec![fs::canonicalize(&feature).unwrap()]
+        );
+        assert_eq!(
+            attestation.worktree_root,
+            fs::canonicalize(&feature).unwrap()
+        );
+        assert!(attestation.git_common_dir.is_absolute());
+        let state_root = root.join("state");
+        fs::create_dir_all(&state_root).unwrap();
+        let standard_root = root.join("standard-project");
+        fs::create_dir_all(&standard_root).unwrap();
+        let standard = resolve_project_mounts(&standard_root, &state_root).unwrap();
+        assert!(
+            standard
+                .iter()
+                .any(|mount| mount.host_path == standard_root)
+        );
+        assert!(
+            standard
+                .iter()
+                .all(|mount| mount.host_path != fs::canonicalize(&main).unwrap())
+        );
+        assert!(
+            resolve_project_mounts_for_role(
+                bridget_transport::protocol::ProjectRole::Standard,
+                &standard_root,
+                &state_root,
+                Some(&BridgetSystemMountContext {
+                    checkout_root: main.clone(),
+                    worktrees: vec![feature.clone()],
+                    mode: BridgetDogfoodingMode::Disabled,
+                }),
+            )
+            .is_err()
+        );
+        let disabled = resolve_bridget_system_mounts(
+            &attestation,
+            &state_root,
+            BridgetDogfoodingMode::Disabled,
+        )
+        .unwrap();
+        assert!(!disabled.shared_git_common_dir_writable);
+        assert!(
+            disabled
+                .mounts
+                .iter()
+                .find(|mount| mount.host_path == attestation.checkout_root)
+                .is_some_and(|mount| !mount.writable)
+        );
+        assert!(
+            disabled
+                .mounts
+                .iter()
+                .find(|mount| mount.host_path == attestation.worktree_root)
+                .is_some_and(|mount| !mount.writable)
+        );
+        let enabled = resolve_bridget_system_mounts(
+            &attestation,
+            &state_root,
+            BridgetDogfoodingMode::Enabled,
+        )
+        .unwrap();
+        assert!(enabled.shared_git_common_dir_writable);
+        let role_resolution = resolve_project_mounts_for_role(
+            bridget_transport::protocol::ProjectRole::BridgetSystem,
+            &main,
+            &state_root,
+            Some(&BridgetSystemMountContext {
+                checkout_root: main.clone(),
+                worktrees: vec![feature.clone()],
+                mode: BridgetDogfoodingMode::Enabled,
+            }),
+        )
+        .unwrap();
+        assert_eq!(role_resolution.topology_digest, enabled.topology_digest);
+        assert!(role_resolution.shared_git_common_dir_writable);
+        assert_ne!(disabled.topology_digest, enabled.topology_digest);
+        assert!(
+            enabled
+                .mounts
+                .iter()
+                .find(|mount| mount.host_path == attestation.worktree_root)
+                .is_some_and(|mount| mount.writable)
+        );
+        assert!(
+            enabled
+                .mounts
+                .iter()
+                .find(|mount| mount.host_path == attestation.checkout_root)
+                .is_some_and(|mount| !mount.writable)
+        );
+        let second_worktree = root.join("feature-086-second");
+        test_git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature-086-second",
+                second_worktree.to_str().unwrap(),
+            ],
+        );
+        let shared = resolve_bridget_system_mounts_for_worktrees(
+            &main,
+            &[feature.clone(), second_worktree.clone()],
+            &state_root,
+            BridgetDogfoodingMode::Enabled,
+        )
+        .unwrap();
+        assert!(
+            shared
+                .mounts
+                .iter()
+                .find(|mount| mount.host_path == fs::canonicalize(&second_worktree).unwrap())
+                .is_some_and(|mount| mount.writable)
+        );
+        assert!(
+            resolve_bridget_system_mounts_for_worktrees(
+                &main,
+                &[feature.clone(), feature.clone()],
+                &state_root,
+                BridgetDogfoodingMode::Enabled,
+            )
+            .is_err()
+        );
+        assert!(attest_bridget_checkout(&main, &main).is_err());
+        assert!(attest_bridget_checkout(&root.join("absent"), &feature).is_err());
+
+        fs::create_dir_all(&foreign).unwrap();
+        test_git(&foreign, &["init", "-b", "main"]);
+        test_git(
+            &foreign,
+            &[
+                "-c",
+                "user.name=Bridget test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        );
+        assert!(attest_bridget_checkout(&main, &foreign).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn absent_policy_file_closes_only_docker_runtime() {
         let absent = Path::new("/tmp/bridget-runtime-policy-absent.json");
         assert!(matches!(
@@ -2205,6 +2715,16 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
+    }
+
+    fn test_git(root: &Path, arguments: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(arguments)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {:?}", arguments);
     }
     #[test]
     fn preflight_refuse_un_uid_ou_gid_incompatible_avec_le_state_root_prive() {
