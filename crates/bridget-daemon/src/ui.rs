@@ -5827,6 +5827,19 @@ fn push_live_thread_messages(
     Ok(())
 }
 
+/// Les publications ne produisent pas forcément un fragment de journal. Le
+/// watch doit donc aussi rafraîchir sa projection attestée : sans cela un
+/// artefact nouvellement publié n'apparaît qu'après reconnexion de la vue.
+/// Les messages du snapshot sont dédoublonnés côté client par `delivery_id`.
+fn push_live_snapshot(
+    http: &mut TcpStream,
+    config: &UiRelayConfig,
+    focus_agent: &str,
+) -> Result<(), UiError> {
+    let snapshot = read_snapshot(config, Some(focus_agent))?;
+    write_sse(http, "snapshot", &snapshot)
+}
+
 fn seed_thread_message_ids(snapshot: &UiSnapshotV1, seen: &mut HashSet<String>) {
     if let Some(messages) = &snapshot.thread_messages {
         for message in messages {
@@ -6000,6 +6013,7 @@ fn stream_sse_journal(
                         agent,
                         &mut seen_thread_ids,
                     );
+                    push_live_snapshot(http, config, agent)?;
                     last_thread_poll = Instant::now();
                 }
                 continue;
@@ -6093,6 +6107,7 @@ fn stream_sse_journal(
         {
             let _ =
                 push_live_thread_messages(http, &config.daemon_socket, agent, &mut seen_thread_ids);
+            push_live_snapshot(http, config, agent)?;
             last_thread_poll = Instant::now();
         }
         if matches!(event, DaemonToWrapper::End { .. }) {
@@ -6247,6 +6262,7 @@ fn stream_sse_thread_watch_after_headers(
     loop {
         thread::sleep(UI_THREAD_LEDGER_POLL);
         push_live_thread_messages(http, &config.daemon_socket, agent, &mut seen_thread_ids)?;
+        push_live_snapshot(http, config, agent)?;
         write!(http, ": keepalive\n\n")?;
         http.flush()?;
     }
@@ -8024,6 +8040,15 @@ mod tests {
         assert!(
             live_body.contains("load_human_referent_thread("),
             "le chemin vivant doit aussi filtrer avant de borner"
+        );
+        let snapshot_body = function_body(source, "fn push_live_snapshot(");
+        assert!(
+            snapshot_body.contains("read_snapshot(config, Some(focus_agent))"),
+            "le rafraîchissement vivant doit relire la projection attestée"
+        );
+        assert!(
+            watch_body.contains("push_live_snapshot(http, config, agent)?"),
+            "le watch doit pousser les références d'artefacts publiées en direct"
         );
     }
 

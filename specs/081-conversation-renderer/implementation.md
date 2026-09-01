@@ -254,6 +254,16 @@ ni secret, ni jeton de relais, ni contenu de conversation de production.
   projection destinée au fournisseur devient désormais `Utilisateur`, valeur
   fixe qui ne peut pas être contaminée par un profil ancien.
 
+## Correctif - identité UI et rendu vivant - 2026-09-01
+
+- `humain` reste l'alias métier du fil et l'UUID du relais UI reste son
+  identité de transport. Les deux sont désormais reconnus comme la même
+  extrémité pour l'échéance d'une réponse attendue : un rappel automatique ne
+  peut plus se glisser dans la file d'un tour humain en cours.
+- Le watch de conversation republie aussi l'instantané attesté, et non plus
+  les seuls messages du ledger. Une publication d'artefact apparaît donc
+  inline sans attendre une reconnexion de l'application.
+
 ## Self-review Article XIX/XX - T014 à T037
 
 - Pourquoi cette solution est nécessaire : un fil riche sans séparation de

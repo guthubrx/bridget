@@ -6467,12 +6467,19 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
     // par leur nom : `agent_type == "ui"` est ce que pose `ui.rs` au moment de
     // l'enregistrement. Un humain renommé reste couvert ; un agent qui se
     // nommerait « humain » ne l'est pas.
-    let humains: std::collections::HashSet<String> = state
+    let mut humains: std::collections::HashSet<String> = state
         .presences
         .values()
         .filter(|presence| presence.agent_type == "ui")
         .map(|presence| presence.name.clone())
         .collect();
+    // Le ledger garde volontairement le libellé stable `humain`, alors que
+    // l'inscription du relais UI utilise son UUID canonique. Les deux doivent
+    // désigner la même extrémité pour le délai humain, sinon des relances
+    // d'agent peuvent parasiter une réponse encore en cours.
+    if humains.contains(UI_HUMAN_AGENT_ID) {
+        humains.insert(UI_HUMAN_SENDER.to_string());
+    }
 
     for pending in state.pending_replies.iter_mut() {
         let elapsed = now.duration_since(pending.created_at).as_secs();
@@ -20032,6 +20039,99 @@ mod presence_tests {
         // donc jamais différer le timeout du daemon.
         assert_eq!(deferred_reminder_level(true, 60, 60), Some(2));
         assert_eq!(deferred_reminder_level(false, 20, 60), None);
+    }
+
+    #[test]
+    fn rappel_reconnait_le_libelle_humain_du_relais_ui_canonique() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-rappel-ui-canonique-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let (mut state, config) = recovery_fixture_state(&root);
+        let target = "61d32f19-3e02-4cbe-91a9-37d38066b4ab";
+        assert!(matches!(
+            handle_register_with_channel(
+                "conn-1",
+                2,
+                "codex".to_string(),
+                target.to_string(),
+                Some("cartae".to_string()),
+                Some("codex_app_server".to_string()),
+                ChannelReport::Omitted,
+                Some(PresenceMode::Cli),
+                None,
+                Some("Linux".to_string()),
+                Some("target-instance".to_string()),
+                Some("bridget".to_string()),
+                false,
+                Some(true),
+                &mut state,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
+        state.presences.insert(
+            "instance-ui".to_string(),
+            Presence {
+                name: UI_HUMAN_AGENT_ID.to_string(),
+                agent_type: "ui".to_string(),
+                host: "localhost".to_string(),
+                transport: "cli".to_string(),
+                channel: Some("ssh-unix".to_string()),
+                mode: None,
+                location: None,
+                journal_available: false,
+                os: "linux".to_string(),
+                state: "connected".to_string(),
+                busy_since: None,
+                capacity_seen: Instant::now(),
+                link_seen: Instant::now(),
+                reconnect_count: 0,
+                model: None,
+                effort: None,
+                rate_limits: Default::default(),
+                served_model: None,
+                derived_domain: None,
+                domain: None,
+                dnd_until: None,
+                disk_space: None,
+            },
+        );
+        state
+            .store
+            .create_request("requete-humaine", UI_HUMAN_SENDER, target, 60)
+            .expect("demande suivie");
+        let started = Instant::now()
+            .checked_sub(Duration::from_secs(61))
+            .expect("61 secondes en arrière");
+        state.pending_replies.push(PendingReply {
+            msg_id: "requete-humaine".to_string(),
+            from: UI_HUMAN_SENDER.to_string(),
+            from_conn: "ui-human".to_string(),
+            to: target.to_string(),
+            target_conn: "conn-1".to_string(),
+            timeout_secs: 60,
+            created_at: started,
+            escalation_level: 0,
+            deferred_level: None,
+        });
+
+        let actions = collect_reminder_actions(&mut state, Instant::now());
+        assert!(
+            actions.is_empty(),
+            "une demande de l'interface ne doit pas créer de relance artificielle"
+        );
+        assert_eq!(
+            state
+                .store
+                .get_request("requete-humaine")
+                .expect("lecture demande")
+                .expect("demande présente")
+                .state,
+            "open"
+        );
+        let _ = std::fs::remove_file(config.db_path);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
