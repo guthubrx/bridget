@@ -10016,7 +10016,7 @@
             placeholder.replaceChildren(make("p", "artifact-renderer__error", "Le runtime sandboxé est indisponible. Le manifeste et l’export restent accessibles via Bridget."));
             return;
           }
-          let sandboxArtifact = artifact;
+          let frameUrl = "";
           try {
             const ticketResponse = await windowRef.fetch(
               artifactResourceUrl("/v1/artifacts/sandbox/ticket", token, state.selectedAgent, versionRef),
@@ -10028,22 +10028,14 @@
             );
             const ticket = await ticketResponse.json();
             if (!ticketResponse.ok || !ticket.ticket) throw new Error(text(ticket && ticket.message, "Ticket sandbox indisponible."));
-            const read = await windowRef.fetch(`/v1/artifacts/sandbox/read?${new URLSearchParams({ token, ticket: ticket.ticket })}`);
-            const content = await read.json();
-            if (!read.ok) throw new Error(text(content && content.message, "Contenu sandbox indisponible."));
-            sandboxArtifact = {
-              ...artifact,
-              publication: {
-                ...artifact.publication,
-                payload: { ...artifact.publication.payload, html: content.html, data: content.data },
-              },
-            };
+            frameUrl = `/v1/artifacts/sandbox/frame?${new URLSearchParams({ token, ticket: ticket.ticket })}`;
           } catch (error) {
             placeholder.replaceChildren(make("p", "artifact-renderer__error", text(error && error.message, "Le contenu HTML canonique est indisponible. Demandez une restauration par Bridget.")));
             return;
           }
-          const card = sandbox.render(documentRef, sandboxArtifact, {
+          const card = sandbox.render(documentRef, artifact, {
             window: windowRef,
+            frameUrl,
             onSave: async (uiState) => {
               const response = await windowRef.fetch(
                 artifactResourceUrl("/v1/artifacts/sandbox/save", token, state.selectedAgent, versionRef),

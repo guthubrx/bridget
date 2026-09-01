@@ -11,29 +11,21 @@
   const MAX_HEIGHT = 1200;
   const MAX_STATE_BYTES = 128 * 1024;
   const MAX_ERROR_BYTES = 2048;
-  const CSP = "default-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; media-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'";
 
   function asText(value, fallback = "") { return typeof value === "string" ? value : fallback; }
   function utf8Length(value) { return new TextEncoder().encode(JSON.stringify(value)).length; }
-  function escapeAttribute(value) { return String(value).replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;"); }
-  function escapedBase64(value) { return btoa(unescape(encodeURIComponent(asText(value)))); }
 
-  function srcdoc(html, bootstrap) {
-    const init = escapedBase64(JSON.stringify(bootstrap || {}));
-    const prelude = `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapeAttribute(CSP)}"><script>const __b=JSON.parse(decodeURIComponent(escape(atob('${init}'))));parent.postMessage({type:'sandbox.ready',frame_instance_id:__b.frame_instance_id},'*');window.addEventListener('message',e=>{if(e.data&&e.data.type==='sandbox.bootstrap')window.dispatchEvent(new CustomEvent('bridget-sandbox-bootstrap',{detail:e.data}));if(e.data&&e.data.type==='sandbox.close')window.close()});</script>`;
-    // WebKit laisse l'iframe blanche lorsque le document complet est injecté
-    // par document.write pendant le parsing de srcdoc. Le document reste donc
-    // dans son propre flux de parsing, avec le CSP et le protocole ajoutés au
-    // début de son <head>.
-    const documentHtml = asText(html).replace(/^\s*<!doctype[^>]*>/i, "");
-    if (/<head\b[^>]*>/i.test(documentHtml)) {
-      return documentHtml.replace(/<head\b[^>]*>/i, (head) => `${head}${prelude}`);
+  function sandboxFrameUrl(value, frameInstanceId) {
+    const source = asText(value).trim();
+    if (!source || !frameInstanceId) return "";
+    try {
+      const url = new URL(source, root && root.location ? root.location.href : undefined);
+      if (url.protocol !== "http:" || url.origin !== (root && root.location ? root.location.origin : url.origin)) return "";
+      url.searchParams.set("frame_instance_id", frameInstanceId);
+      return url.href;
+    } catch (_) {
+      return "";
     }
-    return `<!doctype html><html><head>${prelude}</head><body>${documentHtml}</body></html>`;
-  }
-
-  function sandboxDocumentUrl(html, bootstrap) {
-    return `data:text/html;charset=utf-8;base64,${escapedBase64(srcdoc(html, bootstrap))}`;
   }
 
   function validMessage(value, instanceId) {
@@ -54,19 +46,18 @@
 
   function render(documentRef, artifact, options = {}) {
     const payload = artifact && artifact.publication && artifact.publication.payload || {};
-    const html = asText(payload.html);
     const frameInstanceId = (root.crypto && root.crypto.randomUUID ? root.crypto.randomUUID() : `frame-${Date.now()}-${Math.random()}`);
     const section = documentRef.createElement("section"); section.className = "artifact-sandbox";
-    if (!html) { section.textContent = "Le contenu HTML canonique est indisponible. Consultez le manifeste ou demandez une restauration par Bridget."; section.classList.add("artifact-sandbox--error"); return section; }
+    const frameUrl = sandboxFrameUrl(options.frameUrl, frameInstanceId);
+    if (!frameUrl) { section.textContent = "La page sandboxée est indisponible. Rechargez l’artefact via Bridget."; section.classList.add("artifact-sandbox--error"); return section; }
     const iframe = documentRef.createElement("iframe");
     iframe.className = "artifact-sandbox__frame";
     iframe.setAttribute("sandbox", "allow-scripts");
     iframe.setAttribute("referrerpolicy", "no-referrer");
     iframe.title = asText(artifact.publication && artifact.publication.title, "Artefact HTML Bridget");
-    // WKWebView monte parfois une iframe srcdoc vide dans une WebView Tauri,
-    // malgré une source valide. Une navigation data: garde le document dans
-    // une origine opaque, sans réseau, et évite ce chemin WebKit.
-    iframe.src = sandboxDocumentUrl(html, { frame_instance_id: frameInstanceId });
+    // La page est servie par le relais via un ticket court. Cela évite le
+    // chemin data:/srcdoc qui ne peint pas toujours dans WKWebView/Tauri.
+    iframe.src = frameUrl;
     iframe.style.height = `${Math.min(MAX_HEIGHT, Number(payload.inline_height_hint) || 360)}px`;
     const error = documentRef.createElement("p"); error.className = "artifact-sandbox__error"; error.hidden = true;
     const actions = documentRef.createElement("div"); actions.className = "artifact-sandbox__actions";
@@ -94,5 +85,5 @@
     iframe.addEventListener("load", () => iframe.contentWindow.postMessage({ type: "sandbox.bootstrap", frame_instance_id: frameInstanceId, data: payload.data || null, limits: { max_height: MAX_HEIGHT, max_state_bytes: MAX_STATE_BYTES } }, "*"));
     return section;
   }
-  return { CSP, MAX_HEIGHT, MAX_STATE_BYTES, srcdoc, sandboxDocumentUrl, validMessage, render };
+  return { MAX_HEIGHT, MAX_STATE_BYTES, sandboxFrameUrl, validMessage, render };
 });

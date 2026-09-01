@@ -50,6 +50,7 @@ const MAX_UI_ARTIFACT_RESPONSE_BYTES: usize = 512 * 1024;
 const MAX_UI_ARTIFACT_EXPORT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_UI_ARTIFACT_PAGE_ROWS: usize = 100;
 const UI_SANDBOX_TICKET_TTL: Duration = Duration::from_secs(60);
+const UI_SANDBOX_CSP: &str = "default-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; media-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'";
 const UI_RECONNECT_DELAY: Duration = Duration::from_millis(100);
 /// La rétention des présences côté daemon s'appuie sur `link_seen`, rafraîchi
 /// par le heartbeat. Une présence qui ne bat pas est donc jetée au bout de
@@ -1068,15 +1069,6 @@ struct UiArtifactSandboxTicketAcceptedV1 {
 }
 
 #[derive(Debug, Serialize)]
-struct UiArtifactSandboxReadV1 {
-    version: u8,
-    artifact_ref: String,
-    version_ref: String,
-    html: String,
-    data: serde_json::Value,
-}
-
-#[derive(Debug, Serialize)]
 struct UiRelayStateV1 {
     version: u8,
     kind: &'static str,
@@ -1956,9 +1948,14 @@ fn serve_connection(
                 ),
             }
         }
-        ("GET", "/v1/artifacts/sandbox/read") => {
-            match read_artifact_sandbox_ticket(config, runtime, request.query.get("ticket")) {
-                Ok(response) => write_json(stream, 200, &response),
+        ("GET", "/v1/artifacts/sandbox/frame") => {
+            match read_artifact_sandbox_frame(
+                config,
+                runtime,
+                request.query.get("ticket"),
+                request.query.get("frame_instance_id"),
+            ) {
+                Ok(html) => write_sandbox_html(stream, &html),
                 Err((status, code, message)) => write_json(
                     stream,
                     status,
@@ -4691,7 +4688,7 @@ fn read_artifact_sandbox_ticket(
     config: &UiRelayConfig,
     runtime: &UiRelayRuntime,
     ticket: Option<&String>,
-) -> Result<UiArtifactSandboxReadV1, UiArtifactError> {
+) -> Result<String, UiArtifactError> {
     let Some(ticket) = ticket else {
         return Err((
             400,
@@ -4721,7 +4718,8 @@ fn read_artifact_sandbox_ticket(
             "La portée projet a changé. Rechargez l’artefact via Bridget.".to_owned(),
         ));
     }
-    let detail = read_artifact_detail_for_version(config, &current_project_id, &ticket.version_ref)?;
+    let detail =
+        read_artifact_detail_for_version(config, &current_project_id, &ticket.version_ref)?;
     if detail.publication.kind != crate::artifact_types::ArtifactKind::Html {
         return Err((
             409,
@@ -4743,19 +4741,53 @@ fn read_artifact_sandbox_ticket(
                     .to_owned(),
             )
         })?;
-    let data = detail
-        .publication
-        .payload
-        .get("data")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
-    Ok(UiArtifactSandboxReadV1 {
-        version: UI_VERSION,
-        artifact_ref: detail.item.artifact_ref,
-        version_ref: ticket.version_ref,
-        html: html.to_owned(),
-        data,
-    })
+    Ok(html.to_owned())
+}
+
+fn read_artifact_sandbox_frame(
+    config: &UiRelayConfig,
+    runtime: &UiRelayRuntime,
+    ticket: Option<&String>,
+    frame_instance_id: Option<&String>,
+) -> Result<String, UiArtifactError> {
+    let frame_instance_id = frame_instance_id
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 160
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+        .ok_or_else(|| {
+            (
+                400,
+                "artifact_sandbox_frame_invalid",
+                "Identifiant de frame sandbox invalide.".to_owned(),
+            )
+        })?;
+    let html = read_artifact_sandbox_ticket(config, runtime, ticket)?;
+    Ok(sandbox_frame_document(&html, frame_instance_id))
+}
+
+fn sandbox_frame_document(html: &str, frame_instance_id: &str) -> String {
+    let bootstrap = base64_standard(
+        serde_json::to_string(&serde_json::json!({ "frame_instance_id": frame_instance_id }))
+            .expect("bootstrap sandbox sérialisable")
+            .as_bytes(),
+    );
+    let prelude = format!(
+        "<meta charset=\"utf-8\"><script>const __b=JSON.parse(decodeURIComponent(escape(atob('{bootstrap}'))));parent.postMessage({{type:'sandbox.ready',frame_instance_id:__b.frame_instance_id}},'*');window.addEventListener('message',e=>{{if(e.data&&e.data.type==='sandbox.bootstrap')window.dispatchEvent(new CustomEvent('bridget-sandbox-bootstrap',{{detail:e.data}}));if(e.data&&e.data.type==='sandbox.close')window.close()}});</script>"
+    );
+    let lowercase = html.to_ascii_lowercase();
+    if let Some(head_start) = lowercase.find("<head") {
+        if let Some(head_end) = lowercase[head_start..].find('>') {
+            let insertion = head_start + head_end + 1;
+            let mut document = html.to_owned();
+            document.insert_str(insertion, &prelude);
+            return document;
+        }
+    }
+    format!("<!doctype html><html><head>{prelude}</head><body>{html}</body></html>")
 }
 
 fn post_artifact_sandbox_save(
@@ -6578,6 +6610,18 @@ fn write_binary(
         body.len(),
     )?;
     stream.write_all(body)?;
+    stream.flush()?;
+    Ok(())
+}
+
+fn write_sandbox_html(stream: &mut TcpStream, body: &str) -> Result<(), UiError> {
+    write!(
+        stream,
+        "HTTP/1.1 200 {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Security-Policy: {UI_SANDBOX_CSP}\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        status_text(200),
+        body.len(),
+    )?;
+    stream.write_all(body.as_bytes())?;
     stream.flush()?;
     Ok(())
 }
@@ -9732,5 +9776,18 @@ mod tests {
         assert_eq!(resolved.agent, "agent-test");
         assert_eq!(resolved.version_ref, "artifact-version:test");
         assert!(runtime.resolve_sandbox_ticket("0").is_none());
+    }
+
+    #[test]
+    fn page_sandbox_injecte_le_protocole_sans_alterer_le_document() {
+        let page = sandbox_frame_document(
+            "<!doctype html><html><head><title>Test</title></head><body><h1>Visible</h1></body></html>",
+            "frame-123",
+        );
+        assert!(!page.contains("Content-Security-Policy"));
+        assert!(page.contains("sandbox.ready"));
+        assert!(page.contains("frame_instance_id"));
+        assert!(page.contains("<h1>Visible</h1>"));
+        assert!(page.contains("<head><meta charset=\"utf-8\">"));
     }
 }
