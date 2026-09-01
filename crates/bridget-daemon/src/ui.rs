@@ -1081,11 +1081,32 @@ struct UiProjectRuntimeV1 {
     version: u8,
     project_id: String,
     binding_generation: u64,
+    backend: &'static str,
     state: String,
-    policy_id: String,
-    policy_version: u64,
-    environment_epoch: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    environment_epoch: Option<u64>,
     last_reason: Option<String>,
+}
+
+/// Action runtime fermée issue du menu projet. Aucune image, commande Docker,
+/// chemin hôte ou profil de ressource ne traverse le navigateur.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiProjectRuntimeActionV1 {
+    version: u8,
+    command_id: String,
+    project_id: String,
+    operation: ProjectRuntimeOperation,
+    #[serde(default)]
+    expected_binding_generation: Option<u64>,
+    #[serde(default)]
+    policy_id: Option<String>,
+    #[serde(default)]
+    policy_version: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1156,6 +1177,12 @@ struct UiProjectConfirmRequestV1 {
     #[serde(default)]
     folder_name: Option<String>,
     initialize_git: bool,
+    #[serde(default)]
+    backend: Option<String>,
+    #[serde(default)]
+    policy_id: Option<String>,
+    #[serde(default)]
+    policy_version: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1214,9 +1241,57 @@ struct UiServerControlSettingsV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     policy_generation: Option<u64>,
     allowed_project_roots: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution: Option<UiExecutionSettingsV1>,
+    runtime_capability: UiRuntimeCapabilityV1,
     categories: Vec<UiControlCategoryV1>,
     daemon_version: &'static str,
     update_status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct UiExecutionSettingsV1 {
+    generation: u64,
+    default_backend: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_policy_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_policy_version: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct UiRuntimeCapabilityV1 {
+    docker_available: bool,
+    policy_available: bool,
+    resource_catalog_available: bool,
+    image_attested: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiExecutionSettingsUpdateV1 {
+    version: u8,
+    command_id: String,
+    expected_generation: u64,
+    default_backend: String,
+    #[serde(default)]
+    default_policy_id: Option<String>,
+    #[serde(default)]
+    default_policy_version: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct UiExecutionSettingsAppliedV1 {
+    version: u8,
+    command_id: String,
+    resulting_generation: u64,
+    default_backend: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_policy_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_policy_version: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1287,6 +1362,12 @@ struct UiProjectPreviewRequestV1 {
     root: String,
     #[serde(default)]
     folder_name: Option<String>,
+    #[serde(default)]
+    backend: Option<String>,
+    #[serde(default)]
+    policy_id: Option<String>,
+    #[serde(default)]
+    policy_version: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1297,6 +1378,11 @@ struct UiProjectPreviewV1 {
     display_name: String,
     git: &'static str,
     git_initialization_proposed: bool,
+    backend: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_version: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1331,6 +1417,12 @@ struct UiProjectPlacementRequestV2 {
     requested_name: Option<String>,
     #[serde(default)]
     initialize_git: bool,
+    #[serde(default)]
+    backend: Option<String>,
+    #[serde(default)]
+    policy_id: Option<String>,
+    #[serde(default)]
+    policy_version: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1344,6 +1436,11 @@ struct UiProjectPlacementPreviewV2 {
     display_name: String,
     git: &'static str,
     git_initialization_proposed: bool,
+    backend: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_version: Option<u64>,
 }
 
 /// Projection serveur locale au tunnel courant. Ce contrat ne contient ni
@@ -1757,6 +1854,20 @@ fn serve_connection(
                 ),
             }
         }
+        ("POST", "/v1/projects/runtime") => {
+            match post_project_runtime(&config.daemon_socket, &request.body) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
         ("GET", "/v1/projects/settings") => match read_project_settings(config) {
             Ok(response) => write_json(stream, 200, &response),
             Err((status, code, message)) => write_json(
@@ -1849,6 +1960,20 @@ fn serve_connection(
         }
         ("POST", "/v2/control/project-locations/apply") => {
             match post_project_location_catalog_apply_v2(config, &request.body) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
+        ("POST", "/v1/control/execution/apply") => {
+            match post_execution_settings_apply(config, &request.body) {
                 Ok(response) => write_json(stream, 200, &response),
                 Err((status, code, message)) => write_json(
                     stream,
@@ -2890,6 +3015,10 @@ fn read_server_control_settings(
 ) -> Result<UiServerControlSettingsV1, (u16, &'static str, String)> {
     let project = read_project_settings(config).ok();
     let configuration_available = project.is_some();
+    let execution = execution_settings_path(config)
+        .and_then(|path| crate::control_settings::load_or_initialize_execution_settings(&path).ok())
+        .map(ui_execution_settings);
+    let runtime_capability = runtime_capability_for_ui(config, None);
     let categories = crate::control_settings::server_setting_descriptors(configuration_available)
         .into_iter()
         .map(|descriptor| UiControlCategoryV1 {
@@ -2909,9 +3038,161 @@ fn read_server_control_settings(
         allowed_project_roots: project
             .map(|settings| settings.allowed_project_roots)
             .unwrap_or_default(),
+        execution,
+        runtime_capability: ui_runtime_capability(&runtime_capability),
         categories,
         daemon_version: env!("CARGO_PKG_VERSION"),
         update_status: "not_configured",
+    })
+}
+
+fn execution_settings_path(config: &UiRelayConfig) -> Option<PathBuf> {
+    config
+        .project_root_policy_path
+        .as_deref()
+        .and_then(Path::parent)
+        .map(|directory| directory.join("server-execution-settings.json"))
+}
+
+fn runtime_policy_path(config: &UiRelayConfig) -> Option<PathBuf> {
+    config
+        .project_root_policy_path
+        .as_deref()
+        .and_then(Path::parent)
+        .map(|directory| directory.join("project-runtime-policy.json"))
+}
+
+fn resource_catalog_path(config: &UiRelayConfig) -> Option<PathBuf> {
+    config
+        .project_root_policy_path
+        .as_deref()
+        .and_then(Path::parent)
+        .map(|directory| directory.join("project-resource-catalog.json"))
+}
+
+fn ui_execution_settings(
+    settings: crate::control_settings::ServerExecutionSettings,
+) -> UiExecutionSettingsV1 {
+    UiExecutionSettingsV1 {
+        generation: settings.generation,
+        default_backend: match settings.default_backend {
+            crate::control_settings::ExecutionDefaultBackend::Host => "host",
+            crate::control_settings::ExecutionDefaultBackend::Docker => "docker",
+        },
+        default_policy_id: settings.default_policy_id,
+        default_policy_version: settings.default_policy_version,
+    }
+}
+
+fn ui_runtime_capability(
+    capability: &crate::control_settings::RuntimeCapability,
+) -> UiRuntimeCapabilityV1 {
+    use crate::control_settings::RuntimeCapabilityReason;
+    UiRuntimeCapabilityV1 {
+        docker_available: capability.docker_available,
+        policy_available: capability.policy_available,
+        resource_catalog_available: capability.resource_catalog_available,
+        image_attested: capability.image_attested,
+        reason: capability.reason.map(|reason| match reason {
+            RuntimeCapabilityReason::DockerUnavailable => "docker_unavailable",
+            RuntimeCapabilityReason::PolicyUnavailable => "policy_unavailable",
+            RuntimeCapabilityReason::ResourceCatalogUnavailable => "resource_catalog_unavailable",
+            RuntimeCapabilityReason::ImageUnattested => "image_unattested",
+        }),
+    }
+}
+
+/// La capacité est calculée à partir de documents fermés voisins de la
+/// politique de racines. Le relais ne reçoit aucun chemin libre du navigateur.
+fn runtime_capability_for_ui(
+    config: &UiRelayConfig,
+    policy_reference: Option<(&str, u64)>,
+) -> crate::control_settings::RuntimeCapability {
+    let Some(runtime_path) = runtime_policy_path(config) else {
+        return crate::control_settings::RuntimeCapability::host_only();
+    };
+    let runtime_config =
+        crate::project_runtime::ProjectRuntimePolicyConfig::load(&runtime_path).ok();
+    let resource_catalog_available = crate::project_runtime::ProjectResourceCatalog::load(
+        resource_catalog_path(config)
+            .as_deref()
+            .unwrap_or_else(|| Path::new("/dev/null")),
+    )
+    .is_ok();
+    let docker =
+        crate::project_runtime::DockerCli::new(PathBuf::from("docker"), Duration::from_secs(5));
+    crate::daemon::project_runtime_capability(
+        runtime_config.as_ref(),
+        resource_catalog_available,
+        policy_reference,
+        &docker,
+    )
+}
+
+fn parse_execution_settings_update(
+    body: &[u8],
+) -> Result<crate::control_settings::ExecutionSettingsChange, (u16, &'static str, String)> {
+    let request: UiExecutionSettingsUpdateV1 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "invalid_request",
+            "Réglages d'exécution invalides.".to_string(),
+        )
+    })?;
+    if request.version != UI_VERSION {
+        return Err((
+            400,
+            "invalid_request",
+            "Réglages d'exécution invalides.".to_string(),
+        ));
+    }
+    let default_backend = match request.default_backend.as_str() {
+        "host" => crate::control_settings::ExecutionDefaultBackend::Host,
+        "docker" => crate::control_settings::ExecutionDefaultBackend::Docker,
+        _ => {
+            return Err((
+                400,
+                "invalid_request",
+                "Backend d'exécution inconnu.".to_string(),
+            ));
+        }
+    };
+    Ok(crate::control_settings::ExecutionSettingsChange {
+        command_id: request.command_id,
+        expected_generation: request.expected_generation,
+        default_backend,
+        default_policy_id: request.default_policy_id,
+        default_policy_version: request.default_policy_version,
+    })
+}
+
+fn post_execution_settings_apply(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<UiExecutionSettingsAppliedV1, (u16, &'static str, String)> {
+    let change = parse_execution_settings_update(body)?;
+    let path = execution_settings_path(config).ok_or((
+        409,
+        "control_settings_unavailable",
+        "Les réglages contrôlés ne sont pas disponibles sur ce serveur.".to_string(),
+    ))?;
+    let reference = match (&change.default_policy_id, change.default_policy_version) {
+        (Some(id), Some(version)) => Some((id.as_str(), version)),
+        _ => None,
+    };
+    let capability = runtime_capability_for_ui(config, reference);
+    let command_id = change.command_id.clone();
+    let settings =
+        crate::control_settings::apply_execution_settings(&path, change, &capability, now_secs())
+            .map_err(control_settings_error)?;
+    let projection = ui_execution_settings(settings);
+    Ok(UiExecutionSettingsAppliedV1 {
+        version: UI_VERSION,
+        command_id,
+        resulting_generation: projection.generation,
+        default_backend: projection.default_backend,
+        default_policy_id: projection.default_policy_id,
+        default_policy_version: projection.default_policy_version,
     })
 }
 
@@ -2961,6 +3242,11 @@ fn control_settings_error(
             409,
             "control_settings_refused",
             "Le serveur a refusé les racines ou leur génération.".to_string(),
+        ),
+        crate::control_settings::ControlSettingsRefusal::RuntimeCapabilityIncomplete => (
+            409,
+            "runtime_capability_incomplete",
+            "Docker n'est pas complètement attesté sur ce serveur.".to_string(),
         ),
     }
 }
@@ -3335,6 +3621,12 @@ fn post_project_placement_preview_v2(
         GitDiagnostic::Modified => "modified",
         GitDiagnostic::Worktree => "worktree",
     };
+    let backend = resolve_project_backend(
+        config,
+        request.backend.as_deref(),
+        request.policy_id.as_deref(),
+        request.policy_version,
+    )?;
     Ok(UiProjectPlacementPreviewV2 {
         contract_version: 2,
         command_id: request.command_id,
@@ -3345,6 +3637,12 @@ fn post_project_placement_preview_v2(
         display_name: preview.display_name,
         git,
         git_initialization_proposed: preview.git_initialization_proposed,
+        backend: match backend.backend {
+            ProjectBackend::Host => "host",
+            ProjectBackend::Docker => "docker",
+        },
+        policy_id: backend.policy_id,
+        policy_version: backend.policy_version,
     })
 }
 
@@ -3426,12 +3724,102 @@ fn post_project_placement_apply_v2(
             ));
         }
     };
+    let backend = resolve_project_backend(
+        config,
+        request.backend.as_deref(),
+        request.policy_id.as_deref(),
+        request.policy_version,
+    )?;
     confirm_project_preview(
         config,
         request.command_id,
         request.initialize_git,
         validated_preview,
+        backend,
     )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UiResolvedProjectBackend {
+    backend: ProjectBackend,
+    policy_id: Option<String>,
+    policy_version: Option<u64>,
+}
+
+fn resolve_project_backend(
+    config: &UiRelayConfig,
+    requested_backend: Option<&str>,
+    requested_policy_id: Option<&str>,
+    requested_policy_version: Option<u64>,
+) -> Result<UiResolvedProjectBackend, (u16, &'static str, String)> {
+    let configured = execution_settings_path(config).and_then(|path| {
+        crate::control_settings::load_or_initialize_execution_settings(&path).ok()
+    });
+    let (backend, policy_id, policy_version) = match requested_backend {
+        Some("host") => (ProjectBackend::Host, None, None),
+        Some("docker") => (
+            ProjectBackend::Docker,
+            requested_policy_id.map(str::to_string),
+            requested_policy_version,
+        ),
+        Some(_) => {
+            return Err((
+                400,
+                "invalid_request",
+                "Backend de projet inconnu.".to_string(),
+            ));
+        }
+        None => match configured {
+            Some(settings) => match settings.default_backend {
+                crate::control_settings::ExecutionDefaultBackend::Host => {
+                    (ProjectBackend::Host, None, None)
+                }
+                crate::control_settings::ExecutionDefaultBackend::Docker => (
+                    ProjectBackend::Docker,
+                    settings.default_policy_id,
+                    settings.default_policy_version,
+                ),
+            },
+            None => (ProjectBackend::Host, None, None),
+        },
+    };
+    if backend == ProjectBackend::Host {
+        if requested_policy_id.is_some() || requested_policy_version.is_some() {
+            return Err((
+                400,
+                "invalid_request",
+                "Une politique n'est valable que pour Docker.".to_string(),
+            ));
+        }
+        return Ok(UiResolvedProjectBackend {
+            backend,
+            policy_id: None,
+            policy_version: None,
+        });
+    }
+    let policy_id = policy_id.filter(|value| !value.trim().is_empty()).ok_or((
+        409,
+        "runtime_default_unavailable",
+        "Docker exige une politique versionnée attestée.".to_string(),
+    ))?;
+    let policy_version = policy_version.filter(|version| *version > 0).ok_or((
+        409,
+        "runtime_default_unavailable",
+        "Docker exige une politique versionnée attestée.".to_string(),
+    ))?;
+    let capability = runtime_capability_for_ui(config, Some((&policy_id, policy_version)));
+    if !capability.is_complete() {
+        return Err((
+            409,
+            "runtime_capability_incomplete",
+            "Docker n'est pas complètement attesté sur ce serveur.".to_string(),
+        ));
+    }
+    Ok(UiResolvedProjectBackend {
+        backend,
+        policy_id: Some(policy_id),
+        policy_version: Some(policy_version),
+    })
 }
 
 fn post_project_preview(
@@ -3460,6 +3848,12 @@ fn post_project_preview(
         &request.root,
         request.folder_name.as_deref(),
     )?;
+    let backend = resolve_project_backend(
+        config,
+        request.backend.as_deref(),
+        request.policy_id.as_deref(),
+        request.policy_version,
+    )?;
     let mode = match preview.mode {
         ProjectFolderMode::Create => "create",
         ProjectFolderMode::Import => "import",
@@ -3477,6 +3871,12 @@ fn post_project_preview(
         display_name: preview.display_name,
         git,
         git_initialization_proposed: preview.git_initialization_proposed,
+        backend: match backend.backend {
+            ProjectBackend::Host => "host",
+            ProjectBackend::Docker => "docker",
+        },
+        policy_id: backend.policy_id,
+        policy_version: backend.policy_version,
     })
 }
 
@@ -3944,7 +4344,13 @@ fn post_project_confirm(
         &request.root,
         request.folder_name.as_deref(),
     )?;
-    confirm_project_preview(config, request.command_id, request.initialize_git, preview)
+    let backend = resolve_project_backend(
+        config,
+        request.backend.as_deref(),
+        request.policy_id.as_deref(),
+        request.policy_version,
+    )?;
+    confirm_project_preview(config, request.command_id, request.initialize_git, preview, backend)
 }
 
 fn confirm_project_preview(
@@ -3952,6 +4358,7 @@ fn confirm_project_preview(
     command_id: String,
     initialize_git: bool,
     preview: crate::project_workspace::ProjectPreview,
+    backend: UiResolvedProjectBackend,
 ) -> Result<UiProjectConfirmedV1, UiProjectError> {
     use crate::project_workspace::ProjectFolderMode;
     use std::process::Command;
@@ -3997,9 +4404,9 @@ fn confirm_project_preview(
         deadline_at: now.saturating_add(30),
         project_id: project_id.clone(),
         requested_root: preview.canonical_path.to_string_lossy().into_owned(),
-        backend: ProjectBackend::Host,
-        policy_id: None,
-        policy_version: None,
+        backend: backend.backend,
+        policy_id: backend.policy_id,
+        policy_version: backend.policy_version,
     };
     send_daemon(
         &mut writer,
@@ -4228,8 +4635,69 @@ fn read_project_runtime(
         deadline_at: issued_at.saturating_add(10),
         operation: ProjectRuntimeOperation::Status,
         project_id: project_id.to_string(),
+        expected_binding_generation: None,
+        policy_id: None,
+        policy_version: None,
         profile: None,
     };
+    request_project_runtime(socket_path, request)
+}
+
+fn post_project_runtime(
+    socket_path: &Path,
+    body: &[u8],
+) -> Result<UiProjectRuntimeV1, (u16, &'static str, String)> {
+    let action: UiProjectRuntimeActionV1 = serde_json::from_slice(body).map_err(|_| {
+        (
+            400,
+            "invalid_runtime_action",
+            "Action d'environnement invalide.".to_string(),
+        )
+    })?;
+    if action.version != UI_VERSION
+        || action.command_id.trim().is_empty()
+        || action.project_id.trim().is_empty()
+        || matches!(action.operation, ProjectRuntimeOperation::Status)
+    {
+        return Err((
+            400,
+            "invalid_runtime_action",
+            "Action d'environnement invalide.".to_string(),
+        ));
+    }
+    if matches!(action.operation, ProjectRuntimeOperation::ActivateDocker)
+        && (action.expected_binding_generation.is_none()
+            || action.policy_id.as_deref().is_none_or(str::is_empty)
+            || action.policy_version.is_none())
+    {
+        return Err((
+            400,
+            "runtime_activation_reference_required",
+            "L'activation Docker exige une génération et une politique serveur fermée.".to_string(),
+        ));
+    }
+    let now = now_secs();
+    request_project_runtime(
+        socket_path,
+        ProjectRuntimeRequest {
+            contract_version: crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION,
+            command_id: action.command_id,
+            issued_at: now,
+            deadline_at: now.saturating_add(10),
+            operation: action.operation,
+            project_id: action.project_id,
+            expected_binding_generation: action.expected_binding_generation,
+            policy_id: action.policy_id,
+            policy_version: action.policy_version,
+            profile: None,
+        },
+    )
+}
+
+fn request_project_runtime(
+    socket_path: &Path,
+    request: ProjectRuntimeRequest,
+) -> Result<UiProjectRuntimeV1, (u16, &'static str, String)> {
     let stream = UnixStream::connect(socket_path).map_err(|_| {
         (
             503,
@@ -4288,13 +4756,8 @@ fn read_project_runtime(
                 };
                 return Err((status, code, message));
             }
-            let policy = outcome.runtime_policy.ok_or_else(|| {
-                (
-                    503,
-                    "runtime_unavailable",
-                    "Projection Docker incomplète.".to_string(),
-                )
-            })?;
+            let policy = outcome.runtime_policy;
+            let is_docker = policy.is_some();
             Ok(UiProjectRuntimeV1 {
                 version: UI_VERSION,
                 project_id: outcome.project_id,
@@ -4312,10 +4775,13 @@ fn read_project_runtime(
                         "Projection Docker incomplète.".to_string(),
                     )
                 })?,
-                policy_id: policy.policy_id,
-                policy_version: policy.policy_version,
-                environment_epoch: policy.environment_epoch,
-                last_reason: outcome.last_reason,
+                backend: if is_docker { "docker" } else { "host" },
+                policy_id: policy.as_ref().map(|policy| policy.policy_id.clone()),
+                policy_version: policy.as_ref().map(|policy| policy.policy_version),
+                environment_epoch: policy.map(|policy| policy.environment_epoch),
+                last_reason: crate::project_runtime::public_runtime_reason(
+                    outcome.last_reason.as_deref(),
+                ),
             })
         }
         response => Err((
@@ -8036,7 +8502,10 @@ mod tests {
             canonical
         );
         assert!(artifact_version_from_query(Some(&canonical)).is_err());
-        assert_eq!(artifact_version_from_request(&canonical).unwrap(), canonical);
+        assert_eq!(
+            artifact_version_from_request(&canonical).unwrap(),
+            canonical
+        );
         assert!(artifact_version_from_request(&format!("artifact-version.{suffix}")).is_err());
     }
 
@@ -9092,6 +9561,32 @@ mod tests {
         (status, text)
     }
 
+    fn post_runtime(address: SocketAddr, token: Option<&str>, body: &str) -> (u16, String) {
+        let mut client = TcpStream::connect(address).unwrap();
+        let payload = body.as_bytes();
+        let query = token
+            .map(|token| format!("?token={token}"))
+            .unwrap_or_default();
+        let request = format!(
+            "POST /v1/projects/runtime{query} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            payload.len()
+        );
+        client.write_all(request.as_bytes()).unwrap();
+        client.write_all(payload).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        let text = String::from_utf8(response).unwrap();
+        let status = text
+            .split_whitespace()
+            .nth(1)
+            .and_then(|status| status.parse().ok())
+            .unwrap_or(0);
+        (status, text)
+    }
+
     fn json_body(raw: &str) -> serde_json::Value {
         let json = raw.split("\r\n\r\n").nth(1).unwrap_or("");
         serde_json::from_str(json).unwrap()
@@ -9608,8 +10103,8 @@ mod tests {
         assert!(settings.categories.iter().any(|category| {
             category.key == "project_roots.allowed_roots" && category.access == "writable"
         }));
-        assert!(settings.categories.iter().all(|category| {
-            category.key == "project_roots.allowed_roots" || category.access == "read_only"
+        assert!(settings.categories.iter().any(|category| {
+            category.key == "execution.default_backend" && category.access == "writable"
         }));
 
         let request = serde_json::to_vec(&serde_json::json!({
@@ -10565,5 +11060,179 @@ mod tests {
         assert!(page.contains("sandbox.resize"));
         assert!(page.contains("body.children"));
         assert!(page.contains("[class~=\"metric\"]"));
+    }
+
+    #[test]
+    fn spec_085_action_runtime_ui_reste_fermee_et_activation_exige_sa_reference() {
+        let action: UiProjectRuntimeActionV1 = serde_json::from_str(
+            r#"{"version":1,"command_id":"activate-085","project_id":"projet","operation":"activate_docker","expected_binding_generation":3,"policy_id":"production-linux-amd64","policy_version":1}"#,
+        )
+        .expect("action fermée");
+        assert!(matches!(
+            action.operation,
+            ProjectRuntimeOperation::ActivateDocker
+        ));
+        assert!(serde_json::from_str::<UiProjectRuntimeActionV1>(
+            r#"{"version":1,"command_id":"activate-085","project_id":"projet","operation":"activate_docker","image":"latest"}"#,
+        )
+        .is_err());
+        let error = post_project_runtime(
+            Path::new("/socket-inexistant"),
+            br#"{"version":1,"command_id":"activate-085","project_id":"projet","operation":"activate_docker"}"#,
+        )
+        .expect_err("référence obligatoire avant toute connexion daemon");
+        assert_eq!(error.1, "runtime_activation_reference_required");
+    }
+
+    #[test]
+    fn spec_085_route_runtime_exige_jeton_corps_ferme_et_daemon_disponible() {
+        let config = UiRelayConfig {
+            daemon_socket: PathBuf::from("/tmp/bridget-spec-085-runtime-absent.sock"),
+            maicie_config: PathBuf::from("/tmp/bridget-spec-085-maicie.json"),
+            project_root_policy_path: None,
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "runtime-token".to_string(),
+        };
+        let invalid = r#"{"version":1,"command_id":"runtime-x","project_id":"project-x","operation":"stop","image":"untrusted"}"#;
+        let relay = UiRelay::bind(config.clone()).unwrap();
+        let address = relay.local_addr().unwrap();
+        let worker = thread::spawn(move || relay.serve_one().unwrap());
+        let (status, body) = post_runtime(address, None, invalid);
+        worker.join().unwrap();
+        assert_eq!(status, 403, "{body}");
+
+        let relay = UiRelay::bind(config.clone()).unwrap();
+        let address = relay.local_addr().unwrap();
+        let worker = thread::spawn(move || relay.serve_one().unwrap());
+        let (status, body) = post_runtime(address, Some("runtime-token"), invalid);
+        worker.join().unwrap();
+        assert_eq!(status, 400, "{body}");
+        assert!(body.contains("invalid_runtime_action"));
+
+        let relay = UiRelay::bind(config).unwrap();
+        let address = relay.local_addr().unwrap();
+        let worker = thread::spawn(move || relay.serve_one().unwrap());
+        let (status, body) = post_runtime(
+            address,
+            Some("runtime-token"),
+            r#"{"version":1,"command_id":"runtime-stop","project_id":"project-x","operation":"stop"}"#,
+        );
+        worker.join().unwrap();
+        assert_eq!(status, 503, "{body}");
+        assert!(body.contains("daemon_unavailable"));
+    }
+
+    #[test]
+    fn spec_085_route_runtime_projette_etat_confirme_sans_details_docker() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-085-runtime-state-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let socket = root.join("bridget.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::ProjectRuntimeRequest { request }
+                    if request.operation == ProjectRuntimeOperation::Status
+                        && request.project_id == "project-state-085"
+            ));
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::ProjectRuntimeOutcome {
+                    outcome: bridget_transport::protocol::ProjectRuntimeOutcome {
+                        contract_version: crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION,
+                        command_id: "runtime-state-085".to_string(),
+                        project_id: "project-state-085".to_string(),
+                        operation: ProjectRuntimeOperation::Status,
+                        binding_generation: Some(7),
+                        state: Some("ready".to_string()),
+                        runtime_policy: Some(
+                            bridget_transport::protocol::ProjectRuntimePolicyReference {
+                                policy_id: "production-linux-amd64".to_string(),
+                                policy_version: 1,
+                                policy_digest: "sha256:attested".to_string(),
+                                environment_epoch: 4,
+                            },
+                        ),
+                        last_reason: Some("FAKE_SECRET=ne-doit-jamais-sortir".to_string()),
+                        reason: None,
+                        observed_at: 42,
+                    },
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+        });
+        let state = read_project_runtime(&socket, "project-state-085").unwrap();
+        server.join().unwrap();
+        assert_eq!(state.backend, "docker");
+        assert_eq!(state.state, "ready");
+        assert_eq!(state.binding_generation, 7);
+        assert_eq!(state.policy_id.as_deref(), Some("production-linux-amd64"));
+        assert_eq!(state.policy_version, Some(1));
+        assert_eq!(state.environment_epoch, Some(4));
+        assert_eq!(state.last_reason.as_deref(), Some("runtime_unavailable"));
+        let payload = serde_json::to_string(&state).unwrap();
+        assert!(!payload.contains("container_id"));
+        assert!(!payload.contains("sha256:attested"));
+        assert!(!payload.contains("FAKE_SECRET"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec_085_projection_execution_expose_host_et_capacite_fermee_sans_runtime() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "bridget-spec-085-execution-ui-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let projects = root.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let policy_path = root.join("project-root-policy.json");
+        std::fs::write(
+            &policy_path,
+            serde_json::to_vec(&serde_json::json!({
+                "contract_version": 1,
+                "policy_generation": 1,
+                "allowed_project_roots": [projects],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&policy_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let config = UiRelayConfig {
+            daemon_socket: root.join("bridget.sock"),
+            maicie_config: root.join("maicie.json"),
+            project_root_policy_path: Some(policy_path),
+            bind: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            token: "test".to_string(),
+        };
+        let settings = read_server_control_settings(&config).unwrap();
+        let execution = settings.execution.expect("migration Host lisible");
+        assert_eq!(execution.generation, 1);
+        assert_eq!(execution.default_backend, "host");
+        assert_eq!(
+            settings.runtime_capability.reason,
+            Some("policy_unavailable")
+        );
+        assert_eq!(
+            parse_execution_settings_update(
+                br#"{"version":1,"command_id":"execution-x","expected_generation":1,"default_backend":"untrusted"}"#
+            )
+            .unwrap_err()
+            .1,
+            "invalid_request"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

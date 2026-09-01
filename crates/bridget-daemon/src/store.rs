@@ -1261,6 +1261,121 @@ impl Store {
         tx.commit().map_err(StoreError::Sqlite)?;
         Ok(switched)
     }
+
+    /// Publie une liaison Docker déjà préparée et attestée. La préparation du
+    /// conteneur se fait hors transaction ; cette méthode est le seul point où
+    /// le projet quitte Host. Une erreur laisse donc la liaison Host intacte.
+    pub fn activate_project_docker_binding(
+        &mut self,
+        command_id: &str,
+        project_id: &str,
+        expected_generation: u64,
+        runtime: ProjectRuntimeBinding,
+        observed_at: i64,
+    ) -> Result<ProjectBinding, StoreError> {
+        if command_id.trim().is_empty()
+            || project_id.trim().is_empty()
+            || expected_generation == 0
+            || observed_at < 0
+        {
+            return Err(StoreError::Invariant("activation Docker projet invalide"));
+        }
+        runtime.validate()?;
+        let expected_runtime = runtime.policy_reference();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sqlite)?;
+        if let Some(existing) = project_binding_attempt_for_command(&tx, command_id)? {
+            let outcome: ProjectBindOutcome = serde_json::from_slice(&existing.outcome_json)
+                .map_err(|_| StoreError::Invariant("issue activation Docker corrompue"))?;
+            if existing.project_id != project_id
+                || outcome.backend != Some(ProjectBackend::Docker)
+                || outcome.binding_generation != expected_generation.checked_add(1)
+                || outcome.runtime_policy.as_ref() != Some(&expected_runtime)
+            {
+                return Err(StoreError::ProjectRegistryRefusal(
+                    ProjectRegistryRefusal::EnvelopeMismatch,
+                ));
+            }
+            let binding = project_binding_for_project(&tx, project_id)?
+                .ok_or(StoreError::Invariant("liaison projet absente"))?;
+            tx.commit().map_err(StoreError::Sqlite)?;
+            return Ok(binding);
+        }
+        let existing = project_binding_for_project(&tx, project_id)?
+            .ok_or(StoreError::Invariant("liaison projet absente"))?;
+        if existing.backend != ProjectBackend::Host
+            || existing.state != ProjectBindingState::Active
+            || existing.generation != expected_generation
+        {
+            return Err(StoreError::ProjectRegistryRefusal(
+                ProjectRegistryRefusal::RebindRequired,
+            ));
+        }
+        let generation = expected_generation
+            .checked_add(1)
+            .ok_or(StoreError::Invariant("génération liaison épuisée"))?;
+        tx.execute(
+            "UPDATE project_bindings
+             SET backend = 'docker', state = 'active', generation = ?1, updated_at = ?2,
+                 last_reason = NULL, runtime_state = ?3, runtime_last_reason = ?4,
+                 policy_id = ?5, policy_version = ?6, policy_digest = ?7,
+                 image_reference = ?8, resolved_image_id = ?9, run_as_uid = ?10,
+                 run_as_gid = ?11, environment_epoch = ?12, container_id = ?13
+             WHERE project_id = ?14",
+            params![
+                generation as i64,
+                observed_at,
+                project_environment_state_name(runtime.state),
+                runtime.last_reason.as_deref(),
+                &runtime.policy_id,
+                i64::try_from(runtime.policy_version)
+                    .map_err(|_| StoreError::Invariant("version policy runtime invalide"))?,
+                &runtime.policy_digest,
+                &runtime.image_reference,
+                runtime.resolved_image_id.as_deref(),
+                i64::from(runtime.run_as_uid),
+                i64::from(runtime.run_as_gid),
+                i64::try_from(runtime.environment_epoch)
+                    .map_err(|_| StoreError::Invariant("epoch runtime invalide"))?,
+                runtime.container_id.as_deref(),
+                project_id,
+            ],
+        )
+        .map_err(StoreError::Sqlite)?;
+        let activated = project_binding_for_project(&tx, project_id)?
+            .ok_or(StoreError::Invariant("liaison projet disparue"))?;
+        let audit = ProjectAuditEvent::for_mutation(
+            command_id,
+            project_id,
+            ProjectAuditOperation::Activate,
+            generation,
+            ProjectAuditOutcome::Applied,
+            None,
+            observed_at,
+        );
+        record_project_audit_event_in_transaction(&tx, &audit)?;
+        let outcome =
+            project_binding_active_outcome_for_binding(command_id, &activated, observed_at);
+        let outcome_json = serde_json::to_vec(&outcome)
+            .map_err(|_| StoreError::Invariant("issue activation Docker non sérialisable"))?;
+        tx.execute(
+            "INSERT INTO project_binding_attempts (
+                 command_id, project_id, canonical_root, outcome_json, observed_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                command_id,
+                project_id,
+                &activated.canonical_root,
+                outcome_json,
+                observed_at,
+            ],
+        )
+        .map_err(StoreError::Sqlite)?;
+        tx.commit().map_err(StoreError::Sqlite)?;
+        Ok(activated)
+    }
     /// Résout le nom visible depuis la source d'autorité locale. L'absence est
     /// un fait possible tant qu'une migration n'a pas encore créé le profil.
     pub fn agent_display_name(&self, agent_id: &str) -> Result<Option<String>, StoreError> {
@@ -5539,6 +5654,62 @@ mod tests {
             Err(StoreError::Invariant(_))
         ));
 
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn spec_085_activation_docker_publie_apres_preparation_et_rejoue_sans_regression() {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-project-runtime-activate-{}.db",
+            Uuid::new_v4()
+        ));
+        let mut store = Store::open(&path).unwrap();
+        let host = ProjectBinding::active(
+            "project-085".to_string(),
+            "/srv/projects/085".to_string(),
+            ProjectBackend::Host,
+            10,
+        )
+        .unwrap();
+        store.insert_project_binding(&host).unwrap();
+        let runtime = ProjectRuntimeBinding {
+            state: ProjectEnvironmentState::Ready,
+            policy_id: "production-linux-amd64".to_string(),
+            policy_version: 1,
+            policy_digest: format!("sha256:{}", "a".repeat(64)),
+            image_reference: format!("sha256:{}", "b".repeat(64)),
+            resolved_image_id: Some(format!("sha256:{}", "c".repeat(64))),
+            run_as_uid: 1002,
+            run_as_gid: 1002,
+            environment_epoch: 1,
+            container_id: Some("d".repeat(64)),
+            last_reason: None,
+        };
+
+        let activated = store
+            .activate_project_docker_binding("activate-085", "project-085", 1, runtime.clone(), 11)
+            .unwrap();
+        assert_eq!(activated.backend, ProjectBackend::Docker);
+        assert_eq!(activated.generation, 2);
+        assert_eq!(activated.runtime, Some(runtime.clone()));
+
+        let replay = store
+            .activate_project_docker_binding("activate-085", "project-085", 1, runtime, 12)
+            .unwrap();
+        assert_eq!(replay.generation, 2);
+        assert!(matches!(
+            store.activate_project_docker_binding(
+                "activate-other",
+                "project-085",
+                1,
+                replay.runtime.unwrap(),
+                13,
+            ),
+            Err(StoreError::ProjectRegistryRefusal(
+                ProjectRegistryRefusal::RebindRequired
+            ))
+        ));
         drop(store);
         let _ = std::fs::remove_file(path);
     }

@@ -655,6 +655,7 @@ pub const PROJECT_RUNTIME_CONTRACT_VERSION: u16 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectRuntimeOperation {
+    ActivateDocker,
     Prepare,
     Status,
     Stop,
@@ -674,6 +675,16 @@ pub struct ProjectRuntimeRequest {
     pub deadline_at: i64,
     pub operation: ProjectRuntimeOperation,
     pub project_id: String,
+    /// Verrou optimiste obligatoire pour `activate_docker`. Les opérations
+    /// historiques conservent leur contrat et n'envoient pas ce champ.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_binding_generation: Option<u64>,
+    /// Référence fermée vers une politique déjà présente sur le serveur.
+    /// Aucune image, option Docker ou chemin n'est accepté ici.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_version: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<ResolvedProjectProfile>,
 }
@@ -689,6 +700,8 @@ pub enum ProjectRuntimeRefusal {
     ProjectNotDocker,
     ProjectNotFound,
     PolicyUnavailable,
+    BindingGenerationMismatch,
+    ActivationFailed,
     EnvironmentBusy,
     PrepareFailed,
     RecreateFailed,
@@ -4889,6 +4902,9 @@ mod tests {
             deadline_at: 1_788_000_060,
             operation: ProjectRuntimeOperation::Prepare,
             project_id: "project-066".to_string(),
+            expected_binding_generation: None,
+            policy_id: None,
+            policy_version: None,
             profile: None,
         };
         let wire = encode(&WrapperToDaemon::ProjectRuntimeRequest {
@@ -4932,6 +4948,29 @@ mod tests {
             .unwrap(),
             DaemonToWrapper::ProjectRuntimeOutcome { outcome: decoded } if decoded == outcome
         ));
+    }
+
+    #[test]
+    fn spec_085_activate_docker_exige_une_reference_fermee_et_reste_versionne() {
+        let request = ProjectRuntimeRequest {
+            contract_version: PROJECT_RUNTIME_CONTRACT_VERSION,
+            command_id: "activate-docker-085".to_string(),
+            issued_at: 1,
+            deadline_at: 2,
+            operation: ProjectRuntimeOperation::ActivateDocker,
+            project_id: "project-085".to_string(),
+            expected_binding_generation: Some(7),
+            policy_id: Some("production-linux-amd64".to_string()),
+            policy_version: Some(1),
+            profile: None,
+        };
+        let wire = serde_json::to_string(&request).unwrap();
+        assert!(wire.contains("\"operation\":\"activate_docker\""));
+        assert!(wire.contains("\"expected_binding_generation\":7"));
+        assert!(wire.contains("\"policy_id\":\"production-linux-amd64\""));
+        assert!(serde_json::from_str::<ProjectRuntimeRequest>(&format!(
+            "{{\"contract_version\":1,\"command_id\":\"x\",\"issued_at\":1,\"deadline_at\":2,\"operation\":\"activate_docker\",\"project_id\":\"p\",\"image\":\"latest\"}}"
+        )).is_err());
     }
     #[test]
     fn spec_066_handshake_ingress_est_ferme_et_versionne() {

@@ -121,6 +121,9 @@ MAICIE_BIN="${INSTALL_DIR}/maicie"
 MAICIE_SUIVI_BIN="${INSTALL_DIR}/maicie-suivi"
 MAICIE_RELEVE_BIN="${INSTALL_DIR}/maicie-releve"
 AGENTS_JSON="${CONFIG_DIR_BRIDGET}/agents.json"
+PROJECT_ROOT_POLICY="${CONFIG_DIR_BRIDGET}/project-root-policy.json"
+PROJECT_RUNTIME_POLICY="${CONFIG_DIR_BRIDGET}/project-runtime-policy.json"
+PROJECT_RESOURCE_CATALOG="${CONFIG_DIR_BRIDGET}/project-resource-catalog.json"
 MAICIE_CONFIG="${CONFIG_DIR_MAICIE}/config.json"
 
 DAEMON_PLIST="${LAUNCHD_DIR}/com.bridget.daemon.plist"
@@ -643,7 +646,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${BRIDGET_BIN} daemon
+ExecStart=${BRIDGET_BIN} daemon --project-root-policy ${PROJECT_ROOT_POLICY} --project-runtime-policy ${PROJECT_RUNTIME_POLICY} --project-resource-catalog ${PROJECT_RESOURCE_CATALOG}
 Environment=RUST_LOG=info
 Environment=HOME=${HOME}
 Environment=PATH=${HOME}/.local/bin:/usr/bin:/bin

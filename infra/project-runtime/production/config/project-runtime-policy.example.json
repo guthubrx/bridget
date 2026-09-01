@@ -1,0 +1,21 @@
+{
+  "contract_version": 1,
+  "state_root_parent": "/srv/bridget/project-runtime-state",
+  "policies": [
+    {
+      "policy_id": "production-linux-amd64",
+      "policy_version": 1,
+      "image_reference_kind": "local_image_id",
+      "image_reference": "sha256:0b84145f04295f02640bfe892a2f30b024926a5a493be5dac405cb6c86badd67",
+      "run_as_uid": 1002,
+      "run_as_gid": 1002,
+      "cpu_limit": 2.0,
+      "memory_limit_bytes": 4294967296,
+      "pids_limit": 512,
+      "tmpfs": ["/tmp"],
+      "network_mode": "bridge",
+      "runtime_launcher": "/usr/local/bin/bridget",
+      "runtime_executables": []
+    }
+  ]
+}
