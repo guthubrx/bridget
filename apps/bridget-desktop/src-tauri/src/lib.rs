@@ -389,42 +389,52 @@ pub fn run() {
         local_port: u16,
         endpoint: &crate::profile::RelayEndpoint,
     ) -> Result<(), String> {
-        let (label, next_url) = {
-            let mut panels = state.panels.lock().map_err(as_message)?;
-            let Some(panel) = panels
+        let panel = {
+            let panels = state.panels.lock().map_err(as_message)?;
+            panels
                 .panels()
                 .find(|panel| panel.profile_id == profile_id)
                 .cloned()
-            else {
-                return Ok(());
-            };
-            let mut relay_url = url::Url::parse(&panel.url)
-                .map_err(|_| "L'URL du panneau relayé est invalide.".to_owned())?;
-            relay_url
-                .set_port(Some(local_port))
-                .map_err(|_| "Le port du panneau relayé est invalide.".to_owned())?;
-            let query = relay_url
-                .query_pairs()
-                .map(|(key, value)| (key.into_owned(), value.into_owned()))
-                .collect::<Vec<_>>();
-            {
-                let mut pairs = relay_url.query_pairs_mut();
-                pairs.clear();
-                for (key, value) in query {
-                    if key == "token" {
-                        pairs.append_pair(&key, endpoint.token());
-                    } else {
-                        pairs.append_pair(&key, &value);
-                    }
+        };
+        let Some(panel) = panel else {
+            return Ok(());
+        };
+        // L'URL du registre est celle d'ouverture. Le WebView peut ensuite avoir
+        // mémorisé l'agent choisi dans l'historique sans recharger la page : elle
+        // est donc la source de vérité au moment du changement de tunnel.
+        let current_url = app
+            .get_webview(&panel.label)
+            .and_then(|webview| webview.url().ok())
+            .map(|url| url.to_string())
+            .unwrap_or_else(|| panel.url.clone());
+        let mut relay_url = url::Url::parse(&current_url)
+            .map_err(|_| "L'URL du panneau relayé est invalide.".to_owned())?;
+        relay_url
+            .set_port(Some(local_port))
+            .map_err(|_| "Le port du panneau relayé est invalide.".to_owned())?;
+        let query = relay_url
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<Vec<_>>();
+        {
+            let mut pairs = relay_url.query_pairs_mut();
+            pairs.clear();
+            for (key, value) in query {
+                if key == "token" {
+                    pairs.append_pair(&key, endpoint.token());
+                } else {
+                    pairs.append_pair(&key, &value);
                 }
             }
-            let next_url: String = relay_url.into();
+        }
+        let next_url: String = relay_url.into();
+        {
+            let mut panels = state.panels.lock().map_err(as_message)?;
             if !panels.replace_relay_url(&panel.label, next_url.clone()) {
                 return Err("Le panneau relayé n'a pas pu être mis à jour.".to_owned());
             }
-            (panel.label, next_url)
-        };
-        if let Some(webview) = app.get_webview(&label) {
+        }
+        if let Some(webview) = app.get_webview(&panel.label) {
             let url = next_url
                 .parse()
                 .map_err(|_| "L'URL de reconnexion du panneau est invalide.".to_owned())?;

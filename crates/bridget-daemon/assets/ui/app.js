@@ -11246,6 +11246,14 @@
     const connectWatch = (agent) => {
       closeWatch();
       if (!agent || !token || typeof windowRef.EventSource !== "function") return;
+      // La sélection fait partie de l'état de navigation du panneau natif. Lors
+      // d'une recréation de tunnel, Tauri doit pouvoir relire cet agent dans
+      // l'URL courante et ne pas revenir au premier agent de la flotte.
+      if (windowRef.history && typeof windowRef.history.replaceState === "function") {
+        const selectedUrl = new URL(windowRef.location.href);
+        selectedUrl.searchParams.set("agent", agent);
+        windowRef.history.replaceState(null, "", selectedUrl);
+      }
       const generation = sourceGeneration;
       watchStreamEnded = false;
       replayingJournal = true;
