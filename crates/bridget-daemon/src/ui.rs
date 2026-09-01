@@ -4195,6 +4195,22 @@ fn read_artifact_references(
 
 type UiArtifactError = (u16, &'static str, String);
 
+fn artifact_version_from_suffix(suffix: &str) -> Result<String, UiArtifactError> {
+    if suffix.is_empty()
+        || suffix.len() > 128
+        || !suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err((
+            400,
+            "artifact_version_invalid",
+            "Version d’artefact invalide.".to_string(),
+        ));
+    }
+    Ok(format!("artifact-version:{suffix}"))
+}
+
 fn artifact_version_from_query(value: Option<&str>) -> Result<String, UiArtifactError> {
     let Some(value) = value else {
         return Err((
@@ -4214,19 +4230,20 @@ fn artifact_version_from_query(value: Option<&str>) -> Result<String, UiArtifact
             "Version d’artefact invalide.".to_string(),
         ));
     };
-    if suffix.is_empty()
-        || suffix.len() > 128
-        || !suffix
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-    {
+    artifact_version_from_suffix(suffix)
+}
+
+/// Les corps JSON portent la référence canonique conservée dans le registre,
+/// distincte de la forme URL sans `:` exposée au navigateur.
+fn artifact_version_from_request(value: &str) -> Result<String, UiArtifactError> {
+    let Some(suffix) = value.strip_prefix("artifact-version:") else {
         return Err((
             400,
             "artifact_version_invalid",
             "Version d’artefact invalide.".to_string(),
         ));
-    }
-    Ok(format!("artifact-version:{suffix}"))
+    };
+    artifact_version_from_suffix(suffix)
 }
 
 fn artifact_ui_scope(
@@ -4284,9 +4301,17 @@ fn read_artifact_detail(
 ) -> Result<UiArtifactDetailV1, UiArtifactError> {
     let (project_id, _) = artifact_ui_scope(config, agent)?;
     let version_ref = artifact_version_from_query(version.map(String::as_str))?;
+    read_artifact_detail_for_version(config, &project_id, &version_ref)
+}
+
+fn read_artifact_detail_for_version(
+    config: &UiRelayConfig,
+    project_id: &str,
+    version_ref: &str,
+) -> Result<UiArtifactDetailV1, UiArtifactError> {
     let store = open_artifact_store_for_ui(config)?;
     let detail = store
-        .version_detail(&project_id, &version_ref)
+        .version_detail(project_id, version_ref)
         .map_err(|_| {
             (
                 503,
@@ -4441,7 +4466,7 @@ fn post_artifact_share(
         )
     })?;
     let (project_id, _) = artifact_ui_scope(config, Some(&request.agent))?;
-    let version_ref = artifact_version_from_query(Some(&request.version_ref))?;
+    let version_ref = artifact_version_from_request(&request.version_ref)?;
     let reference_id = open_artifact_store_for_ui(config)?
         .share_with_agent(
             &project_id,
@@ -4562,7 +4587,7 @@ fn post_artifact_lifecycle(
         ));
     }
     let (project_id, _) = artifact_ui_scope(config, Some(&request.agent))?;
-    let version_ref = artifact_version_from_query(Some(&request.version_ref))?;
+    let version_ref = artifact_version_from_request(&request.version_ref)?;
     let store = open_artifact_store_for_ui(config)?;
     let artifact_ref = store
         .artifact_ref_for_version(&project_id, &version_ref)
@@ -4646,8 +4671,8 @@ fn post_artifact_sandbox_ticket(
         ));
     }
     let (project_id, agent) = artifact_ui_scope(config, Some(&request.agent))?;
-    let version_ref = artifact_version_from_query(Some(&request.version_ref))?;
-    let detail = read_artifact_detail(config, Some(&agent), Some(&request.version_ref))?;
+    let version_ref = artifact_version_from_request(&request.version_ref)?;
+    let detail = read_artifact_detail_for_version(config, &project_id, &version_ref)?;
     if detail.publication.kind != crate::artifact_types::ArtifactKind::Html {
         return Err((
             409,
@@ -4696,7 +4721,7 @@ fn read_artifact_sandbox_ticket(
             "La portée projet a changé. Rechargez l’artefact via Bridget.".to_owned(),
         ));
     }
-    let detail = read_artifact_detail(config, Some(&ticket.agent), Some(&ticket.version_ref))?;
+    let detail = read_artifact_detail_for_version(config, &current_project_id, &ticket.version_ref)?;
     if detail.publication.kind != crate::artifact_types::ArtifactKind::Html {
         return Err((
             409,
@@ -4755,8 +4780,8 @@ fn post_artifact_sandbox_save(
         ));
     }
     let (project_id, agent) = artifact_ui_scope(config, Some(&request.agent))?;
-    let parent_version_ref = artifact_version_from_query(Some(&request.version_ref))?;
-    let detail = read_artifact_detail(config, Some(&agent), Some(&parent_version_ref))?;
+    let parent_version_ref = artifact_version_from_request(&request.version_ref)?;
+    let detail = read_artifact_detail_for_version(config, &project_id, &parent_version_ref)?;
     if detail.publication.kind != crate::artifact_types::ArtifactKind::Html {
         return Err((
             409,
@@ -7397,6 +7422,19 @@ mod tests {
         assert!(parse_query("token=a%2Fb").is_err());
         assert!(parse_query("token=a&token=b").is_err());
         assert_eq!(parse_query("token=abc_123").unwrap()["token"], "abc_123");
+    }
+
+    #[test]
+    fn references_d_artefact_separent_les_formats_url_et_json() {
+        let suffix = "e213601b-7e99-4a52-b856-42f55f79da24";
+        let canonical = format!("artifact-version:{suffix}");
+        assert_eq!(
+            artifact_version_from_query(Some(&format!("artifact-version.{suffix}"))).unwrap(),
+            canonical
+        );
+        assert!(artifact_version_from_query(Some(&canonical)).is_err());
+        assert_eq!(artifact_version_from_request(&canonical).unwrap(), canonical);
+        assert!(artifact_version_from_request(&format!("artifact-version.{suffix}")).is_err());
     }
 
     #[test]

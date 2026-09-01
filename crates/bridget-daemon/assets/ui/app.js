@@ -10094,7 +10094,13 @@
       void artifactLoads.get(reference.version_ref).then((artifact) => {
         if (placeholder.isConnected) {
           if (artifact && artifact.error) placeholder.replaceChildren(make("p", "artifact-renderer__error", artifact.error));
-          else void renderLoaded(artifact);
+          else void renderLoaded(artifact).catch((error) => {
+            placeholder.replaceChildren(make(
+              "p",
+              "artifact-renderer__error",
+              text(error && error.message, "Le rendu de l’artefact est indisponible."),
+            ));
+          });
         }
       });
       return placeholder;
