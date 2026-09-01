@@ -3226,7 +3226,6 @@ impl DaemonState {
         // Une seule lecture du roster pour tout l'annuaire : la persistance se
         // résout ensuite par nom, sans E/S par agent.
         let persistence = self.fleet.named_persistence();
-        let execution_enabled = self.registry.execution_projection().dual_write;
         let execution_summaries = match self.execution_store.agent_execution_summaries() {
             Ok(summaries) => summaries,
             Err(error) => {
@@ -3235,9 +3234,6 @@ impl DaemonState {
             }
         };
         let execution_projection = |name: &str| {
-            if !execution_enabled {
-                return None;
-            }
             let summary = execution_summaries.get(name)?;
             let wait_state = match summary.state.as_deref() {
                 Some("waiting_approval") => Some("waiting_approval".to_string()),
@@ -7475,14 +7471,13 @@ fn handle_idempotent_send(
             .saturating_add(message.reply_timeout.unwrap_or(60).min(i64::MAX as u64) as i64)
             .max(0),
     });
-    let execution_link = if st.registry.execution_projection().dual_write
-        && matches!(
-            message.intent,
-            Some(
-                bridget_core::MessageIntent::TriggerTurn
-                    | bridget_core::MessageIntent::InterruptAndStart
-            )
-        ) {
+    let execution_link = if matches!(
+        message.intent,
+        Some(
+            bridget_core::MessageIntent::TriggerTurn
+                | bridget_core::MessageIntent::InterruptAndStart
+        )
+    ) {
         let execution_id = format!("execution-{}", message.id);
         match st.execution_store.admit_starting_message_for_project(
             &message,
@@ -12017,9 +12012,7 @@ fn handle_wrapper_message(
             }
             let target_conn = prepared.target_conn;
             let conv_key = format!("{}|{}", bridge_msg.from, bridge_msg.to);
-            if st.registry.execution_projection().dual_write
-                && bridge_msg.intent == Some(bridget_core::MessageIntent::ControlOnly)
-            {
+            if bridge_msg.intent == Some(bridget_core::MessageIntent::ControlOnly) {
                 return Some(DaemonToWrapper::Nack {
                     id: bridge_msg.id.clone(),
                     reason: "ControlOnly requiert une commande ControlExecution versionnée"
@@ -12042,61 +12035,57 @@ fn handle_wrapper_message(
             st.envelope_guard
                 .mark_relayed(&prepared.message_guard_id, &bridge_msg.to);
 
-            let execution_delivery = if st.registry.execution_projection().dual_write {
-                match bridge_msg.intent {
-                    Some(bridget_core::MessageIntent::QueueOnly) => {
-                        match st.execution_store.admit_message_submission(
-                            &bridge_msg,
-                            0,
-                            unix_now_secs(),
-                        ) {
-                            Ok(admitted) => {
-                                if admitted {
-                                    get_metrics().record_execution_admitted();
-                                }
-                                return Some(DaemonToWrapper::Ack {
-                                    id: bridge_msg.id.clone(),
-                                });
-                            }
-                            Err(error) => {
-                                return Some(DaemonToWrapper::Nack {
-                                    id: bridge_msg.id.clone(),
-                                    reason: format!("admission non persistée: {error}"),
-                                });
-                            }
-                        }
-                    }
-                    Some(
-                        bridget_core::MessageIntent::TriggerTurn
-                        | bridget_core::MessageIntent::InterruptAndStart,
-                    ) => {
-                        let execution_id = format!("execution-{}", bridge_msg.id);
-                        match st.execution_store.admit_starting_message(
-                            &bridge_msg,
-                            &execution_id,
-                            unix_now_secs(),
-                        ) {
-                            Ok(true) => {
+            let execution_delivery = match bridge_msg.intent {
+                Some(bridget_core::MessageIntent::QueueOnly) => {
+                    match st.execution_store.admit_message_submission(
+                        &bridge_msg,
+                        0,
+                        unix_now_secs(),
+                    ) {
+                        Ok(admitted) => {
+                            if admitted {
                                 get_metrics().record_execution_admitted();
-                                Some((execution_id, 1_u64, 0_u64))
                             }
-                            Ok(false) => {
-                                return Some(DaemonToWrapper::Ack {
-                                    id: bridge_msg.id.clone(),
-                                });
-                            }
-                            Err(error) => {
-                                return Some(DaemonToWrapper::Nack {
-                                    id: bridge_msg.id.clone(),
-                                    reason: format!("démarrage non persisté: {error}"),
-                                });
-                            }
+                            return Some(DaemonToWrapper::Ack {
+                                id: bridge_msg.id.clone(),
+                            });
+                        }
+                        Err(error) => {
+                            return Some(DaemonToWrapper::Nack {
+                                id: bridge_msg.id.clone(),
+                                reason: format!("admission non persistée: {error}"),
+                            });
                         }
                     }
-                    _ => None,
                 }
-            } else {
-                None
+                Some(
+                    bridget_core::MessageIntent::TriggerTurn
+                    | bridget_core::MessageIntent::InterruptAndStart,
+                ) => {
+                    let execution_id = format!("execution-{}", bridge_msg.id);
+                    match st.execution_store.admit_starting_message(
+                        &bridge_msg,
+                        &execution_id,
+                        unix_now_secs(),
+                    ) {
+                        Ok(true) => {
+                            get_metrics().record_execution_admitted();
+                            Some((execution_id, 1_u64, 0_u64))
+                        }
+                        Ok(false) => {
+                            return Some(DaemonToWrapper::Ack {
+                                id: bridge_msg.id.clone(),
+                            });
+                        }
+                        Err(error) => {
+                            return Some(DaemonToWrapper::Nack {
+                                id: bridge_msg.id.clone(),
+                                reason: format!("démarrage non persisté: {error}"),
+                            });
+                        }
+                    }
+                }
+                _ => None,
             };
 
             // Le daemon est l'autorité de l'échéance de TOUR (pas seulement
@@ -20440,7 +20429,6 @@ mod presence_tests {
         let home = fixture_root.0.clone();
         let registry_file = home.join(".config/bridget/agents.json");
         let registry_json = serde_json::json!({
-            "execution_projection": { "dual_write": true, "legacy_projection": false },
             "agents": {
                 "claude": {
                     "command": "/bin/sh",
@@ -20692,11 +20680,8 @@ mod presence_tests {
     #[test]
     fn spec_079_tick_global_ne_livre_que_la_politique_projet_active() {
         let (mut state, config) = state_with_registered_agent("spec-079-project-round");
-        state.registry = AgentRegistry::from_json(
-            r#"{"execution_projection":{"dual_write":true,"legacy_projection":false}}"#,
-            "/tmp/spec-079-project-round-agents.json",
-        )
-        .unwrap();
+        state.registry =
+            AgentRegistry::from_json("{}", "/tmp/spec-079-project-round-agents.json").unwrap();
         state.router.rename("conn-1", "bridget").unwrap();
         state
             .conn_names
@@ -22535,7 +22520,6 @@ fn intentions_de_soumission_restent_distinctes_et_persistantes() {
     let (mut state, config) = presence_tests::state_with_registered_agent("intentions-us1");
     let registry_path = config.db_path.with_extension("intentions.json");
     let registry_json = serde_json::json!({
-        "execution_projection": { "dual_write": true, "legacy_projection": false },
         "agents": {
             "claude": {
                 "command": "/bin/sh",

@@ -5097,25 +5097,18 @@ fn delegated_runtime_message(
     message
 }
 
-/// Projette le seul élément de présentation nécessaire au fournisseur sans
-/// toucher au message de routage. `from` reste donc un Agent ID partout où le
-/// wrapper en a besoin pour `reply`, le journal et les accusés de livraison.
+/// Le fournisseur reçoit toujours l'identifiant routable de l'émetteur.
+///
+/// Un nom d'affichage est fait pour l'écran, pas pour l'adressage. Le projeter
+/// dans `from` faisait répondre le fournisseur à « Utilisateur » au lieu de
+/// l'identité réelle `humain`, puis le daemon perdait cette réponse.
 fn message_for_provider(message: &bridget_core::BridgetMessage) -> bridget_core::BridgetMessage {
-    let mut projected = message.clone();
-    if let Some(display_name) = message
-        .from_display_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        projected.from = display_name.to_string();
-    }
-    projected
+    message.clone()
 }
 
 #[cfg(test)]
 #[test]
-fn projection_fournisseur_expose_le_display_name_sans_perdre_l_agent_id() {
+fn projection_fournisseur_conserve_l_identite_routable() {
     let agent_id = "018f2d95-8bd4-7c4c-8b7e-6cafb0a39a63";
     let mut message = bridget_core::BridgetMessage::new(
         agent_id,
@@ -5127,7 +5120,7 @@ fn projection_fournisseur_expose_le_display_name_sans_perdre_l_agent_id() {
     let projected = message_for_provider(&message);
 
     assert_eq!(message.from, agent_id, "le routage conserve l'Agent ID");
-    assert_eq!(projected.from, "Bibliothécaire");
+    assert_eq!(projected.from, agent_id);
     assert_eq!(projected.to, message.to);
     assert_eq!(projected.id, message.id);
 }
