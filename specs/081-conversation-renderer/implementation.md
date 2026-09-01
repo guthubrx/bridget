@@ -203,6 +203,22 @@ ni secret, ni jeton de relais, ni contenu de conversation de production.
   flux de fragments dans Bridget Desktop, sans prétendre qu'un test Node
   reproduit le layout WebView.
 
+## Correctif - activité interrompue sans `turn_end` - 2026-09-01
+
+- Observation réelle : après le redémarrage du relais, le journal de Jim
+  contenait des fragments `update` mais aucun `turn_end`, tandis que le
+  snapshot attestait `state: alive` sans `turn_state`. L'ancien rendu en
+  déduisait à tort une rédaction permanente.
+- La vue ne fabrique aucune fin de tour : sans exécution attestée, un
+  indicateur vivant expire après 30 secondes. Il reste affiché sans limite
+  seulement lorsque le snapshot atteste un tour `running` ou une attente
+  d'autorisation.
+- Le rafraîchissement de flotte réévalue uniquement ces indicateurs. Il ne
+  reconstruit pas le fil et ne peut donc ni déplacer la position de lecture
+  ni perturber la saisie.
+- Vérification : `node crates/bridget-daemon/assets/ui/app.js` réussit avec
+  le témoin `activite_sans_fin_ne_reste_pas_vivante_sans_execution_attestee`.
+
 ## Self-review Article XIX/XX - T014 à T037
 
 - Pourquoi cette solution est nécessaire : un fil riche sans séparation de

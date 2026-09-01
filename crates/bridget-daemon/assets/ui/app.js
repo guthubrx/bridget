@@ -1016,6 +1016,14 @@
         assert.equal(api.projectTimeline(terminal).some((entry) => entry.kind === "activity"), false);
       });
 
+      test("activite_sans_fin_ne_reste_pas_vivante_sans_execution_attestee", () => {
+        const inactive = { state: "alive" };
+        const running = { state: "alive", turn_state: "running" };
+        assert.equal(api.isUnconfirmedLiveStateCurrent(inactive, 100, 129), true);
+        assert.equal(api.isUnconfirmedLiveStateCurrent(inactive, 100, 131), false);
+        assert.equal(api.isUnconfirmedLiveStateCurrent(running, 100, 10_000), true);
+      });
+
       test("notification_terminale_exige_permission_arriere_plan_et_message_suivi", () => {
         const record = { message_id: "m-notify", event: "turn_end", payload: {} };
         const pending = new Map([["m-notify", { target: "rc1", acceptedAt: 1 }]]);
@@ -3550,6 +3558,10 @@
   const BOTTOM_THRESHOLD_PX = 2;
   const MESSAGE_COLLAPSE_THRESHOLD = 1400;
   const FLEET_REFRESH_INTERVAL_MS = 5_000;
+  // Un journal peut être interrompu avant `turn_end` (redémarrage du relais,
+  // fermeture du fournisseur). Sans état d'exécution attesté, son dernier
+  // fragment ne doit pas afficher une rédaction éternelle.
+  const UNCONFIRMED_LIVE_ACTIVITY_TTL_SECS = 30;
   const AGENT_PANE_WIDTH_STORAGE_KEY = "bridget.ui.agent-pane-width.v1";
   const AGENT_PANE_MIN_WIDTH_PX = 224;
   const AGENT_PANE_MAX_WIDTH_PX = 560;
@@ -4164,6 +4176,14 @@
         || (typeof agent.wait_state === "string" && agent.wait_state.length > 0)
       )
     );
+  }
+
+  function isUnconfirmedLiveStateCurrent(agent, at, nowSeconds = Date.now() / 1000) {
+    if (agentHasActiveTurn(agent)) return true;
+    const observedAt = Number(at);
+    const now = Number(nowSeconds);
+    if (!Number.isFinite(observedAt) || !Number.isFinite(now)) return false;
+    return now >= observedAt && now - observedAt <= UNCONFIRMED_LIVE_ACTIVITY_TTL_SECS;
   }
 
   function buildAgentStopRequest(agentId, commandId) {
@@ -10469,7 +10489,12 @@
     };
 
     const renderActivity = (entries) => {
-      const activities = entries.filter((entry) => entry.kind === "activity");
+      const now = Date.now() / 1000;
+      const activities = entries.filter((entry) => {
+        if (entry.kind !== "activity") return false;
+        const agent = state.agents.find((candidate) => candidate.name === entry.agent) || null;
+        return isUnconfirmedLiveStateCurrent(agent, entry.at, now);
+      });
       nodes.agentActivity.replaceChildren();
       nodes.agentActivity.hidden = activities.length === 0;
       activities.forEach((activity) => {
@@ -10550,6 +10575,15 @@
       nodes.deliveryActivity.hidden = !visual;
       if (!visual) return;
 
+      const selectedAgent = state.agents.find((entry) => entry.name === state.selectedAgent) || null;
+      if (!isUnconfirmedLiveStateCurrent(
+        selectedAgent,
+        pendingDeliveryAcceptedAt(visual.pending),
+      )) {
+        nodes.deliveryActivity.hidden = true;
+        return;
+      }
+
       if (visual.phase === "transport") {
         nodes.deliveryActivity.setAttribute(
           "aria-label",
@@ -10581,6 +10615,17 @@
         "Message remis au fournisseur, en attente d’une trace de l’agent",
       );
       nodes.deliveryActivity.append(receipt);
+    };
+
+    // Le rafraîchissement de flotte sert aussi d'horloge pour les indicateurs
+    // éphémères. On ne reconstruit pas le fil et on ne touche donc jamais à la
+    // position de lecture de la conversation.
+    const refreshTransientActivity = () => {
+      if (!state.selectedAgent) return;
+      const rawEvents = state.timelines[state.selectedAgent] || [];
+      const entries = projectTimeline(rawEvents);
+      renderActivity(entries);
+      renderDeliveryActivity(entries, rawEvents);
     };
 
     const captureReadingAnchor = () => {
@@ -10998,6 +11043,7 @@
       try {
         const scoped = await fetchScopedSnapshot((url) => windowRef.fetch(url), token, null);
         applyFleetSnapshot(scoped.snapshot);
+        refreshTransientActivity();
       } catch (_error) {
         // Le watch du fil reste la source de vérité de connexion ; le prochain passage réessaiera.
       } finally {
@@ -11533,6 +11579,7 @@
   return Object.freeze({
     MESSAGE_COLLAPSE_THRESHOLD,
     FLEET_REFRESH_INTERVAL_MS,
+    UNCONFIRMED_LIVE_ACTIVITY_TTL_SECS,
     shouldCollapseMessage,
     messagePreview,
     turnFailureLabel,
@@ -11558,6 +11605,7 @@
     agentStopEligibility,
     agentLifecycleEligibility,
     agentHasActiveTurn,
+    isUnconfirmedLiveStateCurrent,
     buildAgentStopRequest,
     buildAgentStopUrl,
     buildAgentLifecycleUrl,
