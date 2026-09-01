@@ -18,14 +18,11 @@
   function sandboxFrameUrl(value, frameInstanceId) {
     const source = asText(value).trim();
     if (!source || !frameInstanceId) return "";
-    try {
-      const url = new URL(source, root && root.location ? root.location.href : undefined);
-      if (url.protocol !== "http:" || url.origin !== (root && root.location ? root.location.origin : url.origin)) return "";
-      url.searchParams.set("frame_instance_id", frameInstanceId);
-      return url.href;
-    } catch (_) {
-      return "";
-    }
+    // Le document parent est parfois présenté à WKWebView sous tauri://. Ce
+    // schéma ne peut pas servir de base à `new URL` pour notre chemin HTTP
+    // relatif, alors que `iframe.src` le résout correctement vers le relais.
+    if (!/^\/v1\/artifacts\/sandbox\/frame\?/.test(source)) return "";
+    return `${source}&frame_instance_id=${encodeURIComponent(frameInstanceId)}`;
   }
 
   function validMessage(value, instanceId) {
