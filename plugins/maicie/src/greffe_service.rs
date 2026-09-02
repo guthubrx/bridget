@@ -7,8 +7,8 @@
 use crate::MAICIE_IDENTITY;
 use crate::app::{
     CatalogueReconcileError, DelegateError, DelegateRequest, DelegateResult, DelegationCandidate,
-    ObjectiveError, close_with_costs, delegate, pin_coordination_policy,
-    reconcile_catalogue_from_store,
+    ObjectiveError, close_with_costs, delegate, open_focus_waiting_for_agent,
+    pin_coordination_policy, reconcile_catalogue_from_store,
 };
 use crate::bridget_client::{
     AgentInfo, BridgetClient, BridgetClientError, BridgetClientLimits, GuichetClaim,
@@ -31,6 +31,7 @@ use bridget_transport::greffe_authorization::{
 };
 use bridget_transport::protocol::{DelegateOrigin, FocusConflictPolicy};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::fmt;
 use uuid::Uuid;
 
@@ -135,6 +136,25 @@ fn human_refusal_name(refusal: crate::domain::HumanOriginRefusal) -> &'static st
         R::HashCanoniqueDivergent => "hash_canonique_divergent",
         R::AttestationDejaConsommee => "attestation_deja_consommee",
     }
+}
+
+fn focus_candidates_all_temporarily_unavailable(
+    candidates: &[DelegationCandidate],
+    request: &DelegateRequest<'_>,
+) -> bool {
+    if request.explicit_target.is_some() {
+        return false;
+    }
+    let required = request.required_tags.iter().collect::<BTreeSet<_>>();
+    let matching = candidates
+        .iter()
+        .filter(|candidate| candidate.name != MAICIE_IDENTITY)
+        .filter(|candidate| candidate.tags.iter().collect::<BTreeSet<_>>() == required)
+        .collect::<Vec<_>>();
+    !matching.is_empty()
+        && matching
+            .iter()
+            .all(|candidate| !candidate.available || candidate.dnd)
 }
 
 /// Applique une délégation et fige, le cas échéant, la politique de
@@ -287,6 +307,30 @@ pub fn apply_guichet_mutation(
                     .map_err(GreffeServiceError::Authorization)?
                     .map_err(GreffeServiceError::Delegate)?
             };
+            let result = match result {
+                DelegateResult::Candidates(choices)
+                    if choices.is_empty()
+                        && request.focus.is_some()
+                        && human_message_id.is_some()
+                        && focus_candidates_all_temporarily_unavailable(
+                            &candidates,
+                            &delegate_request,
+                        ) =>
+                {
+                    let focus = request.focus.as_ref().expect("focus vérifié");
+                    let message_id = human_message_id.as_deref().expect("origine vérifiée");
+                    DelegateResult::FocusWaitingForAgent(
+                        open_focus_waiting_for_agent(
+                            store,
+                            &delegate_request,
+                            message_id,
+                            matches!(focus.on_conflict, Some(FocusConflictPolicy::Replace)),
+                        )
+                        .map_err(GreffeServiceError::Delegate)?,
+                    )
+                }
+                other => other,
+            };
             if let (Some(message_id), DelegateResult::Created(created)) =
                 (&human_message_id, &result)
             {
@@ -318,6 +362,16 @@ pub fn apply_guichet_mutation(
                     candidates: Vec::new(),
                     waiting_on_prerequisites: created.waiting_on_prerequisites,
                     replayed: created.replayed,
+                },
+                DelegateResult::FocusWaitingForAgent(waiting) => MutationReply::Delegate {
+                    status: DelegateMutationStatus::Created,
+                    objective_id: Some(waiting.objective_id.to_string()),
+                    delegation_id: None,
+                    message_id: None,
+                    participant: None,
+                    candidates: Vec::new(),
+                    waiting_on_prerequisites: true,
+                    replayed: waiting.replayed,
                 },
                 DelegateResult::Candidates(candidates) => MutationReply::Delegate {
                     status: DelegateMutationStatus::SelectionRequired,

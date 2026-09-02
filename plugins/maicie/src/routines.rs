@@ -554,6 +554,7 @@ pub fn evaluate_routines_with(
                 // Cible non résolue / indisponible / autre blip : pas de bucket
                 // consumé — prochaine relève. Ne remonte jamais en erreur fatale.
                 Ok(DelegateResult::Candidates(_))
+                | Ok(DelegateResult::FocusWaitingForAgent(_))
                 | Err(DelegateError::TargetUnavailable(_))
                 | Err(_) => {
                     break;

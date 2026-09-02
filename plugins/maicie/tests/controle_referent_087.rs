@@ -3,14 +3,20 @@
 //! Chaque test nomme une propriété. Les gardes de pause sont éprouvées par
 //! effet observable (ligne différée, outbox absente), jamais par présence.
 
-use maicie::app::{DelegateRequest, DelegateResult, DelegationCandidate, close, delegate};
+use maicie::app::{
+    DelegateRequest, DelegateResult, DelegationCandidate, close, delegate,
+    open_focus_waiting_for_agent,
+};
 use maicie::config::DurationClasses;
 use maicie::control::ControlSnapshot;
 use maicie::domain::{
     AttestationConsumption, ClasseDuree, FaitReassignation, FraicheurCoordination,
-    ObjectiveOpeningPermit, SuiteObjective, TypeFaitReassignation,
+    HumanRequestOriginAttestation, ObjectiveOpeningPermit, ObservedHumanMessage, SuiteObjective,
+    TypeFaitReassignation, human_message_content_seal,
 };
-use maicie::reconcile::{ReconcileAction, reconcile_startup_with_limits};
+use maicie::reconcile::{
+    ReconcileAction, reconcile_focus_waiting_agents, reconcile_startup_with_limits,
+};
 use maicie::store::{HumanDecisionApplication, MaicieStore, SCHEMA_VERSION, StoreError};
 use std::fs;
 use std::path::PathBuf;
@@ -71,6 +77,31 @@ fn paused() -> ControlSnapshot {
         inbox_open_count: 0,
         read_at: 1,
     }
+}
+
+fn human_focus_permit(store: &MaicieStore, message_id: &str) -> ObjectiveOpeningPermit {
+    let observed = ObservedHumanMessage {
+        message_id: message_id.to_string(),
+        ts: 1_000,
+        sender: "humain".to_string(),
+        target: "maicie".to_string(),
+        body: "Traite cette priorité".to_string(),
+    };
+    let scope = store.issuer_scope().to_string();
+    let canonical_request_sha256 = "a".repeat(64);
+    ObjectiveOpeningPermit::human_request(
+        HumanRequestOriginAttestation {
+            version: 1,
+            issuer_scope: scope.clone(),
+            canonical_request_sha256: canonical_request_sha256.clone(),
+            signature: human_message_content_seal(&observed),
+        },
+        &observed,
+        &scope,
+        &canonical_request_sha256,
+        AttestationConsumption::NeverConsumed,
+    )
+    .unwrap()
 }
 
 fn open_auto(
@@ -196,6 +227,66 @@ fn spec_087_file_de_focus_une_tete_et_une_file() {
     assert_eq!(store.focus_queue().unwrap(), vec![(a, 0)]);
     assert_eq!(store.focus_close_current().unwrap(), None);
     assert_eq!(store.focus_active().unwrap(), None);
+}
+
+/// Propriété : un focus humain sans agent disponible reste ouvert, sans
+/// délégation fictive, puis produit un unique item durable après la durée
+/// normale. Avant l'échéance, il ne déclenche rien.
+#[test]
+fn spec_087_focus_sans_agent_attend_puis_avertit_le_referent() {
+    let guard = RootGuard::new("focus-waiting");
+    let mut store = MaicieStore::open(guard.path.join("maicie.sqlite3")).unwrap();
+    let permit = human_focus_permit(&store, "hmo-focus-waiting");
+    let request = DelegateRequest {
+        goal: "Réparer l'import CSV",
+        opening_permit: permit,
+        explicit_target: None,
+        required_tags: &[],
+        duration: ClasseDuree::Normale,
+        reply: false,
+        constat_id: None,
+        review_target: None,
+        suite: SuiteObjective::Aucune,
+        depends_on: &[],
+        references: &[],
+        idempotency_key: "focus-waiting",
+        now: 1_000,
+        retry_until: 1_090,
+        dedup_retained_until: 1_090,
+        max_frame_bytes: 256 * 1024,
+    };
+    let waiting =
+        open_focus_waiting_for_agent(&mut store, &request, "hmo-focus-waiting", true).unwrap();
+    assert_eq!(store.focus_active().unwrap(), Some(waiting.objective_id));
+    assert!(
+        store
+            .objective_snapshots(Some(waiting.objective_id))
+            .unwrap()[0]
+            .delegations
+            .is_empty(),
+        "aucune délégation ni outbox fictive ne doit être créée"
+    );
+    assert_eq!(
+        reconcile_focus_waiting_agents(&mut store, durations().normal_secs, 1_059).unwrap(),
+        0
+    );
+    assert!(store.pending_human_inbox().unwrap().is_empty());
+    assert_eq!(
+        reconcile_focus_waiting_agents(&mut store, durations().normal_secs, 1_060).unwrap(),
+        1
+    );
+    let pending = store.pending_human_inbox().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0].dedup_key,
+        format!("focus-waiting:{}", waiting.objective_id)
+    );
+    assert_eq!(pending[0].kind, "focus_waiting_agent");
+    assert_eq!(
+        reconcile_focus_waiting_agents(&mut store, durations().normal_secs, 1_061).unwrap(),
+        0,
+        "le même focus ne doit pas déposer deux alertes"
+    );
 }
 
 /// Propriété : un message humain n'ouvre jamais deux fois.

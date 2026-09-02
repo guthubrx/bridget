@@ -447,6 +447,35 @@ pub struct HumanInboxReconcileReport {
     pub transport_unavailable: bool,
 }
 
+/// Dépose un item durable quand le focus actif attend un agent au-delà de la
+/// durée normale. L'idempotence est portée par `focus-waiting:<objectif>`.
+pub fn reconcile_focus_waiting_agents(
+    store: &mut MaicieStore,
+    normal_secs: u64,
+    now: i64,
+) -> Result<u32, ReconcileError> {
+    let overdue = store.overdue_focus_waiting_for_agent(now, normal_secs)?;
+    let mut deposited = 0;
+    for (objective_id, goal) in overdue {
+        let subject = serde_json::json!({ "objective_id": objective_id.to_string() }).to_string();
+        let context = serde_json::json!({
+            "summary": format!("Le focus « {goal} » attend encore un agent disponible.")
+        })
+        .to_string();
+        if store.enqueue_human_inbox(
+            &format!("focus-waiting:{objective_id}"),
+            "focus_waiting_agent",
+            &subject,
+            &context,
+            &["ack".to_string()],
+            now,
+        )? {
+            deposited += 1;
+        }
+    }
+    Ok(deposited)
+}
+
 pub fn reconcile_human_inbox_with_limits(
     store: &mut MaicieStore,
     bridget_socket: impl AsRef<Path>,

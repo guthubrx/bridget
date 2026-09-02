@@ -8780,6 +8780,118 @@ impl MaicieStore {
         tx.commit().map_err(StoreError::Sql)
     }
 
+    /// Ouvre atomiquement un focus humain qui attend un agent. Cette voie ne
+    /// crée volontairement ni délégation ni outbox : aucune cible ne doit être
+    /// inventée pendant que les agents missionnables sont indisponibles.
+    ///
+    /// Rend l'identifiant existant si le message humain avait déjà été
+    /// consommé par une ouverture antérieure. Le guichet rejoue alors son
+    /// reçu durable plutôt que de créer un second objectif.
+    pub fn open_focus_waiting_for_agent(
+        &mut self,
+        objective: &ObjectifCoordonne,
+        opening_permit: &ObjectiveOpeningPermit,
+        human_message_id: &str,
+        replace: bool,
+        now: i64,
+    ) -> Result<Option<Uuid>, StoreError> {
+        if human_message_id.trim().is_empty() || now <= 0 {
+            return Err(StoreError::Invalid("focus en attente invalide"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT objective_id FROM human_origin_consumptions WHERE message_id = ?1",
+                [human_message_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        if let Some(existing) = existing {
+            return Ok(Some(parse_uuid(&existing)?));
+        }
+        open_objective(&tx, objective, opening_permit)?;
+        let consumed = tx
+            .execute(
+                "INSERT OR IGNORE INTO human_origin_consumptions(message_id, objective_id, consumed_at)
+                 VALUES (?1, ?2, ?3)",
+                params![human_message_id, objective.id.to_string(), now],
+            )
+            .map_err(StoreError::Sql)?;
+        if consumed != 1 {
+            return Err(StoreError::Conflict("origine humaine déjà consommée"));
+        }
+        if replace {
+            tx.execute("UPDATE focus_queue SET position = position + 1", [])
+                .map_err(StoreError::Sql)?;
+            tx.execute(
+                "INSERT INTO focus_queue(objective_id, position, opened_at) VALUES (?1, 0, ?2)",
+                params![objective.id.to_string(), now],
+            )
+            .map_err(StoreError::Sql)?;
+        } else {
+            let position: i64 = tx
+                .query_row(
+                    "SELECT COALESCE(MAX(position) + 1, 0) FROM focus_queue",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(StoreError::Sql)?;
+            tx.execute(
+                "INSERT INTO focus_queue(objective_id, position, opened_at) VALUES (?1, ?2, ?3)",
+                params![objective.id.to_string(), position, now],
+            )
+            .map_err(StoreError::Sql)?;
+        }
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(None)
+    }
+
+    /// Focus actif sans délégation, dont la durée normale est échue. La
+    /// projection ne modifie rien : le dépôt idempotent vers la boîte est
+    /// laissé au réconciliateur.
+    pub fn overdue_focus_waiting_for_agent(
+        &self,
+        now: i64,
+        normal_secs: u64,
+    ) -> Result<Vec<(Uuid, String)>, StoreError> {
+        if now <= 0 || normal_secs == 0 {
+            return Err(StoreError::Invalid("délai de focus invalide"));
+        }
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT o.id, o.payload_json
+                 FROM focus_queue f
+                 JOIN objectives o ON o.id = f.objective_id
+                 WHERE f.position = 0
+                   AND NOT EXISTS (
+                     SELECT 1 FROM delegations d WHERE d.objective_id = o.id
+                   )",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .map_err(StoreError::Sql)?;
+        let mut overdue = Vec::new();
+        let delay = i64::try_from(normal_secs)
+            .map_err(|_| StoreError::Invalid("délai de focus hors borne"))?;
+        for row in rows {
+            let (id, payload) = row.map_err(StoreError::Sql)?;
+            let objective: ObjectifCoordonne =
+                serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+            if objective.cree_at.saturating_add(delay) <= now {
+                overdue.push((parse_uuid(&id)?, objective.but));
+            }
+        }
+        Ok(overdue)
+    }
+
     /// SPEC-087 T024 : ajoute `focus:<objective_id>` aux références du message
     /// des outboxes encore `prepared` de cet objectif, pour que la file
     /// d'exécution du daemon les serve en premier. Les octets sont réécrits

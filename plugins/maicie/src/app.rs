@@ -871,10 +871,73 @@ pub struct DelegationCreated {
     pub waiting_on_prerequisites: bool,
 }
 
+/// Focus humain durablement ouvert, sans délégation tant qu'aucun agent
+/// missionnable n'est disponible. Il reste dans la file de focus et ne
+/// fabrique donc ni cible ni outbox fictive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FocusWaitingForAgent {
+    pub objective_id: Uuid,
+    pub replayed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DelegateResult {
     Created(DelegationCreated),
+    FocusWaitingForAgent(FocusWaitingForAgent),
     Candidates(Vec<String>),
+}
+
+/// Ouvre un focus humain sans délégation lorsque les agents missionnables du
+/// projet existent mais sont tous momentanément indisponibles.
+///
+/// Cette voie ne s'applique pas aux délégations ordinaires : elle laisse le
+/// focus visible et permet à la relève de déposer l'alerte durable après la
+/// durée normale, sans inventer de participant ou de remise Bridget.
+pub fn open_focus_waiting_for_agent(
+    store: &mut MaicieStore,
+    request: &DelegateRequest<'_>,
+    human_message_id: &str,
+    replace: bool,
+) -> Result<FocusWaitingForAgent, DelegateError> {
+    if request.goal.trim().is_empty() || request.now <= 0 {
+        return Err(DelegateError::Invalid("objectif ou horodatage absent"));
+    }
+    if !matches!(
+        request.opening_permit.origin(),
+        ObjectiveOrigin::HumanRequest { .. }
+    ) {
+        return Err(DelegateError::Invalid(
+            "focus en attente sans origine humaine",
+        ));
+    }
+    validate_suite_and_citations(store, request)?;
+    let mut objective = ObjectifCoordonne::nouveau_avec_permit(
+        request.goal,
+        ModeObjectif::Delegue,
+        request.now,
+        &request.opening_permit,
+    )
+    .map_err(|_| DelegateError::Invalid("objectif invalide"))?;
+    objective
+        .transition(EtatObjectif::EnCoordination, request.now)
+        .map_err(|_| DelegateError::Invalid("transition objectif invalide"))?;
+    objective.suite = Some(request.suite.clone());
+    objective.depends_on = request.depends_on.to_vec();
+    objective.references = request.references.to_vec();
+    let replay = store
+        .open_focus_waiting_for_agent(
+            &objective,
+            &request.opening_permit,
+            human_message_id,
+            replace,
+            request.now,
+        )
+        .map_err(store_error)?;
+    let replayed = replay.is_some();
+    Ok(FocusWaitingForAgent {
+        objective_id: replay.unwrap_or(objective.id),
+        replayed,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -54,7 +54,9 @@
 ### T025 `maicie status` et `maicie focus` : ✅
 - `main.rs` : `ControlStatusOutput` dans `status` (JSON `control` + ligne texte `contrôle=… pause=… plafond_auto=… boîte_ouverte=… focus=… file_focus=… différées=… dispatchs_différés=…`) ; `maicie focus [status|close|queue] [--json]` ; code CLI `budget_reached` ; erreur `HumanOriginInvalid` rendue en usage.
 
-### T027 Focus sans agent disponible : ❌ non fait (voir Reste à faire)
+### T027 Focus sans agent disponible : ✅
+- Si des agents missionnables existent mais sont tous momentanément indisponibles, `greffe_service.rs` ouvre le focus humain sans délégation ni outbox fictive. Un projet sans agent missionnable reste refusé explicitement.
+- `reconcile_focus_waiting_agents` dépose après `durations.normal_secs` l'item idempotent `focus_waiting_agent` (`focus-waiting:<objective_id>`). `spec_087_focus_sans_agent_attend_puis_avertit_le_referent` : **10 passés, 0 échec** sur `controle_referent_087`.
 
 ### T028 Producteurs de boîte humaine : ⚠️ partiel
 - Fait : `chain_exhausted` (options `cancel`, `ack`), `budget_reached` (`raise_budget`, `ack`). Non faits : `review_verdict_pending`, `activation_approval`.

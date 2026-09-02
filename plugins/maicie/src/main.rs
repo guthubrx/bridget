@@ -42,8 +42,9 @@ use maicie::profiles::{
 use maicie::reconcile::{
     CoordinationReconcileAction, CoordinationReconcileReport, ReconcileError,
     reconcile_activation_startup_at, reconcile_coordination_startup_with_limits,
-    reconcile_guichet_startup_with_central_service, reconcile_human_inbox_with_limits,
-    reconcile_notification_startup_with_limits, reconcile_startup_with_limits,
+    reconcile_focus_waiting_agents, reconcile_guichet_startup_with_central_service,
+    reconcile_human_inbox_with_limits, reconcile_notification_startup_with_limits,
+    reconcile_startup_with_limits,
 };
 use maicie::review_continuity::{
     ReviewContinuityObservation, ReviewContinuityObserver, ReviewContinuityState,
@@ -547,6 +548,8 @@ fn open_store_with_reconciliation(
         .map_err(CliError::Reconcile)?;
     // SPEC-087 : dépôts vers la boîte humaine et relève des décisions du
     // référent, puis rejeu des dispatchs que la pause avait différés.
+    reconcile_focus_waiting_agents(&mut store, config.durations.normal_secs, unix_now()?)
+        .map_err(CliError::Reconcile)?;
     reconcile_human_inbox_with_limits(&mut store, &config.bridget_socket, limits, unix_now()?)
         .map_err(CliError::Reconcile)?;
     store
@@ -1427,6 +1430,11 @@ fn render_output(output: DelegateOutput, json: bool) -> Result<String, serde_jso
             )
         }
         DelegateOutput::Candidates { candidates } => format!("candidats={}", candidates.join(",")),
+        DelegateOutput::FocusWaitingForAgent {
+            objective_id,
+            replayed,
+            ..
+        } => format!("objectif={objective_id} état=en_attente_agent replayed={replayed}"),
     })
 }
 
@@ -3758,6 +3766,11 @@ enum DelegateOutput {
     Candidates {
         candidates: Vec<String>,
     },
+    FocusWaitingForAgent {
+        objective_id: Uuid,
+        state: &'static str,
+        replayed: bool,
+    },
 }
 
 #[derive(Serialize)]
@@ -3794,6 +3807,11 @@ impl From<DelegateResult> for DelegateOutput {
                 replayed: created.replayed,
             },
             DelegateResult::Candidates(candidates) => Self::Candidates { candidates },
+            DelegateResult::FocusWaitingForAgent(waiting) => Self::FocusWaitingForAgent {
+                objective_id: waiting.objective_id,
+                state: "en_attente_agent",
+                replayed: waiting.replayed,
+            },
         }
     }
 }

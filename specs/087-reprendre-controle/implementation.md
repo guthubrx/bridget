@@ -46,6 +46,10 @@
 
 ### T024 (partie daemon) : ✅ `ExecutionStore::queue_priority_for`, `FOCUS_QUEUE_PRIORITY = 100`, test `spec_087_une_remise_de_focus_passe_devant_le_travail_ordinaire` ; s'applique à la file `QueueOnly` ; la référence `focus:<objective_id>` est posée par Maicie (demandé à l'agent dérivé)
 ### T026 Interface, focus : ✅ route `POST /v1/control/focus` par la connexion humaine du relais (`submit_focus`, réponse `GuichetResult`), formulaire « Travaille sur… » avec choix « Après le focus actuel / À la place du focus actuel » en amont (au lieu d'une confirmation après coup), test Node ; **focus en tête de la liste des objectifs** : non fait, l'interface ne liste pas les objectifs Maicie (reporté à T041)
+### T027 Focus en attente d'agent : ✅
+- `greffe_service.rs` distingue un projet réellement sans agent missionnable (refus explicite) d'agents missionnables tous temporairement indisponibles. Dans ce second cas, `open_focus_waiting_for_agent` ouvre le focus humain sans délégation ni outbox fictive et le place dans `focus_queue`.
+- `reconcile.rs::reconcile_focus_waiting_agents` relit le focus actif sans délégation. Après `durations.normal_secs`, il dépose l'unique item durable `focus_waiting_agent`, clé `focus-waiting:<objective_id>`, avant la relève de la boîte humaine.
+- Preuve : `cargo test -p maicie --test controle_referent_087` : **10 passés, 0 échec**. Le test `spec_087_focus_sans_agent_attend_puis_avertit_le_referent` constate zéro item à 59 s, un item à 60 s, aucune délégation fictive et aucun doublon au rejeu. `cargo build -p maicie` : **compilation réussie**.
 ### T029 Dette de réponse : ✅ palier 3 d'une demande du référent ⇒ item `reply_debt`
 ### T030 Canal externe : ✅ `human-channel.json` 0600, chemin absolu, commande avec résumé borné sur stdin, échec consigné
 ### T031 Rappel : ✅ `remind_overdue` (module) ; **branchement dans le thread horaire** : voir Convergence
