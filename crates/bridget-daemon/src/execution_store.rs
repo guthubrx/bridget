@@ -194,6 +194,9 @@ pub enum ControlReservation {
     Expired,
 }
 
+/// Priorité de file des soumissions issues d'un focus (SPEC-087).
+pub const FOCUS_QUEUE_PRIORITY: i64 = 100;
+
 impl ExecutionStore {
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         let mut conn = Connection::open(path)?;
@@ -381,12 +384,28 @@ impl ExecutionStore {
     /// Conserve le message exact d'une intention `QueueOnly` afin qu'un
     /// déclenchement ultérieur après redémarrage ne reconstruise jamais un
     /// prompt à partir d'un résumé ou d'une heuristique.
+    /// SPEC-087 : une remise issue d'un focus du référent passe avant le
+    /// travail ordinaire dans la file d'exécution. Le fait vient des
+    /// références du message (`focus:<objective_id>`), posées par Maicie.
+    pub fn queue_priority_for(message: &bridget_core::BridgetMessage, requested: i64) -> i64 {
+        if message
+            .references
+            .iter()
+            .any(|reference| reference.starts_with("focus:"))
+        {
+            requested.max(FOCUS_QUEUE_PRIORITY)
+        } else {
+            requested
+        }
+    }
+
     pub fn admit_message_submission(
         &self,
         message: &bridget_core::BridgetMessage,
         priority: i64,
         enqueued_at: i64,
     ) -> rusqlite::Result<bool> {
+        let priority = Self::queue_priority_for(message, priority);
         let message_json = serde_json::to_string(message)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         let references_json = serde_json::to_string(&message.references)
@@ -1536,4 +1555,27 @@ fn work_submission_column(tx: &Transaction<'_>, column: &str) -> rusqlite::Resul
         [column],
         |row| row.get(0),
     )
+}
+
+#[cfg(test)]
+mod focus_priority_tests {
+    use super::*;
+
+    #[test]
+    fn spec_087_une_remise_de_focus_passe_devant_le_travail_ordinaire() {
+        let mut ordinary = bridget_core::BridgetMessage::new("a", "b", "x");
+        ordinary.references = vec!["project:p@1".to_string()];
+        assert_eq!(ExecutionStore::queue_priority_for(&ordinary, 0), 0);
+        assert_eq!(ExecutionStore::queue_priority_for(&ordinary, 7), 7);
+        let mut focus = bridget_core::BridgetMessage::new("a", "b", "x");
+        focus.references = vec!["project:p@1".to_string(), "focus:o1".to_string()];
+        assert_eq!(
+            ExecutionStore::queue_priority_for(&focus, 0),
+            FOCUS_QUEUE_PRIORITY
+        );
+        assert_eq!(
+            ExecutionStore::queue_priority_for(&focus, FOCUS_QUEUE_PRIORITY + 1),
+            FOCUS_QUEUE_PRIORITY + 1
+        );
+    }
 }

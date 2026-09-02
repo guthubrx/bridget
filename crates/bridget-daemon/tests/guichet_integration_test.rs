@@ -319,6 +319,8 @@ fn delegate_est_admis_comme_depot_sans_etre_confondu_avec_un_succes_metier() {
             suite: ServiceSuiteDeclaration::Aucune,
             depends_on: vec![prerequisite],
             references: Vec::new(),
+            origin: None,
+            focus: None,
         },
     };
     assert!(matches!(

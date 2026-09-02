@@ -334,6 +334,7 @@ fn prepare_refuse_une_trame_finale_poison_et_des_champs_hors_contrat() {
         reply_timeout: Some(base.outbox.timeout_secs),
         deadline_at: u64::try_from(base.outbox.deadline_contractuelle).ok(),
         in_reply_to: None,
+        references: Vec::new(),
     };
     let replay_overhead = serde_json::to_vec(&json!({
         "type": "SendIdempotent",

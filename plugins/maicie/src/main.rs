@@ -26,6 +26,7 @@ use maicie::bridget_client::{
 };
 use maicie::catalogue::{self, AppendOutcome, CatalogueError, CatalogueJournal};
 use maicie::config::{ConfigError, MaicieConfig};
+use maicie::control::{ControlSnapshot, read_control_snapshot};
 use maicie::domain::{
     ClasseDuree, CoutMissionAgent, DecisionCoordination, Delegation, EtatFlux, ObjectifCoordonne,
     ObjectiveOpeningPermit, ProjectProfile, ProjectProfileStatus, SourceSnapshot, SuiteObjective,
@@ -41,8 +42,8 @@ use maicie::profiles::{
 use maicie::reconcile::{
     CoordinationReconcileAction, CoordinationReconcileReport, ReconcileError,
     reconcile_activation_startup_at, reconcile_coordination_startup_with_limits,
-    reconcile_guichet_startup_with_central_service, reconcile_notification_startup_with_limits,
-    reconcile_startup_with_limits,
+    reconcile_guichet_startup_with_central_service, reconcile_human_inbox_with_limits,
+    reconcile_notification_startup_with_limits, reconcile_startup_with_limits,
 };
 use maicie::review_continuity::{
     ReviewContinuityObservation, ReviewContinuityObserver, ReviewContinuityState,
@@ -107,6 +108,7 @@ fn run(arguments: Vec<String>) -> Result<String, CliError> {
         Command::Registre(registre_args) => run_registre(registre_args, migrate),
         Command::Plage(plage_args) => run_plage(plage_args, migrate),
         Command::Routine(routine_args) => run_routine(routine_args, migrate),
+        Command::Focus(focus_args) => run_focus(focus_args, migrate),
         Command::Preflight(preflight_args) => {
             if migrate {
                 return Err(CliError::Usage("preflight n'accepte pas --migrate"));
@@ -143,6 +145,7 @@ fn mission_projection_config(command: &Command) -> Option<PathBuf> {
         Command::Registre(arguments) => Some(arguments.config.clone()),
         Command::Plage(arguments) => Some(arguments.config.clone()),
         Command::Routine(arguments) => Some(arguments.config.clone()),
+        Command::Focus(arguments) => Some(arguments.config.clone()),
         Command::Migrate(arguments) => Some(arguments.config.clone()),
         Command::Preflight(_) => None,
     }
@@ -184,8 +187,10 @@ fn run_status(arguments: StatusArgs, migrate: bool) -> Result<String, CliError> 
         .local_delegate_refusal_counts()
         .map_err(CliError::Store)?;
     let sources = capture_status_sources(&config, &delegated_participants(&snapshots));
+    let control = control_status_output(&store, unix_now()?)?;
     render_objective_output(
         ObjectiveOutput::Status {
+            control,
             coordination: snapshots.into_iter().map(SnapshotOutput::from).collect(),
             review_continuity,
             refus_contraintes,
@@ -518,6 +523,10 @@ fn open_store_with_reconciliation(
     migrate: bool,
 ) -> Result<ReconciledStore, CliError> {
     let mut store = open_guarded_maicie_store(config_path, config, limits, migrate)?;
+    // SPEC-087 : l'état de contrôle du référent est lu une fois, avant tout
+    // puits d'effet autonome. Daemon injoignable ⇒ tout est différé.
+    let control = read_control_snapshot(&config.bridget_socket, limits, unix_now()?);
+    store.set_control_snapshot(control);
     reconcile_pending(&mut store, config, limits)?;
     reconcile_activation_startup_at(&mut store, &config.bridget_socket, unix_now()?)
         .map_err(CliError::Reconcile)?;
@@ -536,6 +545,13 @@ fn open_store_with_reconciliation(
     // le même chemin borné de reprise, jamais une seconde logique d'envoi CLI.
     reconcile_notification_startup_with_limits(&mut store, &config.bridget_socket, limits)
         .map_err(CliError::Reconcile)?;
+    // SPEC-087 : dépôts vers la boîte humaine et relève des décisions du
+    // référent, puis rejeu des dispatchs que la pause avait différés.
+    reconcile_human_inbox_with_limits(&mut store, &config.bridget_socket, limits, unix_now()?)
+        .map_err(CliError::Reconcile)?;
+    store
+        .release_ready_dependents(unix_now()?)
+        .map_err(CliError::Store)?;
     // Battement routines : même horloge que la relève (aucune timer Maicie).
     // Court-circuit si aucune active — zéro I/O Bridget, les fixtures CLI
     // mono-séquence et les commandes hors routines restent intactes.
@@ -1472,6 +1488,8 @@ enum Command {
     Registre(RegistreArgs),
     Plage(PlageArgs),
     Routine(RoutineArgs),
+    /// SPEC-087 : focus du référent (status, close, queue).
+    Focus(FocusArgs),
     /// Gate sans écriture, destiné au chemin d'installation/activation.
     Preflight(PreflightArgs),
     /// Consentement explicite : applique les migrations de schéma.
@@ -1712,6 +1730,7 @@ fn parse_command(arguments: &[String]) -> Result<Command, CliError> {
         "registre" => parse_registre(tail).map(Command::Registre),
         "plage" => parse_plage(tail).map(Command::Plage),
         "routine" => parse_routine(tail).map(Command::Routine),
+        "focus" => parse_focus(tail).map(Command::Focus),
         "preflight" => parse_preflight(tail).map(Command::Preflight),
         "migrate" => parse_migrate(tail).map(Command::Migrate),
         _ => Err(CliError::Usage(
@@ -2078,6 +2097,122 @@ enum RoutineAction {
     Show {
         routine_id: Uuid,
     },
+}
+
+// ---------------------------------------------------------------------------
+// SPEC-087 : `maicie focus`
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+struct FocusArgs {
+    config: PathBuf,
+    json: bool,
+    action: FocusAction,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FocusAction {
+    Status,
+    Close,
+    Queue,
+}
+
+fn parse_focus(arguments: &[String]) -> Result<FocusArgs, CliError> {
+    let Some((verb, tail)) = arguments.split_first() else {
+        return Err(CliError::Usage(
+            "action focus obligatoire : status|close|queue",
+        ));
+    };
+    let action = match verb.as_str() {
+        "status" => FocusAction::Status,
+        "close" => FocusAction::Close,
+        "queue" => FocusAction::Queue,
+        _ => {
+            return Err(CliError::Usage(
+                "action focus inconnue : status|close|queue",
+            ));
+        }
+    };
+    let mut config = None;
+    let mut json = false;
+    let mut index = 0;
+    while index < tail.len() {
+        match tail[index].as_str() {
+            "--config" => set_once_path(&mut config, next_value(tail, &mut index, "--config")?)?,
+            "--json" => {
+                if json {
+                    return Err(CliError::Usage("option --json dupliquée"));
+                }
+                json = true;
+            }
+            _ => return Err(CliError::Usage("option focus inconnue")),
+        }
+        index += 1;
+    }
+    Ok(FocusArgs {
+        config: config.ok_or(CliError::Usage("--config est obligatoire"))?,
+        json,
+        action,
+    })
+}
+
+#[derive(Serialize)]
+struct FocusOutput {
+    focus: Option<String>,
+    queue: Vec<String>,
+    closed: Option<String>,
+}
+
+fn run_focus(arguments: FocusArgs, migrate: bool) -> Result<String, CliError> {
+    let config = MaicieConfig::load(&arguments.config).map_err(CliError::Configuration)?;
+    let mut store = open_store_with_reconciliation(
+        &arguments.config,
+        &config,
+        BridgetClientLimits::default(),
+        migrate,
+    )?
+    .store;
+    let closed = match arguments.action {
+        FocusAction::Status | FocusAction::Queue => None,
+        FocusAction::Close => {
+            let current = store.focus_active().map_err(CliError::Store)?;
+            if current.is_some() {
+                store.focus_close_current().map_err(CliError::Store)?;
+            }
+            current.map(|id| id.to_string())
+        }
+    };
+    let queue = store.focus_queue().map_err(CliError::Store)?;
+    let output = FocusOutput {
+        focus: queue
+            .iter()
+            .find(|(_, position)| *position == 0)
+            .map(|(id, _)| id.to_string()),
+        queue: queue
+            .iter()
+            .filter(|(_, position)| *position > 0)
+            .map(|(id, _)| id.to_string())
+            .collect(),
+        closed,
+    };
+    if arguments.json {
+        return serde_json::to_string(&output)
+            .map_err(|_| CliError::Usage("sortie JSON focus indisponible"));
+    }
+    Ok(format!(
+        "focus={} file={}{}",
+        output.focus.as_deref().unwrap_or("aucun"),
+        if output.queue.is_empty() {
+            "aucune".to_string()
+        } else {
+            output.queue.join(",")
+        },
+        output
+            .closed
+            .as_deref()
+            .map(|id| format!(" fermé={id}"))
+            .unwrap_or_default()
+    ))
 }
 
 fn parse_routine(arguments: &[String]) -> Result<RoutineArgs, CliError> {
@@ -3663,10 +3798,76 @@ impl From<DelegateResult> for DelegateOutput {
     }
 }
 
+/// SPEC-087 : état de contrôle du référent tel que lu à cette relève.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ControlStatusOutput {
+    state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    paused: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_objectives_cap: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inbox_open_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot_age_secs: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    focus: Option<String>,
+    focus_queue: Vec<String>,
+    deferred_occurrences: u32,
+    deferred_dispatches: u32,
+}
+
+fn control_status_output(store: &MaicieStore, now: i64) -> Result<ControlStatusOutput, CliError> {
+    let (state, paused, cap, inbox, age) = match store.control_snapshot() {
+        ControlSnapshot::Unread => ("unread", None, None, None, None),
+        ControlSnapshot::Unknown => ("unknown", None, None, None, None),
+        ControlSnapshot::Read {
+            paused,
+            auto_objectives_cap,
+            inbox_open_count,
+            read_at,
+        } => (
+            "read",
+            Some(paused),
+            Some(auto_objectives_cap),
+            Some(inbox_open_count),
+            Some(now.saturating_sub(read_at).max(0)),
+        ),
+    };
+    let queue = store.focus_queue().map_err(CliError::Store)?;
+    Ok(ControlStatusOutput {
+        state,
+        paused,
+        auto_objectives_cap: cap,
+        inbox_open_count: inbox,
+        snapshot_age_secs: age,
+        focus: queue
+            .iter()
+            .find(|(_, position)| *position == 0)
+            .map(|(id, _)| id.to_string()),
+        focus_queue: queue
+            .iter()
+            .filter(|(_, position)| *position > 0)
+            .map(|(id, _)| id.to_string())
+            .collect(),
+        deferred_occurrences: store
+            .count_control_deferred_occurrences()
+            .map_err(CliError::Store)?,
+        deferred_dispatches: u32::try_from(
+            store
+                .deferred_dispatch_reasons()
+                .map_err(CliError::Store)?
+                .len(),
+        )
+        .unwrap_or(u32::MAX),
+    })
+}
+
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ObjectiveOutput {
     Status {
+        control: ControlStatusOutput,
         coordination: Vec<SnapshotOutput>,
         review_continuity: Vec<ReviewContinuityObservation>,
         refus_contraintes: CompteursRefusDelegationLocale,
@@ -4059,6 +4260,7 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
     }
     Ok(match output {
         ObjectiveOutput::Status {
+            control,
             coordination,
             review_continuity,
             refus_contraintes,
@@ -4109,6 +4311,26 @@ fn render_objective_output(output: ObjectiveOutput, json: bool) -> Result<String
                         .collect::<Vec<_>>(),
                 ),
             );
+            rendered.push_str(&format!(
+                "\ncontrôle={} pause={} plafond_auto={} boîte_ouverte={} focus={} file_focus={} différées={} dispatchs_différés={}",
+                control.state,
+                control
+                    .paused
+                    .map(|paused| paused.to_string())
+                    .unwrap_or_else(|| "inconnue".to_string()),
+                control
+                    .auto_objectives_cap
+                    .map(|cap| cap.to_string())
+                    .unwrap_or_else(|| "inconnu".to_string()),
+                control
+                    .inbox_open_count
+                    .map(|count| count.to_string())
+                    .unwrap_or_else(|| "inconnu".to_string()),
+                control.focus.as_deref().unwrap_or("aucun"),
+                control.focus_queue.len(),
+                control.deferred_occurrences,
+                control.deferred_dispatches,
+            ));
             for observation in review_continuity.iter().filter(|observation| {
                 matches!(
                     observation.state,
@@ -4222,6 +4444,9 @@ fn greffe_service_error_for_cli(error: GreffeServiceError) -> CliError {
             bridget_transport::greffe_authorization::GREFFE_AUTHORIZATION_PUBLIC_REFUSAL,
         ),
         GreffeServiceError::Invalid(reason) => CliError::Usage(reason),
+        GreffeServiceError::HumanOriginInvalid(_) => {
+            CliError::Usage("origine humaine ou focus refusés par le greffe")
+        }
     }
 }
 
@@ -4301,6 +4526,7 @@ impl CliError {
                 "delegate_constraint_refused"
             }
             Self::Delegate(DelegateError::TargetUnavailable(_)) => "target_unavailable",
+            Self::Delegate(DelegateError::BudgetReached { .. }) => "budget_reached",
             Self::TargetIsPilot(_)
             | Self::TargetUnavailableState { .. }
             | Self::TargetEligibilityDivergence(_) => "target_unavailable",

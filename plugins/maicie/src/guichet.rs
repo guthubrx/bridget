@@ -10,8 +10,8 @@ use super::{
 };
 use crate::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use bridget_transport::protocol::{
-    GuichetDurationClass, ReviewTarget, ReviewVerdictEvidence, ServiceRequestPayload,
-    ServiceSuiteDeclaration,
+    DelegateFocus, DelegateOrigin, GuichetDurationClass, ReviewTarget, ReviewVerdictEvidence,
+    ServiceRequestPayload, ServiceSuiteDeclaration,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -83,6 +83,10 @@ pub struct DemandeDelegation {
     pub suite: SuiteObjective,
     pub depends_on: Vec<Uuid>,
     pub references: Vec<Uuid>,
+    /// SPEC-087 : origine fabriquée par le daemon pour le principal humain.
+    pub origin: Option<DelegateOrigin>,
+    /// SPEC-087 : demande de focus, valide seulement avec une origine humaine.
+    pub focus: Option<DelegateFocus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +196,10 @@ struct DelegatePayload {
     depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     references: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin: Option<DelegateOrigin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    focus: Option<DelegateFocus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,8 +302,15 @@ pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDoma
         "delegate" => {
             let payload: DelegatePayload = serde_json::from_value(wire.payload.clone())
                 .map_err(|_| GuichetDomainError::InvalidEnvelope("délégation invalide"))?;
+            // SPEC-087 : origine et focus voyagent en v2, jamais en v1.
+            if wire.v == 1 && (payload.origin.is_some() || payload.focus.is_some()) {
+                return Err(GuichetDomainError::InvalidEnvelope(
+                    "origine ou focus exigent la version 2",
+                ));
+            }
             match (wire.v, payload.review_target.as_ref()) {
                 (1, None) => {}
+                (2, None) if payload.origin.is_some() || payload.focus.is_some() => {}
                 (2, Some(target)) if target.is_valid() => {}
                 (1, Some(_)) => {
                     return Err(GuichetDomainError::InvalidEnvelope(
@@ -384,6 +399,8 @@ pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDoma
                 suite: payload.suite.clone(),
                 depends_on: payload.depends_on.clone(),
                 references: payload.references.clone(),
+                origin: payload.origin.clone(),
+                focus: payload.focus.clone(),
             };
             ensure_canonical(
                 &claim.canonical_request,
@@ -400,6 +417,8 @@ pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDoma
                 suite,
                 depends_on,
                 references,
+                origin: payload.origin,
+                focus: payload.focus,
             })
         }
         "registre_add" => {
@@ -1019,6 +1038,50 @@ fn validate_projection(projection: &ProjectionReply) -> Result<(), GuichetDomain
     Ok(())
 }
 
+/// SPEC-087 : octets canoniques de la requête de délégation **sans** son
+/// origine, tels que le daemon les a hachés avant de fabriquer l'attestation.
+/// Le hash ne se définit jamais sur un document qui porte déjà la preuve.
+pub fn canonical_delegate_bytes_without_origin(
+    canonical: &RequeteCanonique,
+    request: &DemandeDelegation,
+) -> Result<Vec<u8>, GuichetDomainError> {
+    let duration = match request.duration {
+        ClasseDuree::Courte => GuichetDurationClass::Courte,
+        ClasseDuree::Normale => GuichetDurationClass::Normale,
+        ClasseDuree::Longue => GuichetDurationClass::Longue,
+    };
+    let suite = match &request.suite {
+        SuiteObjective::Aucune => ServiceSuiteDeclaration::Aucune,
+        SuiteObjective::Objectif(id) => ServiceSuiteDeclaration::Objectif {
+            objective_id: id.to_string(),
+        },
+    };
+    let payload = ServiceRequestPayload::Delegate {
+        goal: request.goal.clone(),
+        review_target: request.review_target.clone(),
+        explicit_target: request.explicit_target.clone(),
+        required_tags: request.required_tags.clone(),
+        duration,
+        suite,
+        depends_on: request.depends_on.iter().map(ToString::to_string).collect(),
+        references: request.references.iter().map(ToString::to_string).collect(),
+        origin: None,
+        focus: request.focus.clone(),
+    };
+    serde_json::to_vec(&CanonicalServiceRequest {
+        kind: "service_request",
+        v: 2,
+        issuer_scope: &canonical.issuer_scope,
+        request_id: &canonical.request_id,
+        issued_at: canonical.issued_at,
+        from: &canonical.from,
+        to: "maicie",
+        operation: "delegate",
+        payload,
+    })
+    .map_err(|_| GuichetDomainError::InvalidEnvelope("requête non sérialisable"))
+}
+
 fn ensure_canonical<T: Serialize>(
     original: &[u8],
     wire: &ServiceRequestWire,
@@ -1114,6 +1177,8 @@ mod mutation_tests {
             suite: ServiceSuiteDeclaration::Aucune,
             depends_on: Vec::new(),
             references: Vec::new(),
+            origin: None,
+            focus: None,
         }
     }
 

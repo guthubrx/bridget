@@ -21,6 +21,7 @@ pub use execution_store::{
 };
 pub mod fleet;
 pub mod greffe_policy_refresh;
+pub mod human_inbox;
 pub mod idempotency;
 pub mod identity_migration;
 pub mod ledger;
@@ -38,6 +39,7 @@ pub mod project_workspace;
 pub mod reaper;
 pub mod receipt_store;
 pub mod recovery_trace;
+pub mod referent_control;
 pub mod registry;
 pub mod reprise;
 pub mod runtime;

@@ -358,6 +358,8 @@ fn authorized_review_delegate_claim(
             suite: ServiceSuiteDeclaration::Aucune,
             depends_on: Vec::new(),
             references: Vec::new(),
+            origin: None,
+            focus: None,
         },
     )
 }

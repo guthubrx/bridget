@@ -1288,6 +1288,8 @@ enum ReminderAction {
     Deferred {
         to: String,
         msg_id: String,
+        /// `tour en cours` ou `pause` (SPEC-087) : le motif est consigné.
+        reason: &'static str,
         level: u8,
     },
 }
@@ -3186,6 +3188,16 @@ impl DaemonState {
         if existing.connection_id == incoming_conn {
             return;
         }
+        // SPEC-087 T048 : une route encore vivante (écrivain joignable et
+        // présence vue dans la fenêtre de rétention) qui se fait remplacer
+        // est peut-être une usurpation. On ne l'empêche pas, on la montre au
+        // référent, par un canal que l'agent ne lit pas (ADR 027).
+        let existing_alive = self.connections.contains_key(&existing.connection_id)
+            && self
+                .conn_instances
+                .get(&existing.connection_id)
+                .and_then(|instance| self.presences.get(instance))
+                .is_some_and(|presence| presence.link_seen.elapsed() < PRESENCE_RETENTION);
         if let Some(writer) = self.connections.get(&existing.connection_id)
             && let Ok(mut writer) = writer.lock()
             && let Ok(frame) = encode(&DaemonToWrapper::Disconnect)
@@ -3198,6 +3210,37 @@ impl DaemonState {
             "présence UI humaine reprise: {} remplace {}",
             incoming_conn, existing.connection_id
         );
+        if existing_alive {
+            let now = unix_now_secs();
+            let incoming_instance = self
+                .conn_instances
+                .get(incoming_conn)
+                .cloned()
+                .unwrap_or_else(|| "instance inconnue".to_string());
+            warn!(
+                "route humaine vivante remplacée: {} → {} ({incoming_instance})",
+                existing.connection_id, incoming_conn
+            );
+            let context = serde_json::json!({
+                "summary": format!(
+                    "Une nouvelle connexion ({incoming_instance}) a pris l’identité humaine alors que l’interface était encore vivante."
+                ),
+                "replaced_connection": existing.connection_id,
+                "incoming_connection": incoming_conn,
+                "incoming_instance": incoming_instance,
+                "at": now,
+            })
+            .to_string();
+            daemon_deposit_human_inbox(
+                self,
+                &format!("human-route:{incoming_conn}"),
+                bridget_transport::protocol::HumanInboxKind::HumanRouteReplaced,
+                &bridget_transport::protocol::HumanInboxSubject::default(),
+                &context,
+                &["ack".to_string()],
+                now,
+            );
+        }
     }
 
     /// Quand le retain jette une présence, retire aussi le nom du routeur :
@@ -4519,10 +4562,43 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                                 from, to
                             );
                         }
+                        // SPEC-087 T029 : une demande du référent restée sans
+                        // réponse est une dette humaine ; elle arrive dans sa
+                        // boîte, pas seulement dans le fil.
+                        if from == UI_HUMAN_SENDER || from == UI_HUMAN_AGENT_ID {
+                            let now = unix_now_secs();
+                            let context = serde_json::json!({
+                                "summary": format!(
+                                    "{to} n’a pas répondu en {timeout_secs} s à ta demande #{}.",
+                                    &msg_id[..msg_id.len().min(8)]
+                                ),
+                                "to": to,
+                                "timeout_secs": timeout_secs,
+                            })
+                            .to_string();
+                            daemon_deposit_human_inbox(
+                                &st,
+                                &format!("reply-debt:{msg_id}"),
+                                bridget_transport::protocol::HumanInboxKind::ReplyDebt,
+                                &bridget_transport::protocol::HumanInboxSubject {
+                                    message_id: Some(msg_id.clone()),
+                                    agent_id: Some(to.clone()),
+                                    ..Default::default()
+                                },
+                                &context,
+                                &["ack".to_string()],
+                                now,
+                            );
+                        }
                     }
-                    ReminderAction::Deferred { to, msg_id, level } => {
+                    ReminderAction::Deferred {
+                        to,
+                        msg_id,
+                        level,
+                        reason,
+                    } => {
                         info!(
-                            "relance différée (tour en cours) : palier {} pour {} sur demande {}",
+                            "relance différée ({reason}) : palier {} pour {} sur demande {}",
                             level, to, msg_id
                         );
                     }
@@ -4542,6 +4618,19 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                 return;
             }
             let st = st_purge.lock().unwrap_or_else(|e| e.into_inner());
+            // SPEC-087 T031 : rappel des items de boîte ouverts depuis trop
+            // longtemps, seule décision « de ronde » admise par la spec.
+            match crate::human_inbox::remind_overdue(
+                st.store.connection(),
+                human_channel_config().as_ref(),
+                unix_now_secs(),
+            ) {
+                Ok(0) => {}
+                Ok(count) => {
+                    info!("boîte humaine: {count} rappel(s) poussé(s) sur le canal externe")
+                }
+                Err(error) => warn!("boîte humaine: rappel impossible: {error}"),
+            }
             if let Ok(n) = st.store.purge_older_than_days(retention)
                 && n > 0
             {
@@ -5639,8 +5728,13 @@ fn guichet_request_is_valid(
         (
             SERVICE_CONTRACT_VERSION,
             bridget_transport::protocol::ServiceRequestOperation::Delegate,
-            bridget_transport::protocol::ServiceRequestPayload::Delegate { review_target, .. },
-        ) => review_target.is_none(),
+            bridget_transport::protocol::ServiceRequestPayload::Delegate {
+                review_target,
+                origin,
+                focus,
+                ..
+            },
+        ) => review_target.is_none() && origin.is_none() && focus.is_none(),
         (SERVICE_CONTRACT_VERSION, _, _) => true,
         (
             REVIEW_DELEGATE_CONTRACT_VERSION,
@@ -5650,6 +5744,18 @@ fn guichet_request_is_valid(
                 ..
             },
         ) => target.is_valid(),
+        // SPEC-087 : une origine humaine ou un focus voyagent en v2, sans
+        // cible de revue obligatoire (Maicie la mesure elle-même).
+        (
+            REVIEW_DELEGATE_CONTRACT_VERSION,
+            bridget_transport::protocol::ServiceRequestOperation::Delegate,
+            bridget_transport::protocol::ServiceRequestPayload::Delegate {
+                review_target: None,
+                origin,
+                focus,
+                ..
+            },
+        ) => origin.is_some() || focus.is_some(),
         _ => false,
     };
     if !identifier(request_id) || !version_matches_payload {
@@ -5691,8 +5797,30 @@ fn guichet_request_is_valid(
                 suite,
                 depends_on,
                 references,
+                origin,
+                focus,
             },
         ) => {
+            // SPEC-087 : forme seulement ; la vérité de l'origine est rejouée par
+            // Maicie, et son droit d'être là est tranché par le dispatch.
+            let origin_is_valid = origin.as_ref().is_none_or(|origin| match origin {
+                bridget_transport::protocol::DelegateOrigin::Human {
+                    message_id,
+                    observed,
+                    attestation,
+                } => {
+                    identifier(message_id)
+                        && observed.message_id == *message_id
+                        && !observed.sender.is_empty()
+                        && !observed.target.is_empty()
+                        && attestation.version == 1
+                        && attestation.canonical_request_sha256.len() == 64
+                        && attestation.signature.len() == 64
+                }
+            });
+            let focus_is_valid = focus
+                .as_ref()
+                .is_none_or(|focus| identifier(&focus.project_id));
             let suite_is_valid = match suite {
                 bridget_transport::protocol::ServiceSuiteDeclaration::Aucune => true,
                 bridget_transport::protocol::ServiceSuiteDeclaration::Objectif { objective_id } => {
@@ -5723,6 +5851,8 @@ fn guichet_request_is_valid(
                 && references.len() <= 100
                 && suite_is_valid
                 && relations_are_valid
+                && origin_is_valid
+                && focus_is_valid
         }
         (
             bridget_transport::protocol::ServiceRequestOperation::RegistreAdd,
@@ -6922,6 +7052,22 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
         .filter(|presence| presence.is_dnd())
         .map(|presence| presence.name.clone())
         .collect();
+    // SPEC-087 : en pause, les paliers 1 et 2 sont différés comme pour un
+    // tour en cours ; le palier 3 (échec notifié à l'émetteur) reste émis,
+    // c'est une information, pas un réveil.
+    let paused = match crate::referent_control::read(state.store.connection()) {
+        Ok(control) => matches!(
+            crate::referent_control::admit_autonomous_effect(
+                crate::referent_control::AutonomousEffect::ReminderNudge,
+                &control,
+            ),
+            crate::referent_control::Admission::Deferred { .. }
+        ),
+        Err(error) => {
+            warn!("état de contrôle illisible pour les relances: {error}");
+            false
+        }
+    };
     let busy_connections: std::collections::HashSet<String> = state
         .conn_instances
         .iter()
@@ -6976,7 +7122,7 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
             continue;
         }
         if let Some(level) = deferred_reminder_level(
-            busy_connections.contains(&pending.target_conn),
+            paused || busy_connections.contains(&pending.target_conn),
             elapsed,
             timeout,
         ) {
@@ -6987,6 +7133,7 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
                     to: pending.to.clone(),
                     msg_id: pending.msg_id.clone(),
                     level,
+                    reason: if paused { "pause" } else { "tour en cours" },
                 });
             }
             continue;
@@ -8421,6 +8568,357 @@ fn artifact_publication_refusal(code: &str, message: &str) -> DaemonToWrapper {
 }
 
 /// Traite un message wrapper et retourne une réponse optionnelle.
+// ---------------------------------------------------------------------------
+// SPEC-087 : état de contrôle du référent et boîte de réception humaine.
+// Chaque bras du dispatch délègue ici ; la logique vit dans les modules
+// `referent_control` et `human_inbox`. Rien d'autre que le verrou, la
+// négociation et l'horloge n'est lu ici.
+// ---------------------------------------------------------------------------
+
+fn control_client_actor(st: &DaemonState, conn_id: &str) -> Option<&'static str> {
+    st.client_negotiations.get(conn_id).and_then(|negotiated| {
+        crate::referent_control::human_principal_actor(&negotiated.issuer_scope)
+    })
+}
+
+fn human_channel_config() -> Option<crate::human_inbox::HumanChannelConfig> {
+    let path = crate::human_inbox::default_channel_config_path()?;
+    match crate::human_inbox::load_channel_config(&path) {
+        Ok(config) => config,
+        Err(error) => {
+            warn!("canal humain ignoré: {error}");
+            None
+        }
+    }
+}
+
+/// Dépôt interne du daemon (relances, reprise de route humaine, focus en
+/// attente). Le canal externe est poussé si un item a été créé.
+fn daemon_deposit_human_inbox(
+    st: &DaemonState,
+    dedup_key: &str,
+    kind: bridget_transport::protocol::HumanInboxKind,
+    subject: &bridget_transport::protocol::HumanInboxSubject,
+    context: &str,
+    options: &[String],
+    now: i64,
+) {
+    let channel = human_channel_config();
+    let request = crate::human_inbox::DepositRequest {
+        dedup_key,
+        kind,
+        subject,
+        context,
+        options,
+        producer: bridget_transport::protocol::HumanInboxProducer::Daemon,
+        now,
+    };
+    match crate::human_inbox::deposit_and_notify(st.store.connection(), request, channel.as_ref()) {
+        Ok(Ok(deposited)) if deposited.created => {
+            info!(
+                "boîte humaine: item {} déposé ({})",
+                deposited.item_id,
+                kind.as_sql()
+            );
+        }
+        Ok(Ok(_)) => {}
+        Ok(Err(refusal)) => warn!("boîte humaine: dépôt {dedup_key} refusé: {refusal:?}"),
+        Err(error) => warn!("boîte humaine: dépôt {dedup_key} impossible: {error}"),
+    }
+}
+
+fn handle_control_state_read(state: &Arc<Mutex<DaemonState>>, version: u16) -> DaemonToWrapper {
+    use bridget_transport::protocol::ControlStateRefusal;
+    if version != bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION {
+        return DaemonToWrapper::ControlStateRejected {
+            reason: ControlStateRefusal::UnsupportedVersion,
+        };
+    }
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let conn = st.store.connection();
+    match crate::referent_control::read(conn) {
+        Ok(state) => DaemonToWrapper::ControlState {
+            state,
+            inbox_open_count: crate::human_inbox::open_count(conn).unwrap_or(0),
+        },
+        Err(error) => {
+            warn!("état de contrôle illisible: {error}");
+            DaemonToWrapper::ControlStateRejected {
+                reason: ControlStateRefusal::StoreUnavailable,
+            }
+        }
+    }
+}
+
+fn handle_control_history(
+    state: &Arc<Mutex<DaemonState>>,
+    version: u16,
+    limit: u32,
+) -> DaemonToWrapper {
+    use bridget_transport::protocol::ControlStateRefusal;
+    if version != bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION {
+        return DaemonToWrapper::ControlStateRejected {
+            reason: ControlStateRefusal::UnsupportedVersion,
+        };
+    }
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    match crate::referent_control::history(st.store.connection(), limit.clamp(1, 200)) {
+        Ok(events) => DaemonToWrapper::ControlHistory {
+            events: events
+                .into_iter()
+                .map(|event| bridget_transport::protocol::ControlEventFrame {
+                    at: event.at,
+                    actor: event.actor,
+                    kind: event.kind.to_string(),
+                    reason: event.reason,
+                    generation_after: event.generation_after,
+                })
+                .collect(),
+        },
+        Err(error) => {
+            warn!("journal de contrôle illisible: {error}");
+            DaemonToWrapper::ControlStateRejected {
+                reason: ControlStateRefusal::StoreUnavailable,
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_control_state_set(
+    state: &Arc<Mutex<DaemonState>>,
+    conn_id: &str,
+    version: u16,
+    command_id: &str,
+    expected_generation: u64,
+    paused: Option<bool>,
+    auto_objectives_cap: Option<u32>,
+    reason: Option<&str>,
+) -> DaemonToWrapper {
+    use bridget_transport::protocol::ControlStateRefusal;
+    if version != bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION {
+        return DaemonToWrapper::ControlStateRejected {
+            reason: ControlStateRefusal::UnsupportedVersion,
+        };
+    }
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(actor) = control_client_actor(&st, conn_id) else {
+        return DaemonToWrapper::ControlStateRejected {
+            reason: ControlStateRefusal::HumanPrincipalRequired,
+        };
+    };
+    if paused.is_none() && auto_objectives_cap.is_none() {
+        return DaemonToWrapper::ControlStateRejected {
+            reason: ControlStateRefusal::NothingToChange,
+        };
+    }
+    let mutation = crate::referent_control::ControlMutation {
+        command_id,
+        expected_generation,
+        paused,
+        auto_objectives_cap,
+        reason,
+        actor,
+        now: unix_now_secs(),
+    };
+    let conn = st.store.connection();
+    match crate::referent_control::set(conn, mutation) {
+        Ok(Ok(state)) => {
+            info!(
+                "état de contrôle: génération {} par {actor} (pause={}, plafond={})",
+                state.generation, state.paused, state.auto_objectives_cap
+            );
+            DaemonToWrapper::ControlState {
+                state,
+                inbox_open_count: crate::human_inbox::open_count(conn).unwrap_or(0),
+            }
+        }
+        Ok(Err(reason)) => DaemonToWrapper::ControlStateRejected { reason },
+        Err(error) => {
+            warn!("état de contrôle inécrivable: {error}");
+            DaemonToWrapper::ControlStateRejected {
+                reason: ControlStateRefusal::StoreUnavailable,
+            }
+        }
+    }
+}
+
+fn handle_human_inbox_deposit(
+    state: &Arc<Mutex<DaemonState>>,
+    version: u16,
+    dedup_key: &str,
+    kind: bridget_transport::protocol::HumanInboxKind,
+    subject: &bridget_transport::protocol::HumanInboxSubject,
+    context: &str,
+    options: &[String],
+) -> DaemonToWrapper {
+    use bridget_transport::protocol::HumanInboxRefusal;
+    if version != bridget_transport::protocol::HUMAN_INBOX_CONTRACT_VERSION {
+        return DaemonToWrapper::HumanInboxRejected {
+            reason: HumanInboxRefusal::UnsupportedVersion,
+        };
+    }
+    let channel = human_channel_config();
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let request = crate::human_inbox::DepositRequest {
+        dedup_key,
+        kind,
+        subject,
+        context,
+        options,
+        producer: bridget_transport::protocol::HumanInboxProducer::Maicie,
+        now: unix_now_secs(),
+    };
+    match crate::human_inbox::deposit_and_notify(st.store.connection(), request, channel.as_ref()) {
+        Ok(Ok(deposited)) => {
+            if deposited.created {
+                info!(
+                    "boîte humaine: item {} déposé par Maicie ({})",
+                    deposited.item_id,
+                    kind.as_sql()
+                );
+            }
+            DaemonToWrapper::HumanInboxDeposited {
+                item_id: deposited.item_id,
+                created: deposited.created,
+                occurrences: deposited.occurrences,
+            }
+        }
+        Ok(Err(reason)) => DaemonToWrapper::HumanInboxRejected { reason },
+        Err(error) => {
+            warn!("boîte humaine inécrivable: {error}");
+            DaemonToWrapper::HumanInboxRejected {
+                reason: HumanInboxRefusal::StoreUnavailable,
+            }
+        }
+    }
+}
+
+fn handle_human_inbox_list(
+    state: &Arc<Mutex<DaemonState>>,
+    conn_id: &str,
+    version: u16,
+    filter: bridget_transport::protocol::HumanInboxListFilter,
+    limit: u32,
+) -> DaemonToWrapper {
+    use bridget_transport::protocol::HumanInboxRefusal;
+    if version != bridget_transport::protocol::HUMAN_INBOX_CONTRACT_VERSION {
+        return DaemonToWrapper::HumanInboxRejected {
+            reason: HumanInboxRefusal::UnsupportedVersion,
+        };
+    }
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    if control_client_actor(&st, conn_id).is_none() {
+        return DaemonToWrapper::HumanInboxRejected {
+            reason: HumanInboxRefusal::HumanPrincipalRequired,
+        };
+    }
+    match crate::human_inbox::list(st.store.connection(), filter, limit) {
+        Ok((items, open_count)) => DaemonToWrapper::HumanInbox { items, open_count },
+        Err(error) => {
+            warn!("boîte humaine illisible: {error}");
+            DaemonToWrapper::HumanInboxRejected {
+                reason: HumanInboxRefusal::StoreUnavailable,
+            }
+        }
+    }
+}
+
+fn handle_human_inbox_resolve(
+    state: &Arc<Mutex<DaemonState>>,
+    conn_id: &str,
+    version: u16,
+    item_id: &str,
+    choice: &str,
+) -> DaemonToWrapper {
+    use bridget_transport::protocol::HumanInboxRefusal;
+    if version != bridget_transport::protocol::HUMAN_INBOX_CONTRACT_VERSION {
+        return DaemonToWrapper::HumanInboxRejected {
+            reason: HumanInboxRefusal::UnsupportedVersion,
+        };
+    }
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(actor) = control_client_actor(&st, conn_id) else {
+        return DaemonToWrapper::HumanInboxRejected {
+            reason: HumanInboxRefusal::HumanPrincipalRequired,
+        };
+    };
+    let conn = st.store.connection();
+    match crate::human_inbox::resolve(conn, item_id, choice, actor, unix_now_secs()) {
+        Ok(Ok(item)) => {
+            info!("boîte humaine: item {item_id} tranché « {choice} » par {actor}");
+            let open_count = crate::human_inbox::open_count(conn).unwrap_or(0);
+            DaemonToWrapper::HumanInbox {
+                items: vec![item],
+                open_count,
+            }
+        }
+        Ok(Err(reason)) => DaemonToWrapper::HumanInboxRejected { reason },
+        Err(error) => {
+            warn!("boîte humaine inécrivable: {error}");
+            DaemonToWrapper::HumanInboxRejected {
+                reason: HumanInboxRefusal::StoreUnavailable,
+            }
+        }
+    }
+}
+
+fn handle_human_inbox_decisions(
+    state: &Arc<Mutex<DaemonState>>,
+    version: u16,
+    limit: u32,
+) -> DaemonToWrapper {
+    use bridget_transport::protocol::HumanInboxRefusal;
+    if version != bridget_transport::protocol::HUMAN_INBOX_CONTRACT_VERSION {
+        return DaemonToWrapper::HumanInboxRejected {
+            reason: HumanInboxRefusal::UnsupportedVersion,
+        };
+    }
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    match crate::human_inbox::pending_decisions(
+        st.store.connection(),
+        bridget_transport::protocol::HumanInboxProducer::Maicie,
+        limit,
+    ) {
+        Ok(decisions) => DaemonToWrapper::HumanInboxDecisionsBatch { decisions },
+        Err(error) => {
+            warn!("décisions humaines illisibles: {error}");
+            DaemonToWrapper::HumanInboxRejected {
+                reason: HumanInboxRefusal::StoreUnavailable,
+            }
+        }
+    }
+}
+
+fn handle_human_inbox_ack(
+    state: &Arc<Mutex<DaemonState>>,
+    version: u16,
+    decision_id: &str,
+) -> DaemonToWrapper {
+    use bridget_transport::protocol::HumanInboxRefusal;
+    if version != bridget_transport::protocol::HUMAN_INBOX_CONTRACT_VERSION {
+        return DaemonToWrapper::HumanInboxRejected {
+            reason: HumanInboxRefusal::UnsupportedVersion,
+        };
+    }
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    match crate::human_inbox::ack(st.store.connection(), decision_id, unix_now_secs()) {
+        Ok(Some(acked_at)) => DaemonToWrapper::HumanInboxAcked {
+            decision_id: decision_id.to_string(),
+            acked_at,
+        },
+        Ok(None) => DaemonToWrapper::HumanInboxRejected {
+            reason: HumanInboxRefusal::UnknownItem,
+        },
+        Err(error) => {
+            warn!("acquittement humain inécrivable: {error}");
+            DaemonToWrapper::HumanInboxRejected {
+                reason: HumanInboxRefusal::StoreUnavailable,
+            }
+        }
+    }
+}
+
 fn handle_wrapper_message(
     conn_id: &str,
     msg: WrapperToDaemon,
@@ -8525,9 +9023,36 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::GuichetClaim { .. }
                 | WrapperToDaemon::GuichetLookup { .. }
                 | WrapperToDaemon::GuichetReply { .. }
+                | WrapperToDaemon::HumanInboxDeposit { .. }
+                | WrapperToDaemon::HumanInboxDecisions { .. }
+                | WrapperToDaemon::HumanInboxAck { .. }
         );
         match st.connection_roles.get(conn_id) {
             Some(ConnectionRole::Service) => match &msg {
+                WrapperToDaemon::HumanInboxDeposit { .. }
+                | WrapperToDaemon::HumanInboxDecisions { .. }
+                | WrapperToDaemon::HumanInboxAck { .. }
+                    if !st.service_negotiations.contains_key(conn_id) =>
+                {
+                    Some(ServiceRefusal::NegotiationRequired)
+                }
+                WrapperToDaemon::HumanInboxDeposit { .. }
+                | WrapperToDaemon::HumanInboxDecisions { .. }
+                | WrapperToDaemon::HumanInboxAck { .. }
+                    if !st
+                        .service_negotiations
+                        .get(conn_id)
+                        .is_some_and(|negotiated| {
+                            negotiated
+                                .capabilities
+                                .contains(&ServiceCapability::HumanInboxV1)
+                        }) =>
+                {
+                    Some(ServiceRefusal::CapabilityRequired)
+                }
+                WrapperToDaemon::HumanInboxDeposit { .. }
+                | WrapperToDaemon::HumanInboxDecisions { .. }
+                | WrapperToDaemon::HumanInboxAck { .. } => None,
                 WrapperToDaemon::ServiceHello { .. }
                     if st.service_negotiations.contains_key(conn_id) =>
                 {
@@ -8679,7 +9204,12 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::Usage { .. }
                 | WrapperToDaemon::UsageWindow { .. }
                 | WrapperToDaemon::Domain { .. }
-                | WrapperToDaemon::Availability { .. } => {
+                | WrapperToDaemon::Availability { .. }
+                | WrapperToDaemon::ControlStateRead { .. }
+                | WrapperToDaemon::ControlHistory { .. }
+                | WrapperToDaemon::ControlStateSet { .. }
+                | WrapperToDaemon::HumanInboxList { .. }
+                | WrapperToDaemon::HumanInboxResolve { .. } => {
                     Some(ServiceRefusal::MessageOutsideServiceRole)
                 }
             },
@@ -8702,6 +9232,43 @@ fn handle_wrapper_message(
                 {
                     Some(ClientRefusal::AlreadyNegotiated)
                 }
+                WrapperToDaemon::ControlStateRead { .. }
+                | WrapperToDaemon::ControlHistory { .. }
+                | WrapperToDaemon::ControlStateSet { .. }
+                | WrapperToDaemon::HumanInboxList { .. }
+                | WrapperToDaemon::HumanInboxResolve { .. }
+                    if !st.client_negotiations.contains_key(conn_id) =>
+                {
+                    Some(ClientRefusal::NegotiationRequired)
+                }
+                WrapperToDaemon::ControlStateRead { .. } | WrapperToDaemon::ControlHistory { .. }
+                    if st.client_negotiations.get(conn_id).is_some_and(|negotiated| {
+                        negotiated.version != CLIENT_CONTRACT_VERSION
+                            || !(negotiated
+                                .capabilities
+                                .contains(&ClientCapability::ControlStateV1)
+                                || negotiated.capabilities.contains(&ClientCapability::Lookup))
+                    }) =>
+                {
+                    Some(ClientRefusal::CapabilityNotNegotiated)
+                }
+                WrapperToDaemon::ControlStateSet { .. }
+                | WrapperToDaemon::HumanInboxList { .. }
+                | WrapperToDaemon::HumanInboxResolve { .. }
+                    if st.client_negotiations.get(conn_id).is_some_and(|negotiated| {
+                        negotiated.version != CLIENT_CONTRACT_VERSION
+                            || !negotiated
+                                .capabilities
+                                .contains(&ClientCapability::ControlStateV1)
+                    }) =>
+                {
+                    Some(ClientRefusal::CapabilityNotNegotiated)
+                }
+                WrapperToDaemon::ControlStateRead { .. }
+                | WrapperToDaemon::ControlHistory { .. }
+                | WrapperToDaemon::ControlStateSet { .. }
+                | WrapperToDaemon::HumanInboxList { .. }
+                | WrapperToDaemon::HumanInboxResolve { .. } => None,
                 WrapperToDaemon::SendIdempotent { .. }
                 | WrapperToDaemon::Lookup { .. }
                 | WrapperToDaemon::ControlExecution { .. }
@@ -8838,7 +9405,10 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::Usage { .. }
                 | WrapperToDaemon::UsageWindow { .. }
                 | WrapperToDaemon::Domain { .. }
-                | WrapperToDaemon::Availability { .. } => {
+                | WrapperToDaemon::Availability { .. }
+                | WrapperToDaemon::HumanInboxDeposit { .. }
+                | WrapperToDaemon::HumanInboxDecisions { .. }
+                | WrapperToDaemon::HumanInboxAck { .. } => {
                     Some(ClientRefusal::MessageOutsideClientRole)
                 }
             },
@@ -8851,6 +9421,11 @@ fn handle_wrapper_message(
                         | WrapperToDaemon::ControlExecution { .. }
                         | WrapperToDaemon::ProjectRoundRequest { .. }
                         | WrapperToDaemon::ProjectRoundDispatch { .. }
+                        | WrapperToDaemon::ControlStateRead { .. }
+                        | WrapperToDaemon::ControlHistory { .. }
+                        | WrapperToDaemon::ControlStateSet { .. }
+                        | WrapperToDaemon::HumanInboxList { .. }
+                        | WrapperToDaemon::HumanInboxResolve { .. }
                 ) =>
             {
                 Some(ClientRefusal::ClientRoleRequired)
@@ -8864,6 +9439,61 @@ fn handle_wrapper_message(
 
     match msg {
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
+        WrapperToDaemon::ControlStateRead { version } => {
+            Some(handle_control_state_read(state, version))
+        }
+        WrapperToDaemon::ControlHistory { version, limit } => {
+            Some(handle_control_history(state, version, limit))
+        }
+        WrapperToDaemon::ControlStateSet {
+            version,
+            command_id,
+            expected_generation,
+            paused,
+            auto_objectives_cap,
+            reason,
+        } => Some(handle_control_state_set(
+            state,
+            conn_id,
+            version,
+            &command_id,
+            expected_generation,
+            paused,
+            auto_objectives_cap,
+            reason.as_deref(),
+        )),
+        WrapperToDaemon::HumanInboxDeposit {
+            version,
+            dedup_key,
+            kind,
+            subject,
+            context,
+            options,
+        } => Some(handle_human_inbox_deposit(
+            state, version, &dedup_key, kind, &subject, &context, &options,
+        )),
+        WrapperToDaemon::HumanInboxList {
+            version,
+            state: filter,
+            limit,
+        } => Some(handle_human_inbox_list(
+            state, conn_id, version, filter, limit,
+        )),
+        WrapperToDaemon::HumanInboxResolve {
+            version,
+            command_id: _,
+            item_id,
+            choice,
+        } => Some(handle_human_inbox_resolve(
+            state, conn_id, version, &item_id, &choice,
+        )),
+        WrapperToDaemon::HumanInboxDecisions { version, limit } => {
+            Some(handle_human_inbox_decisions(state, version, limit))
+        }
+        WrapperToDaemon::HumanInboxAck {
+            version,
+            decision_id,
+        } => Some(handle_human_inbox_ack(state, version, &decision_id)),
         WrapperToDaemon::RuntimeIngressHello { .. }
         | WrapperToDaemon::RuntimeIngressPreflight { .. } => {
             Some(DaemonToWrapper::RuntimeIngressRejected {
@@ -9899,6 +10529,40 @@ fn handle_wrapper_message(
                     ProjectRoundRefusal::BindingGenerationMismatch,
                     observed_at,
                 ));
+            }
+            // SPEC-087 : la pause du référent précède la politique du projet.
+            // Un réveil est un effet autonome ; la garde unique décide.
+            let control = {
+                let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                crate::referent_control::read(st.store.connection())
+            };
+            match control {
+                Ok(control) => {
+                    if let crate::referent_control::Admission::Deferred { motif } =
+                        crate::referent_control::admit_autonomous_effect(
+                            crate::referent_control::AutonomousEffect::ProjectRound,
+                            &control,
+                        )
+                    {
+                        info!(
+                            "ronde du projet {} différée: {motif}",
+                            request.project.project_id
+                        );
+                        return Some(project_round_dispatch_failure(
+                            &request,
+                            ProjectRoundRefusal::ControlPaused,
+                            observed_at,
+                        ));
+                    }
+                }
+                Err(error) => {
+                    warn!("état de contrôle illisible avant émission de ronde: {error}");
+                    return Some(project_round_dispatch_failure(
+                        &request,
+                        ProjectRoundRefusal::StoreUnavailable,
+                        observed_at,
+                    ));
+                }
             }
             if !policy.configured || !policy.enabled {
                 return Some(project_round_dispatch_failure(
@@ -10979,6 +11643,7 @@ fn handle_wrapper_message(
             let canonical_capabilities = matches!(
                 capabilities.as_slice(),
                 [] | [ServiceCapability::MaicieGuichet]
+                    | [ServiceCapability::HumanInboxV1]
                     | [ServiceCapability::ProjectRegistryV1]
                     | [
                         ServiceCapability::ProjectRegistryV1,
@@ -11220,6 +11885,112 @@ fn handle_wrapper_message(
                     },
                 });
             }
+            // SPEC-087 : seul le principal humain (relais UI enregistré sous
+            // l'identité humaine) peut porter une origine humaine ou un focus,
+            // et c'est le daemon qui fabrique l'origine, jamais le client.
+            let human_principal = {
+                let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                declared_name.as_deref() == Some(UI_HUMAN_AGENT_ID)
+                    && declared_instance_id.as_deref().is_some_and(|instance| {
+                        st.presences
+                            .get(instance)
+                            .is_some_and(|presence| presence.agent_type == "ui")
+                    })
+            };
+            let mut payload = payload;
+            let carries_human_claims = matches!(
+                &payload,
+                bridget_transport::protocol::ServiceRequestPayload::Delegate {
+                    origin: Some(_),
+                    ..
+                } | bridget_transport::protocol::ServiceRequestPayload::Delegate {
+                    focus: Some(_),
+                    ..
+                }
+            );
+            if carries_human_claims && !human_principal {
+                warn!("dépôt {request_id}: origine humaine ou focus refusés à {from}");
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::HumanOriginForbidden,
+                });
+            }
+            if human_principal
+                && let bridget_transport::protocol::ServiceRequestPayload::Delegate {
+                    origin,
+                    goal,
+                    ..
+                } = &mut payload
+            {
+                // Tout `origin` reçu est ignoré : le hash canonique se calcule
+                // sur le dépôt SANS origine (ADR-014, pas de hash récursif).
+                *origin = None;
+                let goal = goal.clone();
+                let without_origin = match encode(&WrapperToDaemon::ServiceRequest {
+                    version,
+                    issuer_scope: issuer_scope.clone(),
+                    request_id: request_id.clone(),
+                    issued_at,
+                    from: from.clone(),
+                    to: to.clone(),
+                    operation,
+                    payload: payload.clone(),
+                }) {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        return Some(DaemonToWrapper::ServiceRejected {
+                            reason: ServiceRefusal::InvalidEnvelope,
+                        });
+                    }
+                };
+                // Déterministe par (périmètre, request_id) : un rejeu du même
+                // dépôt refabrique la même origine et reste idempotent.
+                let message_id = format!(
+                    "hmo-{}",
+                    &bridget_transport::protocol::sha256_hex(
+                        format!("{issuer_scope}\n{request_id}").as_bytes()
+                    )[..32]
+                );
+                let observed = bridget_transport::protocol::ObservedHumanMessageFrame {
+                    message_id: message_id.clone(),
+                    ts: issued_at,
+                    sender: UI_HUMAN_SENDER.to_string(),
+                    target: "maicie".to_string(),
+                    body: goal.clone(),
+                };
+                let attestation = bridget_transport::protocol::HumanOriginAttestationFrame {
+                    version: 1,
+                    issuer_scope: issuer_scope.clone(),
+                    canonical_request_sha256: bridget_transport::protocol::sha256_hex(
+                        without_origin.as_bytes(),
+                    ),
+                    signature: bridget_transport::protocol::human_message_content_seal(&observed),
+                };
+                {
+                    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut human_message =
+                        bridget_core::BridgetMessage::new(UI_HUMAN_SENDER, "maicie", goal);
+                    human_message.id = message_id.clone();
+                    human_message.origin = Some(bridget_core::MessageOrigin::Human);
+                    let conv_key = format!("{}|{}", human_message.from, human_message.to);
+                    if let Err(error) = st.store.record_message(&human_message, &conv_key) {
+                        error!("ledger du message humain d'origine: {error}");
+                        return Some(DaemonToWrapper::ServiceRejected {
+                            reason: ServiceRefusal::TransitionInvalid,
+                        });
+                    }
+                }
+                if let bridget_transport::protocol::ServiceRequestPayload::Delegate {
+                    origin, ..
+                } = &mut payload
+                {
+                    *origin = Some(bridget_transport::protocol::DelegateOrigin::Human {
+                        message_id: message_id.clone(),
+                        observed,
+                        attestation,
+                    });
+                }
+                info!("dépôt {request_id}: origine humaine attestée ({message_id})");
+            }
             let canonical = match encode(&WrapperToDaemon::ServiceRequest {
                 version,
                 issuer_scope: issuer_scope.clone(),
@@ -11251,7 +12022,10 @@ fn handle_wrapper_message(
             let authorization_declared_from = deposit.from.clone();
             let authorization_request_id = deposit.request_id.clone();
             let authorization_canonical_request = deposit.canonical_bytes.clone();
-            let deposit_result = match mutation_action {
+            // SPEC-087 : pour le principal humain, l'attestation d'origine EST
+            // l'autorisation ; la garde du greffe, faite pour les agents, ne
+            // s'applique pas (ADR 027).
+            let deposit_result = match mutation_action.filter(|_| !human_principal) {
                 Some(action) => {
                     // `declared_name` et `declared_instance_id` viennent du
                     // Register de cette connexion. Ils réduisent les sources
@@ -11521,6 +12295,7 @@ fn handle_wrapper_message(
                             | ClientCapability::Lookup
                             | ClientCapability::ExecutionControlV1
                             | ClientCapability::ProjectRoundPolicyV1
+                            | ClientCapability::ControlStateV1
                     )
                 })
                 .collect();
@@ -13180,7 +13955,7 @@ fn handle_wrapper_message(
                 Some(bridget_core::MessageIntent::QueueOnly) => {
                     match st.execution_store.admit_message_submission(
                         &bridge_msg,
-                        0,
+                        crate::execution_store::ExecutionStore::queue_priority_for(&bridge_msg, 0),
                         unix_now_secs(),
                     ) {
                         Ok(admitted) => {
@@ -15599,7 +16374,11 @@ mod presence_tests {
             project_runtime_policy_path: None,
             project_resource_catalog_path: None,
         };
-        let _home_lock = HOME_REGISTRY_LOCK.lock().unwrap();
+        // Un test qui panique en tenant ce verrou ne doit pas empoisonner les
+        // suivants : on relit le verrou empoisonné plutôt que de propager.
+        let _home_lock = HOME_REGISTRY_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (managed_tx, _managed_rx) = mpsc::channel();
         let previous_home = std::env::var_os("HOME");
         // DaemonState::new charge le registre via HOME ; la fixture doit lui
@@ -17456,6 +18235,8 @@ mod presence_tests {
                 suite: bridget_transport::protocol::ServiceSuiteDeclaration::Aucune,
                 depends_on: Vec::new(),
                 references: Vec::new(),
+                origin: None,
+                focus: None,
             };
         let target = bridget_transport::protocol::ReviewTarget {
             target_ref: "origin/session-047-verdict-tete-reecrite".to_string(),
@@ -21511,6 +22292,132 @@ mod presence_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// SPEC-087 T013 : en pause, les paliers 1 et 2 sont différés avec le
+    /// motif `pause`, le palier 3 reste émis ; la reprise libère le rappel.
+    /// Mutant : forcer `admit_autonomous_effect` à admettre rend ce test rouge.
+    #[test]
+    fn spec_087_pause_differe_les_relances_mais_pas_le_palier_trois() {
+        let (mut state, config) = spec_087_state("pause-relances");
+        state
+            .store
+            .create_request("request-pause", "sender", "agent-2", 60)
+            .unwrap();
+        let started = Instant::now();
+        state.pending_replies.push(PendingReply {
+            msg_id: "request-pause".to_string(),
+            from: "sender".to_string(),
+            from_conn: "conn-sender".to_string(),
+            to: "agent-2".to_string(),
+            target_conn: "conn-1".to_string(),
+            timeout_secs: 60,
+            created_at: started,
+            escalation_level: 0,
+            deferred_level: None,
+        });
+        crate::referent_control::set(
+            state.store.connection(),
+            crate::referent_control::ControlMutation {
+                command_id: "pause-relances",
+                expected_generation: 0,
+                paused: Some(true),
+                auto_objectives_cap: None,
+                reason: None,
+                actor: "humain",
+                now: 1,
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+        let first = collect_reminder_actions(&mut state, started + Duration::from_secs(20));
+        assert!(
+            first.iter().any(|action| matches!(
+                action,
+                ReminderAction::Deferred {
+                    level: 1,
+                    reason: "pause",
+                    ..
+                }
+            )),
+            "palier 1 différé avec le motif pause"
+        );
+        assert!(
+            !first
+                .iter()
+                .any(|action| matches!(action, ReminderAction::Gentle { .. })),
+            "aucun rappel n'est émis en pause"
+        );
+        let second = collect_reminder_actions(&mut state, started + Duration::from_secs(41));
+        assert!(
+            !second
+                .iter()
+                .any(|action| matches!(action, ReminderAction::Firm { .. })),
+            "le palier 2 non plus"
+        );
+
+        crate::referent_control::set(
+            state.store.connection(),
+            crate::referent_control::ControlMutation {
+                command_id: "resume-relances",
+                expected_generation: 1,
+                paused: Some(false),
+                auto_objectives_cap: None,
+                reason: None,
+                actor: "humain",
+                now: 2,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        let resumed = collect_reminder_actions(&mut state, started + Duration::from_secs(42));
+        assert!(
+            resumed
+                .iter()
+                .any(|action| matches!(action, ReminderAction::Firm { .. })),
+            "la reprise libère le rappel différé"
+        );
+
+        // Palier 3 : l'échéance reste notifiée à l'émetteur, même en pause.
+        state
+            .store
+            .create_request("request-pause-3", "sender", "agent-2", 60)
+            .unwrap();
+        state.pending_replies.push(PendingReply {
+            msg_id: "request-pause-3".to_string(),
+            from: "sender".to_string(),
+            from_conn: "conn-sender".to_string(),
+            to: "agent-2".to_string(),
+            target_conn: "conn-1".to_string(),
+            timeout_secs: 60,
+            created_at: started,
+            escalation_level: 0,
+            deferred_level: None,
+        });
+        crate::referent_control::set(
+            state.store.connection(),
+            crate::referent_control::ControlMutation {
+                command_id: "pause-relances-2",
+                expected_generation: 2,
+                paused: Some(true),
+                auto_objectives_cap: None,
+                reason: None,
+                actor: "humain",
+                now: 3,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        let expired = collect_reminder_actions(&mut state, started + Duration::from_secs(120));
+        assert!(
+            expired.iter().any(|action| matches!(
+                action,
+                ReminderAction::Timeout { msg_id, .. } if msg_id == "request-pause-3"
+            )),
+            "le palier 3 est une information, pas un réveil"
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
     #[test]
     fn boucle_busy_persiste_les_reports_et_expire_une_seule_fois() {
         let (mut state, config) = state_with_registered_agent("busy-boucle");
@@ -21799,7 +22706,11 @@ mod presence_tests {
     #[test]
     fn spec_079_ack_puis_deux_redemarrages_rejouent_une_seule_continuation() {
         fn reopen_fixture_state(config: &DaemonConfig, home: &std::path::Path) -> DaemonState {
-            let _home_lock = HOME_REGISTRY_LOCK.lock().unwrap();
+            // Un test qui panique en tenant ce verrou ne doit pas empoisonner les
+            // suivants : on relit le verrou empoisonné plutôt que de propager.
+            let _home_lock = HOME_REGISTRY_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let previous_home = std::env::var_os("HOME");
             unsafe { std::env::set_var("HOME", home) };
             let (managed_tx, _managed_rx) = mpsc::channel();
@@ -22065,6 +22976,671 @@ mod presence_tests {
     }
 
     /// Redémarrage daemon simulé : aucune présence préalable, le wrapper
+    /// Fixture SPEC-087 : identique à `state_with_registered_agent`, mais
+    /// l'agent est enregistré sous un UUID v4, comme l'exige le routeur depuis
+    /// la session 081. L'ancienne fixture enregistre `agent-2` et échoue sur
+    /// `InvalidAgentId` : c'est la cause d'une partie des rouges de main.
+    pub(super) const SPEC_087_AGENT_ID: &str = "6f1c2a4e-3b5d-4c7e-8f90-1a2b3c4d5e6f";
+
+    pub(super) fn spec_087_state(label: &str) -> (DaemonState, DaemonConfig) {
+        let base = std::env::temp_dir().join(format!("bridget-{}-{}", label, std::process::id()));
+        let registry_home = base.join("home");
+        let fixture_root = FixtureRoot(registry_home.clone());
+        std::fs::create_dir_all(registry_home.join(".config/bridget")).unwrap();
+        let registry_file = registry_home.join(".config/bridget/agents.json");
+        std::fs::write(
+            &registry_file,
+            serde_json::json!({
+                "agents": {
+                    "claude": {
+                        "command": "/bin/sh",
+                        "protocol": "acp",
+                        "forbidden_env": [],
+                        "pass_env": []
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&registry_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let config = DaemonConfig {
+            socket_path: base.with_extension("sock"),
+            db_path: base.with_extension("db"),
+            log_path: base.with_extension("log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+            project_root_policy_path: None,
+            project_runtime_policy_path: None,
+            project_resource_catalog_path: None,
+        };
+        // Un test qui panique en tenant ce verrou ne doit pas empoisonner les
+        // suivants : on relit le verrou empoisonné plutôt que de propager.
+        let _home_lock = HOME_REGISTRY_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (managed_tx, _managed_rx) = mpsc::channel();
+        let previous_home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", &registry_home) };
+        let state_result = DaemonState::new(&config, managed_tx);
+        if let Some(home) = previous_home {
+            unsafe { std::env::set_var("HOME", home) };
+        } else {
+            unsafe { std::env::remove_var("HOME") };
+        }
+        let mut state = state_result.unwrap();
+        state.fixture_root = Some(fixture_root);
+        state
+            .router
+            .register(
+                SPEC_087_AGENT_ID,
+                &bridget_core::AgentType::Claude,
+                "conn-1",
+            )
+            .unwrap();
+        state
+            .conn_instances
+            .insert("conn-1".to_string(), "instance-1".to_string());
+        state.presences.insert(
+            "instance-1".to_string(),
+            Presence {
+                name: "agent-2".to_string(),
+                agent_type: "claude".to_string(),
+                host: "macbook".to_string(),
+                transport: "acp".to_string(),
+                channel: Some("unix".to_string()),
+                mode: Some(PresenceMode::Acp),
+                location: None,
+                journal_available: true,
+                os: "macOS".to_string(),
+                state: "connected".to_string(),
+                busy_since: None,
+                capacity_seen: Instant::now(),
+                link_seen: Instant::now(),
+                reconnect_count: 0,
+                model: None,
+                effort: None,
+                rate_limits: Default::default(),
+                served_model: None,
+                derived_domain: None,
+                domain: None,
+                dnd_until: None,
+                disk_space: None,
+            },
+        );
+        (state, config)
+    }
+
+    /// Ajoute une présence UI enregistrée sous l'identité humaine (T020).
+    fn spec_087_register_ui_presence(state: &mut DaemonState) {
+        state
+            .router
+            .register(
+                "conn-ui-id-placeholder",
+                &bridget_core::AgentType::Claude,
+                "conn-ui",
+            )
+            .ok();
+        state
+            .conn_names
+            .insert("conn-ui".to_string(), UI_HUMAN_AGENT_ID.to_string());
+        state
+            .conn_instances
+            .insert("conn-ui".to_string(), "instance-ui".to_string());
+        state.presences.insert(
+            "instance-ui".to_string(),
+            Presence {
+                name: UI_HUMAN_AGENT_ID.to_string(),
+                agent_type: "ui".to_string(),
+                host: "localhost".to_string(),
+                transport: "cli".to_string(),
+                channel: Some("ssh-unix".to_string()),
+                mode: Some(PresenceMode::Cli),
+                location: None,
+                journal_available: false,
+                os: "linux".to_string(),
+                state: "connected".to_string(),
+                busy_since: None,
+                capacity_seen: Instant::now(),
+                link_seen: Instant::now(),
+                reconnect_count: 0,
+                model: None,
+                effort: None,
+                rate_limits: Default::default(),
+                served_model: None,
+                derived_domain: None,
+                domain: None,
+                dnd_until: None,
+                disk_space: None,
+            },
+        );
+    }
+
+    fn spec_087_focus_request(from: &str, request_id: &str) -> WrapperToDaemon {
+        let payload = bridget_transport::protocol::ServiceRequestPayload::Delegate {
+            goal: "Travaille sur l’import CSV".to_string(),
+            review_target: None,
+            explicit_target: None,
+            required_tags: Vec::new(),
+            duration: bridget_transport::protocol::GuichetDurationClass::Normale,
+            suite: bridget_transport::protocol::ServiceSuiteDeclaration::Aucune,
+            depends_on: Vec::new(),
+            references: Vec::new(),
+            origin: None,
+            focus: Some(bridget_transport::protocol::DelegateFocus {
+                project_id: "project-087".to_string(),
+                on_conflict: None,
+            }),
+        };
+        WrapperToDaemon::ServiceRequest {
+            version: payload.required_contract_version(),
+            issuer_scope: crate::mcp::issuer_scope("bridget-ui-human-focus"),
+            request_id: request_id.to_string(),
+            issued_at: unix_now_secs(),
+            from: from.to_string(),
+            to: "maicie".to_string(),
+            operation: bridget_transport::protocol::ServiceRequestOperation::Delegate,
+            payload,
+        }
+    }
+
+    /// SPEC-087 T020 : le daemon fabrique l'origine humaine pour le principal
+    /// humain, de façon déterministe et scellée ; il la refuse à un agent.
+    #[test]
+    fn spec_087_origine_humaine_fabriquee_par_le_daemon_et_refusee_aux_agents() {
+        use bridget_transport::protocol::{DelegateOrigin, ServiceRequestPayload};
+        let (mut state, config) = spec_087_state("spec-087-origine");
+        spec_087_register_ui_presence(&mut state);
+        // L'agent déclare bien son propre nom : c'est la garde d'origine qui
+        // doit refuser, pas la cohérence d'émetteur.
+        state
+            .conn_names
+            .insert("conn-1".to_string(), SPEC_087_AGENT_ID.to_string());
+        let shared = Arc::new(Mutex::new(state));
+
+        // Un agent enregistré qui réclame un focus est refusé, rien n'est déposé.
+        let refused = handle_wrapper_message(
+            "conn-1",
+            spec_087_focus_request(SPEC_087_AGENT_ID, "focus-agent-1"),
+            &shared,
+        );
+        assert!(
+            matches!(
+                refused,
+                Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::HumanOriginForbidden
+                })
+            ),
+            "refus d'origine attendu, reçu {refused:?}"
+        );
+
+        // Le principal humain : dépôt accepté, origine fabriquée.
+        let first = handle_wrapper_message(
+            "conn-ui",
+            spec_087_focus_request(UI_HUMAN_AGENT_ID, "focus-humain-1"),
+            &shared,
+        );
+        let Some(DaemonToWrapper::GuichetResult { issue, .. }) = first else {
+            panic!("dépôt attendu, reçu {first:?}");
+        };
+        assert_ne!(issue, "canonical_bytes_mismatch");
+
+        // Rejeu du même dépôt : même origine, donc pas de divergence d'enveloppe.
+        let replay = handle_wrapper_message(
+            "conn-ui",
+            spec_087_focus_request(UI_HUMAN_AGENT_ID, "focus-humain-1"),
+            &shared,
+        );
+        let Some(DaemonToWrapper::GuichetResult { issue, .. }) = replay else {
+            panic!("rejeu attendu, reçu {replay:?}");
+        };
+        assert_ne!(
+            issue, "canonical_bytes_mismatch",
+            "l'origine doit être déterministe"
+        );
+
+        let mut st = shared.lock().unwrap();
+        let now = unix_now_secs();
+        let claim = match st.store.claim_next_guichet("maicie-test", now).unwrap() {
+            crate::store::GuichetNext::Claimed(claim) => claim,
+            other => panic!("dépôt relevable attendu: {other:?}"),
+        };
+        let canonical = String::from_utf8(claim.canonical_request.clone()).unwrap();
+        let WrapperToDaemon::ServiceRequest { payload, .. } = decode(&canonical).unwrap() else {
+            panic!("dépôt guichet attendu");
+        };
+        let ServiceRequestPayload::Delegate {
+            origin:
+                Some(DelegateOrigin::Human {
+                    message_id,
+                    observed,
+                    attestation,
+                }),
+            focus: Some(focus),
+            goal,
+            ..
+        } = payload
+        else {
+            panic!("origine humaine et focus attendus");
+        };
+        assert!(message_id.starts_with("hmo-"));
+        assert_eq!(observed.message_id, message_id);
+        assert_eq!(observed.sender, UI_HUMAN_SENDER);
+        assert_eq!(observed.target, "maicie");
+        assert_eq!(observed.body, goal);
+        assert_eq!(focus.project_id, "project-087");
+        assert_eq!(
+            attestation.signature,
+            bridget_transport::protocol::human_message_content_seal(&observed),
+            "le scellé se recalcule à l'identique côté Maicie"
+        );
+        assert_eq!(attestation.canonical_request_sha256.len(), 64);
+        let ledger_rows: i64 = st
+            .store
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM ledger WHERE id = ?1 AND sender = ?2 AND target = 'maicie'",
+                rusqlite::params![message_id, UI_HUMAN_SENDER],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(ledger_rows, 1, "le message humain d'origine est au ledger");
+        assert!(
+            claim.authorization_attestation.is_none(),
+            "pas de garde du greffe pour le principal humain"
+        );
+        drop(st);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    /// SPEC-087 T048 : remplacer une route humaine encore vivante dépose une
+    /// alerte ; remplacer une route morte ne dépose rien.
+    #[test]
+    fn spec_087_reprise_d_une_route_humaine_vivante_est_signalee() {
+        let (mut state, config) = spec_087_state("spec-087-route");
+        spec_087_register_ui_presence(&mut state);
+        // Rend la route routable sous l'identité humaine avec un écrivain.
+        state.router.unregister_by_conn("conn-ui");
+        state
+            .router
+            .register(
+                UI_HUMAN_AGENT_ID,
+                &bridget_core::AgentType::Claude,
+                "conn-ui",
+            )
+            .unwrap();
+        let (ui_writer, _ui_reader) = control_socket("spec-087-route-ui");
+        state.connections.insert("conn-ui".to_string(), ui_writer);
+        state
+            .conn_instances
+            .insert("conn-ui-2".to_string(), "instance-ui-2".to_string());
+        state.replace_stale_ui_human_route("conn-ui-2", "ui", UI_HUMAN_AGENT_ID);
+        let (items, open) = crate::human_inbox::list(
+            state.store.connection(),
+            bridget_transport::protocol::HumanInboxListFilter::Open,
+            10,
+        )
+        .unwrap();
+        assert_eq!(open, 1, "une route vivante remplacée est signalée");
+        assert_eq!(
+            items[0].kind,
+            bridget_transport::protocol::HumanInboxKind::HumanRouteReplaced
+        );
+        assert!(items[0].context.contains("instance-ui-2"));
+
+        // Route morte : présence hors fenêtre de rétention, aucune alerte.
+        state
+            .router
+            .register(
+                UI_HUMAN_AGENT_ID,
+                &bridget_core::AgentType::Claude,
+                "conn-ui-3",
+            )
+            .unwrap();
+        let (dead_writer, _dead_reader) = control_socket("spec-087-route-dead");
+        state
+            .connections
+            .insert("conn-ui-3".to_string(), dead_writer);
+        state
+            .conn_instances
+            .insert("conn-ui-3".to_string(), "instance-ui-3".to_string());
+        let mut stale = state.presences.get("instance-ui").cloned().unwrap();
+        stale.link_seen = Instant::now() - PRESENCE_RETENTION - Duration::from_secs(1);
+        state.presences.insert("instance-ui-3".to_string(), stale);
+        state.replace_stale_ui_human_route("conn-ui-4", "ui", UI_HUMAN_AGENT_ID);
+        assert_eq!(
+            crate::human_inbox::open_count(state.store.connection()).unwrap(),
+            1,
+            "une route morte remplacée ne produit rien"
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    /// SPEC-087 T019 : la pause survit à la reconstruction de l'état du daemon
+    /// sur la même base.
+    #[test]
+    fn spec_087_pause_survit_a_la_reconstruction_de_l_etat() {
+        let (state, config) = spec_087_state("spec-087-persist");
+        crate::referent_control::set(
+            state.store.connection(),
+            crate::referent_control::ControlMutation {
+                command_id: "pause-persist",
+                expected_generation: 0,
+                paused: Some(true),
+                auto_objectives_cap: Some(3),
+                reason: Some("nuit"),
+                actor: "humain",
+                now: 42,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        drop(state);
+        let (managed_tx, _managed_rx) = mpsc::channel();
+        // Un test qui panique en tenant ce verrou ne doit pas empoisonner les
+        // suivants : on relit le verrou empoisonné plutôt que de propager.
+        let _home_lock = HOME_REGISTRY_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let rebuilt = DaemonState::new(&config, managed_tx).unwrap();
+        let control = crate::referent_control::read(rebuilt.store.connection()).unwrap();
+        assert!(control.paused);
+        assert_eq!(control.auto_objectives_cap, 3);
+        assert_eq!(control.pause_reason.as_deref(), Some("nuit"));
+        assert_eq!(control.generation, 1);
+        drop(rebuilt);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    /// SPEC-087 T042 : un agent qui agit par ses outils déclarés (client MCP,
+    /// capacités `[SendIdempotent]`) ne peut ni muter l'état de contrôle, ni
+    /// trancher la boîte, ni fabriquer une origine humaine.
+    #[test]
+    fn spec_087_un_agent_par_ses_outils_declares_ne_mute_rien() {
+        use bridget_transport::protocol::{ControlStateRefusal, HumanInboxRefusal};
+        let (mut state, config) = spec_087_state("spec-087-adverse");
+        state
+            .conn_names
+            .insert("conn-1".to_string(), SPEC_087_AGENT_ID.to_string());
+        let shared = Arc::new(Mutex::new(state));
+        // Négociation client à la façon de la façade MCP.
+        assert!(matches!(
+            handle_wrapper_message(
+                "mcp-client",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted { .. })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "mcp-client",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: crate::mcp::issuer_scope("instance-agent-2"),
+                    capabilities: vec![ClientCapability::SendIdempotent],
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientWelcome { .. })
+        ));
+        // Mutation de l'état : capacité non négociée.
+        assert!(matches!(
+            handle_wrapper_message(
+                "mcp-client",
+                WrapperToDaemon::ControlStateSet {
+                    version: 1,
+                    command_id: "adverse-1".to_string(),
+                    expected_generation: 0,
+                    paused: Some(false),
+                    auto_objectives_cap: Some(50),
+                    reason: None,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientRejected {
+                reason: ClientRefusal::CapabilityNotNegotiated
+            })
+        ));
+        // Même avec la capacité, un périmètre d'émetteur non humain est refusé.
+        assert!(matches!(
+            handle_wrapper_message(
+                "cap-client",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted { .. })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "cap-client",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: crate::mcp::issuer_scope("instance-agent-2"),
+                    capabilities: vec![ClientCapability::ControlStateV1],
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientWelcome { .. })
+        ));
+        let set_attempt = handle_wrapper_message(
+            "cap-client",
+            WrapperToDaemon::ControlStateSet {
+                version: 1,
+                command_id: "adverse-2".to_string(),
+                expected_generation: 0,
+                paused: Some(true),
+                auto_objectives_cap: None,
+                reason: None,
+            },
+            &shared,
+        );
+        assert!(
+            matches!(
+                set_attempt,
+                Some(DaemonToWrapper::ControlStateRejected {
+                    reason: ControlStateRefusal::HumanPrincipalRequired
+                })
+            ),
+            "refus du principal attendu, reçu {set_attempt:?}"
+        );
+        assert!(matches!(
+            handle_wrapper_message(
+                "cap-client",
+                WrapperToDaemon::HumanInboxResolve {
+                    version: 1,
+                    command_id: "adverse-3".to_string(),
+                    item_id: "quelconque".to_string(),
+                    choice: "ack".to_string(),
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::HumanInboxRejected {
+                reason: HumanInboxRefusal::HumanPrincipalRequired
+            })
+        ));
+        // Origine humaine forgée depuis une connexion d'agent enregistrée.
+        let forged = spec_087_focus_request(SPEC_087_AGENT_ID, "adverse-4");
+        assert!(matches!(
+            handle_wrapper_message("conn-1", forged, &shared),
+            Some(DaemonToWrapper::ServiceRejected {
+                reason: ServiceRefusal::HumanOriginForbidden
+            })
+        ));
+        let st = shared.lock().unwrap();
+        let control = crate::referent_control::read(st.store.connection()).unwrap();
+        assert!(!control.paused, "rien n'a été écrit");
+        assert_eq!(control.auto_objectives_cap, 5);
+        assert_eq!(
+            crate::human_inbox::open_count(st.store.connection()).unwrap(),
+            0
+        );
+        assert!(
+            matches!(
+                st.store.connection().query_row(
+                    "SELECT COUNT(*) FROM guichet_requests",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                ),
+                Ok(0)
+            ),
+            "aucun dépôt au guichet"
+        );
+        drop(st);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    /// SPEC-087 T012 : la pause précède la politique de ronde. Mutant : forcer
+    /// `admit_autonomous_effect` à admettre rend ce test rouge (première
+    /// assertion `ControlPaused`).
+    #[test]
+    fn spec_087_pause_differe_la_ronde_puis_la_reprise_la_livre() {
+        let (mut state, config) = spec_087_state("spec-087-project-round");
+        state.registry =
+            AgentRegistry::from_json("{}", "/tmp/spec-087-project-round-agents.json").unwrap();
+        state.router.rename("conn-1", "bridget").unwrap();
+        state
+            .conn_names
+            .insert("conn-1".to_string(), "bridget".to_string());
+        state.presences.get_mut("instance-1").unwrap().name = "bridget".to_string();
+        let (target_writer, mut target_reader) = control_socket("spec-087-project-round");
+        state
+            .connections
+            .insert("conn-1".to_string(), target_writer);
+        state
+            .peer_uids
+            .insert("round-client".to_string(), unsafe { libc::geteuid() });
+        let now = unix_now_secs();
+        let occurrence_at = now - now.rem_euclid(PROJECT_ROUND_INTERVAL_SECS);
+        state
+            .store
+            .bind_project_registration(
+                "register-project-round-087",
+                "project-087",
+                "/srv/projects/project-087",
+                now - 2,
+            )
+            .unwrap();
+        state
+            .store
+            .apply_project_round_mutation(
+                "enable-project-round-087",
+                ProjectRoundOperation::Enable,
+                "project-087",
+                1,
+                now - 1,
+            )
+            .unwrap();
+        crate::referent_control::set(
+            state.store.connection(),
+            crate::referent_control::ControlMutation {
+                command_id: "pause-087",
+                expected_generation: 0,
+                paused: Some(true),
+                auto_objectives_cap: None,
+                reason: Some("test"),
+                actor: "humain",
+                now,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_wrapper_message(
+                "round-client",
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "round-client",
+                WrapperToDaemon::ClientHello {
+                    contract_version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: crate::mcp::issuer_scope("project-round-test-087"),
+                    capabilities: vec![ClientCapability::ProjectRoundPolicyV1],
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ClientWelcome { .. })
+        ));
+        let request = ProjectRoundDispatchRequest {
+            contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
+            occurrence_at,
+            project: ProjectReference {
+                project_id: "project-087".to_string(),
+                binding_generation: 1,
+            },
+        };
+        assert!(matches!(
+            handle_wrapper_message(
+                "round-client",
+                WrapperToDaemon::ProjectRoundDispatch {
+                    request: request.clone(),
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ProjectRoundDispatchOutcome { outcome })
+                if outcome.reason == Some(ProjectRoundRefusal::ControlPaused)
+                    && outcome.issue.is_none()
+        ));
+        {
+            let mut state = shared.lock().unwrap();
+            assert!(
+                state
+                    .idempotency
+                    .dispatching_deliveries_for_instance("instance-1", now)
+                    .unwrap()
+                    .is_empty(),
+                "aucune remise ne part pendant la pause"
+            );
+            crate::referent_control::set(
+                state.store.connection(),
+                crate::referent_control::ControlMutation {
+                    command_id: "resume-087",
+                    expected_generation: 1,
+                    paused: Some(false),
+                    auto_objectives_cap: None,
+                    reason: None,
+                    actor: "humain",
+                    now,
+                },
+            )
+            .unwrap()
+            .unwrap();
+        }
+        // Après la reprise, la garde ne refuse plus : la suite du chemin (routage
+        // de `bridget-round` vers `bridget`) relève de la ronde elle-même, hors
+        // de ce lot.
+        assert!(matches!(
+            handle_wrapper_message(
+                "round-client",
+                WrapperToDaemon::ProjectRoundDispatch { request },
+                &shared,
+            ),
+            Some(DaemonToWrapper::ProjectRoundDispatchOutcome { outcome })
+                if outcome.reason != Some(ProjectRoundRefusal::ControlPaused)
+        ));
+        drop(target_reader);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
     #[test]
     fn spec_079_tick_global_ne_livre_que_la_politique_projet_active() {
         let (mut state, config) = state_with_registered_agent("spec-079-project-round");
@@ -22277,7 +23853,11 @@ mod presence_tests {
             project_runtime_policy_path: None,
             project_resource_catalog_path: None,
         };
-        let _home_lock = HOME_REGISTRY_LOCK.lock().unwrap();
+        // Un test qui panique en tenant ce verrou ne doit pas empoisonner les
+        // suivants : on relit le verrou empoisonné plutôt que de propager.
+        let _home_lock = HOME_REGISTRY_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous_home = std::env::var_os("HOME");
         unsafe { std::env::set_var("HOME", &registry_home) };
         let (managed_tx, _managed_rx) = mpsc::channel();

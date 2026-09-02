@@ -978,6 +978,8 @@ fn execute_maicie_delegate(
             suite,
             depends_on,
             references,
+            origin: None,
+            focus: None,
         },
     )
 }

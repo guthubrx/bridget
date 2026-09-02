@@ -302,6 +302,11 @@ struct UiRelayRuntime {
 
 struct UiHumanPresence {
     alive: Arc<AtomicBool>,
+    /// Écrivain de la connexion humaine : SPEC-087 y dépose les demandes de
+    /// focus, seules trames de service que le relais émet.
+    writer: Arc<Mutex<BufWriter<UnixStream>>>,
+    /// Une seule réponse de service attendue à la fois ; le lecteur la relaie.
+    pending_service_reply: Arc<Mutex<Option<std::sync::mpsc::Sender<DaemonToWrapper>>>>,
 }
 
 #[derive(Clone)]
@@ -453,9 +458,26 @@ fn open_human_presence(
         }
     });
 
+    let pending_service_reply: Arc<Mutex<Option<std::sync::mpsc::Sender<DaemonToWrapper>>>> =
+        Arc::new(Mutex::new(None));
+    let reader_pending = Arc::clone(&pending_service_reply);
+    let presence_writer = Arc::clone(&writer);
     let thread_alive = Arc::clone(&alive);
     thread::spawn(move || {
         while let Ok(event) = read_daemon(&mut reader) {
+            if matches!(
+                event,
+                DaemonToWrapper::GuichetResult { .. } | DaemonToWrapper::ServiceRejected { .. }
+            ) {
+                let sender = reader_pending
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
+                if let Some(sender) = sender {
+                    let _ = sender.send(event);
+                }
+                continue;
+            }
             match event {
                 DaemonToWrapper::DeliverIdempotent {
                     delivery_id,
@@ -483,7 +505,465 @@ fn open_human_presence(
         }
         thread_alive.store(false, Ordering::Release);
     });
-    Ok(UiHumanPresence { alive })
+    Ok(UiHumanPresence {
+        alive,
+        writer: presence_writer,
+        pending_service_reply,
+    })
+}
+
+/// Identité humaine canonique sous laquelle le relais s'enregistre ; le daemon
+/// n'accepte une origine humaine ou un focus que de cette connexion.
+const UI_HUMAN_PRINCIPAL_ID: &str = "550e8400-e29b-41d4-a716-4466554400f0";
+const FOCUS_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
+
+impl UiRelayRuntime {
+    /// Dépose une demande de focus au guichet Maicie par la connexion humaine
+    /// (SPEC-087). Le daemon fabrique l'origine humaine ; le relais n'en
+    /// déclare aucune.
+    fn submit_focus(
+        &self,
+        socket_path: &Path,
+        goal: &str,
+        project_id: &str,
+        on_conflict: Option<bridget_transport::protocol::FocusConflictPolicy>,
+    ) -> Result<DaemonToWrapper, UiError> {
+        self.ensure_human_presence(socket_path)?;
+        let (writer, pending) = {
+            let presence = self
+                .human_presence
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let Some(current) = presence.as_ref() else {
+                return Err(UiError::Protocol("présence humaine absente".to_string()));
+            };
+            (
+                Arc::clone(&current.writer),
+                Arc::clone(&current.pending_service_reply),
+            )
+        };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        {
+            let mut slot = pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if slot.is_some() {
+                return Err(UiError::Protocol(
+                    "une demande de focus est déjà en cours".to_string(),
+                ));
+            }
+            *slot = Some(sender);
+        }
+        let request_id = format!("focus-{}", uuid::Uuid::new_v4().simple());
+        let payload = bridget_transport::protocol::ServiceRequestPayload::Delegate {
+            goal: goal.to_string(),
+            review_target: None,
+            explicit_target: None,
+            required_tags: Vec::new(),
+            duration: bridget_transport::protocol::GuichetDurationClass::Normale,
+            suite: bridget_transport::protocol::ServiceSuiteDeclaration::Aucune,
+            depends_on: Vec::new(),
+            references: Vec::new(),
+            origin: None,
+            focus: Some(bridget_transport::protocol::DelegateFocus {
+                project_id: project_id.to_string(),
+                on_conflict,
+            }),
+        };
+        let frame = WrapperToDaemon::ServiceRequest {
+            version: payload.required_contract_version(),
+            issuer_scope: crate::mcp::issuer_scope("bridget-ui-human-focus"),
+            request_id,
+            issued_at: now_secs(),
+            from: UI_HUMAN_PRINCIPAL_ID.to_string(),
+            to: "maicie".to_string(),
+            operation: bridget_transport::protocol::ServiceRequestOperation::Delegate,
+            payload,
+        };
+        let sent = {
+            let mut guard = writer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            send_daemon(&mut guard, &frame)
+        };
+        if let Err(error) = sent {
+            pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take();
+            self.invalidate_human_presence();
+            return Err(error);
+        }
+        match receiver.recv_timeout(FOCUS_REPLY_TIMEOUT) {
+            Ok(response) => Ok(response),
+            Err(_) => {
+                pending
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
+                Err(UiError::Protocol(
+                    "le daemon n’a pas répondu à la demande de focus dans le délai".to_string(),
+                ))
+            }
+        }
+    }
+}
+
+/// Connexion client du relais pour l'état de contrôle et la boîte humaine
+/// (SPEC-087) : négociée avec `ControlStateV1`, ce qui fait du relais le
+/// principal humain aux yeux du daemon. Une trame par connexion.
+fn control_request(
+    socket_path: &Path,
+    request: WrapperToDaemon,
+) -> Result<DaemonToWrapper, UiError> {
+    let stream = UnixStream::connect(socket_path)?;
+    let read_stream = stream.try_clone()?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Client,
+        },
+    )?;
+    match read_daemon(&mut reader)? {
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client,
+        } => {}
+        response => {
+            return Err(UiError::Protocol(format!(
+                "acceptation client attendue, reçu {response:?}"
+            )));
+        }
+    }
+    send_daemon(
+        &mut writer,
+        &WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: crate::mcp::issuer_scope("bridget-ui-control"),
+            capabilities: vec![ClientCapability::ControlStateV1],
+        },
+    )?;
+    match read_daemon(&mut reader)? {
+        DaemonToWrapper::ClientWelcome { capabilities, .. }
+            if capabilities.contains(&ClientCapability::ControlStateV1) => {}
+        response => {
+            return Err(UiError::Protocol(format!(
+                "contrat de contrôle attendu, reçu {response:?}"
+            )));
+        }
+    }
+    send_daemon(&mut writer, &request)?;
+    read_daemon(&mut reader)
+}
+
+type UiControlError = (u16, &'static str, String);
+
+fn control_state_json(
+    state: &bridget_transport::protocol::ControlStateFrame,
+    inbox_open_count: u32,
+) -> serde_json::Value {
+    serde_json::json!({
+        "version": UI_VERSION,
+        "generation": state.generation,
+        "paused": state.paused,
+        "paused_since": state.paused_since,
+        "paused_by": state.paused_by,
+        "pause_reason": state.pause_reason,
+        "auto_objectives_cap": state.auto_objectives_cap,
+        "updated_at": state.updated_at,
+        "inbox_open_count": inbox_open_count,
+        "summary": crate::referent_control::summary_line(state, now_secs()),
+    })
+}
+
+fn control_refusal_error(
+    reason: &bridget_transport::protocol::ControlStateRefusal,
+) -> UiControlError {
+    use bridget_transport::protocol::ControlStateRefusal;
+    match reason {
+        ControlStateRefusal::HumanPrincipalRequired => (
+            403,
+            "human_principal_required",
+            "Seul le référent peut modifier l’état de contrôle.".to_string(),
+        ),
+        ControlStateRefusal::GenerationMismatch { current } => (
+            409,
+            "generation_mismatch",
+            format!("L’état a changé entre-temps (génération {current}). Recharge la page."),
+        ),
+        ControlStateRefusal::BudgetOutOfRange { min, max } => (
+            400,
+            "budget_out_of_range",
+            format!("Le plafond doit être compris entre {min} et {max}."),
+        ),
+        ControlStateRefusal::NothingToChange => (
+            409,
+            "nothing_to_change",
+            "Rien à changer : l’état est déjà celui demandé.".to_string(),
+        ),
+        ControlStateRefusal::StoreUnavailable => (
+            503,
+            "store_unavailable",
+            "Le daemon ne peut pas lire son état de contrôle.".to_string(),
+        ),
+        ControlStateRefusal::UnsupportedVersion | ControlStateRefusal::CapabilityRequired => (
+            502,
+            "control_contract_mismatch",
+            "Le daemon ne parle pas ce contrat de contrôle. Redémarre-le sur le binaire courant."
+                .to_string(),
+        ),
+    }
+}
+
+fn get_control_state(config: &UiRelayConfig) -> Result<serde_json::Value, UiControlError> {
+    match control_request(
+        &config.daemon_socket,
+        WrapperToDaemon::ControlStateRead {
+            version: bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION,
+        },
+    ) {
+        Ok(DaemonToWrapper::ControlState {
+            state,
+            inbox_open_count,
+        }) => Ok(control_state_json(&state, inbox_open_count)),
+        Ok(DaemonToWrapper::ControlStateRejected { reason }) => Err(control_refusal_error(&reason)),
+        Ok(DaemonToWrapper::ClientRejected { .. }) => Err((
+            502,
+            "control_contract_mismatch",
+            "Le daemon refuse le contrat de contrôle. Redémarre-le sur le binaire courant."
+                .to_string(),
+        )),
+        Ok(response) => Err((502, "unexpected_response", format!("{response:?}"))),
+        Err(error) => Err((502, "daemon_unreachable", error.to_string())),
+    }
+}
+
+#[derive(Deserialize)]
+struct UiControlStateChangeV1 {
+    expected_generation: u64,
+    #[serde(default)]
+    paused: Option<bool>,
+    #[serde(default)]
+    auto_objectives_cap: Option<u32>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+fn post_control_state(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<serde_json::Value, UiControlError> {
+    let change: UiControlStateChangeV1 = serde_json::from_slice(body)
+        .map_err(|error| (400, "invalid_request", format!("corps invalide: {error}")))?;
+    match control_request(
+        &config.daemon_socket,
+        WrapperToDaemon::ControlStateSet {
+            version: bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION,
+            command_id: format!("control-ui-{}", uuid::Uuid::new_v4().simple()),
+            expected_generation: change.expected_generation,
+            paused: change.paused,
+            auto_objectives_cap: change.auto_objectives_cap,
+            reason: change.reason,
+        },
+    ) {
+        Ok(DaemonToWrapper::ControlState {
+            state,
+            inbox_open_count,
+        }) => Ok(control_state_json(&state, inbox_open_count)),
+        Ok(DaemonToWrapper::ControlStateRejected { reason }) => Err(control_refusal_error(&reason)),
+        Ok(response) => Err((502, "unexpected_response", format!("{response:?}"))),
+        Err(error) => Err((502, "daemon_unreachable", error.to_string())),
+    }
+}
+
+fn inbox_refusal_error(reason: &bridget_transport::protocol::HumanInboxRefusal) -> UiControlError {
+    use bridget_transport::protocol::HumanInboxRefusal;
+    match reason {
+        HumanInboxRefusal::HumanPrincipalRequired => (
+            403,
+            "human_principal_required",
+            "Seul le référent peut lire ou trancher la boîte de réception.".to_string(),
+        ),
+        HumanInboxRefusal::UnknownItem => {
+            (404, "unknown_item", "Cet item n’existe pas.".to_string())
+        }
+        HumanInboxRefusal::AlreadyResolved => (
+            409,
+            "already_resolved",
+            "Cet item a déjà été tranché.".to_string(),
+        ),
+        HumanInboxRefusal::ChoiceNotOffered => (
+            400,
+            "choice_not_offered",
+            "Ce choix n’est pas proposé pour cet item.".to_string(),
+        ),
+        HumanInboxRefusal::InvalidRequest => {
+            (400, "invalid_request", "Demande invalide.".to_string())
+        }
+        HumanInboxRefusal::StoreUnavailable => (
+            503,
+            "store_unavailable",
+            "Le daemon ne peut pas lire la boîte de réception.".to_string(),
+        ),
+        HumanInboxRefusal::UnsupportedVersion | HumanInboxRefusal::CapabilityRequired => (
+            502,
+            "control_contract_mismatch",
+            "Le daemon ne parle pas ce contrat de boîte. Redémarre-le sur le binaire courant."
+                .to_string(),
+        ),
+    }
+}
+
+fn inbox_items_json(
+    items: &[bridget_transport::protocol::HumanInboxItemFrame],
+    open_count: u32,
+) -> serde_json::Value {
+    let rendered: Vec<serde_json::Value> = items
+        .iter()
+        .map(|item| {
+            let context: serde_json::Value =
+                serde_json::from_str(&item.context).unwrap_or(serde_json::Value::Null);
+            serde_json::json!({
+                "id": item.id,
+                "kind": item.kind.as_sql(),
+                "subject": item.subject,
+                "context": context,
+                "options": item.options,
+                "state": item.state,
+                "producer": item.producer,
+                "created_at": item.created_at,
+                "resolved_at": item.resolved_at,
+                "occurrences": item.occurrences,
+                "decision": item.decision,
+                "acked_at": item.acked_at,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "version": UI_VERSION,
+        "open_count": open_count,
+        "items": rendered,
+    })
+}
+
+fn get_inbox(config: &UiRelayConfig, all: bool) -> Result<serde_json::Value, UiControlError> {
+    use bridget_transport::protocol::HumanInboxListFilter;
+    match control_request(
+        &config.daemon_socket,
+        WrapperToDaemon::HumanInboxList {
+            version: bridget_transport::protocol::HUMAN_INBOX_CONTRACT_VERSION,
+            state: if all {
+                HumanInboxListFilter::All
+            } else {
+                HumanInboxListFilter::Open
+            },
+            limit: 100,
+        },
+    ) {
+        Ok(DaemonToWrapper::HumanInbox { items, open_count }) => {
+            Ok(inbox_items_json(&items, open_count))
+        }
+        Ok(DaemonToWrapper::HumanInboxRejected { reason }) => Err(inbox_refusal_error(&reason)),
+        Ok(response) => Err((502, "unexpected_response", format!("{response:?}"))),
+        Err(error) => Err((502, "daemon_unreachable", error.to_string())),
+    }
+}
+
+#[derive(Deserialize)]
+struct UiInboxResolveV1 {
+    choice: String,
+}
+
+fn post_inbox_resolve(
+    config: &UiRelayConfig,
+    item_id: &str,
+    body: &[u8],
+) -> Result<serde_json::Value, UiControlError> {
+    let request: UiInboxResolveV1 = serde_json::from_slice(body)
+        .map_err(|error| (400, "invalid_request", format!("corps invalide: {error}")))?;
+    match control_request(
+        &config.daemon_socket,
+        WrapperToDaemon::HumanInboxResolve {
+            version: bridget_transport::protocol::HUMAN_INBOX_CONTRACT_VERSION,
+            command_id: format!("inbox-ui-{}", uuid::Uuid::new_v4().simple()),
+            item_id: item_id.to_string(),
+            choice: request.choice,
+        },
+    ) {
+        Ok(DaemonToWrapper::HumanInbox { items, open_count }) => {
+            Ok(inbox_items_json(&items, open_count))
+        }
+        Ok(DaemonToWrapper::HumanInboxRejected { reason }) => Err(inbox_refusal_error(&reason)),
+        Ok(response) => Err((502, "unexpected_response", format!("{response:?}"))),
+        Err(error) => Err((502, "daemon_unreachable", error.to_string())),
+    }
+}
+
+#[derive(Deserialize)]
+struct UiFocusRequestV1 {
+    text: String,
+    project_id: String,
+    #[serde(default)]
+    on_conflict: Option<String>,
+}
+
+fn post_control_focus(
+    config: &UiRelayConfig,
+    runtime: &UiRelayRuntime,
+    body: &[u8],
+) -> Result<serde_json::Value, UiControlError> {
+    use bridget_transport::protocol::{FocusConflictPolicy, ServiceRefusal};
+    let request: UiFocusRequestV1 = serde_json::from_slice(body)
+        .map_err(|error| (400, "invalid_request", format!("corps invalide: {error}")))?;
+    let text = request.text.trim();
+    if text.is_empty() || text.chars().count() > 4000 {
+        return Err((
+            400,
+            "invalid_request",
+            "Décris le travail en une phrase, au plus 4000 caractères.".to_string(),
+        ));
+    }
+    if request.project_id.trim().is_empty() {
+        return Err((400, "invalid_request", "Choisis un projet.".to_string()));
+    }
+    let on_conflict = match request.on_conflict.as_deref() {
+        None => None,
+        Some("replace") => Some(FocusConflictPolicy::Replace),
+        Some("queue") => Some(FocusConflictPolicy::Queue),
+        Some(other) => {
+            return Err((
+                400,
+                "invalid_request",
+                format!("on_conflict inconnu: {other}; attendu replace ou queue"),
+            ));
+        }
+    };
+    match runtime.submit_focus(
+        &config.daemon_socket,
+        text,
+        request.project_id.trim(),
+        on_conflict,
+    ) {
+        Ok(DaemonToWrapper::GuichetResult {
+            request_id, issue, ..
+        }) => Ok(serde_json::json!({
+            "version": UI_VERSION,
+            "request_id": request_id,
+            "issue": issue,
+            "message": "Demande déposée. Maicie l’ouvre à sa prochaine relève, deux minutes au plus.",
+        })),
+        Ok(DaemonToWrapper::ServiceRejected { reason }) => Err(match reason {
+            ServiceRefusal::HumanOriginForbidden => (
+                403,
+                "human_origin_forbidden",
+                "Seul le référent peut ouvrir un focus.".to_string(),
+            ),
+            other => (409, "focus_refused", format!("{other:?}")),
+        }),
+        Ok(response) => Err((502, "unexpected_response", format!("{response:?}"))),
+        Err(error) => Err((502, "daemon_unreachable", error.to_string())),
+    }
 }
 
 /// Serveur HTTP local sans état métier propre.
@@ -1716,7 +2196,83 @@ fn serve_connection(
     if request.query.get("token") != Some(&config.token) {
         return write_text(stream, 403, "jeton UI invalide");
     }
+    // SPEC-087 : résolution d'un item de boîte, chemin paramétré.
+    if request.method == "POST"
+        && let Some(item_id) = request
+            .path
+            .strip_prefix("/v1/inbox/")
+            .and_then(|rest| rest.strip_suffix("/resolve"))
+        && !item_id.is_empty()
+        && !item_id.contains('/')
+    {
+        return match post_inbox_resolve(config, item_id, &request.body) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        };
+    }
     match (request.method.as_str(), request.path.as_str()) {
+        ("GET", "/v1/control/state") => match get_control_state(config) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("POST", "/v1/control/state") => match post_control_state(config, &request.body) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("POST", "/v1/control/focus") => match post_control_focus(config, runtime, &request.body) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("GET", "/v1/inbox") => {
+            let all = request
+                .query
+                .get("state")
+                .is_some_and(|state| state == "all");
+            match get_inbox(config, all) {
+                Ok(response) => write_json(stream, 200, &response),
+                Err((status, code, message)) => write_json(
+                    stream,
+                    status,
+                    &UiSendErrorV1 {
+                        version: UI_VERSION,
+                        code,
+                        message,
+                    },
+                ),
+            }
+        }
         ("GET", "/") | ("GET", "/browser-panel") => {
             write_asset(stream, "text/html; charset=utf-8", UI_INDEX, if_none_match)
         }
@@ -4142,6 +4698,12 @@ fn project_round_service_unavailable() -> UiProjectError {
 
 fn project_round_refusal(reason: ProjectRoundRefusal) -> UiProjectError {
     match reason {
+        ProjectRoundRefusal::ControlPaused => (
+            409,
+            "control_paused",
+            "L’autonomie est en pause : aucune ronde n’est émise tant que le référent ne la reprend pas."
+                .to_string(),
+        ),
         ProjectRoundRefusal::ProjectNotFound => (
             404,
             "project_not_found",

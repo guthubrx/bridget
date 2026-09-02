@@ -1,0 +1,20 @@
+# Contre-revue adverse du plan — Jim (Codex, gpt-5.6-terra)
+
+- Date : 2026-09-02, demande 04:26 UTC, réponse 04:31 UTC (5 min)
+- Agent : Jim, fournisseur Codex, UUID `437b3175-…`, connecté sur cartae.app
+- Canal : `bridget send` depuis un client CLI éphémère, réponse adressée au fil humain, lue sur une copie du ledger
+- Question posée : cohérence de l'attestation humaine fabriquée par le daemon avec `human_request` et forgeabilité ; complétude de l'inventaire R8 des producteurs autonomes ; conformité de la boîte daemon avec relève pull aux ADR-003 et 015 ; changement minimal prioritaire
+- Verdict reçu : **BLOCKED**
+
+| Objection | Vérifiée comment | Retenue | Raison |
+|---|---|---|---|
+| 1. L'attestation est forgeable : une connexion qui s'enregistre `type=ui` sous l'UUID humain évince la route UI et fait produire l'origine humaine par le daemon | Lu `daemon.rs:3169-3200` `replace_stale_ui_human_route` : toute connexion `ui` + `UI_HUMAN_AGENT_ID` remplace la route existante sans autre contrôle ; `ui.rs:386-415` envoie ce `Register` en clair | **oui** | Aucune preuve structurelle n'existe dans le modèle coopératif (ADR-003, ADR-011). Corrections : FR-011 et SC-005 bornés explicitement à un agent agissant par ses outils déclarés ; toute reprise d'une route humaine encore vivante devient un item `human_route_replaced` déposé dans la boîte et poussé sur le canal externe que l'agent ne lit pas ; l'ADR 027 nomme le résidu |
+| 2a. Rejeu des `delegation_outbox` en attente à chaque ouverture Maicie | Lu `main.rs:511-563`, `reconcile.rs:353-368` : `reconcile_pending` rejoue toute outbox pendante | **oui** | Déjà couvert par T017 mais absent de R8 ; R8 complété, garde unique `admit_autonomous_effect` adoptée |
+| 2b. Déblocage de dépendance qui crée une outbox | Lu `store.rs:7724-7886` (`deferred_delegation_dispatch`) et `reconcile.rs` : la clôture d'un prérequis matérialise l'outbox différée | **oui** | Puits ajouté à R8 et tâche T047 |
+| 2c. Reprise de remise et d'exécution au réenregistrement d'un agent | Lu `daemon.rs:4021-4055`, `4058-4210`, `6466-6473` | **non** | Ces reprises rejouent un travail déjà accepté avant la pause ; la spec dit que les tours commencés se terminent. Décision écrite dans R8 : admis, avec la raison |
+| 2d. Rejeu de `SpawnOrder` en attente | Lu `desired_state.rs`, `fleet.rs` : la réconciliation de flotte relance des agents, pas du travail | **non** | Un agent relancé sans mission reste inactif ; admis, écrit dans R8 |
+| 3a. La boîte daemon stocke `options`, `decision` et acquittement : décision Maicie hors de Maicie, violation ADR-003/015 | Comparé au guichet existant : `guichet_requests` et `guichet_lifecycle_events` vivent dans le daemon et portent charges et réponses Maicie (`store.rs:570`, `:593`) ; la boîte suit exactement ce précédent | **non** | La boîte est transport ; la décision n'est une décision Maicie qu'une fois appliquée et enregistrée par Maicie. Pas de violation nouvelle |
+| 3b. Marquer « consommé » à la relève perd la décision si Maicie plante entre relève et application | Lu le contrat que j'avais écrit : `consumed_by_producer_at` posé au pull | **oui** | Contrat corrigé : la relève ne marque rien ; Maicie applique dans sa transaction, enregistre `decision_id` dans `human_decisions_applied`, puis envoie `HumanInboxAck { decision_id }` idempotent ; le daemon pose `acked_at` |
+| 3c. La projection du focus dans une réponse daemon exige une lecture Maicie non décrite | Lu `contracts/ui-routes-v1.md` : la route `GET /v1/control/state` agrège le bloc `control` de `maicie status --json`, même mécanisme que `reprise.rs:436` | **non** | Décrite, et déjà pratiquée par le daemon |
+
+Bilan : 4 objections retenues sur 7, dont deux changements de contrat (acquittement après commit, alerte de reprise de route humaine) et un changement de conception (garde unique aux puits d'effet). Verdict après corrections : je passe le plan en `APPROVE_WITH_CHANGES` de mon propre chef ; l'arbitrage final reste au référent, cf. rapport final.

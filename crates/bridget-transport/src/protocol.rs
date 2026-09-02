@@ -134,6 +134,11 @@ pub const COORDINATION_EVENTS_VERSION: u16 = 1;
 /// Version de la relève cursée de coordination. Elle complète, sans modifier,
 /// l'émission historique v1.
 pub const COORDINATION_STREAM_VERSION: u16 = 2;
+/// Version du contrat d'état de contrôle du référent (SPEC-087) : pause de
+/// l'autonomie et plafond d'objectifs auto-générés.
+pub const CONTROL_STATE_CONTRACT_VERSION: u16 = 1;
+/// Version du contrat de boîte de réception humaine (SPEC-087).
+pub const HUMAN_INBOX_CONTRACT_VERSION: u16 = 1;
 
 /// Capacité optionnelle du client idempotent. L'énumération fermée évite une
 /// dégradation silencieuse lorsqu'un client demande une capacité inconnue.
@@ -144,6 +149,9 @@ pub enum ClientCapability {
     Lookup,
     ExecutionControlV1,
     ProjectRoundPolicyV1,
+    /// Lecture et mutation de l'état de contrôle du référent, lecture et
+    /// résolution de la boîte de réception. La façade MCP ne la demande jamais.
+    ControlStateV1,
 }
 
 /// Commande neutre et versionnée du plan de contrôle.
@@ -278,6 +286,9 @@ pub enum ServiceCapability {
     /// Relève bornée et cursée des faits 016. La v1 reste disponible pour les
     /// consommateurs qui n'ont besoin que du rejeu initial historique.
     CoordinationEventsV2,
+    /// Dépôt d'items dans la boîte de réception humaine, relève et
+    /// acquittement des décisions du référent (SPEC-087).
+    HumanInboxV1,
 }
 
 /// Backend d'exécution admis par le registre de projets.
@@ -683,6 +694,8 @@ pub enum ProjectRoundRefusal {
     BindingGenerationMismatch,
     EnvelopeMismatch,
     StoreUnavailable,
+    /// La pause de l'autonomie est active : aucun réveil n'est émis (SPEC-087).
+    ControlPaused,
 }
 
 /// Résultat opératoire fermé du dernier passage effectivement admis par la
@@ -878,7 +891,9 @@ pub enum ServiceRefusal {
     ServiceRoleRequired,
     NegotiationRequired,
     AlreadyNegotiated,
-    UnsupportedVersion { supported_versions: Vec<u16> },
+    UnsupportedVersion {
+        supported_versions: Vec<u16>,
+    },
     InvalidIssuerScope,
     ReservedServiceRequired,
     InvalidEnvelope,
@@ -893,6 +908,9 @@ pub enum ServiceRefusal {
     InvalidIssuedAt,
     FrameTooLarge,
     GreffeAuthorizationDenied,
+    /// Une origine humaine ou un focus a été fourni par un émetteur qui n'est
+    /// pas le principal humain. Seul le daemon fabrique cette origine.
+    HumanOriginForbidden,
 }
 
 /// Opérations fermées que Bridget peut déposer dans le guichet Maicie.
@@ -1011,6 +1029,296 @@ fn valid_git_branch(branch: &str) -> bool {
             .all(|part| !part.is_empty() && !part.starts_with('.') && !part.ends_with(".lock"))
 }
 
+/// Message humain tel que le daemon l'a observé au ledger avant de fabriquer
+/// l'attestation d'origine (SPEC-087). Ce n'est pas une preuve d'identité :
+/// c'est le fait causal scellé, pour qu'il ne soit ni inventé ni rejoué.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObservedHumanMessageFrame {
+    pub message_id: String,
+    pub ts: i64,
+    pub sender: String,
+    pub target: String,
+    pub body: String,
+}
+
+/// SHA-256 en hexadécimal minuscule.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Scellé du contenu d'un message humain observé. Même algorithme que
+/// `maicie::domain::human_message_content_seal` (préfixe, champs préfixés par
+/// leur longueur, horodatage en big-endian) : le daemon scelle, Maicie
+/// vérifie, et les deux doivent produire le même octet.
+pub fn human_message_content_seal(observed: &ObservedHumanMessageFrame) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"maicie/human-origin-seal/v1");
+    for field in [
+        observed.message_id.as_bytes(),
+        observed.sender.as_bytes(),
+        observed.target.as_bytes(),
+        observed.body.as_bytes(),
+    ] {
+        digest.update((field.len() as u64).to_be_bytes());
+        digest.update(field);
+    }
+    digest.update(observed.ts.to_be_bytes());
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Attestation d'origine humaine portée par un dépôt de délégation. Elle est
+/// fabriquée uniquement par le daemon et rejouée par Maicie contre ses cinq
+/// vérifications (`ObjectiveOpeningPermit::human_request`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanOriginAttestationFrame {
+    pub version: u16,
+    pub issuer_scope: String,
+    pub canonical_request_sha256: String,
+    pub signature: String,
+}
+
+/// Provenance fermée d'un dépôt de délégation. Absente : ouverture automatique.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DelegateOrigin {
+    Human {
+        message_id: String,
+        observed: ObservedHumanMessageFrame,
+        attestation: HumanOriginAttestationFrame,
+    },
+}
+
+/// Conduite quand un focus existe déjà au moment d'en demander un autre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FocusConflictPolicy {
+    Replace,
+    Queue,
+}
+
+/// Demande de focus : l'objectif ouvert devient prioritaire pour ce projet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegateFocus {
+    pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_conflict: Option<FocusConflictPolicy>,
+}
+
+/// État de contrôle du référent, projeté par le daemon (SPEC-087).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlStateFrame {
+    pub version: u16,
+    pub generation: u64,
+    pub paused: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_since: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_reason: Option<String>,
+    pub auto_objectives_cap: u32,
+    pub updated_at: i64,
+}
+
+/// Ligne du journal des mutations de contrôle, relisible par la CLI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlEventFrame {
+    pub at: i64,
+    pub actor: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub generation_after: u64,
+}
+
+/// Refus fermé d'une mutation de l'état de contrôle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ControlStateRefusal {
+    HumanPrincipalRequired,
+    GenerationMismatch { current: u64 },
+    BudgetOutOfRange { min: u32, max: u32 },
+    NothingToChange,
+    StoreUnavailable,
+    UnsupportedVersion,
+    CapabilityRequired,
+}
+
+/// Type fermé d'un item de la boîte de réception humaine.
+///
+/// Le libellé SQL est dérivé du nom de fil par serde : une seule source pour
+/// le `CHECK (kind IN (…))` de la table et pour la trame. `ALL` reste la seule
+/// liste littérale ; `as_sql` est exhaustif par construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HumanInboxKind {
+    InterventionRequired,
+    ChainExhausted,
+    ReviewVerdictPending,
+    ActivationApproval,
+    BudgetReached,
+    ReplyDebt,
+    FocusWaitingAgent,
+    ObjectVanished,
+    HumanRouteReplaced,
+}
+
+impl HumanInboxKind {
+    pub const ALL: [Self; 9] = [
+        Self::InterventionRequired,
+        Self::ChainExhausted,
+        Self::ReviewVerdictPending,
+        Self::ActivationApproval,
+        Self::BudgetReached,
+        Self::ReplyDebt,
+        Self::FocusWaitingAgent,
+        Self::ObjectVanished,
+        Self::HumanRouteReplaced,
+    ];
+
+    /// Libellé de fil et de colonne SQL, identique par construction.
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            Self::InterventionRequired => "intervention_required",
+            Self::ChainExhausted => "chain_exhausted",
+            Self::ReviewVerdictPending => "review_verdict_pending",
+            Self::ActivationApproval => "activation_approval",
+            Self::BudgetReached => "budget_reached",
+            Self::ReplyDebt => "reply_debt",
+            Self::FocusWaitingAgent => "focus_waiting_agent",
+            Self::ObjectVanished => "object_vanished",
+            Self::HumanRouteReplaced => "human_route_replaced",
+        }
+    }
+
+    /// Clause `IN ('…', …)` prête pour un `CHECK`, dérivée de `ALL`.
+    pub fn sql_in_clause() -> String {
+        let quoted: Vec<String> = Self::ALL
+            .iter()
+            .map(|kind| format!("'{}'", kind.as_sql()))
+            .collect();
+        format!("IN ({})", quoted.join(", "))
+    }
+
+    pub fn from_sql(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_sql() == value)
+    }
+}
+
+/// État fermé d'un item de boîte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HumanInboxState {
+    Open,
+    Resolved,
+    ClosedSelf,
+}
+
+/// Producteur d'un item : celui qui relèvera la décision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HumanInboxProducer {
+    Daemon,
+    Maicie,
+}
+
+/// Référence vers l'objet concerné par un item. Tous les champs sont
+/// optionnels : un item de reprise de route n'a ni objectif ni délégation.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanInboxSubject {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objective_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+}
+
+/// Décision prise par le référent sur un item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanInboxDecision {
+    pub decision_id: String,
+    pub choice: String,
+    pub actor: String,
+    pub at: i64,
+}
+
+/// Item de boîte projeté vers un client humain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanInboxItemFrame {
+    pub id: String,
+    pub dedup_key: String,
+    pub kind: HumanInboxKind,
+    pub subject: HumanInboxSubject,
+    /// Résumé lisible et faits utiles, texte JSON borné par le daemon.
+    pub context: String,
+    pub options: Vec<String>,
+    pub state: HumanInboxState,
+    pub producer: HumanInboxProducer,
+    pub created_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_at: Option<i64>,
+    pub occurrences: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<HumanInboxDecision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acked_at: Option<i64>,
+}
+
+/// Décision non encore acquittée par son producteur.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanInboxPendingDecision {
+    pub decision_id: String,
+    pub item_id: String,
+    pub dedup_key: String,
+    pub kind: HumanInboxKind,
+    pub subject: HumanInboxSubject,
+    pub choice: String,
+    pub at: i64,
+}
+
+/// Filtre de liste de la boîte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HumanInboxListFilter {
+    Open,
+    All,
+}
+
+/// Refus fermé d'une opération de boîte.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HumanInboxRefusal {
+    HumanPrincipalRequired,
+    CapabilityRequired,
+    UnsupportedVersion,
+    InvalidRequest,
+    UnknownItem,
+    AlreadyResolved,
+    ChoiceNotOffered,
+    StoreUnavailable,
+}
+
 /// Charge canonique d'un dépôt de guichet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -1040,6 +1348,12 @@ pub enum ServiceRequestPayload {
         depends_on: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         references: Vec<String>,
+        /// Fabriquée par le daemon pour le principal humain ; refusée sinon.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<DelegateOrigin>,
+        /// Demande de focus, valide uniquement avec une origine humaine.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        focus: Option<DelegateFocus>,
     },
     RegistreAdd {
         line: String,
@@ -1060,7 +1374,11 @@ impl ServiceRequestPayload {
             Self::Delegate {
                 review_target: Some(_),
                 ..
-            } => REVIEW_DELEGATE_CONTRACT_VERSION,
+            }
+            | Self::Delegate {
+                origin: Some(_), ..
+            }
+            | Self::Delegate { focus: Some(_), .. } => REVIEW_DELEGATE_CONTRACT_VERSION,
             _ => SERVICE_CONTRACT_VERSION,
         }
     }
@@ -1109,6 +1427,10 @@ pub enum GuichetRefusalReason {
     ObjectiveMissing,
     ObjectiveAlreadyClosed,
     AuthorizationDenied,
+    /// L'attestation d'origine humaine n'a pas passé les vérifications de
+    /// Maicie, ou un focus a été demandé sans origine humaine valide. Code
+    /// public unique : la garde précise reste dans le journal Maicie.
+    HumanOriginInvalid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2122,6 +2444,70 @@ pub enum WrapperToDaemon {
         #[serde(default)]
         until_secs: Option<u64>,
     },
+    /// Lire l'état de contrôle du référent (rôle client, SPEC-087).
+    #[serde(rename = "control_state_read")]
+    ControlStateRead {
+        version: u16,
+    },
+    /// Relire le journal des mutations de contrôle, du plus récent au plus
+    /// ancien.
+    #[serde(rename = "control_history")]
+    ControlHistory {
+        version: u16,
+        limit: u32,
+    },
+    /// Muter l'état de contrôle. Réservé au principal humain ; au moins un
+    /// champ non nul, génération attendue obligatoire.
+    #[serde(rename = "control_state_set")]
+    ControlStateSet {
+        version: u16,
+        command_id: String,
+        expected_generation: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        paused: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auto_objectives_cap: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    /// Déposer un item dans la boîte de réception humaine (rôle service).
+    #[serde(rename = "human_inbox_deposit")]
+    HumanInboxDeposit {
+        version: u16,
+        dedup_key: String,
+        kind: HumanInboxKind,
+        subject: HumanInboxSubject,
+        context: String,
+        options: Vec<String>,
+    },
+    /// Lister la boîte (principal humain).
+    #[serde(rename = "human_inbox_list")]
+    HumanInboxList {
+        version: u16,
+        state: HumanInboxListFilter,
+        limit: u32,
+    },
+    /// Trancher un item (principal humain).
+    #[serde(rename = "human_inbox_resolve")]
+    HumanInboxResolve {
+        version: u16,
+        command_id: String,
+        item_id: String,
+        choice: String,
+    },
+    /// Relever les décisions non acquittées du producteur (rôle service).
+    /// La relève ne modifie rien.
+    #[serde(rename = "human_inbox_decisions")]
+    HumanInboxDecisions {
+        version: u16,
+        limit: u32,
+    },
+    /// Acquitter une décision après l'avoir appliquée durablement.
+    #[serde(rename = "human_inbox_ack")]
+    HumanInboxAck {
+        version: u16,
+        decision_id: String,
+    },
 }
 
 /// Origine d'une observation de runtime. Énumération fermée : une valeur
@@ -2704,6 +3090,39 @@ pub enum DaemonToWrapper {
         messages: Vec<LedgerMessage>,
         requests: Vec<RequestInfo>,
     },
+    /// État de contrôle courant (SPEC-087), avec le nombre d'items ouverts de
+    /// la boîte humaine : un compte, jamais leur contenu.
+    #[serde(rename = "control_state")]
+    ControlState {
+        state: ControlStateFrame,
+        #[serde(default)]
+        inbox_open_count: u32,
+    },
+    #[serde(rename = "control_history")]
+    ControlHistory { events: Vec<ControlEventFrame> },
+    #[serde(rename = "control_state_rejected")]
+    ControlStateRejected { reason: ControlStateRefusal },
+    /// Reçu d'un dépôt dans la boîte : `created` distingue un item neuf d'une
+    /// occurrence rattachée à un item déjà ouvert.
+    #[serde(rename = "human_inbox_deposited")]
+    HumanInboxDeposited {
+        item_id: String,
+        created: bool,
+        occurrences: u32,
+    },
+    #[serde(rename = "human_inbox")]
+    HumanInbox {
+        items: Vec<HumanInboxItemFrame>,
+        open_count: u32,
+    },
+    #[serde(rename = "human_inbox_rejected")]
+    HumanInboxRejected { reason: HumanInboxRefusal },
+    #[serde(rename = "human_inbox_decisions_batch")]
+    HumanInboxDecisionsBatch {
+        decisions: Vec<HumanInboxPendingDecision>,
+    },
+    #[serde(rename = "human_inbox_acked")]
+    HumanInboxAcked { decision_id: String, acked_at: i64 },
 }
 
 fn unknown_build_id() -> String {
@@ -3157,6 +3576,8 @@ mod tests {
             suite: ServiceSuiteDeclaration::Aucune,
             depends_on: Vec::new(),
             references: Vec::new(),
+            origin: None,
+            focus: None,
         };
         assert_eq!(
             ordinary.required_contract_version(),
@@ -3180,6 +3601,8 @@ mod tests {
             suite: ServiceSuiteDeclaration::Aucune,
             depends_on: Vec::new(),
             references: Vec::new(),
+            origin: None,
+            focus: None,
         };
         assert_eq!(
             targeted.required_contract_version(),
@@ -5266,5 +5689,289 @@ mod tests {
             r#"{"contract_version":1,"command_id":"x","issued_at":1,"deadline_at":2,"operation":"declare","project_id":"project","expected_binding_generation":1,"root":"/tmp"}"#,
         )
         .is_err());
+    }
+}
+
+#[cfg(test)]
+mod control_and_inbox_contract_tests {
+    use super::*;
+
+    fn control_state_frame() -> ControlStateFrame {
+        ControlStateFrame {
+            version: CONTROL_STATE_CONTRACT_VERSION,
+            generation: 13,
+            paused: true,
+            paused_since: Some(1_788_400_000),
+            paused_by: Some("humain".to_string()),
+            pause_reason: Some("revue en cours".to_string()),
+            auto_objectives_cap: 5,
+            updated_at: 1_788_400_000,
+        }
+    }
+
+    #[test]
+    fn spec_087_trames_etat_de_controle_font_l_aller_retour() {
+        let read = WrapperToDaemon::ControlStateRead {
+            version: CONTROL_STATE_CONTRACT_VERSION,
+        };
+        let encoded = encode(&read).unwrap();
+        assert!(
+            encoded.contains(r#""type":"control_state_read""#),
+            "{encoded}"
+        );
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encoded).unwrap(),
+            WrapperToDaemon::ControlStateRead { version: 1 }
+        ));
+        let set = WrapperToDaemon::ControlStateSet {
+            version: CONTROL_STATE_CONTRACT_VERSION,
+            command_id: "control-1".to_string(),
+            expected_generation: 12,
+            paused: Some(true),
+            auto_objectives_cap: None,
+            reason: Some("revue".to_string()),
+        };
+        let encoded = encode(&set).unwrap();
+        assert!(
+            !encoded.contains("auto_objectives_cap"),
+            "champ nul omis : {encoded}"
+        );
+        let WrapperToDaemon::ControlStateSet { paused, reason, .. } = decode(&encoded).unwrap()
+        else {
+            panic!("variante attendue");
+        };
+        assert_eq!(paused, Some(true));
+        assert_eq!(reason.as_deref(), Some("revue"));
+        let state = DaemonToWrapper::ControlState {
+            state: control_state_frame(),
+            inbox_open_count: 3,
+        };
+        let encoded = encode(&state).unwrap();
+        assert!(encoded.contains(r#""type":"control_state""#), "{encoded}");
+        let DaemonToWrapper::ControlState {
+            state,
+            inbox_open_count,
+        } = decode(&encoded).unwrap()
+        else {
+            panic!("variante attendue");
+        };
+        assert_eq!(state, control_state_frame());
+        assert_eq!(inbox_open_count, 3);
+        let history = DaemonToWrapper::ControlHistory {
+            events: vec![ControlEventFrame {
+                at: 1,
+                actor: "humain".to_string(),
+                kind: "pause_on".to_string(),
+                reason: None,
+                generation_after: 1,
+            }],
+        };
+        assert!(decode::<DaemonToWrapper>(&encode(&history).unwrap()).is_ok());
+        assert!(
+            decode::<WrapperToDaemon>(
+                &encode(&WrapperToDaemon::ControlHistory {
+                    version: 1,
+                    limit: 20
+                })
+                .unwrap()
+            )
+            .is_ok()
+        );
+        let rejected = DaemonToWrapper::ControlStateRejected {
+            reason: ControlStateRefusal::GenerationMismatch { current: 13 },
+        };
+        let encoded = encode(&rejected).unwrap();
+        assert!(
+            encoded.contains(r#""kind":"generation_mismatch""#),
+            "{encoded}"
+        );
+    }
+
+    #[test]
+    fn spec_087_trames_boite_humaine_font_l_aller_retour() {
+        let deposit = WrapperToDaemon::HumanInboxDeposit {
+            version: HUMAN_INBOX_CONTRACT_VERSION,
+            dedup_key: "chain-exhausted:d1".to_string(),
+            kind: HumanInboxKind::ChainExhausted,
+            subject: HumanInboxSubject {
+                objective_id: Some("o1".to_string()),
+                delegation_id: Some("d1".to_string()),
+                ..HumanInboxSubject::default()
+            },
+            context: r#"{"summary":"chaîne épuisée"}"#.to_string(),
+            options: vec!["reassign:a1".to_string(), "cancel".to_string()],
+        };
+        let encoded = encode(&deposit).unwrap();
+        assert!(
+            encoded.contains(r#""type":"human_inbox_deposit""#),
+            "{encoded}"
+        );
+        assert!(encoded.contains(r#""kind":"chain_exhausted""#), "{encoded}");
+        let WrapperToDaemon::HumanInboxDeposit { kind, subject, .. } = decode(&encoded).unwrap()
+        else {
+            panic!("variante attendue");
+        };
+        assert_eq!(kind, HumanInboxKind::ChainExhausted);
+        assert_eq!(subject.message_id, None);
+        let item = HumanInboxItemFrame {
+            id: "i1".to_string(),
+            dedup_key: "chain-exhausted:d1".to_string(),
+            kind: HumanInboxKind::ChainExhausted,
+            subject: HumanInboxSubject::default(),
+            context: "{}".to_string(),
+            options: vec!["ack".to_string()],
+            state: HumanInboxState::Resolved,
+            producer: HumanInboxProducer::Maicie,
+            created_at: 1,
+            resolved_at: Some(2),
+            occurrences: 2,
+            decision: Some(HumanInboxDecision {
+                decision_id: "dec-1".to_string(),
+                choice: "ack".to_string(),
+                actor: "humain".to_string(),
+                at: 2,
+            }),
+            acked_at: None,
+        };
+        let frame = DaemonToWrapper::HumanInbox {
+            items: vec![item.clone()],
+            open_count: 0,
+        };
+        let DaemonToWrapper::HumanInbox { items, open_count } =
+            decode(&encode(&frame).unwrap()).unwrap()
+        else {
+            panic!("variante attendue");
+        };
+        assert_eq!(items, vec![item]);
+        assert_eq!(open_count, 0);
+        for frame in [
+            WrapperToDaemon::HumanInboxList {
+                version: 1,
+                state: HumanInboxListFilter::Open,
+                limit: 50,
+            },
+            WrapperToDaemon::HumanInboxResolve {
+                version: 1,
+                command_id: "c".to_string(),
+                item_id: "i1".to_string(),
+                choice: "ack".to_string(),
+            },
+            WrapperToDaemon::HumanInboxDecisions {
+                version: 1,
+                limit: 20,
+            },
+            WrapperToDaemon::HumanInboxAck {
+                version: 1,
+                decision_id: "dec-1".to_string(),
+            },
+        ] {
+            let encoded = encode(&frame).unwrap();
+            assert!(decode::<WrapperToDaemon>(&encoded).is_ok(), "{encoded}");
+        }
+        let batch = DaemonToWrapper::HumanInboxDecisionsBatch {
+            decisions: vec![HumanInboxPendingDecision {
+                decision_id: "dec-1".to_string(),
+                item_id: "i1".to_string(),
+                dedup_key: "k".to_string(),
+                kind: HumanInboxKind::BudgetReached,
+                subject: HumanInboxSubject::default(),
+                choice: "raise_budget".to_string(),
+                at: 3,
+            }],
+        };
+        assert!(decode::<DaemonToWrapper>(&encode(&batch).unwrap()).is_ok());
+        let rejected = DaemonToWrapper::HumanInboxRejected {
+            reason: HumanInboxRefusal::ChoiceNotOffered,
+        };
+        assert!(encode(&rejected).unwrap().contains("choice_not_offered"));
+    }
+
+    #[test]
+    fn spec_087_kind_sql_derive_d_une_seule_source() {
+        // Chaque variante de ALL rend un libellé unique, égal à son nom de fil.
+        let mut seen = std::collections::BTreeSet::new();
+        for kind in HumanInboxKind::ALL {
+            let wire = serde_json::to_string(&kind).unwrap();
+            assert_eq!(
+                wire,
+                format!("\"{}\"", kind.as_sql()),
+                "fil ≠ SQL pour {kind:?}"
+            );
+            assert!(seen.insert(kind.as_sql()), "doublon {kind:?}");
+            assert_eq!(HumanInboxKind::from_sql(kind.as_sql()), Some(kind));
+        }
+        assert_eq!(
+            HumanInboxKind::sql_in_clause(),
+            "IN ('intervention_required', 'chain_exhausted', 'review_verdict_pending', 'activation_approval', 'budget_reached', 'reply_debt', 'focus_waiting_agent', 'object_vanished', 'human_route_replaced')"
+        );
+        assert_eq!(HumanInboxKind::from_sql("inconnu"), None);
+    }
+
+    #[test]
+    fn spec_087_delegate_avec_origine_ou_focus_exige_la_version_revue() {
+        let base = ServiceRequestPayload::Delegate {
+            goal: "but".to_string(),
+            review_target: None,
+            explicit_target: None,
+            required_tags: Vec::new(),
+            duration: GuichetDurationClass::Normale,
+            suite: ServiceSuiteDeclaration::Aucune,
+            depends_on: Vec::new(),
+            references: Vec::new(),
+            origin: None,
+            focus: None,
+        };
+        assert_eq!(base.required_contract_version(), SERVICE_CONTRACT_VERSION);
+        let encoded = serde_json::to_string(&base).unwrap();
+        assert!(
+            !encoded.contains("origin") && !encoded.contains("focus"),
+            "{encoded}"
+        );
+        let legacy: ServiceRequestPayload = serde_json::from_str(
+            r#"{"goal":"but","duration":"normale","suite":{"kind":"aucune"}}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy, base);
+        let origin = Some(DelegateOrigin::Human {
+            message_id: "m1".to_string(),
+            observed: ObservedHumanMessageFrame {
+                message_id: "m1".to_string(),
+                ts: 1,
+                sender: "humain".to_string(),
+                target: "maicie".to_string(),
+                body: "Travaille sur X".to_string(),
+            },
+            attestation: HumanOriginAttestationFrame {
+                version: 1,
+                issuer_scope: "bridget-ui".to_string(),
+                canonical_request_sha256: "0".repeat(64),
+                signature: "1".repeat(64),
+            },
+        });
+        let focus = Some(DelegateFocus {
+            project_id: "p1".to_string(),
+            on_conflict: Some(FocusConflictPolicy::Queue),
+        });
+        let with_origin = ServiceRequestPayload::Delegate {
+            goal: "but".to_string(),
+            review_target: None,
+            explicit_target: None,
+            required_tags: Vec::new(),
+            duration: GuichetDurationClass::Normale,
+            suite: ServiceSuiteDeclaration::Aucune,
+            depends_on: Vec::new(),
+            references: Vec::new(),
+            origin,
+            focus,
+        };
+        assert_eq!(
+            with_origin.required_contract_version(),
+            REVIEW_DELEGATE_CONTRACT_VERSION
+        );
+        let encoded = serde_json::to_string(&with_origin).unwrap();
+        assert!(encoded.contains(r#""kind":"human""#), "{encoded}");
+        assert!(encoded.contains(r#""on_conflict":"queue""#), "{encoded}");
+        let decoded: ServiceRequestPayload = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, with_origin);
     }
 }

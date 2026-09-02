@@ -29,6 +29,8 @@ use bridget_transport::greffe_authorization::{
     GreffeAuthorizationGate, GreffeAuthorizationRefusal, GreffeEffectAuthorization,
     GreffeMutationAction,
 };
+use bridget_transport::protocol::{DelegateOrigin, FocusConflictPolicy};
+use sha2::{Digest, Sha256};
 use std::fmt;
 use uuid::Uuid;
 
@@ -41,6 +43,9 @@ pub struct RegistreAddResult {
 #[derive(Debug)]
 pub enum GreffeServiceError {
     Invalid(&'static str),
+    /// SPEC-087 : attestation d'origine humaine refusée ou focus sans origine
+    /// humaine. Code public unique ; la garde précise est journalisée.
+    HumanOriginInvalid(&'static str),
     CatalogueAbsent,
     Catalogue(CatalogueError),
     CatalogueReconcile(CatalogueReconcileError),
@@ -55,6 +60,9 @@ impl fmt::Display for GreffeServiceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Invalid(reason) => write!(formatter, "service du greffe invalide : {reason}"),
+            Self::HumanOriginInvalid(refusal) => {
+                write!(formatter, "origine humaine refusée : {refusal}")
+            }
             Self::CatalogueAbsent => {
                 formatter.write_str("catalogue_path absent de la configuration du greffe central")
             }
@@ -83,7 +91,7 @@ impl std::error::Error for GreffeServiceError {
             Self::CatalogueReconcile(error) => Some(error),
             Self::Objective(error) => Some(error),
             Self::Store(error) => Some(error),
-            Self::CatalogueAbsent | Self::Invalid(_) => None,
+            Self::CatalogueAbsent | Self::Invalid(_) | Self::HumanOriginInvalid(_) => None,
         }
     }
 }
@@ -107,6 +115,26 @@ pub fn candidates_from(config: &MaicieConfig, agents: &[AgentInfo]) -> Vec<Deleg
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| left.name.cmp(&right.name));
     candidates
+}
+
+/// Empreinte hexadécimale minuscule, même convention que le daemon.
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Nom interne du refus, journalisé, jamais rendu au fil (code public unique).
+fn human_refusal_name(refusal: crate::domain::HumanOriginRefusal) -> &'static str {
+    use crate::domain::HumanOriginRefusal as R;
+    match refusal {
+        R::VersionInconnue => "version_inconnue",
+        R::PerimetreEmetteurDivergent => "perimetre_emetteur_divergent",
+        R::MessageIdDivergent => "message_id_divergent",
+        R::EmetteurNonHumain => "emetteur_non_humain",
+        R::ScelleDeContenuDivergent => "scelle_de_contenu_divergent",
+        R::HashCanoniqueDivergent => "hash_canonique_divergent",
+        R::AttestationDejaConsommee => "attestation_deja_consommee",
+    }
 }
 
 /// Applique une délégation et fige, le cas échéant, la politique de
@@ -164,9 +192,63 @@ pub fn apply_guichet_mutation(
             let retry_until = now
                 .checked_add(client.negotiated().horizon_secs)
                 .ok_or(GreffeServiceError::Invalid("horizon Bridget hors borne"))?;
+            // SPEC-087 : origine humaine attestée par le daemon, rejouée ici
+            // contre les cinq vérifications et l'usage unique du message.
+            // Un focus sans origine humaine valide est refusé.
+            let (opening_permit, human_message_id) = match &request.origin {
+                None => {
+                    if request.focus.is_some() {
+                        return Err(GreffeServiceError::HumanOriginInvalid(
+                            "focus_sans_origine_humaine",
+                        ));
+                    }
+                    (ObjectiveOpeningPermit::auto_generated(), None)
+                }
+                Some(DelegateOrigin::Human {
+                    message_id,
+                    observed,
+                    attestation,
+                }) => {
+                    let canonical_bytes =
+                        crate::domain::guichet::canonical_delegate_bytes_without_origin(
+                            canonical, request,
+                        )
+                        .map_err(|_| {
+                            GreffeServiceError::HumanOriginInvalid("canonique_illisible")
+                        })?;
+                    let canonical_sha256 = sha256_hex(&canonical_bytes);
+                    let observed = crate::domain::ObservedHumanMessage {
+                        message_id: observed.message_id.clone(),
+                        ts: observed.ts,
+                        sender: observed.sender.clone(),
+                        target: observed.target.clone(),
+                        body: observed.body.clone(),
+                    };
+                    let attestation = crate::domain::HumanRequestOriginAttestation {
+                        version: attestation.version,
+                        issuer_scope: attestation.issuer_scope.clone(),
+                        canonical_request_sha256: attestation.canonical_request_sha256.clone(),
+                        signature: attestation.signature.clone(),
+                    };
+                    let consumption = store
+                        .human_origin_consumption(message_id)
+                        .map_err(GreffeServiceError::Store)?;
+                    let permit = ObjectiveOpeningPermit::human_request(
+                        attestation,
+                        &observed,
+                        &canonical.issuer_scope,
+                        &canonical_sha256,
+                        consumption,
+                    )
+                    .map_err(|refusal| {
+                        GreffeServiceError::HumanOriginInvalid(human_refusal_name(refusal))
+                    })?;
+                    (permit, Some(message_id.clone()))
+                }
+            };
             let delegate_request = DelegateRequest {
                 goal: &request.goal,
-                opening_permit: ObjectiveOpeningPermit::auto_generated(),
+                opening_permit,
                 explicit_target: request.explicit_target.as_deref(),
                 required_tags: &request.required_tags,
                 duration: request.duration,
@@ -182,21 +264,50 @@ pub fn apply_guichet_mutation(
                 dedup_retained_until: retry_until,
                 max_frame_bytes: client.limits().max_frame_bytes,
             };
-            let result = authorization_gate
-                .authorize_effect_then(
-                    GreffeEffectAuthorization {
-                        attestation: claim.authorization_attestation.as_ref(),
-                        action: GreffeMutationAction::Delegate,
-                        issuer_scope: &canonical.issuer_scope,
-                        request_id: &canonical.request_id,
-                        request_issued_at: canonical.issued_at,
-                        canonical_request: &claim.canonical_request,
-                        observed_at: now,
-                    },
-                    |_| apply_delegate(store, config, &candidates, &delegate_request),
-                )
-                .map_err(GreffeServiceError::Authorization)?
-                .map_err(GreffeServiceError::Delegate)?;
+            // ADR 027 : pour le principal humain, l'attestation d'origine EST
+            // l'autorisation ; la garde du greffe ne s'applique qu'aux dépôts
+            // d'origine automatique.
+            let result = if human_message_id.is_some() {
+                apply_delegate(store, config, &candidates, &delegate_request)
+                    .map_err(GreffeServiceError::Delegate)?
+            } else {
+                authorization_gate
+                    .authorize_effect_then(
+                        GreffeEffectAuthorization {
+                            attestation: claim.authorization_attestation.as_ref(),
+                            action: GreffeMutationAction::Delegate,
+                            issuer_scope: &canonical.issuer_scope,
+                            request_id: &canonical.request_id,
+                            request_issued_at: canonical.issued_at,
+                            canonical_request: &claim.canonical_request,
+                            observed_at: now,
+                        },
+                        |_| apply_delegate(store, config, &candidates, &delegate_request),
+                    )
+                    .map_err(GreffeServiceError::Authorization)?
+                    .map_err(GreffeServiceError::Delegate)?
+            };
+            if let (Some(message_id), DelegateResult::Created(created)) =
+                (&human_message_id, &result)
+            {
+                // Usage unique du message humain, puis focus si demandé.
+                store
+                    .consume_human_origin(message_id, created.objective_id, now)
+                    .map_err(GreffeServiceError::Store)?;
+                if let Some(focus) = &request.focus
+                    && !created.replayed
+                {
+                    let replace = matches!(focus.on_conflict, Some(FocusConflictPolicy::Replace));
+                    store
+                        .focus_enqueue(created.objective_id, replace, now)
+                        .map_err(GreffeServiceError::Store)?;
+                    // T024 : la file d'exécution du daemon sert d'abord les
+                    // remises qui portent `focus:<objective_id>`.
+                    store
+                        .add_focus_reference_to_pending_outboxes(created.objective_id)
+                        .map_err(GreffeServiceError::Store)?;
+                }
+            }
             match result {
                 DelegateResult::Created(created) => MutationReply::Delegate {
                     status: DelegateMutationStatus::Created,

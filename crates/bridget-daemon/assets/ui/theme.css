@@ -4902,3 +4902,92 @@ body[data-desktop-shell="true"] .conversation {
   color: var(--text-secondary);
   font-size: 0.74rem;
 }
+
+/* SPEC-087 : bandeau d'état de contrôle, focus et boîte de réception. */
+.control-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+  margin: 0;
+  padding: 0.55rem 1.2rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--text-secondary) 20%, transparent);
+  background: var(--surface-raised);
+  font-size: 0.82rem;
+}
+
+.control-banner[data-state="paused"] {
+  background: color-mix(in srgb, #d9822b 18%, var(--surface-raised));
+}
+
+.control-banner__pause {
+  font-weight: 680;
+}
+
+.control-banner__focus,
+.control-banner__budget {
+  color: var(--text-secondary);
+}
+
+.control-banner__inbox {
+  margin-left: auto;
+}
+
+.control-banner button {
+  font-size: 0.78rem;
+}
+
+.focus-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--text-secondary) 16%, transparent);
+}
+
+.focus-form__status {
+  grid-column: 1 / -1;
+  margin: 0;
+  min-height: 1em;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+}
+
+.focus-form__status[data-state="error"] {
+  color: #c43d3d;
+}
+
+.inbox-overlay__list {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0 1rem 1rem;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.inbox-overlay__item {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.7rem;
+  border-radius: 0.6rem;
+  outline: 1px solid color-mix(in srgb, var(--text-secondary) 16%, transparent);
+  outline-offset: -1px;
+}
+
+.inbox-overlay__item[data-state="resolved"],
+.inbox-overlay__item[data-state="closed_self"] {
+  opacity: 0.6;
+}
+
+.inbox-overlay__kind {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.inbox-overlay__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
