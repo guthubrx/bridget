@@ -4563,6 +4563,17 @@ body[data-desktop-shell="true"] .conversation {
   font-size: 0.78rem;
 }
 
+.project-onboarding-overlay__advanced {
+  display: grid;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.project-onboarding-overlay__advanced summary {
+  cursor: pointer;
+}
+
 .project-onboarding-overlay__actions {
   display: flex;
   justify-content: flex-end;

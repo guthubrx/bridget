@@ -1,6 +1,6 @@
 use bridget_transport::protocol::{
     ProjectBackend, ProjectBindRequest, ProjectBindingProjection, ProjectBindingStatus,
-    ProjectRuntimePolicyReference, SpawnRefusal,
+    ProjectRole, ProjectRuntimePolicyReference, SpawnRefusal,
 };
 
 #[test]
@@ -42,6 +42,7 @@ fn spec_066_docker_contract_is_additive_for_host_history() {
         state: ProjectBindingStatus::Active,
         binding_generation: Some(1),
         backend: Some(ProjectBackend::Docker),
+        role: ProjectRole::Standard,
         runtime_policy: Some(policy.clone()),
         reason: None,
         last_audit: None,

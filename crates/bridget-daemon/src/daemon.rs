@@ -5,6 +5,8 @@ use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAc
 use bridget_transport::greffe_authorization::{
     GreffeAuthorizationGate, GreffeDepositAuthorization, GreffeMutationAction,
 };
+#[cfg(test)]
+use bridget_transport::protocol::ProjectSystemRequest;
 use bridget_transport::protocol::{
     AdoptStoppedOutcome, AgentLinkEventFrame, AttachRefusal, CLIENT_CONTRACT_VERSION,
     COORDINATION_EVENTS_VERSION, COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal,
