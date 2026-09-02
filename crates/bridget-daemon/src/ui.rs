@@ -726,7 +726,25 @@ fn get_control_state(config: &UiRelayConfig) -> Result<serde_json::Value, UiCont
         Ok(DaemonToWrapper::ControlState {
             state,
             inbox_open_count,
-        }) => Ok(control_state_json(&state, inbox_open_count)),
+        }) => {
+            let mut response = control_state_json(&state, inbox_open_count);
+            let focus = match control_request(
+                &config.daemon_socket,
+                WrapperToDaemon::ControlFocusRead {
+                    version: bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION,
+                },
+            ) {
+                Ok(DaemonToWrapper::ControlFocus { focus }) => focus,
+                Ok(DaemonToWrapper::ControlStateRejected { reason }) => {
+                    return Err(control_refusal_error(&reason));
+                }
+                Ok(other) => return Err((502, "unexpected_response", format!("{other:?}"))),
+                Err(error) => return Err((502, "daemon_unreachable", error.to_string())),
+            };
+            response["focus"] = serde_json::to_value(focus)
+                .map_err(|error| (502, "focus_projection_invalid", error.to_string()))?;
+            Ok(response)
+        }
         Ok(DaemonToWrapper::ControlStateRejected { reason }) => Err(control_refusal_error(&reason)),
         Ok(DaemonToWrapper::ClientRejected { .. }) => Err((
             502,

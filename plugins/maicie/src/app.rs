@@ -914,6 +914,7 @@ pub fn open_focus_waiting_for_agent(
     store: &mut MaicieStore,
     request: &DelegateRequest<'_>,
     human_message_id: &str,
+    project_id: &str,
     replace: bool,
 ) -> Result<FocusWaitingForAgent, DelegateError> {
     if request.goal.trim().is_empty() || request.now <= 0 {
@@ -946,6 +947,7 @@ pub fn open_focus_waiting_for_agent(
             &objective,
             &request.opening_permit,
             human_message_id,
+            project_id,
             replace,
             request.now,
         )

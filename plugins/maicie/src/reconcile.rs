@@ -524,6 +524,23 @@ pub fn reconcile_human_inbox_observed_with_limits(
         }
         Err(error) => return Err(ReconcileError::Client(error)),
     };
+    let focus =
+        store
+            .focus_projection()?
+            .map(|focus| bridget_transport::protocol::ControlFocusFrame {
+                objective_id: focus.objective_id.to_string(),
+                goal: focus.goal,
+                project_id: focus.project_id,
+                updated_at: focus.updated_at,
+            });
+    match client.publish_control_focus(focus) {
+        Ok(()) => {}
+        Err(BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. }) => {
+            report.transport_unavailable = true;
+            return Ok(report);
+        }
+        Err(error) => return Err(ReconcileError::Client(error)),
+    }
     for row in pending {
         let deposit = crate::bridget_client::HumanInboxDeposit {
             dedup_key: row.dedup_key.clone(),

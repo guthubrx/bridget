@@ -84,6 +84,22 @@
 - `review_git::freeze_origin_default_review_target` lit uniquement les références locales rapatriées (`refs/remotes/origin/HEAD` puis sa tête), sans accès réseau ni chemin de requête. Un focus sans `review_target` exige le projet de revue configuré correspondant à `focus.project_id`.
 - `spec_087_focus_guichet_gel_la_branche_origin_par_defaut` prouve que la délégation durable porte `origin/main` et le SHA observé. `spec_087_focus_gel_la_branche_par_defaut_origin` couvre la primitive Git isolée.
 
+### T041 et T055 Projection du focus : ✅
+
+- Maicie publie à chaque relève une projection minimale du focus sur sa connexion de boîte humaine. Bridget la persiste dans `control_focus_projection` et l'interface la relit par `ControlFocusRead` : le daemon ne lit jamais la base Maicie et le rafraîchissement de l'interface ne lance jamais `maicie status`.
+- La colonne Projets affiche les objectifs ouverts, avec le focus toujours premier et visuellement distinct. Si la projection de mission est temporairement en retard, le focus reste néanmoins visible depuis sa projection Bridget.
+- Preuves : `node --test crates/bridget-daemon/assets/ui/app.js` : **136 passés, 0 échec** ; `cargo test -p maicie --test greffe_central_channel_integration` : **3 passés, 0 échec** ; `cargo test -p bridget-transport protocol::control_and_inbox_contract_tests::spec_087_trames_etat_de_controle_font_l_aller_retour -- --exact` : **1 passé, 0 échec** ; `cargo check -p bridget-daemon` : réussi.
+
+### T043 Gates finales : ✅
+
+- `cargo fmt --all -- --check` : propre.
+- `cargo test -p bridget-transport` : **242 passés, 0 échec, 1 ignoré**.
+- `cargo test -p bridget-daemon --lib --features test-support` : `referent_control::` **9**, `human_inbox::` **8**, `ui::` **81**, `project_` **38**, `matrice_roles` **11** - soit **147 passés, 0 échec**.
+- `cargo test -p maicie --lib` : `control::` **5**, `routines::` **0** (aucun test ne porte ce préfixe), `guichet::` **5**. Intégrations touchées : `greffe_central_channel_integration` **3** et `review_git_integration` ciblé **1** - soit **14 passés, 0 échec**.
+- `node --test crates/bridget-daemon/assets/ui/app.js` : **136 passés, 0 échec**.
+- Clippy avec `-D warnings` : les trois refus restants sont également présents sur `main` nu : `AcpEvent` trop asymétrique, `ProjectRole::default` dérivable et `format!` inutile dans un test Docker. La quatrième alerte initiale venait de la variante `Delegate` de ce lot : elle est traitée localement par une justification ciblée, sans modifier les octets ni l'API publique de la trame. Aucun nouveau refus Clippy n'est introduit par ce lot.
+- Comparaison de base : le premier rouge de `matrice_roles` venait d'une fixture qui utilisait `child-events`, identifiant devenu invalide car les agents sont désormais des UUID v4. La fixture a été alignée et la matrice est verte. La base `main` nue n'a pas atteint ce test : sa compilation s'arrête avant sur `ServiceRequestPayload::Delegate` dont les champs `origin` et `focus` sont absents, état antérieur de synchronisation des branches.
+
 ### Self-review Article XIX/XX - T049/T050
 
 - Pourquoi cette solution est nécessaire : la réponse du focus sans agent ne pouvait pas être persistée sous `created`, et l'absence de cible Git laissait une revue de focus non gelée.
@@ -100,15 +116,12 @@
 ### T035 Interface, boîte : ✅ panneau « En attente de toi », compteur, notification native (permission accordée, page cachée), routes `/v1/inbox`, `/v1/inbox/<id>/resolve`
 ### T036 Plafond : ✅ `bridget control budget <n>` ; descripteur de réglage serveur : **non fait**, l'interface expose le plafond directement dans « Paramètres du serveur » (T038)
 ### T038 Interface, plafond : ✅ section « Objectifs automatiques », un bouton « Enregistrer »
-### T039 Bandeau complet : ✅ pause, plafond, compteur d'items ; **focus courant dans le bandeau** : non fait (le relais n'appelle pas `maicie status`, qui réconcilie des outboxes à chaque appel ; voir Convergence)
+### T039 Bandeau complet : ✅ pause, plafond, compteur d'items ; **focus courant dans le bandeau** : fait par projection Bridget publiée par Maicie, sans appel UI à `maicie status`.
 ### T040 Historique : ✅ `bridget control status --history` (trame `ControlHistory`)
 ### T042 Essai adverse : ✅ test unitaire `spec_087_un_agent_par_ses_outils_declares_ne_mute_rien` (client MCP-like sans capacité, client avec capacité mais périmètre non humain, origine forgée depuis un agent enregistré) ; fichier d'intégration prévu remplacé par ce test, même propriété
 ### T048 Alerte de route humaine : ✅ `spec_087_reprise_d_une_route_humaine_vivante_est_signalee`
 
 ### Non cochées côté daemon, avec raison
-- T041 : focus en tête de liste ; l'interface ne connaît pas encore les objectifs
-- T043 : gates joués partiellement (voir ci-dessous), à rejouer après fusion du versant Maicie
-- T044 : `docs/regles-chantier.md` mis à jour, `quickstart.md` relu contre les libellés réels ; ce journal
 - T045 : validation opérateur, exige le référent
 - T046 : mise en service ; le pipeline interdit le commit automatique, donc pas de déploiement de code non commité
 

@@ -101,6 +101,13 @@ fn spec_087_focus_guichet_sans_agent_disponible_attend_et_alerte() {
     let objective_id = result.objective_id.expect("focus ouvert absent");
     assert!(result.delegation_id.is_none(), "aucune délégation fictive");
     assert_eq!(store.focus_active().unwrap(), Some(objective_id));
+    let projection = store
+        .focus_projection()
+        .unwrap()
+        .expect("projection focus absente");
+    assert_eq!(projection.objective_id, objective_id);
+    assert_eq!(projection.project_id, "projet-test");
+    assert_eq!(projection.goal, "Réparer l'import CSV");
     assert!(
         store
             .objective_snapshots(Some(objective_id))

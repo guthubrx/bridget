@@ -7,7 +7,7 @@
 //! pas une limite acceptée (ADR 027).
 
 use bridget_transport::protocol::{
-    CONTROL_STATE_CONTRACT_VERSION, ControlStateFrame, ControlStateRefusal,
+    CONTROL_STATE_CONTRACT_VERSION, ControlFocusFrame, ControlStateFrame, ControlStateRefusal,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -145,10 +145,55 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
         INSERT OR IGNORE INTO control_state (
             id, generation, paused, paused_since, paused_by, pause_reason,
             auto_objectives_cap, updated_at
-        ) VALUES (1, 0, 0, NULL, NULL, NULL, {cap}, 0);",
+        ) VALUES (1, 0, 0, NULL, NULL, NULL, {cap}, 0);
+        CREATE TABLE IF NOT EXISTS control_focus_projection (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            objective_id TEXT NOT NULL,
+            goal TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            updated_at INTEGER NOT NULL CHECK (updated_at > 0)
+        );",
         kinds = ControlEventKind::sql_in_clause(),
         cap = DEFAULT_AUTO_OBJECTIVES_CAP,
     ))
+}
+
+pub fn read_focus(conn: &Connection) -> rusqlite::Result<Option<ControlFocusFrame>> {
+    conn.query_row(
+        "SELECT objective_id, goal, project_id, updated_at
+         FROM control_focus_projection WHERE id = 1",
+        [],
+        |row| {
+            Ok(ControlFocusFrame {
+                objective_id: row.get(0)?,
+                goal: row.get(1)?,
+                project_id: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+}
+
+pub fn publish_focus(conn: &Connection, focus: Option<&ControlFocusFrame>) -> rusqlite::Result<()> {
+    match focus {
+        Some(focus) => {
+            conn.execute(
+                "INSERT INTO control_focus_projection(id, objective_id, goal, project_id, updated_at)
+                 VALUES (1, ?1, ?2, ?3, ?4)
+                 ON CONFLICT(id) DO UPDATE SET
+                    objective_id = excluded.objective_id,
+                    goal = excluded.goal,
+                    project_id = excluded.project_id,
+                    updated_at = excluded.updated_at",
+                params![focus.objective_id, focus.goal, focus.project_id, focus.updated_at],
+            )?;
+        }
+        None => {
+            conn.execute("DELETE FROM control_focus_projection WHERE id = 1", [])?;
+        }
+    }
+    Ok(())
 }
 
 pub fn read(conn: &Connection) -> rusqlite::Result<ControlStateFrame> {

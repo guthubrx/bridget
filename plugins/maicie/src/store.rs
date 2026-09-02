@@ -58,7 +58,7 @@ use uuid::Uuid;
 
 /// Version courante du schéma SQLite. Les oracles de migration doivent lire
 /// cette constante — un littéral en dur meurt à chaque migration.
-pub const SCHEMA_VERSION: i64 = 25;
+pub const SCHEMA_VERSION: i64 = 26;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -206,6 +206,15 @@ pub struct ObjectiveSnapshot {
     pub remises_locales: Vec<RemiseLocale>,
     /// Coûts portés à la clôture. Vide tant que l'objectif n'est pas clos.
     pub costs: Vec<CoutMissionAgent>,
+}
+
+/// Projection minimale du focus courant, publiable dans Bridget.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FocusProjection {
+    pub objective_id: Uuid,
+    pub goal: String,
+    pub project_id: String,
+    pub updated_at: i64,
 }
 
 /// Définition 016 et faits initiaux relus depuis le registre, sans aucune
@@ -8888,9 +8897,13 @@ impl MaicieStore {
     pub fn focus_enqueue(
         &mut self,
         objective_id: Uuid,
+        project_id: &str,
         replace: bool,
         now: i64,
     ) -> Result<(), StoreError> {
+        if project_id.trim().is_empty() {
+            return Err(StoreError::Invalid("projet du focus manquant"));
+        }
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -8899,8 +8912,8 @@ impl MaicieStore {
             tx.execute("UPDATE focus_queue SET position = position + 1", [])
                 .map_err(StoreError::Sql)?;
             tx.execute(
-                "INSERT INTO focus_queue(objective_id, position, opened_at) VALUES (?1, 0, ?2)",
-                params![objective_id.to_string(), now],
+                "INSERT INTO focus_queue(objective_id, project_id, position, opened_at) VALUES (?1, ?2, 0, ?3)",
+                params![objective_id.to_string(), project_id, now],
             )
             .map_err(StoreError::Sql)?;
         } else {
@@ -8912,8 +8925,8 @@ impl MaicieStore {
                 )
                 .map_err(StoreError::Sql)?;
             tx.execute(
-                "INSERT INTO focus_queue(objective_id, position, opened_at) VALUES (?1, ?2, ?3)",
-                params![objective_id.to_string(), next, now],
+                "INSERT INTO focus_queue(objective_id, project_id, position, opened_at) VALUES (?1, ?2, ?3, ?4)",
+                params![objective_id.to_string(), project_id, next, now],
             )
             .map_err(StoreError::Sql)?;
         }
@@ -8983,10 +8996,11 @@ impl MaicieStore {
         objective: &ObjectifCoordonne,
         opening_permit: &ObjectiveOpeningPermit,
         human_message_id: &str,
+        project_id: &str,
         replace: bool,
         now: i64,
     ) -> Result<Option<Uuid>, StoreError> {
-        if human_message_id.trim().is_empty() || now <= 0 {
+        if human_message_id.trim().is_empty() || project_id.trim().is_empty() || now <= 0 {
             return Err(StoreError::Invalid("focus en attente invalide"));
         }
         let tx = self
@@ -9019,8 +9033,8 @@ impl MaicieStore {
             tx.execute("UPDATE focus_queue SET position = position + 1", [])
                 .map_err(StoreError::Sql)?;
             tx.execute(
-                "INSERT INTO focus_queue(objective_id, position, opened_at) VALUES (?1, 0, ?2)",
-                params![objective.id.to_string(), now],
+                "INSERT INTO focus_queue(objective_id, project_id, position, opened_at) VALUES (?1, ?2, 0, ?3)",
+                params![objective.id.to_string(), project_id, now],
             )
             .map_err(StoreError::Sql)?;
         } else {
@@ -9032,13 +9046,38 @@ impl MaicieStore {
                 )
                 .map_err(StoreError::Sql)?;
             tx.execute(
-                "INSERT INTO focus_queue(objective_id, position, opened_at) VALUES (?1, ?2, ?3)",
-                params![objective.id.to_string(), position, now],
+                "INSERT INTO focus_queue(objective_id, project_id, position, opened_at) VALUES (?1, ?2, ?3, ?4)",
+                params![objective.id.to_string(), project_id, position, now],
             )
             .map_err(StoreError::Sql)?;
         }
         tx.commit().map_err(StoreError::Sql)?;
         Ok(None)
+    }
+
+    pub fn focus_projection(&self) -> Result<Option<FocusProjection>, StoreError> {
+        let row: Option<(String, Vec<u8>, String, i64)> = self
+            .connection
+            .query_row(
+                "SELECT o.id, o.payload_json, f.project_id, f.opened_at
+             FROM focus_queue f JOIN objectives o ON o.id = f.objective_id
+             WHERE f.position = 0 AND f.project_id <> ''",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        row.map(|(id, payload, project_id, opened_at)| {
+            let objective: ObjectifCoordonne =
+                serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+            Ok(FocusProjection {
+                objective_id: parse_uuid(&id)?,
+                goal: objective.but,
+                project_id,
+                updated_at: objective.mis_a_jour_at.max(opened_at),
+            })
+        })
+        .transpose()
     }
 
     /// Focus actif sans délégation, dont la durée normale est échue. La
@@ -10169,6 +10208,12 @@ fn migrate_to_version(
              WHERE state = 'deposited' AND item_id IS NULL;",
         )
         .map_err(StoreError::Sql)?;
+    }
+
+    // v26 (SPEC-087 T055) : rattachement du focus au projet qui l'a ouvert.
+    if current_version < 26 && target_version >= 26 {
+        tx.execute_batch("ALTER TABLE focus_queue ADD COLUMN project_id TEXT NOT NULL DEFAULT '';")
+            .map_err(StoreError::Sql)?;
     }
 
     for version in (current_version + 1)..=target_version {

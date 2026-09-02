@@ -362,6 +362,7 @@ pub fn apply_guichet_mutation(
                             store,
                             &delegate_request,
                             message_id,
+                            &focus.project_id,
                             matches!(focus.on_conflict, Some(FocusConflictPolicy::Replace)),
                         )
                         .map_err(GreffeServiceError::Delegate)?,
@@ -381,7 +382,7 @@ pub fn apply_guichet_mutation(
                 {
                     let replace = matches!(focus.on_conflict, Some(FocusConflictPolicy::Replace));
                     store
-                        .focus_enqueue(created.objective_id, replace, now)
+                        .focus_enqueue(created.objective_id, &focus.project_id, replace, now)
                         .map_err(GreffeServiceError::Store)?;
                     // T024 : la file d'exécution du daemon sert d'abord les
                     // remises qui portent `focus:<objective_id>`.

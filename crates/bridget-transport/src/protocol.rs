@@ -1131,6 +1131,17 @@ pub struct ControlStateFrame {
     pub updated_at: i64,
 }
 
+/// Projection minimale du focus courant, publiée par Maicie dans Bridget.
+/// Le daemon la conserve et la relit, mais ne consulte jamais la base Maicie.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlFocusFrame {
+    pub objective_id: String,
+    pub goal: String,
+    pub project_id: String,
+    pub updated_at: i64,
+}
+
 /// Ligne du journal des mutations de contrôle, relisible par la CLI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1322,6 +1333,10 @@ pub enum HumanInboxRefusal {
 /// Charge canonique d'un dépôt de guichet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
+// `Delegate` porte l'attestation humaine et le focus dans la trame publique.
+// Les boxer modifierait l'API Rust sans changer les octets sur le fil ; ce coût
+// n'est pas justifié pour une charge rare, contrôlée et durable.
+#[allow(clippy::large_enum_variant)]
 pub enum ServiceRequestPayload {
     DeliveryReport {
         objective_id: String,
@@ -2457,6 +2472,11 @@ pub enum WrapperToDaemon {
     ControlStateRead {
         version: u16,
     },
+    /// Lire la projection passive du focus publiée par Maicie (SPEC-087).
+    #[serde(rename = "control_focus_read")]
+    ControlFocusRead {
+        version: u16,
+    },
     /// Relire le journal des mutations de contrôle, du plus récent au plus
     /// ancien.
     #[serde(rename = "control_history")]
@@ -2487,6 +2507,14 @@ pub enum WrapperToDaemon {
         subject: HumanInboxSubject,
         context: String,
         options: Vec<String>,
+    },
+    /// Publier la projection passive du focus. Réservé au service Maicie,
+    /// négocié avec la même capacité que la boîte humaine.
+    #[serde(rename = "control_focus_publish")]
+    ControlFocusPublish {
+        version: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        focus: Option<ControlFocusFrame>,
     },
     /// Lister la boîte (principal humain).
     #[serde(rename = "human_inbox_list")]
@@ -3112,6 +3140,11 @@ pub enum DaemonToWrapper {
         state: ControlStateFrame,
         #[serde(default)]
         inbox_open_count: u32,
+    },
+    #[serde(rename = "control_focus")]
+    ControlFocus {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        focus: Option<ControlFocusFrame>,
     },
     #[serde(rename = "control_history")]
     ControlHistory { events: Vec<ControlEventFrame> },
@@ -5774,6 +5807,37 @@ mod control_and_inbox_contract_tests {
             decode::<WrapperToDaemon>(&encoded).unwrap(),
             WrapperToDaemon::ControlStateRead { version: 1 }
         ));
+        let focus_read = WrapperToDaemon::ControlFocusRead {
+            version: CONTROL_STATE_CONTRACT_VERSION,
+        };
+        let encoded = encode(&focus_read).unwrap();
+        assert!(
+            encoded.contains(r#""type":"control_focus_read""#),
+            "{encoded}"
+        );
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encoded).unwrap(),
+            WrapperToDaemon::ControlFocusRead { version: 1 }
+        ));
+        let focus = ControlFocusFrame {
+            objective_id: "objective-1".to_string(),
+            goal: "Vérifier le focus".to_string(),
+            project_id: "projet-1".to_string(),
+            updated_at: 42,
+        };
+        let publish = WrapperToDaemon::ControlFocusPublish {
+            version: CONTROL_STATE_CONTRACT_VERSION,
+            focus: Some(focus.clone()),
+        };
+        let encoded = encode(&publish).unwrap();
+        assert!(
+            encoded.contains(r#""type":"control_focus_publish""#),
+            "{encoded}"
+        );
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encoded).unwrap(),
+            WrapperToDaemon::ControlFocusPublish { focus: Some(decoded), .. } if decoded == focus
+        ));
         let set = WrapperToDaemon::ControlStateSet {
             version: CONTROL_STATE_CONTRACT_VERSION,
             command_id: "control-1".to_string(),
@@ -5808,6 +5872,13 @@ mod control_and_inbox_contract_tests {
         };
         assert_eq!(state, control_state_frame());
         assert_eq!(inbox_open_count, 3);
+        let projected = DaemonToWrapper::ControlFocus {
+            focus: Some(focus.clone()),
+        };
+        assert!(matches!(
+            decode::<DaemonToWrapper>(&encode(&projected).unwrap()).unwrap(),
+            DaemonToWrapper::ControlFocus { focus: Some(decoded) } if decoded == focus
+        ));
         let history = DaemonToWrapper::ControlHistory {
             events: vec![ControlEventFrame {
                 at: 1,

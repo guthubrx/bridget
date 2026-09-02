@@ -4957,6 +4957,60 @@ body[data-desktop-shell="true"] .conversation {
   color: #c43d3d;
 }
 
+.mission-list {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.8rem 0.45rem 0.35rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid color-mix(in srgb, var(--text-secondary) 18%, transparent);
+}
+
+.mission-list__title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.67rem;
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mission-list__item {
+  display: grid;
+  gap: 0.14rem;
+  padding: 0.5rem 0.55rem;
+  border-radius: 0.55rem;
+  background: color-mix(in srgb, var(--surface-hover) 58%, transparent);
+}
+
+.mission-list__item[data-focus="true"] {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface-hover));
+}
+
+.mission-list__kind {
+  color: var(--text-secondary);
+  font-size: 0.61rem;
+  font-weight: 760;
+  letter-spacing: 0.08em;
+}
+
+.mission-list__item[data-focus="true"] .mission-list__kind {
+  color: var(--accent);
+}
+
+.mission-list__goal {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-list__state {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+}
+
 .inbox-overlay__list {
   display: grid;
   gap: 0.6rem;

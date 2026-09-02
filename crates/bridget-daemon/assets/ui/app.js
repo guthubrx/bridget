@@ -177,6 +177,16 @@
         assert.doesNotMatch(source, /bridget\.db/);
       });
 
+      test("spec_087_le_focus_est_le_premier_objectif_affiche", () => {
+        const objectives = [
+          { objective_id: "ordinaire", goal: "Travail ordinaire", state: "en_coordination", updated_at: 2 },
+          { objective_id: "focus", goal: "Travail prioritaire", state: "en_coordination", updated_at: 1 },
+        ];
+        const ordered = api.prioritizeFocusObjectives(objectives, { objective_id: "focus", project_id: "p" });
+        assert.deepEqual(ordered.map((item) => item.objective_id), ["focus", "ordinaire"]);
+        assert.equal(ordered[0].isFocus, true);
+      });
+
       test("spec_087_projection_du_bandeau_ne_devine_rien", () => {
         const unknown = api.controlBannerProjection(null, 1000);
         assert.equal(unknown.known, false);
@@ -7479,6 +7489,26 @@
     };
   }
 
+  function prioritizeFocusObjectives(objectives, focus) {
+    const source = Array.isArray(objectives) ? objectives : [];
+    const focusId = text(focus && focus.objective_id);
+    const ordered = source
+      .filter((objective) => objective && text(objective.objective_id))
+      .map((objective) => ({ ...objective, isFocus: text(objective.objective_id) === focusId }))
+      .sort((left, right) => {
+        if (left.isFocus !== right.isFocus) return left.isFocus ? -1 : 1;
+        return Number(right.updated_at || 0) - Number(left.updated_at || 0);
+      });
+    if (!focusId || ordered.some((objective) => objective.isFocus)) return ordered;
+    return [{
+      objective_id: focusId,
+      goal: text(focus.goal) || "Focus en cours",
+      state: "en_coordination",
+      updated_at: Number(focus.updated_at || 0),
+      isFocus: true,
+    }, ...ordered];
+  }
+
   // Les actions restent dérivées d'un état attesté par le daemon. Cette
   // fonction ne change rien localement : le menu attend toujours la réponse HTTP
   // puis relit la liste des projets.
@@ -7891,6 +7921,8 @@
     }
     let state = createUiState({ selectedAgent: isUiSender(requestedAgent) ? null : requestedAgent });
     let projects = [];
+    let missionObjectives = [];
+    let currentFocus = null;
     let selectedProjectId = params.get("project_id") || null;
     let projectSettingsSnapshot = null;
     let projectPresentationPreferences = readProjectPresentationPreferences(windowRef.localStorage);
@@ -10147,6 +10179,24 @@
         shell.append(button, actions);
         nodes.projectList.append(shell);
       });
+      const objectives = prioritizeFocusObjectives(missionObjectives, currentFocus).slice(0, 8);
+      if (objectives.length > 0) {
+        const missions = make("section", "mission-list");
+        missions.setAttribute("aria-label", "Objectifs en cours");
+        missions.append(make("h3", "mission-list__title", "Objectifs en cours"));
+        objectives.forEach((objective) => {
+          const item = make("article", "mission-list__item");
+          item.dataset.focus = String(objective.isFocus === true);
+          const label = objective.isFocus ? "FOCUS" : "OBJECTIF";
+          item.append(
+            make("span", "mission-list__kind", label),
+            make("strong", "mission-list__goal", text(objective.goal) || "Objectif sans libellé"),
+            make("span", "mission-list__state", text(objective.state).replace(/_/g, " ") || "en cours"),
+          );
+          missions.append(item);
+        });
+        nodes.projectList.append(missions);
+      }
     };
     const refreshProjects = async () => {
       const payload = await requestProject("/v1/projects");
@@ -11632,6 +11682,10 @@
 
     const applyFleetSnapshot = (snapshot) => {
       const projectsChanged = applyProjectSnapshot(snapshot);
+      missionObjectives = Array.isArray(snapshot && snapshot.missions && snapshot.missions.objectives)
+        ? snapshot.missions.objectives
+        : [];
+      renderProjects();
       const previousSelected = state.selectedAgent;
       const previousAgents = state.agents;
       state = applyReconnectSnapshot(state, snapshot);
@@ -11695,6 +11749,10 @@
 
     const applySnapshotPayload = (snapshot, watchedAgent) => {
       applyProjectSnapshot(snapshot);
+      missionObjectives = Array.isArray(snapshot && snapshot.missions && snapshot.missions.objectives)
+        ? snapshot.missions.objectives
+        : [];
+      renderProjects();
       const previousSelected = state.selectedAgent;
       const previousArtifactSignature = artifactReferenceSignature(state.artifactReferences);
       state = applyReconnectSnapshot(state, snapshot);
@@ -12534,6 +12592,10 @@
         banner.dataset.state = view.known ? (view.paused ? "paused" : "active") : "unknown";
         banner.hidden = false;
         banner.append(make("span", "control-banner__pause", view.pauseLabel));
+        const focus = payload && payload.focus;
+        if (focus && text(focus.goal)) {
+          banner.append(make("strong", "control-banner__focus", `Focus : ${text(focus.goal)}`));
+        }
         if (view.buttonLabel) {
           const toggle = make("button", view.paused ? null : "secondary", view.buttonLabel);
           toggle.type = "button";
@@ -12550,6 +12612,8 @@
         if (lastInboxCount !== null && view.inboxCount > lastInboxCount) notifyInbox(view.inboxCount);
         lastInboxCount = view.inboxCount;
         lastState = payload;
+        currentFocus = payload && payload.focus ? payload.focus : null;
+        renderProjects();
       };
       const refresh = async () => {
         try {
@@ -12786,6 +12850,7 @@
     applyControlCenterPreferences,
     controlCenterRouteForSearch,
     projectInitials,
+    prioritizeFocusObjectives,
     projectRoundView,
     projectRuntimeActionEligibility,
     buildProjectRoundMutation,

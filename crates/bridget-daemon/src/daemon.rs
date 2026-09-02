@@ -8658,6 +8658,48 @@ fn handle_control_state_read(state: &Arc<Mutex<DaemonState>>, version: u16) -> D
     }
 }
 
+fn handle_control_focus_read(state: &Arc<Mutex<DaemonState>>, version: u16) -> DaemonToWrapper {
+    use bridget_transport::protocol::ControlStateRefusal;
+    if version != bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION {
+        return DaemonToWrapper::ControlStateRejected {
+            reason: ControlStateRefusal::UnsupportedVersion,
+        };
+    }
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    match crate::referent_control::read_focus(st.store.connection()) {
+        Ok(focus) => DaemonToWrapper::ControlFocus { focus },
+        Err(error) => {
+            warn!("projection focus illisible: {error}");
+            DaemonToWrapper::ControlStateRejected {
+                reason: ControlStateRefusal::StoreUnavailable,
+            }
+        }
+    }
+}
+
+fn handle_control_focus_publish(
+    state: &Arc<Mutex<DaemonState>>,
+    version: u16,
+    focus: Option<bridget_transport::protocol::ControlFocusFrame>,
+) -> DaemonToWrapper {
+    use bridget_transport::protocol::ControlStateRefusal;
+    if version != bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION {
+        return DaemonToWrapper::ControlStateRejected {
+            reason: ControlStateRefusal::UnsupportedVersion,
+        };
+    }
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    match crate::referent_control::publish_focus(st.store.connection(), focus.as_ref()) {
+        Ok(()) => DaemonToWrapper::ControlFocus { focus },
+        Err(error) => {
+            warn!("projection focus impossible: {error}");
+            DaemonToWrapper::ControlStateRejected {
+                reason: ControlStateRefusal::StoreUnavailable,
+            }
+        }
+    }
+}
+
 fn handle_control_history(
     state: &Arc<Mutex<DaemonState>>,
     version: u16,
@@ -9059,6 +9101,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::GuichetLookup { .. }
                 | WrapperToDaemon::GuichetReply { .. }
                 | WrapperToDaemon::HumanInboxDeposit { .. }
+                | WrapperToDaemon::ControlFocusPublish { .. }
                 | WrapperToDaemon::HumanInboxDecisions { .. }
                 | WrapperToDaemon::HumanInboxAck { .. }
                 | WrapperToDaemon::HumanInboxClose { .. }
@@ -9066,6 +9109,7 @@ fn handle_wrapper_message(
         match st.connection_roles.get(conn_id) {
             Some(ConnectionRole::Service) => match &msg {
                 WrapperToDaemon::HumanInboxDeposit { .. }
+                | WrapperToDaemon::ControlFocusPublish { .. }
                 | WrapperToDaemon::HumanInboxDecisions { .. }
                 | WrapperToDaemon::HumanInboxAck { .. }
                 | WrapperToDaemon::HumanInboxClose { .. }
@@ -9074,6 +9118,7 @@ fn handle_wrapper_message(
                     Some(ServiceRefusal::NegotiationRequired)
                 }
                 WrapperToDaemon::HumanInboxDeposit { .. }
+                | WrapperToDaemon::ControlFocusPublish { .. }
                 | WrapperToDaemon::HumanInboxDecisions { .. }
                 | WrapperToDaemon::HumanInboxAck { .. }
                 | WrapperToDaemon::HumanInboxClose { .. }
@@ -9089,6 +9134,7 @@ fn handle_wrapper_message(
                     Some(ServiceRefusal::CapabilityRequired)
                 }
                 WrapperToDaemon::HumanInboxDeposit { .. }
+                | WrapperToDaemon::ControlFocusPublish { .. }
                 | WrapperToDaemon::HumanInboxDecisions { .. }
                 | WrapperToDaemon::HumanInboxAck { .. }
                 | WrapperToDaemon::HumanInboxClose { .. } => None,
@@ -9245,6 +9291,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::Domain { .. }
                 | WrapperToDaemon::Availability { .. }
                 | WrapperToDaemon::ControlStateRead { .. }
+                | WrapperToDaemon::ControlFocusRead { .. }
                 | WrapperToDaemon::ControlHistory { .. }
                 | WrapperToDaemon::ControlStateSet { .. }
                 | WrapperToDaemon::HumanInboxList { .. }
@@ -9272,6 +9319,7 @@ fn handle_wrapper_message(
                     Some(ClientRefusal::AlreadyNegotiated)
                 }
                 WrapperToDaemon::ControlStateRead { .. }
+                | WrapperToDaemon::ControlFocusRead { .. }
                 | WrapperToDaemon::ControlHistory { .. }
                 | WrapperToDaemon::ControlStateSet { .. }
                 | WrapperToDaemon::HumanInboxList { .. }
@@ -9281,6 +9329,7 @@ fn handle_wrapper_message(
                     Some(ClientRefusal::NegotiationRequired)
                 }
                 WrapperToDaemon::ControlStateRead { .. } | WrapperToDaemon::ControlHistory { .. }
+                | WrapperToDaemon::ControlFocusRead { .. }
                     if st.client_negotiations.get(conn_id).is_some_and(|negotiated| {
                         negotiated.version != CLIENT_CONTRACT_VERSION
                             || !(negotiated
@@ -9304,6 +9353,7 @@ fn handle_wrapper_message(
                     Some(ClientRefusal::CapabilityNotNegotiated)
                 }
                 WrapperToDaemon::ControlStateRead { .. }
+                | WrapperToDaemon::ControlFocusRead { .. }
                 | WrapperToDaemon::ControlHistory { .. }
                 | WrapperToDaemon::ControlStateSet { .. }
                 | WrapperToDaemon::HumanInboxList { .. }
@@ -9445,6 +9495,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::UsageWindow { .. }
                 | WrapperToDaemon::Domain { .. }
                 | WrapperToDaemon::Availability { .. }
+                | WrapperToDaemon::ControlFocusPublish { .. }
                 | WrapperToDaemon::HumanInboxDeposit { .. }
                 | WrapperToDaemon::HumanInboxDecisions { .. }
                 | WrapperToDaemon::HumanInboxAck { .. }
@@ -9462,6 +9513,7 @@ fn handle_wrapper_message(
                         | WrapperToDaemon::ProjectRoundRequest { .. }
                         | WrapperToDaemon::ProjectRoundDispatch { .. }
                         | WrapperToDaemon::ControlStateRead { .. }
+                        | WrapperToDaemon::ControlFocusRead { .. }
                         | WrapperToDaemon::ControlHistory { .. }
                         | WrapperToDaemon::ControlStateSet { .. }
                         | WrapperToDaemon::HumanInboxList { .. }
@@ -9481,6 +9533,9 @@ fn handle_wrapper_message(
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
         WrapperToDaemon::ControlStateRead { version } => {
             Some(handle_control_state_read(state, version))
+        }
+        WrapperToDaemon::ControlFocusRead { version } => {
+            Some(handle_control_focus_read(state, version))
         }
         WrapperToDaemon::ControlHistory { version, limit } => {
             Some(handle_control_history(state, version, limit))
@@ -9512,6 +9567,9 @@ fn handle_wrapper_message(
         } => Some(handle_human_inbox_deposit(
             state, version, &dedup_key, kind, &subject, &context, &options,
         )),
+        WrapperToDaemon::ControlFocusPublish { version, focus } => {
+            Some(handle_control_focus_publish(state, version, focus))
+        }
         WrapperToDaemon::HumanInboxList {
             version,
             state: filter,
@@ -15251,7 +15309,7 @@ mod matrice_roles_tests {
                 .insert("wrapper-parent".to_string(), parent_instance_id.clone());
             let order = FleetSpawnOrder {
                 agent_type: "fixture".to_string(),
-                requested_name: Some("child-events".to_string()),
+                requested_name: Some("6b0c0eb7-f494-4f4a-a280-6a5f0d13c410".to_string()),
                 cwd: PathBuf::from("/tmp"),
                 persistent: false,
                 command_id: "spawn-events-daemon".to_string(),
@@ -23557,7 +23615,7 @@ mod presence_tests {
             .conn_names
             .insert("conn-1".to_string(), "bridget".to_string());
         state.presences.get_mut("instance-1").unwrap().name = "bridget".to_string();
-        let (target_writer, mut target_reader) = control_socket("spec-087-project-round");
+        let (target_writer, target_reader) = control_socket("spec-087-project-round");
         state
             .connections
             .insert("conn-1".to_string(), target_writer);

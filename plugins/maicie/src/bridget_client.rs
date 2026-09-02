@@ -1421,6 +1421,32 @@ impl HumanInboxClient {
         }
     }
 
+    /// Publie le focus courant sur la même connexion de service que la boîte
+    /// humaine. Bridget conserve cette projection, sans lire le SQLite Maicie.
+    pub fn publish_control_focus(
+        &mut self,
+        focus: Option<bridget_transport::protocol::ControlFocusFrame>,
+    ) -> Result<(), BridgetClientError> {
+        let response = request_with_deadline(
+            &mut self.connection,
+            json!({
+                "type": "control_focus_publish",
+                "version": bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION,
+                "focus": focus,
+            }),
+            self.deadline,
+        )?;
+        match response_type(&response)? {
+            "control_focus" => Ok(()),
+            "control_state_rejected" | "ServiceRejected" => {
+                Err(BridgetClientError::ClientRejected {
+                    reason: response.get("reason").cloned().unwrap_or(Value::Null),
+                })
+            }
+            other => Err(unexpected("control_focus", other)),
+        }
+    }
+
     /// Relève sans rien marquer : la même décision revient tant qu'elle n'a
     /// pas été acquittée après application durable.
     pub fn fetch_human_decisions(
