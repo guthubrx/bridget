@@ -62,6 +62,12 @@
 - La relève encadre désormais explicitement les frontières `AfterFetchBeforeApply` et `AfterApplyBeforeAck`. Elle marque la décision dans la même transaction que son effet, puis seulement l'acquitte côté daemon.
 - `ack`, `cancel`, `raise_budget` et `reassign:<agent_id>` sont couverts. Une réassignation après intervention humaine crée une génération ouverte, un épisode de rappel et une demande durable vers l'agent choisi ; un rejeu ne crée pas de seconde génération.
 - Preuves : `cargo test -p maicie --test controle_referent_087` : **11 passés, 0 échec** ; `coordination_store_integration chaine_epuisee_depose_un_unique_item_humain_durable` : **1 passé, 0 échec**. Le crash simulé entre relève et application relit la décision, l'applique une seule fois, puis l'acquitte.
+
+### T033 et T053 Fermeture automatique des items humains : ✅
+
+- `HumanInboxClose { item_id, reason }` et `HumanInboxClosed` sont classés comme messages service dans les deux matrices daemon. Le bras dédié appelle `human_inbox::close_self` après contrôle de version.
+- Maicie conserve désormais le `item_id` reçu lors du dépôt. La migration v25 remet les anciens dépôts attestés en préparation une seule fois afin de récupérer cet identifiant via le dépôt idempotent. Chaque relève ferme un item dont `objective_id` est clos/absent ou dont `delegation_id` est annulée/absente, avec le motif strict `object_vanished`, puis conserve `closed_at` pour ne pas répéter l'appel.
+- Preuves serveur : trame transport **1 passé, 0 échec** ; unité daemon `human_inbox` **8 passés, 0 échec** dont le dépôt répété (`occurrences = 2`) et `close_self` idempotent ; scénarios Maicie objectif clos et délégation annulée **2 passés, 0 échec** ; contrat client service **1 passé, 0 échec** ; suite `controle_referent_087` **13 passés, 0 échec** ; `cargo check -p bridget-daemon` réussi.
 ### T029 Dette de réponse : ✅ palier 3 d'une demande du référent ⇒ item `reply_debt`
 ### T030 Canal externe : ✅ `human-channel.json` 0600, chemin absolu, commande avec résumé borné sur stdin, échec consigné
 ### T031 Rappel : ✅ `remind_overdue` (module) ; **branchement dans le thread horaire** : voir Convergence

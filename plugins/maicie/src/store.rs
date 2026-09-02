@@ -57,7 +57,7 @@ use uuid::Uuid;
 
 /// Version courante du schéma SQLite. Les oracles de migration doivent lire
 /// cette constante — un littéral en dur meurt à chaque migration.
-pub const SCHEMA_VERSION: i64 = 24;
+pub const SCHEMA_VERSION: i64 = 25;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -8472,6 +8472,9 @@ pub struct HumanInboxOutboxRow {
     pub options: Vec<String>,
     pub created_at: i64,
     pub attempts: u32,
+    /// Identifiant attesté par Bridget après le dépôt. Il permet au
+    /// producteur de fermer précisément son item si sa source disparaît.
+    pub item_id: Option<String>,
 }
 
 impl MaicieStore {
@@ -8567,7 +8570,7 @@ impl MaicieStore {
         let mut statement = self
             .connection
             .prepare(
-                "SELECT dedup_key, kind, subject_json, context, options_json, created_at, attempts
+                "SELECT dedup_key, kind, subject_json, context, options_json, created_at, attempts, item_id
                  FROM human_inbox_outbox WHERE state = 'prepared' ORDER BY created_at, dedup_key",
             )
             .map_err(StoreError::Sql)?;
@@ -8582,21 +8585,115 @@ impl MaicieStore {
                     options: serde_json::from_str(&options_json).unwrap_or_default(),
                     created_at: row.get(5)?,
                     attempts: row.get::<_, i64>(6)?.max(0) as u32,
+                    item_id: row.get(7)?,
                 })
             })
             .map_err(StoreError::Sql)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::Sql)
     }
 
-    pub fn mark_human_inbox_deposited(&mut self, dedup_key: &str) -> Result<(), StoreError> {
+    pub fn mark_human_inbox_deposited(
+        &mut self,
+        dedup_key: &str,
+        item_id: &str,
+    ) -> Result<(), StoreError> {
+        if item_id.trim().is_empty() {
+            return Err(StoreError::Invalid("reçu boîte humaine sans identifiant"));
+        }
         self.connection
             .execute(
-                "UPDATE human_inbox_outbox SET state = 'deposited', attempts = attempts + 1
+                "UPDATE human_inbox_outbox
+                 SET state = 'deposited', item_id = ?2, attempts = attempts + 1
                  WHERE dedup_key = ?1",
-                [dedup_key],
+                params![dedup_key, item_id],
             )
             .map_err(StoreError::Sql)?;
         Ok(())
+    }
+
+    /// Items effectivement ouverts chez Bridget dont le sujet source n'existe
+    /// plus : objectif clos/absent ou délégation annulée/absente. Une fois
+    /// fermé, `closed_at` évite toute nouvelle commande à chaque relève.
+    pub fn deposited_human_inbox_to_close(&self) -> Result<Vec<HumanInboxOutboxRow>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT dedup_key, kind, subject_json, context, options_json, created_at, attempts, item_id
+                 FROM human_inbox_outbox
+                 WHERE state = 'deposited' AND item_id IS NOT NULL AND closed_at IS NULL
+                 ORDER BY created_at, dedup_key",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], |row| {
+                let options_json: String = row.get(4)?;
+                Ok(HumanInboxOutboxRow {
+                    dedup_key: row.get(0)?,
+                    kind: row.get(1)?,
+                    subject_json: row.get(2)?,
+                    context: row.get(3)?,
+                    options: serde_json::from_str(&options_json).unwrap_or_default(),
+                    created_at: row.get(5)?,
+                    attempts: row.get::<_, i64>(6)?.max(0) as u32,
+                    item_id: row.get(7)?,
+                })
+            })
+            .map_err(StoreError::Sql)?;
+        let mut closing = Vec::new();
+        for row in rows {
+            let row = row.map_err(StoreError::Sql)?;
+            if self.human_inbox_subject_vanished(&row.subject_json)? {
+                closing.push(row);
+            }
+        }
+        Ok(closing)
+    }
+
+    pub fn mark_human_inbox_closed(&mut self, dedup_key: &str, now: i64) -> Result<(), StoreError> {
+        self.connection
+            .execute(
+                "UPDATE human_inbox_outbox SET closed_at = ?2
+                 WHERE dedup_key = ?1 AND state = 'deposited' AND closed_at IS NULL",
+                params![dedup_key, now],
+            )
+            .map_err(StoreError::Sql)?;
+        Ok(())
+    }
+
+    fn human_inbox_subject_vanished(&self, subject_json: &str) -> Result<bool, StoreError> {
+        let subject: Value = serde_json::from_str(subject_json).map_err(StoreError::Json)?;
+        let Some(subject) = subject.as_object() else {
+            return Ok(false);
+        };
+        if let Some(objective_id) = subject.get("objective_id").and_then(Value::as_str) {
+            let state: Option<String> = self
+                .connection
+                .query_row(
+                    "SELECT state FROM objectives WHERE id = ?1",
+                    [objective_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(StoreError::Sql)?;
+            if state.as_deref().is_none_or(|state| state == "clos") {
+                return Ok(true);
+            }
+        }
+        if let Some(delegation_id) = subject.get("delegation_id").and_then(Value::as_str) {
+            let state: Option<String> = self
+                .connection
+                .query_row(
+                    "SELECT state FROM delegations WHERE id = ?1",
+                    [delegation_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(StoreError::Sql)?;
+            if state.as_deref().is_none_or(|state| state == "annulee") {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub fn mark_human_inbox_attempt(&mut self, dedup_key: &str) -> Result<(), StoreError> {
@@ -10050,6 +10147,20 @@ fn migrate_to_version(
                  attempts INTEGER NOT NULL DEFAULT 0
              );
              ALTER TABLE deferred_delegation_dispatch ADD COLUMN deferred_reason TEXT;",
+        )
+        .map_err(StoreError::Sql)?;
+    }
+
+    // v25 (SPEC-087) : le reçu Bridget est conservé avec l'outbox afin que
+    // Maicie puisse fermer l'item source devenu caduc. Les reçus v24 ne
+    // portaient pas d'identifiant : on les remet une fois à déposer pour
+    // récupérer le même item idempotent et conserver l'historique daemon.
+    if current_version < 25 && target_version >= 25 {
+        tx.execute_batch(
+            "ALTER TABLE human_inbox_outbox ADD COLUMN item_id TEXT;
+             ALTER TABLE human_inbox_outbox ADD COLUMN closed_at INTEGER;
+             UPDATE human_inbox_outbox SET state = 'prepared'
+             WHERE state = 'deposited' AND item_id IS NULL;",
         )
         .map_err(StoreError::Sql)?;
     }

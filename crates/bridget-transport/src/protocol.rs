@@ -2508,6 +2508,13 @@ pub enum WrapperToDaemon {
         version: u16,
         decision_id: String,
     },
+    /// Fermer un item ouvert dont l'objet source a disparu (rôle service).
+    #[serde(rename = "human_inbox_close")]
+    HumanInboxClose {
+        version: u16,
+        item_id: String,
+        reason: String,
+    },
 }
 
 /// Origine d'une observation de runtime. Énumération fermée : une valeur
@@ -3123,6 +3130,8 @@ pub enum DaemonToWrapper {
     },
     #[serde(rename = "human_inbox_acked")]
     HumanInboxAcked { decision_id: String, acked_at: i64 },
+    #[serde(rename = "human_inbox_closed")]
+    HumanInboxClosed { item_id: String, closed: bool },
 }
 
 fn unknown_build_id() -> String {
@@ -5863,6 +5872,11 @@ mod control_and_inbox_contract_tests {
             WrapperToDaemon::HumanInboxAck {
                 version: 1,
                 decision_id: "dec-1".to_string(),
+            },
+            WrapperToDaemon::HumanInboxClose {
+                version: 1,
+                item_id: "i1".to_string(),
+                reason: "object_vanished".to_string(),
             },
         ] {
             let encoded = encode(&frame).unwrap();

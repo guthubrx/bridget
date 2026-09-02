@@ -1473,6 +1473,37 @@ impl HumanInboxClient {
             other => Err(unexpected("human_inbox_acked", other)),
         }
     }
+
+    pub fn close_human_inbox(
+        &mut self,
+        item_id: &str,
+        reason: &str,
+    ) -> Result<bool, BridgetClientError> {
+        let response = request_with_deadline(
+            &mut self.connection,
+            json!({
+                "type": "human_inbox_close",
+                "version": HUMAN_INBOX_CONTRACT_VERSION,
+                "item_id": item_id,
+                "reason": reason,
+            }),
+            self.deadline,
+        )?;
+        match response_type(&response)? {
+            "human_inbox_closed" => {
+                response
+                    .get("closed")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| {
+                        BridgetClientError::Protocol("fermeture boîte illisible".to_string())
+                    })
+            }
+            "human_inbox_rejected" | "ServiceRejected" => Err(BridgetClientError::ClientRejected {
+                reason: response.get("reason").cloned().unwrap_or(Value::Null),
+            }),
+            other => Err(unexpected("human_inbox_closed", other)),
+        }
+    }
 }
 
 impl ProjectRegistryClient {
@@ -3732,6 +3763,14 @@ mod control_inbox_contract_tests {
                 &mut writer,
                 json!({"type":"human_inbox_acked","decision_id":"dec-1","acked_at":9}),
             );
+            assert_eq!(
+                read_json(&mut reader),
+                json!({"type":"human_inbox_close","version":1,"item_id":"i1","reason":"object_vanished"})
+            );
+            write_json(
+                &mut writer,
+                json!({"type":"human_inbox_closed","item_id":"i1","closed":true}),
+            );
         });
         let mut client = HumanInboxClient::connect_with_limits_until(
             &path,
@@ -3755,6 +3794,7 @@ mod control_inbox_contract_tests {
         assert_eq!(decisions[0].choice, "cancel");
         assert_eq!(decisions[0].subject["delegation_id"], "d1");
         assert_eq!(client.ack_human_decision("dec-1").unwrap(), 9);
+        assert!(client.close_human_inbox("i1", "object_vanished").unwrap());
         server.join().unwrap();
     }
 }

@@ -8919,6 +8919,33 @@ fn handle_human_inbox_ack(
     }
 }
 
+fn handle_human_inbox_close(
+    state: &Arc<Mutex<DaemonState>>,
+    version: u16,
+    item_id: &str,
+    reason: &str,
+) -> DaemonToWrapper {
+    use bridget_transport::protocol::HumanInboxRefusal;
+    if version != bridget_transport::protocol::HUMAN_INBOX_CONTRACT_VERSION {
+        return DaemonToWrapper::HumanInboxRejected {
+            reason: HumanInboxRefusal::UnsupportedVersion,
+        };
+    }
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    match crate::human_inbox::close_self(st.store.connection(), item_id, reason, unix_now_secs()) {
+        Ok(closed) => DaemonToWrapper::HumanInboxClosed {
+            item_id: item_id.to_string(),
+            closed,
+        },
+        Err(error) => {
+            warn!("fermeture boîte humaine impossible: {error}");
+            DaemonToWrapper::HumanInboxRejected {
+                reason: HumanInboxRefusal::StoreUnavailable,
+            }
+        }
+    }
+}
+
 fn handle_wrapper_message(
     conn_id: &str,
     msg: WrapperToDaemon,
@@ -9026,12 +9053,14 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::HumanInboxDeposit { .. }
                 | WrapperToDaemon::HumanInboxDecisions { .. }
                 | WrapperToDaemon::HumanInboxAck { .. }
+                | WrapperToDaemon::HumanInboxClose { .. }
         );
         match st.connection_roles.get(conn_id) {
             Some(ConnectionRole::Service) => match &msg {
                 WrapperToDaemon::HumanInboxDeposit { .. }
                 | WrapperToDaemon::HumanInboxDecisions { .. }
                 | WrapperToDaemon::HumanInboxAck { .. }
+                | WrapperToDaemon::HumanInboxClose { .. }
                     if !st.service_negotiations.contains_key(conn_id) =>
                 {
                     Some(ServiceRefusal::NegotiationRequired)
@@ -9039,6 +9068,7 @@ fn handle_wrapper_message(
                 WrapperToDaemon::HumanInboxDeposit { .. }
                 | WrapperToDaemon::HumanInboxDecisions { .. }
                 | WrapperToDaemon::HumanInboxAck { .. }
+                | WrapperToDaemon::HumanInboxClose { .. }
                     if !st
                         .service_negotiations
                         .get(conn_id)
@@ -9052,7 +9082,8 @@ fn handle_wrapper_message(
                 }
                 WrapperToDaemon::HumanInboxDeposit { .. }
                 | WrapperToDaemon::HumanInboxDecisions { .. }
-                | WrapperToDaemon::HumanInboxAck { .. } => None,
+                | WrapperToDaemon::HumanInboxAck { .. }
+                | WrapperToDaemon::HumanInboxClose { .. } => None,
                 WrapperToDaemon::ServiceHello { .. }
                     if st.service_negotiations.contains_key(conn_id) =>
                 {
@@ -9408,7 +9439,8 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::Availability { .. }
                 | WrapperToDaemon::HumanInboxDeposit { .. }
                 | WrapperToDaemon::HumanInboxDecisions { .. }
-                | WrapperToDaemon::HumanInboxAck { .. } => {
+                | WrapperToDaemon::HumanInboxAck { .. }
+                | WrapperToDaemon::HumanInboxClose { .. } => {
                     Some(ClientRefusal::MessageOutsideClientRole)
                 }
             },
@@ -9494,6 +9526,11 @@ fn handle_wrapper_message(
             version,
             decision_id,
         } => Some(handle_human_inbox_ack(state, version, &decision_id)),
+        WrapperToDaemon::HumanInboxClose {
+            version,
+            item_id,
+            reason,
+        } => Some(handle_human_inbox_close(state, version, &item_id, &reason)),
         WrapperToDaemon::RuntimeIngressHello { .. }
         | WrapperToDaemon::RuntimeIngressPreflight { .. } => {
             Some(DaemonToWrapper::RuntimeIngressRejected {

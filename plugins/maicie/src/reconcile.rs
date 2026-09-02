@@ -441,6 +441,7 @@ pub fn reconcile_startup_at_observed_with_limits(
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct HumanInboxReconcileReport {
     pub deposited: u32,
+    pub closed: u32,
     pub applied: u32,
     pub acked: u32,
     pub unsupported: u32,
@@ -532,14 +533,33 @@ pub fn reconcile_human_inbox_observed_with_limits(
             options: row.options.clone(),
         };
         match client.deposit_human_inbox(&deposit) {
-            Ok(_) => {
-                store.mark_human_inbox_deposited(&row.dedup_key)?;
+            Ok(receipt) => {
+                store.mark_human_inbox_deposited(&row.dedup_key, &receipt.item_id)?;
                 report.deposited += 1;
             }
             Err(BridgetClientError::ClientRejected { .. }) => {
                 // Refus fermé du daemon (contexte trop grand, options vides) :
                 // on compte la tentative et on n'insiste pas dans cette passe.
                 store.mark_human_inbox_attempt(&row.dedup_key)?;
+            }
+            Err(BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. }) => {
+                report.transport_unavailable = true;
+                return Ok(report);
+            }
+            Err(error) => return Err(ReconcileError::Client(error)),
+        }
+    }
+    for row in store.deposited_human_inbox_to_close()? {
+        let item_id = row
+            .item_id
+            .as_deref()
+            .ok_or(ReconcileError::InvalidSnapshot(
+                "item humain déposé sans identifiant",
+            ))?;
+        match client.close_human_inbox(item_id, "object_vanished") {
+            Ok(_) => {
+                store.mark_human_inbox_closed(&row.dedup_key, now)?;
+                report.closed += 1;
             }
             Err(BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. }) => {
                 report.transport_unavailable = true;

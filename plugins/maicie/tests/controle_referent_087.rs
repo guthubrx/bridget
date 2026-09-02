@@ -217,18 +217,18 @@ fn open_auto(
     }
 }
 
-/// Propriété : une base au schéma précédent migre vers v24 avec ses quatre
+/// Propriété : une base au schéma précédent migre vers v25 avec ses quatre
 /// objets, et une base v24 vierge s'ouvre. La base « v23 » est fabriquée par
 /// le code courant puis ramenée à la version précédente sans ses objets v24,
 /// faute de binaire v23 disponible sur le banc.
 #[test]
-fn spec_087_migration_v24_ajoute_focus_consommations_decisions_et_motif() {
+fn spec_087_migration_v25_ajoute_focus_consommations_decisions_et_motif() {
     let guard = RootGuard::new("migration");
     let database = guard.path.join("maicie.sqlite3");
     {
         let store = MaicieStore::open(&database).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 24);
+        assert_eq!(SCHEMA_VERSION, 25);
     }
     {
         let connection = rusqlite::Connection::open(&database).unwrap();
@@ -237,7 +237,7 @@ fn spec_087_migration_v24_ajoute_focus_consommations_decisions_et_motif() {
                 "DROP TABLE focus_queue; DROP TABLE human_origin_consumptions;
                  DROP TABLE human_decisions_applied; DROP TABLE human_inbox_outbox;
                  ALTER TABLE deferred_delegation_dispatch DROP COLUMN deferred_reason;
-                 DELETE FROM schema_migrations WHERE version = 24;
+                 DELETE FROM schema_migrations WHERE version IN (24, 25);
                  PRAGMA user_version = 23;",
             )
             .unwrap();
@@ -252,14 +252,14 @@ fn spec_087_migration_v24_ajoute_focus_consommations_decisions_et_motif() {
             refused,
             Some(StoreError::MigrationRequired {
                 found: 23,
-                supported: 24
+                supported: 25
             })
         ),
         "une base v23 exige le consentement : {refused:?}"
     );
     let mut store =
         historical_guichet_receptions::open_after_published_migration(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 24);
+    assert_eq!(store.schema_version().unwrap(), 25);
     store.set_control_snapshot(active(5));
     let (objective_id, _, _) = open_auto(&mut store, "post-migration", 1_000, &[]);
     store.focus_enqueue(objective_id, true, 1_000).unwrap();
@@ -629,7 +629,7 @@ fn spec_087_depot_humain_durable_et_reference_focus() {
             .unwrap()
     );
     assert_eq!(store.pending_human_inbox().unwrap().len(), 1);
-    store.mark_human_inbox_deposited("k1").unwrap();
+    store.mark_human_inbox_deposited("k1", "item-k1").unwrap();
     assert!(store.pending_human_inbox().unwrap().is_empty());
     assert!(
         store
@@ -657,6 +657,125 @@ fn spec_087_depot_humain_durable_et_reference_focus() {
         0,
         "idempotent"
     );
+}
+
+/// Propriété : le reçu Bridget lie l'outbox locale à l'item ouvert. Quand
+/// l'objectif de cet item est clos, Maicie demande une unique fermeture au
+/// producteur et ne la rejoue plus aux relevés suivants.
+#[test]
+fn spec_087_item_humain_est_ferme_quand_son_objectif_disparait() {
+    let guard = RootGuard::new("human-close");
+    let mut store = MaicieStore::open(guard.path.join("maicie.sqlite3")).unwrap();
+    store.set_control_snapshot(active(10));
+    let (objective_id, _, _) = open_auto(&mut store, "close-source", 1_000, &[]);
+    close(&mut store, objective_id, "travail terminé", 1_010).unwrap();
+    store
+        .enqueue_human_inbox(
+            "closed-objective",
+            "chain_exhausted",
+            &serde_json::json!({ "objective_id": objective_id }).to_string(),
+            r#"{"summary":"source close"}"#,
+            &["ack".to_string()],
+            1_011,
+        )
+        .unwrap();
+
+    let socket = guard.path.join("human-close.sock");
+    let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+    let server = thread::spawn({
+        let socket = socket.clone();
+        move || {
+            let listener = UnixListener::bind(socket).unwrap();
+            ready_tx.send(()).unwrap();
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert_eq!(read_json(&mut reader)["type"], "RoleHandshake");
+            write_json(
+                &mut writer,
+                serde_json::json!({"type":"RoleAccepted","role":"service"}),
+            );
+            assert_eq!(read_json(&mut reader)["type"], "ServiceHello");
+            write_json(
+                &mut writer,
+                serde_json::json!({"type":"ServiceWelcome","version":1,"horizon_secs":60,
+                    "issued_at_tolerance_secs":5,"capabilities":["human_inbox_v1"]}),
+            );
+            assert_eq!(
+                read_json(&mut reader)["type"],
+                "human_inbox_deposit",
+                "le dépôt durable est d'abord attesté"
+            );
+            write_json(
+                &mut writer,
+                serde_json::json!({"type":"human_inbox_deposited","item_id":"item-close-1",
+                    "created":true,"occurrences":1}),
+            );
+            assert_eq!(
+                read_json(&mut reader),
+                serde_json::json!({"type":"human_inbox_close","version":1,
+                    "item_id":"item-close-1","reason":"object_vanished"}),
+            );
+            write_json(
+                &mut writer,
+                serde_json::json!({"type":"human_inbox_closed","item_id":"item-close-1","closed":true}),
+            );
+            assert_eq!(read_json(&mut reader)["type"], "human_inbox_decisions");
+            write_json(
+                &mut writer,
+                serde_json::json!({"type":"human_inbox_decisions_batch","decisions":[]}),
+            );
+        }
+    });
+    ready_rx.recv().unwrap();
+    let report =
+        reconcile_human_inbox_with_limits(&mut store, &socket, human_inbox_limits(), 1_012)
+            .unwrap();
+    server.join().unwrap();
+    assert_eq!((report.deposited, report.closed), (1, 1));
+    assert!(
+        store.deposited_human_inbox_to_close().unwrap().is_empty(),
+        "l'item local fermé ne redonne pas lieu à un second close_self"
+    );
+}
+
+/// Une délégation explicitement annulée est l'autre source caduc prévue par
+/// le contrat. Elle rend son item éligible à la même fermeture producteur.
+#[test]
+fn spec_087_item_humain_est_ferme_quand_sa_delegation_est_annulee() {
+    let guard = RootGuard::new("human-close-cancelled-delegation");
+    let mut store = MaicieStore::open(guard.path.join("maicie.sqlite3")).unwrap();
+    store.set_control_snapshot(active(10));
+    let (_, delegation_id, _) = open_auto(&mut store, "cancel-source", 1_000, &[]);
+    store
+        .enqueue_human_inbox(
+            "cancelled-delegation",
+            "chain_exhausted",
+            &serde_json::json!({ "delegation_id": delegation_id }).to_string(),
+            r#"{"summary":"délégation annulée"}"#,
+            &["ack".to_string()],
+            1_001,
+        )
+        .unwrap();
+    store
+        .mark_human_inbox_deposited("cancelled-delegation", "item-cancelled-1")
+        .unwrap();
+    assert!(store.deposited_human_inbox_to_close().unwrap().is_empty());
+    assert_eq!(
+        store
+            .apply_human_decision(
+                "cancel-delegation-source",
+                "decision-source-item",
+                "cancel",
+                Some(delegation_id),
+                1_002,
+            )
+            .unwrap(),
+        HumanDecisionApplication::Applied
+    );
+    let closing = store.deposited_human_inbox_to_close().unwrap();
+    assert_eq!(closing.len(), 1);
+    assert_eq!(closing[0].item_id.as_deref(), Some("item-cancelled-1"));
 }
 
 /// Propriété : un arrêt entre la relève et l'effet ne consomme pas la
