@@ -1431,6 +1431,13 @@ pub enum GuichetRefusalReason {
     /// Maicie, ou un focus a été demandé sans origine humaine valide. Code
     /// public unique : la garde précise reste dans le journal Maicie.
     HumanOriginInvalid,
+    /// Le plafond de création automatique est atteint. Les deux valeurs sont
+    /// attestées par Maicie au moment du refus, elles ne sont jamais déduites
+    /// par Bridget lors de l'affichage ou d'un rejeu.
+    BudgetReached {
+        cap: u32,
+        open: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

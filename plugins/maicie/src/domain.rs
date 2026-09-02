@@ -2172,6 +2172,7 @@ define_sql_vocabulary! {
         ObjectifDejaClos => "objective_already_closed",
         AutorisationRefusee => "authorization_denied",
         OrigineHumaineInvalide => "human_origin_invalid",
+        BudgetAtteint => "budget_reached",
     }
 }
 

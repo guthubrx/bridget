@@ -103,7 +103,7 @@ Chaque garde de pause (routine, réassignation, relève, dépendance) a donc un 
 **Découverte de méthode** : compiler le clone de base dans `target-maicie` a ensuite fait échouer la compilation du worktree (`unresolved import maicie::control`, `ObservedHumanMessageFrame` introuvable) alors que les sources étaient intactes : le cache a servi les artefacts du clone. Remède : `cargo clean -p maicie -p bridget-transport` (4,7 Gio). Un cache par arbre, jamais deux arbres sur un cache.
 
 ## À reporter côté daemon (protocole ou daemon)
-1. `GuichetRefusalReason` n'a pas de variante budget : un refus `BudgetReached` remonte au guichet comme `mutation_invalid`. Trame souhaitée : `GuichetRefusalReason::BudgetReached { cap: u32, open: u32 }`.
+1. Le refus budget est désormais une trame structurée `GuichetRefusalReason::BudgetReached { cap, open }`, dont les valeurs restent celles du refus initial au rejeu.
 2. Le hash humain est calculé de chaque côté sur la requête canonique sans `origin` ; aucun test croisé daemon/Maicie n'existe pour ces octets (seul le scellé est croisé). À ajouter dans un test d'intégration daemon qui soumet une vraie requête au greffe Maicie.
 3. `priority_class="focus"` n'est pas posé par Maicie ; seule la référence `focus:<id>` l'est, conformément au message du coordinateur.
 

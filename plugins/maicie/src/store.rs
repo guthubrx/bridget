@@ -9,8 +9,9 @@ use crate::bridget_client::{GuichetClaim, IdempotencyIssue, PublicMessage, Spawn
 use crate::control::{Admission, AutonomousEffect, ControlSnapshot, admit_autonomous_effect};
 use crate::domain::guichet::{
     EvenementCycleGuichet, MutationReply, ProjectionReply, RapportLivraison, RequeteCanonique,
-    delivery_reply_bytes, mutation_reply_bytes, projection_reply_bytes,
-    reclaim_mutation_reply_bytes, reclaim_projection_reply_bytes, refusal_reply_bytes,
+    budget_refusal_reply_bytes, delivery_reply_bytes, mutation_reply_bytes, projection_reply_bytes,
+    reclaim_mutation_reply_bytes, reclaim_projection_reply_bytes, reclaim_refusal_reply_bytes,
+    refusal_reply_bytes,
 };
 use crate::domain::{
     ActivationOutbox, ApprobationActivation, AttenteNotification, AttestationConsumption,
@@ -2801,6 +2802,7 @@ impl MaicieStore {
         response_message_id: &str,
         now: i64,
         reason: MotifRefusGreffe,
+        budget: Option<(u32, u32)>,
     ) -> Result<StoredGuichetReply, StoreError> {
         if now <= 0 || response_message_id.trim().is_empty() {
             return Err(StoreError::Invalid("reçu de refus incomplet"));
@@ -2832,9 +2834,8 @@ impl MaicieStore {
             if claim.claim_generation <= reception.claim_generation {
                 return Err(StoreError::Conflict("claim de refus obsolète ou divergent"));
             }
-            let reply_bytes =
-                refusal_reply_bytes(claim, &reception.response_message_id, canonical, reason)
-                    .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
+            let reply_bytes = reclaim_refusal_reply_bytes(claim, &reception.reply_bytes)
+                .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
             let changed = tx
                 .execute(
                     "UPDATE guichet_refusal_receptions\n\
@@ -2860,9 +2861,8 @@ impl MaicieStore {
             }
             reception.claim_generation = claim.claim_generation;
             reception.claim_token = claim.claim_token.clone();
-            reception.reply_bytes =
-                refusal_reply_bytes(claim, &reception.response_message_id, canonical, reason)
-                    .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
+            reception.reply_bytes = reclaim_refusal_reply_bytes(claim, &reception.reply_bytes)
+                .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
             tx.commit().map_err(StoreError::Sql)?;
             return Ok(StoredGuichetReply {
                 reception,
@@ -2871,8 +2871,14 @@ impl MaicieStore {
             });
         }
 
-        let reply_bytes = refusal_reply_bytes(claim, response_message_id, canonical, reason)
-            .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
+        let reply_bytes = match budget {
+            Some((cap, open)) if reason == MotifRefusGreffe::BudgetAtteint => {
+                budget_refusal_reply_bytes(claim, response_message_id, canonical, cap, open)
+            }
+            Some(_) => return Err(StoreError::Invalid("détail budget hors motif budget")),
+            None => refusal_reply_bytes(claim, response_message_id, canonical, reason),
+        }
+        .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
         tx.execute(
             "INSERT INTO guichet_refusal_receptions(\n\
                  issuer_scope, request_id, canonical_request_bytes, operation, reason,\n\

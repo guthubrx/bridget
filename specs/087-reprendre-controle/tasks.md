@@ -180,6 +180,6 @@ Passage 1, 2026-09-02 après intégration des deux versants. Lecture de `spec.md
 - [x] T051 [US3] FR-020 : producteurs `review_verdict_pending` et `activation_approval` dans Maicie (reprend T028)
 - [x] T052 [US3] FR-024 : décision `reassign:<agent_id>` appliquée par Maicie (aujourd'hui `Unsupported`, non acquittée) ; exige soit un fait de réassignation construit par Maicie, soit une trame daemon (reprend T032)
 - [x] T053 [US3] FR-021 : trame `HumanInboxClose { item_id, reason }` (rôle service) dans `crates/bridget-transport/src/protocol.rs` et son bras daemon vers `human_inbox::close_self`, pour que Maicie ferme un item dont l'objet a disparu (reprend T033)
-- [ ] T054 [US4] FR-031 : variante `GuichetRefusalReason::BudgetReached { cap, open }` au protocole ; aujourd'hui mappée sur `mutation_invalid`
+- [x] T054 [US4] FR-031 : variante `GuichetRefusalReason::BudgetReached { cap, open }` au protocole ; aujourd'hui mappée sur `mutation_invalid`
 - [ ] T055 [US5] FR-040 : focus courant dans le bandeau et en tête de liste, sans appeler `maicie status` en boucle ; concevoir une lecture Maicie sans effet de bord (reprend T041)
 - [ ] T056 [US1] FR-002 : brancher un producteur réel de continuations gouvernées sur `reserve_governed_continuation` ; la garde existe, aucun appelant de production (dette antérieure, à décider avec le référent)

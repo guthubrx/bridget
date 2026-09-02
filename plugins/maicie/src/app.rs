@@ -287,7 +287,7 @@ pub fn process_guichet_claim(
     let canonical = parse_claim(claim).map_err(guichet_domain_error)?;
     if let Some(reason) = delegate_refusal_before_effect(store, &canonical)? {
         let stored = store
-            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason, None)
             .map_err(guichet_store_error)?;
         return Ok(guichet_process_result(stored, Some(reason)));
     }
@@ -299,7 +299,7 @@ pub fn process_guichet_claim(
     ) {
         let reason = MotifRefusGreffe::OperationNonDisponible;
         let stored = store
-            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason, None)
             .map_err(guichet_store_error)?;
         return Ok(guichet_process_result(stored, Some(reason)));
     }
@@ -320,7 +320,7 @@ pub fn process_guichet_claim_with_central_service(
     let canonical = parse_claim(claim).map_err(guichet_domain_error)?;
     if let Some(reason) = delegate_refusal_before_effect(store, &canonical)? {
         let stored = store
-            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason, None)
             .map_err(guichet_store_error)?;
         return Ok(guichet_process_result(stored, Some(reason)));
     }
@@ -341,11 +341,18 @@ pub fn process_guichet_claim_with_central_service(
         ) {
             Ok(stored) => Ok(guichet_process_result(stored, None)),
             Err(error) => {
-                let Some(reason) = deterministic_service_refusal(&error) else {
+                let Some((reason, budget)) = deterministic_service_refusal_detail(&error) else {
                     return Err(GuichetError::Store(error.to_string()));
                 };
                 let stored = store
-                    .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+                    .persist_guichet_refusal(
+                        claim,
+                        &canonical,
+                        response_message_id,
+                        now,
+                        reason,
+                        budget,
+                    )
                     .map_err(guichet_store_error)?;
                 Ok(guichet_process_result(stored, Some(reason)))
             }
@@ -411,7 +418,7 @@ fn process_non_mutating_guichet_claim(
                 return Err(guichet_store_error(error));
             };
             let stored = store
-                .persist_guichet_refusal(claim, canonical, response_message_id, now, reason)
+                .persist_guichet_refusal(claim, canonical, response_message_id, now, reason, None)
                 .map_err(guichet_store_error)?;
             Ok(guichet_process_result(stored, Some(reason)))
         }
@@ -429,10 +436,8 @@ fn deterministic_service_refusal(error: &GreffeServiceError) -> Option<MotifRefu
         GreffeServiceError::Delegate(DelegateError::TargetUnavailable(_)) => {
             Some(MotifRefusGreffe::CibleIndisponible)
         }
-        // SPEC-087 : le contrat filaire du guichet n'a pas encore de motif
-        // « plafond atteint » ; le refus reste déterministe et fermé.
         GreffeServiceError::Delegate(DelegateError::BudgetReached { .. }) => {
-            Some(MotifRefusGreffe::MutationInvalide)
+            Some(MotifRefusGreffe::BudgetAtteint)
         }
         GreffeServiceError::Delegate(
             DelegateError::Invalid(_) | DelegateError::EnvelopeMismatch,
@@ -460,6 +465,17 @@ fn deterministic_service_refusal(error: &GreffeServiceError) -> Option<MotifRefu
         | GreffeServiceError::Delegate(DelegateError::Store(_))
         | GreffeServiceError::Store(_)
         | GreffeServiceError::Bridget(_) => None,
+    }
+}
+
+fn deterministic_service_refusal_detail(
+    error: &GreffeServiceError,
+) -> Option<(MotifRefusGreffe, Option<(u32, u32)>)> {
+    match error {
+        GreffeServiceError::Delegate(DelegateError::BudgetReached { cap, open }) => {
+            Some((MotifRefusGreffe::BudgetAtteint, Some((*cap, *open))))
+        }
+        _ => deterministic_service_refusal(error).map(|reason| (reason, None)),
     }
 }
 
@@ -2111,5 +2127,14 @@ mod project_correlation_tests {
             binding_generation: 1,
         };
         assert!(validate_delegation_execution_project(Some(&delegation), &reference(None)).is_ok());
+    }
+
+    #[test]
+    fn spec_087_refus_service_budget_garde_les_mesures_attestees() {
+        let error = GreffeServiceError::Delegate(DelegateError::BudgetReached { cap: 3, open: 3 });
+        assert_eq!(
+            deterministic_service_refusal_detail(&error),
+            Some((MotifRefusGreffe::BudgetAtteint, Some((3, 3))))
+        );
     }
 }

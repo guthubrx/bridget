@@ -68,6 +68,11 @@
 - `HumanInboxClose { item_id, reason }` et `HumanInboxClosed` sont classés comme messages service dans les deux matrices daemon. Le bras dédié appelle `human_inbox::close_self` après contrôle de version.
 - Maicie conserve désormais le `item_id` reçu lors du dépôt. La migration v25 remet les anciens dépôts attestés en préparation une seule fois afin de récupérer cet identifiant via le dépôt idempotent. Chaque relève ferme un item dont `objective_id` est clos/absent ou dont `delegation_id` est annulée/absente, avec le motif strict `object_vanished`, puis conserve `closed_at` pour ne pas répéter l'appel.
 - Preuves serveur : trame transport **1 passé, 0 échec** ; unité daemon `human_inbox` **8 passés, 0 échec** dont le dépôt répété (`occurrences = 2`) et `close_self` idempotent ; scénarios Maicie objectif clos et délégation annulée **2 passés, 0 échec** ; contrat client service **1 passé, 0 échec** ; suite `controle_referent_087` **13 passés, 0 échec** ; `cargo check -p bridget-daemon` réussi.
+
+### T054 Refus de plafond structuré : ✅
+
+- `GuichetRefusalReason::BudgetReached { cap, open }` remplace le faux `mutation_invalid`. Maicie conserve le motif `budget_reached` dans son reçu durable et porte les valeurs attestées dans la trame ; à un rejeu de lease, la charge existante est reprise sans recalculer le budget courant.
+- Preuves serveur : sérialisation et rejeu **1 passé, 0 échec** ; sélection de la variante depuis `DelegateError::BudgetReached` **1 passé, 0 échec** ; protocole guichet **1 passé, 0 échec** ; `cargo check -p bridget-daemon` réussi.
 ### T029 Dette de réponse : ✅ palier 3 d'une demande du référent ⇒ item `reply_debt`
 ### T030 Canal externe : ✅ `human-channel.json` 0600, chemin absolu, commande avec résumé borné sur stdin, échec consigné
 ### T031 Rappel : ✅ `remind_overdue` (module) ; **branchement dans le thread horaire** : voir Convergence
