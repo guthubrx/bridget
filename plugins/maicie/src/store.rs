@@ -549,8 +549,16 @@ impl MaicieStore {
         &mut self,
         mapping: &std::collections::BTreeMap<String, String>,
     ) -> Result<(), StoreError> {
+        // `human` est un destinataire de service réservé, pas l'identité
+        // historique d'un agent. Une migration ne doit ni le remplacer, ni
+        // le fabriquer à partir d'une identité d'agent.
+        let mapping = mapping
+            .iter()
+            .filter(|(legacy, agent_id)| legacy.as_str() != "human" && agent_id.as_str() != "human")
+            .map(|(legacy, agent_id)| (legacy.clone(), agent_id.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
         let tx = self.connection.transaction().map_err(StoreError::Sql)?;
-        for (legacy, agent_id) in mapping {
+        for (legacy, agent_id) in &mapping {
             for statement in [
                 "UPDATE delegation_outbox SET target = ?1 WHERE target = ?2",
                 "UPDATE delegate_idempotency SET participant = ?1 WHERE participant = ?2",
@@ -566,27 +574,27 @@ impl MaicieStore {
             }
         }
 
-        rewrite_json_agent_references(&tx, "delegations", "id", "payload_json", mapping)?;
+        rewrite_json_agent_references(&tx, "delegations", "id", "payload_json", &mapping)?;
         rewrite_json_agent_references(
             &tx,
             "delegation_outbox",
             "message_id",
             "message_bytes",
-            mapping,
+            &mapping,
         )?;
         rewrite_json_agent_references(
             &tx,
             "notification_outbox",
             "message_id",
             "message_bytes",
-            mapping,
+            &mapping,
         )?;
         rewrite_json_agent_references(
             &tx,
             "tracked_request_outbox",
             "effect_id",
             "message_bytes",
-            mapping,
+            &mapping,
         )?;
         tx.commit().map_err(StoreError::Sql)
     }
@@ -1785,6 +1793,30 @@ impl MaicieStore {
             .map_err(StoreError::Sql)?;
         if inserted != 1 {
             return Err(StoreError::Conflict("reçu de greffe non enregistré"));
+        }
+
+        if issue == IssueGreffe::Accepted && report.review_verdict.is_some() {
+            enqueue_human_inbox_tx(
+                &tx,
+                &format!("review-verdict:{}", delegation.id),
+                "review_verdict_pending",
+                &format!(
+                    "{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\"}}",
+                    objective.id, delegation.id
+                ),
+                &format!(
+                    "{{\"summary\":\"Un verdict de revue attend votre arbitrage pour la délégation {}.\",\"verdict\":\"{}\"}}",
+                    delegation.id,
+                    report
+                        .review_verdict
+                        .as_ref()
+                        .expect("verdict vérifié")
+                        .verdict
+                        .as_str()
+                ),
+                &["ack".to_string()],
+                now,
+            )?;
         }
 
         let correlation = upsert_guichet_correlation(
@@ -4756,6 +4788,21 @@ impl MaicieStore {
             ],
         )
         .map_err(StoreError::Sql)?;
+        enqueue_human_inbox_tx(
+            &tx,
+            &format!("activation:{}", approval.id),
+            "activation_approval",
+            &format!(
+                "{{\"objective_id\":\"{}\",\"approval_id\":\"{}\"}}",
+                approval.objective_id, approval.id
+            ),
+            &format!(
+                "{{\"summary\":\"L'activation du profil {} attend votre approbation pour l'objectif {}.\",\"profile_id\":\"{}\"}}",
+                approval.profile_id, approval.objective_id, approval.profile_id
+            ),
+            &["ack".to_string()],
+            approval.expires_at.saturating_sub(1),
+        )?;
         tx.commit().map_err(StoreError::Sql)
     }
 
@@ -6560,10 +6607,21 @@ fn apply_reassignment_batch_in_transaction(
         // SPEC-087 : la chaîne épuisée exige le référent ; l'item part vers
         // la boîte humaine, en plus de la notification à l'agent.
         if notification.kind == TypeNotificationReassignation::InterventionHumaineRequise {
+            let (dedup_key, kind) = if reduction.decision.motif == "chaine_preautorisee_epuisee" {
+                (
+                    format!("chain-exhausted:{}", lot.delegation_id),
+                    "chain_exhausted",
+                )
+            } else {
+                (
+                    format!("intervention-required:{}", lot.delegation_id),
+                    "intervention_required",
+                )
+            };
             enqueue_human_inbox_tx(
                 tx,
-                &format!("chain-exhausted:{}", lot.delegation_id),
-                "chain_exhausted",
+                &dedup_key,
+                kind,
                 &format!(
                     "{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\"}}",
                     lot.objectif_id, lot.delegation_id

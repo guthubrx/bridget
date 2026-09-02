@@ -29,6 +29,11 @@ fn approbation_et_activation_sont_atomiques_et_les_octets_restent_immuables() {
     store
         .create_activation_proposal(&decision, &approval)
         .unwrap();
+    let pending = store.pending_human_inbox().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].dedup_key, format!("activation:{}", approval.id));
+    assert_eq!(pending[0].kind, "activation_approval");
+    assert_eq!(pending[0].options, vec!["ack"]);
 
     assert!(matches!(
         store.approve_activation(approval.id, &request_at(100, &[7], &[9], SPAWN_BYTES)),

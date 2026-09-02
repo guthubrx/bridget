@@ -49,11 +49,33 @@ fn migration_maicie_recrit_les_cibles_outbox_sans_reassignation_implicite() {
             ],
         )
         .unwrap();
+    connection
+        .execute(
+            "INSERT INTO notification_outbox (
+                message_id, idempotency_key, issued_at, objective_id, delegation_id,
+                generation, event_id, policy_version, recipient, message_bytes,
+                state, last_issue_json, terminal
+             ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, ?6, 'human', ?7, 'prepared', NULL, 0)",
+            rusqlite::params![
+                "11111111-1111-4111-8111-111111111111",
+                "human-inbox-identity-test",
+                1_i64,
+                "objective-1",
+                "human-notification",
+                1_i64,
+                br#"{"to":"human"}"#.to_vec(),
+            ],
+        )
+        .unwrap();
     drop(connection);
 
     let mut mapping = BTreeMap::new();
     mapping.insert(
         "agent-historique".to_string(),
+        "550e8400-e29b-41d4-a716-446655440000".to_string(),
+    );
+    mapping.insert(
+        "human".to_string(),
         "550e8400-e29b-41d4-a716-446655440000".to_string(),
     );
     store.migrate_agent_participants(&mapping).unwrap();
@@ -76,5 +98,13 @@ fn migration_maicie_recrit_les_cibles_outbox_sans_reassignation_implicite() {
         )
         .unwrap();
     assert_eq!(target, "550e8400-e29b-41d4-a716-446655440000");
+    let human_recipient: String = connection
+        .query_row(
+            "SELECT recipient FROM notification_outbox WHERE idempotency_key = 'human-inbox-identity-test'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(human_recipient, "human");
     std::fs::remove_dir_all(root).unwrap();
 }

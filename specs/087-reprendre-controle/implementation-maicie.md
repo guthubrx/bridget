@@ -58,8 +58,9 @@
 - Si des agents missionnables existent mais sont tous momentanément indisponibles, `greffe_service.rs` ouvre le focus humain sans délégation ni outbox fictive. Un projet sans agent missionnable reste refusé explicitement.
 - `reconcile_focus_waiting_agents` dépose après `durations.normal_secs` l'item idempotent `focus_waiting_agent` (`focus-waiting:<objective_id>`). `spec_087_focus_sans_agent_attend_puis_avertit_le_referent` : **10 passés, 0 échec** sur `controle_referent_087`.
 
-### T028 Producteurs de boîte humaine : ⚠️ partiel
-- Fait : `chain_exhausted` (options `cancel`, `ack`), `budget_reached` (`raise_budget`, `ack`). Non faits : `review_verdict_pending`, `activation_approval`.
+### T028 Producteurs de boîte humaine : ✅
+- `chain_exhausted` (ou `intervention_required` pour un autre motif), `budget_reached`, `review_verdict_pending` et `activation_approval` sont déposés durablement vers la boîte humaine. Les deux derniers sont créés dans la transaction de leur fait source, avec les clés `review-verdict:<delegation_id>` et `activation:<approval_id>`.
+- `migrate_agent_participants` conserve explicitement le destinataire réservé `human`.
 
 ### T032 Décisions humaines : ⚠️ partiel
 - `apply_human_decision` : `ack` ⇒ appliqué ; `cancel` ⇒ annulation de la délégation ; `raise_budget` ⇒ appliqué côté Maicie (le plafond est un réglage daemon, rien à faire ici) ; `reassign:<agent>` ⇒ `Unsupported`, non acquitté, reste visible dans la boîte. `spec_087_decisions_humaines_appliquees_une_seule_fois` vert.
@@ -107,7 +108,6 @@ Chaque garde de pause (routine, réassignation, relève, dépendance) a donc un 
 
 ## Reste à faire côté Maicie
 - T027 : un focus sans agent disponible doit rester en attente et déposer un item ; aujourd'hui `apply_delegate` refuse comme pour toute délégation sans agent.
-- T028 : producteurs `review_verdict_pending` et `activation_approval`.
 - T023 : mesure de la base gelée sur `origin/<branche>` quand la requête de focus n'a pas de `review_target`.
 - Un test direct de `canonical_delegate_bytes_without_origin` (v2, `origin` retiré, `focus` conservé) et du refus v1 avec origine.
 
@@ -120,5 +120,5 @@ Chaque garde de pause (routine, réassignation, relève, dépendance) a donc un 
 6. Tests neufs : 9 (`controle_referent_087`) + 4 (routines) + 1 (scellé croisé) + 3 (clients contre faux daemon) + 5 (garde), tous verts.
 7. Mutant « pause admet tout » tue 4 tests, un par garde.
 8. Six rouges préexistants, identiques nom pour nom sur la base nue mesurée par clone frais.
-9. Non faits : T027, deux producteurs de T028, `reassign` (T032), T033 (trame absente), mesure git du focus (T023).
+9. Non faits : `reassign` (T032), T033 (trame absente), mesure git du focus (T023).
 10. Cinq points à reporter côté daemon, dont deux trames à ajouter au protocole.
