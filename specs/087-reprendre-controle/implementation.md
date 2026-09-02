@@ -34,8 +34,13 @@
 ### T011 CLI : ✅ `bridget control status [--history] | pause [--reason] | resume | budget <n>`, `bridget inbox list [--all] | resolve <id> <choix>`, terminal interactif exigé pour les mutations, pied de `who` (`emit_control_footer`), `cargo build -p bridget-daemon` vert
 ### T012 Ronde : ✅ `spec_087_pause_differe_la_ronde_puis_la_reprise_la_livre`
 ### T013 Relances : ✅ `spec_087_pause_differe_les_relances_mais_pas_le_palier_trois` ; `ReminderAction::Deferred` porte `reason`
-### T014 Continuations : ✅ `managed_supervisor::control_pause_tests::la_pause_globale_rend_la_continuation_paused`
-- **Note honnête** : aucun appelant de production de `reserve_governed_continuation` n'existe sur main ; la garde est prête, le producteur n'est pas branché (dette antérieure)
+### T014 et T056 Continuations : ✅
+
+- Le producteur réel est `schedule_execution_recovery`, appelé au réenregistrement d'un wrapper sans tour actif. Avant toute reconstruction, il relit `control_state` et passe par `reserve_governed_continuation`.
+- Le contexte fermé `RecoveryAfterIdleWrapper` autorise uniquement cette reprise à réserver un parent encore actif dans SQLite, car l'absence de tour vient d'être attestée par le wrapper. Les continuations ordinaires conservent leur exigence de parent inactif.
+- Pause, limite de budget, course ou manque de faits arrêtent la reprise avant la création de la génération fille. Seules `Reserved` et le rejeu de la même réservation autorisent la reconstruction.
+- Preuves : `cargo test -p bridget-daemon --test execution_budget_test` : **2 passés, 0 échec** ; `cargo test -p bridget-daemon --lib --features test-support daemon::presence_tests::spec_087_pause_differe_la_continuation_de_reprise -- --exact` : **1 passé, 0 échec**.
+- Le scénario historique `spec_079_reprise_register_livre_le_message_exact_une_seule_fois` reste rouge avant d'atteindre la reprise : sa fixture enregistre `agent-2`, invalide depuis l'adoption des UUID v4. C'est le même défaut préexistant déjà consigné pour T043, hors du chemin T056.
 
 ### T018 Interface, pause : ✅ routes `GET/POST /v1/control/state` via socket (`control_request`, capacité `ControlStateV1`, périmètre `bridget-ui-control`), bandeau `#control-banner`, projection pure `controlBannerProjection`
 ### T019 Persistance et `who` : ✅ `spec_087_pause_survit_a_la_reconstruction_de_l_etat`, ligne `Contrôle : …` après `Daemon build-id`
@@ -130,6 +135,7 @@
 | Mutant | Tests attendus rouges | Résultat brut |
 |---|---|---|
 | `admit_autonomous_effect` forcé à `Admitted` (server, copie restaurée ensuite) | ronde, relances, continuation, table de vérité | `test result: FAILED. 0 passed; 4 failed` : `la_pause_globale_rend_la_continuation_paused`, `garde_unique_table_de_verite`, `spec_087_pause_differe_les_relances_mais_pas_le_palier_trois`, `spec_087_pause_differe_la_ronde_puis_la_reprise_la_livre` |
+| `autonomy_runtime_for_control` renvoie `observed` pendant une pause (copie restaurée ensuite) | `spec_087_pause_differe_la_continuation_de_reprise` | `test result: FAILED. 0 passed; 1 failed` : la remise de reprise était présente malgré la pause. Garde restaurée puis test vert. |
 
 ## Gates joués (versant daemon, transport, interface)
 

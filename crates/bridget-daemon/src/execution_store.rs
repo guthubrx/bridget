@@ -186,6 +186,18 @@ pub enum ContinuationReservation {
     ConcurrentExecution,
 }
 
+/// Contexte attesté avant de réserver une continuation.
+///
+/// Une continuation ordinaire exige un parent déjà terminal. La reprise de
+/// daemon est différente : le wrapper vient de se reconnecter et atteste qu'il
+/// n'a plus de tour actif, tandis que SQLite porte encore son état historique.
+/// Ce cas reste explicite pour ne pas assouplir la garde générale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinuationReservationContext {
+    InactiveParent,
+    RecoveryAfterIdleWrapper,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlReservation {
     New,
@@ -861,6 +873,52 @@ impl ExecutionStore {
         proof_idle_at: i64,
         observed_at: i64,
     ) -> rusqlite::Result<ContinuationReservation> {
+        self.reserve_continuation_with_context(
+            parent_execution_id,
+            expected_generation,
+            expected_revision,
+            continuation_id,
+            proof_idle_at,
+            observed_at,
+            ContinuationReservationContext::InactiveParent,
+        )
+    }
+
+    /// Réserve une reprise après l'attestation d'un wrapper revenu sans tour
+    /// actif. Ce contexte n'est construit que dans le chemin de reconnexion du
+    /// daemon, jamais depuis une requête cliente.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reserve_recovery_continuation_after_idle_wrapper(
+        &self,
+        parent_execution_id: &str,
+        expected_generation: u64,
+        expected_revision: u64,
+        continuation_id: &str,
+        proof_idle_at: i64,
+        observed_at: i64,
+    ) -> rusqlite::Result<ContinuationReservation> {
+        self.reserve_continuation_with_context(
+            parent_execution_id,
+            expected_generation,
+            expected_revision,
+            continuation_id,
+            proof_idle_at,
+            observed_at,
+            ContinuationReservationContext::RecoveryAfterIdleWrapper,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reserve_continuation_with_context(
+        &self,
+        parent_execution_id: &str,
+        expected_generation: u64,
+        expected_revision: u64,
+        continuation_id: &str,
+        proof_idle_at: i64,
+        observed_at: i64,
+        context: ContinuationReservationContext,
+    ) -> rusqlite::Result<ContinuationReservation> {
         if continuation_id.trim().is_empty() || proof_idle_at <= 0 || observed_at < proof_idle_at {
             return Ok(ContinuationReservation::StaleProof);
         }
@@ -882,10 +940,23 @@ impl ExecutionStore {
             tx.commit()?;
             return Ok(ContinuationReservation::RevisionMismatch);
         }
-        if !matches!(
+        let parent_is_inactive = matches!(
             state.as_str(),
             "interrupted" | "completed" | "failed" | "unreachable" | "paused" | "blocked"
-        ) {
+        );
+        let parent_is_recoverable = matches!(
+            state.as_str(),
+            "queued"
+                | "starting"
+                | "running"
+                | "waiting_approval"
+                | "waiting_user_input"
+                | "interrupting"
+        );
+        if !parent_is_inactive
+            && !(context == ContinuationReservationContext::RecoveryAfterIdleWrapper
+                && parent_is_recoverable)
+        {
             tx.commit()?;
             return Ok(ContinuationReservation::NotInactive);
         }

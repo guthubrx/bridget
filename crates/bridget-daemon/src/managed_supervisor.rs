@@ -47,6 +47,16 @@ pub enum GovernedContinuation {
     MissingFacts,
 }
 
+/// Source attestée d'une demande de continuation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GovernedContinuationSource {
+    /// Le parent a déjà atteint un état terminal.
+    InactiveParent,
+    /// Le wrapper s'est reconnecté sans tour actif ; son état SQLite peut être
+    /// encore actif jusqu'à la reconstruction atomique.
+    RecoveryAfterIdleWrapper,
+}
+
 /// Point unique de réservation d une continuation gouvernée. Les faits sont
 /// relus dans la même passe de contrôle puis la réservation SQLite atomique
 /// refuse une course entre deux continuations ou un tour concurrent.
@@ -55,6 +65,7 @@ pub fn reserve_governed_continuation(
     store: &ExecutionStore,
     policy: AutonomyBudgetPolicy,
     runtime: AutonomyRuntimeState,
+    source: GovernedContinuationSource,
     parent_execution_id: &str,
     expected_generation: u64,
     expected_revision: u64,
@@ -69,14 +80,25 @@ pub fn reserve_governed_continuation(
         return Ok(GovernedContinuation::Budget(outcome));
     }
     Ok(
-        match store.reserve_continuation_if_idle(
-            parent_execution_id,
-            expected_generation,
-            expected_revision,
-            continuation_id,
-            proof_idle_at,
-            observed_at,
-        )? {
+        match match source {
+            GovernedContinuationSource::InactiveParent => store.reserve_continuation_if_idle(
+                parent_execution_id,
+                expected_generation,
+                expected_revision,
+                continuation_id,
+                proof_idle_at,
+                observed_at,
+            ),
+            GovernedContinuationSource::RecoveryAfterIdleWrapper => store
+                .reserve_recovery_continuation_after_idle_wrapper(
+                    parent_execution_id,
+                    expected_generation,
+                    expected_revision,
+                    continuation_id,
+                    proof_idle_at,
+                    observed_at,
+                ),
+        }? {
             ContinuationReservation::Reserved => GovernedContinuation::Reserved,
             reservation => GovernedContinuation::Reservation(reservation),
         },

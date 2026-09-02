@@ -55,7 +55,10 @@ use crate::idempotency::{
     DelegatedRuntimeEventInput, DeliveryExecutionLink, IdempotencyKey, IdempotencyStore,
     LookupResult, OperationKind, ReplyTracking, Reservation, SendDelivery,
 };
-use crate::managed_supervisor::ManagedSupervisorGuard;
+use crate::managed_supervisor::{
+    GovernedContinuation, GovernedContinuationSource, ManagedSupervisorGuard,
+    autonomy_runtime_for_control, reserve_governed_continuation,
+};
 use crate::store::{
     GuichetCoordinationEvent, GuichetDeposit, GuichetLifecycleEvent, GuichetNext,
     GuichetReplyInput, GuichetResult, MAX_GUICHET_FRAME_BYTES, ProjectRuntimeBinding, Store,
@@ -4164,6 +4167,61 @@ fn schedule_execution_recovery(
             ),
         }
         return;
+    }
+
+    let parent = match state
+        .execution_store
+        .execution_snapshot(parent_execution_id)
+    {
+        Ok(Some(snapshot)) => snapshot,
+        Ok(None) => return,
+        Err(error) => {
+            error!("lecture de l'exécution à reprendre {parent_execution_id}: {error}");
+            return;
+        }
+    };
+    let control = match crate::referent_control::read(state.store.connection()) {
+        Ok(control) => control,
+        Err(error) => {
+            error!("lecture du contrôle avant reprise de {parent_execution_id}: {error}");
+            return;
+        }
+    };
+    let continuation_id = format!("continuation-recovery-{parent_execution_id}");
+    match reserve_governed_continuation(
+        &state.execution_store,
+        Default::default(),
+        autonomy_runtime_for_control(&control, crate::fleet::AutonomyRuntimeState::Ready),
+        GovernedContinuationSource::RecoveryAfterIdleWrapper,
+        parent_execution_id,
+        parent.generation,
+        parent.revision,
+        &continuation_id,
+        now,
+        now,
+    ) {
+        Ok(
+            GovernedContinuation::Reserved
+            | GovernedContinuation::Reservation(
+                crate::execution_store::ContinuationReservation::Replayed,
+            ),
+        ) => {}
+        Ok(GovernedContinuation::Budget(outcome)) => {
+            warn!("reprise gouvernée différée pour {parent_execution_id}: {outcome:?}");
+            return;
+        }
+        Ok(GovernedContinuation::Reservation(reservation)) => {
+            warn!("reprise gouvernée refusée pour {parent_execution_id}: {reservation:?}");
+            return;
+        }
+        Ok(GovernedContinuation::MissingFacts) => {
+            warn!("reprise gouvernée sans faits pour {parent_execution_id}");
+            return;
+        }
+        Err(error) => {
+            error!("réservation gouvernée de {parent_execution_id}: {error}");
+            return;
+        }
     }
 
     let child_execution_id = format!("execution-recovery-{}", Uuid::new_v4());
@@ -23075,6 +23133,78 @@ mod presence_tests {
                 .unwrap(),
             None
         );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn spec_087_pause_differe_la_continuation_de_reprise() {
+        let (mut state, config) = spec_087_state("spec-087-continuation-pause");
+        let (writer, _reader) = control_socket("spec-087-continuation-pause");
+        state.connections.insert("conn-1".to_string(), writer);
+        let now = unix_now_secs();
+        let mut message = bridget_core::BridgetMessage::new(
+            "humain",
+            SPEC_087_AGENT_ID,
+            "reprendre seulement après la pause",
+        );
+        message.id = "message-continuation-pause-087".to_string();
+        message.origin = Some(bridget_core::MessageOrigin::Human);
+        message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+        state
+            .execution_store
+            .admit_starting_message(&message, "execution-continuation-pause-087", now)
+            .unwrap();
+
+        let initial = crate::referent_control::read(state.store.connection()).unwrap();
+        let paused = crate::referent_control::set(
+            state.store.connection(),
+            crate::referent_control::ControlMutation {
+                command_id: "pause-continuation-087",
+                expected_generation: initial.generation,
+                paused: Some(true),
+                auto_objectives_cap: None,
+                reason: Some("test"),
+                actor: "test",
+                now,
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+        schedule_execution_recovery(&mut state, "conn-1", "instance-1", SPEC_087_AGENT_ID, false);
+        assert!(state.pending_post_response_controls.is_empty());
+        assert!(matches!(
+            state
+                .execution_store
+                .execution_snapshot("execution-continuation-pause-087")
+                .unwrap(),
+            Some(snapshot) if snapshot.state == "starting" && snapshot.generation == 1
+        ));
+
+        crate::referent_control::set(
+            state.store.connection(),
+            crate::referent_control::ControlMutation {
+                command_id: "resume-continuation-087",
+                expected_generation: paused.generation,
+                paused: Some(false),
+                auto_objectives_cap: None,
+                reason: None,
+                actor: "test",
+                now: now + 1,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        schedule_execution_recovery(&mut state, "conn-1", "instance-1", SPEC_087_AGENT_ID, false);
+        let controls = &state.pending_post_response_controls["conn-1"];
+        assert_eq!(controls.len(), 1);
+        assert!(matches!(
+            &controls[0].message,
+            DaemonToWrapper::DeliverIdempotent {
+                execution: Some(execution),
+                ..
+            } if execution.generation == 2
+        ));
         let _ = std::fs::remove_file(config.db_path);
     }
 
