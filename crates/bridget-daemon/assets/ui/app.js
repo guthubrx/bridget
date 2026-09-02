@@ -145,6 +145,19 @@
         assert.match(stylesheet, /\.project-onboarding-overlay__source/);
       });
 
+      test("projets_un_seul_bouton_et_reglages_serveur_lus_avant_le_formulaire", () => {
+        const source = fs.readFileSync(__filename, "utf8");
+        const stylesheet = fs.readFileSync(path.join(__dirname, "theme.css"), "utf8");
+        // La lecture des réglages serveur doit suivre la garde, jamais vivre dans son bloc.
+        assert.match(source, /\n\s+\}\n\s+const serverControl = await requestProject\("\/v1\/control\/settings"\);/);
+        // Les libellés retirés sont assemblés ici pour que ce test ne se lise pas lui-même.
+        assert.doesNotMatch(source, new RegExp(["Vérifier", "avant", "enregistrement"].join(" ")));
+        assert.doesNotMatch(source, new RegExp(["\"Prévisualiser\"", "\\)"].join("")));
+        assert.match(source, /make\("button", null, "Enregistrer"\)/);
+        assert.match(source, /project-onboarding-overlay__advanced/);
+        assert.match(stylesheet, /\.project-onboarding-overlay__advanced/);
+      });
+
       test("spec_080_usage_reste_atteste_et_ne_fabrique_aucun_cout", () => {
         assert.equal(
           api.controlResourceUrl("/v1/usage", "jeton +", { period: "30d" }),
@@ -8461,7 +8474,6 @@
             const help = make("p", "control-center__help", locationsPayload.legacy_v1
               ? "Ajoute simplement un dossier de travail. L’ancien réglage est conservé pendant cette migration."
               : "Ajoute un ou plusieurs dossiers de travail. Les options techniques sont disponibles seulement si tu en as besoin.");
-            let preparedChange = null;
             let saveDraft = () => {};
             const createLocationRow = (location = {}) => {
               const row = make("fieldset", "control-center__location");
@@ -8532,19 +8544,16 @@
               saveDraft();
             });
             const preview = make("p", "control-center__preview", restoredDraft
-              ? "Brouillon restauré. Vérifie-le avant de l’enregistrer."
-              : "Ajoute un dossier, puis vérifie-le avant enregistrement.");
-            const prepare = make("button", "secondary", "Vérifier avant enregistrement");
-            prepare.type = "button";
-            const apply = make("button", null, "Enregistrer les dossiers");
+              ? "Brouillon restauré : il n’est pas encore enregistré."
+              : "Ajoute un dossier, puis clique Enregistrer.");
+            const apply = make("button", null, "Enregistrer");
             apply.type = "button";
-            apply.hidden = true;
             const discard = make("button", "quiet", "Abandonner le brouillon");
             discard.type = "button";
             discard.hidden = !restoredDraft;
             const actions = make("div", "control-center__actions");
             actions.classList.add("control-center__location-actions");
-            actions.append(addLocation, prepare, apply, discard);
+            actions.append(addLocation, apply, discard);
             section.append(label, help, editor, preview, actions);
             const collectCandidate = () => Array.from(editor.querySelectorAll(".control-center__location")).map((row) => {
               const controlFor = (name) => row.querySelector(`[aria-label="${name}"]`);
@@ -8564,15 +8573,13 @@
               };
             });
             saveDraft = () => {
-              preparedChange = null;
-              apply.hidden = true;
               const candidate = collectCandidate();
               try {
                 windowRef.localStorage && windowRef.localStorage.setItem(draftStorageKey, JSON.stringify(candidate));
                 discard.hidden = false;
-                preview.textContent = "Brouillon conservé. Vérifie-le avant de l’enregistrer.";
+                preview.textContent = "Brouillon conservé : clique Enregistrer pour l’appliquer.";
               } catch (_error) {
-                preview.textContent = "Brouillon modifié. Vérifie-le avant de l’enregistrer.";
+                preview.textContent = "Modifications non enregistrées : clique Enregistrer.";
               }
             };
             discard.addEventListener("click", () => {
@@ -8583,14 +8590,39 @@
               }
               void renderControlRoute("server");
             });
-            prepare.addEventListener("click", async () => {
+            const legacyNote = (confirmed) => {
+              if (confirmed.legacy_inventory_available === false) {
+                return " Attention : les projets déjà enregistrés n’ont pas pu être inventoriés.";
+              }
+              const linked = Array.isArray(confirmed.legacy_projects)
+                ? confirmed.legacy_projects.reduce((count, item) => count + (Array.isArray(item.project_ids) ? item.project_ids.length : 0), 0)
+                : 0;
+              return linked > 0 ? ` ${linked} projet(s) déjà enregistré(s) restent inchangés.` : "";
+            };
+            const postControl = async (route, request) => {
+              const response = await windowRef.fetch(controlResourceUrl(route, token), {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(request),
+              });
+              const payload = await response.json();
+              if (!response.ok) throw new Error(payload.message || "Le serveur a refusé ces dossiers. Rien n’a été modifié.");
+              return payload;
+            };
+            // Un seul bouton pour l'opérateur ; le serveur garde ses deux temps :
+            // il vérifie d'abord sans rien écrire, puis n'écrit que ce qu'il a validé.
+            apply.addEventListener("click", async () => {
               const candidate = collectCandidate();
               if (candidate.length === 0) {
-                preview.textContent = "Au moins un emplacement est obligatoire.";
+                preview.textContent = "Ajoute au moins un dossier.";
                 return;
               }
-              prepare.disabled = true;
-              preview.textContent = "Prévisualisation validée par le serveur…";
+              if (candidate.some((location) => !location.label || !location.canonical_path)) {
+                preview.textContent = "Chaque dossier a besoin d’un nom et d’un chemin.";
+                return;
+              }
+              apply.disabled = true;
+              preview.textContent = "Vérification par le serveur…";
               try {
                 const request = {
                   contract_version: 2,
@@ -8598,69 +8630,27 @@
                   expected_generation: locationsPayload.generation,
                   locations: candidate,
                 };
-                const response = await windowRef.fetch(controlResourceUrl("/v2/control/project-locations/preview", token), {
-                  method: "POST",
-                  headers: { "content-type": "application/json" },
-                  body: JSON.stringify(request),
+                const confirmed = await postControl("/v2/control/project-locations/preview", request);
+                preview.textContent = "Enregistrement…";
+                const accepted = await postControl("/v2/control/project-locations/apply", {
+                  ...request,
+                  locations: confirmed.requested_locations,
                 });
-                const confirmed = await response.json();
-                if (!response.ok) throw new Error("settings_refused");
-                preparedChange = { ...request, locations: confirmed.requested_locations };
-                apply.hidden = false;
-                const legacySummary = confirmed.legacy_inventory_available === false
-                  ? " L'inventaire des projets historiques est indisponible : la migration ne doit pas être considérée neutre."
-                  : Array.isArray(confirmed.legacy_projects) && confirmed.legacy_projects.length > 0
-                    ? ` ${confirmed.legacy_projects.reduce((count, item) => count + (Array.isArray(item.project_ids) ? item.project_ids.length : 0), 0)} projet(s) historique(s) restent liés et ne seront pas modifiés.`
-                    : "";
-                preview.textContent = `${confirmed.current_locations.length} → ${confirmed.requested_locations.length} emplacement(s), génération ${confirmed.expected_generation} → ${confirmed.resulting_generation}. Confirmez pour écrire.${legacySummary}`;
-              } catch (_error) {
-                preparedChange = null;
-                apply.hidden = true;
-                preview.textContent = "Le serveur a refusé la prévisualisation. Aucune valeur n'a été modifiée.";
-              } finally {
-                prepare.disabled = false;
-              }
-            });
-            apply.addEventListener("click", async () => {
-              if (!preparedChange) return;
-              apply.disabled = true;
-              preview.textContent = "Application en cours…";
-              try {
-                const response = await windowRef.fetch(controlResourceUrl("/v2/control/project-locations/apply", token), {
-                  method: "POST",
-                  headers: { "content-type": "application/json" },
-                  body: JSON.stringify(preparedChange),
-                });
-                const accepted = await response.json();
-                if (!response.ok) throw new Error("settings_refused");
                 locationsPayload.generation = accepted.resulting_generation;
-                preparedChange = null;
-                apply.hidden = true;
                 try {
                   windowRef.localStorage && windowRef.localStorage.removeItem(draftStorageKey);
                 } catch (_error) {
                   // La confirmation du serveur est déjà acquise : le nettoyage local est secondaire.
                 }
                 discard.hidden = true;
-                preview.textContent = `Réglage appliqué - confirmation ${accepted.command_id}, génération ${accepted.resulting_generation}.`;
-              } catch (_error) {
-                preview.textContent = "Le serveur a refusé la modification. La configuration actuelle n'a pas été remplacée.";
+                const count = confirmed.requested_locations.length;
+                preview.textContent = `Enregistré : ${count} dossier${count > 1 ? "s" : ""}.${legacyNote(confirmed)}`;
+              } catch (error) {
+                preview.textContent = error.message || "Le serveur a refusé la modification. Rien n’a été modifié.";
               } finally {
                 apply.disabled = false;
               }
             });
-            const defaults = controlSection(
-              "Nouveaux projets",
-              "Les projets sont liés au registre local après une prévisualisation explicite. Les projets déjà enregistrés ne changent pas.",
-              "Serveur relié",
-            );
-            const defaultsStatus = make(
-              "p",
-              "control-center__status",
-              "Le choix d’un agent coordinateur n’est pas un réglage du registre de projets. Bridget n’affiche donc pas de faux catalogue de coordinateurs.",
-            );
-            defaults.append(defaultsStatus);
-            section.append(defaults);
           } catch (_error) {
             status.textContent = "Les réglages de ce serveur sont indisponibles. Aucune valeur locale n'a été remplacée.";
             status.dataset.state = "error";
@@ -10046,10 +10036,10 @@
         const eligibleLocations = locations.filter((location) => !location.system_only && (mode === "create" ? location.kind === "workspace" : true));
         if (eligibleLocations.length === 0) {
           throw new Error(mode === "create"
-            ? "Aucun espace de travail n’est configuré sur ce serveur. Ouvrez Réglages, puis Serveur."
-            : "Aucun emplacement de projet n’est configuré sur ce serveur. Ouvrez Réglages, puis Serveur.");
-        const serverControl = await requestProject("/v1/control/settings");
+            ? "Aucun dossier de projets n’est configuré sur ce serveur. Ouvrez Réglages, puis Paramètres du serveur."
+            : "Aucun dossier de projets n’est configuré sur ce serveur. Ouvrez Réglages, puis Paramètres du serveur.");
         }
+        const serverControl = await requestProject("/v1/control/settings");
         const dialog = nodes.projectOnboardingOverlay;
         dialog.replaceChildren();
         const form = make("form", "project-onboarding-overlay__shell");
@@ -10072,37 +10062,36 @@
           "p",
           "project-onboarding-overlay__intro",
           mode === "create"
-            ? "Le serveur créera uniquement le dossier confirmé, sous une racine déjà autorisée."
-            : "Le dossier existant doit être sous une racine déjà autorisée. Aucun contenu n’est modifié avant confirmation.",
+            ? "Bridget crée un dossier vide dans l’un des dossiers de projets autorisés."
+            : "Le dossier doit déjà exister dans l’un des dossiers de projets autorisés. Rien n’y est modifié.",
         );
-        const locationField = make("label", "project-onboarding-overlay__field", "Emplacement projet");
+        const locationField = make("label", "project-onboarding-overlay__field", "Dossier de projets");
         const locationControl = documentRef.createElement("select");
         eligibleLocations.forEach((location) => {
           const option = documentRef.createElement("option");
           option.value = location.location_id;
-          option.textContent = `${location.label} - ${location.kind === "workspace" ? "espace de travail" : "projet exact"}`;
+          option.textContent = `${location.label} · ${location.canonical_path}`;
           locationControl.append(option);
         });
         locationField.append(locationControl);
-        const rootField = make("label", "project-onboarding-overlay__field", mode === "create" ? "Emplacement sélectionné" : "Dossier existant");
-        let rootControl;
+        let rootControl = null;
+        let folderControl = null;
         if (mode === "create") {
-          rootControl = documentRef.createElement("select");
-          eligibleLocations.forEach((location) => {
-            const option = documentRef.createElement("option");
-            option.value = location.canonical_path;
-            option.textContent = location.canonical_path;
-            rootControl.append(option);
-          });
-          locationControl.addEventListener("change", () => {
-            const location = eligibleLocations.find((item) => item.location_id === locationControl.value);
-            if (location) rootControl.value = location.canonical_path;
-          });
+          const folderField = make("label", "project-onboarding-overlay__field", "Nom du projet");
+          folderControl = documentRef.createElement("input");
+          folderControl.type = "text";
+          folderControl.placeholder = "mon-projet";
+          folderControl.autocomplete = "off";
+          folderControl.required = true;
+          folderField.append(folderControl);
+          form.append(header, intro, locationField, folderField);
         } else {
+          const rootField = make("label", "project-onboarding-overlay__field", "Dossier existant");
           rootControl = documentRef.createElement("input");
           rootControl.type = "text";
           rootControl.value = eligibleLocations[0].canonical_path;
           rootControl.spellcheck = false;
+          rootControl.required = true;
           rootControl.setAttribute("list", "project-onboarding-roots");
           const list = documentRef.createElement("datalist");
           list.id = "project-onboarding-roots";
@@ -10111,28 +10100,15 @@
             option.value = location.canonical_path;
             list.append(option);
           });
-          rootField.append(list);
-        }
-        rootControl.required = true;
-        rootField.append(rootControl);
-        let folderControl = null;
-        if (mode === "create") {
-          const folderField = make("label", "project-onboarding-overlay__field", "Nom du dossier");
-          folderControl = documentRef.createElement("input");
-          folderControl.type = "text";
-          folderControl.placeholder = "mon-projet";
-          folderControl.autocomplete = "off";
-          folderControl.required = true;
-          folderField.append(folderControl);
-          form.append(header, intro, locationField, rootField, folderField);
-        } else {
+          rootField.append(list, rootControl);
           form.append(header, intro, locationField, rootField);
         }
-        const executionField = make("label", "project-onboarding-overlay__field", "Environnement d’exécution");
-        const executionControl = documentRef.createElement("select");
+        // Options avancées : repliées, car le défaut du serveur convient presque toujours.
         const configuredExecution = serverControl && serverControl.execution && typeof serverControl.execution === "object"
           ? serverControl.execution
           : { default_backend: "host" };
+        const executionField = make("label", "project-onboarding-overlay__field", "Environnement d’exécution");
+        const executionControl = documentRef.createElement("select");
         const serverChoice = documentRef.createElement("option");
         serverChoice.value = "server";
         const configuredPolicy = configuredExecution.default_policy_id && configuredExecution.default_policy_version
@@ -10145,114 +10121,61 @@
         hostChoice.textContent = "Host - ne pas utiliser Docker";
         executionControl.append(hostChoice);
         executionField.append(executionControl);
-        form.append(executionField);
-        const status = make("p", "project-onboarding-overlay__status", "Choisissez le dossier, puis prévisualisez l’opération.");
-        status.setAttribute("role", "status");
-        const previewCard = make("div", "project-onboarding-overlay__preview");
-        previewCard.hidden = true;
         const initializeGit = documentRef.createElement("input");
         initializeGit.type = "checkbox";
-        initializeGit.checked = false;
-        initializeGit.disabled = true;
+        initializeGit.checked = true;
         const gitLabel = make("label", "project-onboarding-overlay__checkbox");
-        gitLabel.append(initializeGit, make("span", null, "Initialiser Git si nécessaire"));
-        previewCard.append(gitLabel);
+        gitLabel.append(initializeGit, make("span", null, "Initialiser Git si le dossier n’en a pas"));
+        const advanced = documentRef.createElement("details");
+        advanced.className = "project-onboarding-overlay__advanced";
+        advanced.append(make("summary", null, "Options avancées"), executionField, gitLabel);
+        form.append(advanced);
+        const status = make("p", "project-onboarding-overlay__status", mode === "create"
+          ? "Choisis le dossier de projets et un nom."
+          : "Indique le dossier existant à importer.");
+        status.setAttribute("role", "status");
         const actions = make("div", "project-onboarding-overlay__actions");
-        const previewAction = make("button", "secondary", "Prévisualiser");
-        previewAction.type = "button";
         const confirmAction = make("button", null, mode === "create" ? "Créer le projet" : "Importer le projet");
         confirmAction.type = "submit";
-        confirmAction.disabled = true;
-        actions.append(previewAction, confirmAction);
-        form.append(status, previewCard, actions);
-        let preview = null;
-        const clearPreview = () => {
-          preview = null;
-          confirmAction.disabled = true;
-          previewCard.hidden = true;
-          initializeGit.checked = false;
-          initializeGit.disabled = true;
-          status.textContent = "Choisissez le dossier, puis prévisualisez l’opération.";
-        };
-        rootControl.addEventListener("input", clearPreview);
-        locationControl.addEventListener("change", clearPreview);
-        if (folderControl) folderControl.addEventListener("input", clearPreview);
-        executionControl.addEventListener("change", clearPreview);
-        previewAction.addEventListener("click", async () => {
-          const root = rootControl.value.trim();
-          const folder = folderControl ? folderControl.value.trim() : null;
-          if (!root || (mode === "create" && !folder)) {
-            status.textContent = mode === "create" ? "Choisissez une racine et un nom de dossier." : "Indiquez le dossier existant à importer.";
+        actions.append(confirmAction);
+        form.append(status, actions);
+        const placementRequest = (prefix, extra) => ({
+          contract_version: 2,
+          command_id: `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          expected_generation: catalog.generation,
+          location_id: locationControl.value,
+          operation: mode,
+          root: mode === "import" ? rootControl.value.trim() : undefined,
+          requested_name: mode === "create" ? folderControl.value.trim() : undefined,
+          backend: executionControl.value === "server" ? undefined : executionControl.value,
+          ...extra,
+        });
+        // Un seul bouton pour l'opérateur ; le serveur garde ses deux temps :
+        // il vérifie d'abord sans rien écrire, puis ne crée que ce qu'il a validé.
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const missing = mode === "create" ? !folderControl.value.trim() : !rootControl.value.trim();
+          if (missing) {
             status.dataset.state = "error";
+            status.textContent = mode === "create" ? "Donne un nom au projet." : "Indique le dossier existant à importer.";
             return;
           }
-          previewAction.disabled = true;
+          confirmAction.disabled = true;
           status.dataset.state = "loading";
           status.textContent = "Vérification du dossier par le serveur…";
           try {
-            preview = await requestProject("/v2/projects/placement/preview", {
+            const preview = await requestProject("/v2/projects/placement/preview", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                contract_version: 2,
-                command_id: "project-preview-" + Date.now() + "-" + Math.random().toString(16).slice(2),
-                expected_generation: catalog.generation,
-                location_id: locationControl.value,
-                operation: mode,
-                root: mode === "import" ? root : undefined,
-                requested_name: mode === "create" ? folder : undefined,
-                backend: executionControl.value === "server" ? undefined : executionControl.value,
-              }),
+              body: JSON.stringify(placementRequest("project-preview")),
             });
-            previewCard.replaceChildren(
-              make("strong", null, preview.display_name),
-              make("span", null, preview.canonical_path),
-              make("span", null, `Git : ${preview.git === "absent" ? "absent" : preview.git}`),
-              make("span", null, preview.backend === "docker"
-                ? `Exécution : Docker · politique ${preview.policy_id}@${preview.policy_version}`
-                : "Exécution : Host"),
-              gitLabel,
-            );
-            initializeGit.checked = Boolean(preview.git_initialization_proposed);
-            initializeGit.disabled = !preview.git_initialization_proposed;
-            previewCard.hidden = false;
-            confirmAction.disabled = false;
-            status.dataset.state = "ready";
-            status.textContent = "Prévisualisation validée. La confirmation réalisera l’opération.";
-          } catch (error) {
-            preview = null;
-            confirmAction.disabled = true;
-            previewCard.hidden = true;
-            status.dataset.state = "error";
-            status.textContent = error.message || "Le serveur a refusé la prévisualisation.";
-          } finally {
-            previewAction.disabled = false;
-          }
-        });
-        form.addEventListener("submit", async (event) => {
-          event.preventDefault();
-          if (!preview) return;
-          const root = rootControl.value.trim();
-          const folder = folderControl ? folderControl.value.trim() : null;
-          confirmAction.disabled = true;
-          previewAction.disabled = true;
-          status.dataset.state = "loading";
-          status.textContent = "Enregistrement durable du projet…";
-          try {
+            status.textContent = `${mode === "create" ? "Création" : "Enregistrement"} de ${preview.canonical_path}…`;
             const confirmed = await requestProject("/v2/projects/placement/apply", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                contract_version: 2,
-                command_id: "project-ui-" + Date.now() + "-" + Math.random().toString(16).slice(2),
-                expected_generation: catalog.generation,
-                location_id: locationControl.value,
-                operation: mode,
-                root: mode === "import" ? root : undefined,
-                requested_name: mode === "create" ? folder : undefined,
-                initialize_git: Boolean(initializeGit.checked),
-                backend: executionControl.value === "server" ? undefined : executionControl.value,
-              }),
+              body: JSON.stringify(placementRequest("project-ui", {
+                initialize_git: initializeGit.checked && Boolean(preview.git_initialization_proposed),
+              })),
             });
             selectedProjectId = confirmed.project_id;
             await refreshProjects();
@@ -10261,10 +10184,8 @@
             nodes.sourceState.dataset.state = "ready";
           } catch (error) {
             status.dataset.state = "error";
-            status.textContent = error.message || "Le projet n’a pas pu être enregistré.";
+            status.textContent = error.message || "Le projet n’a pas pu être enregistré. Rien n’a été modifié.";
             confirmAction.disabled = false;
-          } finally {
-            previewAction.disabled = false;
           }
         });
         dialog.append(form);
