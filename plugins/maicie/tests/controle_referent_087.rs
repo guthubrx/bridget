@@ -15,11 +15,17 @@ use maicie::domain::{
     TypeFaitReassignation, human_message_content_seal,
 };
 use maicie::reconcile::{
-    ReconcileAction, reconcile_focus_waiting_agents, reconcile_startup_with_limits,
+    HumanInboxReconcilePhase, ReconcileAction, ReconcileError, reconcile_focus_waiting_agents,
+    reconcile_human_inbox_observed_with_limits, reconcile_human_inbox_with_limits,
+    reconcile_startup_with_limits,
 };
 use maicie::store::{HumanDecisionApplication, MaicieStore, SCHEMA_VERSION, StoreError};
 use std::fs;
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread;
 use uuid::Uuid;
 
 #[path = "support/historical_guichet_receptions.rs"]
@@ -102,6 +108,71 @@ fn human_focus_permit(store: &MaicieStore, message_id: &str) -> ObjectiveOpening
         AttestationConsumption::NeverConsumed,
     )
     .unwrap()
+}
+
+fn human_inbox_limits() -> maicie::bridget_client::BridgetClientLimits {
+    maicie::bridget_client::BridgetClientLimits {
+        connect_timeout: std::time::Duration::from_secs(2),
+        io_timeout: std::time::Duration::from_secs(2),
+        max_frame_bytes: 64 * 1024,
+    }
+}
+
+fn read_json(reader: &mut BufReader<UnixStream>) -> serde_json::Value {
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    serde_json::from_str(&line).unwrap()
+}
+
+fn write_json(writer: &mut BufWriter<UnixStream>, value: serde_json::Value) {
+    serde_json::to_writer(&mut *writer, &value).unwrap();
+    writer.write_all(b"\n").unwrap();
+    writer.flush().unwrap();
+}
+
+fn serve_one_human_decision(
+    socket: PathBuf,
+    decision_id: &'static str,
+    expect_ack: bool,
+) -> (thread::JoinHandle<()>, mpsc::Receiver<()>) {
+    let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+    let server = thread::spawn(move || {
+        let listener = UnixListener::bind(socket).unwrap();
+        ready_tx.send(()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
+        assert_eq!(read_json(&mut reader)["type"], "RoleHandshake");
+        write_json(
+            &mut writer,
+            serde_json::json!({"type":"RoleAccepted","role":"service"}),
+        );
+        assert_eq!(read_json(&mut reader)["type"], "ServiceHello");
+        write_json(
+            &mut writer,
+            serde_json::json!({"type":"ServiceWelcome","version":1,"horizon_secs":60,
+                "issued_at_tolerance_secs":5,"capabilities":["human_inbox_v1"]}),
+        );
+        assert_eq!(read_json(&mut reader)["type"], "human_inbox_decisions");
+        write_json(
+            &mut writer,
+            serde_json::json!({"type":"human_inbox_decisions_batch","decisions":[{
+                "decision_id":decision_id,"item_id":"item-1","dedup_key":"k1",
+                "kind":"chain_exhausted","subject":{},"choice":"ack","at":1000
+            }]}),
+        );
+        if expect_ack {
+            assert_eq!(
+                read_json(&mut reader),
+                serde_json::json!({"type":"human_inbox_ack","version":1,"decision_id":decision_id}),
+            );
+            write_json(
+                &mut writer,
+                serde_json::json!({"type":"human_inbox_acked","decision_id":decision_id,"acked_at":1001}),
+            );
+        }
+    });
+    (server, ready_rx)
 }
 
 fn open_auto(
@@ -350,6 +421,14 @@ fn spec_087_decisions_humaines_appliquees_une_seule_fois() {
     );
     assert_eq!(
         store
+            .apply_human_decision("dec-budget", "item-budget", "raise_budget", None, 1_025)
+            .unwrap(),
+        HumanDecisionApplication::Applied,
+        "le plafond reste côté daemon, mais la décision est acquittable"
+    );
+    assert!(store.human_decision_applied("dec-budget").unwrap());
+    assert_eq!(
+        store
             .apply_human_decision("dec-3", "item-3", "reassign:agent-x", None, 1_030)
             .unwrap(),
         HumanDecisionApplication::Unsupported
@@ -578,4 +657,47 @@ fn spec_087_depot_humain_durable_et_reference_focus() {
         0,
         "idempotent"
     );
+}
+
+/// Propriété : un arrêt entre la relève et l'effet ne consomme pas la
+/// décision. Elle revient ensuite et n'est acquittée qu'après le commit.
+#[test]
+fn spec_087_releve_humaine_rejoue_apres_crash_avant_effet() {
+    let guard = RootGuard::new("human-decision-crash");
+    let mut store = MaicieStore::open(guard.path.join("maicie.sqlite3")).unwrap();
+    let socket = guard.path.join("human.sock");
+    let (first, first_ready) = serve_one_human_decision(socket.clone(), "decision-crash-1", false);
+    first_ready.recv().unwrap();
+    let first_result = reconcile_human_inbox_observed_with_limits(
+        &mut store,
+        &socket,
+        human_inbox_limits(),
+        1_000,
+        |phase| {
+            assert_eq!(phase, HumanInboxReconcilePhase::AfterFetchBeforeApply);
+            Err(ReconcileError::InvalidSnapshot("crash simulé avant effet"))
+        },
+    );
+    assert!(
+        matches!(
+            first_result,
+            Err(ReconcileError::InvalidSnapshot("crash simulé avant effet"))
+        ),
+        "résultat réel : {first_result:?}"
+    );
+    first.join().unwrap();
+    assert!(!store.human_decision_applied("decision-crash-1").unwrap());
+    fs::remove_file(&socket).unwrap();
+
+    let (second, second_ready) = serve_one_human_decision(socket.clone(), "decision-crash-1", true);
+    second_ready.recv().unwrap();
+    let report =
+        reconcile_human_inbox_with_limits(&mut store, &socket, human_inbox_limits(), 1_001)
+            .unwrap();
+    second.join().unwrap();
+    assert_eq!(
+        (report.applied, report.acked, report.unsupported),
+        (1, 1, 0)
+    );
+    assert!(store.human_decision_applied("decision-crash-1").unwrap());
 }

@@ -57,6 +57,11 @@
 - Un rapport de revue accepté avec verdict dépose `review_verdict_pending` (`review-verdict:<delegation_id>`) et une proposition d'activation dépose `activation_approval` (`activation:<approval_id>`), chacun dans la transaction qui enregistre son fait source. Les options sont fermées.
 - La migration des identités exclut le destinataire réservé `human`, y compris dans les enveloppes JSON.
 - Preuves ciblées sur le serveur : `coordination_store_integration chaine_epuisee_depose_un_unique_item_humain_durable` : **1 passé, 0 échec** ; `guichet_greffe_integration verdict_concordant_termine_la_revue_sans_clore_l_objectif` : **1 passé, 0 échec** ; `approval_atomicity_integration approbation_et_activation_sont_atomiques_et_les_octets_restent_immuables` : **1 passé, 0 échec** ; `identity_migration` : **1 passé, 0 échec**. La cible intégrale `guichet_greffe_integration` garde deux rouges préexistants de migration (`migration_v6_vers_v7_preserve_les_agregats_et_ajoute_les_recus`, `parcours_v16_v17_v18_v19_v20_conserve_les_refus_et_motifs_de_revue`) sur `duplicate column name: deferred_reason`, hors scénario T028.
+
+### T032 et T052 Décisions humaines : ✅
+- La relève encadre désormais explicitement les frontières `AfterFetchBeforeApply` et `AfterApplyBeforeAck`. Elle marque la décision dans la même transaction que son effet, puis seulement l'acquitte côté daemon.
+- `ack`, `cancel`, `raise_budget` et `reassign:<agent_id>` sont couverts. Une réassignation après intervention humaine crée une génération ouverte, un épisode de rappel et une demande durable vers l'agent choisi ; un rejeu ne crée pas de seconde génération.
+- Preuves : `cargo test -p maicie --test controle_referent_087` : **11 passés, 0 échec** ; `coordination_store_integration chaine_epuisee_depose_un_unique_item_humain_durable` : **1 passé, 0 échec**. Le crash simulé entre relève et application relit la décision, l'applique une seule fois, puis l'acquitte.
 ### T029 Dette de réponse : ✅ palier 3 d'une demande du référent ⇒ item `reply_debt`
 ### T030 Canal externe : ✅ `human-channel.json` 0600, chemin absolu, commande avec résumé borné sur stdin, échec consigné
 ### T031 Rappel : ✅ `remind_overdue` (module) ; **branchement dans le thread horaire** : voir Convergence

@@ -62,7 +62,9 @@
 - `chain_exhausted` (ou `intervention_required` pour un autre motif), `budget_reached`, `review_verdict_pending` et `activation_approval` sont déposés durablement vers la boîte humaine. Les deux derniers sont créés dans la transaction de leur fait source, avec les clés `review-verdict:<delegation_id>` et `activation:<approval_id>`.
 - `migrate_agent_participants` conserve explicitement le destinataire réservé `human`.
 
-### T032 Décisions humaines : ⚠️ partiel
+### T032 Décisions humaines : ✅
+- La relève applique puis acquitte chaque décision. `ack`, `cancel`, `raise_budget` et `reassign:<agent_id>` sont transactionnels et idempotents. La réassignation humaine ouvre une génération et une demande durable vers l'agent explicitement désigné.
+- Les frontières `AfterFetchBeforeApply` et `AfterApplyBeforeAck` couvrent le crash : une décision non appliquée revient, une décision déjà durablement appliquée est seulement acquittée.
 - `apply_human_decision` : `ack` ⇒ appliqué ; `cancel` ⇒ annulation de la délégation ; `raise_budget` ⇒ appliqué côté Maicie (le plafond est un réglage daemon, rien à faire ici) ; `reassign:<agent>` ⇒ `Unsupported`, non acquitté, reste visible dans la boîte. `spec_087_decisions_humaines_appliquees_une_seule_fois` vert.
 
 ### T033 Clôture d'item : ❌ note seule

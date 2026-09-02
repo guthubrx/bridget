@@ -12,8 +12,8 @@ use maicie::domain::{
 };
 use maicie::outbox::{PreparedDelegation, stable_body_hash};
 use maicie::store::{
-    CoordinationCommitPhase, GuichetCommitPhase, MaicieStore, ObjectiveClosureCommitPhase,
-    ReassignmentCommitPhase, SCHEMA_VERSION, StoreError,
+    CoordinationCommitPhase, GuichetCommitPhase, HumanDecisionApplication, MaicieStore,
+    ObjectiveClosureCommitPhase, ReassignmentCommitPhase, SCHEMA_VERSION, StoreError,
 };
 use rusqlite::{Connection, ErrorCode, params};
 use std::fs;
@@ -1362,6 +1362,48 @@ fn chaine_epuisee_depose_un_unique_item_humain_durable() {
     assert_eq!(pending[0].options, vec!["cancel", "ack"]);
     assert!(store.apply_reassignment_batch(&exhausted).unwrap().replayed);
     assert_eq!(store.pending_human_inbox().unwrap().len(), 1);
+
+    assert_eq!(
+        store
+            .apply_human_decision(
+                "human-reassign-1",
+                "item-chain-1",
+                "reassign:charlie",
+                Some(delegation_id),
+                1_787_500_300,
+            )
+            .unwrap(),
+        HumanDecisionApplication::Applied
+    );
+    let reassigned = store
+        .pending_tracked_request_outboxes()
+        .unwrap()
+        .into_iter()
+        .filter(|outbox| outbox.generation == 2)
+        .collect::<Vec<_>>();
+    assert_eq!(reassigned.len(), 1);
+    assert_eq!(reassigned[0].recipient, "charlie");
+    assert_eq!(
+        store
+            .apply_human_decision(
+                "human-reassign-1",
+                "item-chain-1",
+                "reassign:charlie",
+                Some(delegation_id),
+                1_787_500_301,
+            )
+            .unwrap(),
+        HumanDecisionApplication::Replayed
+    );
+    assert_eq!(
+        store
+            .pending_tracked_request_outboxes()
+            .unwrap()
+            .into_iter()
+            .filter(|outbox| outbox.generation == 2)
+            .count(),
+        1
+    );
 }
 
 #[test]

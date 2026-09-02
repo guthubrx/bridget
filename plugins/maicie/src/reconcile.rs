@@ -447,6 +447,14 @@ pub struct HumanInboxReconcileReport {
     pub transport_unavailable: bool,
 }
 
+/// Frontières observables de la relève humaine. Elles permettent d'éprouver
+/// le cas crash : aucune décision n'est acquittée avant son effet durable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HumanInboxReconcilePhase {
+    AfterFetchBeforeApply,
+    AfterApplyBeforeAck,
+}
+
 /// Dépose un item durable quand le focus actif attend un agent au-delà de la
 /// durée normale. L'idempotence est portée par `focus-waiting:<objectif>`.
 pub fn reconcile_focus_waiting_agents(
@@ -481,6 +489,16 @@ pub fn reconcile_human_inbox_with_limits(
     bridget_socket: impl AsRef<Path>,
     limits: BridgetClientLimits,
     now: i64,
+) -> Result<HumanInboxReconcileReport, ReconcileError> {
+    reconcile_human_inbox_observed_with_limits(store, bridget_socket, limits, now, |_| Ok(()))
+}
+
+pub fn reconcile_human_inbox_observed_with_limits(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    limits: BridgetClientLimits,
+    now: i64,
+    mut observer: impl FnMut(HumanInboxReconcilePhase) -> Result<(), ReconcileError>,
 ) -> Result<HumanInboxReconcileReport, ReconcileError> {
     let mut report = HumanInboxReconcileReport::default();
     let pending = store.pending_human_inbox()?;
@@ -539,6 +557,7 @@ pub fn reconcile_human_inbox_with_limits(
         Err(error) => return Err(ReconcileError::Client(error)),
     };
     for decision in decisions {
+        observer(HumanInboxReconcilePhase::AfterFetchBeforeApply)?;
         let delegation_id = decision
             .subject
             .get("delegation_id")
@@ -559,6 +578,7 @@ pub fn reconcile_human_inbox_with_limits(
                 continue;
             }
         }
+        observer(HumanInboxReconcilePhase::AfterApplyBeforeAck)?;
         match client.ack_human_decision(&decision.decision_id) {
             Ok(_) => report.acked += 1,
             Err(BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. }) => {

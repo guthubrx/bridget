@@ -8639,9 +8639,9 @@ impl MaicieStore {
         Ok(inserted == 1)
     }
 
-    /// Applique une décision « ack » (fermeture sans effet) ou « cancel »
-    /// (annulation de la délégation visée) de façon transactionnelle. Une
-    /// décision déjà appliquée rend `Replayed`.
+    /// Applique une décision du référent dans la même transaction que son
+    /// marquage. Une décision déjà appliquée rend `Replayed` : le relais peut
+    /// alors l'acquitter sans dupliquer l'effet local.
     pub fn apply_human_decision(
         &mut self,
         decision_id: &str,
@@ -8657,6 +8657,17 @@ impl MaicieStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(StoreError::Sql)?;
+        let effect_name = if choice.starts_with("reassign:") {
+            "reassign"
+        } else {
+            choice
+        };
+        let fresh =
+            Self::record_human_decision_applied(&tx, decision_id, item_id, effect_name, now)?;
+        if !fresh {
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(HumanDecisionApplication::Replayed);
+        }
         let effect = match choice {
             "ack" => "ack",
             "cancel" => {
@@ -8667,15 +8678,34 @@ impl MaicieStore {
                 "cancel"
             }
             "raise_budget" => "ignored_daemon_side",
+            choice if choice.starts_with("reassign:") => {
+                let Some(delegation_id) = delegation_id else {
+                    return Ok(HumanDecisionApplication::Unsupported);
+                };
+                let participant_id = choice.trim_start_matches("reassign:").trim();
+                if participant_id.is_empty() || participant_id == crate::MAICIE_IDENTITY {
+                    return Ok(HumanDecisionApplication::Unsupported);
+                }
+                apply_human_reassignment_in_transaction(
+                    &tx,
+                    decision_id,
+                    delegation_id,
+                    participant_id,
+                    now,
+                )?;
+                "reassign"
+            }
             _ => return Ok(HumanDecisionApplication::Unsupported),
         };
-        let fresh = Self::record_human_decision_applied(&tx, decision_id, item_id, effect, now)?;
+        if effect != effect_name {
+            tx.execute(
+                "UPDATE human_decisions_applied SET effect = ?1 WHERE decision_id = ?2",
+                params![effect, decision_id],
+            )
+            .map_err(StoreError::Sql)?;
+        }
         tx.commit().map_err(StoreError::Sql)?;
-        Ok(if fresh {
-            HumanDecisionApplication::Applied
-        } else {
-            HumanDecisionApplication::Replayed
-        })
+        Ok(HumanDecisionApplication::Applied)
     }
 
     /// Usage unique d'un message humain : `AlreadyConsumed` s'il a déjà ouvert
@@ -9155,6 +9185,184 @@ fn cancel_delegation_in_transaction(
     )
     .map_err(StoreError::Sql)?;
     Ok(())
+}
+
+/// Relève explicitement une délégation restée en intervention humaine. Le
+/// référent désigne le successeur, mais l'effet reste identique à une relève
+/// préautorisée : nouvelle génération, nouvelle demande durable et épisode de
+/// rappel, tous dans la transaction de la décision humaine.
+fn apply_human_reassignment_in_transaction(
+    tx: &Transaction<'_>,
+    decision_id: &str,
+    delegation_id: Uuid,
+    participant_id: &str,
+    now: i64,
+) -> Result<(), StoreError> {
+    let current_payload: Vec<u8> = tx
+        .query_row(
+            "SELECT generation.payload_json
+             FROM delegation_lineages lineage
+             JOIN delegation_generations generation
+               ON generation.delegation_id = lineage.delegation_id
+              AND generation.generation = lineage.active_generation
+             WHERE lineage.delegation_id = ?1",
+            [delegation_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::Sql)?;
+    let current: GenerationDelegation =
+        serde_json::from_slice(&current_payload).map_err(StoreError::Json)?;
+    if current.delegation_id != delegation_id
+        || current.etat != EtatGenerationDelegation::InterventionHumaineRequise
+    {
+        return Err(StoreError::Conflict(
+            "réassignation humaine sans intervention ouverte",
+        ));
+    }
+    let policy_payload: Vec<u8> = tx
+        .query_row(
+            "SELECT payload_json FROM reassignment_policies WHERE delegation_id = ?1",
+            [delegation_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::Sql)?;
+    let policy: PolitiqueReassignation =
+        serde_json::from_slice(&policy_payload).map_err(StoreError::Json)?;
+    let (body_bytes, timeout_secs) = load_delegation_request_template(tx, delegation_id)?;
+    let next_generation = current
+        .generation
+        .checked_add(1)
+        .ok_or(StoreError::Invalid("génération humaine hors borne"))?;
+    let event_id = format!("human-reassign:{decision_id}");
+    let request_id = identifiant_deterministe(
+        b"human-reassign-request-v1",
+        &[
+            delegation_id.as_bytes(),
+            &next_generation.to_be_bytes(),
+            decision_id.as_bytes(),
+            participant_id.as_bytes(),
+        ],
+    )
+    .to_string();
+    let deadline_at = now
+        .checked_add(
+            i64::try_from(timeout_secs)
+                .map_err(|_| StoreError::Invalid("délai humain hors borne"))?,
+        )
+        .ok_or(StoreError::Invalid("échéance humaine hors borne"))?;
+
+    let mut source = current.clone();
+    source.etat = EtatGenerationDelegation::Reassignee;
+    source.trigger_event_id = Some(event_id.clone());
+    let changed = tx
+        .execute(
+            "UPDATE delegation_generations SET state = ?1, payload_json = ?2
+             WHERE delegation_id = ?3 AND generation = ?4 AND state = 'intervention_humaine_requise'",
+            params![
+                generation_state_name(source.etat),
+                serde_json::to_vec(&source).map_err(StoreError::Json)?,
+                delegation_id.to_string(),
+                i64::try_from(current.generation)
+                    .map_err(|_| StoreError::Invalid("génération humaine hors borne"))?,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    if changed != 1 {
+        return Err(StoreError::Conflict(
+            "génération humaine modifiée concurremment",
+        ));
+    }
+
+    let next = GenerationDelegation {
+        delegation_id,
+        objectif_id: current.objectif_id,
+        generation: next_generation,
+        participant_id: participant_id.to_string(),
+        etat: EtatGenerationDelegation::Ouverte,
+        generation_precedente: Some(current.generation),
+        trigger_event_id: Some(event_id.clone()),
+    };
+    next.verifier().map_err(StoreError::Domain)?;
+    let inserted = tx
+        .execute(
+            "INSERT INTO delegation_generations(
+                 delegation_id, objective_id, generation, participant_id, state, payload_json
+             ) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                delegation_id.to_string(),
+                current.objectif_id.to_string(),
+                i64::try_from(next_generation)
+                    .map_err(|_| StoreError::Invalid("génération humaine hors borne"))?,
+                participant_id,
+                generation_state_name(next.etat),
+                serde_json::to_vec(&next).map_err(StoreError::Json)?,
+            ],
+        )
+        .map_err(map_coordination_insert_error)?;
+    if inserted != 1 {
+        return Err(StoreError::Conflict("successeur humain non enregistré"));
+    }
+    let lineage = LigneeDelegation {
+        delegation_id,
+        objectif_id: current.objectif_id,
+        generation_active: next_generation,
+    };
+    let changed = tx
+        .execute(
+            "UPDATE delegation_lineages SET active_generation = ?1, payload_json = ?2
+             WHERE delegation_id = ?3 AND active_generation = ?4",
+            params![
+                i64::try_from(next_generation)
+                    .map_err(|_| StoreError::Invalid("génération humaine hors borne"))?,
+                serde_json::to_vec(&lineage).map_err(StoreError::Json)?,
+                delegation_id.to_string(),
+                i64::try_from(current.generation)
+                    .map_err(|_| StoreError::Invalid("génération humaine hors borne"))?,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    if changed != 1 {
+        return Err(StoreError::Conflict(
+            "lignée humaine modifiée concurremment",
+        ));
+    }
+
+    let episode = EpisodeRelance {
+        delegation_id,
+        objectif_id: current.objectif_id,
+        generation: next_generation,
+        request_id: request_id.clone(),
+        request_ordinal: 1,
+        reminder_count: 0,
+        reemissions_used: 0,
+        etat: EtatEpisodeRelance::Actif,
+    };
+    episode
+        .verifier(policy.max_reemissions)
+        .map_err(StoreError::Domain)?;
+    insert_reminder_episode(tx, &episode)?;
+    let lot = LotReassignation {
+        objectif_id: current.objectif_id,
+        delegation_id,
+        generation: next_generation,
+        issued_at: now,
+        next_deadline_at: deadline_at,
+        faits: Vec::new(),
+    };
+    let effect = EffetDemandeSuivie {
+        effect_id: identifiant_deterministe(
+            b"human-reassign-effect-v1",
+            &[delegation_id.as_bytes(), decision_id.as_bytes()],
+        ),
+        kind: TypeEffetDemandeSuivie::Creer,
+        generation: next_generation,
+        request_id,
+        recipient: participant_id.to_string(),
+        deadline_at: Some(deadline_at),
+    };
+    let outbox =
+        tracked_request_outbox(&lot, &policy, &effect, &body_bytes, timeout_secs, &event_id)?;
+    insert_tracked_request_outbox(tx, &outbox)
 }
 
 fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), StoreError> {
