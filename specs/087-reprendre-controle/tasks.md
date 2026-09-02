@@ -175,8 +175,8 @@
 
 Passage 1, 2026-09-02 après intégration des deux versants. Lecture de `spec.md` FR par FR contre le code ; manques ci-dessous, ajoutés sans rien décocher.
 
-- [ ] T049 [US2] FR-012, FR-015 : un focus sans agent disponible est refusé au lieu d'attendre ; `plugins/maicie/src/greffe_service.rs` `apply_delegate` doit laisser l'objectif ouvert en file et déposer `focus_waiting_agent` après `durations.normal_secs` (reprend T027) ; test d'effet
-- [ ] T050 [US2] FR-012 : mesure de la base gelée sur `origin/<branche par défaut>` par `plugins/maicie/src/review_git.rs` quand le focus n'a pas de `review_target` (reprend T023 pour cette moitié) ; test
+- [x] T049 [US2] FR-012, FR-015 : un focus sans agent disponible est refusé au lieu d'attendre ; `plugins/maicie/src/greffe_service.rs` `apply_delegate` doit laisser l'objectif ouvert en file et déposer `focus_waiting_agent` après `durations.normal_secs` (reprend T027) ; test d'effet
+- [x] T050 [US2] FR-012 : mesure de la base gelée sur `origin/<branche par défaut>` par `plugins/maicie/src/review_git.rs` quand le focus n'a pas de `review_target` (reprend T023 pour cette moitié) ; test
 - [x] T051 [US3] FR-020 : producteurs `review_verdict_pending` et `activation_approval` dans Maicie (reprend T028)
 - [x] T052 [US3] FR-024 : décision `reassign:<agent_id>` appliquée par Maicie (aujourd'hui `Unsupported`, non acquittée) ; exige soit un fait de réassignation construit par Maicie, soit une trame daemon (reprend T032)
 - [x] T053 [US3] FR-021 : trame `HumanInboxClose { item_id, reason }` (rôle service) dans `crates/bridget-transport/src/protocol.rs` et son bras daemon vers `human_inbox::close_self`, pour que Maicie ferme un item dont l'objet a disparu (reprend T033)

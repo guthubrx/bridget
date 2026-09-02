@@ -612,6 +612,7 @@ impl ProjectionReply {
 #[serde(rename_all = "snake_case")]
 pub enum DelegateMutationStatus {
     Created,
+    WaitingForAgent,
     SelectionRequired,
 }
 
@@ -1034,6 +1035,25 @@ fn validate_mutation_reply(reply: &MutationReply) -> Result<(), GuichetDomainErr
                 {
                     return Err(GuichetDomainError::InvalidEnvelope(
                         "résultat de délégation incohérent",
+                    ));
+                }
+            }
+            DelegateMutationStatus::WaitingForAgent => {
+                let objective_id =
+                    objective_id
+                        .as_deref()
+                        .ok_or(GuichetDomainError::InvalidEnvelope(
+                            "focus en attente sans objectif",
+                        ))?;
+                parse_uuid(objective_id)?;
+                if delegation_id.is_some()
+                    || message_id.is_some()
+                    || participant.is_some()
+                    || !candidates.is_empty()
+                    || !*waiting_on_prerequisites
+                {
+                    return Err(GuichetDomainError::InvalidEnvelope(
+                        "focus en attente incohérent",
                     ));
                 }
             }

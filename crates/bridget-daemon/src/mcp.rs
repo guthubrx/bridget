@@ -1243,6 +1243,10 @@ fn guichet_result_value(
                 ..
             } => "created",
             GuichetReplyPayload::Delegate {
+                status: GuichetDelegateMutationStatus::WaitingForAgent,
+                ..
+            } => "waiting_for_agent",
+            GuichetReplyPayload::Delegate {
                 status: GuichetDelegateMutationStatus::SelectionRequired,
                 ..
             } => "selection_required",
@@ -1264,6 +1268,9 @@ fn guichet_result_value(
             &payload,
             GuichetReplyPayload::Delegate {
                 status: GuichetDelegateMutationStatus::Created,
+                ..
+            } | GuichetReplyPayload::Delegate {
+                status: GuichetDelegateMutationStatus::WaitingForAgent,
                 ..
             } | GuichetReplyPayload::RegistreAdd { .. }
                 | GuichetReplyPayload::ObjectiveClose { .. }

@@ -5,7 +5,8 @@ use maicie::review::{
 };
 use maicie::review_git::{
     GitMeasurementRequest, LimitKind, ReviewGitError, ReviewGitLimits, ReviewPreparationError,
-    ReviewPreparationRequest, measure_repository, prepare_review_submission,
+    ReviewPreparationRequest, freeze_origin_default_review_target, measure_repository,
+    prepare_review_submission,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -98,6 +99,27 @@ fn review_project(root: PathBuf, project_id: &str) -> ReviewProjectConfig {
         repository_root: root,
         referent_id: "bridget".to_string(),
     }
+}
+
+#[test]
+fn spec_087_focus_gel_la_branche_par_defaut_origin() {
+    let repo = FixtureRepository::new("focus-default-branch");
+    repo.write("src/value.rs", "pub const VALUE: u8 = 1;\n");
+    let head = repo.commit("base");
+    repo.git(&["update-ref", "refs/remotes/origin/main", &head]);
+    repo.git(&[
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+    ]);
+
+    assert_eq!(
+        freeze_origin_default_review_target(&repo.root).unwrap(),
+        bridget_transport::protocol::ReviewTarget {
+            target_ref: "origin/main".to_string(),
+            expected_head: head,
+        }
+    );
 }
 
 fn submission_payload(project_id: &str, base: &str, head: &str) -> ReviewLotSubmitPayload {

@@ -49,6 +49,7 @@ use maicie::reconcile::{
 use maicie::review_continuity::{
     ReviewContinuityObservation, ReviewContinuityObserver, ReviewContinuityState,
 };
+use maicie::review_git::ReviewGitError;
 use maicie::routines::{
     EtatRoutine, ProposeRoutineRequest, RoutineError, RoutineStatusRow, approve_routine,
     evaluate_routines, pause_routine, propose_routine, resume_routine, routines_status_rows,
@@ -4457,6 +4458,7 @@ fn greffe_service_error_for_cli(error: GreffeServiceError) -> CliError {
         GreffeServiceError::Objective(error) => CliError::Objective(error),
         GreffeServiceError::Store(error) => CliError::Store(error),
         GreffeServiceError::Bridget(error) => CliError::Bridget(error),
+        GreffeServiceError::ReviewGit(error) => CliError::ReviewGit(error),
         GreffeServiceError::Delegate(error) => CliError::Delegate(error),
         GreffeServiceError::Authorization(_) => CliError::Usage(
             bridget_transport::greffe_authorization::GREFFE_AUTHORIZATION_PUBLIC_REFUSAL,
@@ -4497,6 +4499,7 @@ enum CliError {
     Routine(RoutineError),
     InstallPublish(InstallPublishError),
     Projection(UiProjectionError),
+    ReviewGit(ReviewGitError),
 }
 
 impl CliError {
@@ -4505,6 +4508,7 @@ impl CliError {
             Self::Usage(_) => EXIT_USAGE,
             Self::Configuration(_) | Self::Catalogue(_) => EXIT_CONFIGURATION,
             Self::Bridget(_) | Self::DaemonStoreLocality(_) => EXIT_BRIDGET,
+            Self::ReviewGit(_) => EXIT_CONFIGURATION,
             Self::Delegate(DelegateError::Store(_))
             | Self::Store(_)
             | Self::CatalogueReconcile(CatalogueReconcileError::Store(_)) => EXIT_STORE,
@@ -4538,6 +4542,7 @@ impl CliError {
             Self::CatalogueReconcile(CatalogueReconcileError::Catalogue(_)) => "catalogue",
             Self::CatalogueReconcile(_) => "catalogue_reconcile",
             Self::Bridget(_) => "bridget",
+            Self::ReviewGit(_) => "review_git",
             Self::DaemonStoreLocality(_) => "daemon_store_not_local",
             Self::Delegate(DelegateError::EnvelopeMismatch) => "envelope_mismatch",
             Self::Delegate(DelegateError::ContrainteRefusee { .. }) => {
@@ -4583,6 +4588,7 @@ impl fmt::Display for CliError {
             Self::Catalogue(error) => error.fmt(formatter),
             Self::CatalogueReconcile(error) => error.fmt(formatter),
             Self::Bridget(error) => error.fmt(formatter),
+            Self::ReviewGit(error) => error.fmt(formatter),
             Self::Projection(error) => error.fmt(formatter),
             Self::DaemonStoreLocality(detail) => write!(formatter, "écriture refusée : {detail}"),
             Self::Delegate(error) => error.fmt(formatter),

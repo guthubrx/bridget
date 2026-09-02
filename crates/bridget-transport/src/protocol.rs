@@ -1444,6 +1444,7 @@ pub enum GuichetRefusalReason {
 #[serde(rename_all = "snake_case")]
 pub enum GuichetDelegateMutationStatus {
     Created,
+    WaitingForAgent,
     SelectionRequired,
 }
 
@@ -4300,6 +4301,40 @@ mod tests {
             reply.attach_refusal(),
             Some(AttachRefusal::MessageOutsideAttachRole)
         );
+
+        let waiting = WrapperToDaemon::GuichetReply {
+            version: SERVICE_CONTRACT_VERSION,
+            issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
+            request_id: "req-waiting".to_string(),
+            claim_generation: 3,
+            claim_token: "claim-waiting".to_string(),
+            response_message_id: "msg-waiting".to_string(),
+            in_reply_to: "message-waiting".to_string(),
+            outcome: GuichetOutcome::Accepted,
+            payload: GuichetReplyPayload::Delegate {
+                status: GuichetDelegateMutationStatus::WaitingForAgent,
+                objective_id: Some("objective-waiting".to_string()),
+                delegation_id: None,
+                message_id: None,
+                participant: None,
+                candidates: Vec::new(),
+                waiting_on_prerequisites: true,
+                replayed: false,
+            },
+        };
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&encode(&waiting).unwrap()).unwrap(),
+            WrapperToDaemon::GuichetReply {
+                payload: GuichetReplyPayload::Delegate {
+                    status: GuichetDelegateMutationStatus::WaitingForAgent,
+                    objective_id: Some(objective_id),
+                    delegation_id: None,
+                    waiting_on_prerequisites: true,
+                    ..
+                },
+                ..
+            } if objective_id == "objective-waiting"
+        ));
 
         let refused = WrapperToDaemon::GuichetReply {
             version: SERVICE_CONTRACT_VERSION,

@@ -5959,6 +5959,14 @@ fn guichet_reply_is_valid(
                     && candidates.is_empty()
                     && !(*waiting_on_prerequisites && message_id.is_some())
             }
+            bridget_transport::protocol::GuichetDelegateMutationStatus::WaitingForAgent => {
+                objective_id.as_deref().is_some_and(identifier)
+                    && delegation_id.is_none()
+                    && message_id.is_none()
+                    && participant.is_none()
+                    && candidates.is_empty()
+                    && *waiting_on_prerequisites
+            }
             bridget_transport::protocol::GuichetDelegateMutationStatus::SelectionRequired => {
                 objective_id.is_none()
                     && delegation_id.is_none()

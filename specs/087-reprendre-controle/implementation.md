@@ -73,6 +73,26 @@
 
 - `GuichetRefusalReason::BudgetReached { cap, open }` remplace le faux `mutation_invalid`. Maicie conserve le motif `budget_reached` dans son reçu durable et porte les valeurs attestées dans la trame ; à un rejeu de lease, la charge existante est reprise sans recalculer le budget courant.
 - Preuves serveur : sérialisation et rejeu **1 passé, 0 échec** ; sélection de la variante depuis `DelegateError::BudgetReached` **1 passé, 0 échec** ; protocole guichet **1 passé, 0 échec** ; `cargo check -p bridget-daemon` réussi.
+
+### T049 Focus guichet en attente : ✅
+
+- Le cas « agents correspondants tous temporairement indisponibles » traverse le guichet avec le statut fermé `waiting_for_agent`, un `objective_id` et aucun identifiant de délégation, de message ou de participant. La validation stricte du reçu, le daemon et la projection MCP reconnaissent ce troisième état sans affaiblir `created`.
+- `spec_087_focus_guichet_sans_agent_disponible_attend_et_alerte` prouve le chemin complet : focus durable, aucune délégation fictive, item `focus_waiting_agent` après 60 s et rejeu sans second focus.
+
+### T050 Cible Git gelée du focus : ✅
+
+- `review_git::freeze_origin_default_review_target` lit uniquement les références locales rapatriées (`refs/remotes/origin/HEAD` puis sa tête), sans accès réseau ni chemin de requête. Un focus sans `review_target` exige le projet de revue configuré correspondant à `focus.project_id`.
+- `spec_087_focus_guichet_gel_la_branche_origin_par_defaut` prouve que la délégation durable porte `origin/main` et le SHA observé. `spec_087_focus_gel_la_branche_par_defaut_origin` couvre la primitive Git isolée.
+
+### Self-review Article XIX/XX - T049/T050
+
+- Pourquoi cette solution est nécessaire : la réponse du focus sans agent ne pouvait pas être persistée sous `created`, et l'absence de cible Git laissait une revue de focus non gelée.
+- Pourquoi elle est plus simple ou plus maintenable : un statut fermé supplémentaire exprime le fait réel sans rendre permissif `created`; une seule fonction `review_git` réutilise la capture Git bornée existante.
+- Hypothèses prises : la branche par défaut `origin` a déjà été rapatriée et `origin/HEAD` pointe vers elle; son absence reste une erreur technique rejouable.
+- Vérifications réalisées : `cargo test -p maicie --test review_git_integration spec_087_focus_gel_la_branche_par_defaut_origin -- --exact` : **1 passé, 0 échec**; `cargo test -p maicie --test greffe_central_channel_integration` : **3 passés, 0 échec**; `cargo test -p bridget-transport protocol::tests::service_guichet_messages_roundtrip_et_restent_hors_attach -- --exact` : **1 passé, 0 échec**; `cargo check -p bridget-daemon` : réussi.
+- Non vérifié : parcours opérateur réel de T045, volontairement hors de ce lot.
+- Code supprimé ou évité : aucune lecture réseau Git, aucune délégation ou outbox fictive, aucun relâchement de validation pour `created`.
+- Complexité ajoutée et justification : un état de protocole et ses trois validateurs, nécessaires pour rendre le reçu durable, rejouable et non ambigu.
 ### T029 Dette de réponse : ✅ palier 3 d'une demande du référent ⇒ item `reply_debt`
 ### T030 Canal externe : ✅ `human-channel.json` 0600, chemin absolu, commande avec résumé borné sur stdin, échec consigné
 ### T031 Rappel : ✅ `remind_overdue` (module) ; **branchement dans le thread horaire** : voir Convergence

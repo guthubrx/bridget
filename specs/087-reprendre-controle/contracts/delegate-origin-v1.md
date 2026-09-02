@@ -23,5 +23,6 @@ Règles Maicie (`guichet.rs` puis `greffe_service.rs`) :
 2. `origin.human` → `ObjectiveOpeningPermit::human_request(attestation, observed, issuer_scope, canonical_request_sha256, consumption)` ; `consumption` vient de `human_origin_consumptions`. Tout refus `HumanOriginRefusal` devient `GuichetRefusalReason::HumanOriginInvalid` (code public unique, motif interne journalisé).
 3. `focus` présent avec origine humaine valide → objectif inscrit dans `focus_queue` en position 0 (`replace` : l'ancien focus passe en position 1) ou en fin de file (`queue`). `focus` sans origine humaine → refus `HumanOriginInvalid`.
 4. Pour un focus, `review_target` absent est calculé par `review_git` sur `origin/<branche par défaut>` du projet ; l'instruction porte le bloc `IDENTIFIANTS DE DÉPÔT`.
+5. Un focus humain dont les agents correspondants sont tous momentanément indisponibles répond `waiting_for_agent` avec son `objective_id`, sans `delegation_id`, sans participant ni message. Il reste ouvert en tête de la file et la relève dépose ensuite l’item `focus_waiting_agent`.
 
 Mémoire projet appliquée : « additif sur le fil n'est pas additif à la source ». Tous les initialiseurs `ServiceRequestPayload::Delegate { … }` (protocole, guichet, tests) reçoivent `origin: None, focus: None`. Le gate `cargo test --workspace --no-run` sur la composition fait partie des tâches.

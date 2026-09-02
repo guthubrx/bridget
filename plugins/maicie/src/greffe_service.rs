@@ -24,12 +24,15 @@ use crate::domain::guichet::{
 use crate::domain::{
     CoutMissionAgent, CoutMissionCompteurs, DecisionCoordination, ObjectiveOpeningPermit,
 };
+use crate::review_git::{ReviewGitError, freeze_origin_default_review_target};
 use crate::store::{MaicieStore, StoreError, StoredGuichetReply};
 use bridget_transport::greffe_authorization::{
     GreffeAuthorizationGate, GreffeAuthorizationRefusal, GreffeEffectAuthorization,
     GreffeMutationAction,
 };
-use bridget_transport::protocol::{DelegateOrigin, FocusConflictPolicy};
+use bridget_transport::protocol::{
+    DelegateFocus, DelegateOrigin, FocusConflictPolicy, ReviewTarget,
+};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fmt;
@@ -53,6 +56,7 @@ pub enum GreffeServiceError {
     Objective(ObjectiveError),
     Store(StoreError),
     Bridget(BridgetClientError),
+    ReviewGit(ReviewGitError),
     Delegate(DelegateError),
     Authorization(GreffeAuthorizationRefusal),
 }
@@ -74,6 +78,9 @@ impl fmt::Display for GreffeServiceError {
             Self::Objective(error) => write!(formatter, "clôture du greffe impossible : {error}"),
             Self::Store(error) => write!(formatter, "stockage du greffe impossible : {error}"),
             Self::Bridget(error) => write!(formatter, "annuaire Bridget indisponible : {error}"),
+            Self::ReviewGit(error) => {
+                write!(formatter, "cible Git du focus indisponible : {error}")
+            }
             Self::Delegate(error) => write!(formatter, "délégation du greffe impossible : {error}"),
             Self::Authorization(error) => {
                 write!(formatter, "autorisation du greffe refusée : {error}")
@@ -86,6 +93,7 @@ impl std::error::Error for GreffeServiceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Bridget(error) => Some(error),
+            Self::ReviewGit(error) => Some(error),
             Self::Delegate(error) => Some(error),
             Self::Authorization(error) => Some(error),
             Self::Catalogue(error) => Some(error),
@@ -95,6 +103,31 @@ impl std::error::Error for GreffeServiceError {
             Self::CatalogueAbsent | Self::Invalid(_) | Self::HumanOriginInvalid(_) => None,
         }
     }
+}
+
+/// Pour un focus, une cible explicite garde toujours la main. Sans cible, le
+/// seul dépôt configuré pour ce Maicie fournit `origin/<branche par défaut>`
+/// et sa tête observée. Un autre projet est un refus de configuration, jamais
+/// un chemin fourni par la requête.
+fn resolve_focus_review_target(
+    config: &MaicieConfig,
+    focus: Option<&DelegateFocus>,
+    supplied: Option<&ReviewTarget>,
+) -> Result<Option<ReviewTarget>, GreffeServiceError> {
+    if supplied.is_some() || focus.is_none() {
+        return Ok(supplied.cloned());
+    }
+    let focus = focus.expect("focus vérifié");
+    let project = config
+        .review_project
+        .as_ref()
+        .filter(|project| project.project_id == focus.project_id)
+        .ok_or(GreffeServiceError::Invalid(
+            "projet de revue du focus absent",
+        ))?;
+    freeze_origin_default_review_target(&project.repository_root)
+        .map(Some)
+        .map_err(GreffeServiceError::ReviewGit)
 }
 
 /// Projette l'annuaire public dans les faits minimaux du sélecteur Maicie.
@@ -266,6 +299,11 @@ pub fn apply_guichet_mutation(
                     (permit, Some(message_id.clone()))
                 }
             };
+            let frozen_review_target = resolve_focus_review_target(
+                config,
+                request.focus.as_ref(),
+                request.review_target.as_ref(),
+            )?;
             let delegate_request = DelegateRequest {
                 goal: &request.goal,
                 opening_permit,
@@ -274,7 +312,7 @@ pub fn apply_guichet_mutation(
                 duration: request.duration,
                 reply: false,
                 constat_id: None,
-                review_target: request.review_target.as_ref(),
+                review_target: frozen_review_target.as_ref(),
                 suite: request.suite.clone(),
                 depends_on: &request.depends_on,
                 references: &request.references,
@@ -364,7 +402,7 @@ pub fn apply_guichet_mutation(
                     replayed: created.replayed,
                 },
                 DelegateResult::FocusWaitingForAgent(waiting) => MutationReply::Delegate {
-                    status: DelegateMutationStatus::Created,
+                    status: DelegateMutationStatus::WaitingForAgent,
                     objective_id: Some(waiting.objective_id.to_string()),
                     delegation_id: None,
                     message_id: None,

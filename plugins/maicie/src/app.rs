@@ -464,7 +464,8 @@ fn deterministic_service_refusal(error: &GreffeServiceError) -> Option<MotifRefu
         | GreffeServiceError::Objective(ObjectiveError::Store(_))
         | GreffeServiceError::Delegate(DelegateError::Store(_))
         | GreffeServiceError::Store(_)
-        | GreffeServiceError::Bridget(_) => None,
+        | GreffeServiceError::Bridget(_)
+        | GreffeServiceError::ReviewGit(_) => None,
     }
 }
 
