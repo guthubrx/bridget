@@ -2931,6 +2931,38 @@ code {
   border-radius: var(--radius-small);
 }
 
+.control-center__location-basic,
+.control-center__location-advanced-fields {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.control-center__location-advanced {
+  grid-column: 1 / -1;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.control-center__location-advanced summary {
+  cursor: pointer;
+}
+
+.control-center__location-advanced-fields {
+  margin-top: 0.65rem;
+}
+
+.control-center__location-actions {
+  position: sticky;
+  bottom: 0.5rem;
+  z-index: 1;
+  padding: 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--text-secondary) 20%, transparent);
+  border-radius: var(--radius-small);
+  background: var(--surface-raised);
+}
+
 .control-center__location legend {
   padding: 0 0.25rem;
   color: var(--text-secondary);
@@ -2970,7 +3002,9 @@ code {
 }
 
 @media (max-width: 42rem) {
-  .control-center__location {
+  .control-center__location,
+  .control-center__location-basic,
+  .control-center__location-advanced-fields {
     grid-template-columns: 1fr;
   }
 }

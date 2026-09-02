@@ -137,7 +137,11 @@
         assert.match(source, /\/v2\/projects\/placement\/apply/);
         assert.match(source, /\/v2\/control\/project-locations\/preview/);
         assert.match(source, /locationsPayload\.legacy_v1/);
+        assert.match(source, /Ajouter un dossier de projets/);
+        assert.match(source, /Brouillon conservé/);
+        assert.match(source, /Options avancées/);
         assert.match(stylesheet, /\.control-center__locations/);
+        assert.match(stylesheet, /\.control-center__location-actions/);
         assert.match(stylesheet, /\.project-onboarding-overlay__source/);
       });
 
@@ -8442,19 +8446,31 @@
             const locationsPayload = await locationsResponse.json();
             if (!locationsResponse.ok || locationsPayload.contract_version !== 2) throw new Error("locations_unavailable");
             const locations = Array.isArray(locationsPayload.locations) ? locationsPayload.locations : [];
-            const label = make("p", "control-center__roots-label", "Emplacements de projets autorisés");
+            const draftStorageKey = `bridget.project-locations.draft.v1:${desktopSource || "local"}`;
+            let restoredDraft = null;
+            try {
+              const rawDraft = windowRef.localStorage && windowRef.localStorage.getItem(draftStorageKey);
+              const parsedDraft = rawDraft ? JSON.parse(rawDraft) : null;
+              if (Array.isArray(parsedDraft) && parsedDraft.length > 0) restoredDraft = parsedDraft;
+            } catch (_error) {
+              restoredDraft = null;
+            }
+            const displayedLocations = restoredDraft || locations;
+            const label = make("p", "control-center__roots-label", "Dossiers où Bridget peut créer tes projets");
             const editor = make("div", "control-center__locations");
             const help = make("p", "control-center__help", locationsPayload.legacy_v1
-              ? "Cette politique historique est restrictive : choisissez explicitement les emplacements à promouvoir en espace de travail avant toute création."
-              : "Chaque emplacement a un identifiant, un libellé, un chemin et une capacité. Le serveur canonicalise et valide l’ensemble avant toute écriture.");
+              ? "Ajoute simplement un dossier de travail. L’ancien réglage est conservé pendant cette migration."
+              : "Ajoute un ou plusieurs dossiers de travail. Les options techniques sont disponibles seulement si tu en as besoin.");
+            let preparedChange = null;
+            let saveDraft = () => {};
             const createLocationRow = (location = {}) => {
               const row = make("fieldset", "control-center__location");
-              const legend = make("legend", null, "Emplacement projet");
+              const legend = make("legend", null, location.kind === "exact_project" ? "Projet existant" : "Dossier de projets");
               const id = documentRef.createElement("input");
-              id.value = location.location_id || `location-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+              id.value = location.location_id || `workspace-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
               id.setAttribute("aria-label", "Identifiant stable");
               const name = documentRef.createElement("input");
-              name.value = location.label || "Nouvel emplacement";
+              name.value = location.label || "";
               name.setAttribute("aria-label", "Libellé");
               const path = documentRef.createElement("input");
               path.value = location.canonical_path || "";
@@ -8465,7 +8481,7 @@
                 const option = documentRef.createElement("option");
                 option.value = value;
                 option.textContent = copy;
-                option.selected = (location.kind || "exact_project") === value;
+                option.selected = (location.kind || "workspace") === value;
                 kind.append(option);
               }
               const systemOnly = documentRef.createElement("input");
@@ -8473,61 +8489,102 @@
               systemOnly.checked = location.system_only === true;
               const defaultCreation = documentRef.createElement("input");
               defaultCreation.type = "checkbox";
-              defaultCreation.checked = location.default_creation === true;
+              defaultCreation.checked = location.default_creation !== false;
               const remove = make("button", "quiet", "Retirer");
               remove.type = "button";
               remove.addEventListener("click", () => {
                 row.remove();
-                preparedChange = null;
-                apply.hidden = true;
+                saveDraft();
               });
               const field = (copy, control) => {
                 const item = documentRef.createElement("label");
                 item.append(make("span", null, copy), control);
                 return item;
               };
-              row.append(
-                legend,
-                field("Identifiant", id),
-                field("Libellé", name),
-                field("Chemin absolu", path),
-                field("Capacité", kind),
+              const basic = make("div", "control-center__location-basic");
+              basic.append(
+                field("Nom affiché", name),
+                field("Dossier existant sur le serveur", path),
+              );
+              const advanced = documentRef.createElement("details");
+              advanced.className = "control-center__location-advanced";
+              advanced.append(make("summary", null, "Options avancées"));
+              const advancedFields = make("div", "control-center__location-advanced-fields");
+              advancedFields.append(
+                field("Identifiant technique", id),
+                field("Type", kind),
                 field("Réservé système", systemOnly),
                 field("Création par défaut", defaultCreation),
-                remove,
               );
+              advanced.append(advancedFields);
+              row.append(legend, basic, advanced, remove);
+              for (const control of [id, name, path, kind, systemOnly, defaultCreation]) {
+                control.addEventListener("input", saveDraft);
+                control.addEventListener("change", saveDraft);
+              }
               return row;
             };
-            for (const location of locations) editor.append(createLocationRow(location));
-            const addLocation = make("button", "secondary", "Ajouter un emplacement");
+            for (const location of displayedLocations) editor.append(createLocationRow(location));
+            const addLocation = make("button", "secondary", "Ajouter un dossier de projets");
             addLocation.type = "button";
             addLocation.addEventListener("click", () => {
               editor.append(createLocationRow());
-              preparedChange = null;
-              apply.hidden = true;
+              saveDraft();
             });
-            const preview = make("p", "control-center__preview", "Aucune modification préparée.");
-            const prepare = make("button", "secondary", "Prévisualiser la modification");
+            const preview = make("p", "control-center__preview", restoredDraft
+              ? "Brouillon restauré. Vérifie-le avant de l’enregistrer."
+              : "Ajoute un dossier, puis vérifie-le avant enregistrement.");
+            const prepare = make("button", "secondary", "Vérifier avant enregistrement");
             prepare.type = "button";
-            const apply = make("button", null, "Confirmer et appliquer");
+            const apply = make("button", null, "Enregistrer les dossiers");
             apply.type = "button";
             apply.hidden = true;
+            const discard = make("button", "quiet", "Abandonner le brouillon");
+            discard.type = "button";
+            discard.hidden = !restoredDraft;
             const actions = make("div", "control-center__actions");
-            actions.append(prepare, apply);
-            section.append(label, help, editor, addLocation, preview, actions);
-            let preparedChange = null;
+            actions.classList.add("control-center__location-actions");
+            actions.append(addLocation, prepare, apply, discard);
+            section.append(label, help, editor, preview, actions);
+            const collectCandidate = () => Array.from(editor.querySelectorAll(".control-center__location")).map((row) => {
+              const controlFor = (name) => row.querySelector(`[aria-label="${name}"]`);
+              const id = controlFor("Identifiant stable");
+              const name = controlFor("Libellé");
+              const path = controlFor("Chemin absolu");
+              const kind = controlFor("Capacité");
+              const systemOnly = controlFor("Réservé système");
+              const defaultCreation = controlFor("Création par défaut");
+              return {
+                location_id: id.value.trim(),
+                label: name.value.trim(),
+                canonical_path: path.value.trim(),
+                kind: kind.value,
+                system_only: systemOnly.checked,
+                default_creation: defaultCreation.checked,
+              };
+            });
+            saveDraft = () => {
+              preparedChange = null;
+              apply.hidden = true;
+              const candidate = collectCandidate();
+              try {
+                windowRef.localStorage && windowRef.localStorage.setItem(draftStorageKey, JSON.stringify(candidate));
+                discard.hidden = false;
+                preview.textContent = "Brouillon conservé. Vérifie-le avant de l’enregistrer.";
+              } catch (_error) {
+                preview.textContent = "Brouillon modifié. Vérifie-le avant de l’enregistrer.";
+              }
+            };
+            discard.addEventListener("click", () => {
+              try {
+                windowRef.localStorage && windowRef.localStorage.removeItem(draftStorageKey);
+              } catch (_error) {
+                // L'écran peut toujours être reconstruit même si le navigateur refuse ce stockage.
+              }
+              void renderControlRoute("server");
+            });
             prepare.addEventListener("click", async () => {
-              const candidate = Array.from(editor.querySelectorAll(".control-center__location")).map((row) => {
-                const [id, name, path, kind, systemOnly, defaultCreation] = row.querySelectorAll("input, select");
-                return {
-                  location_id: id.value.trim(),
-                  label: name.value.trim(),
-                  canonical_path: path.value.trim(),
-                  kind: kind.value,
-                  system_only: systemOnly.checked,
-                  default_creation: defaultCreation.checked,
-                };
-              });
+              const candidate = collectCandidate();
               if (candidate.length === 0) {
                 preview.textContent = "Au moins un emplacement est obligatoire.";
                 return;
@@ -8579,6 +8636,12 @@
                 locationsPayload.generation = accepted.resulting_generation;
                 preparedChange = null;
                 apply.hidden = true;
+                try {
+                  windowRef.localStorage && windowRef.localStorage.removeItem(draftStorageKey);
+                } catch (_error) {
+                  // La confirmation du serveur est déjà acquise : le nettoyage local est secondaire.
+                }
+                discard.hidden = true;
                 preview.textContent = `Réglage appliqué - confirmation ${accepted.command_id}, génération ${accepted.resulting_generation}.`;
               } catch (_error) {
                 preview.textContent = "Le serveur a refusé la modification. La configuration actuelle n'a pas été remplacée.";
