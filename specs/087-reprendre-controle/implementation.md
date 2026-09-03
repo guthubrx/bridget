@@ -149,6 +149,14 @@
 - Diagnostic sur une copie de la base Bridget : le message Maicie `c640392a-86da-4298-ad09-0c3da692116d` n'a pas de ligne dans `executions`, et `control_pause_interruptions` est vide. Ce chemin de remise ne crée donc pas l'exécution suivie que C1-C6 peuvent interrompre et reconstruire.
 - Verdict : l'essai réel Codex n'est pas validé. Il ne faut pas le présenter comme une preuve fournisseur. La prochaine correction doit relier les remises Maicie aux exécutions Bridget avant de rejouer T045.
 
+### Correctif de remise Maicie pilotable - 2026-09-03
+
+- Cause confirmée : `handle_idempotent_send` ne crée une exécution que pour les intentions `trigger_turn` ou `interrupt_and_start`. L'enveloppe persistée de délégation Maicie ne pouvait pas porter `intent`, donc une délégation reçue n'était jamais suivie par `executions`.
+- Correction : `PublicMessage` conserve désormais l'intention à travers la persistance et le rejeu. Toute nouvelle délégation Maicie et toute demande suivie de réassignation portent `trigger_turn`; les notifications restent sans intention. Les enveloppes historiques sans ce champ restent relisibles.
+- La pause inclut aussi l'état `starting` : une pause juste après la remise n'attend plus que le fournisseur ait publié `running`.
+- Preuves serveur : `store_outbox_integration transaction_unique_expose_l_enveloppe_exacte_et_le_snapshot` : `test result: ok. 1 passed; 0 failed`; deux contrôles de borne de trame : chacun `test result: ok. 1 passed; 0 failed`; pause : `test result: ok. 5 passed; 0 failed`; reprise : `test result: ok. 3 passed; 0 failed`.
+- Reste à accomplir : installer ce correctif puis rejouer l'essai fournisseur réel avant toute validation de T045.
+
 ### T046 Mise en service - 2026-09-03 : ✅
 
 - `main` a été fusionnée et poussée au commit `8cf724d0` avant toute opération serveur. Le checkout principal serveur `/home/moi/bridget-referent/bridget` a été avancé par fast-forward vers ce commit, sans modifier ses caches non suivis.

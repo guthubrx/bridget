@@ -169,6 +169,10 @@ pub struct PublicMessage {
     pub deadline_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_reply_to: Option<String>,
+    /// Intention de remise transmise sans inférer quoi que ce soit du texte.
+    /// Absente dans les enveloppes historiques, qui restent donc relisibles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<bridget_core::MessageIntent>,
     /// Références portées par le message (`project:…`, `focus:<objective_id>`).
     /// Additif : un fil sans le champ se relit en liste vide.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -228,6 +232,8 @@ struct ReplayPublicMessage {
     #[serde(default)]
     in_reply_to: Option<String>,
     #[serde(default)]
+    intent: Option<bridget_core::MessageIntent>,
+    #[serde(default)]
     references: Vec<String>,
 }
 
@@ -243,6 +249,7 @@ impl ReplayPublicMessage {
             reply_timeout: self.reply_timeout,
             deadline_at: self.deadline_at,
             in_reply_to: self.in_reply_to,
+            intent: self.intent,
             references: self.references,
         }
     }
@@ -3453,6 +3460,7 @@ mod tests {
             reply_timeout: None,
             deadline_at: None,
             in_reply_to: None,
+            intent: None,
             references: Vec::new(),
         };
         let request = json!({

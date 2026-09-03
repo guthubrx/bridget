@@ -8879,7 +8879,7 @@ fn interrupt_executions_for_pause(st: &mut DaemonState, control_generation: u64)
         };
         if !matches!(
             target.snapshot.state.as_str(),
-            "running" | "waiting_approval" | "waiting_user_input"
+            "starting" | "running" | "waiting_approval" | "waiting_user_input"
         ) {
             continue;
         }
@@ -23399,18 +23399,6 @@ mod presence_tests {
         state
             .execution_store
             .admit_starting_message(&message, "execution-pause-interrupt-087", now)
-            .unwrap();
-        state
-            .execution_store
-            .transition_if_current(
-                "execution-pause-interrupt-087",
-                "starting",
-                0,
-                1,
-                "running",
-                "provider_accepted",
-                now,
-            )
             .unwrap();
         let shared = Arc::new(Mutex::new(state));
         assert!(matches!(

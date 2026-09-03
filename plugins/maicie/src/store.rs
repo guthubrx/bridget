@@ -6990,6 +6990,7 @@ fn tracked_request_outbox(
                     .deadline_at
                     .and_then(|value| u64::try_from(value).ok()),
                 in_reply_to: None,
+                intent: Some(bridget_core::MessageIntent::TriggerTurn),
                 references: Vec::new(),
             })
             .map_err(StoreError::Json)?
@@ -7080,6 +7081,7 @@ fn reassignment_notification_outbox(
         reply_timeout: None,
         deadline_at: None,
         in_reply_to: None,
+        intent: None,
         references: Vec::new(),
     })
     .map_err(StoreError::Json)?;
@@ -7376,6 +7378,7 @@ fn persist_dependent_opening(
         reply_timeout: None,
         deadline_at: None,
         in_reply_to: None,
+        intent: None,
         references: Vec::new(),
     };
     let outbox = NotificationOutbox {

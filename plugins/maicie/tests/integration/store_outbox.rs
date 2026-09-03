@@ -1,3 +1,4 @@
+use bridget_core::MessageIntent;
 use maicie::bridget_client::{IdempotencyIssue, PublicMessage};
 use maicie::domain::{
     ClasseDuree, Delegation, EtatDelegation, EtatObjectif, EtatOutboxDelegation, ModeObjectif,
@@ -334,6 +335,7 @@ fn prepare_refuse_une_trame_finale_poison_et_des_champs_hors_contrat() {
         reply_timeout: Some(base.outbox.timeout_secs),
         deadline_at: u64::try_from(base.outbox.deadline_contractuelle).ok(),
         in_reply_to: None,
+        intent: Some(MessageIntent::TriggerTurn),
         references: Vec::new(),
     };
     let replay_overhead = serde_json::to_vec(&json!({
@@ -439,6 +441,7 @@ fn transaction_unique_expose_l_enveloppe_exacte_et_le_snapshot() {
     let public_message = pending[0].public_message().unwrap();
     assert_eq!(public_message.body.as_bytes(), BODY);
     assert_eq!(public_message.from, maicie::MAICIE_IDENTITY);
+    assert_eq!(public_message.intent, Some(MessageIntent::TriggerTurn));
     assert_ne!(pending[0].issuer_scope, public_message.from);
 
     let snapshot = store.recovery_snapshot(uuid(MESSAGE_ID)).unwrap().unwrap();
