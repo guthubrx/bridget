@@ -185,5 +185,9 @@ Passage 1, 2026-09-02 après intégration des deux versants. Lecture de `spec.md
 - [x] T056 [US1] FR-002 : brancher un producteur réel de continuations gouvernées sur `reserve_governed_continuation` ; la garde existe, aucun appelant de production (dette antérieure, à décider avec le référent)
 - [x] T057 Lot A : réaligner les appels de test Maicie avec `project_id` ; preuve `controle_referent_087` 13 passés.
 - [x] T058 Lot B : rapatrier `origin` avant le gel de focus et refuser un remote inaccessible ; preuve `review_git_integration` 13 passés.
-- [x] T059-T063 Lot C : persister les gels, interrompre les tours, reconstruire les exécutions gelées et les remettre immédiatement ; preuves `spec_087_pause_interrompt_le_tour_en_cours` et `spec_087_levee_de_pause_relance_l_execution_interrompue`.
+- [x] T059 Lot C1 : migration v10 et table `control_pause_interruptions` dans `crates/bridget-daemon/src/execution_store.rs` ; preuve couverte par les tests de reprise 087.
+- [x] T060 Lot C2 : interruption interne dans `crates/bridget-daemon/src/daemon.rs` à la pose de pause ; preuve `spec_087_pause_interrompt_le_tour_en_cours` et mutant 1 rouge.
+- [x] T061 Lot C3 : reconstruction limitée aux exécutions mémorisées par pause dans `crates/bridget-daemon/src/execution_store.rs` ; preuves `spec_087_levee_de_pause_relance_l_execution_interrompue` et `spec_087_levee_de_pause_agent_absent_reprend_a_la_reconnexion`, mutant 3 rouge.
+- [x] T062 Lot C4 : reprise immédiate à la levée pour un agent connecté et libre dans `crates/bridget-daemon/src/daemon.rs` ; preuve `spec_087_levee_de_pause_relance_l_execution_interrompue`, mutant 2 rouge.
+- [x] T063 Lot C5-C6 : agent occupé non relancé et agent absent repris à la reconnexion dans `crates/bridget-daemon/src/daemon.rs` ; preuves `spec_087_levee_de_pause_agent_occupe_ne_relance_pas` et `spec_087_levee_de_pause_agent_absent_reprend_a_la_reconnexion`.
 - [x] T064 Documentation : aligner spec, contrat, scénario et quickstart sur pause = gel immédiat puis reprise.

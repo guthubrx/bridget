@@ -11,6 +11,8 @@ Prérequis : daemon et relais UI sur le binaire livré, au moins un projet actif
 4. Redémarre le service Bridget (`systemctl --user restart bridget-daemon`, puis relance les agents gérés par UUID). Attendu : le bandeau affiche toujours la pause après rechargement.
 5. En ligne de commande, `bridget who` se termine par `Contrôle : pause depuis … · plafond objectifs automatiques N`. `bridget control status --history` montre la ligne `pause_on` avec l'acteur `humain`.
 
+Limite fournisseur : le comportement d'interruption a une preuve automatisée commune. La validation avec un fournisseur réellement en cours de tour reste à consigner par type (Codex, Claude ou autre présent) dans la validation opérateur T045.
+
 ## 2. Imposer un focus
 
 1. Dans la colonne Projets, sélectionne ton projet. Sous l'en-tête, un champ « Travaille sur… » et un choix « Après le focus actuel » ou « À la place du focus actuel ».

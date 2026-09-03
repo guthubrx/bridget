@@ -45,7 +45,7 @@ Le référent constate que le coordinateur enchaîne des ouvertures de travail q
 **Acceptance Scenarios**:
 
 1. **Given** une routine dont l'occurrence est due et une ronde active sur un projet, **When** le référent active la pause, **Then** l'occurrence est consignée comme différée avec le motif « pause » et la ronde n'émet aucun réveil, et les deux faits sont lisibles dans l'état du système.
-2. **Given** un agent en plein tour, **When** la pause est activée, **Then** le tour se termine sans interruption et aucun nouveau tour autonome ne lui est proposé tant que la pause dure.
+2. **Given** un agent en plein tour, **When** la pause est activée, **Then** il reçoit une interruption et son exécution est mémorisée ; **When** la pause est levée, **Then** elle lui est remise à nouveau s'il est connecté et libre, sinon à sa reconnexion.
 3. **Given** la pause active, **When** le service Bridget ou le coordinateur redémarre, **Then** la pause est toujours active et affichée après redémarrage.
 4. **Given** la pause active, **When** le référent envoie lui-même un message ou ouvre un focus, **Then** son action est acceptée : la pause ne bride que l'autonomie, jamais le référent.
 5. **Given** la pause active, **When** un agent tente de lever la pause, **Then** la demande est refusée avec un motif explicite et le refus est consigné.
@@ -124,6 +124,7 @@ Où qu'il soit dans l'interface, le référent voit en permanence : pause active
 ### Edge Cases
 
 - Pause activée pendant qu'une délégation est en cours de remise : la remise déjà réservée se termine, aucune nouvelle remise autonome ne part.
+- Pause activée pendant un tour fournisseur : le parent interrompu reste la seule exécution reconstruisible par la reprise de pause ; un agent occupé ou absent conserve cette reprise jusqu'à redevenir libre ou se reconnecter.
 - Pause activée puis levée entre deux occurrences de routine : les occurrences différées pendant la pause ne sont pas rejouées en rafale ; seule la prochaine occurrence due repart.
 - Focus ouvert alors que tous les agents du projet sont occupés : le focus attend, il est proposé au premier agent qui se libère, et un item « focus en attente d'agent » est déposé dans la boîte après un délai configurable.
 - Focus demandé sur un projet sans agent missionnable : refus explicite avec la liste de ce qui manque, aucun objectif ouvert.
@@ -195,6 +196,7 @@ Visibilité et traçabilité
 - **SC-004**: Sur une fenêtre de mesure quotidienne, le rapport entre objectifs auto-générés créés et clos passe sous 2 pour 1, contre 100 pour 26 mesuré sur la fenêtre D.
 - **SC-005**: Zéro ouverture d'objectif à origine humaine obtenue par un agent agissant par ses outils déclarés (outil MCP, ligne de commande documentée) lors d'un essai adverse où il tente de forger la provenance ; et toute reprise de l'identité humaine par une connexion concurrente produit un signalement au référent en moins d'une minute.
 - **SC-006**: Un référent qui n'a jamais utilisé la ligne de commande peut activer la pause, ouvrir un focus et traiter un item de boîte en s'appuyant uniquement sur l'interface, sans documentation, lors d'un essai réel consigné.
+- **SC-007**: Après la levée de pause, chaque agent connecté et libre reçoit son exécution interrompue avant toute nouvelle trame de travail qui lui serait destinée ; les exécutions d'agents occupés ou absents restent attestées jusqu'à disponibilité ou reconnexion.
 
 ## Assumptions
 

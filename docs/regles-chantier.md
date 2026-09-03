@@ -435,6 +435,8 @@ pour suspendre toute ouverture autonome, et de `bridget inbox` pour lire et
 trancher ce qui attend sa décision ; ce qui exige le référent n'attend plus
 dans une base, il arrive dans sa boîte.
 
+Quand cette pause est activée, Bridget gèle aussi le tour fournisseur déjà en cours : il est interrompu, mémorisé, puis repris à la levée si l'agent est libre ou à sa prochaine reconnexion.
+
 Corollaire : un mandat envoyé par simple message, sans passer par
 `maicie delegate`, ne crée aucun objectif — donc aucun dépôt n'est possible.
 Toute mission dont on attend un rapport doit être déléguée, pas seulement
