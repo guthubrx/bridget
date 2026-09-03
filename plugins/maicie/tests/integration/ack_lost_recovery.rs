@@ -202,6 +202,7 @@ fn reprise_utilise_la_meme_borne_runtime_que_la_preparation() {
         reply_timeout: Some(60),
         deadline_at: Some(1_060),
         in_reply_to: None,
+        intent: Some(bridget_core::MessageIntent::TriggerTurn),
         references: Vec::new(),
     };
     let replay_overhead = serde_json::to_vec(&json!({
@@ -251,6 +252,7 @@ fn trame_trop_grande_devient_rejet_local_durable_sans_rejeu() {
         reply_timeout: Some(60),
         deadline_at: Some(1_060),
         in_reply_to: None,
+        intent: Some(bridget_core::MessageIntent::TriggerTurn),
         references: Vec::new(),
     };
     let replay_overhead = serde_json::to_vec(&json!({

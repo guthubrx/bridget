@@ -50,6 +50,7 @@ impl PreparedDelegation {
             reply_timeout: outbox.reply.then_some(outbox.timeout_secs),
             deadline_at: u64::try_from(outbox.deadline_contractuelle).ok(),
             in_reply_to: None,
+            intent: Some(bridget_core::MessageIntent::TriggerTurn),
             references: Vec::new(),
         };
         let message_bytes = serde_json::to_vec(&message).map_err(OutboxError::Encode)?;
