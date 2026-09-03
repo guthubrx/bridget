@@ -8931,7 +8931,8 @@ fn resume_executions_after_pause(st: &mut DaemonState) {
         if let Some(controls) = st.pending_post_response_controls.remove(&connection_id) {
             let retry = execute_controls(controls);
             if !retry.is_empty() {
-                st.pending_post_response_controls.insert(connection_id, retry);
+                st.pending_post_response_controls
+                    .insert(connection_id, retry);
             }
         }
     }
@@ -23300,17 +23301,49 @@ mod presence_tests {
         let (writer, mut reader) = control_socket("spec-087-pause-resume");
         state.connections.insert("conn-1".to_string(), writer);
         let now = unix_now_secs();
-        let mut message = bridget_core::BridgetMessage::new("humain", SPEC_087_AGENT_ID, "reprends moi");
+        let mut message =
+            bridget_core::BridgetMessage::new("humain", SPEC_087_AGENT_ID, "reprends moi");
         message.id = "message-pause-resume-087".to_string();
         message.origin = Some(bridget_core::MessageOrigin::Human);
         message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
-        state.execution_store.admit_starting_message(&message, "execution-pause-resume-087", now).unwrap();
-        state.execution_store.transition_if_current("execution-pause-resume-087", "starting", 0, 1, "interrupted", "control_pause", now).unwrap();
-        state.execution_store.record_pause_interruption("execution-pause-resume-087", SPEC_087_AGENT_ID, 2, now).unwrap();
-        assert_eq!(state.execution_store.recoverable_execution_ids_for_agent(SPEC_087_AGENT_ID).unwrap(), vec!["execution-pause-resume-087"]);
+        state
+            .execution_store
+            .admit_starting_message(&message, "execution-pause-resume-087", now)
+            .unwrap();
+        state
+            .execution_store
+            .transition_if_current(
+                "execution-pause-resume-087",
+                "starting",
+                0,
+                1,
+                "interrupted",
+                "control_pause",
+                now,
+            )
+            .unwrap();
+        state
+            .execution_store
+            .record_pause_interruption("execution-pause-resume-087", SPEC_087_AGENT_ID, 2, now)
+            .unwrap();
+        assert_eq!(
+            state
+                .execution_store
+                .recoverable_execution_ids_for_agent(SPEC_087_AGENT_ID)
+                .unwrap(),
+            vec!["execution-pause-resume-087"]
+        );
         resume_executions_after_pause(&mut state);
-        assert!(matches!(read_control(&mut reader), DaemonToWrapper::DeliverIdempotent { execution: Some(execution), .. } if execution.generation == 2));
-        assert!(state.execution_store.pending_pause_interruptions().unwrap().is_empty());
+        assert!(
+            matches!(read_control(&mut reader), DaemonToWrapper::DeliverIdempotent { execution: Some(execution), .. } if execution.generation == 2)
+        );
+        assert!(
+            state
+                .execution_store
+                .pending_pause_interruptions()
+                .unwrap()
+                .is_empty()
+        );
         let _ = std::fs::remove_file(config.db_path);
     }
 
@@ -23320,14 +23353,38 @@ mod presence_tests {
         let (writer, mut reader) = control_socket("spec-087-pause-interrupt");
         state.connections.insert("conn-1".to_string(), writer);
         let now = unix_now_secs();
-        let mut message = bridget_core::BridgetMessage::new("humain", SPEC_087_AGENT_ID, "arrête moi");
+        let mut message =
+            bridget_core::BridgetMessage::new("humain", SPEC_087_AGENT_ID, "arrête moi");
         message.id = "message-pause-interrupt-087".to_string();
         message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
-        state.execution_store.admit_starting_message(&message, "execution-pause-interrupt-087", now).unwrap();
-        state.execution_store.transition_if_current("execution-pause-interrupt-087", "starting", 0, 1, "running", "provider_accepted", now).unwrap();
+        state
+            .execution_store
+            .admit_starting_message(&message, "execution-pause-interrupt-087", now)
+            .unwrap();
+        state
+            .execution_store
+            .transition_if_current(
+                "execution-pause-interrupt-087",
+                "starting",
+                0,
+                1,
+                "running",
+                "provider_accepted",
+                now,
+            )
+            .unwrap();
         interrupt_executions_for_pause(&mut state, 2);
-        assert!(matches!(read_control(&mut reader), DaemonToWrapper::ControlExecutionDispatch { command, .. } if command.operation == ExecutionControlOperation::Interrupt && command.execution_id == "execution-pause-interrupt-087"));
-        assert_eq!(state.execution_store.pending_pause_interruptions().unwrap().len(), 1);
+        assert!(
+            matches!(read_control(&mut reader), DaemonToWrapper::ControlExecutionDispatch { command, .. } if command.operation == ExecutionControlOperation::Interrupt && command.execution_id == "execution-pause-interrupt-087")
+        );
+        assert_eq!(
+            state
+                .execution_store
+                .pending_pause_interruptions()
+                .unwrap()
+                .len(),
+            1
+        );
         let _ = std::fs::remove_file(config.db_path);
     }
 

@@ -55,24 +55,24 @@ impl FixtureRepository {
 }
 
 fn git_at(root: &Path, arguments: &[&str]) -> String {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(arguments)
-            .env("LC_ALL", "C")
-            .env("GIT_AUTHOR_NAME", "Fixture")
-            .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
-            .env("GIT_COMMITTER_NAME", "Fixture")
-            .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {arguments:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap().trim().to_string()
-    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(arguments)
+        .env("LC_ALL", "C")
+        .env("GIT_AUTHOR_NAME", "Fixture")
+        .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Fixture")
+        .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {arguments:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
 
 impl Drop for FixtureRepository {
     fn drop(&mut self) {
@@ -110,10 +110,9 @@ fn spec_087_focus_gel_la_branche_par_defaut_origin() {
     let repo = FixtureRepository::new("focus-default-branch");
     repo.write("src/value.rs", "pub const VALUE: u8 = 1;\n");
     let head = repo.commit("base");
-    let origin = repo.root.with_file_name(format!(
-        "maicie-review-origin-{}",
-        Uuid::new_v4()
-    ));
+    let origin = repo
+        .root
+        .with_file_name(format!("maicie-review-origin-{}", Uuid::new_v4()));
     let origin_text = origin.to_str().unwrap();
     git_at(Path::new("/"), &["init", "--bare", "-q", origin_text]);
     repo.git(&["remote", "add", "origin", origin_text]);
@@ -138,10 +137,9 @@ fn spec_087_focus_rapatrie_origin_avant_de_geler_sa_branche_par_defaut() {
     repo.write("src/value.rs", "pub const VALUE: u8 = 1;\n");
     repo.commit("base");
 
-    let origin = repo.root.with_file_name(format!(
-        "maicie-review-origin-{}",
-        Uuid::new_v4()
-    ));
+    let origin = repo
+        .root
+        .with_file_name(format!("maicie-review-origin-{}", Uuid::new_v4()));
     let origin_text = origin.to_str().unwrap();
     git_at(Path::new("/"), &["init", "--bare", "-q", origin_text]);
     repo.git(&["remote", "add", "origin", origin_text]);
@@ -150,24 +148,26 @@ fn spec_087_focus_rapatrie_origin_avant_de_geler_sa_branche_par_defaut() {
     repo.git(&["fetch", "origin"]);
     repo.git(&["remote", "set-head", "origin", "-a"]);
 
-    let writer = repo.root.with_file_name(format!(
-        "maicie-review-writer-{}",
-        Uuid::new_v4()
-    ));
+    let writer = repo
+        .root
+        .with_file_name(format!("maicie-review-writer-{}", Uuid::new_v4()));
     let writer_text = writer.to_str().unwrap();
     git_at(Path::new("/"), &["clone", "-q", origin_text, writer_text]);
     fs::write(writer.join("src/value.rs"), "pub const VALUE: u8 = 2;\n").unwrap();
     let new_head = git_at(&writer, &["add", "--all"]);
     let _ = new_head;
-    git_at(&writer, &[
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "--no-verify",
-        "-q",
-        "-m",
-        "nouvelle tete",
-    ]);
+    git_at(
+        &writer,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--no-verify",
+            "-q",
+            "-m",
+            "nouvelle tete",
+        ],
+    );
     let expected_head = git_at(&writer, &["rev-parse", "HEAD"]);
     git_at(&writer, &["push", "origin", "HEAD:refs/heads/main"]);
 
@@ -185,12 +185,7 @@ fn spec_087_focus_rapatrie_origin_avant_de_geler_sa_branche_par_defaut() {
 #[test]
 fn spec_087_focus_refuse_un_origin_inaccessible() {
     let repo = FixtureRepository::new("focus-origin-inaccessible");
-    repo.git(&[
-        "remote",
-        "add",
-        "origin",
-        "/chemin/inexistant/origin.git",
-    ]);
+    repo.git(&["remote", "add", "origin", "/chemin/inexistant/origin.git"]);
 
     assert_eq!(
         freeze_origin_default_review_target(&repo.root),
