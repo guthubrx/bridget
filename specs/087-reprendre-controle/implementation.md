@@ -143,6 +143,12 @@
 - Interface : `node --test app.js` donne 136 passés, 0 échec. Les gates `clippy` et workspace `--no-run` restent bloqués par les tests d'intégration préexistants `mcp_injection_smoke_test` et `idempotency_crash_test`, qui utilisent le champ supprimé `name`.
 - Reste non vérifié : interruption d'un fournisseur réel en plein tour, à consigner par type pendant T045.
 
+### Essai fournisseur réel - 2026-09-03
+
+- Codex : une délégation Maicie réelle a été créée pour Bridget, objectif `c0fddc80-08b4-4199-8fc1-0a2a5c4d33b4`, puis le contrôle a été posé (génération 5) et levé (génération 6). L'agent est resté `busy` et aucun journal d'interruption ou de reprise n'a été produit.
+- Diagnostic sur une copie de la base Bridget : le message Maicie `c640392a-86da-4298-ad09-0c3da692116d` n'a pas de ligne dans `executions`, et `control_pause_interruptions` est vide. Ce chemin de remise ne crée donc pas l'exécution suivie que C1-C6 peuvent interrompre et reconstruire.
+- Verdict : l'essai réel Codex n'est pas validé. Il ne faut pas le présenter comme une preuve fournisseur. La prochaine correction doit relier les remises Maicie aux exécutions Bridget avant de rejouer T045.
+
 ### T046 Mise en service - 2026-09-03 : ✅
 
 - `main` a été fusionnée et poussée au commit `8cf724d0` avant toute opération serveur. Le checkout principal serveur `/home/moi/bridget-referent/bridget` a été avancé par fast-forward vers ce commit, sans modifier ses caches non suivis.
