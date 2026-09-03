@@ -1311,10 +1311,10 @@ impl ExecutionStore {
                  JOIN work_submissions submission
                    ON submission.submission_id = execution.submission_id
                  WHERE submission.target_agent = ?1
-                   AND execution.state IN (
+                   AND (execution.state IN (
                        'queued', 'starting', 'running', 'waiting_approval',
                        'waiting_user_input', 'interrupting'
-                   )
+                   ) OR execution.execution_id IN (SELECT execution_id FROM control_pause_interruptions WHERE resumed_at IS NULL))
                  ORDER BY execution.created_at, execution.execution_id
                  LIMIT 2",
             )?;
@@ -1375,13 +1375,14 @@ impl ExecutionStore {
         };
         let closed = tx.execute(
             "UPDATE executions
-             SET state = 'unreachable', reason = 'daemon_restart',
+             SET state = CASE WHEN state = 'interrupted' THEN state ELSE 'unreachable' END,
+                 reason = CASE WHEN state = 'interrupted' THEN 'control_resume' ELSE 'daemon_restart' END,
                  revision = revision + 1, updated_at = ?2
              WHERE execution_id = ?1 AND revision = ?3
-               AND state IN (
+               AND (state IN (
                    'queued', 'starting', 'running', 'waiting_approval',
                    'waiting_user_input', 'interrupting'
-               )",
+               ) OR (state = 'interrupted' AND execution_id IN (SELECT execution_id FROM control_pause_interruptions WHERE resumed_at IS NULL)))",
             params![parent_execution_id, observed_at, parent_revision],
         )?;
         if closed != 1 {
@@ -1407,6 +1408,7 @@ impl ExecutionStore {
                 observed_at,
             ],
         )?;
+        tx.execute("UPDATE control_pause_interruptions SET resumed_at = ?2, resume_execution_id = ?3 WHERE execution_id = ?1 AND resumed_at IS NULL", params![parent_execution_id, observed_at, child_execution_id])?;
         tx.execute(
             "INSERT INTO execution_continuations (
                 execution_id, generation, parent_execution_id,
@@ -1450,8 +1452,9 @@ impl ExecutionStore {
              JOIN work_submissions submission
                ON submission.submission_id = execution.submission_id
              WHERE submission.target_agent = ?1
-               AND execution.state IN ('queued', 'starting', 'running',
+               AND (execution.state IN ('queued', 'starting', 'running',
                    'waiting_approval', 'waiting_user_input', 'interrupting')
+                    OR execution.execution_id IN (SELECT execution_id FROM control_pause_interruptions WHERE resumed_at IS NULL))
              ORDER BY execution.created_at, execution.execution_id
              LIMIT 2",
         )?;
@@ -1469,6 +1472,24 @@ impl ExecutionStore {
         statement
             .query_map([], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()
+    }
+
+    pub fn record_pause_interruption(
+        &self,
+        execution_id: &str,
+        target_agent: &str,
+        control_generation: u64,
+        now: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn.execute("INSERT OR IGNORE INTO control_pause_interruptions(execution_id, target_agent, control_generation, requested_at) VALUES (?1, ?2, ?3, ?4)", params![execution_id, target_agent, control_generation, now])?;
+        Ok(())
+    }
+
+    pub fn pending_pause_interruptions(&self) -> rusqlite::Result<Vec<(String, String)>> {
+        let mut statement = self.conn.prepare("SELECT execution_id, target_agent FROM control_pause_interruptions WHERE resumed_at IS NULL ORDER BY requested_at, execution_id")?;
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect()
     }
 
     pub fn schema_version(&self) -> rusqlite::Result<u32> {
@@ -1568,6 +1589,11 @@ impl ExecutionStore {
         }
         tx.execute(
             "INSERT OR IGNORE INTO execution_schema_migrations(version) VALUES (9)",
+            [],
+        )?;
+        tx.execute_batch(r#"CREATE TABLE IF NOT EXISTS control_pause_interruptions (execution_id TEXT PRIMARY KEY REFERENCES executions(execution_id), target_agent TEXT NOT NULL, control_generation INTEGER NOT NULL, requested_at INTEGER NOT NULL, resumed_at INTEGER, resume_execution_id TEXT); CREATE INDEX IF NOT EXISTS idx_control_pause_interruptions_pending ON control_pause_interruptions(target_agent) WHERE resumed_at IS NULL;"#)?;
+        tx.execute(
+            "INSERT OR IGNORE INTO execution_schema_migrations(version) VALUES (10)",
             [],
         )?;
         tx.commit()?;
