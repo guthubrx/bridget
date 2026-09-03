@@ -183,3 +183,7 @@ Passage 1, 2026-09-02 après intégration des deux versants. Lecture de `spec.md
 - [x] T054 [US4] FR-031 : variante `GuichetRefusalReason::BudgetReached { cap, open }` au protocole ; aujourd'hui mappée sur `mutation_invalid`
 - [x] T055 [US5] FR-040 : focus courant dans le bandeau et en tête de liste, sans appeler `maicie status` en boucle ; concevoir une lecture Maicie sans effet de bord (reprend T041)
 - [x] T056 [US1] FR-002 : brancher un producteur réel de continuations gouvernées sur `reserve_governed_continuation` ; la garde existe, aucun appelant de production (dette antérieure, à décider avec le référent)
+- [x] T057 Lot A : réaligner les appels de test Maicie avec `project_id` ; preuve `controle_referent_087` 13 passés.
+- [x] T058 Lot B : rapatrier `origin` avant le gel de focus et refuser un remote inaccessible ; preuve `review_git_integration` 13 passés.
+- [x] T059-T063 Lot C : persister les gels, interrompre les tours, reconstruire les exécutions gelées et les remettre immédiatement ; preuves `spec_087_pause_interrompt_le_tour_en_cours` et `spec_087_levee_de_pause_relance_l_execution_interrompue`.
+- [x] T064 Documentation : aligner spec, contrat, scénario et quickstart sur pause = gel immédiat puis reprise.

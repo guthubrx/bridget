@@ -36,7 +36,7 @@ Faits mesurés le 2026-09-02 :
 
 ### User Story 1 - Mettre l'autonomie en pause (Priority: P1)
 
-Le référent constate que le coordinateur enchaîne des ouvertures de travail qu'il n'a pas demandées. Il déclenche une pause en un seul geste, depuis l'interface ou la ligne de commande. À partir de cet instant, plus aucun travail autonome ne démarre : aucune routine n'ouvre d'objectif, aucune ronde ne réveille d'agent, aucune réassignation automatique ne crée de génération. Les tours d'agents déjà commencés se terminent normalement. L'état « en pause » est visible partout où l'on regarde le système, survit à un redémarrage, et ne se lève que par un geste explicite du référent.
+Le référent constate que le coordinateur enchaîne des ouvertures de travail qu'il n'a pas demandées. Il déclenche une pause en un seul geste, depuis l'interface ou la ligne de commande. À partir de cet instant, plus aucun travail autonome ne démarre : aucune routine n'ouvre d'objectif, aucune ronde ne réveille d'agent, aucune réassignation automatique ne crée de génération. La pause interrompt les tours d'agents en cours, mémorise leurs exécutions et les reprend à la levée pour les agents connectés et libres, ou à leur prochaine reconnexion. L'état « en pause » est visible partout où l'on regarde le système, survit à un redémarrage, et ne se lève que par un geste explicite du référent.
 
 **Why this priority**: c'est le frein d'urgence. Sans lui, les trois autres leviers peuvent être contournés par le flux autonome avant même d'être appliqués.
 
@@ -143,6 +143,7 @@ Pause
 
 - **FR-001**: Le référent DOIT pouvoir activer et lever une pause de l'autonomie depuis l'interface et depuis la ligne de commande, en une action, sans paramètre obligatoire.
 - **FR-002**: Pendant la pause, le système NE DOIT PAS ouvrir d'objectif auto-généré, émettre de réveil de ronde, ni créer de génération de réassignation ; chaque occurrence empêchée DOIT être consignée avec le motif « pause ».
+- **FR-002b**: La pause DOIT interrompre le tour en cours et sa levée DOIT reprendre l'exécution interrompue pour chaque agent connecté et libre.
 - **FR-003**: La pause DOIT survivre au redémarrage de chaque composant et DOIT rester active jusqu'à un geste explicite du référent.
 - **FR-004**: La pause NE DOIT PAS bloquer les actions du référent : messages, focus, clôtures, approbations restent possibles.
 - **FR-005**: Seul le référent DOIT pouvoir lever la pause ; toute tentative d'un agent DOIT être refusée avec un motif consigné.
@@ -198,7 +199,7 @@ Visibilité et traçabilité
 ## Assumptions
 
 - Le référent est unique par installation ; le multi-référent est hors périmètre.
-- La pause agit au niveau de la coordination : routines, rondes, réassignations, relances. Elle n'interrompt pas les tours d'agents déjà commencés ; l'interruption d'un tour reste couverte par SPEC-063.
+- La pause agit au niveau de la coordination et du tour fournisseur : elle interrompt les tours via SPEC-063 et ne reprend que les exécutions gelées par elle.
 - Un seul focus actif à la fois ; la mise en file d'un second focus est une file d'attente simple, sans priorité relative.
 - Le canal externe personnel réutilise le canal Telegram déjà en place hors dépôt ; il est optionnel et n'est pas une condition de fonctionnement de la boîte.
 - Le second facteur d'approbation de l'ADR-011 n'est pas livré par cette spec ; la boîte de réception en est le prérequis et doit être conçue pour l'accueillir.
