@@ -126,9 +126,17 @@
 ### T042 Essai adverse : ✅ test unitaire `spec_087_un_agent_par_ses_outils_declares_ne_mute_rien` (client MCP-like sans capacité, client avec capacité mais périmètre non humain, origine forgée depuis un agent enregistré) ; fichier d'intégration prévu remplacé par ce test, même propriété
 ### T048 Alerte de route humaine : ✅ `spec_087_reprise_d_une_route_humaine_vivante_est_signalee`
 
+### T046 Mise en service - 2026-09-03 : ✅
+
+- `main` a été fusionnée et poussée au commit `8cf724d0` avant toute opération serveur. Le checkout principal serveur `/home/moi/bridget-referent/bridget` a été avancé par fast-forward vers ce commit, sans modifier ses caches non suivis.
+- Compilation release : `cargo build --release -p bridget-daemon -p maicie -p bridget-transport` : **réussie**.
+- Binaires installés et basculés par liens atomiques : Bridget `/home/moi/.local/lib/bridget/bridget-8cf724d-2db2b3dceaa8`, Maicie `/home/moi/.local/lib/maicie/maicie-8cf724d-6061c902d4f5`.
+- Redémarrage ordonné : `bridget-ui.service`, puis `bridget-daemon.service` : **actifs**. Le PID daemon charge bien `/home/moi/.local/lib/bridget/bridget-8cf724d-2db2b3dceaa8`.
+- Snapshot avant redémarrage conservé dans `/tmp/bridget-agents-before-087.json`. Les deux agents persistants alors connectés (`Bridget`, `Jim`) sont revenus `busy` automatiquement après le redémarrage ; aucune relance explicite n'était nécessaire. Les six agents persistants déjà `stopped` ont été préservés dans cet état, afin de ne pas redémarrer un travail arrêté volontairement.
+- Vérification : `bridget status` rend `Build-id daemon: 8cf724d0020a`; `bridget who` rend `Daemon build-id: 8cf724d0020a` puis `Contrôle : autonomie active · plafond objectifs automatiques 5`; les 120 dernières lignes du journal daemon ne contiennent aucun avertissement `identity_version`.
+
 ### Non cochées côté daemon, avec raison
-- T045 : validation opérateur, exige le référent
-- T046 : mise en service ; le pipeline interdit le commit automatique, donc pas de déploiement de code non commité
+- T045 : validation opérateur, exige le référent.
 
 ## Mutants
 
