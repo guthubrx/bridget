@@ -6,6 +6,7 @@ use crate::review::{
     ReviewLotSubmitPayload, ReviewSubmission, ReviewSubmissionError, TrackedPath,
     calculate_criticality, create_review_submission, is_canonical_sha, is_full_branch_ref,
 };
+use bridget_transport::protocol::ReviewTarget;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
@@ -91,6 +92,7 @@ pub struct PreparedReviewSubmission {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReviewGitError {
     RepositoryUnavailable,
+    DefaultBranchUnavailable,
     BranchRefNotFull,
     InvalidCommit {
         field: &'static str,
@@ -123,6 +125,9 @@ impl std::fmt::Display for ReviewGitError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::RepositoryUnavailable => formatter.write_str("dépôt configuré indisponible"),
+            Self::DefaultBranchUnavailable => {
+                formatter.write_str("branche par défaut origin indisponible")
+            }
             Self::BranchRefNotFull => formatter.write_str("référence Git non complète"),
             Self::InvalidCommit { field } => write!(formatter, "SHA {field} non canonique"),
             Self::BranchHeadMismatch => {
@@ -299,6 +304,63 @@ pub fn measure_repository(
         contracts,
         open_findings: request.open_findings.to_vec(),
     })
+}
+
+/// Fige la tête courante de la branche par défaut déjà connue du remote
+/// `origin`. Cette lecture ne contacte jamais le réseau : la référence doit
+/// avoir été rapatriée avant la demande de focus.
+pub fn freeze_origin_default_review_target(
+    repository_root: &Path,
+) -> Result<ReviewTarget, ReviewGitError> {
+    let root = canonical_repository_root(repository_root)?;
+    let default_branch = git_capture(
+        &root,
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+        None,
+        SMALL_OUTPUT_LIMIT,
+        "origin-default-branch",
+    )?;
+    if !default_branch.status.success() || default_branch.stdout.exceeded(SMALL_OUTPUT_LIMIT) {
+        return Err(ReviewGitError::DefaultBranchUnavailable);
+    }
+    let target_ref = output_line(&default_branch.stdout.bytes, "origin-default-branch")?;
+    let Some(branch) = target_ref.strip_prefix("origin/") else {
+        return Err(ReviewGitError::DefaultBranchUnavailable);
+    };
+    if branch.is_empty() {
+        return Err(ReviewGitError::DefaultBranchUnavailable);
+    }
+    let head_expression = format!("{target_ref}^{{commit}}");
+    let head = git_capture(
+        &root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &head_expression,
+        ],
+        None,
+        SMALL_OUTPUT_LIMIT,
+        "origin-default-head",
+    )?;
+    if !head.status.success() || head.stdout.exceeded(SMALL_OUTPUT_LIMIT) {
+        return Err(ReviewGitError::DefaultBranchUnavailable);
+    }
+    let target = ReviewTarget {
+        target_ref: target_ref.to_string(),
+        expected_head: output_line(&head.stdout.bytes, "origin-default-head")?.to_string(),
+    };
+    if !target.is_valid() {
+        return Err(ReviewGitError::InvalidGitOutput {
+            step: "origin-default-target",
+        });
+    }
+    Ok(target)
 }
 
 /// Mesure la paire Git configurée, calcule la carte puis prépare la soumission.

@@ -4,14 +4,17 @@ use bridget_transport::greffe_authorization::{
     GreffeDepositAuthorization, GreffeMutationAction,
 };
 use bridget_transport::protocol::{
-    GuichetDelegateMutationStatus, GuichetDurationClass, GuichetRegistreAddStatus,
-    GuichetReplyPayload, ReviewTarget, ServiceRequestOperation, ServiceRequestPayload,
-    ServiceSuiteDeclaration, decode, encode,
+    DelegateFocus, DelegateOrigin, FocusConflictPolicy, GuichetDelegateMutationStatus,
+    GuichetDurationClass, GuichetRegistreAddStatus, GuichetReplyPayload,
+    HumanOriginAttestationFrame, ObservedHumanMessageFrame, ReviewTarget, ServiceRequestOperation,
+    ServiceRequestPayload, ServiceSuiteDeclaration, decode, encode, human_message_content_seal,
+    sha256_hex,
 };
 use maicie::app::process_guichet_claim_with_central_service;
 use maicie::bridget_client::{BridgetClientLimits, GuichetClaim};
 use maicie::config::MaicieConfig;
 use maicie::domain::EtatObjectif;
+use maicie::reconcile::reconcile_focus_waiting_agents;
 use maicie::store::MaicieStore;
 use serde_json::{Value, json};
 use std::fs;
@@ -30,6 +33,208 @@ const ROOT_ENV: &str = "MAICIE_GREFFE_CENTRAL_EFFECT_ROOT";
 const PRINCIPAL: &str = "agent-autorise";
 const INSTANCE_ID: &str = "instance-autorisee";
 const POLICY_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const PROSPECTIVE_AGENT_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+#[test]
+fn spec_087_focus_guichet_sans_agent_disponible_attend_et_alerte() {
+    let root = std::env::temp_dir().join(format!(
+        "maicie-focus-waiting-channel-{}-{}",
+        std::process::id(),
+        Uuid::new_v4()
+    ));
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = root.join("bridget.sock");
+    let database = root.join("maicie.sqlite3");
+    let config_path = root.join("maicie.json");
+    fs::write(
+        &config_path,
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "bridget_socket": socket,
+            "database_path": database,
+            "durations": {"short_secs": 30, "normal_secs": 60, "long_secs": 90},
+            "profiles": [{
+                "id": "prospective",
+                "agent_id": PROSPECTIVE_AGENT_ID,
+                "display_name": "Prospective",
+                "tags": [],
+                "personality_ref": "profiles/prospective.md",
+                "tools": ["bridget_send"],
+                "spawn_order_ref": "agents/prospective"
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let config = MaicieConfig::load(&config_path).unwrap();
+    let mut store = MaicieStore::open(&database).unwrap();
+    let now = 1_000;
+    let claim = human_focus_claim(
+        store.issuer_scope(),
+        now,
+        Some(ReviewTarget {
+            target_ref: "origin/main".to_string(),
+            expected_head: "a".repeat(40),
+        }),
+    );
+
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let server_socket = socket.clone();
+    let server = thread::spawn(move || {
+        serve_agent_list_once_with_agent(&server_socket, ready_tx, "dnd", PROSPECTIVE_AGENT_ID)
+    });
+    ready_rx.recv().unwrap();
+    let result = process_guichet_claim_with_central_service(
+        &mut store,
+        &config,
+        BridgetClientLimits::default(),
+        &claim,
+        "response-focus-waiting",
+        now,
+    )
+    .unwrap();
+    server.join().unwrap();
+    fs::remove_file(&socket).unwrap();
+
+    assert!(result.refusal_reason.is_none());
+    let objective_id = result.objective_id.expect("focus ouvert absent");
+    assert!(result.delegation_id.is_none(), "aucune délégation fictive");
+    assert_eq!(store.focus_active().unwrap(), Some(objective_id));
+    let projection = store
+        .focus_projection()
+        .unwrap()
+        .expect("projection focus absente");
+    assert_eq!(projection.objective_id, objective_id);
+    assert_eq!(projection.project_id, "projet-test");
+    assert_eq!(projection.goal, "Réparer l'import CSV");
+    assert!(
+        store
+            .objective_snapshots(Some(objective_id))
+            .unwrap()
+            .remove(0)
+            .delegations
+            .is_empty()
+    );
+    assert_eq!(
+        reconcile_focus_waiting_agents(&mut store, config.durations.normal_secs, now + 60).unwrap(),
+        1
+    );
+    assert_eq!(store.pending_human_inbox().unwrap().len(), 1);
+
+    let replay = process_guichet_claim_with_central_service(
+        &mut store,
+        &config,
+        BridgetClientLimits::default(),
+        &claim,
+        "response-focus-waiting",
+        now + 1,
+    )
+    .unwrap();
+    assert_eq!(replay.objective_id, Some(objective_id));
+    assert_eq!(store.focus_queue().unwrap(), vec![(objective_id, 0)]);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn spec_087_focus_guichet_gel_la_branche_origin_par_defaut() {
+    let root = std::env::temp_dir().join(format!(
+        "maicie-focus-default-target-{}-{}",
+        std::process::id(),
+        Uuid::new_v4()
+    ));
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    git(&root, &["init", "-q", "-b", "main"]);
+    fs::write(root.join("lib.rs"), "pub const VALUE: u8 = 1;\n").unwrap();
+    git(&root, &["add", "lib.rs"]);
+    git(&root, &["commit", "-q", "-m", "base"]);
+    let head = git(&root, &["rev-parse", "HEAD"]);
+    git(&root, &["update-ref", "refs/remotes/origin/main", &head]);
+    git(
+        &root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+
+    let socket = root.join("bridget.sock");
+    let database = root.join("maicie.sqlite3");
+    let config_path = root.join("maicie.json");
+    fs::write(
+        &config_path,
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "bridget_socket": socket,
+            "database_path": database,
+            "durations": {"short_secs": 30, "normal_secs": 60, "long_secs": 90},
+            "review_project": {
+                "project_id": "projet-test",
+                "repository_root": root,
+                "referent_id": "referent-test"
+            },
+            "profiles": [{
+                "id": "prospective",
+                "agent_id": PROSPECTIVE_AGENT_ID,
+                "display_name": "Prospective",
+                "tags": [],
+                "personality_ref": "profiles/prospective.md",
+                "tools": ["bridget_send"],
+                "spawn_order_ref": "agents/prospective"
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let config = MaicieConfig::load(&config_path).unwrap();
+    let mut store = MaicieStore::open(&database).unwrap();
+    let now = 1_000;
+    let claim = human_focus_claim(store.issuer_scope(), now, None);
+
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let server_socket = socket.clone();
+    let server = thread::spawn(move || {
+        serve_agent_list_once_with_agent(
+            &server_socket,
+            ready_tx,
+            "connected",
+            PROSPECTIVE_AGENT_ID,
+        )
+    });
+    ready_rx.recv().unwrap();
+    let result = process_guichet_claim_with_central_service(
+        &mut store,
+        &config,
+        BridgetClientLimits::default(),
+        &claim,
+        "response-focus-default-target",
+        now,
+    )
+    .unwrap();
+    server.join().unwrap();
+    fs::remove_file(&socket).unwrap();
+
+    let objective_id = result.objective_id.expect("focus ouvert absent");
+    let target = store
+        .objective_snapshots(Some(objective_id))
+        .unwrap()
+        .remove(0)
+        .delegations
+        .remove(0)
+        .review_target;
+    assert_eq!(
+        target,
+        Some(ReviewTarget {
+            target_ref: "origin/main".to_string(),
+            expected_head: head,
+        })
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
 
 #[test]
 fn trois_mutations_federees_autorisees_appliquent_le_greffe_central() {
@@ -86,6 +291,7 @@ fn run_effect_oracle(root: &Path) {
             "durations": {"short_secs": 30, "normal_secs": 60, "long_secs": 90},
             "profiles": [{
                 "id": "prospective",
+                "agent_id": PROSPECTIVE_AGENT_ID,
                 "display_name": "Prospective",
                 "tags": ["review"],
                 "personality_ref": "profiles/prospective.md",
@@ -335,6 +541,106 @@ fn authorized_claim(
     }
 }
 
+fn human_focus_claim(
+    issuer_scope: &str,
+    issued_at: i64,
+    review_target: Option<ReviewTarget>,
+) -> GuichetClaim {
+    let request_id = "request-focus-waiting";
+    let observed = ObservedHumanMessageFrame {
+        message_id: "hmo-focus-waiting".to_string(),
+        ts: issued_at,
+        sender: "humain".to_string(),
+        target: "maicie".to_string(),
+        body: "Réparer l'import CSV".to_string(),
+    };
+    let without_origin = ServiceRequestPayload::Delegate {
+        goal: "Réparer l'import CSV".to_string(),
+        review_target,
+        explicit_target: None,
+        required_tags: Vec::new(),
+        duration: GuichetDurationClass::Normale,
+        suite: ServiceSuiteDeclaration::Aucune,
+        depends_on: Vec::new(),
+        references: Vec::new(),
+        origin: None,
+        focus: Some(DelegateFocus {
+            project_id: "projet-test".to_string(),
+            on_conflict: Some(FocusConflictPolicy::Replace),
+        }),
+    };
+    let canonical_without_origin = encode(&WrapperToDaemon::ServiceRequest {
+        version: without_origin.required_contract_version(),
+        issuer_scope: issuer_scope.to_string(),
+        request_id: request_id.to_string(),
+        issued_at,
+        from: "humain".to_string(),
+        to: "maicie".to_string(),
+        operation: ServiceRequestOperation::Delegate,
+        payload: without_origin.clone(),
+    })
+    .unwrap()
+    .into_bytes();
+    let payload = match without_origin {
+        ServiceRequestPayload::Delegate {
+            goal,
+            review_target,
+            explicit_target,
+            required_tags,
+            duration,
+            suite,
+            depends_on,
+            references,
+            focus,
+            ..
+        } => ServiceRequestPayload::Delegate {
+            goal,
+            review_target,
+            explicit_target,
+            required_tags,
+            duration,
+            suite,
+            depends_on,
+            references,
+            origin: Some(DelegateOrigin::Human {
+                message_id: observed.message_id.clone(),
+                attestation: HumanOriginAttestationFrame {
+                    version: 1,
+                    issuer_scope: issuer_scope.to_string(),
+                    canonical_request_sha256: sha256_hex(&canonical_without_origin),
+                    signature: human_message_content_seal(&observed),
+                },
+                observed,
+            }),
+            focus,
+        },
+        _ => unreachable!("payload de délégation attendu"),
+    };
+    let canonical_request = encode(&WrapperToDaemon::ServiceRequest {
+        version: payload.required_contract_version(),
+        issuer_scope: issuer_scope.to_string(),
+        request_id: request_id.to_string(),
+        issued_at,
+        from: "humain".to_string(),
+        to: "maicie".to_string(),
+        operation: ServiceRequestOperation::Delegate,
+        payload,
+    })
+    .unwrap()
+    .into_bytes();
+    GuichetClaim {
+        issuer_scope: issuer_scope.to_string(),
+        request_id: request_id.to_string(),
+        canonical_request,
+        authorization_attestation: None,
+        claimed_at: issued_at,
+        claim_generation: 1,
+        claim_token: "claim-focus-waiting".to_string(),
+        claim_lease_expires_at: issued_at + 30,
+        expires_at: issued_at + 60,
+    }
+}
+
 fn authorized_review_delegate_claim(
     gate: &GreffeAuthorizationGate,
     issuer_scope: &str,
@@ -352,17 +658,32 @@ fn authorized_review_delegate_claim(
         ServiceRequestPayload::Delegate {
             goal: "prouver le chemin fédéré central".to_string(),
             review_target: Some(review_target.clone()),
-            explicit_target: Some("prospective".to_string()),
+            explicit_target: Some(PROSPECTIVE_AGENT_ID.to_string()),
             required_tags: vec!["review".to_string()],
             duration: GuichetDurationClass::Courte,
             suite: ServiceSuiteDeclaration::Aucune,
             depends_on: Vec::new(),
             references: Vec::new(),
+            origin: None,
+            focus: None,
         },
     )
 }
 
 fn serve_agent_list_once(socket: &Path, ready: mpsc::Sender<()>) {
+    serve_agent_list_once_with_state(socket, ready, "connected");
+}
+
+fn serve_agent_list_once_with_state(socket: &Path, ready: mpsc::Sender<()>, state: &str) {
+    serve_agent_list_once_with_agent(socket, ready, state, PROSPECTIVE_AGENT_ID);
+}
+
+fn serve_agent_list_once_with_agent(
+    socket: &Path,
+    ready: mpsc::Sender<()>,
+    state: &str,
+    agent_id: &str,
+) {
     let listener = UnixListener::bind(socket).unwrap();
     ready.send(()).unwrap();
     let (stream, _) = listener.accept().unwrap();
@@ -394,12 +715,14 @@ fn serve_agent_list_once(socket: &Path, ready: mpsc::Sender<()>) {
         json!({
             "type":"AgentList",
             "agents":[{
-                "name":"prospective",
+                "name":agent_id,
+                "agent_id":agent_id,
+                "display_name":"Prospective",
                 "agent_type":"codex",
                 "connection_id":"fixture-central",
                 "host":"fixture",
                 "transport":"codex_app_server",
-                "state":"connected",
+                "state":state,
                 "last_seen_secs":0,
                 "reconnect_count":0,
                 "domain":"bridget",
@@ -453,4 +776,24 @@ fn unix_now() -> i64 {
             .as_secs(),
     )
     .unwrap()
+}
+
+fn git(root: &Path, arguments: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(arguments)
+        .env("LC_ALL", "C")
+        .env("GIT_AUTHOR_NAME", "Fixture")
+        .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Fixture")
+        .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {arguments:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
 }

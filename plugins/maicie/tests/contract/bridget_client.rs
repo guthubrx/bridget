@@ -649,6 +649,7 @@ fn message(body: &str) -> PublicMessage {
         reply_timeout: Some(60),
         deadline_at: Some(1_700_000_060),
         in_reply_to: None,
+        references: Vec::new(),
     }
 }
 

@@ -12,8 +12,8 @@ use maicie::domain::{
 };
 use maicie::outbox::{PreparedDelegation, stable_body_hash};
 use maicie::store::{
-    CoordinationCommitPhase, GuichetCommitPhase, MaicieStore, ObjectiveClosureCommitPhase,
-    ReassignmentCommitPhase, SCHEMA_VERSION, StoreError,
+    CoordinationCommitPhase, GuichetCommitPhase, HumanDecisionApplication, MaicieStore,
+    ObjectiveClosureCommitPhase, ReassignmentCommitPhase, SCHEMA_VERSION, StoreError,
 };
 use rusqlite::{Connection, ErrorCode, params};
 use std::fs;
@@ -1288,6 +1288,122 @@ fn borne_m_deux_cree_deux_reemissions_puis_un_unique_successeur() {
     assert_eq!(result.reduction.successeur.unwrap().participant_id, "bob");
     assert_eq!(store.pending_tracked_request_outboxes().unwrap().len(), 4);
     assert_eq!(store.pending_notification_outboxes().unwrap().len(), 2);
+}
+
+#[test]
+fn chaine_epuisee_depose_un_unique_item_humain_durable() {
+    let fixture = Fixture::new("reassignation-chaine-epuisee-inbox");
+    let (objectif_id, delegation_id) = seed_coordination(&fixture.database, "alice");
+    let connection = Connection::open(&fixture.database).unwrap();
+    let payload: Vec<u8> = connection
+        .query_row(
+            "SELECT payload_json FROM reassignment_policies WHERE delegation_id = ?1",
+            [delegation_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut policy: PolitiqueReassignation = serde_json::from_slice(&payload).unwrap();
+    policy.chaine_repli.clear();
+    connection
+        .execute(
+            "UPDATE reassignment_policies SET payload_json = ?1 WHERE delegation_id = ?2",
+            params![
+                serde_json::to_vec(&policy).unwrap(),
+                delegation_id.to_string()
+            ],
+        )
+        .unwrap();
+    drop(connection);
+
+    let mut store = MaicieStore::open(&fixture.database).unwrap();
+    let mut request_id = initial_request_id(&store, delegation_id);
+    for ordinal in 1..=2 {
+        let lot = reassignment_lot(
+            objectif_id,
+            delegation_id,
+            1,
+            vec![reassignment_fact(
+                &format!("answered-{ordinal}"),
+                &request_id,
+                TypeFaitReassignation::Answered,
+            )],
+        );
+        let result = store.apply_reassignment_batch(&lot).unwrap();
+        request_id = result
+            .reduction
+            .episode_successeur
+            .as_ref()
+            .unwrap()
+            .request_id
+            .clone();
+    }
+    let exhausted = reassignment_lot(
+        objectif_id,
+        delegation_id,
+        1,
+        vec![reassignment_fact(
+            "answered-3",
+            &request_id,
+            TypeFaitReassignation::Answered,
+        )],
+    );
+    let result = store.apply_reassignment_batch(&exhausted).unwrap();
+    assert_eq!(
+        result.reduction.decision.motif,
+        "chaine_preautorisee_epuisee"
+    );
+    let pending = store.pending_human_inbox().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0].dedup_key,
+        format!("chain-exhausted:{delegation_id}")
+    );
+    assert_eq!(pending[0].kind, "chain_exhausted");
+    assert_eq!(pending[0].options, vec!["cancel", "ack"]);
+    assert!(store.apply_reassignment_batch(&exhausted).unwrap().replayed);
+    assert_eq!(store.pending_human_inbox().unwrap().len(), 1);
+
+    assert_eq!(
+        store
+            .apply_human_decision(
+                "human-reassign-1",
+                "item-chain-1",
+                "reassign:charlie",
+                Some(delegation_id),
+                1_787_500_300,
+            )
+            .unwrap(),
+        HumanDecisionApplication::Applied
+    );
+    let reassigned = store
+        .pending_tracked_request_outboxes()
+        .unwrap()
+        .into_iter()
+        .filter(|outbox| outbox.generation == 2)
+        .collect::<Vec<_>>();
+    assert_eq!(reassigned.len(), 1);
+    assert_eq!(reassigned[0].recipient, "charlie");
+    assert_eq!(
+        store
+            .apply_human_decision(
+                "human-reassign-1",
+                "item-chain-1",
+                "reassign:charlie",
+                Some(delegation_id),
+                1_787_500_301,
+            )
+            .unwrap(),
+        HumanDecisionApplication::Replayed
+    );
+    assert_eq!(
+        store
+            .pending_tracked_request_outboxes()
+            .unwrap()
+            .into_iter()
+            .filter(|outbox| outbox.generation == 2)
+            .count(),
+        1
+    );
 }
 
 #[test]

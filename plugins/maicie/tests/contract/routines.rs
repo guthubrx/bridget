@@ -1395,3 +1395,219 @@ fn relec1_m6_saut_de_resume_adopte_les_orphelins() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// SPEC-087 : la garde du référent devant l'ouverture par routine.
+// ---------------------------------------------------------------------------
+
+fn control_read(paused: bool, cap: u32) -> maicie::control::ControlSnapshot {
+    maicie::control::ControlSnapshot::Read {
+        paused,
+        auto_objectives_cap: cap,
+        inbox_open_count: 0,
+        read_at: 1,
+    }
+}
+
+/// Propriété : en pause, une routine due ne produit aucun objectif et consigne
+/// une occurrence différée avec le motif `pause`. Mutant : forcer la garde à
+/// admettre rend ce test rouge (une occurrence `Ouverte` apparaît).
+#[test]
+fn spec_087_la_pause_differe_l_ouverture_par_routine_avec_son_motif() {
+    let guard = RootGuard::new("087-pause");
+    let database = guard.path.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let period = 420_i64;
+    let t0 = 1_787_580_000;
+    let routine_id = seed_active(&mut store, t0, period);
+    store.set_control_snapshot(control_read(true, 5));
+    let produced = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0 + 5,
+    )
+    .expect("evaluate");
+    let differees: Vec<_> = produced
+        .iter()
+        .filter(|occ| occ.state == EtatOccurrence::Differee)
+        .collect();
+    assert_eq!(differees.len(), 1, "{produced:?}");
+    assert_eq!(differees[0].reason.as_deref(), Some("pause"));
+    assert_eq!(differees[0].routine_id, routine_id);
+    assert!(
+        produced
+            .iter()
+            .all(|occ| occ.state != EtatOccurrence::Ouverte),
+        "aucun objectif n'est ouvert en pause"
+    );
+    assert_eq!(store.count_open_auto_generated_objectives().unwrap(), 0);
+    assert_eq!(store.count_control_deferred_occurrences().unwrap(), 1);
+    // Levée : la prochaine occurrence due repart, sans rafale sur le bucket différé.
+    store.set_control_snapshot(control_read(false, 5));
+    let later = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0 + period + 5,
+    )
+    .expect("evaluate après levée");
+    assert_eq!(
+        later
+            .iter()
+            .filter(|occ| occ.state == EtatOccurrence::Ouverte)
+            .count(),
+        1,
+        "{later:?}"
+    );
+}
+
+/// Propriété : un état de contrôle inconnu (daemon injoignable) diffère aussi,
+/// avec un motif distinct de la pause.
+#[test]
+fn spec_087_un_controle_inconnu_differe_avec_son_propre_motif() {
+    let guard = RootGuard::new("087-inconnu");
+    let database = guard.path.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let t0 = 1_787_580_000;
+    seed_active(&mut store, t0, 420);
+    store.set_control_snapshot(maicie::control::ControlSnapshot::Unknown);
+    let produced = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0 + 5,
+    )
+    .expect("evaluate");
+    assert!(produced.iter().any(|occ| {
+        occ.state == EtatOccurrence::Differee && occ.reason.as_deref() == Some("controle_inconnu")
+    }));
+}
+
+/// Propriété : un focus actif diffère le travail automatique avec le motif
+/// `focus` ; il repart quand le focus se ferme.
+#[test]
+fn spec_087_un_focus_actif_differe_les_routines() {
+    let guard = RootGuard::new("087-focus");
+    let database = guard.path.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let t0 = 1_787_580_000;
+    seed_active(&mut store, t0, 420);
+    store.set_control_snapshot(control_read(false, 5));
+    // Un objectif existant sert de focus (clé étrangère vers objectives).
+    let focus = {
+        let request = maicie::app::DelegateRequest {
+            goal: "objectif prioritaire du référent",
+            opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
+            explicit_target: Some("prospective"),
+            required_tags: &[],
+            duration: maicie::domain::ClasseDuree::Normale,
+            reply: false,
+            constat_id: None,
+            review_target: None,
+            suite: SuiteObjective::Aucune,
+            depends_on: &[],
+            references: &[],
+            idempotency_key: "focus-087",
+            now: t0,
+            retry_until: t0 + 90,
+            dedup_retained_until: t0 + 90,
+            max_frame_bytes: 256 * 1024,
+        };
+        match maicie::app::delegate(
+            &mut store,
+            durations(),
+            "maicie",
+            &[candidate("prospective")],
+            &request,
+        )
+        .unwrap()
+        {
+            maicie::app::DelegateResult::Created(created) => created.objective_id,
+            other => panic!("création attendue : {other:?}"),
+        }
+    };
+    store.focus_enqueue(focus, true, t0).unwrap();
+    assert_eq!(store.focus_active().unwrap(), Some(focus));
+    let produced = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0 + 5,
+    )
+    .expect("evaluate");
+    assert!(
+        produced.iter().any(|occ| {
+            occ.state == EtatOccurrence::Differee && occ.reason.as_deref() == Some("focus")
+        }),
+        "{produced:?}"
+    );
+    assert_eq!(store.focus_close_current().unwrap(), None);
+    let later = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0 + 420 + 5,
+    )
+    .expect("evaluate après fermeture du focus");
+    assert!(
+        later.iter().any(|occ| occ.state == EtatOccurrence::Ouverte),
+        "{later:?}"
+    );
+}
+
+/// Propriété : au plafond, la routine n'ouvre pas, consigne `budget`, et une
+/// seule demande part vers la boîte humaine. Mutant : retirer le comptage
+/// rend une seconde occurrence `Ouverte`.
+#[test]
+fn spec_087_le_plafond_differe_et_depose_une_seule_demande() {
+    let guard = RootGuard::new("087-budget");
+    let database = guard.path.join("maicie.sqlite3");
+    let mut store = MaicieStore::open(&database).unwrap();
+    let t0 = 1_787_580_000;
+    let first = seed_active(&mut store, t0, 420);
+    let second = seed_active(&mut store, t0, 420);
+    assert_ne!(first, second);
+    store.set_control_snapshot(control_read(false, 1));
+    let produced = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0 + 5,
+    )
+    .expect("evaluate");
+    let opened = produced
+        .iter()
+        .filter(|occ| occ.state == EtatOccurrence::Ouverte)
+        .count();
+    let budget = produced
+        .iter()
+        .filter(|occ| {
+            occ.state == EtatOccurrence::Differee && occ.reason.as_deref() == Some("budget")
+        })
+        .count();
+    assert_eq!((opened, budget), (1, 1), "{produced:?}");
+    assert_eq!(store.count_open_auto_generated_objectives().unwrap(), 1);
+    let pending = store.pending_human_inbox().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].dedup_key, "budget-reached");
+    assert_eq!(pending[0].kind, "budget_reached");
+    assert!(pending[0].options.contains(&"raise_budget".to_string()));
+    // Second passage saturé : la clé fixe absorbe, aucune seconde demande.
+    let again = evaluate_routines(
+        &mut store,
+        &durations(),
+        "maicie",
+        &[candidate("prospective")],
+        t0 + 420 + 5,
+    )
+    .expect("evaluate saturé");
+    assert!(again.iter().all(|occ| occ.state != EtatOccurrence::Ouverte));
+    assert_eq!(store.pending_human_inbox().unwrap().len(), 1);
+}

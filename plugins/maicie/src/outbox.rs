@@ -50,6 +50,7 @@ impl PreparedDelegation {
             reply_timeout: outbox.reply.then_some(outbox.timeout_secs),
             deadline_at: u64::try_from(outbox.deadline_contractuelle).ok(),
             in_reply_to: None,
+            references: Vec::new(),
         };
         let message_bytes = serde_json::to_vec(&message).map_err(OutboxError::Encode)?;
         validate_send_idempotent_frame(

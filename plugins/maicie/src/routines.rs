@@ -12,6 +12,7 @@
 
 use crate::app::{DelegateError, DelegateRequest, DelegateResult, DelegationCandidate, delegate};
 use crate::config::DurationClasses;
+use crate::control::{Admission, AutonomousEffect, admit_autonomous_effect};
 use crate::domain::{ClasseDuree, ObjectiveOpeningPermit, SuiteObjective};
 use crate::store::{MaicieStore, StoreError};
 use serde::{Deserialize, Serialize};
@@ -461,6 +462,34 @@ pub fn evaluate_routines_with(
                 routine.last_bucket = Some(bucket);
                 continue;
             }
+            // SPEC-087 : garde unique du référent. Pause, état de contrôle
+            // inconnu ou focus actif ⇒ occurrence différée avec son motif,
+            // bucket consommé (pas de rafale à la levée : la prochaine
+            // occurrence due repart d'elle-même).
+            let admission =
+                admit_autonomous_effect(AutonomousEffect::RoutineOpening, store.control_snapshot());
+            let deferral = match admission {
+                Admission::Deferred { motif } => Some(motif),
+                Admission::Admitted => store
+                    .focus_active()
+                    .map_err(routine_store_error)?
+                    .map(|_| "focus"),
+            };
+            if let Some(motif) = deferral {
+                let occ = RoutineOccurrence {
+                    routine_id: routine.id,
+                    bucket,
+                    state: EtatOccurrence::Differee,
+                    reason: Some(motif.to_string()),
+                    objective_id: None,
+                    delegation_id: None,
+                    created_at: now,
+                };
+                store.insert_occurrence(&occ).map_err(routine_store_error)?;
+                produced.push(occ);
+                routine.last_bucket = Some(bucket);
+                continue;
+            }
             if candidates.is_empty() {
                 // Bridget / annuaire indisponible : ne consomme pas le bucket.
                 break;
@@ -491,9 +520,41 @@ pub fn evaluate_routines_with(
             };
             let created = match delegate(store, *durations, issuer_scope, candidates, &request) {
                 Ok(DelegateResult::Created(created)) => created,
+                // SPEC-087 : plafond d'objectifs auto-générés atteint. Occurrence
+                // différée avec le motif `budget`, bucket consommé, et une seule
+                // demande au référent par épisode de saturation (clé fixe).
+                Err(DelegateError::BudgetReached { cap, open }) => {
+                    let occ = RoutineOccurrence {
+                        routine_id: routine.id,
+                        bucket,
+                        state: EtatOccurrence::Differee,
+                        reason: Some("budget".to_string()),
+                        objective_id: None,
+                        delegation_id: None,
+                        created_at: now,
+                    };
+                    store.insert_occurrence(&occ).map_err(routine_store_error)?;
+                    produced.push(occ);
+                    routine.last_bucket = Some(bucket);
+                    store
+                        .enqueue_human_inbox(
+                            "budget-reached",
+                            "budget_reached",
+                            "{}",
+                            &format!(
+                                "{{\"summary\":\"Plafond d'objectifs automatiques atteint : {open} ouverts sur {cap}. La routine {} attend.\"}}",
+                                routine.id
+                            ),
+                            &["raise_budget".to_string(), "ack".to_string()],
+                            now,
+                        )
+                        .map_err(routine_store_error)?;
+                    continue;
+                }
                 // Cible non résolue / indisponible / autre blip : pas de bucket
                 // consumé — prochaine relève. Ne remonte jamais en erreur fatale.
                 Ok(DelegateResult::Candidates(_))
+                | Ok(DelegateResult::FocusWaitingForAgent(_))
                 | Err(DelegateError::TargetUnavailable(_))
                 | Err(_) => {
                     break;

@@ -528,6 +528,14 @@ fn verdict_concordant_termine_la_revue_sans_clore_l_objectif() {
     assert_eq!(verdicts[0].delegation_id, created.delegation_id);
     assert_eq!(verdicts[0].evidence.target_ref, "origin/fix/review");
     assert_eq!(verdicts[0].evidence.measured_head, head);
+    let pending = store.pending_human_inbox().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0].dedup_key,
+        format!("review-verdict:{}", created.delegation_id)
+    );
+    assert_eq!(pending[0].kind, "review_verdict_pending");
+    assert_eq!(pending[0].options, vec!["ack"]);
     drop(store);
     fs::remove_dir_all(root).unwrap();
 }

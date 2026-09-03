@@ -287,7 +287,7 @@ pub fn process_guichet_claim(
     let canonical = parse_claim(claim).map_err(guichet_domain_error)?;
     if let Some(reason) = delegate_refusal_before_effect(store, &canonical)? {
         let stored = store
-            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason, None)
             .map_err(guichet_store_error)?;
         return Ok(guichet_process_result(stored, Some(reason)));
     }
@@ -299,7 +299,7 @@ pub fn process_guichet_claim(
     ) {
         let reason = MotifRefusGreffe::OperationNonDisponible;
         let stored = store
-            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason, None)
             .map_err(guichet_store_error)?;
         return Ok(guichet_process_result(stored, Some(reason)));
     }
@@ -320,7 +320,7 @@ pub fn process_guichet_claim_with_central_service(
     let canonical = parse_claim(claim).map_err(guichet_domain_error)?;
     if let Some(reason) = delegate_refusal_before_effect(store, &canonical)? {
         let stored = store
-            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+            .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason, None)
             .map_err(guichet_store_error)?;
         return Ok(guichet_process_result(stored, Some(reason)));
     }
@@ -341,11 +341,18 @@ pub fn process_guichet_claim_with_central_service(
         ) {
             Ok(stored) => Ok(guichet_process_result(stored, None)),
             Err(error) => {
-                let Some(reason) = deterministic_service_refusal(&error) else {
+                let Some((reason, budget)) = deterministic_service_refusal_detail(&error) else {
                     return Err(GuichetError::Store(error.to_string()));
                 };
                 let stored = store
-                    .persist_guichet_refusal(claim, &canonical, response_message_id, now, reason)
+                    .persist_guichet_refusal(
+                        claim,
+                        &canonical,
+                        response_message_id,
+                        now,
+                        reason,
+                        budget,
+                    )
                     .map_err(guichet_store_error)?;
                 Ok(guichet_process_result(stored, Some(reason)))
             }
@@ -411,7 +418,7 @@ fn process_non_mutating_guichet_claim(
                 return Err(guichet_store_error(error));
             };
             let stored = store
-                .persist_guichet_refusal(claim, canonical, response_message_id, now, reason)
+                .persist_guichet_refusal(claim, canonical, response_message_id, now, reason, None)
                 .map_err(guichet_store_error)?;
             Ok(guichet_process_result(stored, Some(reason)))
         }
@@ -421,12 +428,16 @@ fn process_non_mutating_guichet_claim(
 fn deterministic_service_refusal(error: &GreffeServiceError) -> Option<MotifRefusGreffe> {
     match error {
         GreffeServiceError::Authorization(_) => Some(MotifRefusGreffe::AutorisationRefusee),
+        GreffeServiceError::HumanOriginInvalid(_) => Some(MotifRefusGreffe::OrigineHumaineInvalide),
         GreffeServiceError::Invalid(_) => Some(MotifRefusGreffe::MutationInvalide),
         GreffeServiceError::Delegate(DelegateError::ContrainteRefusee { .. }) => {
             Some(MotifRefusGreffe::SuiteAucuneAvecCitationNonClassee)
         }
         GreffeServiceError::Delegate(DelegateError::TargetUnavailable(_)) => {
             Some(MotifRefusGreffe::CibleIndisponible)
+        }
+        GreffeServiceError::Delegate(DelegateError::BudgetReached { .. }) => {
+            Some(MotifRefusGreffe::BudgetAtteint)
         }
         GreffeServiceError::Delegate(
             DelegateError::Invalid(_) | DelegateError::EnvelopeMismatch,
@@ -453,7 +464,19 @@ fn deterministic_service_refusal(error: &GreffeServiceError) -> Option<MotifRefu
         | GreffeServiceError::Objective(ObjectiveError::Store(_))
         | GreffeServiceError::Delegate(DelegateError::Store(_))
         | GreffeServiceError::Store(_)
-        | GreffeServiceError::Bridget(_) => None,
+        | GreffeServiceError::Bridget(_)
+        | GreffeServiceError::ReviewGit(_) => None,
+    }
+}
+
+fn deterministic_service_refusal_detail(
+    error: &GreffeServiceError,
+) -> Option<(MotifRefusGreffe, Option<(u32, u32)>)> {
+    match error {
+        GreffeServiceError::Delegate(DelegateError::BudgetReached { cap, open }) => {
+            Some((MotifRefusGreffe::BudgetAtteint, Some((*cap, *open))))
+        }
+        _ => deterministic_service_refusal(error).map(|reason| (reason, None)),
     }
 }
 
@@ -865,15 +888,86 @@ pub struct DelegationCreated {
     pub waiting_on_prerequisites: bool,
 }
 
+/// Focus humain durablement ouvert, sans délégation tant qu'aucun agent
+/// missionnable n'est disponible. Il reste dans la file de focus et ne
+/// fabrique donc ni cible ni outbox fictive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FocusWaitingForAgent {
+    pub objective_id: Uuid,
+    pub replayed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DelegateResult {
     Created(DelegationCreated),
+    FocusWaitingForAgent(FocusWaitingForAgent),
     Candidates(Vec<String>),
+}
+
+/// Ouvre un focus humain sans délégation lorsque les agents missionnables du
+/// projet existent mais sont tous momentanément indisponibles.
+///
+/// Cette voie ne s'applique pas aux délégations ordinaires : elle laisse le
+/// focus visible et permet à la relève de déposer l'alerte durable après la
+/// durée normale, sans inventer de participant ou de remise Bridget.
+pub fn open_focus_waiting_for_agent(
+    store: &mut MaicieStore,
+    request: &DelegateRequest<'_>,
+    human_message_id: &str,
+    project_id: &str,
+    replace: bool,
+) -> Result<FocusWaitingForAgent, DelegateError> {
+    if request.goal.trim().is_empty() || request.now <= 0 {
+        return Err(DelegateError::Invalid("objectif ou horodatage absent"));
+    }
+    if !matches!(
+        request.opening_permit.origin(),
+        ObjectiveOrigin::HumanRequest { .. }
+    ) {
+        return Err(DelegateError::Invalid(
+            "focus en attente sans origine humaine",
+        ));
+    }
+    validate_suite_and_citations(store, request)?;
+    let mut objective = ObjectifCoordonne::nouveau_avec_permit(
+        request.goal,
+        ModeObjectif::Delegue,
+        request.now,
+        &request.opening_permit,
+    )
+    .map_err(|_| DelegateError::Invalid("objectif invalide"))?;
+    objective
+        .transition(EtatObjectif::EnCoordination, request.now)
+        .map_err(|_| DelegateError::Invalid("transition objectif invalide"))?;
+    objective.suite = Some(request.suite.clone());
+    objective.depends_on = request.depends_on.to_vec();
+    objective.references = request.references.to_vec();
+    let replay = store
+        .open_focus_waiting_for_agent(
+            &objective,
+            &request.opening_permit,
+            human_message_id,
+            project_id,
+            replace,
+            request.now,
+        )
+        .map_err(store_error)?;
+    let replayed = replay.is_some();
+    Ok(FocusWaitingForAgent {
+        objective_id: replay.unwrap_or(objective.id),
+        replayed,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DelegateError {
     Invalid(&'static str),
+    /// SPEC-087 : plafond d'objectifs auto-générés ouverts atteint. Jamais
+    /// rendu pour une origine humaine.
+    BudgetReached {
+        cap: u32,
+        open: u32,
+    },
     ContrainteRefusee {
         motif: MotifRefusDelegationLocale,
         objectif_cite: Uuid,
@@ -1013,6 +1107,10 @@ impl fmt::Display for DelegateError {
                 motif.code()
             ),
             Self::TargetUnavailable(target) => write!(formatter, "cible indisponible : {target}"),
+            Self::BudgetReached { cap, open } => write!(
+                formatter,
+                "plafond d'objectifs automatiques atteint : {open} ouverts sur {cap}"
+            ),
             Self::EnvelopeMismatch => write!(formatter, "commande idempotente divergente"),
             Self::Store(reason) => write!(formatter, "stockage impossible : {reason}"),
         }
@@ -1359,6 +1457,20 @@ pub fn delegate(
         }
     };
 
+    // SPEC-087 : budget d'objectifs auto-générés, compté à l'ouverture, ici,
+    // par le seul producteur qui ouvre. Les origines humaines n'y entrent pas.
+    if matches!(
+        request.opening_permit.origin(),
+        crate::domain::ObjectiveOrigin::AutoGenerated
+    ) && let Some(cap) = store.control_snapshot().auto_objectives_cap()
+    {
+        let open = store
+            .count_open_auto_generated_objectives()
+            .map_err(store_error)?;
+        if open >= cap {
+            return Err(DelegateError::BudgetReached { cap, open });
+        }
+    }
     let timeout_secs = timeout_for_duration(request.duration, durations);
     let deadline = request
         .now
@@ -2018,5 +2130,14 @@ mod project_correlation_tests {
             binding_generation: 1,
         };
         assert!(validate_delegation_execution_project(Some(&delegation), &reference(None)).is_ok());
+    }
+
+    #[test]
+    fn spec_087_refus_service_budget_garde_les_mesures_attestees() {
+        let error = GreffeServiceError::Delegate(DelegateError::BudgetReached { cap: 3, open: 3 });
+        assert_eq!(
+            deterministic_service_refusal_detail(&error),
+            Some((MotifRefusGreffe::BudgetAtteint, Some((3, 3))))
+        );
     }
 }

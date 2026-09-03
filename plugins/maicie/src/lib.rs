@@ -22,6 +22,7 @@ pub mod bridget_client;
 pub mod catalogue;
 pub mod citation;
 pub mod config;
+pub mod control;
 pub mod domain;
 pub mod greffe_service;
 pub mod install_publish;

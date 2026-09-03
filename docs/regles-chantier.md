@@ -426,6 +426,15 @@ la consigne de dépôt est inapplicable — elle l'est restée plusieurs heures
 d'abord faute de les transmettre du tout, puis faute d'en transmettre le
 troisième. Deux agents l'ont signalé, sous deux angles différents.
 
+Depuis SPEC-087, cette transmission manuelle ne concerne plus que les
+délégations lancées à la main. Un **focus** ouvert depuis l'interface
+(« Travaille sur… ») ou déposé par le principal humain porte lui-même le bloc
+`IDENTIFIANTS DE DÉPÔT` dans l'instruction remise à l'agent, et sa base gelée
+est mesurée par Maicie. Le référent dispose aussi de `bridget control pause`
+pour suspendre toute ouverture autonome, et de `bridget inbox` pour lire et
+trancher ce qui attend sa décision ; ce qui exige le référent n'attend plus
+dans une base, il arrive dans sa boîte.
+
 Corollaire : un mandat envoyé par simple message, sans passer par
 `maicie delegate`, ne crée aucun objectif — donc aucun dépôt n'est possible.
 Toute mission dont on attend un rapport doit être déléguée, pas seulement

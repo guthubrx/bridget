@@ -151,6 +151,8 @@ pub fn run() {
         "domain" => cmd_domain(&args[2..]),
         "project-runtime" => cmd_project_runtime(&args[2..]),
         "project-round" => cmd_project_round(&args[2..]),
+        "control" => cmd_control(&args[2..]),
+        "inbox" => cmd_inbox(&args[2..]),
         "dnd" => cmd_dnd(&args[2..]),
         "hook" => cmd_hook(&args[2..]),
         "install-hooks" => cmd_install_hooks(&args[2..]),
@@ -568,6 +570,8 @@ fn print_usage() {
            rename <N>             Renomme l'agent courant\n  \
            project-runtime <OP> --project <ID> Prépare, consulte ou recrée Docker\n  \
            project-round <OP>       Pilote ou déclenche la ronde par projet\n  \
+           control <OP>           Référent : status [--history] | pause [--reason <T>] | resume | budget <N>\n  \
+           inbox <OP>             Référent : list [--all] | resolve <ID> <CHOIX>\n  \
            runtime --model <M>    Déclare le modèle courant [--effort <E>]\n  \
            domain <N> | --reset   Change le domaine de l'agent courant\n  \
            dnd [off]              Ne pas déranger [--duration 30m]\n  \
@@ -1909,6 +1913,8 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
                     suite,
                     depends_on,
                     references,
+                    origin: None,
+                    focus: None,
                 },
             )
         }
@@ -4166,6 +4172,318 @@ fn cmd_agents(args: &[String]) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// SPEC-087 : `bridget control` et `bridget inbox`. Les mutations exigent un
+// terminal interactif, même borne que l'approbation d'activation Maicie.
+// ---------------------------------------------------------------------------
+
+fn send_control_request(request: WrapperToDaemon) -> Result<DaemonToWrapper, String> {
+    let stream = UnixStream::connect(socket_path()).map_err(|error| error.to_string())?;
+    let read_stream = stream.try_clone().map_err(|error| error.to_string())?;
+    let mut writer = BufWriter::new(stream);
+    let mut reader = BufReader::new(read_stream);
+    write_control_message(
+        &mut writer,
+        &WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Client,
+        },
+    )?;
+    match read_control_message(&mut reader)? {
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client,
+        } => {}
+        response => return Err(format!("handshake control refusé: {response:?}")),
+    }
+    write_control_message(
+        &mut writer,
+        &WrapperToDaemon::ClientHello {
+            contract_version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: crate::mcp::issuer_scope("bridget-control-cli"),
+            capabilities: vec![ClientCapability::ControlStateV1],
+        },
+    )?;
+    match read_control_message(&mut reader)? {
+        DaemonToWrapper::ClientWelcome { capabilities, .. }
+            if capabilities.contains(&ClientCapability::ControlStateV1) => {}
+        DaemonToWrapper::ClientRejected { reason } => {
+            return Err(format!("négociation control refusée: {reason:?}"));
+        }
+        response => return Err(format!("négociation control refusée: {response:?}")),
+    }
+    write_control_message(&mut writer, &request)?;
+    read_control_message(&mut reader)
+}
+
+fn require_interactive_terminal(command: &str) -> bool {
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        return true;
+    }
+    eprintln!("bridget {command}: contrôle du référent = terminal interactif uniquement");
+    false
+}
+
+fn fetch_control_state() -> Result<(bridget_transport::protocol::ControlStateFrame, u32), String> {
+    match send_control_request(WrapperToDaemon::ControlStateRead {
+        version: bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION,
+    })? {
+        DaemonToWrapper::ControlState {
+            state,
+            inbox_open_count,
+        } => Ok((state, inbox_open_count)),
+        DaemonToWrapper::ControlStateRejected { reason } => Err(format!("{reason:?}")),
+        response => Err(format!("réponse inattendue: {response:?}")),
+    }
+}
+
+fn control_footer_line(
+    state: &bridget_transport::protocol::ControlStateFrame,
+    inbox_open_count: u32,
+    now: i64,
+) -> String {
+    let mut line = crate::referent_control::summary_line(state, now);
+    if inbox_open_count > 0 {
+        line.push_str(&format!(
+            " · {inbox_open_count} décision{} en attente",
+            if inbox_open_count > 1 { "s" } else { "" }
+        ));
+    }
+    line
+}
+
+/// Pied de `bridget who` : silencieux si le daemon ne sait pas encore répondre,
+/// pour ne jamais casser l'annuaire sur un daemon antérieur à SPEC-087.
+fn emit_control_footer() {
+    if let Ok((state, inbox_open_count)) = fetch_control_state() {
+        println!(
+            "{}",
+            control_footer_line(&state, inbox_open_count, unix_now_secs_cli())
+        );
+    }
+}
+
+fn unix_now_secs_cli() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or(0)
+}
+
+fn print_control_status(
+    state: &bridget_transport::protocol::ControlStateFrame,
+    inbox_open_count: u32,
+) {
+    println!(
+        "{}",
+        control_footer_line(state, inbox_open_count, unix_now_secs_cli())
+    );
+    println!("génération : {}", state.generation);
+    if state.paused {
+        println!(
+            "pause posée par {} · motif : {}",
+            state.paused_by.as_deref().unwrap_or("inconnu"),
+            state.pause_reason.as_deref().unwrap_or("aucun")
+        );
+    }
+}
+
+fn apply_control_mutation(
+    command: &str,
+    paused: Option<bool>,
+    auto_objectives_cap: Option<u32>,
+    reason: Option<String>,
+) {
+    if !require_interactive_terminal(command) {
+        std::process::exit(2);
+    }
+    let (current, _) = fetch_control_state().unwrap_or_else(|error| {
+        eprintln!("bridget control: {error}");
+        std::process::exit(1);
+    });
+    let response = send_control_request(WrapperToDaemon::ControlStateSet {
+        version: bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION,
+        command_id: format!("control-cli-{}", uuid::Uuid::new_v4()),
+        expected_generation: current.generation,
+        paused,
+        auto_objectives_cap,
+        reason,
+    });
+    match response {
+        Ok(DaemonToWrapper::ControlState {
+            state,
+            inbox_open_count,
+        }) => print_control_status(&state, inbox_open_count),
+        Ok(DaemonToWrapper::ControlStateRejected { reason }) => {
+            eprintln!("bridget control: refusé: {reason:?}");
+            std::process::exit(1);
+        }
+        Ok(response) => {
+            eprintln!("bridget control: réponse inattendue: {response:?}");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("bridget control: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_control(args: &[String]) {
+    let usage =
+        "usage: bridget control status [--history] | pause [--reason <T>] | resume | budget <N>";
+    match args.first().map(String::as_str) {
+        Some("status") => {
+            let (state, inbox_open_count) = fetch_control_state().unwrap_or_else(|error| {
+                eprintln!("bridget control: {error}");
+                std::process::exit(1);
+            });
+            print_control_status(&state, inbox_open_count);
+            if args.iter().any(|argument| argument == "--history") {
+                match send_control_request(WrapperToDaemon::ControlHistory {
+                    version: bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION,
+                    limit: 50,
+                }) {
+                    Ok(DaemonToWrapper::ControlHistory { events }) => {
+                        if events.is_empty() {
+                            println!("historique : aucune mutation");
+                        }
+                        for event in events {
+                            println!(
+                                "  {} · {} · {} · génération {}{}",
+                                event.at,
+                                event.actor,
+                                event.kind,
+                                event.generation_after,
+                                event
+                                    .reason
+                                    .map(|reason| format!(" · {reason}"))
+                                    .unwrap_or_default()
+                            );
+                        }
+                    }
+                    Ok(response) => {
+                        eprintln!("bridget control: historique indisponible: {response:?}")
+                    }
+                    Err(error) => eprintln!("bridget control: {error}"),
+                }
+            }
+        }
+        Some("pause") => {
+            let reason = args
+                .iter()
+                .position(|argument| argument == "--reason")
+                .and_then(|index| args.get(index + 1))
+                .cloned();
+            apply_control_mutation("control pause", Some(true), None, reason);
+        }
+        Some("resume") => apply_control_mutation("control resume", Some(false), None, None),
+        Some("budget") => {
+            let cap = args.get(1).and_then(|value| value.parse::<u32>().ok());
+            let Some(cap) = cap else {
+                eprintln!("{usage}");
+                std::process::exit(2);
+            };
+            apply_control_mutation("control budget", None, Some(cap), None);
+        }
+        _ => {
+            eprintln!("{usage}");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn cmd_inbox(args: &[String]) {
+    use bridget_transport::protocol::{HUMAN_INBOX_CONTRACT_VERSION, HumanInboxListFilter};
+    let usage = "usage: bridget inbox list [--all] | resolve <ID> <CHOIX>";
+    match args.first().map(String::as_str) {
+        Some("list") => {
+            let filter = if args.iter().any(|argument| argument == "--all") {
+                HumanInboxListFilter::All
+            } else {
+                HumanInboxListFilter::Open
+            };
+            match send_control_request(WrapperToDaemon::HumanInboxList {
+                version: HUMAN_INBOX_CONTRACT_VERSION,
+                state: filter,
+                limit: 100,
+            }) {
+                Ok(DaemonToWrapper::HumanInbox { items, open_count }) => {
+                    println!("{open_count} décision(s) en attente");
+                    for item in items {
+                        println!(
+                            "  {} · {} · {:?} · ×{} · options : {}",
+                            item.id,
+                            item.kind.as_sql(),
+                            item.state,
+                            item.occurrences,
+                            item.options.join(", ")
+                        );
+                        if let Ok(context) =
+                            serde_json::from_str::<serde_json::Value>(&item.context)
+                            && let Some(summary) = context.get("summary").and_then(|v| v.as_str())
+                        {
+                            println!("      {summary}");
+                        }
+                    }
+                }
+                Ok(DaemonToWrapper::HumanInboxRejected { reason }) => {
+                    eprintln!("bridget inbox: refusé: {reason:?}");
+                    std::process::exit(1);
+                }
+                Ok(response) => {
+                    eprintln!("bridget inbox: réponse inattendue: {response:?}");
+                    std::process::exit(1);
+                }
+                Err(error) => {
+                    eprintln!("bridget inbox: {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some("resolve") => {
+            let (Some(item_id), Some(choice)) = (args.get(1), args.get(2)) else {
+                eprintln!("{usage}");
+                std::process::exit(2);
+            };
+            if !require_interactive_terminal("inbox resolve") {
+                std::process::exit(2);
+            }
+            match send_control_request(WrapperToDaemon::HumanInboxResolve {
+                version: HUMAN_INBOX_CONTRACT_VERSION,
+                command_id: format!("inbox-cli-{}", uuid::Uuid::new_v4()),
+                item_id: item_id.clone(),
+                choice: choice.clone(),
+            }) {
+                Ok(DaemonToWrapper::HumanInbox { items, open_count }) => {
+                    for item in items {
+                        println!(
+                            "{} tranché « {} » · {open_count} décision(s) restante(s)",
+                            item.id,
+                            item.decision.map(|d| d.choice).unwrap_or_default()
+                        );
+                    }
+                }
+                Ok(DaemonToWrapper::HumanInboxRejected { reason }) => {
+                    eprintln!("bridget inbox: refusé: {reason:?}");
+                    std::process::exit(1);
+                }
+                Ok(response) => {
+                    eprintln!("bridget inbox: réponse inattendue: {response:?}");
+                    std::process::exit(1);
+                }
+                Err(error) => {
+                    eprintln!("bridget inbox: {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        _ => {
+            eprintln!("{usage}");
+            std::process::exit(2);
+        }
+    }
+}
+
 fn cmd_who(args: &[String]) {
     let parsed = parse_directory_args("who", args, false).unwrap_or_else(|error| {
         eprintln!("bridget {error}");
@@ -4191,6 +4509,7 @@ fn cmd_who(args: &[String]) {
 
     print!("{}", render_who(&agents, parsed.domain.as_deref()));
     println!("Daemon build-id: {build_id}");
+    emit_control_footer();
     emit_disk_trend();
     emit_stale_daemon_warning(status.build_id.as_deref(), status.daemon_host.as_deref());
     emit_disk_warning();

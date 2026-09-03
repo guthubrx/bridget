@@ -164,3 +164,28 @@ fn le_scelle_separe_les_champs_au_lieu_de_les_concatener() {
         "un décalage de frontière ne doit jamais produire le même scellé"
     );
 }
+
+/// SPEC-087 : le daemon scelle avec `bridget_transport::protocol::human_message_content_seal`
+/// et Maicie vérifie avec la fonction de domaine. Les deux doivent rendre le
+/// même scellé, octet pour octet, sur la même observation.
+#[test]
+fn spec_087_le_scelle_transport_et_le_scelle_domaine_sont_identiques() {
+    let message = message_observe();
+    let frame = bridget_transport::protocol::ObservedHumanMessageFrame {
+        message_id: message.message_id.clone(),
+        ts: message.ts,
+        sender: message.sender.clone(),
+        target: message.target.clone(),
+        body: message.body.clone(),
+    };
+    assert_eq!(
+        bridget_transport::protocol::human_message_content_seal(&frame),
+        human_message_content_seal(&message)
+    );
+    let mut altered = frame.clone();
+    altered.body.push('!');
+    assert_ne!(
+        bridget_transport::protocol::human_message_content_seal(&altered),
+        human_message_content_seal(&message)
+    );
+}

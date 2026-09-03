@@ -530,7 +530,15 @@ impl Store {
         Ok(Store { conn })
     }
 
+    /// Connexion partagée avec les modules du plan de contrôle (SPEC-087) qui
+    /// possèdent leurs propres tables dans cette base.
+    pub(crate) fn connection(&self) -> &Connection {
+        &self.conn
+    }
+
     fn init_schema(conn: &Connection) -> Result<(), StoreError> {
+        crate::referent_control::ensure_schema(conn).map_err(StoreError::Sqlite)?;
+        crate::human_inbox::ensure_schema(conn).map_err(StoreError::Sqlite)?;
         // `result_bytes` a été retirée du schéma canonique : `reply_bytes`
         // porte déjà les octets terminaux rejouables. Les bases antérieures
         // peuvent conserver cette colonne nullable ignorée ; reconstruire la
@@ -4944,6 +4952,8 @@ mod tests {
             suite: bridget_transport::protocol::ServiceSuiteDeclaration::Aucune,
             depends_on: Vec::new(),
             references: Vec::new(),
+            origin: None,
+            focus: None,
         };
         first.authorization_attestation = Some(original.clone());
         assert!(matches!(

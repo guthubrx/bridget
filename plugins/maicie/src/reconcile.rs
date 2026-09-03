@@ -63,6 +63,13 @@ pub enum ReconcileAction {
         objective_id: Uuid,
         message_id: Uuid,
     },
+    /// SPEC-087 : la garde du référent diffère ce rejeu (pause ou état de
+    /// contrôle inconnu) ; l'outbox reste prepared et sera relue.
+    Differee {
+        objective_id: Uuid,
+        message_id: Uuid,
+        motif: &'static str,
+    },
     /// Les octets durables sont invalides localement : le store les a figés
     /// comme rejetés, sans les transmettre ni les assimiler à un refus Bridget.
     RejetLocal {
@@ -350,12 +357,40 @@ pub fn reconcile_startup_at_observed_with_limits(
     let socket = bridget_socket.as_ref();
     let mut report = ReconcileReport::default();
     let deadline = Instant::now() + reconciliation_budget(limits);
-    for entry in store.delegation_recovery_entries()? {
+    // SPEC-087 : les outboxes du focus passent d'abord ; les autres gardent
+    // leur ordre d'émission.
+    let focus = store.focus_active()?;
+    let mut entries = store.delegation_recovery_entries()?;
+    if let Some(focus) = focus {
+        let (mut first, rest): (Vec<_>, Vec<_>) = entries.into_iter().partition(|entry| {
+            matches!(entry, DelegationRecoveryEntry::Pending(outbox) if outbox.objective_id == focus)
+        });
+        first.extend(rest);
+        entries = first;
+    }
+    let control = store.control_snapshot();
+    for entry in entries {
         let Some(_) = deadline.checked_duration_since(Instant::now()) else {
             break;
         };
         let action = match entry {
             DelegationRecoveryEntry::Pending(outbox) => {
+                // SPEC-087 : garde unique. Une outbox d'origine automatique ne
+                // part pas en pause ; une outbox d'origine humaine part toujours.
+                let origin_auto = store.objective_origin_is_auto(outbox.objective_id)?;
+                if let crate::control::Admission::Deferred { motif } =
+                    crate::control::admit_autonomous_effect(
+                        crate::control::AutonomousEffect::OutboxReplay { origin_auto },
+                        control,
+                    )
+                {
+                    report.actions.push(ReconcileAction::Differee {
+                        objective_id: outbox.objective_id,
+                        message_id: outbox.message_id,
+                        motif,
+                    });
+                    continue;
+                }
                 observer(ReconcilePhase::BeforeSocket)?;
                 reconcile_one(
                     store,
@@ -392,6 +427,202 @@ pub fn reconcile_startup_at_observed_with_limits(
         // et transformerait une commande CLI en boucle O(N × délai).
         if socket_unavailable {
             break;
+        }
+    }
+    Ok(report)
+}
+
+/// SPEC-087 : dépôts vers la boîte humaine et relève des décisions.
+///
+/// Une seule connexion de service bornée par relève. Les dépôts durables
+/// (`human_inbox_outbox`) partent d'abord, puis les décisions non acquittées
+/// sont appliquées dans une transaction locale et acquittées ensuite ; un
+/// plantage entre relève et application relit la même décision.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct HumanInboxReconcileReport {
+    pub deposited: u32,
+    pub closed: u32,
+    pub applied: u32,
+    pub acked: u32,
+    pub unsupported: u32,
+    pub transport_unavailable: bool,
+}
+
+/// Frontières observables de la relève humaine. Elles permettent d'éprouver
+/// le cas crash : aucune décision n'est acquittée avant son effet durable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HumanInboxReconcilePhase {
+    AfterFetchBeforeApply,
+    AfterApplyBeforeAck,
+}
+
+/// Dépose un item durable quand le focus actif attend un agent au-delà de la
+/// durée normale. L'idempotence est portée par `focus-waiting:<objectif>`.
+pub fn reconcile_focus_waiting_agents(
+    store: &mut MaicieStore,
+    normal_secs: u64,
+    now: i64,
+) -> Result<u32, ReconcileError> {
+    let overdue = store.overdue_focus_waiting_for_agent(now, normal_secs)?;
+    let mut deposited = 0;
+    for (objective_id, goal) in overdue {
+        let subject = serde_json::json!({ "objective_id": objective_id.to_string() }).to_string();
+        let context = serde_json::json!({
+            "summary": format!("Le focus « {goal} » attend encore un agent disponible.")
+        })
+        .to_string();
+        if store.enqueue_human_inbox(
+            &format!("focus-waiting:{objective_id}"),
+            "focus_waiting_agent",
+            &subject,
+            &context,
+            &["ack".to_string()],
+            now,
+        )? {
+            deposited += 1;
+        }
+    }
+    Ok(deposited)
+}
+
+pub fn reconcile_human_inbox_with_limits(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    limits: BridgetClientLimits,
+    now: i64,
+) -> Result<HumanInboxReconcileReport, ReconcileError> {
+    reconcile_human_inbox_observed_with_limits(store, bridget_socket, limits, now, |_| Ok(()))
+}
+
+pub fn reconcile_human_inbox_observed_with_limits(
+    store: &mut MaicieStore,
+    bridget_socket: impl AsRef<Path>,
+    limits: BridgetClientLimits,
+    now: i64,
+    mut observer: impl FnMut(HumanInboxReconcilePhase) -> Result<(), ReconcileError>,
+) -> Result<HumanInboxReconcileReport, ReconcileError> {
+    let mut report = HumanInboxReconcileReport::default();
+    let pending = store.pending_human_inbox()?;
+    let deadline = Instant::now() + reconciliation_budget(limits);
+    let mut client = match crate::bridget_client::HumanInboxClient::connect_with_limits_until(
+        bridget_socket.as_ref(),
+        store.issuer_scope(),
+        limits,
+        deadline,
+    ) {
+        Ok(client) => client,
+        Err(BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. }) => {
+            report.transport_unavailable = true;
+            return Ok(report);
+        }
+        // Daemon antérieur à SPEC-087 : la capacité n'existe pas. Rien à
+        // relever, les dépôts restent durables jusqu'au prochain binaire.
+        Err(BridgetClientError::ClientRejected { .. })
+        | Err(BridgetClientError::CapabilityMissing { .. }) => {
+            report.transport_unavailable = true;
+            return Ok(report);
+        }
+        Err(error) => return Err(ReconcileError::Client(error)),
+    };
+    let focus =
+        store
+            .focus_projection()?
+            .map(|focus| bridget_transport::protocol::ControlFocusFrame {
+                objective_id: focus.objective_id.to_string(),
+                goal: focus.goal,
+                project_id: focus.project_id,
+                updated_at: focus.updated_at,
+            });
+    match client.publish_control_focus(focus) {
+        Ok(()) => {}
+        Err(BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. }) => {
+            report.transport_unavailable = true;
+            return Ok(report);
+        }
+        Err(error) => return Err(ReconcileError::Client(error)),
+    }
+    for row in pending {
+        let deposit = crate::bridget_client::HumanInboxDeposit {
+            dedup_key: row.dedup_key.clone(),
+            kind: row.kind.clone(),
+            subject: serde_json::from_str(&row.subject_json).unwrap_or(serde_json::Value::Null),
+            context: row.context.clone(),
+            options: row.options.clone(),
+        };
+        match client.deposit_human_inbox(&deposit) {
+            Ok(receipt) => {
+                store.mark_human_inbox_deposited(&row.dedup_key, &receipt.item_id)?;
+                report.deposited += 1;
+            }
+            Err(BridgetClientError::ClientRejected { .. }) => {
+                // Refus fermé du daemon (contexte trop grand, options vides) :
+                // on compte la tentative et on n'insiste pas dans cette passe.
+                store.mark_human_inbox_attempt(&row.dedup_key)?;
+            }
+            Err(BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. }) => {
+                report.transport_unavailable = true;
+                return Ok(report);
+            }
+            Err(error) => return Err(ReconcileError::Client(error)),
+        }
+    }
+    for row in store.deposited_human_inbox_to_close()? {
+        let item_id = row
+            .item_id
+            .as_deref()
+            .ok_or(ReconcileError::InvalidSnapshot(
+                "item humain déposé sans identifiant",
+            ))?;
+        match client.close_human_inbox(item_id, "object_vanished") {
+            Ok(_) => {
+                store.mark_human_inbox_closed(&row.dedup_key, now)?;
+                report.closed += 1;
+            }
+            Err(BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. }) => {
+                report.transport_unavailable = true;
+                return Ok(report);
+            }
+            Err(error) => return Err(ReconcileError::Client(error)),
+        }
+    }
+    let decisions = match client.fetch_human_decisions(20) {
+        Ok(decisions) => decisions,
+        Err(BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. }) => {
+            report.transport_unavailable = true;
+            return Ok(report);
+        }
+        Err(error) => return Err(ReconcileError::Client(error)),
+    };
+    for decision in decisions {
+        observer(HumanInboxReconcilePhase::AfterFetchBeforeApply)?;
+        let delegation_id = decision
+            .subject
+            .get("delegation_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|raw| Uuid::parse_str(raw).ok());
+        let application = store.apply_human_decision(
+            &decision.decision_id,
+            &decision.item_id,
+            &decision.choice,
+            delegation_id,
+            now,
+        )?;
+        match application {
+            crate::store::HumanDecisionApplication::Applied => report.applied += 1,
+            crate::store::HumanDecisionApplication::Replayed => {}
+            crate::store::HumanDecisionApplication::Unsupported => {
+                report.unsupported += 1;
+                continue;
+            }
+        }
+        observer(HumanInboxReconcilePhase::AfterApplyBeforeAck)?;
+        match client.ack_human_decision(&decision.decision_id) {
+            Ok(_) => report.acked += 1,
+            Err(BridgetClientError::Connect { .. } | BridgetClientError::Timeout { .. }) => {
+                report.transport_unavailable = true;
+                return Ok(report);
+            }
+            Err(error) => return Err(ReconcileError::Client(error)),
         }
     }
     Ok(report)

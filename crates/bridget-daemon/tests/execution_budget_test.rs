@@ -3,7 +3,9 @@ use bridget_daemon::execution_store::{
     ExecutionUsageSample,
 };
 use bridget_daemon::fleet::{AutonomyBudgetPolicy, AutonomyRuntimeState, evaluate_autonomy_budget};
-use bridget_daemon::{GovernedContinuation, reserve_governed_continuation};
+use bridget_daemon::{
+    GovernedContinuation, GovernedContinuationSource, reserve_governed_continuation,
+};
 use bridget_transport::protocol::{ExecutionBudgetOutcome, UsageTokens};
 
 fn tokens(input: u64, output: u64) -> UsageTokens {
@@ -169,6 +171,7 @@ fn continuation_exige_inactivite_budget_et_reservation_sans_course() {
             &store,
             Default::default(),
             AutonomyRuntimeState::Ready,
+            GovernedContinuationSource::InactiveParent,
             "execution-parent",
             1,
             1,
@@ -184,6 +187,7 @@ fn continuation_exige_inactivite_budget_et_reservation_sans_course() {
             &store,
             Default::default(),
             AutonomyRuntimeState::Ready,
+            GovernedContinuationSource::InactiveParent,
             "execution-parent",
             1,
             1,
@@ -199,6 +203,7 @@ fn continuation_exige_inactivite_budget_et_reservation_sans_course() {
             &store,
             Default::default(),
             AutonomyRuntimeState::Ready,
+            GovernedContinuationSource::InactiveParent,
             "execution-parent",
             1,
             1,
@@ -226,6 +231,7 @@ fn continuation_exige_inactivite_budget_et_reservation_sans_course() {
                 ..Default::default()
             },
             AutonomyRuntimeState::Ready,
+            GovernedContinuationSource::InactiveParent,
             "execution-budget",
             1,
             1,
@@ -245,6 +251,7 @@ fn continuation_exige_inactivite_budget_et_reservation_sans_course() {
             &store,
             Default::default(),
             AutonomyRuntimeState::Ready,
+            GovernedContinuationSource::InactiveParent,
             "execution-running",
             1,
             0,
@@ -254,6 +261,22 @@ fn continuation_exige_inactivite_budget_et_reservation_sans_course() {
         )
         .unwrap(),
         GovernedContinuation::Reservation(ContinuationReservation::NotInactive)
+    );
+    assert_eq!(
+        reserve_governed_continuation(
+            &store,
+            Default::default(),
+            AutonomyRuntimeState::Ready,
+            GovernedContinuationSource::RecoveryAfterIdleWrapper,
+            "execution-running",
+            1,
+            0,
+            "continuation-recovery-after-idle",
+            100,
+            120,
+        )
+        .unwrap(),
+        GovernedContinuation::Reserved
     );
 
     completed(
@@ -277,6 +300,7 @@ fn continuation_exige_inactivite_budget_et_reservation_sans_course() {
             &store,
             Default::default(),
             AutonomyRuntimeState::Ready,
+            GovernedContinuationSource::InactiveParent,
             "execution-race",
             1,
             1,

@@ -19,6 +19,7 @@
     <script type="module" src="/app.js"></script>
   </head>
   <body>
+    <section class="control-banner" id="control-banner" data-state="unknown" hidden aria-live="polite"></section>
     <div class="workspace" id="workspace">
       <aside class="project-pane" id="project-pane" aria-label="Projets">
         <header class="project-pane__header">
@@ -32,6 +33,15 @@
             <button id="project-import" type="button">Importer</button>
           </div>
         </header>
+        <form id="focus-form" class="focus-form" autocomplete="off" aria-label="Objectif prioritaire">
+          <input id="focus-text" type="text" placeholder="Travaille sur…" aria-label="Décris le travail prioritaire" maxlength="4000">
+          <select id="focus-conflict" aria-label="Si un focus existe déjà">
+            <option value="queue">Après le focus actuel</option>
+            <option value="replace">À la place du focus actuel</option>
+          </select>
+          <button id="focus-launch" type="submit">Lancer</button>
+          <p id="focus-status" class="focus-form__status" role="status"></p>
+        </form>
         <nav id="project-list" class="project-list" aria-label="Projets ouverts"></nav>
       </aside>
       <aside class="agent-pane" aria-label="Agents Bridget">
@@ -238,5 +248,6 @@
     </dialog>
     <dialog class="project-presentation-overlay" id="project-presentation-overlay" aria-labelledby="project-presentation-title"></dialog>
     <dialog class="project-onboarding-overlay" id="project-onboarding-overlay" aria-labelledby="project-onboarding-title"></dialog>
+    <dialog class="project-onboarding-overlay inbox-overlay" id="inbox-overlay" aria-label="Décisions en attente"></dialog>
   </body>
 </html>

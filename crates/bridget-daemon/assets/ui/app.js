@@ -158,6 +158,60 @@
         assert.match(stylesheet, /\.project-onboarding-overlay__advanced/);
       });
 
+      test("spec_087_bandeau_focus_et_boite_sont_branches", () => {
+        const source = fs.readFileSync(__filename, "utf8");
+        const stylesheet = fs.readFileSync(path.join(__dirname, "theme.css"), "utf8");
+        const markup = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+        assert.match(source, /\/v1\/control\/state/);
+        assert.match(source, /\/v1\/control\/focus/);
+        assert.match(source, /\/v1\/inbox/);
+        assert.match(markup, /id="control-banner"/);
+        assert.match(markup, /id="focus-form"/);
+        assert.match(markup, /id="inbox-overlay"/);
+        assert.match(stylesheet, /\.control-banner/);
+        assert.match(stylesheet, /\.focus-form/);
+        assert.match(stylesheet, /\.inbox-overlay__item/);
+        assert.match(source, /new NotificationApi\("Bridget : une décision vous attend"/);
+        assert.match(source, /Plafond d’objectifs automatiques ouverts/);
+        // Aucune nouvelle route ne lit la base : tout passe par le relais.
+        assert.doesNotMatch(source, /bridget\.db/);
+      });
+
+      test("spec_087_le_focus_est_le_premier_objectif_affiche", () => {
+        const objectives = [
+          { objective_id: "ordinaire", goal: "Travail ordinaire", state: "en_coordination", updated_at: 2 },
+          { objective_id: "focus", goal: "Travail prioritaire", state: "en_coordination", updated_at: 1 },
+        ];
+        const ordered = api.prioritizeFocusObjectives(objectives, { objective_id: "focus", project_id: "p" });
+        assert.deepEqual(ordered.map((item) => item.objective_id), ["focus", "ordinaire"]);
+        assert.equal(ordered[0].isFocus, true);
+      });
+
+      test("spec_087_projection_du_bandeau_ne_devine_rien", () => {
+        const unknown = api.controlBannerProjection(null, 1000);
+        assert.equal(unknown.known, false);
+        assert.equal(unknown.buttonLabel, null);
+        const active = api.controlBannerProjection(
+          { paused: false, generation: 3, inbox_open_count: 0, auto_objectives_cap: 5 },
+          1000,
+        );
+        assert.equal(active.pauseLabel, "Autonomie active");
+        assert.equal(active.buttonLabel, "Pause");
+        assert.equal(active.inboxLabel, "Aucune décision en attente");
+        assert.equal(active.budgetLabel, "Plafond d’objectifs automatiques : 5");
+        assert.equal(active.generation, 3);
+        const paused = api.controlBannerProjection(
+          { paused: true, paused_since: 1000 - 2 * 3600 - 600, pause_reason: "revue", generation: 4, inbox_open_count: 2, auto_objectives_cap: 5 },
+          1000,
+        );
+        assert.equal(paused.pauseLabel, "Pause depuis 2 h 10 · revue");
+        assert.equal(paused.buttonLabel, "Reprendre");
+        assert.equal(paused.inboxLabel, "2 décisions vous attendent");
+        const one = api.controlBannerProjection({ paused: false, inbox_open_count: 1 }, 0);
+        assert.equal(one.inboxLabel, "1 décision vous attend");
+        assert.equal(one.budgetLabel, "");
+      });
+
       test("spec_080_usage_reste_atteste_et_ne_fabrique_aucun_cout", () => {
         assert.equal(
           api.controlResourceUrl("/v1/usage", "jeton +", { period: "30d" }),
@@ -6967,6 +7021,13 @@
     agentPaneResizer: "agent-pane-resizer",
     connectionIndicator: "connection-indicator",
     relayBanner: "relay-banner",
+    controlBanner: "control-banner",
+    focusForm: "focus-form",
+    focusText: "focus-text",
+    focusConflict: "focus-conflict",
+    focusLaunch: "focus-launch",
+    focusStatus: "focus-status",
+    inboxOverlay: "inbox-overlay",
     stoppedBanner: "stopped-banner",
     thread: "thread",
     newMessages: "new-messages",
@@ -7428,6 +7489,26 @@
     };
   }
 
+  function prioritizeFocusObjectives(objectives, focus) {
+    const source = Array.isArray(objectives) ? objectives : [];
+    const focusId = text(focus && focus.objective_id);
+    const ordered = source
+      .filter((objective) => objective && text(objective.objective_id))
+      .map((objective) => ({ ...objective, isFocus: text(objective.objective_id) === focusId }))
+      .sort((left, right) => {
+        if (left.isFocus !== right.isFocus) return left.isFocus ? -1 : 1;
+        return Number(right.updated_at || 0) - Number(left.updated_at || 0);
+      });
+    if (!focusId || ordered.some((objective) => objective.isFocus)) return ordered;
+    return [{
+      objective_id: focusId,
+      goal: text(focus.goal) || "Focus en cours",
+      state: "en_coordination",
+      updated_at: Number(focus.updated_at || 0),
+      isFocus: true,
+    }, ...ordered];
+  }
+
   // Les actions restent dérivées d'un état attesté par le daemon. Cette
   // fonction ne change rien localement : le menu attend toujours la réponse HTTP
   // puis relit la liste des projets.
@@ -7580,6 +7661,57 @@
       if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
     }
     return `${path}?${query.toString()}`;
+  }
+
+  // SPEC-087 : projection pure du bandeau d'état de contrôle. Tout champ
+  // absent est « inconnu », jamais inventé.
+  function controlBannerProjection(payload, nowSecs) {
+    const known = payload && typeof payload === "object" && typeof payload.paused === "boolean";
+    if (!known) {
+      return {
+        known: false,
+        paused: false,
+        pauseLabel: "État de contrôle inconnu",
+        buttonLabel: null,
+        inboxCount: 0,
+        inboxLabel: "",
+        budgetLabel: "",
+        generation: null,
+      };
+    }
+    const paused = payload.paused === true;
+    let pauseLabel = "Autonomie active";
+    if (paused) {
+      const since = Number(payload.paused_since);
+      const elapsed = Number.isFinite(since) ? Math.max(0, Math.floor(nowSecs - since)) : 0;
+      const minutes = Math.floor(elapsed / 60);
+      const duration = minutes < 60
+        ? `${minutes} min`
+        : minutes < 48 * 60
+          ? `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, "0")}`
+          : `${Math.floor(minutes / 1440)} j`;
+      pauseLabel = `Pause depuis ${duration}`;
+      if (text(payload.pause_reason)) pauseLabel += ` · ${text(payload.pause_reason)}`;
+    }
+    const inboxCount = Number.isFinite(Number(payload.inbox_open_count))
+      ? Math.max(0, Number(payload.inbox_open_count))
+      : 0;
+    const inboxLabel = inboxCount === 0
+      ? "Aucune décision en attente"
+      : inboxCount === 1
+        ? "1 décision vous attend"
+        : `${inboxCount} décisions vous attendent`;
+    const cap = Number(payload.auto_objectives_cap);
+    return {
+      known: true,
+      paused,
+      pauseLabel,
+      buttonLabel: paused ? "Reprendre" : "Pause",
+      inboxCount,
+      inboxLabel,
+      budgetLabel: Number.isFinite(cap) ? `Plafond d’objectifs automatiques : ${cap}` : "",
+      generation: Number.isFinite(Number(payload.generation)) ? Number(payload.generation) : null,
+    };
   }
 
   function usageDashboardProjection(payload) {
@@ -7789,6 +7921,8 @@
     }
     let state = createUiState({ selectedAgent: isUiSender(requestedAgent) ? null : requestedAgent });
     let projects = [];
+    let missionObjectives = [];
+    let currentFocus = null;
     let selectedProjectId = params.get("project_id") || null;
     let projectSettingsSnapshot = null;
     let projectPresentationPreferences = readProjectPresentationPreferences(windowRef.localStorage);
@@ -8651,6 +8785,72 @@
                 apply.disabled = false;
               }
             });
+            // SPEC-087 : plafond d'objectifs automatiques, un seul bouton.
+            const budgetSection = controlSection(
+              "Objectifs automatiques",
+              "Au-delà du plafond, Maicie n’ouvre plus d’objectif seule et te le demande dans la boîte de réception.",
+              "Serveur relié",
+            );
+            const budgetStatus = make("p", "control-center__status", "Lecture du plafond…");
+            budgetStatus.setAttribute("role", "status");
+            const budgetField = documentRef.createElement("label");
+            budgetField.className = "control-center__period-label";
+            budgetField.append(make("span", null, "Plafond d’objectifs automatiques ouverts"));
+            const budgetInput = documentRef.createElement("input");
+            budgetInput.type = "number";
+            budgetInput.min = "1";
+            budgetInput.max = "100";
+            budgetInput.setAttribute("aria-label", "Plafond d’objectifs automatiques");
+            budgetField.append(budgetInput);
+            const budgetSave = make("button", null, "Enregistrer");
+            budgetSave.type = "button";
+            budgetSection.append(budgetStatus, budgetField, budgetSave);
+            section.append(budgetSection);
+            let budgetGeneration = null;
+            const readControl = async (options) => {
+              const response = await windowRef.fetch(controlResourceUrl("/v1/control/state", token), options);
+              const payload = await response.json();
+              if (!response.ok) throw new Error(text(payload && payload.message) || "Le daemon a refusé la demande.");
+              return payload;
+            };
+            const loadBudget = async () => {
+              try {
+                const payload = await readControl();
+                budgetGeneration = Number(payload.generation);
+                budgetInput.value = String(payload.auto_objectives_cap);
+                budgetStatus.textContent = text(payload.summary);
+                budgetStatus.dataset.state = "ready";
+              } catch (error) {
+                budgetStatus.textContent = `Plafond indisponible : ${error.message}`;
+                budgetStatus.dataset.state = "error";
+              }
+            };
+            budgetSave.addEventListener("click", async () => {
+              const cap = Number(budgetInput.value);
+              if (!Number.isInteger(cap) || cap < 1 || cap > 100) {
+                budgetStatus.textContent = "Le plafond doit être un entier entre 1 et 100.";
+                budgetStatus.dataset.state = "error";
+                return;
+              }
+              budgetSave.disabled = true;
+              budgetStatus.textContent = "Enregistrement…";
+              try {
+                const payload = await readControl({
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ expected_generation: budgetGeneration, auto_objectives_cap: cap }),
+                });
+                budgetGeneration = Number(payload.generation);
+                budgetStatus.textContent = `Enregistré : plafond ${payload.auto_objectives_cap}.`;
+                budgetStatus.dataset.state = "ready";
+              } catch (error) {
+                budgetStatus.textContent = error.message;
+                budgetStatus.dataset.state = "error";
+              } finally {
+                budgetSave.disabled = false;
+              }
+            });
+            void loadBudget();
           } catch (_error) {
             status.textContent = "Les réglages de ce serveur sont indisponibles. Aucune valeur locale n'a été remplacée.";
             status.dataset.state = "error";
@@ -9979,6 +10179,24 @@
         shell.append(button, actions);
         nodes.projectList.append(shell);
       });
+      const objectives = prioritizeFocusObjectives(missionObjectives, currentFocus).slice(0, 8);
+      if (objectives.length > 0) {
+        const missions = make("section", "mission-list");
+        missions.setAttribute("aria-label", "Objectifs en cours");
+        missions.append(make("h3", "mission-list__title", "Objectifs en cours"));
+        objectives.forEach((objective) => {
+          const item = make("article", "mission-list__item");
+          item.dataset.focus = String(objective.isFocus === true);
+          const label = objective.isFocus ? "FOCUS" : "OBJECTIF";
+          item.append(
+            make("span", "mission-list__kind", label),
+            make("strong", "mission-list__goal", text(objective.goal) || "Objectif sans libellé"),
+            make("span", "mission-list__state", text(objective.state).replace(/_/g, " ") || "en cours"),
+          );
+          missions.append(item);
+        });
+        nodes.projectList.append(missions);
+      }
     };
     const refreshProjects = async () => {
       const payload = await requestProject("/v1/projects");
@@ -11464,6 +11682,10 @@
 
     const applyFleetSnapshot = (snapshot) => {
       const projectsChanged = applyProjectSnapshot(snapshot);
+      missionObjectives = Array.isArray(snapshot && snapshot.missions && snapshot.missions.objectives)
+        ? snapshot.missions.objectives
+        : [];
+      renderProjects();
       const previousSelected = state.selectedAgent;
       const previousAgents = state.agents;
       state = applyReconnectSnapshot(state, snapshot);
@@ -11527,6 +11749,10 @@
 
     const applySnapshotPayload = (snapshot, watchedAgent) => {
       applyProjectSnapshot(snapshot);
+      missionObjectives = Array.isArray(snapshot && snapshot.missions && snapshot.missions.objectives)
+        ? snapshot.missions.objectives
+        : [];
+      renderProjects();
       const previousSelected = state.selectedAgent;
       const previousArtifactSignature = artifactReferenceSignature(state.artifactReferences);
       state = applyReconnectSnapshot(state, snapshot);
@@ -11618,7 +11844,9 @@
       source = null;
     };
 
+    let referentControlClose = null;
     const closeAll = () => {
+      if (typeof referentControlClose === "function") referentControlClose();
       if (systemThemeMedia && typeof systemThemeMedia.removeEventListener === "function") {
         systemThemeMedia.removeEventListener("change", onSystemThemeChange);
       }
@@ -12328,6 +12556,194 @@
         FLEET_REFRESH_INTERVAL_MS,
       );
     }
+    // SPEC-087 : bandeau d'état de contrôle, focus et boîte de réception.
+    const referentControl = (() => {
+      const banner = nodes.controlBanner;
+      let lastState = null;
+      let lastInboxCount = null;
+      const nowSecs = () => Math.floor(Date.now() / 1000);
+      const controlFetch = async (path, options = {}) => {
+        const response = await windowRef.fetch(controlResourceUrl(path, token), options);
+        const payload = await response.json();
+        if (!response.ok) {
+          const error = new Error(text(payload && payload.message) || "Le daemon a refusé la demande.");
+          error.code = payload && payload.code;
+          throw error;
+        }
+        return payload;
+      };
+      const notifyInbox = (count) => {
+        const NotificationApi = windowRef.Notification;
+        if (typeof NotificationApi !== "function" || NotificationApi.permission !== "granted") return;
+        if (!documentRef.visibilityState || documentRef.visibilityState !== "hidden") return;
+        try {
+          new NotificationApi("Bridget : une décision vous attend", {
+            body: count === 1 ? "1 décision en attente dans la boîte de réception." : `${count} décisions en attente.`,
+            tag: "bridget-inbox",
+          });
+        } catch (_error) {
+          // La notification native est un confort ; la boîte reste la référence.
+        }
+      };
+      const render = (payload) => {
+        if (!banner) return;
+        const view = controlBannerProjection(payload, nowSecs());
+        banner.replaceChildren();
+        banner.dataset.state = view.known ? (view.paused ? "paused" : "active") : "unknown";
+        banner.hidden = false;
+        banner.append(make("span", "control-banner__pause", view.pauseLabel));
+        const focus = payload && payload.focus;
+        if (focus && text(focus.goal)) {
+          banner.append(make("strong", "control-banner__focus", `Focus : ${text(focus.goal)}`));
+        }
+        if (view.buttonLabel) {
+          const toggle = make("button", view.paused ? null : "secondary", view.buttonLabel);
+          toggle.type = "button";
+          toggle.addEventListener("click", () => {
+            void setControl({ paused: !view.paused, reason: view.paused ? null : "Pause demandée depuis l’interface" });
+          });
+          banner.append(toggle);
+        }
+        if (view.budgetLabel) banner.append(make("span", "control-banner__budget", view.budgetLabel));
+        const inbox = make("button", "quiet control-banner__inbox", view.inboxLabel);
+        inbox.type = "button";
+        inbox.addEventListener("click", () => void openInbox());
+        banner.append(inbox);
+        if (lastInboxCount !== null && view.inboxCount > lastInboxCount) notifyInbox(view.inboxCount);
+        lastInboxCount = view.inboxCount;
+        lastState = payload;
+        currentFocus = payload && payload.focus ? payload.focus : null;
+        renderProjects();
+      };
+      const refresh = async () => {
+        try {
+          render(await controlFetch("/v1/control/state"));
+        } catch (_error) {
+          render(null);
+        }
+      };
+      const setControl = async (change) => {
+        const generation = lastState && Number.isFinite(Number(lastState.generation)) ? Number(lastState.generation) : null;
+        if (generation === null) {
+          await refresh();
+          return;
+        }
+        try {
+          render(await controlFetch("/v1/control/state", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ expected_generation: generation, ...change }),
+          }));
+        } catch (error) {
+          if (banner) banner.append(make("span", "control-banner__error", error.message));
+          await refresh();
+        }
+      };
+      const openInbox = async () => {
+        const dialog = nodes.inboxOverlay;
+        if (!dialog) return;
+        dialog.replaceChildren();
+        const shell = make("section", "project-onboarding-overlay__shell");
+        const header = make("header", "project-onboarding-overlay__header");
+        const heading = make("div");
+        heading.append(make("p", "project-onboarding-overlay__eyebrow", "DÉCISIONS"), make("h2", null, "En attente de toi"));
+        const close = make("button", "quiet-action", "Fermer");
+        close.type = "button";
+        close.addEventListener("click", () => { if (dialog.open) dialog.close(); });
+        header.append(heading, close);
+        const list = make("div", "inbox-overlay__list");
+        shell.append(header, list);
+        dialog.append(shell);
+        const load = async () => {
+          list.replaceChildren();
+          try {
+            const payload = await controlFetch("/v1/inbox");
+            const items = Array.isArray(payload.items) ? payload.items : [];
+            if (items.length === 0) list.append(make("p", "project-onboarding-overlay__intro", "Rien n’attend ta décision."));
+            for (const item of items) {
+              const card = make("article", "inbox-overlay__item");
+              card.dataset.state = text(item.state) || "open";
+              const summary = item.context && typeof item.context === "object" ? text(item.context.summary) : "";
+              card.append(
+                make("span", "inbox-overlay__kind", text(item.kind).replace(/_/g, " ")),
+                make("strong", null, summary || "Décision à prendre"),
+                make("span", "control-banner__budget", `Signalé ${item.occurrences > 1 ? `${item.occurrences} fois` : "une fois"}`),
+              );
+              const options = make("div", "inbox-overlay__options");
+              for (const choice of Array.isArray(item.options) ? item.options : []) {
+                const button = make("button", "secondary", choice.startsWith("reassign:") ? `Réassigner à ${choice.slice(9)}` : { cancel: "Annuler", ack: "Vu", raise_budget: "Relever le plafond" }[choice] || choice);
+                button.type = "button";
+                button.addEventListener("click", async () => {
+                  button.disabled = true;
+                  try {
+                    await controlFetch(`/v1/inbox/${encodeURIComponent(item.id)}/resolve`, {
+                      method: "POST",
+                      headers: { "content-type": "application/json" },
+                      body: JSON.stringify({ choice }),
+                    });
+                    await load();
+                    await refresh();
+                  } catch (error) {
+                    card.append(make("p", "focus-form__status", error.message));
+                    button.disabled = false;
+                  }
+                });
+                options.append(button);
+              }
+              card.append(options);
+              list.append(card);
+            }
+          } catch (error) {
+            list.append(make("p", "project-onboarding-overlay__intro", error.message));
+          }
+        };
+        await load();
+        if (typeof dialog.showModal === "function" && !dialog.open) dialog.showModal();
+      };
+      const submitFocus = async (event) => {
+        if (event && typeof event.preventDefault === "function") event.preventDefault();
+        const status = nodes.focusStatus;
+        const goal = text(nodes.focusText && nodes.focusText.value).trim();
+        if (!goal) {
+          if (status) { status.textContent = "Décris le travail en une phrase."; status.dataset.state = "error"; }
+          return;
+        }
+        if (!selectedProjectId) {
+          if (status) { status.textContent = "Choisis d’abord un projet dans la liste."; status.dataset.state = "error"; }
+          return;
+        }
+        if (status) { status.textContent = "Dépôt de la demande…"; status.dataset.state = "loading"; }
+        try {
+          const accepted = await controlFetch("/v1/control/focus", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              text: goal,
+              project_id: selectedProjectId,
+              on_conflict: text(nodes.focusConflict && nodes.focusConflict.value) || "queue",
+            }),
+          });
+          if (nodes.focusText) nodes.focusText.value = "";
+          if (status) { status.textContent = text(accepted.message) || "Demande déposée."; status.dataset.state = "ready"; }
+        } catch (error) {
+          if (status) { status.textContent = error.message; status.dataset.state = "error"; }
+        }
+      };
+      if (nodes.focusForm && typeof nodes.focusForm.addEventListener === "function") {
+        nodes.focusForm.addEventListener("submit", (event) => void submitFocus(event));
+      }
+      void refresh();
+      let timer = null;
+      if (typeof windowRef.setInterval === "function") {
+        timer = windowRef.setInterval(() => void refresh(), 15_000);
+      }
+      return {
+        refresh,
+        openInbox,
+        close: () => { if (timer !== null && typeof windowRef.clearInterval === "function") windowRef.clearInterval(timer); },
+      };
+    })();
+    referentControlClose = referentControl.close;
     void refreshAttentionPreferences().then(() => void refreshAttention());
     if (typeof windowRef.setInterval === "function") {
       attentionRefreshTimer = windowRef.setInterval(
@@ -12412,6 +12828,7 @@
     sandboxTicketRequest,
     controlResourceUrl,
     usageDashboardProjection,
+    controlBannerProjection,
     formatTokenCount,
     CONTROL_CENTER_NAVIGATION,
     CONTENT_SECURITY_PREFERENCES_KEY,
@@ -12433,6 +12850,7 @@
     applyControlCenterPreferences,
     controlCenterRouteForSearch,
     projectInitials,
+    prioritizeFocusObjectives,
     projectRoundView,
     projectRuntimeActionEligibility,
     buildProjectRoundMutation,

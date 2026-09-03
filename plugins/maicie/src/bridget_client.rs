@@ -169,6 +169,10 @@ pub struct PublicMessage {
     pub deadline_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_reply_to: Option<String>,
+    /// Références portées par le message (`project:…`, `focus:<objective_id>`).
+    /// Additif : un fil sans le champ se relit en liste vide.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
 }
 
 impl PublicMessage {
@@ -223,6 +227,8 @@ struct ReplayPublicMessage {
     deadline_at: Option<u64>,
     #[serde(default)]
     in_reply_to: Option<String>,
+    #[serde(default)]
+    references: Vec<String>,
 }
 
 impl ReplayPublicMessage {
@@ -237,6 +243,7 @@ impl ReplayPublicMessage {
             reply_timeout: self.reply_timeout,
             deadline_at: self.deadline_at,
             in_reply_to: self.in_reply_to,
+            references: self.references,
         }
     }
 }
@@ -1182,6 +1189,345 @@ impl GuichetClient {
         match self.deadline {
             Some(deadline) => self.connection.request_raw_json_until(json_bytes, deadline),
             None => self.connection.request_raw_json(json_bytes),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SPEC-087 : état de contrôle du référent (lecture) et boîte humaine.
+// ---------------------------------------------------------------------------
+
+/// Capacité client de lecture de l'état de contrôle (SPEC-087).
+pub const REQUIRED_CONTROL_STATE_CAPABILITY: &str = "control_state_v1";
+/// Capacité service de dépôt et de relève de la boîte humaine (SPEC-087).
+pub const REQUIRED_HUMAN_INBOX_CAPABILITY: &str = "human_inbox_v1";
+pub const CONTROL_STATE_CONTRACT_VERSION: u16 = 1;
+pub const HUMAN_INBOX_CONTRACT_VERSION: u16 = 1;
+
+/// Projection filaire de l'état de contrôle du daemon. Maicie ne l'écrit
+/// jamais : elle lit, applique, et oublie à la commande suivante.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ControlStateWire {
+    pub version: u16,
+    pub generation: u64,
+    pub paused: bool,
+    #[serde(default)]
+    pub paused_since: Option<i64>,
+    #[serde(default)]
+    pub pause_reason: Option<String>,
+    pub auto_objectives_cap: u32,
+    pub updated_at: i64,
+}
+
+/// Lecture d'état de contrôle, plus le nombre d'items ouverts de la boîte.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlStateReading {
+    pub state: ControlStateWire,
+    pub inbox_open_count: u32,
+}
+
+/// Connexion client négociée pour lire l'état de contrôle seulement.
+pub struct ControlStateClient {
+    connection: WireConnection,
+    deadline: Option<Instant>,
+}
+
+impl ControlStateClient {
+    pub fn connect_with_limits_until(
+        socket_path: impl AsRef<Path>,
+        issuer_scope: impl Into<String>,
+        limits: BridgetClientLimits,
+        deadline: Instant,
+    ) -> Result<Self, BridgetClientError> {
+        validate_limits(limits)?;
+        let issuer_scope = issuer_scope.into();
+        let mut connection = WireConnection::connect(socket_path.as_ref(), limits, deadline)?;
+        let role = request_with_deadline(
+            &mut connection,
+            json!({"type": "RoleHandshake", "role": "client"}),
+            Some(deadline),
+        )?;
+        expect_role_accepted(&role, "client")?;
+        let welcome = request_with_deadline(
+            &mut connection,
+            json!({
+                "type": "ClientHello",
+                "contract_version": CLIENT_CONTRACT_VERSION,
+                "issuer_scope": issuer_scope,
+                "capabilities": [REQUIRED_CONTROL_STATE_CAPABILITY],
+            }),
+            Some(deadline),
+        )?;
+        let negotiated = parse_client_welcome(welcome)?;
+        if !negotiated
+            .capabilities
+            .contains(REQUIRED_CONTROL_STATE_CAPABILITY)
+        {
+            return Err(BridgetClientError::CapabilityMissing {
+                capability: REQUIRED_CONTROL_STATE_CAPABILITY.to_string(),
+            });
+        }
+        Ok(Self {
+            connection,
+            deadline: Some(deadline),
+        })
+    }
+
+    pub fn read_control_state(&mut self) -> Result<ControlStateReading, BridgetClientError> {
+        let response = request_with_deadline(
+            &mut self.connection,
+            json!({"type": "control_state_read", "version": CONTROL_STATE_CONTRACT_VERSION}),
+            self.deadline,
+        )?;
+        parse_control_state(response)
+    }
+}
+
+fn parse_control_state(response: Value) -> Result<ControlStateReading, BridgetClientError> {
+    match response_type(&response)? {
+        "control_state" => {
+            let state = response.get("state").cloned().ok_or_else(|| {
+                BridgetClientError::Protocol("control_state sans state".to_string())
+            })?;
+            let state: ControlStateWire = serde_json::from_value(state).map_err(|error| {
+                BridgetClientError::Protocol(format!("état de contrôle illisible: {error}"))
+            })?;
+            let inbox_open_count = response
+                .get("inbox_open_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            Ok(ControlStateReading {
+                state,
+                inbox_open_count: u32::try_from(inbox_open_count).unwrap_or(u32::MAX),
+            })
+        }
+        "control_state_rejected" | "ClientRejected" => Err(BridgetClientError::ClientRejected {
+            reason: response.get("reason").cloned().unwrap_or(Value::Null),
+        }),
+        other => Err(unexpected("control_state", other)),
+    }
+}
+
+/// Item à déposer dans la boîte humaine. `context` est un texte JSON borné
+/// par le daemon ; `options` est la liste fermée des décisions possibles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HumanInboxDeposit {
+    pub dedup_key: String,
+    pub kind: String,
+    #[serde(default)]
+    pub subject: Value,
+    pub context: String,
+    pub options: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct HumanInboxDeposited {
+    pub item_id: String,
+    pub created: bool,
+    pub occurrences: u32,
+}
+
+/// Décision du référent non encore acquittée par Maicie.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HumanDecisionWire {
+    pub decision_id: String,
+    pub item_id: String,
+    pub dedup_key: String,
+    pub kind: String,
+    #[serde(default)]
+    pub subject: Value,
+    pub choice: String,
+    pub at: i64,
+}
+
+/// Connexion de service dédiée à la boîte humaine : dépôt, relève des
+/// décisions sans marquage, acquittement après application durable.
+pub struct HumanInboxClient {
+    connection: WireConnection,
+    deadline: Option<Instant>,
+}
+
+impl HumanInboxClient {
+    pub fn connect_with_limits_until(
+        socket_path: impl AsRef<Path>,
+        issuer_scope: impl Into<String>,
+        limits: BridgetClientLimits,
+        deadline: Instant,
+    ) -> Result<Self, BridgetClientError> {
+        validate_limits(limits)?;
+        let issuer_scope = issuer_scope.into();
+        if issuer_scope.len() < 16 || issuer_scope.trim().is_empty() {
+            return Err(BridgetClientError::InvalidEnvelope(
+                "issuer_scope boîte humaine doit contenir au moins 128 bits opaques".to_string(),
+            ));
+        }
+        let mut connection = WireConnection::connect(socket_path.as_ref(), limits, deadline)?;
+        let role = request_raw_with_deadline(
+            &mut connection,
+            &canonical_service_role_handshake()?,
+            Some(deadline),
+        )?;
+        expect_role_accepted(&role, "service")?;
+        let capabilities = [REQUIRED_HUMAN_INBOX_CAPABILITY];
+        let hello = serde_json::to_vec(&CanonicalServiceHello {
+            kind: "ServiceHello",
+            version: GUICHET_CONTRACT_VERSION,
+            service: "maicie",
+            issuer_scope: &issuer_scope,
+            capabilities: &capabilities,
+        })
+        .map_err(BridgetClientError::Encode)?;
+        let welcome = request_raw_with_deadline(&mut connection, &hello, Some(deadline))?;
+        let negotiated = parse_service_welcome(welcome)?;
+        if !negotiated
+            .capabilities
+            .contains(REQUIRED_HUMAN_INBOX_CAPABILITY)
+        {
+            return Err(BridgetClientError::CapabilityMissing {
+                capability: REQUIRED_HUMAN_INBOX_CAPABILITY.to_string(),
+            });
+        }
+        Ok(Self {
+            connection,
+            deadline: Some(deadline),
+        })
+    }
+
+    pub fn deposit_human_inbox(
+        &mut self,
+        deposit: &HumanInboxDeposit,
+    ) -> Result<HumanInboxDeposited, BridgetClientError> {
+        let response = request_with_deadline(
+            &mut self.connection,
+            json!({
+                "type": "human_inbox_deposit",
+                "version": HUMAN_INBOX_CONTRACT_VERSION,
+                "dedup_key": deposit.dedup_key,
+                "kind": deposit.kind,
+                "subject": deposit.subject,
+                "context": deposit.context,
+                "options": deposit.options,
+            }),
+            self.deadline,
+        )?;
+        match response_type(&response)? {
+            "human_inbox_deposited" => serde_json::from_value(response).map_err(|error| {
+                BridgetClientError::Protocol(format!("reçu de dépôt illisible: {error}"))
+            }),
+            "human_inbox_rejected" | "ServiceRejected" => Err(BridgetClientError::ClientRejected {
+                reason: response.get("reason").cloned().unwrap_or(Value::Null),
+            }),
+            other => Err(unexpected("human_inbox_deposited", other)),
+        }
+    }
+
+    /// Publie le focus courant sur la même connexion de service que la boîte
+    /// humaine. Bridget conserve cette projection, sans lire le SQLite Maicie.
+    pub fn publish_control_focus(
+        &mut self,
+        focus: Option<bridget_transport::protocol::ControlFocusFrame>,
+    ) -> Result<(), BridgetClientError> {
+        let response = request_with_deadline(
+            &mut self.connection,
+            json!({
+                "type": "control_focus_publish",
+                "version": bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION,
+                "focus": focus,
+            }),
+            self.deadline,
+        )?;
+        match response_type(&response)? {
+            "control_focus" => Ok(()),
+            "control_state_rejected" | "ServiceRejected" => {
+                Err(BridgetClientError::ClientRejected {
+                    reason: response.get("reason").cloned().unwrap_or(Value::Null),
+                })
+            }
+            other => Err(unexpected("control_focus", other)),
+        }
+    }
+
+    /// Relève sans rien marquer : la même décision revient tant qu'elle n'a
+    /// pas été acquittée après application durable.
+    pub fn fetch_human_decisions(
+        &mut self,
+        limit: u32,
+    ) -> Result<Vec<HumanDecisionWire>, BridgetClientError> {
+        let response = request_with_deadline(
+            &mut self.connection,
+            json!({
+                "type": "human_inbox_decisions",
+                "version": HUMAN_INBOX_CONTRACT_VERSION,
+                "limit": limit,
+            }),
+            self.deadline,
+        )?;
+        match response_type(&response)? {
+            "human_inbox_decisions_batch" => {
+                let decisions = response
+                    .get("decisions")
+                    .cloned()
+                    .unwrap_or_else(|| Value::Array(Vec::new()));
+                serde_json::from_value(decisions).map_err(|error| {
+                    BridgetClientError::Protocol(format!("décisions humaines illisibles: {error}"))
+                })
+            }
+            "human_inbox_rejected" | "ServiceRejected" => Err(BridgetClientError::ClientRejected {
+                reason: response.get("reason").cloned().unwrap_or(Value::Null),
+            }),
+            other => Err(unexpected("human_inbox_decisions_batch", other)),
+        }
+    }
+
+    /// Acquitte après commit local. Rend l'horodatage d'acquittement posé par
+    /// le daemon ; un second acquittement rend le même horodatage.
+    pub fn ack_human_decision(&mut self, decision_id: &str) -> Result<i64, BridgetClientError> {
+        let response = request_with_deadline(
+            &mut self.connection,
+            json!({
+                "type": "human_inbox_ack",
+                "version": HUMAN_INBOX_CONTRACT_VERSION,
+                "decision_id": decision_id,
+            }),
+            self.deadline,
+        )?;
+        match response_type(&response)? {
+            "human_inbox_acked" => required_i64(&response, "acked_at"),
+            "human_inbox_rejected" | "ServiceRejected" => Err(BridgetClientError::ClientRejected {
+                reason: response.get("reason").cloned().unwrap_or(Value::Null),
+            }),
+            other => Err(unexpected("human_inbox_acked", other)),
+        }
+    }
+
+    pub fn close_human_inbox(
+        &mut self,
+        item_id: &str,
+        reason: &str,
+    ) -> Result<bool, BridgetClientError> {
+        let response = request_with_deadline(
+            &mut self.connection,
+            json!({
+                "type": "human_inbox_close",
+                "version": HUMAN_INBOX_CONTRACT_VERSION,
+                "item_id": item_id,
+                "reason": reason,
+            }),
+            self.deadline,
+        )?;
+        match response_type(&response)? {
+            "human_inbox_closed" => {
+                response
+                    .get("closed")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| {
+                        BridgetClientError::Protocol("fermeture boîte illisible".to_string())
+                    })
+            }
+            "human_inbox_rejected" | "ServiceRejected" => Err(BridgetClientError::ClientRejected {
+                reason: response.get("reason").cloned().unwrap_or(Value::Null),
+            }),
+            other => Err(unexpected("human_inbox_closed", other)),
         }
     }
 }
@@ -3107,6 +3453,7 @@ mod tests {
             reply_timeout: None,
             deadline_at: None,
             in_reply_to: None,
+            references: Vec::new(),
         };
         let request = json!({
             "type": "SendIdempotent",
@@ -3260,5 +3607,220 @@ mod tests {
         serde_json::to_writer(&mut *writer, &value).expect("écriture JSONL");
         writer.write_all(b"\n").expect("délimiteur JSONL");
         writer.flush().expect("flush JSONL");
+    }
+}
+
+/// SPEC-087 : contrats des clients d'état de contrôle et de boîte humaine,
+/// éprouvés contre un faux daemon qui vérifie chaque trame reçue.
+#[cfg(test)]
+mod control_inbox_contract_tests {
+    use super::{
+        BridgetClientLimits, ControlStateClient, HumanInboxClient, HumanInboxDeposit,
+        REQUIRED_CONTROL_STATE_CAPABILITY, REQUIRED_HUMAN_INBOX_CAPABILITY,
+    };
+    use serde_json::{Value, json};
+    use std::io::{BufRead, BufReader, BufWriter, Write};
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    fn socket(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("m087-{label}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("b.sock")
+    }
+
+    fn read_json(reader: &mut BufReader<UnixStream>) -> Value {
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("lecture JSONL");
+        serde_json::from_str(&line).expect("JSONL valide")
+    }
+
+    fn write_json(writer: &mut BufWriter<UnixStream>, value: Value) {
+        serde_json::to_writer(&mut *writer, &value).expect("écriture");
+        writer.write_all(b"\n").unwrap();
+        writer.flush().unwrap();
+    }
+
+    fn limits() -> BridgetClientLimits {
+        BridgetClientLimits {
+            connect_timeout: Duration::from_secs(2),
+            io_timeout: Duration::from_secs(2),
+            max_frame_bytes: 64 * 1024,
+        }
+    }
+
+    /// Propriété : la lecture négocie la seule capacité `control_state_v1` en
+    /// rôle client et rend l'état plus le compte d'items, sans autre trame.
+    #[test]
+    fn spec_087_lecture_de_l_etat_negocie_sa_capacite_et_lit_une_fois() {
+        let path = socket("control");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert_eq!(
+                read_json(&mut reader),
+                json!({"type":"RoleHandshake","role":"client"})
+            );
+            write_json(&mut writer, json!({"type":"RoleAccepted","role":"client"}));
+            let hello = read_json(&mut reader);
+            assert_eq!(hello["type"], "ClientHello");
+            assert_eq!(
+                hello["capabilities"],
+                json!([REQUIRED_CONTROL_STATE_CAPABILITY])
+            );
+            write_json(
+                &mut writer,
+                json!({"type":"ClientWelcome","version":1,"horizon_secs":60,
+                       "issued_at_tolerance_secs":5,"capabilities":[REQUIRED_CONTROL_STATE_CAPABILITY]}),
+            );
+            assert_eq!(
+                read_json(&mut reader),
+                json!({"type":"control_state_read","version":1})
+            );
+            write_json(
+                &mut writer,
+                json!({"type":"control_state","inbox_open_count":3,
+                       "state":{"version":1,"generation":7,"paused":true,"paused_since":10,
+                                "paused_by":"humain","pause_reason":"revue",
+                                "auto_objectives_cap":5,"updated_at":10}}),
+            );
+        });
+        let mut client = ControlStateClient::connect_with_limits_until(
+            &path,
+            "maicie-control-snapshot-v1-read-only",
+            limits(),
+            Instant::now() + Duration::from_secs(3),
+        )
+        .unwrap();
+        let reading = client.read_control_state().unwrap();
+        assert!(reading.state.paused);
+        assert_eq!(reading.state.generation, 7);
+        assert_eq!(reading.state.auto_objectives_cap, 5);
+        assert_eq!(reading.inbox_open_count, 3);
+        server.join().unwrap();
+    }
+
+    /// Propriété : un daemon qui refuse la capacité rend un refus explicite.
+    #[test]
+    fn spec_087_capacite_absente_est_un_refus_pas_un_defaut() {
+        let path = socket("control-refus");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            let _ = read_json(&mut reader);
+            write_json(&mut writer, json!({"type":"RoleAccepted","role":"client"}));
+            let _ = read_json(&mut reader);
+            write_json(
+                &mut writer,
+                json!({"type":"ClientWelcome","version":1,"horizon_secs":60,
+                       "issued_at_tolerance_secs":5,"capabilities":["lookup"]}),
+            );
+        });
+        let result = ControlStateClient::connect_with_limits_until(
+            &path,
+            "maicie-control-snapshot-v1-read-only",
+            limits(),
+            Instant::now() + Duration::from_secs(3),
+        );
+        assert!(matches!(
+            result.err(),
+            Some(super::BridgetClientError::CapabilityMissing { .. })
+        ));
+        server.join().unwrap();
+    }
+
+    /// Propriété : dépôt, relève sans marquage et acquittement passent par le
+    /// rôle service avec la seule capacité `human_inbox_v1`, et chaque trame
+    /// porte la version du contrat.
+    #[test]
+    fn spec_087_boite_humaine_depose_releve_et_acquitte_en_service() {
+        let path = socket("inbox");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert_eq!(
+                read_json(&mut reader),
+                json!({"type":"RoleHandshake","role":"service"})
+            );
+            write_json(&mut writer, json!({"type":"RoleAccepted","role":"service"}));
+            let hello = read_json(&mut reader);
+            assert_eq!(hello["type"], "ServiceHello");
+            assert_eq!(
+                hello["capabilities"],
+                json!([REQUIRED_HUMAN_INBOX_CAPABILITY])
+            );
+            write_json(
+                &mut writer,
+                json!({"type":"ServiceWelcome","version":1,"horizon_secs":60,
+                       "issued_at_tolerance_secs":5,"capabilities":[REQUIRED_HUMAN_INBOX_CAPABILITY]}),
+            );
+            let deposit = read_json(&mut reader);
+            assert_eq!(deposit["type"], "human_inbox_deposit");
+            assert_eq!(deposit["version"], 1);
+            assert_eq!(deposit["dedup_key"], "chain-exhausted:d1");
+            assert_eq!(deposit["kind"], "chain_exhausted");
+            assert_eq!(deposit["options"], json!(["cancel", "ack"]));
+            write_json(
+                &mut writer,
+                json!({"type":"human_inbox_deposited","item_id":"i1","created":true,"occurrences":1}),
+            );
+            assert_eq!(
+                read_json(&mut reader),
+                json!({"type":"human_inbox_decisions","version":1,"limit":20})
+            );
+            write_json(
+                &mut writer,
+                json!({"type":"human_inbox_decisions_batch","decisions":[
+                    {"decision_id":"dec-1","item_id":"i1","dedup_key":"chain-exhausted:d1",
+                     "kind":"chain_exhausted","subject":{"delegation_id":"d1"},"choice":"cancel","at":5}]}),
+            );
+            assert_eq!(
+                read_json(&mut reader),
+                json!({"type":"human_inbox_ack","version":1,"decision_id":"dec-1"})
+            );
+            write_json(
+                &mut writer,
+                json!({"type":"human_inbox_acked","decision_id":"dec-1","acked_at":9}),
+            );
+            assert_eq!(
+                read_json(&mut reader),
+                json!({"type":"human_inbox_close","version":1,"item_id":"i1","reason":"object_vanished"})
+            );
+            write_json(
+                &mut writer,
+                json!({"type":"human_inbox_closed","item_id":"i1","closed":true}),
+            );
+        });
+        let mut client = HumanInboxClient::connect_with_limits_until(
+            &path,
+            "maicie-issuer-scope-0123456789",
+            limits(),
+            Instant::now() + Duration::from_secs(3),
+        )
+        .unwrap();
+        let deposited = client
+            .deposit_human_inbox(&HumanInboxDeposit {
+                dedup_key: "chain-exhausted:d1".to_string(),
+                kind: "chain_exhausted".to_string(),
+                subject: json!({"delegation_id":"d1"}),
+                context: r#"{"summary":"s"}"#.to_string(),
+                options: vec!["cancel".to_string(), "ack".to_string()],
+            })
+            .unwrap();
+        assert!(deposited.created);
+        let decisions = client.fetch_human_decisions(20).unwrap();
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].choice, "cancel");
+        assert_eq!(decisions[0].subject["delegation_id"], "d1");
+        assert_eq!(client.ack_human_decision("dec-1").unwrap(), 9);
+        assert!(client.close_human_inbox("i1", "object_vanished").unwrap());
+        server.join().unwrap();
     }
 }

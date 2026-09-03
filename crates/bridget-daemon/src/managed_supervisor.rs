@@ -18,7 +18,24 @@ use crate::fleet::FleetSupervisor;
 
 use crate::execution_store::{ContinuationReservation, ExecutionStore};
 use crate::fleet::{AutonomyBudgetPolicy, AutonomyRuntimeState, evaluate_autonomy_budget};
-use bridget_transport::protocol::ExecutionBudgetOutcome;
+use bridget_transport::protocol::{ControlStateFrame, ExecutionBudgetOutcome};
+
+/// Traduit l'état de contrôle du référent (SPEC-087) en précondition de
+/// continuation. La pause globale est une pause d'autonomie : la garde de
+/// continuation rend `ExecutionBudgetOutcome::Paused`, vocabulaire déjà
+/// défini par SPEC-064, sans nouvelle limite.
+pub fn autonomy_runtime_for_control(
+    control: &ControlStateFrame,
+    observed: AutonomyRuntimeState,
+) -> AutonomyRuntimeState {
+    match crate::referent_control::admit_autonomous_effect(
+        crate::referent_control::AutonomousEffect::Continuation,
+        control,
+    ) {
+        crate::referent_control::Admission::Deferred { .. } => AutonomyRuntimeState::Paused,
+        crate::referent_control::Admission::Admitted => observed,
+    }
+}
 
 /// Verdict de la garde de continuation. Une limite est une issue Bridget :
 /// elle ne modifie aucune délégation ni objectif Maicie.
@@ -30,6 +47,16 @@ pub enum GovernedContinuation {
     MissingFacts,
 }
 
+/// Source attestée d'une demande de continuation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GovernedContinuationSource {
+    /// Le parent a déjà atteint un état terminal.
+    InactiveParent,
+    /// Le wrapper s'est reconnecté sans tour actif ; son état SQLite peut être
+    /// encore actif jusqu'à la reconstruction atomique.
+    RecoveryAfterIdleWrapper,
+}
+
 /// Point unique de réservation d une continuation gouvernée. Les faits sont
 /// relus dans la même passe de contrôle puis la réservation SQLite atomique
 /// refuse une course entre deux continuations ou un tour concurrent.
@@ -38,6 +65,7 @@ pub fn reserve_governed_continuation(
     store: &ExecutionStore,
     policy: AutonomyBudgetPolicy,
     runtime: AutonomyRuntimeState,
+    source: GovernedContinuationSource,
     parent_execution_id: &str,
     expected_generation: u64,
     expected_revision: u64,
@@ -52,14 +80,25 @@ pub fn reserve_governed_continuation(
         return Ok(GovernedContinuation::Budget(outcome));
     }
     Ok(
-        match store.reserve_continuation_if_idle(
-            parent_execution_id,
-            expected_generation,
-            expected_revision,
-            continuation_id,
-            proof_idle_at,
-            observed_at,
-        )? {
+        match match source {
+            GovernedContinuationSource::InactiveParent => store.reserve_continuation_if_idle(
+                parent_execution_id,
+                expected_generation,
+                expected_revision,
+                continuation_id,
+                proof_idle_at,
+                observed_at,
+            ),
+            GovernedContinuationSource::RecoveryAfterIdleWrapper => store
+                .reserve_recovery_continuation_after_idle_wrapper(
+                    parent_execution_id,
+                    expected_generation,
+                    expected_revision,
+                    continuation_id,
+                    proof_idle_at,
+                    observed_at,
+                ),
+        }? {
             ContinuationReservation::Reserved => GovernedContinuation::Reserved,
             reservation => GovernedContinuation::Reservation(reservation),
         },
@@ -364,6 +403,55 @@ mod tests {
             ecoule < ManagedSupervisorGuard::JOIN_DEADLINE,
             "le chemin nominal ne doit pas attendre l'échéance : {} ms",
             ecoule.as_millis()
+        );
+    }
+}
+
+/// SPEC-087 T014 : la pause du référent se traduit par `Paused` dans la garde
+/// de continuation, sans nouvelle limite. Aucun appelant de production ne
+/// réserve encore de continuation gouvernée sur main : la garde attend son
+/// producteur, et ce test la tient prête.
+#[cfg(test)]
+mod control_pause_tests {
+    use super::*;
+    use crate::execution_store::ExecutionBudgetFacts;
+
+    fn control(paused: bool) -> ControlStateFrame {
+        ControlStateFrame {
+            version: bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION,
+            generation: 1,
+            paused,
+            paused_since: None,
+            paused_by: None,
+            pause_reason: None,
+            auto_objectives_cap: 5,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn la_pause_globale_rend_la_continuation_paused() {
+        let facts = ExecutionBudgetFacts {
+            duration_secs: 1,
+            descendants: 0,
+            usage: None,
+        };
+        let runtime = autonomy_runtime_for_control(&control(true), AutonomyRuntimeState::Ready);
+        assert_eq!(runtime, AutonomyRuntimeState::Paused);
+        assert_eq!(
+            evaluate_autonomy_budget(AutonomyBudgetPolicy::default(), &facts, runtime),
+            Some(ExecutionBudgetOutcome::Paused)
+        );
+        let runtime = autonomy_runtime_for_control(&control(false), AutonomyRuntimeState::Ready);
+        assert_eq!(runtime, AutonomyRuntimeState::Ready);
+        assert_eq!(
+            evaluate_autonomy_budget(AutonomyBudgetPolicy::default(), &facts, runtime),
+            None
+        );
+        // Une terminaison observée n'est jamais effacée par l'absence de pause.
+        assert_eq!(
+            autonomy_runtime_for_control(&control(false), AutonomyRuntimeState::Terminated),
+            AutonomyRuntimeState::Terminated
         );
     }
 }

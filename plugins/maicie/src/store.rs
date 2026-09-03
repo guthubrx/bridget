@@ -6,28 +6,31 @@
 
 use crate::app::ConversationRecord;
 use crate::bridget_client::{GuichetClaim, IdempotencyIssue, PublicMessage, SpawnOutcome};
+use crate::control::{Admission, AutonomousEffect, ControlSnapshot, admit_autonomous_effect};
 use crate::domain::guichet::{
     EvenementCycleGuichet, MutationReply, ProjectionReply, RapportLivraison, RequeteCanonique,
-    delivery_reply_bytes, mutation_reply_bytes, projection_reply_bytes,
-    reclaim_mutation_reply_bytes, reclaim_projection_reply_bytes, refusal_reply_bytes,
+    budget_refusal_reply_bytes, delivery_reply_bytes, mutation_reply_bytes, projection_reply_bytes,
+    reclaim_mutation_reply_bytes, reclaim_projection_reply_bytes, reclaim_refusal_reply_bytes,
+    refusal_reply_bytes,
 };
 use crate::domain::{
-    ActivationOutbox, ApprobationActivation, AttenteNotification, ClasseDuree, CoutMissionAgent,
-    DEPENDENCY_POLICY_VERSION, DecisionCoordination, DecisionCoordinationActive,
-    DefinitionCoordination, Delegation, DependanceDelegation, DomainError, EffetDemandeSuivie,
-    EntreeReductionCoordination, EpisodeRelance, EtatActivationOutbox, EtatDecision,
-    EtatDelegation, EtatEpisodeRelance, EtatGenerationDelegation, EtatNotificationOutbox,
-    EtatObjectif, EtatOutboxDelegation, EtatRequeteGuichet, EvenementCoordination,
-    ExecutionProjection, FaitReassignation, FraicheurCoordination, GenerationDelegation,
-    IssueGreffe, LienArbitrage, LigneeDelegation, LotReassignation, MotifRefusDelegationLocale,
-    MotifRefusGreffe, NotificationOutbox, NotificationReassignation, ObjectifCoordonne,
-    ObjectiveOpeningPermit, OperationGuichet, OutboxDelegation, PolitiqueReassignation,
-    ProjectIdentity, ProjectIdentityStatus, QualificationDependance, ReceptionGreffe,
-    RecuCorrelation, ReductionCoordinationActive, ReductionOuvertureDelegation,
-    ReductionReassignation, SuiteObjective, TransitionCoordinationActive, TypeDecision,
-    TypeEffetDemandeSuivie, TypeEvenementAttendu, TypeFaitReassignation,
-    TypeNotificationReassignation, identifiant_deterministe, reduire_coordination,
-    reduire_ouverture_dependance, reduire_reassignation,
+    ActivationOutbox, ApprobationActivation, AttenteNotification, AttestationConsumption,
+    ClasseDuree, CoutMissionAgent, DEPENDENCY_POLICY_VERSION, DecisionCoordination,
+    DecisionCoordinationActive, DefinitionCoordination, Delegation, DependanceDelegation,
+    DomainError, EffetDemandeSuivie, EntreeReductionCoordination, EpisodeRelance,
+    EtatActivationOutbox, EtatDecision, EtatDelegation, EtatEpisodeRelance,
+    EtatGenerationDelegation, EtatNotificationOutbox, EtatObjectif, EtatOutboxDelegation,
+    EtatRequeteGuichet, EvenementCoordination, ExecutionProjection, FaitReassignation,
+    FraicheurCoordination, GenerationDelegation, IssueGreffe, LienArbitrage, LigneeDelegation,
+    LotReassignation, MotifRefusDelegationLocale, MotifRefusGreffe, NotificationOutbox,
+    NotificationReassignation, ObjectifCoordonne, ObjectiveOpeningPermit, ObjectiveOrigin,
+    OperationGuichet, OutboxDelegation, PolitiqueReassignation, ProjectIdentity,
+    ProjectIdentityStatus, QualificationDependance, ReceptionGreffe, RecuCorrelation,
+    ReductionCoordinationActive, ReductionOuvertureDelegation, ReductionReassignation,
+    SuiteObjective, TransitionCoordinationActive, TypeDecision, TypeEffetDemandeSuivie,
+    TypeEvenementAttendu, TypeFaitReassignation, TypeNotificationReassignation,
+    identifiant_deterministe, reduire_coordination, reduire_ouverture_dependance,
+    reduire_reassignation,
 };
 use crate::domain::{ProjectProfile, ProjectProfileApproval, ProjectProfileStatus};
 use crate::outbox::{
@@ -55,7 +58,7 @@ use uuid::Uuid;
 
 /// Version courante du schéma SQLite. Les oracles de migration doivent lire
 /// cette constante — un littéral en dur meurt à chaque migration.
-pub const SCHEMA_VERSION: i64 = 23;
+pub const SCHEMA_VERSION: i64 = 26;
 const DATABASE_MODE: u32 = 0o600;
 const DIRECTORY_MODE: u32 = 0o700;
 type StoredActivationOutcome = (
@@ -86,6 +89,9 @@ pub struct MaicieStore {
     path: PathBuf,
     connection: Connection,
     issuer_scope: String,
+    /// Instantané de l'état de contrôle du référent, posé à la relève et
+    /// jamais persisté (SPEC-087). Lu par tous les puits d'effet autonome.
+    control: ControlSnapshot,
 }
 
 /// Résultat du contrôle de compatibilité qui précède l'activation d'un
@@ -200,6 +206,15 @@ pub struct ObjectiveSnapshot {
     pub remises_locales: Vec<RemiseLocale>,
     /// Coûts portés à la clôture. Vide tant que l'objectif n'est pas clos.
     pub costs: Vec<CoutMissionAgent>,
+}
+
+/// Projection minimale du focus courant, publiable dans Bridget.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FocusProjection {
+    pub objective_id: Uuid,
+    pub goal: String,
+    pub project_id: String,
+    pub updated_at: i64,
 }
 
 /// Définition 016 et faits initiaux relus depuis le registre, sans aucune
@@ -532,6 +547,7 @@ impl MaicieStore {
             path: path.to_path_buf(),
             connection,
             issuer_scope,
+            control: ControlSnapshot::Unread,
         })
     }
 
@@ -543,8 +559,16 @@ impl MaicieStore {
         &mut self,
         mapping: &std::collections::BTreeMap<String, String>,
     ) -> Result<(), StoreError> {
+        // `human` est un destinataire de service réservé, pas l'identité
+        // historique d'un agent. Une migration ne doit ni le remplacer, ni
+        // le fabriquer à partir d'une identité d'agent.
+        let mapping = mapping
+            .iter()
+            .filter(|(legacy, agent_id)| legacy.as_str() != "human" && agent_id.as_str() != "human")
+            .map(|(legacy, agent_id)| (legacy.clone(), agent_id.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
         let tx = self.connection.transaction().map_err(StoreError::Sql)?;
-        for (legacy, agent_id) in mapping {
+        for (legacy, agent_id) in &mapping {
             for statement in [
                 "UPDATE delegation_outbox SET target = ?1 WHERE target = ?2",
                 "UPDATE delegate_idempotency SET participant = ?1 WHERE participant = ?2",
@@ -560,27 +584,27 @@ impl MaicieStore {
             }
         }
 
-        rewrite_json_agent_references(&tx, "delegations", "id", "payload_json", mapping)?;
+        rewrite_json_agent_references(&tx, "delegations", "id", "payload_json", &mapping)?;
         rewrite_json_agent_references(
             &tx,
             "delegation_outbox",
             "message_id",
             "message_bytes",
-            mapping,
+            &mapping,
         )?;
         rewrite_json_agent_references(
             &tx,
             "notification_outbox",
             "message_id",
             "message_bytes",
-            mapping,
+            &mapping,
         )?;
         rewrite_json_agent_references(
             &tx,
             "tracked_request_outbox",
             "effect_id",
             "message_bytes",
-            mapping,
+            &mapping,
         )?;
         tx.commit().map_err(StoreError::Sql)
     }
@@ -1134,6 +1158,18 @@ impl MaicieStore {
         &mut self,
         fact: FaitReassignation,
     ) -> Result<StoredReassignmentReduction, StoreError> {
+        // SPEC-087 : une réassignation crée une génération, c'est un effet
+        // autonome. Différée par la garde, elle n'est pas réduite : le fait
+        // reste au guichet et revient à la relève suivante.
+        if let Admission::Deferred { motif } =
+            admit_autonomous_effect(AutonomousEffect::Reassignment, self.control)
+        {
+            return Err(StoreError::Conflict(if motif == "pause" {
+                "réassignation différée : pause du référent"
+            } else {
+                "réassignation différée : état de contrôle inconnu"
+            }));
+        }
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1767,6 +1803,30 @@ impl MaicieStore {
             .map_err(StoreError::Sql)?;
         if inserted != 1 {
             return Err(StoreError::Conflict("reçu de greffe non enregistré"));
+        }
+
+        if issue == IssueGreffe::Accepted && report.review_verdict.is_some() {
+            enqueue_human_inbox_tx(
+                &tx,
+                &format!("review-verdict:{}", delegation.id),
+                "review_verdict_pending",
+                &format!(
+                    "{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\"}}",
+                    objective.id, delegation.id
+                ),
+                &format!(
+                    "{{\"summary\":\"Un verdict de revue attend votre arbitrage pour la délégation {}.\",\"verdict\":\"{}\"}}",
+                    delegation.id,
+                    report
+                        .review_verdict
+                        .as_ref()
+                        .expect("verdict vérifié")
+                        .verdict
+                        .as_str()
+                ),
+                &["ack".to_string()],
+                now,
+            )?;
         }
 
         let correlation = upsert_guichet_correlation(
@@ -2751,6 +2811,7 @@ impl MaicieStore {
         response_message_id: &str,
         now: i64,
         reason: MotifRefusGreffe,
+        budget: Option<(u32, u32)>,
     ) -> Result<StoredGuichetReply, StoreError> {
         if now <= 0 || response_message_id.trim().is_empty() {
             return Err(StoreError::Invalid("reçu de refus incomplet"));
@@ -2782,9 +2843,8 @@ impl MaicieStore {
             if claim.claim_generation <= reception.claim_generation {
                 return Err(StoreError::Conflict("claim de refus obsolète ou divergent"));
             }
-            let reply_bytes =
-                refusal_reply_bytes(claim, &reception.response_message_id, canonical, reason)
-                    .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
+            let reply_bytes = reclaim_refusal_reply_bytes(claim, &reception.reply_bytes)
+                .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
             let changed = tx
                 .execute(
                     "UPDATE guichet_refusal_receptions\n\
@@ -2810,9 +2870,8 @@ impl MaicieStore {
             }
             reception.claim_generation = claim.claim_generation;
             reception.claim_token = claim.claim_token.clone();
-            reception.reply_bytes =
-                refusal_reply_bytes(claim, &reception.response_message_id, canonical, reason)
-                    .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
+            reception.reply_bytes = reclaim_refusal_reply_bytes(claim, &reception.reply_bytes)
+                .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
             tx.commit().map_err(StoreError::Sql)?;
             return Ok(StoredGuichetReply {
                 reception,
@@ -2821,8 +2880,14 @@ impl MaicieStore {
             });
         }
 
-        let reply_bytes = refusal_reply_bytes(claim, response_message_id, canonical, reason)
-            .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
+        let reply_bytes = match budget {
+            Some((cap, open)) if reason == MotifRefusGreffe::BudgetAtteint => {
+                budget_refusal_reply_bytes(claim, response_message_id, canonical, cap, open)
+            }
+            Some(_) => return Err(StoreError::Invalid("détail budget hors motif budget")),
+            None => refusal_reply_bytes(claim, response_message_id, canonical, reason),
+        }
+        .map_err(|_| StoreError::Invalid("réponse de refus non sérialisable"))?;
         tx.execute(
             "INSERT INTO guichet_refusal_receptions(\n\
                  issuer_scope, request_id, canonical_request_bytes, operation, reason,\n\
@@ -3622,6 +3687,7 @@ impl MaicieStore {
             now,
             costs.as_deref(),
             &mut observer,
+            self.control,
         )?;
         observer(ObjectiveClosureCommitPhase::BeforeCommit)?;
         tx.commit().map_err(StoreError::Sql)?;
@@ -4737,6 +4803,21 @@ impl MaicieStore {
             ],
         )
         .map_err(StoreError::Sql)?;
+        enqueue_human_inbox_tx(
+            &tx,
+            &format!("activation:{}", approval.id),
+            "activation_approval",
+            &format!(
+                "{{\"objective_id\":\"{}\",\"approval_id\":\"{}\"}}",
+                approval.objective_id, approval.id
+            ),
+            &format!(
+                "{{\"summary\":\"L'activation du profil {} attend votre approbation pour l'objectif {}.\",\"profile_id\":\"{}\"}}",
+                approval.profile_id, approval.objective_id, approval.profile_id
+            ),
+            &["ack".to_string()],
+            approval.expires_at.saturating_sub(1),
+        )?;
         tx.commit().map_err(StoreError::Sql)
     }
 
@@ -6538,6 +6619,36 @@ fn apply_reassignment_batch_in_transaction(
     }
     observer(ReassignmentCommitPhase::AfterRequestOutboxes)?;
     for notification in &reduction.notifications {
+        // SPEC-087 : la chaîne épuisée exige le référent ; l'item part vers
+        // la boîte humaine, en plus de la notification à l'agent.
+        if notification.kind == TypeNotificationReassignation::InterventionHumaineRequise {
+            let (dedup_key, kind) = if reduction.decision.motif == "chaine_preautorisee_epuisee" {
+                (
+                    format!("chain-exhausted:{}", lot.delegation_id),
+                    "chain_exhausted",
+                )
+            } else {
+                (
+                    format!("intervention-required:{}", lot.delegation_id),
+                    "intervention_required",
+                )
+            };
+            enqueue_human_inbox_tx(
+                tx,
+                &dedup_key,
+                kind,
+                &format!(
+                    "{{\"objective_id\":\"{}\",\"delegation_id\":\"{}\"}}",
+                    lot.objectif_id, lot.delegation_id
+                ),
+                &format!(
+                    "{{\"summary\":\"Chaîne de repli épuisée pour la délégation {} (objectif {}) : intervention requise.\",\"generation\":{}}}",
+                    lot.delegation_id, lot.objectif_id, lot.generation
+                ),
+                &["cancel".to_string(), "ack".to_string()],
+                lot.issued_at,
+            )?;
+        }
         let outbox = reassignment_notification_outbox(lot, &policy, notification, &batch_event_id)?;
         insert_notification_outbox(tx, &outbox)?;
     }
@@ -6879,6 +6990,7 @@ fn tracked_request_outbox(
                     .deadline_at
                     .and_then(|value| u64::try_from(value).ok()),
                 in_reply_to: None,
+                references: Vec::new(),
             })
             .map_err(StoreError::Json)?
         }
@@ -6968,6 +7080,7 @@ fn reassignment_notification_outbox(
         reply_timeout: None,
         deadline_at: None,
         in_reply_to: None,
+        references: Vec::new(),
     })
     .map_err(StoreError::Json)?;
     let outbox = NotificationOutbox {
@@ -7263,6 +7376,7 @@ fn persist_dependent_opening(
         reply_timeout: None,
         deadline_at: None,
         in_reply_to: None,
+        references: Vec::new(),
     };
     let outbox = NotificationOutbox {
         message_id: opening.notification.message_id,
@@ -7388,6 +7502,7 @@ fn persist_objective_closure<F>(
     issued_at: i64,
     costs: Option<&[CoutMissionAgent]>,
     observer: &mut F,
+    control: ControlSnapshot,
 ) -> Result<(), StoreError>
 where
     F: FnMut(ObjectiveClosureCommitPhase) -> Result<(), StoreError>,
@@ -7446,7 +7561,13 @@ where
     MaicieStore::terminate_occurrences_for_objective_tx(tx, objective.id)?;
     // F37 : déblocage OBJECTIF→OBJECTIF dans la même transaction que 016.
     // Aucun dépendant → zéro écriture supplémentaire (oracle silencieux).
-    release_waiting_dependents_on_prerequisite_closure(tx, objective.id, decision, issued_at)?;
+    release_waiting_dependents_on_prerequisite_closure(
+        tx,
+        objective.id,
+        decision,
+        issued_at,
+        control,
+    )?;
     observer(ObjectiveClosureCommitPhase::AfterOutboxes)
 }
 
@@ -7728,6 +7849,7 @@ fn release_waiting_dependents_on_prerequisite_closure(
     closed_prerequisite: Uuid,
     decision: &DecisionCoordination,
     issued_at: i64,
+    control: ControlSnapshot,
 ) -> Result<(), StoreError> {
     let mut statement = tx
         .prepare(
@@ -7744,148 +7866,193 @@ fn release_waiting_dependents_on_prerequisite_closure(
         .map_err(StoreError::Sql)?;
     drop(statement);
 
+    // SPEC-087 : la matérialisation d'une outbox est un effet autonome. En
+    // pause, la ligne différée est conservée avec son motif et rejouée par
+    // `release_ready_dependents` à la levée.
+    let admission = admit_autonomous_effect(AutonomousEffect::DependencyRelease, control);
     for dependent_raw in dependents {
         let dependent_id = parse_uuid(&dependent_raw)?;
         if !all_objective_prerequisites_closed(tx, dependent_id)? {
             continue;
         }
-        let Some((objective, mut delegation, deferred)) =
-            load_waiting_dependent_bundle(tx, dependent_id)?
-        else {
+        if let Admission::Deferred { motif } = admission {
+            mark_deferred_dispatch_reason(tx, dependent_id, motif)?;
             continue;
-        };
-        delegation
-            .transition(EtatDelegation::Creee)
-            .map_err(StoreError::Domain)?;
-        let message_id = Uuid::new_v4();
-        delegation
-            .finaliser_mandat(message_id)
-            .map_err(StoreError::Domain)?;
-        let body_bytes = delegation.instruction.as_bytes().to_vec();
-        let deadline = issued_at
-            .checked_add(
-                i64::try_from(deferred.timeout_secs)
-                    .map_err(|_| StoreError::Invalid("timeout hors borne"))?,
-            )
-            .ok_or(StoreError::Invalid("échéance hors borne"))?;
-        let outbox = OutboxDelegation {
-            message_id,
-            delegation_id: delegation.id,
-            target: delegation.participant.clone(),
-            body_bytes: body_bytes.clone(),
-            reply: deferred.reply,
-            timeout_secs: deferred.timeout_secs,
-            deadline_contractuelle: deadline,
-            body_hash: stable_body_hash(&body_bytes),
-            etat: EtatOutboxDelegation::Prepared,
-            attempted_at: None,
-            retry_until: deferred.retry_until.max(issued_at),
-            dedup_retained_until: deferred.dedup_retained_until.max(issued_at),
-        };
-        let prepared = PreparedDelegation::new(
-            objective.clone(),
-            delegation.clone(),
-            outbox,
-            deferred.issuer_scope.clone(),
-            issued_at,
-            deferred.max_frame_bytes,
-        )
-        .map_err(StoreError::Outbox)?;
-        // L'objectif existe déjà : insert_prepared ferait upsert puis INSERT
-        // délégation (conflit). On pose seulement l'outbox + transition.
-        let delegation_json = serde_json::to_vec(&delegation).map_err(StoreError::Json)?;
-        let changed = tx
-            .execute(
-                "UPDATE delegations SET state = ?1, payload_json = ?2
-                 WHERE id = ?3 AND state = ?4",
-                params![
-                    delegation_state_name(EtatDelegation::Creee),
-                    delegation_json,
-                    delegation.id.to_string(),
-                    delegation_state_name(EtatDelegation::EnAttentePrerequis),
-                ],
-            )
-            .map_err(StoreError::Sql)?;
-        if changed != 1 {
-            return Err(StoreError::Conflict(
-                "délégation d'attente modifiée concurremment",
-            ));
         }
-        tx.execute(
-            "INSERT INTO delegation_outbox(\n\
-                 message_id, delegation_id, objective_id, issuer_scope, issued_at, target,\n\
-                 body_bytes, reply, timeout_secs, deadline_contractuelle, body_hash,\n\
-                 message_bytes, state, attempted_at, retry_until, dedup_retained_until, terminal\n\
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'prepared',NULL,?13,?14,0)",
-            params![
-                prepared.outbox.message_id.to_string(),
-                prepared.delegation.id.to_string(),
-                prepared.objective.id.to_string(),
-                prepared.issuer_scope,
-                prepared.issued_at,
-                prepared.outbox.target,
-                prepared.outbox.body_bytes,
-                i64::from(prepared.outbox.reply),
-                i64::try_from(prepared.outbox.timeout_secs)
-                    .map_err(|_| StoreError::Invalid("timeout_secs hors borne SQLite"))?,
-                prepared.outbox.deadline_contractuelle,
-                prepared.outbox.body_hash,
-                prepared.message_bytes,
-                prepared.outbox.retry_until,
-                prepared.outbox.dedup_retained_until,
-            ],
-        )
-        .map_err(StoreError::Sql)?;
-        tx.execute(
-            "UPDATE delegate_idempotency
-             SET message_id = ?1, deadline_contractuelle = ?2
-             WHERE delegation_id = ?3 AND message_id IS NULL",
-            params![message_id.to_string(), deadline, delegation.id.to_string(),],
-        )
-        .map_err(StoreError::Sql)?;
-        tx.execute(
-            "DELETE FROM deferred_delegation_dispatch WHERE delegation_id = ?1",
-            [delegation.id.to_string()],
-        )
-        .map_err(StoreError::Sql)?;
-
-        let notify_id = identifiant_deterministe(
-            b"notification-deblocage-objectif-v1",
-            &[
-                closed_prerequisite.as_bytes(),
-                dependent_id.as_bytes(),
-                decision.id.as_bytes(),
-            ],
-        );
-        let notify_bytes = serde_json::to_vec(&ObjectiveClosureMessage {
-            id: notify_id.to_string(),
-            from: crate::MAICIE_IDENTITY,
-            to: &delegation.participant,
-            body: format!(
-                "Prérequis {closed_prerequisite} clôturé — délégation {} débloquée",
-                delegation.id
-            ),
-            reply: false,
-            hops: 4,
-        })
-        .map_err(StoreError::Json)?;
-        let notify = NotificationOutbox {
-            message_id: notify_id,
-            idempotency_key: format!("notification:{notify_id}"),
+        materialize_waiting_dependent(
+            tx,
+            dependent_id,
+            Some(closed_prerequisite),
+            &decision.id.to_string(),
             issued_at,
-            objectif_id: dependent_id,
-            delegation_id: Some(delegation.id),
-            generation: None,
-            event_id: format!("objective-unblocked:{dependent_id}:{}", closed_prerequisite),
-            policy_version: DEPENDENCY_POLICY_VERSION,
-            recipient: delegation.participant.clone(),
-            message_bytes: notify_bytes,
-            etat: EtatNotificationOutbox::Prepared,
-        };
-        notify.verifier().map_err(StoreError::Domain)?;
-        insert_notification_outbox(tx, &notify)?;
+        )?;
     }
     Ok(())
+}
+
+/// Pose le motif de différé sur la ligne de dispatch en attente du dépendant.
+fn mark_deferred_dispatch_reason(
+    tx: &Transaction<'_>,
+    dependent_id: Uuid,
+    motif: &str,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "UPDATE deferred_delegation_dispatch SET deferred_reason = ?1
+         WHERE delegation_id IN (
+             SELECT d.id FROM delegations d WHERE d.objective_id = ?2
+         )",
+        params![motif, dependent_id.to_string()],
+    )
+    .map_err(StoreError::Sql)?;
+    Ok(())
+}
+
+/// Matérialise l'outbox d'un dépendant dont tous les prérequis sont clos.
+/// Rend `false` si aucune délégation en attente n'existe pour lui.
+fn materialize_waiting_dependent(
+    tx: &Transaction<'_>,
+    dependent_id: Uuid,
+    closed_prerequisite: Option<Uuid>,
+    cause_id: &str,
+    issued_at: i64,
+) -> Result<bool, StoreError> {
+    let cause_prerequisite = closed_prerequisite.unwrap_or(dependent_id);
+    let Some((objective, mut delegation, deferred)) =
+        load_waiting_dependent_bundle(tx, dependent_id)?
+    else {
+        return Ok(false);
+    };
+    delegation
+        .transition(EtatDelegation::Creee)
+        .map_err(StoreError::Domain)?;
+    let message_id = Uuid::new_v4();
+    delegation
+        .finaliser_mandat(message_id)
+        .map_err(StoreError::Domain)?;
+    let body_bytes = delegation.instruction.as_bytes().to_vec();
+    let deadline = issued_at
+        .checked_add(
+            i64::try_from(deferred.timeout_secs)
+                .map_err(|_| StoreError::Invalid("timeout hors borne"))?,
+        )
+        .ok_or(StoreError::Invalid("échéance hors borne"))?;
+    let outbox = OutboxDelegation {
+        message_id,
+        delegation_id: delegation.id,
+        target: delegation.participant.clone(),
+        body_bytes: body_bytes.clone(),
+        reply: deferred.reply,
+        timeout_secs: deferred.timeout_secs,
+        deadline_contractuelle: deadline,
+        body_hash: stable_body_hash(&body_bytes),
+        etat: EtatOutboxDelegation::Prepared,
+        attempted_at: None,
+        retry_until: deferred.retry_until.max(issued_at),
+        dedup_retained_until: deferred.dedup_retained_until.max(issued_at),
+    };
+    let prepared = PreparedDelegation::new(
+        objective.clone(),
+        delegation.clone(),
+        outbox,
+        deferred.issuer_scope.clone(),
+        issued_at,
+        deferred.max_frame_bytes,
+    )
+    .map_err(StoreError::Outbox)?;
+    // L'objectif existe déjà : insert_prepared ferait upsert puis INSERT
+    // délégation (conflit). On pose seulement l'outbox + transition.
+    let delegation_json = serde_json::to_vec(&delegation).map_err(StoreError::Json)?;
+    let changed = tx
+        .execute(
+            "UPDATE delegations SET state = ?1, payload_json = ?2
+             WHERE id = ?3 AND state = ?4",
+            params![
+                delegation_state_name(EtatDelegation::Creee),
+                delegation_json,
+                delegation.id.to_string(),
+                delegation_state_name(EtatDelegation::EnAttentePrerequis),
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    if changed != 1 {
+        return Err(StoreError::Conflict(
+            "délégation d'attente modifiée concurremment",
+        ));
+    }
+    tx.execute(
+        "INSERT INTO delegation_outbox(\n\
+             message_id, delegation_id, objective_id, issuer_scope, issued_at, target,\n\
+             body_bytes, reply, timeout_secs, deadline_contractuelle, body_hash,\n\
+             message_bytes, state, attempted_at, retry_until, dedup_retained_until, terminal\n\
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'prepared',NULL,?13,?14,0)",
+        params![
+            prepared.outbox.message_id.to_string(),
+            prepared.delegation.id.to_string(),
+            prepared.objective.id.to_string(),
+            prepared.issuer_scope,
+            prepared.issued_at,
+            prepared.outbox.target,
+            prepared.outbox.body_bytes,
+            i64::from(prepared.outbox.reply),
+            i64::try_from(prepared.outbox.timeout_secs)
+                .map_err(|_| StoreError::Invalid("timeout_secs hors borne SQLite"))?,
+            prepared.outbox.deadline_contractuelle,
+            prepared.outbox.body_hash,
+            prepared.message_bytes,
+            prepared.outbox.retry_until,
+            prepared.outbox.dedup_retained_until,
+        ],
+    )
+    .map_err(StoreError::Sql)?;
+    tx.execute(
+        "UPDATE delegate_idempotency
+         SET message_id = ?1, deadline_contractuelle = ?2
+         WHERE delegation_id = ?3 AND message_id IS NULL",
+        params![message_id.to_string(), deadline, delegation.id.to_string(),],
+    )
+    .map_err(StoreError::Sql)?;
+    tx.execute(
+        "DELETE FROM deferred_delegation_dispatch WHERE delegation_id = ?1",
+        [delegation.id.to_string()],
+    )
+    .map_err(StoreError::Sql)?;
+
+    let notify_id = identifiant_deterministe(
+        b"notification-deblocage-objectif-v1",
+        &[
+            cause_prerequisite.as_bytes(),
+            dependent_id.as_bytes(),
+            cause_id.as_bytes(),
+        ],
+    );
+    let notify_bytes = serde_json::to_vec(&ObjectiveClosureMessage {
+        id: notify_id.to_string(),
+        from: crate::MAICIE_IDENTITY,
+        to: &delegation.participant,
+        body: format!(
+            "Prérequis {cause_prerequisite} clôturé — délégation {} débloquée",
+            delegation.id
+        ),
+        reply: false,
+        hops: 4,
+    })
+    .map_err(StoreError::Json)?;
+    let notify = NotificationOutbox {
+        message_id: notify_id,
+        idempotency_key: format!("notification:{notify_id}"),
+        issued_at,
+        objectif_id: dependent_id,
+        delegation_id: Some(delegation.id),
+        generation: None,
+        event_id: format!("objective-unblocked:{dependent_id}:{cause_prerequisite}"),
+        policy_version: DEPENDENCY_POLICY_VERSION,
+        recipient: delegation.participant.clone(),
+        message_bytes: notify_bytes,
+        etat: EtatNotificationOutbox::Prepared,
+    };
+    notify.verifier().map_err(StoreError::Domain)?;
+    insert_notification_outbox(tx, &notify)?;
+    Ok(true)
 }
 
 fn all_objective_prerequisites_closed(
@@ -8303,6 +8470,1041 @@ fn parse_tracked_request_kind(value: &str) -> Result<TypeEffetDemandeSuivie, Sto
         "creer" => Ok(TypeEffetDemandeSuivie::Creer),
         _ => Err(StoreError::Corrupt("type d'effet F29 inconnu")),
     }
+}
+
+// ---------------------------------------------------------------------------
+// SPEC-087 : état de contrôle, budget d'objectifs auto-générés, focus, usage
+// unique des attestations humaines, décisions humaines et dépôts vers la boîte.
+// ---------------------------------------------------------------------------
+
+/// Item à déposer dans la boîte humaine, durable jusqu'au reçu du daemon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HumanInboxOutboxRow {
+    pub dedup_key: String,
+    pub kind: String,
+    pub subject_json: String,
+    pub context: String,
+    pub options: Vec<String>,
+    pub created_at: i64,
+    pub attempts: u32,
+    /// Identifiant attesté par Bridget après le dépôt. Il permet au
+    /// producteur de fermer précisément son item si sa source disparaît.
+    pub item_id: Option<String>,
+}
+
+impl MaicieStore {
+    /// Pose l'instantané lu à la relève. Jamais persisté : la commande
+    /// suivante relira le daemon.
+    pub fn set_control_snapshot(&mut self, snapshot: ControlSnapshot) {
+        self.control = snapshot;
+    }
+
+    pub fn control_snapshot(&self) -> ControlSnapshot {
+        self.control
+    }
+
+    /// Occurrences de routine différées par le contrôle du référent.
+    pub fn count_control_deferred_occurrences(&self) -> Result<u32, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT COUNT(*) FROM routine_occurrences
+                 WHERE state = 'differee'
+                   AND reason IN ('pause', 'focus', 'budget', 'controle_inconnu')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count.max(0) as u32)
+            .map_err(StoreError::Sql)
+    }
+
+    /// Origine automatique d'un objectif. `LegacyUnknown` rend `false` :
+    /// l'histoire inconnue reste inconnue et ne compte pas dans le budget.
+    pub fn objective_origin_is_auto(&self, objective_id: Uuid) -> Result<bool, StoreError> {
+        let payload: Option<Vec<u8>> = self
+            .connection
+            .query_row(
+                "SELECT payload_json FROM objectives WHERE id = ?1",
+                [objective_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        let Some(payload) = payload else {
+            return Err(StoreError::NotFound("objectif absent"));
+        };
+        let objective: ObjectifCoordonne =
+            serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+        Ok(matches!(objective.origin, ObjectiveOrigin::AutoGenerated))
+    }
+
+    /// Objectifs ouverts d'origine automatique. Complexité : O(n) sur les
+    /// objectifs non clos, n borné en pratique par le plafond et la file de
+    /// focus ; le payload porte l'origine, aucune colonne n'est ajoutée.
+    pub fn count_open_auto_generated_objectives(&self) -> Result<u32, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT payload_json FROM objectives WHERE state != 'clos'")
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, Vec<u8>>(0))
+            .map_err(StoreError::Sql)?;
+        let mut count = 0u32;
+        for payload in rows {
+            let payload = payload.map_err(StoreError::Sql)?;
+            let objective: ObjectifCoordonne =
+                serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+            if matches!(objective.origin, ObjectiveOrigin::AutoGenerated) {
+                count = count.saturating_add(1);
+            }
+        }
+        Ok(count)
+    }
+
+    /// Dépose durablement un item pour la boîte humaine. Idempotent par
+    /// `dedup_key` : un second dépôt de la même clé ne réécrit rien.
+    pub fn enqueue_human_inbox(
+        &mut self,
+        dedup_key: &str,
+        kind: &str,
+        subject_json: &str,
+        context: &str,
+        options: &[String],
+        now: i64,
+    ) -> Result<bool, StoreError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let inserted =
+            enqueue_human_inbox_tx(&tx, dedup_key, kind, subject_json, context, options, now)?;
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(inserted)
+    }
+
+    pub fn pending_human_inbox(&self) -> Result<Vec<HumanInboxOutboxRow>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT dedup_key, kind, subject_json, context, options_json, created_at, attempts, item_id
+                 FROM human_inbox_outbox WHERE state = 'prepared' ORDER BY created_at, dedup_key",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], |row| {
+                let options_json: String = row.get(4)?;
+                Ok(HumanInboxOutboxRow {
+                    dedup_key: row.get(0)?,
+                    kind: row.get(1)?,
+                    subject_json: row.get(2)?,
+                    context: row.get(3)?,
+                    options: serde_json::from_str(&options_json).unwrap_or_default(),
+                    created_at: row.get(5)?,
+                    attempts: row.get::<_, i64>(6)?.max(0) as u32,
+                    item_id: row.get(7)?,
+                })
+            })
+            .map_err(StoreError::Sql)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::Sql)
+    }
+
+    pub fn mark_human_inbox_deposited(
+        &mut self,
+        dedup_key: &str,
+        item_id: &str,
+    ) -> Result<(), StoreError> {
+        if item_id.trim().is_empty() {
+            return Err(StoreError::Invalid("reçu boîte humaine sans identifiant"));
+        }
+        self.connection
+            .execute(
+                "UPDATE human_inbox_outbox
+                 SET state = 'deposited', item_id = ?2, attempts = attempts + 1
+                 WHERE dedup_key = ?1",
+                params![dedup_key, item_id],
+            )
+            .map_err(StoreError::Sql)?;
+        Ok(())
+    }
+
+    /// Items effectivement ouverts chez Bridget dont le sujet source n'existe
+    /// plus : objectif clos/absent ou délégation annulée/absente. Une fois
+    /// fermé, `closed_at` évite toute nouvelle commande à chaque relève.
+    pub fn deposited_human_inbox_to_close(&self) -> Result<Vec<HumanInboxOutboxRow>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT dedup_key, kind, subject_json, context, options_json, created_at, attempts, item_id
+                 FROM human_inbox_outbox
+                 WHERE state = 'deposited' AND item_id IS NOT NULL AND closed_at IS NULL
+                 ORDER BY created_at, dedup_key",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], |row| {
+                let options_json: String = row.get(4)?;
+                Ok(HumanInboxOutboxRow {
+                    dedup_key: row.get(0)?,
+                    kind: row.get(1)?,
+                    subject_json: row.get(2)?,
+                    context: row.get(3)?,
+                    options: serde_json::from_str(&options_json).unwrap_or_default(),
+                    created_at: row.get(5)?,
+                    attempts: row.get::<_, i64>(6)?.max(0) as u32,
+                    item_id: row.get(7)?,
+                })
+            })
+            .map_err(StoreError::Sql)?;
+        let mut closing = Vec::new();
+        for row in rows {
+            let row = row.map_err(StoreError::Sql)?;
+            if self.human_inbox_subject_vanished(&row.subject_json)? {
+                closing.push(row);
+            }
+        }
+        Ok(closing)
+    }
+
+    pub fn mark_human_inbox_closed(&mut self, dedup_key: &str, now: i64) -> Result<(), StoreError> {
+        self.connection
+            .execute(
+                "UPDATE human_inbox_outbox SET closed_at = ?2
+                 WHERE dedup_key = ?1 AND state = 'deposited' AND closed_at IS NULL",
+                params![dedup_key, now],
+            )
+            .map_err(StoreError::Sql)?;
+        Ok(())
+    }
+
+    fn human_inbox_subject_vanished(&self, subject_json: &str) -> Result<bool, StoreError> {
+        let subject: Value = serde_json::from_str(subject_json).map_err(StoreError::Json)?;
+        let Some(subject) = subject.as_object() else {
+            return Ok(false);
+        };
+        if let Some(objective_id) = subject.get("objective_id").and_then(Value::as_str) {
+            let state: Option<String> = self
+                .connection
+                .query_row(
+                    "SELECT state FROM objectives WHERE id = ?1",
+                    [objective_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(StoreError::Sql)?;
+            if state.as_deref().is_none_or(|state| state == "clos") {
+                return Ok(true);
+            }
+        }
+        if let Some(delegation_id) = subject.get("delegation_id").and_then(Value::as_str) {
+            let state: Option<String> = self
+                .connection
+                .query_row(
+                    "SELECT state FROM delegations WHERE id = ?1",
+                    [delegation_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(StoreError::Sql)?;
+            if state.as_deref().is_none_or(|state| state == "annulee") {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    pub fn mark_human_inbox_attempt(&mut self, dedup_key: &str) -> Result<(), StoreError> {
+        self.connection
+            .execute(
+                "UPDATE human_inbox_outbox SET attempts = attempts + 1 WHERE dedup_key = ?1",
+                [dedup_key],
+            )
+            .map_err(StoreError::Sql)?;
+        Ok(())
+    }
+
+    pub fn human_decision_applied(&self, decision_id: &str) -> Result<bool, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM human_decisions_applied WHERE decision_id = ?1)",
+                [decision_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|found| found == 1)
+            .map_err(StoreError::Sql)
+    }
+
+    /// Enregistre l'application d'une décision dans la même transaction que
+    /// son effet. Rend `false` si elle l'était déjà (rejeu).
+    fn record_human_decision_applied(
+        tx: &Transaction<'_>,
+        decision_id: &str,
+        item_id: &str,
+        effect: &str,
+        now: i64,
+    ) -> Result<bool, StoreError> {
+        let inserted = tx
+            .execute(
+                "INSERT OR IGNORE INTO human_decisions_applied(decision_id, item_id, applied_at, effect)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![decision_id, item_id, now, effect],
+            )
+            .map_err(StoreError::Sql)?;
+        Ok(inserted == 1)
+    }
+
+    /// Applique une décision du référent dans la même transaction que son
+    /// marquage. Une décision déjà appliquée rend `Replayed` : le relais peut
+    /// alors l'acquitter sans dupliquer l'effet local.
+    pub fn apply_human_decision(
+        &mut self,
+        decision_id: &str,
+        item_id: &str,
+        choice: &str,
+        delegation_id: Option<Uuid>,
+        now: i64,
+    ) -> Result<HumanDecisionApplication, StoreError> {
+        if self.human_decision_applied(decision_id)? {
+            return Ok(HumanDecisionApplication::Replayed);
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let effect_name = if choice.starts_with("reassign:") {
+            "reassign"
+        } else {
+            choice
+        };
+        let fresh =
+            Self::record_human_decision_applied(&tx, decision_id, item_id, effect_name, now)?;
+        if !fresh {
+            tx.commit().map_err(StoreError::Sql)?;
+            return Ok(HumanDecisionApplication::Replayed);
+        }
+        let effect = match choice {
+            "ack" => "ack",
+            "cancel" => {
+                let Some(delegation_id) = delegation_id else {
+                    return Ok(HumanDecisionApplication::Unsupported);
+                };
+                cancel_delegation_in_transaction(&tx, delegation_id, now)?;
+                "cancel"
+            }
+            "raise_budget" => "ignored_daemon_side",
+            choice if choice.starts_with("reassign:") => {
+                let Some(delegation_id) = delegation_id else {
+                    return Ok(HumanDecisionApplication::Unsupported);
+                };
+                let participant_id = choice.trim_start_matches("reassign:").trim();
+                if participant_id.is_empty() || participant_id == crate::MAICIE_IDENTITY {
+                    return Ok(HumanDecisionApplication::Unsupported);
+                }
+                apply_human_reassignment_in_transaction(
+                    &tx,
+                    decision_id,
+                    delegation_id,
+                    participant_id,
+                    now,
+                )?;
+                "reassign"
+            }
+            _ => return Ok(HumanDecisionApplication::Unsupported),
+        };
+        if effect != effect_name {
+            tx.execute(
+                "UPDATE human_decisions_applied SET effect = ?1 WHERE decision_id = ?2",
+                params![effect, decision_id],
+            )
+            .map_err(StoreError::Sql)?;
+        }
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(HumanDecisionApplication::Applied)
+    }
+
+    /// Usage unique d'un message humain : `AlreadyConsumed` s'il a déjà ouvert
+    /// un objectif.
+    pub fn human_origin_consumption(
+        &self,
+        message_id: &str,
+    ) -> Result<AttestationConsumption, StoreError> {
+        let consumed: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM human_origin_consumptions WHERE message_id = ?1)",
+                [message_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|found| found == 1)
+            .map_err(StoreError::Sql)?;
+        Ok(if consumed {
+            AttestationConsumption::AlreadyConsumed
+        } else {
+            AttestationConsumption::NeverConsumed
+        })
+    }
+
+    pub fn consume_human_origin(
+        &mut self,
+        message_id: &str,
+        objective_id: Uuid,
+        now: i64,
+    ) -> Result<bool, StoreError> {
+        let inserted = self
+            .connection
+            .execute(
+                "INSERT OR IGNORE INTO human_origin_consumptions(message_id, objective_id, consumed_at)
+                 VALUES (?1, ?2, ?3)",
+                params![message_id, objective_id.to_string(), now],
+            )
+            .map_err(StoreError::Sql)?;
+        Ok(inserted == 1)
+    }
+
+    /// Focus actif : l'objectif en position 0, s'il existe.
+    pub fn focus_active(&self) -> Result<Option<Uuid>, StoreError> {
+        let id: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT objective_id FROM focus_queue WHERE position = 0",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        id.as_deref().map(parse_uuid).transpose()
+    }
+
+    /// File de focus, position 0 en tête.
+    pub fn focus_queue(&self) -> Result<Vec<(Uuid, i64)>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT objective_id, position FROM focus_queue ORDER BY position")
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(StoreError::Sql)?;
+        let mut queue = Vec::new();
+        for row in rows {
+            let (id, position) = row.map_err(StoreError::Sql)?;
+            queue.push((parse_uuid(&id)?, position));
+        }
+        Ok(queue)
+    }
+
+    /// Inscrit un focus. `replace` : l'objectif prend la tête et l'ancien
+    /// focus recule d'une place ; sinon il rejoint la fin de la file.
+    pub fn focus_enqueue(
+        &mut self,
+        objective_id: Uuid,
+        project_id: &str,
+        replace: bool,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        if project_id.trim().is_empty() {
+            return Err(StoreError::Invalid("projet du focus manquant"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        if replace {
+            tx.execute("UPDATE focus_queue SET position = position + 1", [])
+                .map_err(StoreError::Sql)?;
+            tx.execute(
+                "INSERT INTO focus_queue(objective_id, project_id, position, opened_at) VALUES (?1, ?2, 0, ?3)",
+                params![objective_id.to_string(), project_id, now],
+            )
+            .map_err(StoreError::Sql)?;
+        } else {
+            let next: i64 = tx
+                .query_row(
+                    "SELECT COALESCE(MAX(position) + 1, 0) FROM focus_queue",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(StoreError::Sql)?;
+            tx.execute(
+                "INSERT INTO focus_queue(objective_id, project_id, position, opened_at) VALUES (?1, ?2, ?3, ?4)",
+                params![objective_id.to_string(), project_id, next, now],
+            )
+            .map_err(StoreError::Sql)?;
+        }
+        tx.commit().map_err(StoreError::Sql)
+    }
+
+    /// Ferme le focus courant et promeut la file. Rend le nouveau focus.
+    pub fn focus_close_current(&mut self) -> Result<Option<Uuid>, StoreError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        tx.execute("DELETE FROM focus_queue WHERE position = 0", [])
+            .map_err(StoreError::Sql)?;
+        tx.execute("UPDATE focus_queue SET position = position - 1", [])
+            .map_err(StoreError::Sql)?;
+        let next: Option<String> = tx
+            .query_row(
+                "SELECT objective_id FROM focus_queue WHERE position = 0",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        tx.commit().map_err(StoreError::Sql)?;
+        next.as_deref().map(parse_uuid).transpose()
+    }
+
+    /// Retire un objectif de la file de focus quel que soit son rang.
+    pub fn focus_remove(&mut self, objective_id: Uuid) -> Result<(), StoreError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let removed: Option<i64> = tx
+            .query_row(
+                "SELECT position FROM focus_queue WHERE objective_id = ?1",
+                [objective_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        if let Some(position) = removed {
+            tx.execute(
+                "DELETE FROM focus_queue WHERE objective_id = ?1",
+                [objective_id.to_string()],
+            )
+            .map_err(StoreError::Sql)?;
+            tx.execute(
+                "UPDATE focus_queue SET position = position - 1 WHERE position > ?1",
+                [position],
+            )
+            .map_err(StoreError::Sql)?;
+        }
+        tx.commit().map_err(StoreError::Sql)
+    }
+
+    /// Ouvre atomiquement un focus humain qui attend un agent. Cette voie ne
+    /// crée volontairement ni délégation ni outbox : aucune cible ne doit être
+    /// inventée pendant que les agents missionnables sont indisponibles.
+    ///
+    /// Rend l'identifiant existant si le message humain avait déjà été
+    /// consommé par une ouverture antérieure. Le guichet rejoue alors son
+    /// reçu durable plutôt que de créer un second objectif.
+    pub fn open_focus_waiting_for_agent(
+        &mut self,
+        objective: &ObjectifCoordonne,
+        opening_permit: &ObjectiveOpeningPermit,
+        human_message_id: &str,
+        project_id: &str,
+        replace: bool,
+        now: i64,
+    ) -> Result<Option<Uuid>, StoreError> {
+        if human_message_id.trim().is_empty() || project_id.trim().is_empty() || now <= 0 {
+            return Err(StoreError::Invalid("focus en attente invalide"));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT objective_id FROM human_origin_consumptions WHERE message_id = ?1",
+                [human_message_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        if let Some(existing) = existing {
+            return Ok(Some(parse_uuid(&existing)?));
+        }
+        open_objective(&tx, objective, opening_permit)?;
+        let consumed = tx
+            .execute(
+                "INSERT OR IGNORE INTO human_origin_consumptions(message_id, objective_id, consumed_at)
+                 VALUES (?1, ?2, ?3)",
+                params![human_message_id, objective.id.to_string(), now],
+            )
+            .map_err(StoreError::Sql)?;
+        if consumed != 1 {
+            return Err(StoreError::Conflict("origine humaine déjà consommée"));
+        }
+        if replace {
+            tx.execute("UPDATE focus_queue SET position = position + 1", [])
+                .map_err(StoreError::Sql)?;
+            tx.execute(
+                "INSERT INTO focus_queue(objective_id, project_id, position, opened_at) VALUES (?1, ?2, 0, ?3)",
+                params![objective.id.to_string(), project_id, now],
+            )
+            .map_err(StoreError::Sql)?;
+        } else {
+            let position: i64 = tx
+                .query_row(
+                    "SELECT COALESCE(MAX(position) + 1, 0) FROM focus_queue",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(StoreError::Sql)?;
+            tx.execute(
+                "INSERT INTO focus_queue(objective_id, project_id, position, opened_at) VALUES (?1, ?2, ?3, ?4)",
+                params![objective.id.to_string(), project_id, position, now],
+            )
+            .map_err(StoreError::Sql)?;
+        }
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(None)
+    }
+
+    pub fn focus_projection(&self) -> Result<Option<FocusProjection>, StoreError> {
+        let row: Option<(String, Vec<u8>, String, i64)> = self
+            .connection
+            .query_row(
+                "SELECT o.id, o.payload_json, f.project_id, f.opened_at
+             FROM focus_queue f JOIN objectives o ON o.id = f.objective_id
+             WHERE f.position = 0 AND f.project_id <> ''",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(StoreError::Sql)?;
+        row.map(|(id, payload, project_id, opened_at)| {
+            let objective: ObjectifCoordonne =
+                serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+            Ok(FocusProjection {
+                objective_id: parse_uuid(&id)?,
+                goal: objective.but,
+                project_id,
+                updated_at: objective.mis_a_jour_at.max(opened_at),
+            })
+        })
+        .transpose()
+    }
+
+    /// Focus actif sans délégation, dont la durée normale est échue. La
+    /// projection ne modifie rien : le dépôt idempotent vers la boîte est
+    /// laissé au réconciliateur.
+    pub fn overdue_focus_waiting_for_agent(
+        &self,
+        now: i64,
+        normal_secs: u64,
+    ) -> Result<Vec<(Uuid, String)>, StoreError> {
+        if now <= 0 || normal_secs == 0 {
+            return Err(StoreError::Invalid("délai de focus invalide"));
+        }
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT o.id, o.payload_json
+                 FROM focus_queue f
+                 JOIN objectives o ON o.id = f.objective_id
+                 WHERE f.position = 0
+                   AND NOT EXISTS (
+                     SELECT 1 FROM delegations d WHERE d.objective_id = o.id
+                   )",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .map_err(StoreError::Sql)?;
+        let mut overdue = Vec::new();
+        let delay = i64::try_from(normal_secs)
+            .map_err(|_| StoreError::Invalid("délai de focus hors borne"))?;
+        for row in rows {
+            let (id, payload) = row.map_err(StoreError::Sql)?;
+            let objective: ObjectifCoordonne =
+                serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+            if objective.cree_at.saturating_add(delay) <= now {
+                overdue.push((parse_uuid(&id)?, objective.but));
+            }
+        }
+        Ok(overdue)
+    }
+
+    /// SPEC-087 T024 : ajoute `focus:<objective_id>` aux références du message
+    /// des outboxes encore `prepared` de cet objectif, pour que la file
+    /// d'exécution du daemon les serve en premier. Les octets sont réécrits
+    /// avant tout envoi ; un message déjà parti n'est jamais modifié.
+    pub fn add_focus_reference_to_pending_outboxes(
+        &mut self,
+        objective_id: Uuid,
+    ) -> Result<u32, StoreError> {
+        let reference = format!("focus:{objective_id}");
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let rows: Vec<(String, Vec<u8>)> = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT message_id, message_bytes FROM delegation_outbox
+                     WHERE objective_id = ?1 AND state = 'prepared' AND attempted_at IS NULL",
+                )
+                .map_err(StoreError::Sql)?;
+            let rows = statement
+                .query_map([objective_id.to_string()], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+                .map_err(StoreError::Sql)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(StoreError::Sql)?
+        };
+        let mut updated = 0u32;
+        for (message_id, bytes) in rows {
+            let mut message: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(StoreError::Json)?;
+            let Some(object) = message.as_object_mut() else {
+                continue;
+            };
+            let references = object
+                .entry("references")
+                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+            let Some(array) = references.as_array_mut() else {
+                continue;
+            };
+            if array
+                .iter()
+                .any(|value| value.as_str() == Some(reference.as_str()))
+            {
+                continue;
+            }
+            array.push(serde_json::Value::String(reference.clone()));
+            let rewritten = serde_json::to_vec(&message).map_err(StoreError::Json)?;
+            tx.execute(
+                "UPDATE delegation_outbox SET message_bytes = ?1 WHERE message_id = ?2",
+                params![rewritten, message_id],
+            )
+            .map_err(StoreError::Sql)?;
+            updated += 1;
+        }
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(updated)
+    }
+
+    /// Motifs de différé posés sur les dispatchs en attente (SPEC-087).
+    pub fn deferred_dispatch_reasons(&self) -> Result<Vec<(Uuid, String)>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT delegation_id, deferred_reason FROM deferred_delegation_dispatch
+                 WHERE deferred_reason IS NOT NULL ORDER BY delegation_id",
+            )
+            .map_err(StoreError::Sql)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(StoreError::Sql)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, reason) = row.map_err(StoreError::Sql)?;
+            out.push((parse_uuid(&id)?, reason));
+        }
+        Ok(out)
+    }
+
+    /// Rejoue les dispatchs différés par la pause dont les prérequis sont
+    /// clos. Ne fait rien si la garde diffère encore. Rend le nombre
+    /// d'outboxes matérialisées.
+    pub fn release_ready_dependents(&mut self, now: i64) -> Result<u32, StoreError> {
+        if let Admission::Deferred { .. } =
+            admit_autonomous_effect(AutonomousEffect::DependencyRelease, self.control)
+        {
+            return Ok(0);
+        }
+        let deferred = self.deferred_dispatch_reasons()?;
+        if deferred.is_empty() {
+            return Ok(0);
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(StoreError::Sql)?;
+        let mut released = 0u32;
+        for (delegation_id, _reason) in deferred {
+            let objective_id: Option<String> = tx
+                .query_row(
+                    "SELECT objective_id FROM delegations WHERE id = ?1",
+                    [delegation_id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(StoreError::Sql)?;
+            let Some(objective_id) = objective_id else {
+                continue;
+            };
+            let dependent_id = parse_uuid(&objective_id)?;
+            if !all_objective_prerequisites_closed(&tx, dependent_id)? {
+                continue;
+            }
+            if materialize_waiting_dependent(&tx, dependent_id, None, "reprise-controle", now)? {
+                released += 1;
+            }
+        }
+        tx.commit().map_err(StoreError::Sql)?;
+        Ok(released)
+    }
+}
+
+/// Dépôt durable vers la boîte humaine, dans la transaction de l'appelant.
+/// Idempotent par `dedup_key` : rend `false` si la clé existe déjà.
+fn enqueue_human_inbox_tx(
+    tx: &Transaction<'_>,
+    dedup_key: &str,
+    kind: &str,
+    subject_json: &str,
+    context: &str,
+    options: &[String],
+    now: i64,
+) -> Result<bool, StoreError> {
+    if dedup_key.trim().is_empty() || options.is_empty() || now <= 0 {
+        return Err(StoreError::Invalid("dépôt humain invalide"));
+    }
+    let inserted = tx
+        .execute(
+            "INSERT OR IGNORE INTO human_inbox_outbox(
+                 dedup_key, kind, subject_json, context, options_json, created_at, state
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'prepared')",
+            params![
+                dedup_key,
+                kind,
+                subject_json,
+                context,
+                serde_json::to_string(options).map_err(StoreError::Json)?,
+                now,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    Ok(inserted == 1)
+}
+
+/// Issue de l'application d'une décision humaine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HumanDecisionApplication {
+    Applied,
+    Replayed,
+    /// Choix non pris en charge par Maicie : la décision reste non acquittée.
+    Unsupported,
+}
+
+/// Annule une délégation encore vivante ; sans effet si elle est terminale.
+fn cancel_delegation_in_transaction(
+    tx: &Transaction<'_>,
+    delegation_id: Uuid,
+    _now: i64,
+) -> Result<(), StoreError> {
+    let stored: Option<(String, Vec<u8>)> = tx
+        .query_row(
+            "SELECT state, payload_json FROM delegations WHERE id = ?1",
+            [delegation_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(StoreError::Sql)?;
+    let Some((_, payload)) = stored else {
+        return Err(StoreError::NotFound("délégation absente"));
+    };
+    let mut delegation: Delegation = serde_json::from_slice(&payload).map_err(StoreError::Json)?;
+    if delegation.etat.est_terminal() {
+        return Ok(());
+    }
+    delegation.annuler().map_err(StoreError::Domain)?;
+    let payload = serde_json::to_vec(&delegation).map_err(StoreError::Json)?;
+    tx.execute(
+        "UPDATE delegations SET state = ?1, payload_json = ?2 WHERE id = ?3",
+        params![
+            delegation_state_name(delegation.etat),
+            payload,
+            delegation_id.to_string()
+        ],
+    )
+    .map_err(StoreError::Sql)?;
+    tx.execute(
+        "UPDATE delegation_outbox SET terminal = 1, state = 'rejected'
+         WHERE delegation_id = ?1 AND terminal = 0",
+        [delegation_id.to_string()],
+    )
+    .map_err(StoreError::Sql)?;
+    Ok(())
+}
+
+/// Relève explicitement une délégation restée en intervention humaine. Le
+/// référent désigne le successeur, mais l'effet reste identique à une relève
+/// préautorisée : nouvelle génération, nouvelle demande durable et épisode de
+/// rappel, tous dans la transaction de la décision humaine.
+fn apply_human_reassignment_in_transaction(
+    tx: &Transaction<'_>,
+    decision_id: &str,
+    delegation_id: Uuid,
+    participant_id: &str,
+    now: i64,
+) -> Result<(), StoreError> {
+    let current_payload: Vec<u8> = tx
+        .query_row(
+            "SELECT generation.payload_json
+             FROM delegation_lineages lineage
+             JOIN delegation_generations generation
+               ON generation.delegation_id = lineage.delegation_id
+              AND generation.generation = lineage.active_generation
+             WHERE lineage.delegation_id = ?1",
+            [delegation_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::Sql)?;
+    let current: GenerationDelegation =
+        serde_json::from_slice(&current_payload).map_err(StoreError::Json)?;
+    if current.delegation_id != delegation_id
+        || current.etat != EtatGenerationDelegation::InterventionHumaineRequise
+    {
+        return Err(StoreError::Conflict(
+            "réassignation humaine sans intervention ouverte",
+        ));
+    }
+    let policy_payload: Vec<u8> = tx
+        .query_row(
+            "SELECT payload_json FROM reassignment_policies WHERE delegation_id = ?1",
+            [delegation_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::Sql)?;
+    let policy: PolitiqueReassignation =
+        serde_json::from_slice(&policy_payload).map_err(StoreError::Json)?;
+    let (body_bytes, timeout_secs) = load_delegation_request_template(tx, delegation_id)?;
+    let next_generation = current
+        .generation
+        .checked_add(1)
+        .ok_or(StoreError::Invalid("génération humaine hors borne"))?;
+    let event_id = format!("human-reassign:{decision_id}");
+    let request_id = identifiant_deterministe(
+        b"human-reassign-request-v1",
+        &[
+            delegation_id.as_bytes(),
+            &next_generation.to_be_bytes(),
+            decision_id.as_bytes(),
+            participant_id.as_bytes(),
+        ],
+    )
+    .to_string();
+    let deadline_at = now
+        .checked_add(
+            i64::try_from(timeout_secs)
+                .map_err(|_| StoreError::Invalid("délai humain hors borne"))?,
+        )
+        .ok_or(StoreError::Invalid("échéance humaine hors borne"))?;
+
+    let mut source = current.clone();
+    source.etat = EtatGenerationDelegation::Reassignee;
+    source.trigger_event_id = Some(event_id.clone());
+    let changed = tx
+        .execute(
+            "UPDATE delegation_generations SET state = ?1, payload_json = ?2
+             WHERE delegation_id = ?3 AND generation = ?4 AND state = 'intervention_humaine_requise'",
+            params![
+                generation_state_name(source.etat),
+                serde_json::to_vec(&source).map_err(StoreError::Json)?,
+                delegation_id.to_string(),
+                i64::try_from(current.generation)
+                    .map_err(|_| StoreError::Invalid("génération humaine hors borne"))?,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    if changed != 1 {
+        return Err(StoreError::Conflict(
+            "génération humaine modifiée concurremment",
+        ));
+    }
+
+    let next = GenerationDelegation {
+        delegation_id,
+        objectif_id: current.objectif_id,
+        generation: next_generation,
+        participant_id: participant_id.to_string(),
+        etat: EtatGenerationDelegation::Ouverte,
+        generation_precedente: Some(current.generation),
+        trigger_event_id: Some(event_id.clone()),
+    };
+    next.verifier().map_err(StoreError::Domain)?;
+    let inserted = tx
+        .execute(
+            "INSERT INTO delegation_generations(
+                 delegation_id, objective_id, generation, participant_id, state, payload_json
+             ) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                delegation_id.to_string(),
+                current.objectif_id.to_string(),
+                i64::try_from(next_generation)
+                    .map_err(|_| StoreError::Invalid("génération humaine hors borne"))?,
+                participant_id,
+                generation_state_name(next.etat),
+                serde_json::to_vec(&next).map_err(StoreError::Json)?,
+            ],
+        )
+        .map_err(map_coordination_insert_error)?;
+    if inserted != 1 {
+        return Err(StoreError::Conflict("successeur humain non enregistré"));
+    }
+    let lineage = LigneeDelegation {
+        delegation_id,
+        objectif_id: current.objectif_id,
+        generation_active: next_generation,
+    };
+    let changed = tx
+        .execute(
+            "UPDATE delegation_lineages SET active_generation = ?1, payload_json = ?2
+             WHERE delegation_id = ?3 AND active_generation = ?4",
+            params![
+                i64::try_from(next_generation)
+                    .map_err(|_| StoreError::Invalid("génération humaine hors borne"))?,
+                serde_json::to_vec(&lineage).map_err(StoreError::Json)?,
+                delegation_id.to_string(),
+                i64::try_from(current.generation)
+                    .map_err(|_| StoreError::Invalid("génération humaine hors borne"))?,
+            ],
+        )
+        .map_err(StoreError::Sql)?;
+    if changed != 1 {
+        return Err(StoreError::Conflict(
+            "lignée humaine modifiée concurremment",
+        ));
+    }
+
+    let episode = EpisodeRelance {
+        delegation_id,
+        objectif_id: current.objectif_id,
+        generation: next_generation,
+        request_id: request_id.clone(),
+        request_ordinal: 1,
+        reminder_count: 0,
+        reemissions_used: 0,
+        etat: EtatEpisodeRelance::Actif,
+    };
+    episode
+        .verifier(policy.max_reemissions)
+        .map_err(StoreError::Domain)?;
+    insert_reminder_episode(tx, &episode)?;
+    let lot = LotReassignation {
+        objectif_id: current.objectif_id,
+        delegation_id,
+        generation: next_generation,
+        issued_at: now,
+        next_deadline_at: deadline_at,
+        faits: Vec::new(),
+    };
+    let effect = EffetDemandeSuivie {
+        effect_id: identifiant_deterministe(
+            b"human-reassign-effect-v1",
+            &[delegation_id.as_bytes(), decision_id.as_bytes()],
+        ),
+        kind: TypeEffetDemandeSuivie::Creer,
+        generation: next_generation,
+        request_id,
+        recipient: participant_id.to_string(),
+        deadline_at: Some(deadline_at),
+    };
+    let outbox =
+        tracked_request_outbox(&lot, &policy, &effect, &body_bytes, timeout_secs, &event_id)?;
+    insert_tracked_request_outbox(tx, &outbox)
 }
 
 fn migrate(connection: &mut Connection, allow_upgrade: bool) -> Result<(), StoreError> {
@@ -8956,6 +10158,62 @@ fn migrate_to_version(
                  ON project_profiles(project_id, state, updated_at);",
         )
         .map_err(StoreError::Sql)?;
+    }
+
+    // v24 (SPEC-087) : focus du référent, usage unique des attestations
+    // d'origine humaine, décisions humaines appliquées, motif de différé des
+    // dispatchs en attente, et file de dépôt vers la boîte humaine.
+    if current_version < 24 && target_version >= 24 {
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS focus_queue (
+                 objective_id TEXT PRIMARY KEY REFERENCES objectives(id),
+                 position INTEGER NOT NULL CHECK(position >= 0),
+                 opened_at INTEGER NOT NULL CHECK(opened_at > 0)
+             );
+             CREATE TABLE IF NOT EXISTS human_origin_consumptions (
+                 message_id TEXT PRIMARY KEY,
+                 objective_id TEXT NOT NULL,
+                 consumed_at INTEGER NOT NULL CHECK(consumed_at > 0)
+             );
+             CREATE TABLE IF NOT EXISTS human_decisions_applied (
+                 decision_id TEXT PRIMARY KEY,
+                 item_id TEXT NOT NULL,
+                 applied_at INTEGER NOT NULL CHECK(applied_at > 0),
+                 effect TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS human_inbox_outbox (
+                 dedup_key TEXT PRIMARY KEY,
+                 kind TEXT NOT NULL,
+                 subject_json TEXT NOT NULL,
+                 context TEXT NOT NULL,
+                 options_json TEXT NOT NULL,
+                 created_at INTEGER NOT NULL CHECK(created_at > 0),
+                 state TEXT NOT NULL CHECK(state IN ('prepared', 'deposited')),
+                 attempts INTEGER NOT NULL DEFAULT 0
+             );
+             ALTER TABLE deferred_delegation_dispatch ADD COLUMN deferred_reason TEXT;",
+        )
+        .map_err(StoreError::Sql)?;
+    }
+
+    // v25 (SPEC-087) : le reçu Bridget est conservé avec l'outbox afin que
+    // Maicie puisse fermer l'item source devenu caduc. Les reçus v24 ne
+    // portaient pas d'identifiant : on les remet une fois à déposer pour
+    // récupérer le même item idempotent et conserver l'historique daemon.
+    if current_version < 25 && target_version >= 25 {
+        tx.execute_batch(
+            "ALTER TABLE human_inbox_outbox ADD COLUMN item_id TEXT;
+             ALTER TABLE human_inbox_outbox ADD COLUMN closed_at INTEGER;
+             UPDATE human_inbox_outbox SET state = 'prepared'
+             WHERE state = 'deposited' AND item_id IS NULL;",
+        )
+        .map_err(StoreError::Sql)?;
+    }
+
+    // v26 (SPEC-087 T055) : rattachement du focus au projet qui l'a ouvert.
+    if current_version < 26 && target_version >= 26 {
+        tx.execute_batch("ALTER TABLE focus_queue ADD COLUMN project_id TEXT NOT NULL DEFAULT '';")
+            .map_err(StoreError::Sql)?;
     }
 
     for version in (current_version + 1)..=target_version {
@@ -11019,6 +12277,7 @@ mod coordination_transaction_tests {
             path: PathBuf::from(":memory:"),
             connection,
             issuer_scope: "test_scope_012345678901234567890123".to_string(),
+            control: ControlSnapshot::Unread,
         };
         let pending = store.pending_notification_outboxes().unwrap();
         assert_eq!(pending, reduction.outboxes);

@@ -2171,6 +2171,8 @@ define_sql_vocabulary! {
         ObjectifAbsent => "objective_missing",
         ObjectifDejaClos => "objective_already_closed",
         AutorisationRefusee => "authorization_denied",
+        OrigineHumaineInvalide => "human_origin_invalid",
+        BudgetAtteint => "budget_reached",
     }
 }
 

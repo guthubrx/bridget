@@ -10,8 +10,9 @@ use super::{
 };
 use crate::bridget_client::{GuichetClaim, GuichetLifecycleEvent};
 use bridget_transport::protocol::{
-    GuichetDurationClass, ReviewTarget, ReviewVerdictEvidence, ServiceRequestPayload,
-    ServiceSuiteDeclaration,
+    DelegateFocus, DelegateOrigin, GuichetDurationClass, GuichetOutcome, GuichetRefusalReason,
+    GuichetReplyPayload, ReviewTarget, ReviewVerdictEvidence, ServiceRequestPayload,
+    ServiceSuiteDeclaration, WrapperToDaemon, decode, encode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -83,6 +84,10 @@ pub struct DemandeDelegation {
     pub suite: SuiteObjective,
     pub depends_on: Vec<Uuid>,
     pub references: Vec<Uuid>,
+    /// SPEC-087 : origine fabriquée par le daemon pour le principal humain.
+    pub origin: Option<DelegateOrigin>,
+    /// SPEC-087 : demande de focus, valide seulement avec une origine humaine.
+    pub focus: Option<DelegateFocus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +197,10 @@ struct DelegatePayload {
     depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     references: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin: Option<DelegateOrigin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    focus: Option<DelegateFocus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,8 +303,15 @@ pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDoma
         "delegate" => {
             let payload: DelegatePayload = serde_json::from_value(wire.payload.clone())
                 .map_err(|_| GuichetDomainError::InvalidEnvelope("délégation invalide"))?;
+            // SPEC-087 : origine et focus voyagent en v2, jamais en v1.
+            if wire.v == 1 && (payload.origin.is_some() || payload.focus.is_some()) {
+                return Err(GuichetDomainError::InvalidEnvelope(
+                    "origine ou focus exigent la version 2",
+                ));
+            }
             match (wire.v, payload.review_target.as_ref()) {
                 (1, None) => {}
+                (2, None) if payload.origin.is_some() || payload.focus.is_some() => {}
                 (2, Some(target)) if target.is_valid() => {}
                 (1, Some(_)) => {
                     return Err(GuichetDomainError::InvalidEnvelope(
@@ -384,6 +400,8 @@ pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDoma
                 suite: payload.suite.clone(),
                 depends_on: payload.depends_on.clone(),
                 references: payload.references.clone(),
+                origin: payload.origin.clone(),
+                focus: payload.focus.clone(),
             };
             ensure_canonical(
                 &claim.canonical_request,
@@ -400,6 +418,8 @@ pub fn parse_claim(claim: &GuichetClaim) -> Result<RequeteCanonique, GuichetDoma
                 suite,
                 depends_on,
                 references,
+                origin: payload.origin,
+                focus: payload.focus,
             })
         }
         "registre_add" => {
@@ -592,6 +612,7 @@ impl ProjectionReply {
 #[serde(rename_all = "snake_case")]
 pub enum DelegateMutationStatus {
     Created,
+    WaitingForAgent,
     SelectionRequired,
 }
 
@@ -698,7 +719,7 @@ struct DeliveryReplyPayload<'a> {
 struct RefusalReplyPayload {
     kind: &'static str,
     operation: &'static str,
-    reason: &'static str,
+    reason: GuichetRefusalReason,
 }
 
 pub fn delivery_reply_bytes(
@@ -745,10 +766,37 @@ pub fn refusal_reply_bytes(
     request: &RequeteCanonique,
     reason: MotifRefusGreffe,
 ) -> Result<Vec<u8>, GuichetDomainError> {
+    let reason = wire_refusal_reason(reason)?;
+    refusal_reply_bytes_with_wire_reason(claim, response_message_id, request, reason)
+}
+
+/// Reçu de refus qui préserve les mesures du plafond au moment précis où le
+/// greffe a refusé la mutation. Le détail n'est pas reconstruit à partir de
+/// l'état courant lors d'un rejeu.
+pub fn budget_refusal_reply_bytes(
+    claim: &GuichetClaim,
+    response_message_id: &str,
+    request: &RequeteCanonique,
+    cap: u32,
+    open: u32,
+) -> Result<Vec<u8>, GuichetDomainError> {
+    refusal_reply_bytes_with_wire_reason(
+        claim,
+        response_message_id,
+        request,
+        GuichetRefusalReason::BudgetReached { cap, open },
+    )
+}
+
+fn refusal_reply_bytes_with_wire_reason(
+    claim: &GuichetClaim,
+    response_message_id: &str,
+    request: &RequeteCanonique,
+    reason: GuichetRefusalReason,
+) -> Result<Vec<u8>, GuichetDomainError> {
     validate_identifier(response_message_id)?;
     validate_identifier(&claim.claim_token)?;
     let operation = request.request.operation().as_sql();
-    let reason = reason.as_sql();
     let in_reply_to = request.request.in_reply_to(&request.request_id);
     serde_json::to_vec(&GuichetReplyWire {
         kind: "guichet_reply",
@@ -767,6 +815,82 @@ pub fn refusal_reply_bytes(
         },
     })
     .map_err(|_| GuichetDomainError::InvalidEnvelope("refus non sérialisable"))
+}
+
+/// Reprend un reçu de refus déjà durable avec un nouveau lease sans toucher à
+/// sa charge. Cela est essentiel pour `BudgetReached` : `cap` et `open`
+/// restent les valeurs attestées au premier refus, pas celles du store au
+/// moment du rejeu.
+pub fn reclaim_refusal_reply_bytes(
+    claim: &GuichetClaim,
+    bytes: &[u8],
+) -> Result<Vec<u8>, GuichetDomainError> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| GuichetDomainError::InvalidEnvelope("reçu de refus non UTF-8"))?;
+    let mut reply: WrapperToDaemon = decode(text)
+        .map_err(|_| GuichetDomainError::InvalidEnvelope("reçu de refus non décodable"))?;
+    let WrapperToDaemon::GuichetReply {
+        issuer_scope,
+        request_id,
+        claim_generation,
+        claim_token,
+        outcome,
+        payload,
+        ..
+    } = &mut reply
+    else {
+        return Err(GuichetDomainError::InvalidEnvelope(
+            "reçu de refus hors protocole",
+        ));
+    };
+    if *outcome != GuichetOutcome::Refused
+        || !matches!(payload, GuichetReplyPayload::Refused { .. })
+    {
+        return Err(GuichetDomainError::InvalidEnvelope(
+            "reçu durable non refusé",
+        ));
+    }
+    *issuer_scope = claim.issuer_scope.clone();
+    *request_id = claim.request_id.clone();
+    *claim_generation = claim.claim_generation;
+    *claim_token = claim.claim_token.clone();
+    encode(&reply)
+        .map(String::into_bytes)
+        .map_err(|_| GuichetDomainError::InvalidEnvelope("reçu de refus non sérialisable"))
+}
+
+fn wire_refusal_reason(
+    reason: MotifRefusGreffe,
+) -> Result<GuichetRefusalReason, GuichetDomainError> {
+    let reason = match reason {
+        MotifRefusGreffe::DelegationAbsente => GuichetRefusalReason::DelegationMissing,
+        MotifRefusGreffe::RelationsInvalides => GuichetRefusalReason::RelationInvalid,
+        MotifRefusGreffe::EnveloppeDivergente => GuichetRefusalReason::EnvelopeMismatch,
+        MotifRefusGreffe::VerdictRevueRequis => GuichetRefusalReason::ReviewVerdictRequired,
+        MotifRefusGreffe::VerdictRevueInattendu => GuichetRefusalReason::ReviewVerdictUnexpected,
+        MotifRefusGreffe::MandatRevueDivergent => GuichetRefusalReason::ReviewMandateMismatch,
+        MotifRefusGreffe::TeteCibleDeplacee => GuichetRefusalReason::TargetHeadMoved,
+        MotifRefusGreffe::TeteCibleDeplaceeEtTeteMesureeDivergente => {
+            GuichetRefusalReason::TargetHeadMovedAndMeasuredHeadMismatch
+        }
+        MotifRefusGreffe::TeteMesureeDivergente => GuichetRefusalReason::MeasuredHeadMismatch,
+        MotifRefusGreffe::SuiteAucuneAvecCitationNonClassee => {
+            GuichetRefusalReason::SuiteNoneWithUnclassifiedCitation
+        }
+        MotifRefusGreffe::OperationNonDisponible => GuichetRefusalReason::OperationNotAvailable,
+        MotifRefusGreffe::MutationInvalide => GuichetRefusalReason::MutationInvalid,
+        MotifRefusGreffe::CibleIndisponible => GuichetRefusalReason::TargetUnavailable,
+        MotifRefusGreffe::ObjectifAbsent => GuichetRefusalReason::ObjectiveMissing,
+        MotifRefusGreffe::ObjectifDejaClos => GuichetRefusalReason::ObjectiveAlreadyClosed,
+        MotifRefusGreffe::AutorisationRefusee => GuichetRefusalReason::AuthorizationDenied,
+        MotifRefusGreffe::OrigineHumaineInvalide => GuichetRefusalReason::HumanOriginInvalid,
+        MotifRefusGreffe::BudgetAtteint => {
+            return Err(GuichetDomainError::InvalidEnvelope(
+                "budget sans valeurs attestées",
+            ));
+        }
+    };
+    Ok(reason)
 }
 
 pub fn projection_reply_bytes(
@@ -914,6 +1038,25 @@ fn validate_mutation_reply(reply: &MutationReply) -> Result<(), GuichetDomainErr
                     ));
                 }
             }
+            DelegateMutationStatus::WaitingForAgent => {
+                let objective_id =
+                    objective_id
+                        .as_deref()
+                        .ok_or(GuichetDomainError::InvalidEnvelope(
+                            "focus en attente sans objectif",
+                        ))?;
+                parse_uuid(objective_id)?;
+                if delegation_id.is_some()
+                    || message_id.is_some()
+                    || participant.is_some()
+                    || !candidates.is_empty()
+                    || !*waiting_on_prerequisites
+                {
+                    return Err(GuichetDomainError::InvalidEnvelope(
+                        "focus en attente incohérent",
+                    ));
+                }
+            }
             DelegateMutationStatus::SelectionRequired => {
                 if objective_id.is_some()
                     || delegation_id.is_some()
@@ -1019,6 +1162,50 @@ fn validate_projection(projection: &ProjectionReply) -> Result<(), GuichetDomain
     Ok(())
 }
 
+/// SPEC-087 : octets canoniques de la requête de délégation **sans** son
+/// origine, tels que le daemon les a hachés avant de fabriquer l'attestation.
+/// Le hash ne se définit jamais sur un document qui porte déjà la preuve.
+pub fn canonical_delegate_bytes_without_origin(
+    canonical: &RequeteCanonique,
+    request: &DemandeDelegation,
+) -> Result<Vec<u8>, GuichetDomainError> {
+    let duration = match request.duration {
+        ClasseDuree::Courte => GuichetDurationClass::Courte,
+        ClasseDuree::Normale => GuichetDurationClass::Normale,
+        ClasseDuree::Longue => GuichetDurationClass::Longue,
+    };
+    let suite = match &request.suite {
+        SuiteObjective::Aucune => ServiceSuiteDeclaration::Aucune,
+        SuiteObjective::Objectif(id) => ServiceSuiteDeclaration::Objectif {
+            objective_id: id.to_string(),
+        },
+    };
+    let payload = ServiceRequestPayload::Delegate {
+        goal: request.goal.clone(),
+        review_target: request.review_target.clone(),
+        explicit_target: request.explicit_target.clone(),
+        required_tags: request.required_tags.clone(),
+        duration,
+        suite,
+        depends_on: request.depends_on.iter().map(ToString::to_string).collect(),
+        references: request.references.iter().map(ToString::to_string).collect(),
+        origin: None,
+        focus: request.focus.clone(),
+    };
+    serde_json::to_vec(&CanonicalServiceRequest {
+        kind: "service_request",
+        v: 2,
+        issuer_scope: &canonical.issuer_scope,
+        request_id: &canonical.request_id,
+        issued_at: canonical.issued_at,
+        from: &canonical.from,
+        to: "maicie",
+        operation: "delegate",
+        payload,
+    })
+    .map_err(|_| GuichetDomainError::InvalidEnvelope("requête non sérialisable"))
+}
+
 fn ensure_canonical<T: Serialize>(
     original: &[u8],
     wire: &ServiceRequestWire,
@@ -1114,6 +1301,8 @@ mod mutation_tests {
             suite: ServiceSuiteDeclaration::Aucune,
             depends_on: Vec::new(),
             references: Vec::new(),
+            origin: None,
+            focus: None,
         }
     }
 
@@ -1244,5 +1433,38 @@ mod mutation_tests {
         assert!(value["payload"].get("objective_id").is_none());
         assert!(value["payload"].get("delegation_id").is_none());
         assert!(value["payload"].get("message_id").is_none());
+    }
+
+    #[test]
+    fn spec_087_refus_budget_conserve_cap_et_open_au_rejeu() {
+        let request = claim(
+            canonical("delegate", &delegate_payload(None)),
+            1,
+            "token-budget-1",
+        );
+        let canonical = parse_claim(&request).unwrap();
+        let bytes =
+            budget_refusal_reply_bytes(&request, "response-budget", &canonical, 3, 3).unwrap();
+        let parsed: WrapperToDaemon = decode(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        assert!(matches!(
+            parsed,
+            WrapperToDaemon::GuichetReply {
+                payload: GuichetReplyPayload::Refused {
+                    reason: GuichetRefusalReason::BudgetReached { cap: 3, open: 3 },
+                    ..
+                },
+                ..
+            }
+        ));
+
+        let replay_claim = claim(request.canonical_request.clone(), 2, "token-budget-2");
+        let replay = reclaim_refusal_reply_bytes(&replay_claim, &bytes).unwrap();
+        let replay_value: Value = serde_json::from_slice(&replay).unwrap();
+        assert_eq!(replay_value["claim_generation"], 2);
+        assert_eq!(replay_value["claim_token"], "token-budget-2");
+        assert_eq!(
+            replay_value["payload"]["reason"],
+            serde_json::json!({"budget_reached":{"cap":3,"open":3}})
+        );
     }
 }
