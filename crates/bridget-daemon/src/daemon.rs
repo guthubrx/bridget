@@ -14371,7 +14371,16 @@ fn handle_wrapper_message(
         WrapperToDaemon::TurnState { in_progress } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             match st.set_turn_state(conn_id, in_progress) {
-                Ok(()) => None,
+                Ok(()) => {
+                    // La levée peut précéder le terminal de `turn/interrupt`.
+                    // Le retour à l'état disponible rejoue alors la reprise
+                    // durable. Celle-ci reste refusée tant que le contrôle est
+                    // toujours en pause.
+                    if !in_progress {
+                        resume_executions_after_pause(&mut st);
+                    }
+                    None
+                }
                 Err(reason) => Some(DaemonToWrapper::Nack {
                     id: "turn-state".to_string(),
                     reason,
@@ -23434,6 +23443,12 @@ mod presence_tests {
     #[test]
     fn spec_087_levee_de_pause_agent_occupe_ne_relance_pas() {
         let (mut state, config) = spec_087_state("spec-087-pause-busy");
+        let (writer, mut reader) = control_socket("spec-087-pause-busy");
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .unwrap();
+        state.connections.insert("conn-1".to_string(), writer);
         state.presences.get_mut("instance-1").unwrap().busy_since = Some(Instant::now());
         spec_087_register_human_control_client(&mut state);
         let now = unix_now_secs();
@@ -23496,6 +23511,27 @@ mod presence_tests {
                 "execution-pause-busy-087".to_string(),
                 SPEC_087_AGENT_ID.to_string()
             )]
+        );
+        drop(state);
+
+        assert!(
+            handle_wrapper_message(
+                "conn-1",
+                WrapperToDaemon::TurnState { in_progress: false },
+                &shared
+            )
+            .is_none()
+        );
+        assert!(
+            matches!(read_control(&mut reader), DaemonToWrapper::DeliverIdempotent { execution: Some(execution), .. } if execution.generation == 2)
+        );
+        let state = shared.lock().unwrap();
+        assert!(
+            state
+                .execution_store
+                .pending_pause_interruptions()
+                .unwrap()
+                .is_empty()
         );
         drop(state);
         drop(shared);
