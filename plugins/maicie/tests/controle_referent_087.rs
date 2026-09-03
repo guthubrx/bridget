@@ -118,6 +118,16 @@ fn human_inbox_limits() -> maicie::bridget_client::BridgetClientLimits {
     }
 }
 
+/// Depuis T055, Maicie publie le focus courant (`control_focus_publish`) à
+/// chaque relève, avant toute trame de boîte humaine. Le faux daemon l'accepte.
+fn answer_control_focus_publish(
+    reader: &mut BufReader<UnixStream>,
+    writer: &mut BufWriter<UnixStream>,
+) {
+    assert_eq!(read_json(reader)["type"], "control_focus_publish");
+    write_json(writer, serde_json::json!({"type":"control_focus"}));
+}
+
 fn read_json(reader: &mut BufReader<UnixStream>) -> serde_json::Value {
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
@@ -153,6 +163,7 @@ fn serve_one_human_decision(
             serde_json::json!({"type":"ServiceWelcome","version":1,"horizon_secs":60,
                 "issued_at_tolerance_secs":5,"capabilities":["human_inbox_v1"]}),
         );
+        answer_control_focus_publish(&mut reader, &mut writer);
         assert_eq!(read_json(&mut reader)["type"], "human_inbox_decisions");
         write_json(
             &mut writer,
@@ -217,18 +228,19 @@ fn open_auto(
     }
 }
 
-/// Propriété : une base au schéma précédent migre vers v25 avec ses quatre
-/// objets, et une base v24 vierge s'ouvre. La base « v23 » est fabriquée par
+/// Propriété : une base au schéma précédent migre vers v26 avec ses quatre
+/// objets 087 et la colonne `project_id` de la file de focus, et une base v24
+/// vierge s'ouvre. La base « v23 » est fabriquée par
 /// le code courant puis ramenée à la version précédente sans ses objets v24,
 /// faute de binaire v23 disponible sur le banc.
 #[test]
-fn spec_087_migration_v25_ajoute_focus_consommations_decisions_et_motif() {
+fn spec_087_migration_v26_ajoute_focus_consommations_decisions_et_motif() {
     let guard = RootGuard::new("migration");
     let database = guard.path.join("maicie.sqlite3");
     {
         let store = MaicieStore::open(&database).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 25);
+        assert_eq!(SCHEMA_VERSION, 26);
     }
     {
         let connection = rusqlite::Connection::open(&database).unwrap();
@@ -237,7 +249,7 @@ fn spec_087_migration_v25_ajoute_focus_consommations_decisions_et_motif() {
                 "DROP TABLE focus_queue; DROP TABLE human_origin_consumptions;
                  DROP TABLE human_decisions_applied; DROP TABLE human_inbox_outbox;
                  ALTER TABLE deferred_delegation_dispatch DROP COLUMN deferred_reason;
-                 DELETE FROM schema_migrations WHERE version IN (24, 25);
+                 DELETE FROM schema_migrations WHERE version IN (24, 25, 26);
                  PRAGMA user_version = 23;",
             )
             .unwrap();
@@ -252,17 +264,19 @@ fn spec_087_migration_v25_ajoute_focus_consommations_decisions_et_motif() {
             refused,
             Some(StoreError::MigrationRequired {
                 found: 23,
-                supported: 25
+                supported: 26
             })
         ),
         "une base v23 exige le consentement : {refused:?}"
     );
     let mut store =
         historical_guichet_receptions::open_after_published_migration(&database).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 25);
+    assert_eq!(store.schema_version().unwrap(), 26);
     store.set_control_snapshot(active(5));
     let (objective_id, _, _) = open_auto(&mut store, "post-migration", 1_000, &[]);
-    store.focus_enqueue(objective_id, true, 1_000).unwrap();
+    store
+        .focus_enqueue(objective_id, "projet-test-087", true, 1_000)
+        .unwrap();
     assert_eq!(store.focus_active().unwrap(), Some(objective_id));
     assert!(
         store
@@ -282,15 +296,21 @@ fn spec_087_file_de_focus_une_tete_et_une_file() {
     let (a, _, _) = open_auto(&mut store, "a", 1_000, &[]);
     let (b, _, _) = open_auto(&mut store, "b", 1_001, &[]);
     let (c, _, _) = open_auto(&mut store, "c", 1_002, &[]);
-    store.focus_enqueue(a, true, 1_000).unwrap();
-    store.focus_enqueue(b, false, 1_001).unwrap();
+    store
+        .focus_enqueue(a, "projet-test-087", true, 1_000)
+        .unwrap();
+    store
+        .focus_enqueue(b, "projet-test-087", false, 1_001)
+        .unwrap();
     assert_eq!(store.focus_active().unwrap(), Some(a));
     assert_eq!(
         store.focus_queue().unwrap(),
         vec![(a, 0), (b, 1)],
         "b est en file derrière a"
     );
-    store.focus_enqueue(c, true, 1_002).unwrap();
+    store
+        .focus_enqueue(c, "projet-test-087", true, 1_002)
+        .unwrap();
     assert_eq!(store.focus_queue().unwrap(), vec![(c, 0), (a, 1), (b, 2)]);
     assert_eq!(store.focus_close_current().unwrap(), Some(a));
     assert_eq!(store.focus_queue().unwrap(), vec![(a, 0), (b, 1)]);
@@ -326,8 +346,14 @@ fn spec_087_focus_sans_agent_attend_puis_avertit_le_referent() {
         dedup_retained_until: 1_090,
         max_frame_bytes: 256 * 1024,
     };
-    let waiting =
-        open_focus_waiting_for_agent(&mut store, &request, "hmo-focus-waiting", true).unwrap();
+    let waiting = open_focus_waiting_for_agent(
+        &mut store,
+        &request,
+        "hmo-focus-waiting",
+        "projet-test-087",
+        true,
+    )
+    .unwrap();
     assert_eq!(store.focus_active().unwrap(), Some(waiting.objective_id));
     assert!(
         store
@@ -701,6 +727,7 @@ fn spec_087_item_humain_est_ferme_quand_son_objectif_disparait() {
                 serde_json::json!({"type":"ServiceWelcome","version":1,"horizon_secs":60,
                     "issued_at_tolerance_secs":5,"capabilities":["human_inbox_v1"]}),
             );
+            answer_control_focus_publish(&mut reader, &mut writer);
             assert_eq!(
                 read_json(&mut reader)["type"],
                 "human_inbox_deposit",
