@@ -169,6 +169,16 @@
 ### Non cochées côté daemon, avec raison
 - T045 : validation opérateur, exige le référent.
 
+### Preuve fournisseur Codex et correction de reprise - 2026-09-03
+
+- La première tentative fournisseur n'était pas valide : les définitions gelées Codex n'avaient pas d'observation de capacités. Le daemon refusait donc légitimement l'interruption. L'observation attestée `interrupt` et `steer` a été ajoutée aux définitions persistantes sans modifier les secrets.
+- La tentative suivante a révélé une course : si `control resume` arrivait avant le terminal de `turn/interrupt`, l'agent était encore `busy` et aucune reprise n'était envoyée lorsqu'il redevenait libre. Le daemon rejoue désormais la reprise durable à la transition `TurnState { in_progress: false }`.
+- Tests ciblés sur le serveur après correction : `spec_087_pause` : **5 passés, 0 échec** ; `spec_087_levee_de_pause` : **3 passés, 0 échec**.
+- Essai réel isolé Codex, agent éphémère `6f36e8ff-4886-4896-9168-e9523c2efb29` : objectif `9ed0807b-4585-4906-929b-212d2033fc2e`, soumission `cc600386-2c54-46cb-966e-0c6d1fe60232`, exécution parent `execution-cc600386-2c54-46cb-966e-0c6d1fe60232`.
+- La pause de génération 11 a placé le parent en `interrupted`, génération 1. La reprise de génération 12 a renseigné `control_pause_interruptions.resumed_at` et créé `execution-recovery-ea977796-18a9-4e76-afc2-9f4e9b7873a1`, génération 2. Cette exécution est passée à `completed`.
+- Nettoyage de l'essai : l'agent éphémère a été arrêté puis décommissionné, les deux objectifs techniques ont été clos, la configuration Maicie a été restaurée depuis sa sauvegarde. Le contrôle est de nouveau `autonomie active`, génération 12.
+- Mise en service du correctif : build `f281b749`, daemon installé dans `/home/moi/.local/lib/bridget/bridget-f281b749-c5516c284c3b/bridget`, puis `bridget-daemon.service` redémarré. `bridget control status` confirme le contrôle actif.
+
 ## Mutants
 
 | Mutant | Tests attendus rouges | Résultat brut |
