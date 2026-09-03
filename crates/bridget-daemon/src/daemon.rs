@@ -8809,7 +8809,7 @@ fn handle_control_state_set(
             reason: ControlStateRefusal::UnsupportedVersion,
         };
     }
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
     let Some(actor) = control_client_actor(&st, conn_id) else {
         return DaemonToWrapper::ControlStateRejected {
             reason: ControlStateRefusal::HumanPrincipalRequired,
@@ -8829,16 +8829,22 @@ fn handle_control_state_set(
         actor,
         now: unix_now_secs(),
     };
-    let conn = st.store.connection();
-    match crate::referent_control::set(conn, mutation) {
+    let outcome = crate::referent_control::set(st.store.connection(), mutation);
+    match outcome {
         Ok(Ok(state)) => {
+            if paused == Some(true) {
+                interrupt_executions_for_pause(&mut st, state.generation);
+            } else if paused == Some(false) {
+                resume_executions_after_pause(&mut st);
+            }
             info!(
                 "état de contrôle: génération {} par {actor} (pause={}, plafond={})",
                 state.generation, state.paused, state.auto_objectives_cap
             );
             DaemonToWrapper::ControlState {
                 state,
-                inbox_open_count: crate::human_inbox::open_count(conn).unwrap_or(0),
+                inbox_open_count: crate::human_inbox::open_count(st.store.connection())
+                    .unwrap_or(0),
             }
         }
         Ok(Err(reason)) => DaemonToWrapper::ControlStateRejected { reason },
@@ -8846,6 +8852,87 @@ fn handle_control_state_set(
             warn!("état de contrôle inécrivable: {error}");
             DaemonToWrapper::ControlStateRejected {
                 reason: ControlStateRefusal::StoreUnavailable,
+            }
+        }
+    }
+}
+
+fn interrupt_executions_for_pause(st: &mut DaemonState, control_generation: u64) {
+    let now = unix_now_secs();
+    let ids = match st.execution_store.recoverable_execution_ids() {
+        Ok(ids) => ids,
+        Err(error) => {
+            warn!("lecture des exécutions à geler: {error}");
+            return;
+        }
+    };
+    let issuer_scope = match st.idempotency.supervisor_scope() {
+        Ok(scope) => scope,
+        Err(error) => {
+            warn!("identité superviseur indisponible pour pause: {error}");
+            return;
+        }
+    };
+    for execution_id in ids {
+        let Ok(Some(target)) = st.execution_store.execution_control_target(&execution_id) else {
+            continue;
+        };
+        if !matches!(
+            target.snapshot.state.as_str(),
+            "running" | "waiting_approval" | "waiting_user_input"
+        ) {
+            continue;
+        }
+        if let Err(error) = st.execution_store.record_pause_interruption(
+            &execution_id,
+            &target.target_agent,
+            control_generation,
+            now,
+        ) {
+            warn!("mémoire gel {execution_id}: {error}");
+            continue;
+        }
+        let command = ExecutionControlCommand {
+            version: 1,
+            command_id: format!("control-pause-{control_generation}-{execution_id}"),
+            execution_id,
+            generation: target.snapshot.generation,
+            revision: target.snapshot.revision,
+            operation: ExecutionControlOperation::Interrupt,
+            message: None,
+        };
+        let outcome = handle_execution_control(&issuer_scope, command, st);
+        info!("interruption de pause demandée: {outcome:?}");
+    }
+}
+
+fn resume_executions_after_pause(st: &mut DaemonState) {
+    let pending = match st.execution_store.pending_pause_interruptions() {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!("lecture gels à reprendre: {error}");
+            return;
+        }
+    };
+    for (_, agent_name) in pending {
+        let Some(agent) = st.router.get_agent(&agent_name) else {
+            continue;
+        };
+        let connection_id = agent.connection_id.clone();
+        let Some((instance_id, _)) = st
+            .presences
+            .iter()
+            .find(|(_, presence)| presence.name == agent_name && presence.busy_since.is_none())
+        else {
+            continue;
+        };
+        let instance_id = instance_id.clone();
+        schedule_execution_recovery(st, &connection_id, &instance_id, &agent_name, false);
+        if let Some(controls) = st.pending_post_response_controls.remove(&connection_id) {
+            let retry = execute_controls(controls);
+            if !retry.is_empty() {
+                st.pending_post_response_controls
+                    .insert(connection_id, retry);
             }
         }
     }
@@ -23171,7 +23258,7 @@ mod presence_tests {
         .unwrap()
         .unwrap();
 
-        schedule_execution_recovery(&mut state, "conn-1", "instance-1", SPEC_087_AGENT_ID, false);
+        resume_executions_after_pause(&mut state);
         assert!(state.pending_post_response_controls.is_empty());
         assert!(matches!(
             state
@@ -23205,6 +23292,350 @@ mod presence_tests {
                 ..
             } if execution.generation == 2
         ));
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn spec_087_levee_de_pause_relance_l_execution_interrompue() {
+        let (mut state, config) = spec_087_state("spec-087-pause-resume");
+        let (writer, mut reader) = control_socket("spec-087-pause-resume");
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .unwrap();
+        state.connections.insert("conn-1".to_string(), writer);
+        spec_087_register_human_control_client(&mut state);
+        let now = unix_now_secs();
+        let mut message =
+            bridget_core::BridgetMessage::new("humain", SPEC_087_AGENT_ID, "reprends moi");
+        message.id = "message-pause-resume-087".to_string();
+        message.origin = Some(bridget_core::MessageOrigin::Human);
+        message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+        state
+            .execution_store
+            .admit_starting_message(&message, "execution-pause-resume-087", now)
+            .unwrap();
+        state
+            .execution_store
+            .transition_if_current(
+                "execution-pause-resume-087",
+                "starting",
+                0,
+                1,
+                "interrupted",
+                "control_pause",
+                now,
+            )
+            .unwrap();
+        state
+            .execution_store
+            .record_pause_interruption("execution-pause-resume-087", SPEC_087_AGENT_ID, 2, now)
+            .unwrap();
+        assert_eq!(
+            state
+                .execution_store
+                .recoverable_execution_ids_for_agent(SPEC_087_AGENT_ID)
+                .unwrap(),
+            vec!["execution-pause-resume-087"]
+        );
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_control_state_set(
+                &shared,
+                "ui-control",
+                1,
+                "pause-resume-087",
+                0,
+                Some(true),
+                None,
+                Some("test"),
+            ),
+            DaemonToWrapper::ControlState { .. }
+        ));
+        assert!(matches!(
+            handle_control_state_set(
+                &shared,
+                "ui-control",
+                1,
+                "resume-pause-087",
+                1,
+                Some(false),
+                None,
+                Some("test"),
+            ),
+            DaemonToWrapper::ControlState { .. }
+        ));
+        assert!(
+            matches!(read_control(&mut reader), DaemonToWrapper::DeliverIdempotent { execution: Some(execution), .. } if execution.generation == 2)
+        );
+        assert!(
+            shared
+                .lock()
+                .unwrap()
+                .execution_store
+                .pending_pause_interruptions()
+                .unwrap()
+                .is_empty()
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn spec_087_pause_interrompt_le_tour_en_cours() {
+        let (mut state, config) = spec_087_state("spec-087-pause-interrupt");
+        let (writer, mut reader) = control_socket("spec-087-pause-interrupt");
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(250)))
+            .unwrap();
+        state.connections.insert("conn-1".to_string(), writer);
+        spec_087_register_human_control_client(&mut state);
+        let now = unix_now_secs();
+        let mut message =
+            bridget_core::BridgetMessage::new("humain", SPEC_087_AGENT_ID, "arrête moi");
+        message.id = "message-pause-interrupt-087".to_string();
+        message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+        state
+            .execution_store
+            .admit_starting_message(&message, "execution-pause-interrupt-087", now)
+            .unwrap();
+        state
+            .execution_store
+            .transition_if_current(
+                "execution-pause-interrupt-087",
+                "starting",
+                0,
+                1,
+                "running",
+                "provider_accepted",
+                now,
+            )
+            .unwrap();
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_control_state_set(
+                &shared,
+                "ui-control",
+                1,
+                "pause-interrupt-087",
+                0,
+                Some(true),
+                None,
+                Some("test"),
+            ),
+            DaemonToWrapper::ControlState { .. }
+        ));
+        assert!(
+            matches!(read_control(&mut reader), DaemonToWrapper::ControlExecutionDispatch { command, .. } if command.operation == ExecutionControlOperation::Interrupt && command.execution_id == "execution-pause-interrupt-087")
+        );
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .execution_store
+                .pending_pause_interruptions()
+                .unwrap()
+                .len(),
+            1
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn spec_087_levee_de_pause_agent_occupe_ne_relance_pas() {
+        let (mut state, config) = spec_087_state("spec-087-pause-busy");
+        state.presences.get_mut("instance-1").unwrap().busy_since = Some(Instant::now());
+        spec_087_register_human_control_client(&mut state);
+        let now = unix_now_secs();
+        let mut message =
+            bridget_core::BridgetMessage::new("humain", SPEC_087_AGENT_ID, "reste occupé");
+        message.id = "message-pause-busy-087".to_string();
+        message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+        state
+            .execution_store
+            .admit_starting_message(&message, "execution-pause-busy-087", now)
+            .unwrap();
+        state
+            .execution_store
+            .transition_if_current(
+                "execution-pause-busy-087",
+                "starting",
+                0,
+                1,
+                "interrupted",
+                "control_pause",
+                now,
+            )
+            .unwrap();
+        state
+            .execution_store
+            .record_pause_interruption("execution-pause-busy-087", SPEC_087_AGENT_ID, 1, now)
+            .unwrap();
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_control_state_set(
+                &shared,
+                "ui-control",
+                1,
+                "pause-busy-087",
+                0,
+                Some(true),
+                None,
+                None
+            ),
+            DaemonToWrapper::ControlState { .. }
+        ));
+        assert!(matches!(
+            handle_control_state_set(
+                &shared,
+                "ui-control",
+                1,
+                "resume-busy-087",
+                1,
+                Some(false),
+                None,
+                None
+            ),
+            DaemonToWrapper::ControlState { .. }
+        ));
+        let state = shared.lock().unwrap();
+        assert!(state.pending_post_response_controls.is_empty());
+        assert_eq!(
+            state.execution_store.pending_pause_interruptions().unwrap(),
+            vec![(
+                "execution-pause-busy-087".to_string(),
+                SPEC_087_AGENT_ID.to_string()
+            )]
+        );
+        drop(state);
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn spec_087_levee_de_pause_agent_absent_reprend_a_la_reconnexion() {
+        let (mut state, config) = spec_087_state("spec-087-pause-absent");
+        state.router.unregister_by_conn("conn-1");
+        state.presences.remove("instance-1");
+        spec_087_register_human_control_client(&mut state);
+        let now = unix_now_secs();
+        let mut message = bridget_core::BridgetMessage::new(
+            "humain",
+            SPEC_087_AGENT_ID,
+            "reprends à la reconnexion",
+        );
+        message.id = "message-pause-absent-087".to_string();
+        message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+        state
+            .execution_store
+            .admit_starting_message(&message, "execution-pause-absent-087", now)
+            .unwrap();
+        state
+            .execution_store
+            .transition_if_current(
+                "execution-pause-absent-087",
+                "starting",
+                0,
+                1,
+                "interrupted",
+                "control_pause",
+                now,
+            )
+            .unwrap();
+        state
+            .execution_store
+            .record_pause_interruption("execution-pause-absent-087", SPEC_087_AGENT_ID, 1, now)
+            .unwrap();
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_control_state_set(
+                &shared,
+                "ui-control",
+                1,
+                "pause-absent-087",
+                0,
+                Some(true),
+                None,
+                None
+            ),
+            DaemonToWrapper::ControlState { .. }
+        ));
+        assert!(matches!(
+            handle_control_state_set(
+                &shared,
+                "ui-control",
+                1,
+                "resume-absent-087",
+                1,
+                Some(false),
+                None,
+                None
+            ),
+            DaemonToWrapper::ControlState { .. }
+        ));
+        let mut state = shared.lock().unwrap();
+        assert!(state.pending_post_response_controls.is_empty());
+        assert_eq!(
+            state
+                .execution_store
+                .pending_pause_interruptions()
+                .unwrap()
+                .len(),
+            1
+        );
+        let (writer, _reader) = control_socket("spec-087-pause-absent-reconnect");
+        state.connections.insert("conn-2".to_string(), writer);
+        state
+            .router
+            .register(
+                SPEC_087_AGENT_ID,
+                &bridget_core::AgentType::Claude,
+                "conn-2",
+            )
+            .unwrap();
+        state
+            .conn_instances
+            .insert("conn-2".to_string(), "instance-2".to_string());
+        state.presences.insert(
+            "instance-2".to_string(),
+            Presence {
+                name: SPEC_087_AGENT_ID.to_string(),
+                agent_type: "claude".to_string(),
+                host: "macbook".to_string(),
+                transport: "acp".to_string(),
+                channel: Some("unix".to_string()),
+                mode: Some(PresenceMode::Acp),
+                location: None,
+                journal_available: true,
+                os: "macOS".to_string(),
+                state: "connected".to_string(),
+                busy_since: None,
+                capacity_seen: Instant::now(),
+                link_seen: Instant::now(),
+                reconnect_count: 0,
+                model: None,
+                effort: None,
+                rate_limits: Default::default(),
+                served_model: None,
+                derived_domain: None,
+                domain: None,
+                dnd_until: None,
+                disk_space: None,
+            },
+        );
+        schedule_execution_recovery(&mut state, "conn-2", "instance-2", SPEC_087_AGENT_ID, false);
+        assert_eq!(state.pending_post_response_controls["conn-2"].len(), 1);
+        assert!(
+            state
+                .execution_store
+                .pending_pause_interruptions()
+                .unwrap()
+                .is_empty()
+        );
+        drop(state);
+        drop(shared);
         let _ = std::fs::remove_file(config.db_path);
     }
 
@@ -23280,7 +23711,7 @@ mod presence_tests {
         state.presences.insert(
             "instance-1".to_string(),
             Presence {
-                name: "agent-2".to_string(),
+                name: SPEC_087_AGENT_ID.to_string(),
                 agent_type: "claude".to_string(),
                 host: "macbook".to_string(),
                 transport: "acp".to_string(),
@@ -23348,6 +23779,17 @@ mod presence_tests {
                 domain: None,
                 dnd_until: None,
                 disk_space: None,
+            },
+        );
+    }
+
+    fn spec_087_register_human_control_client(state: &mut DaemonState) {
+        state.client_negotiations.insert(
+            "ui-control".to_string(),
+            NegotiatedClient {
+                version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: crate::mcp::issuer_scope("bridget-ui-control"),
+                capabilities: vec![ClientCapability::ControlStateV1],
             },
         );
     }

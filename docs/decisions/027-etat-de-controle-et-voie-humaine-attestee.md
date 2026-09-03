@@ -11,7 +11,7 @@ Le coordinateur sait s'ouvrir du travail : routines, rondes, réassignations, co
 ## Décision
 
 1. **L'état de contrôle vit dans le daemon Bridget**, plan de contrôle au sens de l'ADR-015 : une ligne persistante `control_state` (pause, plafond d'objectifs auto-générés, génération) et un journal `control_events`. Il est exposé par le protocole (`ControlStateRead`, `ControlStateSet`). Maicie le lit à chaque relève et n'en conserve aucune copie ; un daemon injoignable rend un état inconnu qui **différe** toute ouverture automatique.
-2. **Chaque plan possède une garde unique** `admit_autonomous_effect(effet, état)` appelée par tous ses puits d'effet autonome : ronde, relances et continuations côté daemon ; routines, réassignation, rejeu d'outbox, déblocage de dépendance et dispatch différé côté Maicie. Un puits qui ne l'appelle pas est un défaut. La reprise des remises et exécutions déjà acceptées, et la réconciliation de flotte, sont admises pendant la pause parce qu'elles ne créent pas de travail.
+2. **Chaque plan possède une garde unique** `admit_autonomous_effect(effet, état)` appelée par tous ses puits d'effet autonome : ronde, relances et continuations côté daemon ; routines, réassignation, rejeu d'outbox, déblocage de dépendance et dispatch différé côté Maicie. Un puits qui ne l'appelle pas est un défaut. La reprise des remises déjà acceptées et la réconciliation de flotte restent admises pendant la pause ; un tour fournisseur en cours est interrompu et mémorisé pour reprise à la levée.
 3. **Le focus est un attribut d'objectif Maicie**, plan de mission : un seul actif, une file derrière. Son ouverture passe par le guichet, avec une origine humaine.
 4. **L'attestation d'origine humaine est fabriquée par le daemon**, jamais acceptée d'un client. Quand le principal humain dépose une délégation, le daemon enregistre le message au ledger, scelle son contenu, lie le hash canonique du dépôt et transmet l'origine à Maicie, qui rejoue les cinq vérifications de `ObjectiveOpeningPermit::human_request` et consomme le message une seule fois.
 5. **La boîte de réception humaine vit dans le daemon**, comme le guichet : une table transport où le daemon et Maicie déposent, que seul le référent tranche, et dont Maicie relève les décisions sans rien marquer. Une décision n'est acquittée qu'après le commit de son application par Maicie (`HumanInboxAck { decision_id }`). Un canal externe personnel, une commande configurée dans un fichier 0600, pousse un résumé borné.
@@ -26,6 +26,10 @@ La reconnaissance du principal humain repose sur l'attribution d'émetteur du da
 **Positives.** Le référent dispose d'un frein d'urgence persistant, d'une commande d'une phrase pour imposer son objectif, d'un endroit unique où arrivent les décisions qui l'attendent, et d'une garde permanente contre l'emballement. La voie humaine de l'ADR-014 est fermée sans nouveau mécanisme d'attestation. Les vocabulaires existants sont réutilisés : `AutonomyRuntimeState::Paused`, `RoutineOccurrence::Differee`, `priority_class`, notification native ADR-016.
 
 **Négatives.** Deux tables de plus dans une base sans propriétaire de schéma unique, à reprendre avec la consolidation. Une migration Maicie de plus. Une commande externe exécutée par le daemon, bornée par un fichier privé à chemin absolu. Le rejeu des outboxes et le déblocage des dépendances passent par une garde de plus.
+
+## Amendement 2026-09-03
+
+Le référent a décidé que la pause arrête immédiatement les tours fournisseurs en cours. Bridget écrit donc une ligne dans `control_pause_interruptions` avant d'émettre `Interrupt`, puis ne reconstruit que ces exécutions lorsque la pause est levée et que l'agent est connecté et libre, ou à sa prochaine reconnexion. Cette décision ajoute une table et un chemin de reprise. Le cas où deux candidats réclament le même agent reste volontairement refusé, sans arbitrage automatique.
 
 ## Alternatives écartées
 

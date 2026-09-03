@@ -1530,7 +1530,9 @@ fn spec_087_un_focus_actif_differe_les_routines() {
             other => panic!("création attendue : {other:?}"),
         }
     };
-    store.focus_enqueue(focus, true, t0).unwrap();
+    store
+        .focus_enqueue(focus, "projet-test-087", true, t0)
+        .unwrap();
     assert_eq!(store.focus_active().unwrap(), Some(focus));
     let produced = evaluate_routines(
         &mut store,

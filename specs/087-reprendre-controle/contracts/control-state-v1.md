@@ -13,6 +13,7 @@ Rôle : `Client`, capacité `ControlStateV1` ou `Lookup`. Réponse : `DaemonToWr
   "paused": true | false | null, "auto_objectives_cap": 5 | null, "reason": "…" | null }
 ```
 Rôle : `Client`, capacité `ControlStateV1`. Au moins un champ non nul. Réponse : `ControlState` (generation + 1) ou `ControlStateRejected { reason }`.
+Quand `paused` devient vrai, Bridget mémorise chaque exécution active et émet une commande interne `Interrupt` nommée `control-pause-<generation>-<execution_id>`. Quand `paused` devient faux, les exécutions mémorisées sont reprises pour les agents connectés et libres.
 
 Refus fermés `ControlStateRefusal` :
 - `HumanPrincipalRequired` : l'émetteur n'est pas attribué au principal humain ;

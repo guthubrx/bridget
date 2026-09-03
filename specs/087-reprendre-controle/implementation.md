@@ -126,6 +126,23 @@
 ### T042 Essai adverse : ✅ test unitaire `spec_087_un_agent_par_ses_outils_declares_ne_mute_rien` (client MCP-like sans capacité, client avec capacité mais périmètre non humain, origine forgée depuis un agent enregistré) ; fichier d'intégration prévu remplacé par ce test, même propriété
 ### T048 Alerte de route humaine : ✅ `spec_087_reprise_d_une_route_humaine_vivante_est_signalee`
 
+### Pause = gel immédiat, reprise à la levée - 2026-09-03
+
+- Lot A : appels de focus réalignés, `test result: ok. 13 passed; 0 failed`.
+- Lot B : `origin` est rapatrié avant le gel et un remote inaccessible est refusé ; mutant sans fetch : `test result: FAILED. 0 passed; 1 failed` ; garde restaurée : `test result: ok. 13 passed; 0 failed`.
+- Lot C : migration execution v10, table `control_pause_interruptions`, interruption interne et reprise immédiate. Preuves : `spec_087_pause_interrompt_le_tour_en_cours` et `spec_087_levee_de_pause_relance_l_execution_interrompue`, chacune `test result: ok. 1 passed; 0 failed`.
+- Non vérifié à ce stade : essai réel fournisseur et gates complets.
+
+### Complément de preuves C et gates - 2026-09-03
+
+- C2-C6 : `spec_087_pause_interrompt_le_tour_en_cours` passe par `handle_control_state_set` du principal humain ; `spec_087_levee_de_pause_relance_l_execution_interrompue`, `spec_087_levee_de_pause_agent_occupe_ne_relance_pas` et `spec_087_levee_de_pause_agent_absent_reprend_a_la_reconnexion` couvrent les trois devenirs. Résultats : `test result: ok. 1 passed; 0 failed` puis `test result: ok. 3 passed; 0 failed`.
+- Mutant 1, appel `interrupt_executions_for_pause` retiré : `test result: FAILED. 0 passed; 1 failed` dans `spec_087_pause_interrompt_le_tour_en_cours`.
+- Mutant 2, appel `resume_executions_after_pause` retiré : `test result: FAILED. 0 passed; 1 failed` dans `spec_087_levee_de_pause_relance_l_execution_interrompue`.
+- Mutant 3, sélection des interruptions de pause retirée de `recoverable_execution_ids_for_agent` : `test result: FAILED. 1 passed; 2 failed` dans les scénarios de reprise connectée et de reconnexion. Les trois mutants sont restaurés ; `rg MUTANT-087 crates/bridget-daemon` ne retourne rien.
+- Gates : transport `test result: ok. 242 passed; 0 failed; 1 ignored`; Maicie contrôle 087 `test result: ok. 13 passed; 0 failed`; attestation humaine `test result: ok. 10 passed; 0 failed`; budget d'exécution `test result: ok. 2 passed; 0 failed`; daemon `test result: FAILED. 706 passed; 144 failed; 7 ignored`, sans nom rouge nouveau par rapport à la base de 146 noms. Maicie lib reste à `test result: FAILED. 90 passed; 1 failed; 1 ignored`, rouge préexistant `faute_apres_une_vraie_outbox_annule_decision_transition_et_notification` (`agent_retarget_requirements` absent).
+- Interface : `node --test app.js` donne 136 passés, 0 échec. Les gates `clippy` et workspace `--no-run` restent bloqués par les tests d'intégration préexistants `mcp_injection_smoke_test` et `idempotency_crash_test`, qui utilisent le champ supprimé `name`.
+- Reste non vérifié : interruption d'un fournisseur réel en plein tour, à consigner par type pendant T045.
+
 ### T046 Mise en service - 2026-09-03 : ✅
 
 - `main` a été fusionnée et poussée au commit `8cf724d0` avant toute opération serveur. Le checkout principal serveur `/home/moi/bridget-referent/bridget` a été avancé par fast-forward vers ce commit, sans modifier ses caches non suivis.

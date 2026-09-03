@@ -6,9 +6,12 @@ Prérequis : daemon et relais UI sur le binaire livré, au moins un projet actif
 
 1. Ouvre l'interface. Le bandeau en tête de page affiche « Autonomie active », un bouton « Pause », le plafond d'objectifs automatiques et « Aucune décision en attente ».
 2. Clique « Pause ». Attendu : le bandeau passe en fond orangé, « Pause depuis 0 min · Pause demandée depuis l’interface », le bouton devient « Reprendre ».
+3. Si un agent est en plein tour, il passe par `interrupting` puis `interrupted`; après « Reprendre », il reçoit à nouveau la même exécution.
 3. Attends une occurrence de routine, ou lance `maicie status --json` et lis `control`. Attendu : une occurrence différée avec le motif `pause`, aucun objectif nouveau.
 4. Redémarre le service Bridget (`systemctl --user restart bridget-daemon`, puis relance les agents gérés par UUID). Attendu : le bandeau affiche toujours la pause après rechargement.
 5. En ligne de commande, `bridget who` se termine par `Contrôle : pause depuis … · plafond objectifs automatiques N`. `bridget control status --history` montre la ligne `pause_on` avec l'acteur `humain`.
+
+Limite fournisseur : le comportement d'interruption a une preuve automatisée commune. La validation avec un fournisseur réellement en cours de tour reste à consigner par type (Codex, Claude ou autre présent) dans la validation opérateur T045.
 
 ## 2. Imposer un focus
 

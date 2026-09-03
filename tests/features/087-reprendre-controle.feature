@@ -6,11 +6,15 @@ Fonctionnalité: Reprendre le contrôle du coordinateur
     Alors l'occurrence est consignée différée avec le motif pause
     Et la ronde n'émet aucun réveil et son refus est consigné
 
-  Scénario: La pause n'interrompt pas un tour commencé
+  Scénario: La pause interrompt un tour commencé
     Étant donné un agent en plein tour
     Quand la pause est activée
-    Alors le tour se termine sans interruption
-    Et aucun nouveau tour autonome ne lui est proposé tant que la pause dure
+    Alors le tour reçoit une interruption et son exécution est mémorisée
+
+  Scénario: La levée de la pause reprend le tour interrompu
+    Étant donné un tour interrompu par la pause et un agent connecté libre
+    Quand le référent lève la pause
+    Alors l'agent reçoit la reprise de la même exécution
 
   Scénario: La pause survit au redémarrage
     Étant donné la pause active

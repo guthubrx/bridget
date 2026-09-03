@@ -92,6 +92,7 @@ pub struct PreparedReviewSubmission {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReviewGitError {
     RepositoryUnavailable,
+    OriginUnreachable,
     DefaultBranchUnavailable,
     BranchRefNotFull,
     InvalidCommit {
@@ -125,6 +126,7 @@ impl std::fmt::Display for ReviewGitError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::RepositoryUnavailable => formatter.write_str("dépôt configuré indisponible"),
+            Self::OriginUnreachable => formatter.write_str("remote origin indisponible"),
             Self::DefaultBranchUnavailable => {
                 formatter.write_str("branche par défaut origin indisponible")
             }
@@ -306,13 +308,23 @@ pub fn measure_repository(
     })
 }
 
-/// Fige la tête courante de la branche par défaut déjà connue du remote
-/// `origin`. Cette lecture ne contacte jamais le réseau : la référence doit
-/// avoir été rapatriée avant la demande de focus.
+/// Rapatrie puis fige la tête courante de la branche par défaut du remote
+/// `origin`, afin qu'un focus ne soit jamais construit sur une référence
+/// distante périmée.
 pub fn freeze_origin_default_review_target(
     repository_root: &Path,
 ) -> Result<ReviewTarget, ReviewGitError> {
     let root = canonical_repository_root(repository_root)?;
+    let fetch = git_capture(
+        &root,
+        &["fetch", "--quiet", "--no-tags", "--prune", "origin"],
+        None,
+        SMALL_OUTPUT_LIMIT,
+        "origin-fetch",
+    )?;
+    if !fetch.status.success() || fetch.stdout.exceeded(SMALL_OUTPUT_LIMIT) {
+        return Err(ReviewGitError::OriginUnreachable);
+    }
     let default_branch = git_capture(
         &root,
         &[
