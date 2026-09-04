@@ -535,3 +535,32 @@ dialog.settings-dialog {
     justify-content: flex-start;
   }
 }
+
+/* SPEC-088 : demande de la page relayée, confirmation locale et pulse. */
+@keyframes rights-pulse {
+  0%, 100% { outline-color: transparent; }
+  50% { outline-color: var(--accent, #6695ff); }
+}
+
+.rights-pulse {
+  outline: 3px solid transparent;
+  outline-offset: 4px;
+  border-radius: 0.5rem;
+  animation: rights-pulse 1.2s ease-in-out 3;
+}
+
+.rights-proposal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--accent, #6695ff);
+  border-radius: 0.5rem;
+}
+
+.rights-proposal p {
+  flex-basis: 100%;
+  margin: 0;
+}

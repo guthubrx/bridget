@@ -2052,9 +2052,7 @@
 
       test("historique_long_et_erreur_fournisseur_restent_lisibles", () => {
         assert.equal(api.localDayKey(0), "unknown");
-        assert.equal(api.shouldCollapseMessage("court"), false);
-        assert.equal(api.shouldCollapseMessage("x".repeat(api.MESSAGE_COLLAPSE_THRESHOLD + 1)), true);
-        assert.match(api.messagePreview("a ".repeat(400)), /…$/);
+        assert.equal(typeof api.shouldCollapseMessage, "undefined", "aucun repli : la réponse s'affiche en entier");
         assert.equal(
           api.turnFailureLabel({ terminal_kind: "turn_failed", reason: "api_error" }),
           "Le fournisseur a refusé ce tour.",
@@ -3187,8 +3185,8 @@
           { parse: engines.parse, purify: engines.purify },
         );
         assert.equal(root.querySelectorAll("a, img").length, 0);
-        assert.equal(root.querySelectorAll(".content-reference").length, 3);
-        assert.equal(root.querySelectorAll(".content-reference__blocked").length, 3);
+        assert.equal(root.querySelectorAll(".content-reference").length, 0, "aucune carte par référence fermée");
+        assert.equal(root.querySelectorAll(".content-reference__blocked").length, 3, "une notice par sorte");
         assert.equal(root.querySelectorAll(".content-reference__action").length, 0);
         assert.equal(api.messageDomHasForbiddenSurface(root), false);
       });
@@ -3329,10 +3327,11 @@
             },
           },
         );
-        const refusal = root.querySelector(".content-reference .refusal");
-        assert.ok(refusal, "le refus est rendu dans la forme unique");
+        const refusal = root.querySelector(".content-references .refusal--compact");
+        assert.ok(refusal, "le refus est rendu dans la forme unique, compacte");
         assert.equal(refusal.dataset.layer, "browser_content");
-        assert.match(refusal.querySelector(".refusal__prevented").textContent, /Ouverture au clic désactivée · Sécurité du contenu › Liens externes/);
+        assert.match(refusal.querySelector(".refusal__prevented").textContent, /1 lien externe non ouvert · Ouverture au clic désactivée · Sécurité du contenu › Liens externes/);
+        assert.match(refusal.querySelector(".content-notice__names").textContent, /site/);
         assert.equal(root.textContent.includes("Bloqué par vos réglages locaux"), false);
         const gesture = refusal.querySelector(".refusal__gesture");
         assert.equal(gesture.textContent, "Autoriser les liens");
@@ -3356,11 +3355,23 @@
         assert.equal(calls, 0, "un événement non fiable ne déclenche rien");
         const managed = api.renderMessageMarkdown(
           engines.document,
-          "[site](https://example.test/doc)",
+          "[site](https://example.test/doc) [doc](https://example.test/doc2)",
           { parse: engines.parse, purify: engines.purify, contentSecurityDesktopManaged: true },
         );
-        assert.equal(managed.querySelector(".refusal__gesture"), null);
-        assert.match(managed.querySelector(".refusal__no-gesture").textContent, /Bridget Desktop/);
+        // Sous Desktop : pas de geste local, mais un lien vers le réglage Desktop ; une seule notice pour deux liens.
+        assert.equal(managed.querySelectorAll(".refusal--compact").length, 1);
+        assert.match(managed.querySelector(".refusal__prevented").textContent, /2 liens externes non ouverts/);
+        assert.equal(managed.querySelector(".refusal__gesture").textContent, "Ouvrir le réglage dans Bridget Desktop");
+        // Le code et les chemins système ne produisent aucune référence.
+        const clean = api.renderMessageMarkdown(
+          engines.document,
+          "Exécute :\n```\ncurl -o /dev/null https://example.test/x\n```\net `/tmp/a` puis /dev/null /proc/self",
+          { parse: engines.parse, purify: engines.purify },
+        );
+        assert.equal(clean.querySelectorAll(".content-references").length, 0, "code et chemins système ignorés");
+        assert.equal(api.classifyContentReference("/dev/null").kind, "blocked");
+        assert.equal(api.classifyContentReference("/srv/projet/README.md").kind, "project_file");
+        assert.match(api.rightsDesktopProfileUrl("confident", { external_links: true, remote_images: true, file_references: false }), /^bridget-open:\/\/settings\?action=content-security&profile=confident&external_links=1&remote_images=1&file_references=0$/);
       });
 
       test("spec_088_acte_refusal_projete_avec_ses_champs_et_refus_de_controle", () => {
@@ -4062,7 +4073,6 @@
   "use strict";
 
   const BOTTOM_THRESHOLD_PX = 2;
-  const MESSAGE_COLLAPSE_THRESHOLD = 1400;
   const FLEET_REFRESH_INTERVAL_MS = 5_000;
   // Un journal peut être interrompu avant `turn_end` (redémarrage du relais,
   // fermeture du fournisseur). Sans état d'exécution attesté, son dernier
@@ -4905,15 +4915,6 @@
     return `${parts.year}-${parts.month}-${parts.day}`;
   }
 
-  function shouldCollapseMessage(value, threshold = MESSAGE_COLLAPSE_THRESHOLD) {
-    return String(value || "").trim().length > threshold;
-  }
-
-  function messagePreview(value, limit = 360) {
-    const compact = String(value || "").replace(/\s+/g, " ").trim();
-    if (compact.length <= limit) return compact;
-    return `${compact.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
-  }
 
   function turnFailureLabel(payload) {
     if (!payload || payload.terminal_kind !== "turn_failed") {
@@ -7405,7 +7406,7 @@
   function renderRefusal(documentRef, value, options = {}) {
     const refusal = normalizeRefusal(value, { localOrigin: options.allowLocalToggle === true });
     const card = documentRef.createElement("div");
-    card.className = "refusal";
+    card.className = options.compact === true ? "refusal refusal--compact" : "refusal";
     card.dataset.layer = refusal.layer;
     card.dataset.attributedTo = refusal.attributed_to;
     const layer = documentRef.createElement("strong");
@@ -7441,7 +7442,7 @@
       const link = documentRef.createElement("button");
       link.type = "button";
       link.className = "refusal__gesture refusal__gesture--link";
-      link.textContent = text(RIGHTS_LINE_LABELS[refusal.gesture.target], "Ouvrir la page Droits");
+      link.textContent = text(options.rightsLineLabel, text(RIGHTS_LINE_LABELS[refusal.gesture.target], "Ouvrir la page Droits"));
       link.addEventListener("click", (event) => {
         if (!event.isTrusted && options.trustGestures !== true) return;
         if (typeof options.onOpenRightsLine === "function") options.onOpenRightsLine(refusal.gesture.target);
@@ -7648,6 +7649,19 @@
     return next;
   }
 
+  // Demande à Bridget Desktop d'appliquer la part locale d'un profil : les
+  // valeurs sont explicites, Desktop n'a pas de seconde matrice à tenir.
+  function rightsDesktopProfileUrl(profile, values) {
+    const query = new URLSearchParams({
+      action: "content-security",
+      profile: String(profile),
+      external_links: values && values.external_links ? "1" : "0",
+      remote_images: values && values.remote_images ? "1" : "0",
+      file_references: values && values.file_references ? "1" : "0",
+    });
+    return `bridget-open://settings?${query.toString()}`;
+  }
+
   function rightsTestProjection(attempt, nowSecs) {
     if (!attempt || typeof attempt !== "object") return null;
     const outcome = RIGHTS_TEST_OUTCOME_LABELS[attempt.outcome] ? attempt.outcome : "unknown_expired";
@@ -7704,12 +7718,19 @@
     return preferences;
   }
 
+  // Chemins qui ne sont jamais des fichiers de projet (faux positif /dev/null
+  // relevé le 2026-09-04 sous un message de test).
+  const SYSTEM_PATH_PREFIXES = Object.freeze(["/dev/", "/proc/", "/sys/", "/run/", "/tmp/", "/private/tmp/", "/var/run/"]);
+
   function classifyContentReference(value, options = {}) {
     const candidate = String(value == null ? "" : value).trim();
     const expected = options && options.expected === "image" ? "image" : "auto";
     const blocked = { kind: "blocked", value: "" };
     if (!candidate || candidate.length > 4096 || /[\u0000-\u001f]/.test(candidate)) return blocked;
     if (/^(?:javascript|data|vbscript|file):/i.test(candidate) || candidate.startsWith("//")) return blocked;
+    if (candidate.startsWith("/") && SYSTEM_PATH_PREFIXES.some((prefix) => candidate === prefix.slice(0, -1) || candidate.startsWith(prefix))) {
+      return { kind: "blocked", value: candidate };
+    }
     if (candidate.startsWith("/")) {
       return expected === "image" ? blocked : { kind: "project_file", value: candidate };
     }
@@ -7728,7 +7749,11 @@
 
   function extractContentReferences(source) {
     const found = [];
-    const textSource = String(source == null ? "" : source);
+    // Le code (blocs et portions en accent grave) n'est jamais une référence :
+    // une commande de test qui cite /dev/null n'est pas un fichier du projet.
+    const textSource = String(source == null ? "" : source)
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/`[^`\n]*`/g, " ");
     const add = (value, expected, label) => {
       const reference = classifyContentReference(value, { expected });
       if (reference.kind === "blocked") return;
@@ -7760,6 +7785,7 @@
     const list = documentRef.createElement("section");
     list.className = "content-references";
     list.setAttribute("aria-label", "Contenus référencés");
+    const closedByKind = new Map([["external_link", []], ["remote_image", []], ["project_file", []]]);
     for (const reference of references) {
       const card = documentRef.createElement("article");
       card.className = "content-reference";
@@ -7780,47 +7806,8 @@
           ? allowed.remoteImages
           : allowed.fileReferences;
       if (!enabled) {
-        const preferenceKey = reference.kind === "external_link"
-          ? "externalLinks"
-          : reference.kind === "remote_image"
-            ? "remoteImages"
-            : "fileReferences";
-        const prevented = reference.kind === "external_link"
-          ? "Ouverture au clic désactivée · Sécurité du contenu › Liens externes"
-          : reference.kind === "remote_image"
-            ? "Chargement au clic désactivé · Sécurité du contenu › Images distantes"
-            : "Aperçu désactivé · Sécurité du contenu › Fichiers de projet";
-        const desktopManaged = options.contentSecurityDesktopManaged === true;
-        const blocked = renderRefusal(
-          documentRef,
-          {
-            layer: "browser_content",
-            prevented,
-            gesture: desktopManaged ? { kind: "none" } : { kind: "local_toggle", target: preferenceKey },
-            attributed_to: "bridget",
-          },
-          {
-            allowLocalToggle: true,
-            trustGestures: options.trustGestures,
-            localToggleLabel: reference.kind === "external_link"
-              ? "Autoriser les liens"
-              : reference.kind === "remote_image"
-                ? "Autoriser les images"
-                : "Autoriser les aperçus",
-            noGestureLabel: desktopManaged ? "Modifiez cette autorisation dans les réglages de Bridget Desktop." : "",
-            onLocalToggle: async (target) => {
-              if (typeof options.onContentSecurityChange !== "function") return;
-              const next = await options.onContentSecurityChange(target);
-              if (next && typeof next === "object") {
-                list.remove();
-                renderContentReferences(documentRef, root, source, next, options);
-              }
-            },
-          },
-        );
-        blocked.classList.add("content-reference__blocked");
-        card.append(blocked);
-        list.append(card);
+        // Pas de carte par lien : une seule notice compacte par sorte, après la boucle.
+        closedByKind.get(reference.kind).push(reference);
         continue;
       }
       const action = documentRef.createElement("button");
@@ -7894,6 +7881,56 @@
       card.append(action);
       list.append(card);
     }
+    // SPEC-088 (2026-09-04) : une notice discrète par sorte de contenu fermé,
+    // avec la raison et le geste qui mène au bon réglage.
+    const desktopManaged = options.contentSecurityDesktopManaged === true;
+    const NOTICE = {
+      external_link: { preference: "externalLinks", line: "external_links", label: (n) => n === 1 ? "1 lien externe non ouvert" : `${n} liens externes non ouverts`, prevented: "Ouverture au clic désactivée · Sécurité du contenu › Liens externes", allow: "Autoriser les liens" },
+      remote_image: { preference: "remoteImages", line: "remote_images", label: (n) => n === 1 ? "1 image distante non chargée" : `${n} images distantes non chargées`, prevented: "Chargement au clic désactivé · Sécurité du contenu › Images distantes", allow: "Autoriser les images" },
+      project_file: { preference: "fileReferences", line: "file_references", label: (n) => n === 1 ? "1 aperçu de fichier non proposé" : `${n} aperçus de fichiers non proposés`, prevented: "Aperçu désactivé · Sécurité du contenu › Fichiers de projet", allow: "Autoriser les aperçus" },
+    };
+    for (const [kind, closed] of closedByKind) {
+      if (closed.length === 0) continue;
+      const spec = NOTICE[kind];
+      const notice = renderRefusal(
+        documentRef,
+        {
+          layer: "browser_content",
+          prevented: `${spec.label(closed.length)} · ${spec.prevented}`,
+          gesture: desktopManaged ? { kind: "rights_line", target: spec.line } : { kind: "local_toggle", target: spec.preference },
+          attributed_to: "bridget",
+        },
+        {
+          compact: true,
+          allowLocalToggle: !desktopManaged,
+          trustGestures: options.trustGestures,
+          localToggleLabel: spec.allow,
+          rightsLineLabel: desktopManaged ? "Ouvrir le réglage dans Bridget Desktop" : "Ouvrir le réglage",
+          onOpenRightsLine: (line) => {
+            if (desktopManaged && windowRef) {
+              windowRef.location.href = `bridget-open://settings?section=content-security&line=${encodeURIComponent(line)}`;
+              return;
+            }
+            if (typeof options.onOpenRightsLine === "function") options.onOpenRightsLine(line);
+          },
+          onLocalToggle: async (target) => {
+            if (typeof options.onContentSecurityChange !== "function") return;
+            const next = await options.onContentSecurityChange(target);
+            if (next && typeof next === "object") {
+              list.remove();
+              renderContentReferences(documentRef, root, source, next, options);
+            }
+          },
+        },
+      );
+      notice.classList.add("content-reference__blocked");
+      const names = documentRef.createElement("span");
+      names.className = "content-notice__names";
+      names.textContent = closed.map((reference) => reference.label || reference.value).join(" · ");
+      notice.append(names);
+      list.append(notice);
+    }
+
     root.append(list);
   }
 
@@ -9060,8 +9097,13 @@
                   const next = applyRightsProfileLocally(windowRef.localStorage, view.matrix, key);
                   if (next) contentSecurityPreferences = next;
                   renderThread(0);
+                  void renderControlRoute("rights");
+                } else {
+                  // Sur ce Mac, seul Desktop peut appliquer la part locale : on
+                  // la lui demande ; il confirme, sauvegarde et recharge la page.
+                  status.textContent = `${RIGHTS_PROFILE_LABELS[key]} : appliqué sur le serveur · sur ce Mac : confirmation demandée dans Bridget Desktop.`;
+                  windowRef.location.href = rightsDesktopProfileUrl(key, values);
                 }
-                void renderControlRoute("rights");
               } catch (error) {
                 status.replaceChildren(renderRefusal(documentRef, controlRefusalFromCode(error.code, error.message)));
               }
@@ -9088,9 +9130,9 @@
 
           // Blocs.
           const blocks = [
-            ["see", "Ce que je vois", "Vit dans ce navigateur. Un serveur relié, un agent ou un message ne peuvent pas le changer.", "Cette interface"],
-            ["agents", "Ce que les agents peuvent faire", "Vit sur le serveur et chez le fournisseur de l’agent. Les trois premières lignes sont liées : une seule posture de lancement.", "Serveur relié"],
-            ["autonomy", "Combien ils décident seuls", "Vit sur le serveur (SPEC-087). La pause ne se change que par le bandeau ou la ligne de commande.", "Serveur relié"],
+            ["see", "Ce que je vois · sur ce Mac", desktopManaged ? "Ces lignes sont tenues par Bridget Desktop sur ce Mac. Le serveur ne peut pas les changer ; un profil choisi ici le demande à Desktop, qui te demande confirmation." : "Ces lignes sont tenues par ce navigateur. Un serveur relié, un agent ou un message ne peuvent pas les changer.", desktopManaged ? "Sur ce Mac · Bridget Desktop" : "Sur ce Mac · ce navigateur"],
+            ["agents", "Ce que les agents peuvent faire · sur le serveur", "Tenu par le serveur et le fournisseur de l’agent. Les trois premières lignes sont liées : une seule posture de lancement, lecture seule ou tout permis.", "Sur le serveur"],
+            ["autonomy", "Combien ils décident seuls · sur le serveur", "Tenu par le serveur (SPEC-087). La pause ne se change que par le bandeau ou la ligne de commande.", "Sur le serveur"],
           ];
           const tests = new Map(view.tests.map((attempt) => [text(attempt.line), attempt]));
           for (const [block, title, copy, scope] of blocks) {
@@ -9264,7 +9306,11 @@
           if (pendingRightsLine) {
             const target = body.querySelector(`[data-rights-line="${pendingRightsLine}"]`);
             pendingRightsLine = null;
-            if (target && typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "center" });
+            if (target) {
+              if (typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "center" });
+              target.classList.add("rights__pulse");
+              if (typeof windowRef.setTimeout === "function") windowRef.setTimeout(() => target.classList.remove("rights__pulse"), 4000);
+            }
           }
           return;
         }
@@ -11395,6 +11441,7 @@
       const render = (value) => renderMessageMarkdown(documentRef, value, {
         contentSecurity: contentSecurityPreferences,
         contentSecurityDesktopManaged: desktopContentSecurity !== null,
+        onOpenRightsLine: (line) => { pendingRightsLine = line; openControlCenter("rights"); },
         onContentSecurityChange: (key) => {
           if (desktopContentSecurity !== null) return null;
           contentSecurityPreferences = writeContentSecurityPreferences(windowRef.localStorage, {
@@ -11413,20 +11460,9 @@
           return payload;
         },
       });
-      if (!shouldCollapseMessage(entry.text)) {
-        surface.append(render(entry.text));
-        return;
-      }
-      surface.append(make("p", "message-preview", messagePreview(entry.text)));
-      const details = make("details", "message-expanded");
-      details.append(make("summary", "", "Afficher le message complet"));
-      let expanded = false;
-      details.addEventListener("toggle", () => {
-        if (!details.open || expanded) return;
-        details.append(render(entry.text));
-        expanded = true;
-      });
-      surface.append(details);
+      // Décision du référent (2026-09-04) : une réponse s'affiche toujours en
+      // entier, jamais repliée derrière un aperçu.
+      surface.append(render(entry.text));
     };
 
     const renderMessage = (entry) => {
@@ -13637,11 +13673,8 @@
   }
 
   return Object.freeze({
-    MESSAGE_COLLAPSE_THRESHOLD,
     FLEET_REFRESH_INTERVAL_MS,
     UNCONFIRMED_LIVE_ACTIVITY_TTL_SECS,
-    shouldCollapseMessage,
-    messagePreview,
     turnFailureLabel,
     turnFailureDetail,
     activityLabel,
@@ -13727,6 +13760,7 @@
     rightsProfileProjection,
     applyRightsProfileLocally,
     rightsTestProjection,
+    rightsDesktopProfileUrl,
     rightsMatrixValues,
     RIGHTS_LOCAL_LINES,
     RIGHTS_PROFILE_LABELS,

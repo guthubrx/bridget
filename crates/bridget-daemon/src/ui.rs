@@ -958,7 +958,7 @@ fn post_rights_test(
         }
     } else {
         let body = format!(
-            "Bridget vérifie un droit (test {}). Exécute exactement cette commande, sans la modifier, et rends sa sortie brute :\n{}",
+            "Bridget vérifie un droit (test {}). Exécute exactement cette commande, sans la modifier, et rends sa sortie brute :\n```\n{}\n```",
             attempt.test_id, attempt.expected_command
         );
         let agent_id = request.agent_id.as_str();

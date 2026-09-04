@@ -5144,3 +5144,43 @@ body[data-desktop-shell="true"] .conversation {
   margin-top: 0.3rem;
   font-size: 0.74rem;
 }
+
+/* SPEC-088 (2026-09-04) : notice compacte et pulse de réglage. */
+.refusal--compact {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.6rem;
+  padding: 0.3rem 0.55rem;
+  border-left-width: 2px;
+  background: color-mix(in srgb, var(--text-secondary) 6%, transparent);
+  font-size: 0.7rem;
+}
+
+.refusal--compact .refusal__layer {
+  display: none;
+}
+
+.refusal--compact .refusal__gesture {
+  min-height: 1.5rem;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.68rem;
+}
+
+.content-notice__names {
+  flex-basis: 100%;
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+}
+
+@keyframes rights-pulse {
+  0%, 100% { outline-color: transparent; }
+  50% { outline-color: var(--accent); }
+}
+
+.rights__pulse {
+  outline: 3px solid transparent;
+  outline-offset: 3px;
+  border-radius: 0.5rem;
+  animation: rights-pulse 1.2s ease-in-out 3;
+}
