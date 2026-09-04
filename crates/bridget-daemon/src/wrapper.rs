@@ -281,13 +281,23 @@ fn managed_resume_context(
             if attested.modified.is_empty() {
                 lines.push("Fichiers non commités : aucun attesté.".to_string());
             } else {
-                let modified = attested
+                // Borné : la carte est un message remis à l'agent, pas un inventaire.
+                const RESUME_CARD_MAX_ENTRIES: usize = 40;
+                let shown = attested
                     .modified
                     .iter()
+                    .take(RESUME_CARD_MAX_ENTRIES)
                     .map(|entry| resume_card_external_text(entry))
                     .collect::<Vec<_>>()
                     .join(", ");
-                lines.push(format!("Fichiers non commités : {modified}"));
+                let rest = attested.modified.len().saturating_sub(RESUME_CARD_MAX_ENTRIES);
+                if rest > 0 {
+                    lines.push(format!(
+                        "Fichiers non commités : {shown} … et {rest} autres (liste tronquée)"
+                    ));
+                } else {
+                    lines.push(format!("Fichiers non commités : {shown}"));
+                }
             }
         }
         Err(error) => lines.push(format!(
@@ -593,7 +603,9 @@ fn managed_resume_worktree(worktree: &Path) -> Result<ResumeWorktree, String> {
     let branch =
         git(&["symbolic-ref", "--short", "HEAD"]).unwrap_or_else(|_| "detached".to_string());
     let head = git(&["rev-parse", "--short", "HEAD"])?;
-    let modified = git(&["status", "--porcelain=v1", "--untracked-files=all"])?
+    // Répertoires non suivis repliés (`normal`, pas `all`) : un target de build
+    // oublié listait 40 000 fichiers et faisait une carte de 1 Mo (2026-09-04).
+    let modified = git(&["status", "--porcelain=v1", "--untracked-files=normal"])?
         .lines()
         .map(str::to_string)
         .collect();

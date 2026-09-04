@@ -3370,6 +3370,14 @@
         );
         assert.equal(clean.querySelectorAll(".content-references").length, 0, "code et chemins système ignorés");
         assert.equal(api.classifyContentReference("/dev/null").kind, "blocked");
+        // Un message énorme est affiché entier en texte brut, sans Markdown ni références.
+        const enormous = "[lien](https://example.test/x) ".repeat(20_000);
+        const t0 = Date.now();
+        const rawRoot = api.renderMessageMarkdown(engines.document, enormous, { parse: engines.parse, purify: engines.purify });
+        assert.ok(Date.now() - t0 < 1000, "rendu brut immédiat");
+        assert.ok(rawRoot.classList.contains("message-body--raw"));
+        assert.equal(rawRoot.querySelector("pre").textContent.length, enormous.length, "contenu entier conservé");
+        assert.equal(rawRoot.querySelectorAll(".content-references").length, 0);
         // Extraction bornée : un texte énorme avec beaucoup de ``` non fermés reste rapide, et une
         // référence au-delà de la borne n'est pas cherchée.
         const huge = "```\n".repeat(20000) + "[loin](https://example.test/loin)";
@@ -7162,7 +7170,24 @@
     return html;
   }
 
+  // Au-delà de cette taille, un message n'est plus du Markdown à interpréter
+  // mais un dépôt brut (une carte de reprise d'un Mo a figé la page le
+  // 2026-09-04) : on l'affiche entier, en texte, sans analyse.
+  const MARKDOWN_RENDER_LIMIT = 200_000;
+
   function renderMessageMarkdown(documentRef, source, options = {}) {
+    const raw = String(source == null ? "" : source);
+    if (raw.length > MARKDOWN_RENDER_LIMIT) {
+      const root = documentRef.createElement("div");
+      root.className = "message-body message-body--raw";
+      const note = documentRef.createElement("p");
+      note.className = "message-body__raw-note";
+      note.textContent = `Message de ${Math.round(raw.length / 1000)} k caractères affiché en texte brut, sans mise en forme.`;
+      const pre = documentRef.createElement("pre");
+      pre.textContent = raw;
+      root.append(note, pre);
+      return root;
+    }
     const dirty = parseMessageMarkdown(source, options.parse);
     // Production : toujours assainir. options.skipSanitize = mutant de test uniquement.
     const clean = options.skipSanitize
