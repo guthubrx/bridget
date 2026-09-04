@@ -77,3 +77,12 @@ In Progress : 25/28 tâches cochées ; restent T011 et T019 (quickstart §1 à �
 ## Non vérifié
 - Routes `/v1/control/rights*` en conditions réelles (relais + daemon vivants) : quickstart §3-§4.
 - Interruption/lancement réel en posture découverte sur le serveur (un agent relancé sous Prudent part en lecture seule) : à observer à la mise en service, et c'est la raison de la migration « base existante ⇒ complète ».
+
+## Lot 2 — 2026-09-04 : profils appliqués sur ce Mac, notices discrètes, réponses entières (mandat du référent, sans spec séparée)
+- Réponses d'agent affichées en entier : repli « Afficher le message complet » supprimé (fonctions et constante retirées, test adapté).
+- Références de contenu : le code (blocs et accents graves) est ignoré ; `/dev/`, `/proc/`, `/sys/`, `/run/`, `/tmp/`, `/private/tmp/`, `/var/run/` ne sont jamais des fichiers de projet ; la commande de « Tester » part dans un bloc de code.
+- Une seule notice compacte par sorte de contenu fermé (liens, images, aperçus), avec le nombre, la raison et le geste : « Autoriser » sur le web, « Ouvrir le réglage dans Bridget Desktop » sous Desktop (`bridget-open://settings?section=content-security&line=…`).
+- Page Droits : blocs « sur ce Mac » / « sur le serveur » ; un profil choisi sous Desktop applique le serveur puis demande à Desktop la part locale (`bridget-open://settings?action=content-security&profile=…&external_links=…`) ; ligne d'état « appliqué sur le serveur · sur ce Mac : confirmation demandée » ; pulse sur la ligne ciblée.
+- Desktop (`apps/bridget-desktop`) : `forward_settings_request` transmet à la fenêtre principale (`settings-request`) ; `fleet-app.js` ouvre les préférences sur la ligne avec pulse, ou affiche une proposition « Appliquer <profil> sur ce Mac » avec Appliquer/Annuler qui coche les cases et soumet le formulaire existant (sauvegarde + rechargement des panneaux). Aucune valeur n'est appliquée sans ce clic ; seules des valeurs fermées traversent.
+- Preuves : `node --test app.js` : 142 passés, 0 échec ; `cargo tauri build --bundles app` : réussi ; relais reconstruit (`ec97cf02`) et `bridget-ui.service` redémarré ; `/Applications/Bridget.app` remplacé (ancien conservé en `Bridget.app.backup-20260904-0701`), instance en cours non tuée : à relancer par le référent.
+- Non vérifié : le parcours complet sous Desktop (clic Confiant → proposition → application → rechargement) n'a pas été joué à l'écran.
