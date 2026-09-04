@@ -96,3 +96,19 @@ Motif : le blocage au changement d'agent venait d'une carte de reprise de 1 034 
 - La fenêtre de 40 tours et son bouton « Afficher les tours précédents » sont supprimés : la virtualisation les remplace, et une réponse ne demande aucun clic pour être lue.
 - Preuves : `node --test app.js` 143 passés 0 échec, dont `spec_088_fil_virtualise_construit_la_queue_et_garde_les_tours_hydrates` (900 tours, 8 construits, 892 en réserve). `cargo test -p bridget-daemon --lib --features test-support` : 719 passés, 144 échecs, aucun nom rouge nouveau contre la base de 146 (deux tirages ; au premier, `receipt_store::tests::deleting_an_enrolled_instance_directory_remains_fail_closed_after_reopen` est apparu puis a passé 3 fois sur 3 en isolé et n'est pas réapparu au second tirage : instabilité de banc sous parallélisme, sans rapport avec ce lot). `cargo fmt --all --check` propre. Build release `2a29ec19` installé, relais redémarré.
 - Non vérifié : le comportement de défilement à l'hydratation n'a pas été observé à l'écran, seulement raisonné et testé sur ses fonctions pures.
+
+## Lot 4 — 2026-09-04 : messages longs mis en forme par blocs
+Le lot 3 abandonnait la mise en forme au-delà de 200 000 caractères et affichait du texte brut. Le référent a refusé ce compromis : puisque le fil est paginé, le message doit l'être aussi.
+
+- `splitMarkdownIntoBlocks(source, cible)` découpe un Markdown en blocs autonomes. La coupe n'a lieu que sur une ligne vide hors bloc de code, donc un bloc de code, une table ou une liste ne peuvent pas être coupés en deux. Deux replis, sinon un message sans ligne vide ne serait jamais découpé : coupe entre deux lignes au-delà de quatre fois la cible, et coupe d'une ligne démesurée sur des frontières d'espace, mot pour mot, sans perte de texte.
+- `renderMessageMarkdown` rend le premier bloc tout de suite et met les suivants en réserve avec leur hauteur estimée. Ils sont mis en forme à l'approche de l'écran par le même observateur que les tours, avec la même compensation de défilement. Un bloc construit reste construit d'un rendu à l'autre, grâce à une clé stable par message.
+- `renderMarkdownInto` devient le point unique de rendu : un message entier et un de ses blocs suivent le même chemin, donc la même désinfection et les mêmes références de contenu.
+- Le texte brut n'est plus qu'un filet à 5 M caractères, jamais atteint en pratique.
+- Mesures sur les messages réels, avec les moteurs de production :
+
+```text
+message réel de Jim, 107 337 car.        premier rendu 29 ms   12 blocs en réserve   3 blocs hydratés 12 ms
+carte de reprise reconstituée, 2 017 819 car.  premier rendu 14 ms   253 blocs en réserve  3 blocs hydratés 3 ms
+```
+
+- Preuves : `node --test app.js` 145 passés 0 échec, dont le non-découpage d'un bloc de code contenant des lignes vides, l'intégrité d'une table de 400 lignes, l'absence de perte de mots au découpage, et la stabilité des blocs déjà construits entre deux rendus. `cargo test -p bridget-transport --lib act_kind` 6 passés, l'oracle de parité qui évalue app.js à l'exécution. Build `2705c00` installé, relais redémarré.
