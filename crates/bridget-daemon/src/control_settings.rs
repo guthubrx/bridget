@@ -1045,7 +1045,7 @@ pub fn resolve_rights_test(
             .get("text")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("");
-        if text.trim() != attempt.expected_command.trim() {
+        if normalize_command_text(text) != normalize_command_text(&attempt.expected_command) {
             continue;
         }
         let failed = payload.get("state").and_then(serde_json::Value::as_str) == Some("failed");
@@ -1084,6 +1084,42 @@ pub fn resolve_rights_test(
     // Terminaison sans jeton ni signal reconnu : on ne classe pas.
     resolved.outcome = RightsTestOutcome::UnknownExpired;
     resolved
+}
+
+/// Codex exécute la commande demandée dans une enveloppe `/bin/bash -lc "…"`
+/// et échappe guillemets et antislashs (mesuré le 2026-09-04 sur Jim). La
+/// comparaison exacte porte sur la commande DÉNUDÉE de cette enveloppe ; une
+/// commande voisine qui imprime le jeton reste différente.
+pub fn normalize_command_text(text: &str) -> String {
+    let mut inner = text.trim();
+    for prefix in [
+        "/bin/bash -lc ",
+        "bash -lc ",
+        "/bin/sh -lc ",
+        "sh -lc ",
+        "/bin/bash -c ",
+        "bash -c ",
+        "/bin/sh -c ",
+        "sh -c ",
+    ] {
+        if let Some(rest) = inner.strip_prefix(prefix) {
+            inner = rest.trim();
+            break;
+        }
+    }
+    let unquoted = if inner.len() >= 2
+        && ((inner.starts_with('"') && inner.ends_with('"'))
+            || (inner.starts_with('\'') && inner.ends_with('\'')))
+    {
+        &inner[1..inner.len() - 1]
+    } else {
+        inner
+    };
+    unquoted
+        .replace("\\\\", "\\")
+        .replace("\\\"", "\"")
+        .trim()
+        .to_string()
 }
 
 fn expire_if_due(mut attempt: RightsTestAttempt, now: i64) -> RightsTestAttempt {
@@ -1145,6 +1181,33 @@ mod rights_test_tests {
         let a = new_rights_test_attempt(RightsTestLine::Shell, "agent-1", "/x", 1);
         assert_eq!(a.expected_sha256, sha256_hex(&a.expected_command));
         assert_eq!(a.outcome, RightsTestOutcome::Pending);
+    }
+
+    #[test]
+    fn spec_088_l_enveloppe_bash_de_codex_est_reconnue_mais_pas_une_commande_voisine() {
+        // Échantillon réel (journal de Jim, 2026-09-04 04:14 UTC).
+        let expected = "printf 'BRIDGET-TEST-726c7780ac6a\\n'";
+        let real = "/bin/bash -lc \"printf 'BRIDGET-TEST-726c7780ac6a\\\\n'\"";
+        assert_eq!(
+            normalize_command_text(real),
+            normalize_command_text(expected)
+        );
+        assert_eq!(normalize_command_text(expected), expected);
+        assert_ne!(
+            normalize_command_text("/bin/bash -lc \"echo BRIDGET-TEST-726c7780ac6a\""),
+            normalize_command_text(expected)
+        );
+        let mut a = new_rights_test_attempt(RightsTestLine::Shell, "agent-1", "/x", 1_000);
+        a.message_id = Some("m-1".to_string());
+        let wrapped = format!(
+            "/bin/bash -lc \"{}\"",
+            a.expected_command.replace('\\', "\\\\")
+        );
+        let done = command_completed("m-1", &wrapped, "completed", 0, &format!("{}\n", a.token));
+        assert_eq!(
+            resolve_rights_test(&a, &[done], 1_010).outcome,
+            RightsTestOutcome::Passed
+        );
     }
 
     #[test]
