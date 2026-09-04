@@ -5204,3 +5204,8 @@ body[data-desktop-shell="true"] .conversation {
 .conversation-turn[data-turn-placeholder="true"] {
   contain: layout style;
 }
+
+/* SPEC-088 : message long mis en forme par blocs. */
+.message-segment[data-markdown-segment="pending"] {
+  contain: layout style;
+}

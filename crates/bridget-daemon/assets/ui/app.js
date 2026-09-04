@@ -3228,6 +3228,68 @@
         assert.equal(opened, null);
       });
 
+      test("spec_088_message_long_est_mis_en_forme_par_blocs_sans_casser_la_syntaxe", () => {
+        // Un bloc de code contient des lignes vides : la coupe ne doit jamais
+        // tomber dedans, sinon le Markdown de chaque moitié est faux.
+        const fence = ["```rust", "fn a() {}", "", "fn b() {}", "", "fn c() {}", "```"].join("\n");
+        const source = `${"para ".repeat(2000)}\n\n${fence}\n\n${"suite ".repeat(2000)}`;
+        const blocks = api.splitMarkdownIntoBlocks(source, 4000);
+        assert.ok(blocks.length >= 2, `découpé en plusieurs blocs, got ${blocks.length}`);
+        assert.equal(blocks.join("\n\n").replace(/\s+/g, " ").trim(), source.replace(/\s+/g, " ").trim(), "rien n'est perdu");
+        for (const block of blocks) {
+          const fences = (block.match(/^```/gm) || []).length;
+          assert.equal(fences % 2, 0, `bloc de code jamais coupé en deux: ${block.slice(0, 80)}`);
+        }
+        // Une table n'est pas coupée : pas de ligne vide entre ses lignes.
+        const table = ["| a | b |", "|---|---|", ...Array.from({ length: 400 }, (_v, i) => `| ${i} | x |`)].join("\n");
+        const tableBlocks = api.splitMarkdownIntoBlocks(`${"t ".repeat(3000)}\n\n${table}`, 2000);
+        const withTable = tableBlocks.filter((block) => block.includes("|---|"));
+        assert.equal(withTable.length, 1, "la table reste dans un seul bloc");
+        assert.ok(withTable[0].includes("| 399 | x |"), "la table est entière");
+        // Court : un seul bloc, jamais de découpage inutile.
+        assert.deepEqual(api.splitMarkdownIntoBlocks("court", 4000), ["court"]);
+        assert.deepEqual(api.splitMarkdownIntoBlocks("", 4000), []);
+        // Clé stable entre deux rendus du même message.
+        assert.equal(api.markdownSegmentKey("abc", 2, "msg-1"), "msg-1#2");
+        assert.equal(api.markdownSegmentKey("abc", 2, null), api.markdownSegmentKey("abc", 2, null));
+        assert.notEqual(api.markdownSegmentKey("abc", 2, null), api.markdownSegmentKey("abd", 2, null));
+        assert.notEqual(api.markdownSegmentKey("abc", 2, null), api.markdownSegmentKey("abc", 3, null));
+        assert.ok(api.estimateMarkdownSegmentPx("x".repeat(9000)) <= 1600);
+        assert.ok(api.estimateMarkdownSegmentPx("court") >= 24);
+      });
+
+      test("spec_088_message_long_rend_son_premier_bloc_et_reserve_les_suivants", () => {
+        const engines = loadMarkdownEngines();
+        const long = Array.from({ length: 60 }, (_v, i) => `## Titre ${i}\n\nParagraphe ${i} ${"mot ".repeat(200)}`).join("\n\n");
+        assert.ok(long.length > 20_000, "le cas de test dépasse bien le seuil");
+        const hydratedSegments = new Set();
+        const started = Date.now();
+        const root = api.renderMessageMarkdown(engines.document, long, {
+          parse: engines.parse, purify: engines.purify, segmentKey: "msg-1", hydratedSegments,
+        });
+        assert.ok(Date.now() - started < 2000, "le premier rendu ne construit pas tout");
+        assert.ok(root.classList.contains("message-body--progressive"));
+        assert.equal(root.classList.contains("message-body--raw"), false, "mis en forme, jamais du texte brut");
+        const pending = root.querySelectorAll("[data-markdown-segment='pending']");
+        assert.ok(pending.length >= 1, "des blocs sont en réserve");
+        assert.ok(root.querySelector(".message-segment h2"), "le premier bloc est mis en forme");
+        assert.ok(pending[0].style.minHeight.endsWith("px"), "la hauteur est réservée");
+        // Hydrater un bloc le met en forme et le retient pour les rendus suivants.
+        pending[0].__bridgetHydrate();
+        assert.equal(pending[0].dataset.markdownSegment, undefined);
+        assert.ok(pending[0].querySelector("h2, p"), "le bloc hydraté est mis en forme");
+        assert.equal(hydratedSegments.size, 1);
+        // Deuxième rendu : le bloc déjà vu reste construit.
+        const again = api.renderMessageMarkdown(engines.document, long, {
+          parse: engines.parse, purify: engines.purify, segmentKey: "msg-1", hydratedSegments,
+        });
+        const stillPending = again.querySelectorAll("[data-markdown-segment='pending']");
+        assert.equal(stillPending.length, pending.length - 1, "un bloc de moins en réserve");
+        // Le filet du texte brut ne sert plus qu'à l'absurde.
+        const absurd = api.renderMessageMarkdown(engines.document, "x".repeat(5_000_001), { parse: engines.parse, purify: engines.purify });
+        assert.ok(absurd.classList.contains("message-body--raw"));
+      });
+
       test("spec_088_fil_virtualise_construit_la_queue_et_garde_les_tours_hydrates", () => {
         const keys = Array.from({ length: 900 }, (_value, index) => `turn-${index}`);
         // Fil neuf : seule la queue est construite, pas les 892 autres.
@@ -3405,14 +3467,17 @@
         );
         assert.equal(clean.querySelectorAll(".content-references").length, 0, "code et chemins système ignorés");
         assert.equal(api.classifyContentReference("/dev/null").kind, "blocked");
-        // Un message énorme est affiché entier en texte brut, sans Markdown ni références.
+        // Un message énorme est mis en forme par blocs, et le premier rendu
+        // reste immédiat même sans une seule ligne vide où couper.
         const enormous = "[lien](https://example.test/x) ".repeat(20_000);
         const t0 = Date.now();
-        const rawRoot = api.renderMessageMarkdown(engines.document, enormous, { parse: engines.parse, purify: engines.purify });
-        assert.ok(Date.now() - t0 < 1000, "rendu brut immédiat");
-        assert.ok(rawRoot.classList.contains("message-body--raw"));
-        assert.equal(rawRoot.querySelector("pre").textContent.length, enormous.length, "contenu entier conservé");
-        assert.equal(rawRoot.querySelectorAll(".content-references").length, 0);
+        const hugeRoot = api.renderMessageMarkdown(engines.document, enormous, { parse: engines.parse, purify: engines.purify, segmentKey: "huge" });
+        assert.ok(Date.now() - t0 < 1000, `premier rendu immédiat, pris ${Date.now() - t0} ms`);
+        assert.ok(hugeRoot.classList.contains("message-body--progressive"));
+        assert.equal(hugeRoot.classList.contains("message-body--raw"), false);
+        assert.ok(hugeRoot.querySelectorAll("[data-markdown-segment='pending']").length > 1, "les blocs suivants attendent");
+        const rebuilt = api.splitMarkdownIntoBlocks(enormous).join(" ").replace(/\s+/g, " ").trim();
+        assert.equal(rebuilt, enormous.replace(/\s+/g, " ").trim(), "aucun mot perdu au découpage");
         // Extraction bornée : un texte énorme avec beaucoup de ``` non fermés reste rapide, et une
         // référence au-delà de la borne n'est pas cherchée.
         const huge = "```\n".repeat(20000) + "[loin](https://example.test/loin)";
@@ -7205,44 +7270,181 @@
     return html;
   }
 
-  // Au-delà de cette taille, un message n'est plus du Markdown à interpréter
-  // mais un dépôt brut (une carte de reprise d'un Mo a figé la page le
-  // 2026-09-04) : on l'affiche entier, en texte, sans analyse.
-  const MARKDOWN_RENDER_LIMIT = 200_000;
+  // Un message long est rendu par blocs, à mesure qu'il approche de l'écran,
+  // au lieu d'être construit d'un coup ou abandonné en texte brut. Décision du
+  // référent le 2026-09-04 : ne pas mettre en forme est une reculade.
+  const MARKDOWN_PROGRESSIVE_LIMIT = 20_000;
+  const MARKDOWN_SEGMENT_TARGET_CHARS = 8_000;
+  // Filet ultime : au-delà, même le découpage coûte trop cher pour la page.
+  const MARKDOWN_RAW_LIMIT = 5_000_000;
+  const MARKDOWN_SEGMENT_CHARS_PER_LINE = 90;
+  const MARKDOWN_SEGMENT_LINE_PX = 22;
 
-  function renderMessageMarkdown(documentRef, source, options = {}) {
+  /// Découpe un Markdown en blocs autonomes, sans casser sa syntaxe : la coupe
+  /// n'a lieu que sur une ligne vide hors bloc de code. Un bloc de code, une
+  /// table ou une liste ne peuvent donc pas être coupés en deux. Linéaire.
+  function splitMarkdownIntoBlocks(source, targetChars = MARKDOWN_SEGMENT_TARGET_CHARS) {
     const raw = String(source == null ? "" : source);
-    if (raw.length > MARKDOWN_RENDER_LIMIT) {
-      const root = documentRef.createElement("div");
-      root.className = "message-body message-body--raw";
-      const note = documentRef.createElement("p");
-      note.className = "message-body__raw-note";
-      note.textContent = `Message de ${Math.round(raw.length / 1000)} k caractères affiché en texte brut, sans mise en forme.`;
-      const pre = documentRef.createElement("pre");
-      pre.textContent = raw;
-      root.append(note, pre);
-      return root;
+    const target = Math.max(1, Number.isFinite(targetChars) ? targetChars : MARKDOWN_SEGMENT_TARGET_CHARS);
+    if (raw.length <= target) return raw.length === 0 ? [] : [raw];
+    // Sans repli, un message d'une seule ligne ou sans ligne vide ne serait
+    // jamais découpé, et l'on retomberait sur le rendu massif qu'on évite.
+    const hardLimit = target * 4;
+    const lines = raw.split("\n");
+    const segments = [];
+    let current = [];
+    let currentLength = 0;
+    let inFence = false;
+    let fenceMarker = "";
+    const flush = () => {
+      if (current.length === 0) return;
+      segments.push(current.join("\n"));
+      current = [];
+      currentLength = 0;
+    };
+    for (const line of lines) {
+      const fence = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+      if (fence) {
+        if (!inFence) {
+          inFence = true;
+          fenceMarker = fence[1][0];
+        } else if (fence[1][0] === fenceMarker) {
+          inFence = false;
+          fenceMarker = "";
+        }
+      }
+      const isSafeCut = !inFence && line.trim().length === 0;
+      if (isSafeCut && currentLength >= target) {
+        flush();
+        continue;
+      }
+      // Repli 1 : aucune ligne vide depuis longtemps. Une coupe entre deux
+      // lignes reste du Markdown valide ; seul un bloc de code l'interdit.
+      if (!inFence && currentLength >= hardLimit) flush();
+      // Repli 2 : une seule ligne démesurée. Elle est coupée sur des espaces,
+      // mot pour mot : le texte est conservé, seuls des retours à la ligne
+      // apparaissent, sur une ligne déjà repliée par l'affichage de toute façon.
+      if (!inFence && line.length > hardLimit) {
+        let rest = line;
+        while (rest.length > target) {
+          const window = rest.slice(0, target);
+          const space = window.lastIndexOf(" ");
+          const cut = space > target / 2 ? space + 1 : target;
+          current.push(rest.slice(0, cut));
+          flush();
+          rest = rest.slice(cut);
+        }
+        if (rest.length > 0) {
+          current.push(rest);
+          currentLength += rest.length + 1;
+        }
+        continue;
+      }
+      current.push(line);
+      currentLength += line.length + 1;
     }
+    if (current.length > 0) {
+      const rest = current.join("\n");
+      if (rest.trim().length > 0 || segments.length === 0) segments.push(rest);
+      else segments[segments.length - 1] += `\n${rest}`;
+    }
+    return segments;
+  }
+
+  /// Hauteur réservée par un bloc pas encore construit.
+  function estimateMarkdownSegmentPx(segment) {
+    const lines = Math.ceil(String(segment || "").length / MARKDOWN_SEGMENT_CHARS_PER_LINE);
+    return Math.min(1600, Math.max(24, lines * MARKDOWN_SEGMENT_LINE_PX));
+  }
+
+  /// Clé stable d'un bloc entre deux rendus du fil, pour qu'un bloc déjà
+  /// construit ne redevienne pas une réserve sous les yeux du lecteur.
+  function markdownSegmentKey(source, index, providedKey) {
+    if (providedKey) return `${providedKey}#${index}`;
+    const raw = String(source == null ? "" : source);
+    let hash = 2166136261;
+    for (let position = 0; position < Math.min(raw.length, 256); position += 1) {
+      hash ^= raw.charCodeAt(position);
+      hash = Math.imul(hash, 16777619) >>> 0;
+    }
+    return `anon:${raw.length}:${hash.toString(36)}#${index}`;
+  }
+
+  /// Rend un Markdown DANS un conteneur existant. Point unique : le rendu d'un
+  /// message entier et celui d'un de ses blocs suivent le même chemin, donc la
+  /// même désinfection et les mêmes références de contenu.
+  function renderMarkdownInto(documentRef, container, source, options = {}) {
     const dirty = parseMessageMarkdown(source, options.parse);
     // Production : toujours assainir. options.skipSanitize = mutant de test uniquement.
     const clean = options.skipSanitize
       ? dirty
       : sanitizeMessageHtml(dirty, options.purify);
     if (!options.skipSanitize) assertMessageHtmlSafe(clean);
-    const root = documentRef.createElement("div");
-    root.className = "message-body";
     // HTML déjà passé par DOMPurify. Ce seul point d'insertion conserve les
     // classes `language-*` nécessaires au colorateur local.
-    root.innerHTML = clean;
-    enhanceMessageMarkdown(documentRef, root, source, options);
+    container.innerHTML = clean;
+    enhanceMessageMarkdown(documentRef, container, source, options);
     renderContentReferences(
       documentRef,
-      root,
+      container,
       source,
       options.contentSecurity || defaultContentSecurityPreferences(),
       options,
     );
+    return container;
+  }
+
+  function renderMessageMarkdown(documentRef, source, options = {}) {
+    const raw = String(source == null ? "" : source);
+    const root = documentRef.createElement("div");
+    root.className = "message-body";
+    if (raw.length > MARKDOWN_RAW_LIMIT) {
+      root.classList.add("message-body--raw");
+      const note = documentRef.createElement("p");
+      note.className = "message-body__raw-note";
+      note.textContent = `Message de ${Math.round(raw.length / 1000)} k caractères affiché en texte brut : au-delà de ${MARKDOWN_RAW_LIMIT / 1_000_000} M caractères, la mise en forme est abandonnée pour garder la page utilisable.`;
+      const pre = documentRef.createElement("pre");
+      pre.textContent = raw;
+      root.append(note, pre);
+      return root;
+    }
+    if (raw.length <= MARKDOWN_PROGRESSIVE_LIMIT) {
+      return renderMarkdownInto(documentRef, root, source, options);
+    }
+    // Message long : mis en forme par blocs, le premier tout de suite, les
+    // suivants à l'approche de l'écran. Rien n'est perdu ni tronqué.
+    const hydrated = options.hydratedSegments instanceof Set ? options.hydratedSegments : null;
+    const segments = splitMarkdownIntoBlocks(raw, MARKDOWN_SEGMENT_TARGET_CHARS);
+    root.classList.add("message-body--progressive");
+    root.dataset.segmentCount = String(segments.length);
+    segments.forEach((segment, index) => {
+      const key = markdownSegmentKey(raw, index, options.segmentKey);
+      const holder = documentRef.createElement("div");
+      holder.className = "message-segment";
+      if (index === 0 || (hydrated && hydrated.has(key))) {
+        renderMarkdownInto(documentRef, holder, segment, options);
+      } else {
+        holder.dataset.markdownSegment = "pending";
+        holder.style.minHeight = `${estimateMarkdownSegmentPx(segment)}px`;
+        holder.__bridgetSegmentKey = key;
+        holder.__bridgetHydrate = () => {
+          holder.removeAttribute("data-markdown-segment");
+          holder.style.minHeight = "";
+          renderMarkdownInto(documentRef, holder, segment, options);
+          if (hydrated) hydrated.add(key);
+        };
+      }
+      root.append(holder);
+    });
     return root;
+  }
+
+  /// Blocs en réserve d'un sous-arbre, prêts à être observés.
+  function collectPendingMarkdownSegments(root) {
+    if (!root || typeof root.querySelectorAll !== "function") return [];
+    return [...root.querySelectorAll("[data-markdown-segment='pending']")]
+      .filter((node) => typeof node.__bridgetHydrate === "function")
+      .map((node) => ({ node, key: node.__bridgetSegmentKey, fill: node.__bridgetHydrate }));
   }
 
   function collectMessageDomTags(node, tags = new Set()) {
@@ -8667,6 +8869,7 @@
     let projects = [];
     let pendingRightsLine = null;
     let hydratedTurns = new Set();
+    let hydratedSegments = new Set();
     let turnHydrationObserver = null;
     let missionObjectives = [];
     let currentFocus = null;
@@ -11568,6 +11771,8 @@
 
     const appendMessageContent = (surface, entry) => {
       const render = (value) => renderMessageMarkdown(documentRef, value, {
+        segmentKey: entry.messageId || null,
+        hydratedSegments,
         contentSecurity: contentSecurityPreferences,
         contentSecurityDesktopManaged: desktopContentSecurity !== null,
         onOpenRightsLine: (line) => { pendingRightsLine = line; openControlCenter("rights"); },
@@ -12633,39 +12838,57 @@
     /// Hydrate un tour resté en réserve quand il approche de l'écran, et
     /// compense le défilement : un tour construit AU-DESSUS du point de vue
     /// grandit, et sans compensation le texte lu glisserait sous les yeux.
-    const observeTurnHydration = (pending) => {
+    // Un tour en réserve et un bloc de message en réserve suivent le même
+    // chemin : même observateur, même compensation de défilement.
+    let pendingHydrationByNode = new Map();
+
+    const hydrateInPlace = (item) => {
+      const above = item.node.getBoundingClientRect().bottom < 0;
+      const heightBefore = item.node.getBoundingClientRect().height;
+      item.node.removeAttribute("data-turn-placeholder");
+      item.node.style.minHeight = "";
+      item.fill();
+      if (item.kind === "turn") hydratedTurns.add(item.key);
+      // Un tour qui se construit révèle ses propres blocs en réserve.
+      observePendingHydration(collectPendingMarkdownSegments(item.node).map((segment) => ({
+        ...segment,
+        kind: "segment",
+      })));
+      const grewBy = item.node.getBoundingClientRect().height - heightBefore;
+      if (above && grewBy !== 0 && nodes.thread) nodes.thread.scrollTop += grewBy;
+    };
+
+    const observePendingHydration = (pending) => {
       if (!Array.isArray(pending) || pending.length === 0) return;
       const Observer = windowRef.IntersectionObserver;
       if (typeof Observer !== "function") {
         // Sans observateur (vieux moteur, banc de test) : tout construire
-        // plutôt que laisser des tours vides et illisibles.
+        // plutôt que laisser des tours ou des blocs vides et illisibles.
         pending.forEach((item) => {
           item.node.removeAttribute("data-turn-placeholder");
+          item.node.removeAttribute("data-markdown-segment");
           item.node.style.minHeight = "";
           item.fill();
-          hydratedTurns.add(item.key);
+          if (item.kind === "turn") hydratedTurns.add(item.key);
         });
         return;
       }
-      const byNode = new Map(pending.map((item) => [item.node, item]));
-      turnHydrationObserver = new Observer((records) => {
-        for (const record of records) {
-          if (!record.isIntersecting) continue;
-          const item = byNode.get(record.target);
-          if (!item) continue;
-          byNode.delete(record.target);
-          turnHydrationObserver.unobserve(record.target);
-          const heightBefore = record.target.getBoundingClientRect().height;
-          const above = record.target.getBoundingClientRect().bottom < 0;
-          item.node.removeAttribute("data-turn-placeholder");
-          item.node.style.minHeight = "";
-          item.fill();
-          hydratedTurns.add(item.key);
-          const grewBy = record.target.getBoundingClientRect().height - heightBefore;
-          if (above && grewBy !== 0 && nodes.thread) nodes.thread.scrollTop += grewBy;
-        }
-      }, { root: nodes.thread, rootMargin: `${THREAD_HYDRATE_MARGIN_PX}px 0px` });
-      pending.forEach((item) => turnHydrationObserver.observe(item.node));
+      if (!turnHydrationObserver) {
+        turnHydrationObserver = new Observer((records) => {
+          for (const record of records) {
+            if (!record.isIntersecting) continue;
+            const item = pendingHydrationByNode.get(record.target);
+            if (!item) continue;
+            pendingHydrationByNode.delete(record.target);
+            turnHydrationObserver.unobserve(record.target);
+            hydrateInPlace(item);
+          }
+        }, { root: nodes.thread, rootMargin: `${THREAD_HYDRATE_MARGIN_PX}px 0px` });
+      }
+      pending.forEach((item) => {
+        pendingHydrationByNode.set(item.node, item);
+        turnHydrationObserver.observe(item.node);
+      });
     };
 
     const renderThread = (incomingCount = 0) => {
@@ -12684,6 +12907,7 @@
         turnHydrationObserver.disconnect();
         turnHydrationObserver = null;
       }
+      pendingHydrationByNode = new Map();
       const pendingHydration = [];
       const artifactReferences = state.artifactReferences && state.artifactReferences.state === "ready"
         ? state.artifactReferences.items
@@ -12730,7 +12954,7 @@
         } else {
           turnNode.dataset.turnPlaceholder = "true";
           turnNode.style.minHeight = `${estimateTurnHeightPx(turn)}px`;
-          pendingHydration.push({ node: turnNode, key: turn.key, fill: fillTurnNode });
+          pendingHydration.push({ node: turnNode, key: turn.key, kind: "turn", fill: fillTurnNode });
         }
         timeline.append(turnNode);
       });
@@ -12749,7 +12973,10 @@
       renderActivity(entries);
       renderDeliveryActivity(entries, state.timelines[state.selectedAgent] || []);
       nodes.thread.replaceChildren(timeline);
-      observeTurnHydration(pendingHydration);
+      observePendingHydration([
+        ...pendingHydration,
+        ...collectPendingMarkdownSegments(timeline).map((segment) => ({ ...segment, kind: "segment" })),
+      ]);
       const after = currentMetrics();
       const decision = decideScroll(before, after, incomingCount, keepFollowingLatest);
       const restoredScrollTop = restoreReadingAnchor(readingAnchor);
@@ -13132,6 +13359,7 @@
         // Chaque fil repart de sa queue : changer d'agent ne doit jamais
         // reconstruire l'historique entier de l'agent quitté ni du suivant.
         hydratedTurns = new Set();
+        hydratedSegments = new Set();
         if (turnHydrationObserver) {
           turnHydrationObserver.disconnect();
           turnHydrationObserver = null;
@@ -13957,6 +14185,9 @@
     applyRightsProfileLocally,
     rightsTestProjection,
     planThreadVirtualization,
+    splitMarkdownIntoBlocks,
+    estimateMarkdownSegmentPx,
+    markdownSegmentKey,
     estimateTurnHeightPx,
     turnTextVolume,
     rightsDesktopProfileUrl,
