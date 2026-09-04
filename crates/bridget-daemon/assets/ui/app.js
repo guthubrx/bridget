@@ -3370,6 +3370,13 @@
         );
         assert.equal(clean.querySelectorAll(".content-references").length, 0, "code et chemins système ignorés");
         assert.equal(api.classifyContentReference("/dev/null").kind, "blocked");
+        // Extraction bornée : un texte énorme avec beaucoup de ``` non fermés reste rapide, et une
+        // référence au-delà de la borne n'est pas cherchée.
+        const huge = "```\n".repeat(20000) + "[loin](https://example.test/loin)";
+        const startedAt = Date.now();
+        assert.equal(api.extractContentReferences(huge).length, 0);
+        assert.ok(Date.now() - startedAt < 500, "extraction linéaire et bornée");
+        assert.equal(api.extractContentReferences("[près](https://example.test/pres)").length, 1);
         assert.equal(api.classifyContentReference("/srv/projet/README.md").kind, "project_file");
         assert.match(api.rightsDesktopProfileUrl("confident", { external_links: true, remote_images: true, file_references: false }), /^bridget-open:\/\/settings\?action=content-security&profile=confident&external_links=1&remote_images=1&file_references=0$/);
       });
@@ -7720,6 +7727,7 @@
 
   // Chemins qui ne sont jamais des fichiers de projet (faux positif /dev/null
   // relevé le 2026-09-04 sous un message de test).
+  const CONTENT_REFERENCE_SCAN_LIMIT = 40_000;
   const SYSTEM_PATH_PREFIXES = Object.freeze(["/dev/", "/proc/", "/sys/", "/run/", "/tmp/", "/private/tmp/", "/var/run/"]);
 
   function classifyContentReference(value, options = {}) {
@@ -7751,9 +7759,15 @@
     const found = [];
     // Le code (blocs et portions en accent grave) n'est jamais une référence :
     // une commande de test qui cite /dev/null n'est pas un fichier du projet.
-    const textSource = String(source == null ? "" : source)
-      .replace(/```[\s\S]*?```/g, " ")
-      .replace(/`[^`\n]*`/g, " ");
+    // Borné : au-delà, les références ne sont pas cherchées (un journal de
+    // 138 000 lignes rendu en entier a figé la page le 2026-09-04). Le retrait
+    // du code est linéaire : les segments impairs entre ``` sont du code.
+    const bounded = String(source == null ? "" : source).slice(0, CONTENT_REFERENCE_SCAN_LIMIT);
+    const textSource = bounded
+      .split("```")
+      .filter((_segment, index) => index % 2 === 0)
+      .join(" ")
+      .replace(/`[^`\n]{0,400}`/g, " ");
     const add = (value, expected, label) => {
       const reference = classifyContentReference(value, { expected });
       if (reference.kind === "blocked") return;
@@ -8539,6 +8553,8 @@
     let state = createUiState({ selectedAgent: isUiSender(requestedAgent) ? null : requestedAgent });
     let projects = [];
     let pendingRightsLine = null;
+    const THREAD_RENDER_WINDOW = 40;
+    let threadRenderLimit = THREAD_RENDER_WINDOW;
     let missionObjectives = [];
     let currentFocus = null;
     let selectedProjectId = params.get("project_id") || null;
@@ -12506,8 +12522,24 @@
       const keepFollowingLatest = followLatest || isAtBottom(before);
       const readingAnchor = keepFollowingLatest ? null : captureReadingAnchor();
       const entries = projectTimeline(state.timelines[state.selectedAgent] || []);
-      const turns = deriveConversationTurns(state.timelines[state.selectedAgent] || []);
+      const allTurns = deriveConversationTurns(state.timelines[state.selectedAgent] || []);
+      // Rendu progressif : les derniers tours d'abord, les précédents à la
+      // demande. Chaque message reste entier ; c'est le nombre de tours rendus
+      // d'un coup qui est borné, pas leur longueur.
+      const hiddenTurns = Math.max(0, allTurns.length - threadRenderLimit);
+      const turns = hiddenTurns > 0 ? allTurns.slice(hiddenTurns) : allTurns;
       const timeline = make("div", "timeline");
+      if (hiddenTurns > 0) {
+        const older = make("button", "quiet timeline__older", hiddenTurns === 1
+          ? "Afficher le tour précédent"
+          : `Afficher les ${Math.min(hiddenTurns, THREAD_RENDER_WINDOW)} tours précédents (${hiddenTurns} masqués)`);
+        older.type = "button";
+        older.addEventListener("click", () => {
+          threadRenderLimit += THREAD_RENDER_WINDOW;
+          renderThread(0);
+        });
+        timeline.append(older);
+      }
       const artifactReferences = state.artifactReferences && state.artifactReferences.state === "ready"
         ? state.artifactReferences.items
         : [];
@@ -12940,7 +12972,10 @@
     const selectAgent = (agentName) => {
       if (isUiSender(agentName) || !state.agents.some((agent) => agent.name === agentName)) return;
       closeIdentityCard(false);
-      if (state.selectedAgent !== agentName) storeCurrentDraft();
+      if (state.selectedAgent !== agentName) {
+        storeCurrentDraft();
+        threadRenderLimit = THREAD_RENDER_WINDOW;
+      }
       state = {
         ...state,
         selectedAgent: agentName,
