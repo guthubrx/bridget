@@ -69,10 +69,10 @@ Passage 1 : 2 tâches ajoutées (T027 hôte sur la carte de signalement, T028 é
 - Vertus LLM : chaque garde a un test d'effet ; la contre-revue a corrigé deux défauts de conception avant le code.
 - Prochaines corrections recommandées : mesurer `item/completed` réel (T006a) ; jouer le quickstart complet (T025) ; mise en service (T026).
 
-### T026 Mise en service — 2026-09-04 : ✅ fusion `165433d4` puis correctif d'enveloppe ; binaires `~/.local/lib/bridget/bridget-<sha>-<hash>/bridget` et `~/.local/lib/maicie/maicie-<sha>-<hash>/maicie` basculés par lien ; `bridget-ui.service` puis `bridget-daemon.service` redémarrés ; les deux agents gérés (Bridget, Jim) ont survécu au redémarrage (relance refusée « déjà actif ») ; `bridget who` sur le nouveau build, contrôle génération 12 avec historique recopié (migration de `control_events` vérifiée en production) ; `GET /v1/control/rights` : `agent_posture: complete`, `auto_reassignment: true`, profil `balanced` (base existante conservée) ; test réel « Shell » sur Jim.
+### T026 Mise en service — 2026-09-04 : ✅ fusion `165433d4` puis correctif d'enveloppe ; binaires `~/.local/lib/bridget/bridget-<sha>-<hash>/bridget` et `~/.local/lib/maicie/maicie-<sha>-<hash>/maicie` basculés par lien ; `bridget-ui.service` puis `bridget-daemon.service` redémarrés ; les deux agents gérés (Bridget, Jim) ont survécu au redémarrage (relance refusée « déjà actif ») ; `bridget who` sur le nouveau build, contrôle génération 12 avec historique recopié (migration de `control_events` vérifiée en production) ; `GET /v1/control/rights` : `agent_posture: complete`, `auto_reassignment: true`, profil `balanced` (base existante conservée) ; test réel « Shell » sur Jim : `passed`, sortie `BRIDGET-TEST-…` ; test réel « Internet » sur Jim : `passed`, sortie `200 BRIDGET-TEST-…` (build final `918c7f0a`).
 
 ## Statut
-In Progress : 23/28 tâches cochées ; restent T011, T019, T023 (quickstart sur le serveur, après mise en service), T025 (validation opérateur) et T026 (mise en service après commit). Rien n'est commité : diff à relire.
+In Progress : 25/28 tâches cochées ; restent T011 et T019 (quickstart §1 à §3 à l'écran, dans le navigateur du référent) et T025 (validation opérateur). Fusionné dans `main` (`918c7f0a`) et en service.
 
 ## Non vérifié
 - Routes `/v1/control/rights*` en conditions réelles (relais + daemon vivants) : quickstart §3-§4.
