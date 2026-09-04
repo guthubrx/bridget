@@ -317,7 +317,10 @@ fn managed_resume_context(
                     .map(|entry| resume_card_external_text(entry))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let rest = attested.modified.len().saturating_sub(RESUME_CARD_MAX_ENTRIES);
+                let rest = attested
+                    .modified
+                    .len()
+                    .saturating_sub(RESUME_CARD_MAX_ENTRIES);
                 if rest > 0 {
                     lines.push(format!(
                         "Fichiers non commités : {shown} … et {rest} autres (liste tronquée)"
