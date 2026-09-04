@@ -468,6 +468,72 @@ elements.preferencesForm.addEventListener("submit", async (event) => {
     elements.preferencesError.hidden = false;
   }
 });
+// SPEC-088 : demandes de la page relayée, transmises par Desktop. Ouvrir le
+// réglage sur la bonne ligne, ou proposer d'appliquer un profil, avec un clic
+// de confirmation ici : la page n'écrit jamais les préférences de ce Mac.
+const RIGHTS_LINE_INPUTS = Object.freeze({
+  external_links: "preferencesExternalLinks",
+  remote_images: "preferencesRemoteImages",
+  file_references: "preferencesFileReferences",
+});
+const RIGHTS_PROFILE_LABELS = Object.freeze({ prudent: "Prudent", balanced: "Équilibré", confident: "Confiant" });
+
+function pulseElement(element) {
+  if (!element) return;
+  element.classList.add("rights-pulse");
+  setTimeout(() => element.classList.remove("rights-pulse"), 4000);
+}
+
+function openPreferencesAt(line) {
+  elements.showPreferences?.click();
+  const input = elements[RIGHTS_LINE_INPUTS[line]];
+  const target = input ? input.closest("label") || input : document.querySelector("fieldset.content-security");
+  if (target && typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "center" });
+  pulseElement(target);
+}
+
+function proposeProfile(request) {
+  elements.showPreferences?.click();
+  const fieldset = document.querySelector("fieldset.content-security");
+  if (!fieldset) return;
+  document.querySelector("#rights-profile-proposal")?.remove();
+  const box = document.createElement("div");
+  box.id = "rights-profile-proposal";
+  box.className = "notice rights-proposal";
+  const label = RIGHTS_PROFILE_LABELS[request.profile] || request.profile;
+  const wanted = [
+    ["Liens externes", request.external_links],
+    ["Images distantes", request.remote_images],
+    ["Aperçus de fichiers", request.file_references],
+  ];
+  const text = document.createElement("p");
+  text.textContent = `Appliquer le profil ${label} sur ce Mac ? ${wanted.map(([name, on]) => `${name} : ${on ? "ouvert" : "fermé"}`).join(" · ")}`;
+  const apply = document.createElement("button");
+  apply.type = "button";
+  apply.textContent = `Appliquer ${label} sur ce Mac`;
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "secondary";
+  cancel.textContent = "Annuler";
+  apply.addEventListener("click", async () => {
+    elements.preferencesExternalLinks.checked = request.external_links === true;
+    elements.preferencesRemoteImages.checked = request.remote_images === true;
+    elements.preferencesFileReferences.checked = request.file_references === true;
+    box.remove();
+    elements.preferencesForm.requestSubmit();
+  });
+  cancel.addEventListener("click", () => box.remove());
+  box.append(text, apply, cancel);
+  fieldset.prepend(box);
+  pulseElement(fieldset);
+}
+
+window.__TAURI__?.event?.listen("settings-request", (event) => {
+  const request = event?.payload || {};
+  if (request.kind === "apply-profile") proposeProfile(request);
+  else openPreferencesAt(request.line);
+});
+
 window.__TAURI__?.event?.listen("connection-state", (event) => {
   if (event.payload?.profile_id) connectionStates.set(event.payload.profile_id, event.payload);
   void refreshFleet();

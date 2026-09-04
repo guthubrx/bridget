@@ -148,6 +148,51 @@ pub fn run() {
         Some(url)
     }
 
+    /// Transmet à la fenêtre principale une demande de la page relayée :
+    /// `bridget-open://settings?section=content-security&line=<ligne>` ouvre
+    /// les réglages sur la ligne ; `…?action=content-security&profile=…&
+    /// external_links=1&…` propose d'appliquer les valeurs locales d'un
+    /// profil. Seules des valeurs fermées traversent ; rien n'est appliqué
+    /// sans le clic de confirmation dans la fenêtre principale.
+    fn forward_settings_request(app: &tauri::AppHandle, url: &tauri::Url) {
+        let pairs: std::collections::HashMap<String, String> = url
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        let allowed_line = |value: &str| {
+            matches!(value, "external_links" | "remote_images" | "file_references")
+        };
+        let flag = |key: &str| pairs.get(key).map(|value| value == "1");
+        let payload = match pairs.get("action").map(String::as_str) {
+            Some("content-security") => {
+                let profile = pairs.get("profile").cloned().unwrap_or_default();
+                if !matches!(profile.as_str(), "prudent" | "balanced" | "confident") {
+                    return;
+                }
+                serde_json::json!({
+                    "kind": "apply-profile",
+                    "profile": profile,
+                    "external_links": flag("external_links").unwrap_or(false),
+                    "remote_images": flag("remote_images").unwrap_or(false),
+                    "file_references": flag("file_references").unwrap_or(false),
+                })
+            }
+            _ => {
+                let line = pairs
+                    .get("line")
+                    .filter(|value| allowed_line(value))
+                    .cloned()
+                    .unwrap_or_default();
+                serde_json::json!({ "kind": "open", "section": "content-security", "line": line })
+            }
+        };
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.show();
+            let _ = main.set_focus();
+        }
+        let _ = app.emit_to("main", "settings-request", payload);
+    }
+
     fn reload_panels_after_preferences_save(app: &tauri::AppHandle, state: &DesktopState) {
         let labels = match state.panels.lock() {
             Ok(panels) => panels
@@ -1198,6 +1243,14 @@ pub fn run() {
                     return true;
                 }
                 if url.scheme() == "bridget-open" {
+                    // SPEC-088 : la page relayée ne peut pas écrire les
+                    // préférences de ce Mac ; elle DEMANDE à Desktop, qui
+                    // ouvre ses réglages au bon endroit ou demande une
+                    // confirmation avant d'appliquer un profil.
+                    if url.host_str() == Some("settings") {
+                        forward_settings_request(&navigation_app, &url);
+                        return false;
+                    }
                     let destination = url
                         .query_pairs()
                         .find_map(|(key, value)| (key == "url").then(|| value.into_owned()))
