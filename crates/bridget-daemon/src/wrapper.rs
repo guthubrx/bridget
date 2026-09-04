@@ -156,6 +156,33 @@ fn redact_bytes_in_place(buffer: &mut [u8], pattern: &[u8]) {
 /// une nouvelle ligne. Le vecteur « nom » est déjà fermé en amont
 /// (`validate_agent_name`, 4d1f3cf) ; celui-ci ferme le champ `instruction`
 /// et tout autre interpolé.
+/// La carte de reprise est un message REMIS à un agent, pas un inventaire.
+/// Elle est bornée à l'écriture : une source qui déborde est tronquée ici,
+/// avec sa mention, plutôt que de produire un corps que personne ne peut
+/// lire. Mesure du 2026-09-04 : un répertoire de build non suivi avait porté
+/// une carte à 1 034 232 caractères, contre 9 167 pour le plus gros message
+/// légitime du ledger.
+pub(crate) const RESUME_CARD_MAX_CHARS: usize = 16_000;
+
+/// Plafond d'un corps que le wrapper fabrique lui-même et injecte dans le
+/// fournisseur. Au-delà, la remise est refusée et journalisée : un producteur
+/// non borné ne doit pas pouvoir traverser en silence.
+pub(crate) const INJECTED_BODY_MAX_CHARS: usize = 120_000;
+
+/// Tronque sur une frontière de caractère et dit qu'elle a tronqué.
+pub(crate) fn bounded_resume_card(card: String, max_chars: usize) -> String {
+    if card.chars().count() <= max_chars {
+        return card;
+    }
+    let mention = format!(
+        "\n… carte tronquée à {max_chars} caractères (source anormalement longue ; corriger le producteur, pas la carte)."
+    );
+    let keep = max_chars.saturating_sub(mention.chars().count());
+    let mut bounded: String = card.chars().take(keep).collect();
+    bounded.push_str(&mention);
+    bounded
+}
+
 fn resume_card_external_text(value: &str) -> String {
     value
         .chars()
@@ -312,8 +339,32 @@ fn managed_resume_context(
         );
     }
     lines.push(managed_resume_consigne(&resume_stance).to_string());
-    lines.join("\n")
+    bounded_resume_card(lines.join("\n"), RESUME_CARD_MAX_CHARS)
 }
+/// Point unique d'injection d'un message fabriqué par le wrapper. La garde de
+/// taille est ici et non chez l'appelant : un futur producteur passe par cette
+/// porte, ou il n'injecte pas. Un dépassement est refusé et journalisé, jamais
+/// tronqué en silence : le corps serait alors faux sans que personne le sache.
+fn deliver_injected_message<S: ManagedSession + ?Sized>(
+    transport: &mut S,
+    message: &bridget_core::BridgetMessage,
+    label: &str,
+) -> Result<(), String> {
+    let chars = message.body.chars().count();
+    if chars > INJECTED_BODY_MAX_CHARS {
+        let refusal = format!(
+            "{label} refusée: corps de {chars} caractères au-dessus du plafond d'injection {INJECTED_BODY_MAX_CHARS}"
+        );
+        warn!("{refusal}");
+        return Err(refusal);
+    }
+    transport.deliver(message).map_err(|error| {
+        let detail = format!("{label} impossible: {error}");
+        warn!("{detail}");
+        detail
+    })
+}
+
 struct ResumeMission {
     objective_id: String,
     delegation_id: String,
@@ -3833,9 +3884,11 @@ fn launch_acp_with_status(
             definition_digest,
         );
         let resume_message = bridget_core::BridgetMessage::new("bridget-reprise", &my_name, resume);
-        if let Err(error) = transport.deliver(&resume_message) {
-            warn!("injection de la carte de reprise impossible: {error}");
-        }
+        let _ = deliver_injected_message(
+            transport.as_mut(),
+            &resume_message,
+            "injection de la carte de reprise",
+        );
     }
     if let Some(reporter) = managed_reporter.as_mut() {
         reporter.startup_succeeded();
@@ -4218,9 +4271,11 @@ fn launch_acp_with_status(
                         );
                         let resume_message =
                             bridget_core::BridgetMessage::new("bridget-reprise", &my_name, resume);
-                        if let Err(error) = transport.deliver(&resume_message) {
-                            warn!("réinjection carte de reprise après relance impossible: {error}");
-                        }
+                        let _ = deliver_injected_message(
+                            transport.as_mut(),
+                            &resume_message,
+                            "réinjection de la carte de reprise après relance",
+                        );
                     }
                     last_provider_spawn = Instant::now();
                     last_heartbeat = Instant::now();
@@ -5539,8 +5594,9 @@ fn codex_model_from_args(args: &[String]) -> Option<String> {
 #[cfg(test)]
 mod prompt_tests {
     use super::{
-        codex_resume_bootstrap, interactive_bridget_prompt, is_protected_principal_checkout,
-        managed_resume_context, prepare_codex_agent_args, render_resume_review,
+        RESUME_CARD_MAX_CHARS, bounded_resume_card, codex_resume_bootstrap,
+        interactive_bridget_prompt, is_protected_principal_checkout, managed_resume_context,
+        prepare_codex_agent_args, render_resume_review,
     };
     use crate::mission_projection::MissionReviewV1;
     use bridget_transport::protocol::ReviewTarget;
@@ -6003,6 +6059,37 @@ mod prompt_tests {
             "doit prescrire l'attente d'un mandat: {context}"
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    /// SPEC-088 (2026-09-04) : la carte est bornée à l'écriture. Mesure du
+    /// jour : un répertoire de build non suivi l'avait portée à 1 034 232
+    /// caractères et figeait la page. Le plus gros message légitime du ledger
+    /// de production fait 9 167 caractères.
+    #[test]
+    fn carte_de_reprise_est_bornee_et_dit_qu_elle_tronque() {
+        let court = "trois lignes\nde carte\nnormale".to_string();
+        assert_eq!(
+            bounded_resume_card(court.clone(), RESUME_CARD_MAX_CHARS),
+            court,
+            "une carte normale traverse intacte"
+        );
+
+        // Frontière de caractère : un corps d'accents tronqué reste valide.
+        let enorme = "é".repeat(RESUME_CARD_MAX_CHARS * 3);
+        let borne = bounded_resume_card(enorme, RESUME_CARD_MAX_CHARS);
+        assert_eq!(borne.chars().count(), RESUME_CARD_MAX_CHARS);
+        assert!(
+            borne.contains("carte tronquée"),
+            "la troncature est dite, jamais silencieuse: {}",
+            &borne[borne.len().saturating_sub(200)..]
+        );
+        assert!(borne.contains("corriger le producteur"));
+
+        // Exactement à la borne : intacte, sans mention.
+        let pile = "a".repeat(RESUME_CARD_MAX_CHARS);
+        let rendue = bounded_resume_card(pile.clone(), RESUME_CARD_MAX_CHARS);
+        assert_eq!(rendue, pile);
+        assert!(!rendue.contains("tronquée"));
     }
 
     #[test]

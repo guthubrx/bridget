@@ -3228,6 +3228,41 @@
         assert.equal(opened, null);
       });
 
+      test("spec_088_fil_virtualise_construit_la_queue_et_garde_les_tours_hydrates", () => {
+        const keys = Array.from({ length: 900 }, (_value, index) => `turn-${index}`);
+        // Fil neuf : seule la queue est construite, pas les 892 autres.
+        const fresh = api.planThreadVirtualization(keys, new Set());
+        assert.equal(fresh.rendered.size, 8);
+        assert.equal(fresh.placeholders.length, 892);
+        assert.equal(fresh.rendered.has("turn-899"), true, "le dernier tour est construit");
+        assert.equal(fresh.rendered.has("turn-0"), false, "le premier tour attend");
+        // Un tour hydraté le reste : le contenu ne disparaît pas sous les yeux.
+        const withHydrated = api.planThreadVirtualization(keys, new Set(["turn-0", "turn-500"]));
+        assert.equal(withHydrated.rendered.has("turn-0"), true);
+        assert.equal(withHydrated.rendered.has("turn-500"), true);
+        assert.equal(withHydrated.rendered.size, 10);
+        // Fil court : tout est construit, aucun placeholder.
+        const short = api.planThreadVirtualization(["a", "b"], new Set());
+        assert.equal(short.placeholders.length, 0);
+        assert.equal(short.rendered.size, 2);
+        assert.deepEqual(api.planThreadVirtualization([], new Set()).placeholders, []);
+
+        // La hauteur réservée suit le volume, bornée des deux côtés.
+        const vide = { key: "v", entries: [] };
+        const court = { key: "c", entries: [{ kind: "message", text: "bonjour" }] };
+        const long = { key: "l", entries: [{ kind: "message", text: "x".repeat(200_000) }] };
+        assert.equal(api.turnTextVolume(court), 7);
+        assert.equal(api.estimateTurnHeightPx(vide), api.estimateTurnHeightPx(court), "plancher commun");
+        assert.ok(api.estimateTurnHeightPx(long) > api.estimateTurnHeightPx(court));
+        assert.ok(api.estimateTurnHeightPx(long) <= 1600, "plafond respecté");
+        // Le prompt compte, les actes comptent de façon bornée.
+        const avecPrompt = { key: "p", prompt: { kind: "message", text: "a".repeat(500) }, entries: [] };
+        assert.equal(api.turnTextVolume(avecPrompt), 500);
+        const avecActes = { key: "a", entries: [{ kind: "activity_batch", acts: [{ text: "z".repeat(5000) }] }] };
+        assert.equal(api.turnTextVolume(avecActes), 200, "un acte bavard ne gonfle pas l'estimation");
+        assert.equal(api.turnTextVolume(null), 0);
+      });
+
       test("spec_088_page_droits_projette_profils_lignes_locales_et_serveur", () => {
         const matrix = [
           { profile: "prudent", values: { agent_posture: "discovery", auto_reassignment: false, auto_objectives_cap: 5, external_links: false, remote_images: false, file_references: false } },
@@ -7752,6 +7787,59 @@
 
   // Chemins qui ne sont jamais des fichiers de projet (faux positif /dev/null
   // relevé le 2026-09-04 sous un message de test).
+  // SPEC-088 (2026-09-04) : le fil est virtualisé. Un fil de 900 tours ne doit
+  // pas coûter 900 rendus Markdown au changement d'agent ; seuls les tours
+  // proches du bas sont construits, les autres attendent d'approcher l'écran.
+  const THREAD_TAIL_TURNS = 8;
+  const THREAD_HYDRATE_MARGIN_PX = 1500;
+  const THREAD_PLACEHOLDER_MIN_PX = 64;
+  const THREAD_PLACEHOLDER_MAX_PX = 1600;
+  const THREAD_PLACEHOLDER_CHARS_PER_LINE = 90;
+  const THREAD_PLACEHOLDER_LINE_PX = 22;
+
+  /// Volume de texte d'un tour, sans construire son rendu.
+  function turnTextVolume(turn) {
+    if (!turn || typeof turn !== "object") return 0;
+    const entries = Array.isArray(turn.entries) ? turn.entries : [];
+    const all = turn.prompt ? [turn.prompt, ...entries] : entries;
+    let total = 0;
+    for (const entry of all) {
+      if (!entry) continue;
+      if (typeof entry.text === "string") total += entry.text.length;
+      if (Array.isArray(entry.acts)) {
+        for (const act of entry.acts) {
+          if (act && typeof act.text === "string") total += Math.min(act.text.length, 200);
+        }
+      }
+    }
+    return total;
+  }
+
+  /// Hauteur qu'un tour non construit réserve, pour que la barre de défilement
+  /// ne mente pas trop avant hydratation. Bornée des deux côtés : une
+  /// estimation fausse se corrige à l'hydratation, une estimation absurde
+  /// rendrait le fil inutilisable.
+  function estimateTurnHeightPx(turn) {
+    const lines = Math.ceil(turnTextVolume(turn) / THREAD_PLACEHOLDER_CHARS_PER_LINE);
+    const estimated = lines * THREAD_PLACEHOLDER_LINE_PX;
+    return Math.min(THREAD_PLACEHOLDER_MAX_PX, Math.max(THREAD_PLACEHOLDER_MIN_PX, estimated));
+  }
+
+  /// Décide quels tours sont construits : la queue du fil, plus tout tour déjà
+  /// hydraté lors d'un rendu précédent. Un tour hydraté ne redevient jamais un
+  /// placeholder : le contenu ne doit pas disparaître sous les yeux du lecteur.
+  function planThreadVirtualization(turnKeys, hydratedKeys, tailCount = THREAD_TAIL_TURNS) {
+    const keys = Array.isArray(turnKeys) ? turnKeys : [];
+    const hydrated = hydratedKeys instanceof Set ? hydratedKeys : new Set(hydratedKeys || []);
+    const tail = Math.max(0, Number.isFinite(tailCount) ? tailCount : THREAD_TAIL_TURNS);
+    const firstRendered = Math.max(0, keys.length - tail);
+    const rendered = new Set();
+    for (let index = 0; index < keys.length; index += 1) {
+      if (index >= firstRendered || hydrated.has(keys[index])) rendered.add(keys[index]);
+    }
+    return { rendered, placeholders: keys.filter((key) => !rendered.has(key)) };
+  }
+
   const CONTENT_REFERENCE_SCAN_LIMIT = 40_000;
   const SYSTEM_PATH_PREFIXES = Object.freeze(["/dev/", "/proc/", "/sys/", "/run/", "/tmp/", "/private/tmp/", "/var/run/"]);
 
@@ -8578,8 +8666,8 @@
     let state = createUiState({ selectedAgent: isUiSender(requestedAgent) ? null : requestedAgent });
     let projects = [];
     let pendingRightsLine = null;
-    const THREAD_RENDER_WINDOW = 40;
-    let threadRenderLimit = THREAD_RENDER_WINDOW;
+    let hydratedTurns = new Set();
+    let turnHydrationObserver = null;
     let missionObjectives = [];
     let currentFocus = null;
     let selectedProjectId = params.get("project_id") || null;
@@ -12542,29 +12630,61 @@
       }, 0);
     };
 
+    /// Hydrate un tour resté en réserve quand il approche de l'écran, et
+    /// compense le défilement : un tour construit AU-DESSUS du point de vue
+    /// grandit, et sans compensation le texte lu glisserait sous les yeux.
+    const observeTurnHydration = (pending) => {
+      if (!Array.isArray(pending) || pending.length === 0) return;
+      const Observer = windowRef.IntersectionObserver;
+      if (typeof Observer !== "function") {
+        // Sans observateur (vieux moteur, banc de test) : tout construire
+        // plutôt que laisser des tours vides et illisibles.
+        pending.forEach((item) => {
+          item.node.removeAttribute("data-turn-placeholder");
+          item.node.style.minHeight = "";
+          item.fill();
+          hydratedTurns.add(item.key);
+        });
+        return;
+      }
+      const byNode = new Map(pending.map((item) => [item.node, item]));
+      turnHydrationObserver = new Observer((records) => {
+        for (const record of records) {
+          if (!record.isIntersecting) continue;
+          const item = byNode.get(record.target);
+          if (!item) continue;
+          byNode.delete(record.target);
+          turnHydrationObserver.unobserve(record.target);
+          const heightBefore = record.target.getBoundingClientRect().height;
+          const above = record.target.getBoundingClientRect().bottom < 0;
+          item.node.removeAttribute("data-turn-placeholder");
+          item.node.style.minHeight = "";
+          item.fill();
+          hydratedTurns.add(item.key);
+          const grewBy = record.target.getBoundingClientRect().height - heightBefore;
+          if (above && grewBy !== 0 && nodes.thread) nodes.thread.scrollTop += grewBy;
+        }
+      }, { root: nodes.thread, rootMargin: `${THREAD_HYDRATE_MARGIN_PX}px 0px` });
+      pending.forEach((item) => turnHydrationObserver.observe(item.node));
+    };
+
     const renderThread = (incomingCount = 0) => {
       const before = currentMetrics();
       const keepFollowingLatest = followLatest || isAtBottom(before);
       const readingAnchor = keepFollowingLatest ? null : captureReadingAnchor();
       const entries = projectTimeline(state.timelines[state.selectedAgent] || []);
-      const allTurns = deriveConversationTurns(state.timelines[state.selectedAgent] || []);
-      // Rendu progressif : les derniers tours d'abord, les précédents à la
-      // demande. Chaque message reste entier ; c'est le nombre de tours rendus
-      // d'un coup qui est borné, pas leur longueur.
-      const hiddenTurns = Math.max(0, allTurns.length - threadRenderLimit);
-      const turns = hiddenTurns > 0 ? allTurns.slice(hiddenTurns) : allTurns;
+      const turns = deriveConversationTurns(state.timelines[state.selectedAgent] || []);
+      // Virtualisation : seuls la queue du fil et les tours déjà hydratés sont
+      // construits. Les autres réservent leur hauteur et attendent d'approcher
+      // l'écran. Chaque message reste entier : c'est le NOMBRE de tours
+      // construits qui est borné, jamais le contenu d'un message.
+      const plan = planThreadVirtualization(turns.map((turn) => turn.key), hydratedTurns);
       const timeline = make("div", "timeline");
-      if (hiddenTurns > 0) {
-        const older = make("button", "quiet timeline__older", hiddenTurns === 1
-          ? "Afficher le tour précédent"
-          : `Afficher les ${Math.min(hiddenTurns, THREAD_RENDER_WINDOW)} tours précédents (${hiddenTurns} masqués)`);
-        older.type = "button";
-        older.addEventListener("click", () => {
-          threadRenderLimit += THREAD_RENDER_WINDOW;
-          renderThread(0);
-        });
-        timeline.append(older);
+      if (turnHydrationObserver) {
+        turnHydrationObserver.disconnect();
+        turnHydrationObserver = null;
       }
+      const pendingHydration = [];
       const artifactReferences = state.artifactReferences && state.artifactReferences.state === "ready"
         ? state.artifactReferences.items
         : [];
@@ -12585,24 +12705,33 @@
         turnNode.dataset.hasActivity = String(presentation.hasActivity);
         turnNode.dataset.hasWork = String(presentation.hasWork);
         turnNode.setAttribute("aria-label", presentation.accessibleLabel);
-        const renderEntry = (entry) => {
-          if (entry.kind === "message") turnNode.append(renderMessage(entry));
-          else if (entry.kind === "round") turnNode.append(renderRound(entry));
-          else if (entry.kind === "peer_exchange") turnNode.append(renderPeer(entry));
-          else if (entry.kind === "activity_batch") turnNode.append(renderActivityBatch(entry));
-          else if (entry.kind === "work") turnNode.append(renderWork(entry));
-          else if (entry.kind === "system") turnNode.append(make("p", "system-event", entry.text));
+        const fillTurnNode = () => {
+          const renderEntry = (entry) => {
+            if (entry.kind === "message") turnNode.append(renderMessage(entry));
+            else if (entry.kind === "round") turnNode.append(renderRound(entry));
+            else if (entry.kind === "peer_exchange") turnNode.append(renderPeer(entry));
+            else if (entry.kind === "activity_batch") turnNode.append(renderActivityBatch(entry));
+            else if (entry.kind === "work") turnNode.append(renderWork(entry));
+            else if (entry.kind === "system") turnNode.append(make("p", "system-event", entry.text));
+          };
+          if (turn.prompt) renderEntry(turn.prompt);
+          turn.entries.forEach(renderEntry);
+          const nextTurnAt = turns[turnIndex + 1] ? turns[turnIndex + 1].at : Number.POSITIVE_INFINITY;
+          artifactReferences
+            .filter((reference) => !renderedArtifactReferences.has(reference.reference_id))
+            .filter((reference) => reference.created_at >= turn.at && reference.created_at < nextTurnAt)
+            .forEach((reference) => {
+              renderedArtifactReferences.add(reference.reference_id);
+              turnNode.append(renderArtifactReference(reference));
+            });
         };
-        if (turn.prompt) renderEntry(turn.prompt);
-        turn.entries.forEach(renderEntry);
-        const nextTurnAt = turns[turnIndex + 1] ? turns[turnIndex + 1].at : Number.POSITIVE_INFINITY;
-        artifactReferences
-          .filter((reference) => !renderedArtifactReferences.has(reference.reference_id))
-          .filter((reference) => reference.created_at >= turn.at && reference.created_at < nextTurnAt)
-          .forEach((reference) => {
-            renderedArtifactReferences.add(reference.reference_id);
-            turnNode.append(renderArtifactReference(reference));
-          });
+        if (plan.rendered.has(turn.key)) {
+          fillTurnNode();
+        } else {
+          turnNode.dataset.turnPlaceholder = "true";
+          turnNode.style.minHeight = `${estimateTurnHeightPx(turn)}px`;
+          pendingHydration.push({ node: turnNode, key: turn.key, fill: fillTurnNode });
+        }
         timeline.append(turnNode);
       });
       artifactReferences
@@ -12620,6 +12749,7 @@
       renderActivity(entries);
       renderDeliveryActivity(entries, state.timelines[state.selectedAgent] || []);
       nodes.thread.replaceChildren(timeline);
+      observeTurnHydration(pendingHydration);
       const after = currentMetrics();
       const decision = decideScroll(before, after, incomingCount, keepFollowingLatest);
       const restoredScrollTop = restoreReadingAnchor(readingAnchor);
@@ -12999,7 +13129,13 @@
       closeIdentityCard(false);
       if (state.selectedAgent !== agentName) {
         storeCurrentDraft();
-        threadRenderLimit = THREAD_RENDER_WINDOW;
+        // Chaque fil repart de sa queue : changer d'agent ne doit jamais
+        // reconstruire l'historique entier de l'agent quitté ni du suivant.
+        hydratedTurns = new Set();
+        if (turnHydrationObserver) {
+          turnHydrationObserver.disconnect();
+          turnHydrationObserver = null;
+        }
       }
       state = {
         ...state,
@@ -13820,6 +13956,9 @@
     rightsProfileProjection,
     applyRightsProfileLocally,
     rightsTestProjection,
+    planThreadVirtualization,
+    estimateTurnHeightPx,
+    turnTextVolume,
     rightsDesktopProfileUrl,
     rightsMatrixValues,
     RIGHTS_LOCAL_LINES,
