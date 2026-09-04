@@ -73,6 +73,7 @@ fn active(cap: u32) -> ControlSnapshot {
         auto_objectives_cap: cap,
         inbox_open_count: 0,
         read_at: 1,
+        auto_reassignment: Some(true),
     }
 }
 
@@ -82,6 +83,7 @@ fn paused() -> ControlSnapshot {
         auto_objectives_cap: 5,
         inbox_open_count: 0,
         read_at: 1,
+        auto_reassignment: Some(true),
     }
 }
 

@@ -7393,6 +7393,49 @@ fn live_notify_timeout_secs(fallback: &AgentRegistry, agent_type: &str) -> u64 {
 ///
 /// `reply_timeout` reste un délai métier de suivi de réponse. Il ne borne pas
 /// le tour du fournisseur : une question humaine doit pouvoir dépasser 60 s.
+/// SPEC-088 : en posture découverte, seule la définition de découverte
+/// (lecture seule attestée par le registre) est lancée ; un type qui n'en a
+/// pas est refusé, jamais lancé en posture complète par repli. Un état de
+/// contrôle illisible ne bloque pas le lancement mais est journalisé.
+fn resolve_spawn_agent_type_for_posture(
+    st: &DaemonState,
+    agent_type: &str,
+) -> Result<String, SpawnRefusal> {
+    match crate::referent_control::read(st.store.connection()) {
+        Ok(control)
+            if control.agent_posture
+                == Some(bridget_transport::protocol::AgentPosture::Discovery) =>
+        {
+            match st.registry.project_discovery_agent_type(agent_type) {
+                Some(discovery_type) => Ok(discovery_type),
+                None => {
+                    warn!(
+                        "lancement refusé: posture découverte exigée et aucune définition de découverte pour '{agent_type}'"
+                    );
+                    Err(SpawnRefusal::UnsupportedCapability {
+                        agent_type: agent_type.to_string(),
+                        model: String::new(),
+                        capability: "posture_decouverte".to_string(),
+                    })
+                }
+            }
+        }
+        Ok(_) => Ok(agent_type.to_string()),
+        Err(error) => {
+            // Repli fermé : sans état lisible, on ne lance jamais en posture
+            // complète ; la découverte si elle existe, sinon refus.
+            warn!("lancement: état de contrôle illisible, repli en posture découverte: {error}");
+            st.registry
+                .project_discovery_agent_type(agent_type)
+                .ok_or_else(|| SpawnRefusal::UnsupportedCapability {
+                    agent_type: agent_type.to_string(),
+                    model: String::new(),
+                    capability: "posture_decouverte".to_string(),
+                })
+        }
+    }
+}
+
 fn stamp_turn_deadline_for_delivery(
     message: &mut bridget_core::BridgetMessage,
     registry: &AgentRegistry,
@@ -8802,6 +8845,8 @@ fn handle_control_state_set(
     paused: Option<bool>,
     auto_objectives_cap: Option<u32>,
     reason: Option<&str>,
+    agent_posture: Option<bridget_transport::protocol::AgentPosture>,
+    auto_reassignment: Option<bool>,
 ) -> DaemonToWrapper {
     use bridget_transport::protocol::ControlStateRefusal;
     if version != bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION {
@@ -8815,7 +8860,11 @@ fn handle_control_state_set(
             reason: ControlStateRefusal::HumanPrincipalRequired,
         };
     };
-    if paused.is_none() && auto_objectives_cap.is_none() {
+    if paused.is_none()
+        && auto_objectives_cap.is_none()
+        && agent_posture.is_none()
+        && auto_reassignment.is_none()
+    {
         return DaemonToWrapper::ControlStateRejected {
             reason: ControlStateRefusal::NothingToChange,
         };
@@ -8828,6 +8877,8 @@ fn handle_control_state_set(
         reason,
         actor,
         now: unix_now_secs(),
+        agent_posture,
+        auto_reassignment,
     };
     let outcome = crate::referent_control::set(st.store.connection(), mutation);
     match outcome {
@@ -9692,6 +9743,8 @@ fn handle_wrapper_message(
             paused,
             auto_objectives_cap,
             reason,
+            agent_posture,
+            auto_reassignment,
         } => Some(handle_control_state_set(
             state,
             conn_id,
@@ -9701,6 +9754,8 @@ fn handle_wrapper_message(
             paused,
             auto_objectives_cap,
             reason.as_deref(),
+            agent_posture,
+            auto_reassignment,
         )),
         WrapperToDaemon::HumanInboxDeposit {
             version,
@@ -12847,6 +12902,16 @@ fn handle_wrapper_message(
                 }
             } else {
                 (None, None)
+            };
+            // SPEC-088 : la posture des agents est un droit du référent.
+            let order = match resolve_spawn_agent_type_for_posture(&st, &order.agent_type) {
+                Ok(agent_type) => FleetSpawnOrder {
+                    agent_type,
+                    ..order
+                },
+                Err(reason) => {
+                    return Some(DaemonToWrapper::SpawnRejected { command_id, reason });
+                }
             };
             let decision = if docker_target.is_some() {
                 submit_spawn_for_project_in_runtime(
@@ -22581,6 +22646,8 @@ mod presence_tests {
                 reason: None,
                 actor: "humain",
                 now: 1,
+                agent_posture: None,
+                auto_reassignment: None,
             },
         )
         .unwrap()
@@ -22622,6 +22689,8 @@ mod presence_tests {
                 reason: None,
                 actor: "humain",
                 now: 2,
+                agent_posture: None,
+                auto_reassignment: None,
             },
         )
         .unwrap()
@@ -22660,6 +22729,8 @@ mod presence_tests {
                 reason: None,
                 actor: "humain",
                 now: 3,
+                agent_posture: None,
+                auto_reassignment: None,
             },
         )
         .unwrap()
@@ -23232,6 +23303,66 @@ mod presence_tests {
         let _ = std::fs::remove_file(config.db_path);
     }
 
+    /// SPEC-088 T015 : posture découverte ⇒ définition de découverte ; type
+    /// sans définition attestée ⇒ refus explicite, jamais de repli complet.
+    #[test]
+    fn spec_088_posture_decouverte_choisit_la_definition_ou_refuse() {
+        use bridget_transport::protocol::AgentPosture;
+        let (mut state, config) = spec_087_state("spec-088-posture");
+        // Registre de test : « claude » en protocole acp, sans découverte
+        // attestée ; « codex » en app-server, avec découverte.
+        state.registry = AgentRegistry::from_json(
+            &serde_json::json!({
+                "agents": {
+                    "claude": { "command": "/bin/sh", "protocol": "acp", "forbidden_env": [], "pass_env": [] },
+                    "codex": { "command": "/bin/sh", "args": ["app-server"], "protocol": "codex_app_server", "forbidden_env": [], "pass_env": [] }
+                }
+            })
+            .to_string(),
+            "/tmp/agents-spec-088.json",
+        )
+        .unwrap();
+        let now = unix_now_secs();
+        let initial = crate::referent_control::read(state.store.connection()).unwrap();
+        // Base neuve : Prudent ⇒ découverte.
+        assert_eq!(initial.agent_posture, Some(AgentPosture::Discovery));
+        assert_eq!(
+            resolve_spawn_agent_type_for_posture(&state, "codex").unwrap(),
+            "project-discovery-codex"
+        );
+        assert!(matches!(
+            resolve_spawn_agent_type_for_posture(&state, "claude"),
+            Err(SpawnRefusal::UnsupportedCapability { ref capability, ref agent_type, .. })
+                if capability == "posture_decouverte" && agent_type == "claude"
+        ));
+        // Posture complète ⇒ le type demandé, tel quel.
+        crate::referent_control::set(
+            state.store.connection(),
+            crate::referent_control::ControlMutation {
+                command_id: "posture-complete-088",
+                expected_generation: initial.generation,
+                paused: None,
+                auto_objectives_cap: None,
+                reason: None,
+                actor: "test",
+                now,
+                agent_posture: Some(AgentPosture::Complete),
+                auto_reassignment: None,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            resolve_spawn_agent_type_for_posture(&state, "claude").unwrap(),
+            "claude"
+        );
+        assert_eq!(
+            resolve_spawn_agent_type_for_posture(&state, "codex").unwrap(),
+            "codex"
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
     #[test]
     fn spec_087_pause_differe_la_continuation_de_reprise() {
         let (mut state, config) = spec_087_state("spec-087-continuation-pause");
@@ -23262,6 +23393,8 @@ mod presence_tests {
                 reason: Some("test"),
                 actor: "test",
                 now,
+                agent_posture: None,
+                auto_reassignment: None,
             },
         )
         .unwrap()
@@ -23287,6 +23420,8 @@ mod presence_tests {
                 reason: None,
                 actor: "test",
                 now: now + 1,
+                agent_posture: None,
+                auto_reassignment: None,
             },
         )
         .unwrap()
@@ -23358,6 +23493,8 @@ mod presence_tests {
                 Some(true),
                 None,
                 Some("test"),
+                None,
+                None
             ),
             DaemonToWrapper::ControlState { .. }
         ));
@@ -23371,6 +23508,8 @@ mod presence_tests {
                 Some(false),
                 None,
                 Some("test"),
+                None,
+                None
             ),
             DaemonToWrapper::ControlState { .. }
         ));
@@ -23420,6 +23559,8 @@ mod presence_tests {
                 Some(true),
                 None,
                 Some("test"),
+                None,
+                None
             ),
             DaemonToWrapper::ControlState { .. }
         ));
@@ -23486,6 +23627,8 @@ mod presence_tests {
                 0,
                 Some(true),
                 None,
+                None,
+                None,
                 None
             ),
             DaemonToWrapper::ControlState { .. }
@@ -23498,6 +23641,8 @@ mod presence_tests {
                 "resume-busy-087",
                 1,
                 Some(false),
+                None,
+                None,
                 None,
                 None
             ),
@@ -23582,6 +23727,8 @@ mod presence_tests {
                 0,
                 Some(true),
                 None,
+                None,
+                None,
                 None
             ),
             DaemonToWrapper::ControlState { .. }
@@ -23594,6 +23741,8 @@ mod presence_tests {
                 "resume-absent-087",
                 1,
                 Some(false),
+                None,
+                None,
                 None,
                 None
             ),
@@ -24034,6 +24183,8 @@ mod presence_tests {
                 reason: Some("nuit"),
                 actor: "humain",
                 now: 42,
+                agent_posture: None,
+                auto_reassignment: None,
             },
         )
         .unwrap()
@@ -24100,6 +24251,8 @@ mod presence_tests {
                     paused: Some(false),
                     auto_objectives_cap: Some(50),
                     reason: None,
+                    agent_posture: None,
+                    auto_reassignment: None,
                 },
                 &shared,
             ),
@@ -24139,6 +24292,8 @@ mod presence_tests {
                 paused: Some(true),
                 auto_objectives_cap: None,
                 reason: None,
+                agent_posture: None,
+                auto_reassignment: None,
             },
             &shared,
         );
@@ -24249,6 +24404,8 @@ mod presence_tests {
                 reason: Some("test"),
                 actor: "humain",
                 now,
+                agent_posture: None,
+                auto_reassignment: None,
             },
         )
         .unwrap()
@@ -24318,6 +24475,8 @@ mod presence_tests {
                     reason: None,
                     actor: "humain",
                     now,
+                    agent_posture: None,
+                    auto_reassignment: None,
                 },
             )
             .unwrap()

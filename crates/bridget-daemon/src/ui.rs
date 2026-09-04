@@ -671,10 +671,371 @@ fn control_state_json(
         "paused_by": state.paused_by,
         "pause_reason": state.pause_reason,
         "auto_objectives_cap": state.auto_objectives_cap,
+        "agent_posture": state.agent_posture,
+        "auto_reassignment": state.auto_reassignment,
+        "profile": crate::control_settings::profile_for(
+            state.agent_posture,
+            state.auto_reassignment,
+            state.auto_objectives_cap,
+        ),
         "updated_at": state.updated_at,
         "inbox_open_count": inbox_open_count,
         "summary": crate::referent_control::summary_line(state, now_secs()),
     })
+}
+
+// ---------------------------------------------------------------------------
+// SPEC-088 : page Droits. Les lignes serveur pilotent des mécanismes
+// existants ; un seul `ControlStateSet` porte posture, réassignation et
+// plafond ; `paused` n'est jamais transmis par cette route.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct UiRightsApplyV1 {
+    expected_generation: u64,
+    profile: String,
+    agent_posture: bridget_transport::protocol::AgentPosture,
+    auto_reassignment: bool,
+    auto_objectives_cap: u32,
+}
+
+fn rights_server_lines(
+    state: &bridget_transport::protocol::ControlStateFrame,
+    dogfooding_enabled: Option<bool>,
+    runtime_complete: bool,
+) -> serde_json::Value {
+    use bridget_transport::protocol::AgentPosture;
+    let posture = state.agent_posture;
+    let posture_line = |key: &str, phrase_discovery: &str, phrase_complete: &str| {
+        let requested = posture.map(|value| value.as_sql());
+        serde_json::json!({
+            "key": key,
+            "requested": requested,
+            "actual": requested,
+            "phrase": match posture {
+                Some(AgentPosture::Discovery) => phrase_discovery,
+                Some(AgentPosture::Complete) => phrase_complete,
+                None => "Inconnu : le daemon ne publie pas la posture des agents.",
+            },
+            "mechanism": "posture d’agent du registre (définition normale ou découverte en lecture seule)",
+            "storage": "serveur, control_state.agent_posture",
+            "linked": ["internet", "files", "shell"],
+        })
+    };
+    let mut internet = posture_line(
+        "internet",
+        "Les agents n’ont pas de réseau ni de shell : posture découverte, lecture seule.",
+        "Les agents peuvent joindre internet depuis le serveur.",
+    );
+    if !runtime_complete && posture == Some(AgentPosture::Complete) {
+        internet["reason_if_differs"] = serde_json::json!(
+            "Le runtime Docker attesté n’est pas complet sur ce serveur : la valeur réelle dépend de l’hôte."
+        );
+    }
+    serde_json::json!([
+        internet,
+        posture_line(
+            "files",
+            "Les agents lisent les fichiers du projet, sans écrire.",
+            "Les agents lisent et écrivent dans les fichiers du projet.",
+        ),
+        posture_line(
+            "shell",
+            "Les agents n’exécutent aucune commande : la sandbox du fournisseur bloque le shell.",
+            "Les agents exécutent des commandes sur le serveur.",
+        ),
+        {
+            "key": "bridget",
+            "requested": dogfooding_enabled.map(|enabled| if enabled { "enabled" } else { "disabled" }),
+            "actual": dogfooding_enabled.map(|enabled| if enabled { "enabled" } else { "disabled" }),
+            "phrase": match dogfooding_enabled {
+                Some(true) => "Les agents du projet système peuvent modifier Bridget dans des worktrees.",
+                Some(false) => "Aucun agent ne peut modifier Bridget.",
+                None => "Aucun projet système attesté : la ligne est fermée par construction.",
+            },
+            "mechanism": "réglage expert dogfooding.bridget (SPEC-086)",
+            "storage": "serveur, projet système",
+            "gesture": "bridget-system",
+        },
+        {
+            "key": "pause",
+            "requested": state.paused,
+            "actual": state.paused,
+            "phrase": if state.paused { "L’autonomie est en pause : aucun travail automatique ne démarre." } else { "Le coordinateur peut ouvrir du travail automatique." },
+            "mechanism": "état de contrôle (SPEC-087)",
+            "storage": "serveur, control_state.paused",
+        },
+        {
+            "key": "cap",
+            "requested": state.auto_objectives_cap,
+            "actual": state.auto_objectives_cap,
+            "phrase": format!("Au plus {} objectifs automatiques ouverts en même temps.", state.auto_objectives_cap),
+            "mechanism": "plafond d’objectifs (SPEC-087)",
+            "storage": "serveur, control_state.auto_objectives_cap",
+        },
+        {
+            "key": "reassignment",
+            "requested": state.auto_reassignment,
+            "actual": state.auto_reassignment,
+            "phrase": match state.auto_reassignment {
+                Some(true) => "Une délégation sans réponse est réassignée automatiquement.",
+                Some(false) => "Aucune réassignation automatique : la délégation attend le référent.",
+                None => "Inconnu : le daemon ne publie pas ce droit ; Maicie diffère toute réassignation.",
+            },
+            "mechanism": "garde unique de Maicie, effet Reassignment",
+            "storage": "serveur, control_state.auto_reassignment",
+        },
+    ])
+}
+
+fn get_rights(config: &UiRelayConfig) -> Result<serde_json::Value, UiControlError> {
+    let mut response = get_control_state(config)?;
+    let dogfooding_enabled = config
+        .project_root_policy_path
+        .as_deref()
+        .and_then(|_| read_dogfooding_enabled_for_rights(config));
+    let runtime_complete = runtime_capability_for_ui(config, None).is_complete();
+    let state: bridget_transport::protocol::ControlStateFrame =
+        serde_json::from_value(serde_json::json!({
+            "version": bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION,
+            "generation": response["generation"],
+            "paused": response["paused"],
+            "paused_since": response["paused_since"],
+            "paused_by": response["paused_by"],
+            "pause_reason": response["pause_reason"],
+            "auto_objectives_cap": response["auto_objectives_cap"],
+            "agent_posture": response["agent_posture"],
+            "auto_reassignment": response["auto_reassignment"],
+            "updated_at": response["updated_at"],
+        }))
+        .map_err(|error| (502, "control_state_invalid", error.to_string()))?;
+    response["lines"] = rights_server_lines(&state, dogfooding_enabled, runtime_complete);
+    response["matrix"] = serde_json::to_value(
+        crate::control_settings::PROFILE_MATRIX
+            .iter()
+            .map(|(profile, values)| serde_json::json!({ "profile": profile, "values": values }))
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|error| (502, "matrix_invalid", error.to_string()))?;
+    response["tests"] = serde_json::to_value(resolved_rights_tests(config))
+        .map_err(|error| (502, "tests_invalid", error.to_string()))?;
+    Ok(response)
+}
+
+/// Lecture du réglage expert pour la ligne « Modifier Bridget » : `None` quand
+/// aucun projet système n'est attesté.
+fn read_dogfooding_enabled_for_rights(config: &UiRelayConfig) -> Option<bool> {
+    let projects = read_projects(&config.daemon_socket).ok()?;
+    let system = projects
+        .projects
+        .iter()
+        .find(|project| project.role == "bridget_system")?;
+    match read_system_dogfooding(&config.daemon_socket, &system.project_id) {
+        Ok(state) => Some(state.mode == "enabled"),
+        Err(_) => None,
+    }
+}
+
+#[derive(Deserialize)]
+struct UiRightsTestRequestV1 {
+    line: String,
+    agent_id: String,
+}
+
+fn rights_tests_path_for(config: &UiRelayConfig) -> Option<PathBuf> {
+    config
+        .project_root_policy_path
+        .as_deref()
+        .and_then(Path::parent)
+        .map(|directory| directory.join("server-rights-tests.json"))
+}
+
+/// Bornes de lecture d'un journal pour résoudre une tentative : les journaux
+/// modifiés depuis le début de la tentative, au plus trois fichiers, au plus
+/// ce nombre d'événements. Une tentative est courte ; le reste est du bruit.
+const RIGHTS_TEST_MAX_JOURNAL_FILES: usize = 3;
+const RIGHTS_TEST_MAX_EVENTS: usize = 20_000;
+
+/// Événements du journal d'un agent, lus sur disque comme `/v1/journal`,
+/// bornés à la fenêtre de la tentative.
+fn agent_journal_events(agent: &str, since_unix: i64) -> Vec<serde_json::Value> {
+    let since = std::time::UNIX_EPOCH + std::time::Duration::from_secs(since_unix.max(0) as u64);
+    let mut files = std::fs::read_dir(agent_journal_dir(agent))
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .filter(|path| {
+            std::fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .map(|modified| modified >= since)
+                .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    let skip = files.len().saturating_sub(RIGHTS_TEST_MAX_JOURNAL_FILES);
+    files
+        .iter()
+        .skip(skip)
+        .flat_map(|path| valid_events(path))
+        .take(RIGHTS_TEST_MAX_EVENTS)
+        .collect()
+}
+
+/// Résout les tentatives en attente contre le journal de leur agent et
+/// persiste ce qui a changé. Appelé à chaque `GET /v1/control/rights`.
+fn resolved_rights_tests(
+    config: &UiRelayConfig,
+) -> Vec<crate::control_settings::RightsTestAttempt> {
+    let Some(path) = rights_tests_path_for(config) else {
+        return Vec::new();
+    };
+    let mut document = crate::control_settings::load_rights_tests(&path);
+    let now = now_secs();
+    let mut changed = false;
+    for attempt in document.attempts.iter_mut() {
+        if attempt.outcome != crate::control_settings::RightsTestOutcome::Pending {
+            continue;
+        }
+        let events = agent_journal_events(&attempt.agent_id, attempt.started_at - 60);
+        let resolved = crate::control_settings::resolve_rights_test(attempt, &events, now);
+        if resolved != *attempt {
+            *attempt = resolved;
+            changed = true;
+        }
+    }
+    if changed {
+        let _ = crate::control_settings::save_rights_tests(&path, &document);
+    }
+    document.attempts
+}
+
+fn post_rights_test(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<serde_json::Value, UiControlError> {
+    use crate::control_settings::{RightsTestLine, RightsTestOutcome};
+    let request: UiRightsTestRequestV1 = serde_json::from_slice(body)
+        .map_err(|error| (400, "invalid_request", format!("corps invalide: {error}")))?;
+    let Some(line) = RightsTestLine::parse(&request.line) else {
+        return Err((
+            400,
+            "invalid_request",
+            "ligne de droit inconnue".to_string(),
+        ));
+    };
+    validate_agent(&request.agent_id)
+        .map_err(|_| (404, "no_agent", "agent inconnu".to_string()))?;
+    let Some(path) = rights_tests_path_for(config) else {
+        return Err((
+            503,
+            "store_unavailable",
+            "aucun dossier de réglages configuré".to_string(),
+        ));
+    };
+    let now = now_secs();
+    let known_file = config
+        .project_root_policy_path
+        .as_deref()
+        .map(|policy| policy.display().to_string())
+        .unwrap_or_else(|| "/etc/hostname".to_string());
+    let mut attempt =
+        crate::control_settings::new_rights_test_attempt(line, &request.agent_id, &known_file, now);
+    if line == RightsTestLine::Bridget {
+        // Aucun geste non mutateur ne mesure « modifier Bridget » : on rend la
+        // configuration, jamais un « réussi » (contre-revue Jim, passe 2).
+        attempt.finished_at = Some(now);
+        if read_dogfooding_enabled_for_rights(config) == Some(true) {
+            attempt.outcome = RightsTestOutcome::EnabledNotMeasured;
+            attempt.raw =
+                "dogfooding.bridget activé : capacité non mesurée par un geste".to_string();
+        } else {
+            attempt.outcome = RightsTestOutcome::RefusedBridget;
+            attempt.raw =
+                "dogfooding.bridget désactivé : aucun agent ne peut modifier Bridget".to_string();
+        }
+    } else {
+        let body = format!(
+            "Bridget vérifie un droit (test {}). Exécute exactement cette commande, sans la modifier, et rends sa sortie brute :\n{}",
+            attempt.test_id, attempt.expected_command
+        );
+        let agent_id = request.agent_id.as_str();
+        let send = UiSendRequestV1 {
+            version: UI_VERSION,
+            to: agent_id.to_string(),
+            body,
+            reply: false,
+        };
+        match send_ui_message(&config.daemon_socket, send) {
+            Ok(accepted) => attempt.message_id = Some(accepted.message_id),
+            Err(error) => {
+                attempt.outcome = RightsTestOutcome::NoAgent;
+                attempt.finished_at = Some(now);
+                attempt.raw = error.to_string();
+            }
+        }
+    }
+    let mut document = crate::control_settings::load_rights_tests(&path);
+    crate::control_settings::upsert_rights_test(&mut document, attempt.clone());
+    crate::control_settings::save_rights_tests(&path, &document).map_err(|_| {
+        (
+            503,
+            "store_unavailable",
+            "tentative non enregistrable".to_string(),
+        )
+    })?;
+    serde_json::to_value(attempt).map_err(|error| (502, "attempt_invalid", error.to_string()))
+}
+
+fn post_rights_apply(
+    config: &UiRelayConfig,
+    body: &[u8],
+) -> Result<serde_json::Value, UiControlError> {
+    let change: UiRightsApplyV1 = serde_json::from_slice(body)
+        .map_err(|error| (400, "invalid_request", format!("corps invalide: {error}")))?;
+    let Some(profile) = crate::control_settings::RightsProfile::parse(&change.profile) else {
+        return Err((400, "invalid_request", "profil inconnu".to_string()));
+    };
+    if let Some(values) = crate::control_settings::profile_values(profile)
+        && (values.agent_posture != change.agent_posture
+            || values.auto_reassignment != change.auto_reassignment
+            || values.auto_objectives_cap != change.auto_objectives_cap)
+    {
+        return Err((
+            400,
+            "invalid_request",
+            "un profil nommé porte exactement les valeurs de sa matrice".to_string(),
+        ));
+    }
+    match control_request(
+        &config.daemon_socket,
+        WrapperToDaemon::ControlStateSet {
+            version: bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION,
+            command_id: format!("rights-ui-{}", uuid::Uuid::new_v4().simple()),
+            expected_generation: change.expected_generation,
+            paused: None,
+            auto_objectives_cap: Some(change.auto_objectives_cap),
+            reason: Some(format!("profil {}", change.profile)),
+            agent_posture: Some(change.agent_posture),
+            auto_reassignment: Some(change.auto_reassignment),
+        },
+    ) {
+        Ok(DaemonToWrapper::ControlState {
+            state,
+            inbox_open_count,
+        }) => Ok(control_state_json(&state, inbox_open_count)),
+        Ok(DaemonToWrapper::ControlStateRejected { reason }) => {
+            let error = control_refusal_error(&reason);
+            if error.0 == 403 {
+                log::warn!("droits: modification refusée, principal humain requis ({reason:?})");
+            }
+            Err(error)
+        }
+        Ok(response) => Err((502, "unexpected_response", format!("{response:?}"))),
+        Err(error) => Err((502, "daemon_unreachable", error.to_string())),
+    }
 }
 
 fn control_refusal_error(
@@ -783,6 +1144,8 @@ fn post_control_state(
             paused: change.paused,
             auto_objectives_cap: change.auto_objectives_cap,
             reason: change.reason,
+            agent_posture: None,
+            auto_reassignment: None,
         },
     ) {
         Ok(DaemonToWrapper::ControlState {
@@ -2238,6 +2601,42 @@ fn serve_connection(
     }
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/v1/control/state") => match get_control_state(config) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("GET", "/v1/control/rights") => match get_rights(config) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("POST", "/v1/control/rights/test") => match post_rights_test(config, &request.body) {
+            Ok(response) => write_json(stream, 200, &response),
+            Err((status, code, message)) => write_json(
+                stream,
+                status,
+                &UiSendErrorV1 {
+                    version: UI_VERSION,
+                    code,
+                    message,
+                },
+            ),
+        },
+        ("POST", "/v1/control/rights/apply") => match post_rights_apply(config, &request.body) {
             Ok(response) => write_json(stream, 200, &response),
             Err((status, code, message)) => write_json(
                 stream,

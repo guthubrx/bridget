@@ -4307,6 +4307,8 @@ fn apply_control_mutation(
         paused,
         auto_objectives_cap,
         reason,
+        agent_posture: None,
+        auto_reassignment: None,
     });
     match response {
         Ok(DaemonToWrapper::ControlState {

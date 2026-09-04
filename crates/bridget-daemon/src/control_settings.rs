@@ -622,6 +622,14 @@ fn write_execution_settings_atomically(
     source: &Path,
     settings: &ServerExecutionSettings,
 ) -> Result<(), ControlSettingsRefusal> {
+    write_settings_document_atomically(source, settings)
+}
+
+/// Écriture atomique 0600 partagée par les documents de réglages du relais.
+fn write_settings_document_atomically<T: Serialize>(
+    source: &Path,
+    settings: &T,
+) -> Result<(), ControlSettingsRefusal> {
     let parent = source.parent().ok_or(ControlSettingsRefusal::Unavailable)?;
     fs::create_dir_all(parent).map_err(|_| ControlSettingsRefusal::Unavailable)?;
     let payload =
@@ -649,6 +657,621 @@ fn write_execution_settings_atomically(
     fs::set_permissions(source, fs::Permissions::from_mode(0o600))
         .map_err(|_| ControlSettingsRefusal::Unavailable)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// SPEC-088 : profils de droits. Les valeurs serveur vivent dans `control_state`
+// (daemon, ADR-027) ; ici seulement la matrice fermée et sa dérivation.
+// ---------------------------------------------------------------------------
+
+pub use bridget_transport::protocol::AgentPosture;
+
+pub const RIGHTS_TEST_STALE_AFTER_SECS: i64 = 24 * 3600;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RightsProfile {
+    Prudent,
+    Balanced,
+    Confident,
+    Custom,
+}
+
+impl RightsProfile {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "prudent" => Some(Self::Prudent),
+            "balanced" => Some(Self::Balanced),
+            "confident" => Some(Self::Confident),
+            "custom" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+}
+
+/// Valeurs d'un profil pour les lignes serveur ET les lignes locales : le
+/// relais n'écrit que les premières ; la vue applique les secondes dans le
+/// navigateur qui a choisi le profil (FR-013).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ProfileValues {
+    pub agent_posture: AgentPosture,
+    pub auto_reassignment: bool,
+    pub auto_objectives_cap: u32,
+    pub external_links: bool,
+    pub remote_images: bool,
+    pub file_references: bool,
+}
+
+/// Matrice fermée (research R6). `Custom` n'a pas de valeurs : c'est l'état
+/// calculé quand une ligne diverge.
+pub const PROFILE_MATRIX: &[(RightsProfile, ProfileValues)] = &[
+    (
+        RightsProfile::Prudent,
+        ProfileValues {
+            agent_posture: AgentPosture::Discovery,
+            auto_reassignment: false,
+            auto_objectives_cap: 5,
+            external_links: false,
+            remote_images: false,
+            file_references: false,
+        },
+    ),
+    (
+        RightsProfile::Balanced,
+        ProfileValues {
+            agent_posture: AgentPosture::Complete,
+            auto_reassignment: true,
+            auto_objectives_cap: 5,
+            external_links: true,
+            remote_images: false,
+            file_references: true,
+        },
+    ),
+    (
+        RightsProfile::Confident,
+        ProfileValues {
+            agent_posture: AgentPosture::Complete,
+            auto_reassignment: true,
+            auto_objectives_cap: 20,
+            external_links: true,
+            remote_images: true,
+            file_references: true,
+        },
+    ),
+];
+
+pub fn profile_values(profile: RightsProfile) -> Option<ProfileValues> {
+    PROFILE_MATRIX
+        .iter()
+        .find(|(candidate, _)| *candidate == profile)
+        .map(|(_, values)| *values)
+}
+
+/// Profil réellement en vigueur sur les lignes serveur : le premier profil
+/// dont les trois valeurs serveur correspondent, sinon `Custom`. `None` sur
+/// une valeur (daemon antérieur) ⇒ `Custom`. O(3).
+pub fn profile_for(
+    agent_posture: Option<AgentPosture>,
+    auto_reassignment: Option<bool>,
+    auto_objectives_cap: u32,
+) -> RightsProfile {
+    let (Some(agent_posture), Some(auto_reassignment)) = (agent_posture, auto_reassignment) else {
+        return RightsProfile::Custom;
+    };
+    PROFILE_MATRIX
+        .iter()
+        .find(|(_, values)| {
+            values.agent_posture == agent_posture
+                && values.auto_reassignment == auto_reassignment
+                && values.auto_objectives_cap == auto_objectives_cap
+        })
+        .map(|(profile, _)| *profile)
+        .unwrap_or(RightsProfile::Custom)
+}
+
+#[cfg(test)]
+mod rights_tests {
+    use super::*;
+
+    #[test]
+    fn spec_088_profile_for_rend_custom_quand_une_ligne_diverge_ou_manque() {
+        assert_eq!(
+            profile_for(Some(AgentPosture::Discovery), Some(false), 5),
+            RightsProfile::Prudent
+        );
+        assert_eq!(
+            profile_for(Some(AgentPosture::Complete), Some(true), 5),
+            RightsProfile::Balanced
+        );
+        assert_eq!(
+            profile_for(Some(AgentPosture::Complete), Some(true), 20),
+            RightsProfile::Confident
+        );
+        assert_eq!(
+            profile_for(Some(AgentPosture::Complete), Some(false), 5),
+            RightsProfile::Custom
+        );
+        assert_eq!(
+            profile_for(Some(AgentPosture::Discovery), Some(false), 7),
+            RightsProfile::Custom
+        );
+        // Daemon antérieur : valeur inconnue ⇒ jamais un profil nommé.
+        assert_eq!(profile_for(None, Some(false), 5), RightsProfile::Custom);
+        assert_eq!(
+            profile_for(Some(AgentPosture::Discovery), None, 5),
+            RightsProfile::Custom
+        );
+    }
+
+    #[test]
+    fn spec_088_chaque_profil_nomme_a_ses_valeurs_et_custom_aucune() {
+        for profile in [
+            RightsProfile::Prudent,
+            RightsProfile::Balanced,
+            RightsProfile::Confident,
+        ] {
+            let values = profile_values(profile).expect("valeurs du profil");
+            assert_eq!(
+                profile_for(
+                    Some(values.agent_posture),
+                    Some(values.auto_reassignment),
+                    values.auto_objectives_cap
+                ),
+                profile
+            );
+            assert_eq!(
+                RightsProfile::parse(serde_json::to_string(&profile).unwrap().trim_matches('"')),
+                Some(profile)
+            );
+        }
+        assert_eq!(profile_values(RightsProfile::Custom), None);
+        assert_eq!(RightsProfile::parse("libre"), None);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SPEC-088 : tentatives de test d'un droit (relais). Une tentative est
+// corrélée par le `message_id` rendu à l'envoi et par la commande canonique
+// exacte ; elle ne se résout que sur une fin de commande, sinon elle expire.
+// ---------------------------------------------------------------------------
+
+pub const RIGHTS_TEST_EXPIRY_SECS: i64 = 120;
+pub const RIGHTS_TEST_TOKEN_PREFIX: &str = "BRIDGET-TEST-";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RightsTestLine {
+    Shell,
+    Files,
+    Internet,
+    Bridget,
+}
+
+impl RightsTestLine {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "shell" => Some(Self::Shell),
+            "files" => Some(Self::Files),
+            "internet" => Some(Self::Internet),
+            "bridget" => Some(Self::Bridget),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RightsTestOutcome {
+    Pending,
+    Passed,
+    RefusedProviderSandbox,
+    RefusedServerRuntime,
+    RefusedBridget,
+    /// Ligne « Modifier Bridget » : le réglage est activé mais aucun geste
+    /// non mutateur ne mesure cette capacité ; on ne dit pas « réussi ».
+    EnabledNotMeasured,
+    Unreachable,
+    NoAgent,
+    UnknownExpired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RightsTestAttempt {
+    pub test_id: String,
+    pub line: RightsTestLine,
+    pub agent_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    pub expected_command: String,
+    pub expected_sha256: String,
+    pub token: String,
+    pub started_at: i64,
+    pub outcome: RightsTestOutcome,
+    #[serde(default)]
+    pub raw: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RightsTestsDocument {
+    #[serde(default)]
+    pub attempts: Vec<RightsTestAttempt>,
+}
+
+/// Commande fermée d'un geste de test (FR-021). Aucune n'écrit, n'installe,
+/// ni ne dépense ; `files` et `bridget` lisent zéro octet d'un fichier connu.
+pub fn test_gesture(line: RightsTestLine, token: &str, known_file: &str) -> String {
+    match line {
+        RightsTestLine::Shell => format!("printf '{token}\\n'"),
+        RightsTestLine::Files | RightsTestLine::Bridget => {
+            format!("head -c 0 '{known_file}' && printf '{token}\\n'")
+        }
+        RightsTestLine::Internet => {
+            format!("curl -sS -o /dev/null -w '%{{http_code}} {token}\\n' https://example.com/")
+        }
+    }
+}
+
+pub fn sha256_hex(text: &str) -> String {
+    bridget_transport::protocol::sha256_hex(text.as_bytes())
+}
+
+pub fn new_rights_test_attempt(
+    line: RightsTestLine,
+    agent_id: &str,
+    known_file: &str,
+    now: i64,
+) -> RightsTestAttempt {
+    let short = uuid::Uuid::new_v4().simple().to_string();
+    let token = format!("{RIGHTS_TEST_TOKEN_PREFIX}{}", &short[..12]);
+    let expected_command = test_gesture(line, &token, known_file);
+    RightsTestAttempt {
+        test_id: uuid::Uuid::new_v4().to_string(),
+        line,
+        agent_id: agent_id.to_string(),
+        message_id: None,
+        expected_sha256: sha256_hex(&expected_command),
+        expected_command,
+        token,
+        started_at: now,
+        outcome: RightsTestOutcome::Pending,
+        raw: String::new(),
+        finished_at: None,
+    }
+}
+
+/// Lecture partagée : fichier régulier, non symlink, jamais inscriptible par
+/// le groupe ou les autres (même garde que les réglages d'exécution).
+fn read_settings_document(source: &Path) -> Result<Vec<u8>, ControlSettingsRefusal> {
+    let metadata = fs::symlink_metadata(source).map_err(|_| ControlSettingsRefusal::Unavailable)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(ControlSettingsRefusal::Unavailable);
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o022 != 0 {
+        return Err(ControlSettingsRefusal::Unavailable);
+    }
+    fs::read(source).map_err(|_| ControlSettingsRefusal::Unavailable)
+}
+
+pub fn load_rights_tests(source: &Path) -> RightsTestsDocument {
+    if !source.exists() {
+        return RightsTestsDocument::default();
+    }
+    read_settings_document(source)
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_rights_tests(
+    source: &Path,
+    document: &RightsTestsDocument,
+) -> Result<(), ControlSettingsRefusal> {
+    write_settings_document_atomically(source, document)
+}
+
+/// Remplace la tentative de la même ligne ; une tentative par ligne.
+pub fn upsert_rights_test(document: &mut RightsTestsDocument, attempt: RightsTestAttempt) {
+    document
+        .attempts
+        .retain(|existing| existing.line != attempt.line);
+    document.attempts.push(attempt);
+}
+
+fn bounded(text: &str) -> String {
+    text.chars()
+        .take(bridget_transport::refusals::MAX_RAW_CHARS)
+        .collect()
+}
+
+/// Résolution pure d'une tentative à partir des événements du journal de
+/// l'agent (objets `{ message_id, event, payload }`). Contrat rights-v1 :
+/// seule une fin de commande au texte exactement attendu conclut ; un acte
+/// `refusal` du même message et du même item conclut en refus ; sinon la
+/// tentative reste `pending` puis expire. Complexité : O(n) sur les
+/// événements fournis, n borné par la fenêtre lue.
+pub fn resolve_rights_test(
+    attempt: &RightsTestAttempt,
+    events: &[serde_json::Value],
+    now: i64,
+) -> RightsTestAttempt {
+    if attempt.outcome != RightsTestOutcome::Pending {
+        return attempt.clone();
+    }
+    let mut resolved = attempt.clone();
+    let Some(message_id) = attempt.message_id.as_deref() else {
+        return expire_if_due(resolved, now);
+    };
+    let mine = events.iter().filter(|event| {
+        event.get("message_id").and_then(serde_json::Value::as_str) == Some(message_id)
+            && event.get("event").and_then(serde_json::Value::as_str) == Some("update")
+    });
+    // Parcours complet : le producteur écrit la fin de commande AVANT l'acte
+    // refusal du même item ; conclure au premier événement masquerait le refus.
+    let mut refusals_by_item: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut completion: Option<(bool, i64, String, String)> = None;
+    for event in mine {
+        let payload = event.get("payload").cloned().unwrap_or_default();
+        let kind = payload
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let item_id = payload
+            .get("item_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if kind == "refusal" {
+            let raw = payload
+                .get("raw")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            refusals_by_item.entry(item_id).or_insert(raw);
+            continue;
+        }
+        if completion.is_some()
+            || kind != "command"
+            || payload.get("detail").and_then(serde_json::Value::as_str) != Some("item/completed")
+        {
+            continue;
+        }
+        let text = payload
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if text.trim() != attempt.expected_command.trim() {
+            continue;
+        }
+        let failed = payload.get("state").and_then(serde_json::Value::as_str) == Some("failed");
+        let exit_code = payload
+            .get("exit_code")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(-1);
+        let tail = payload
+            .get("output_tail")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        completion = Some((failed, exit_code, tail, item_id));
+    }
+    let Some((failed, exit_code, tail, item_id)) = completion else {
+        return expire_if_due(resolved, now);
+    };
+    resolved.finished_at = Some(now);
+    resolved.raw = bounded(&tail);
+    if !failed && exit_code == 0 && tail.contains(&attempt.token) {
+        resolved.outcome = RightsTestOutcome::Passed;
+        return resolved;
+    }
+    if failed && let Some(raw) = refusals_by_item.get(&item_id) {
+        resolved.outcome = RightsTestOutcome::RefusedProviderSandbox;
+        resolved.raw = bounded(raw);
+        return resolved;
+    }
+    if attempt.line == RightsTestLine::Internet
+        && failed
+        && (tail.contains("curl: (6)") || tail.contains("curl: (7)") || tail.contains("curl: (28)"))
+    {
+        resolved.outcome = RightsTestOutcome::Unreachable;
+        return resolved;
+    }
+    // Terminaison sans jeton ni signal reconnu : on ne classe pas.
+    resolved.outcome = RightsTestOutcome::UnknownExpired;
+    resolved
+}
+
+fn expire_if_due(mut attempt: RightsTestAttempt, now: i64) -> RightsTestAttempt {
+    if now.saturating_sub(attempt.started_at) > RIGHTS_TEST_EXPIRY_SECS {
+        attempt.outcome = RightsTestOutcome::UnknownExpired;
+        attempt.finished_at = Some(now);
+    }
+    attempt
+}
+
+#[cfg(test)]
+mod rights_test_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn attempt() -> RightsTestAttempt {
+        let mut attempt = new_rights_test_attempt(RightsTestLine::Shell, "agent-1", "/x", 1_000);
+        attempt.message_id = Some("m-1".to_string());
+        attempt
+    }
+
+    fn command_completed(
+        message_id: &str,
+        text: &str,
+        state: &str,
+        exit_code: i64,
+        tail: &str,
+    ) -> serde_json::Value {
+        json!({ "message_id": message_id, "event": "update", "payload": {
+            "kind": "command", "detail": "item/completed", "text": text, "state": state,
+            "exit_code": exit_code, "output_tail": tail, "item_id": "item-1" } })
+    }
+
+    #[test]
+    fn spec_088_gestes_fermes_portent_le_jeton_et_n_ecrivent_jamais() {
+        for line in [
+            RightsTestLine::Shell,
+            RightsTestLine::Files,
+            RightsTestLine::Internet,
+            RightsTestLine::Bridget,
+        ] {
+            let command = test_gesture(line, "BRIDGET-TEST-abc", "/srv/p/README.md");
+            assert!(command.contains("BRIDGET-TEST-abc"), "{command}");
+            for forbidden in [
+                " > ",
+                " >> ",
+                "tee ",
+                "rm ",
+                "mv ",
+                "chmod ",
+                "curl -o /tmp",
+            ] {
+                assert!(
+                    !command.contains(forbidden),
+                    "{command} contient {forbidden:?}"
+                );
+            }
+        }
+        let a = new_rights_test_attempt(RightsTestLine::Shell, "agent-1", "/x", 1);
+        assert_eq!(a.expected_sha256, sha256_hex(&a.expected_command));
+        assert_eq!(a.outcome, RightsTestOutcome::Pending);
+    }
+
+    #[test]
+    fn spec_088_commande_demarree_sans_fin_reste_pending_puis_expire() {
+        let a = attempt();
+        let started = json!({ "message_id": "m-1", "event": "update", "payload": {
+            "kind": "command", "detail": "item/started", "text": a.expected_command } });
+        assert_eq!(
+            resolve_rights_test(&a, std::slice::from_ref(&started), 1_010).outcome,
+            RightsTestOutcome::Pending
+        );
+        assert_eq!(
+            resolve_rights_test(&a, &[started], 1_121).outcome,
+            RightsTestOutcome::UnknownExpired
+        );
+    }
+
+    #[test]
+    fn spec_088_fin_reussie_avec_jeton_passe_et_autre_message_ne_compte_pas() {
+        let a = attempt();
+        let other = command_completed("m-2", &a.expected_command, "completed", 0, &a.token);
+        assert_eq!(
+            resolve_rights_test(&a, &[other], 1_010).outcome,
+            RightsTestOutcome::Pending
+        );
+        let mine = command_completed(
+            "m-1",
+            &a.expected_command,
+            "completed",
+            0,
+            &format!("{}\n", a.token),
+        );
+        let resolved = resolve_rights_test(&a, &[mine], 1_010);
+        assert_eq!(resolved.outcome, RightsTestOutcome::Passed);
+        assert_eq!(resolved.finished_at, Some(1_010));
+        // Une autre commande qui imprime le jeton n'est pas la commande attendue.
+        let forged = command_completed("m-1", "echo BRIDGET", "completed", 0, &a.token);
+        assert_eq!(
+            resolve_rights_test(&a, &[forged], 1_010).outcome,
+            RightsTestOutcome::Pending
+        );
+    }
+
+    #[test]
+    fn spec_088_fin_en_echec_apres_ligne_reconnue_est_un_refus_de_sandbox() {
+        let a = attempt();
+        let refusal = json!({ "message_id": "m-1", "event": "update", "payload": {
+            "kind": "refusal", "layer": "provider_sandbox", "item_id": "item-1",
+            "raw": "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted" } });
+        let failed = command_completed("m-1", &a.expected_command, "failed", 1, "");
+        // Ordre RÉEL du producteur : la fin de commande, PUIS l'acte refusal.
+        let resolved = resolve_rights_test(&a, &[failed.clone(), refusal.clone()], 1_010);
+        assert_eq!(resolved.outcome, RightsTestOutcome::RefusedProviderSandbox);
+        assert!(resolved.raw.starts_with("bwrap:"));
+        // Ordre inverse : même verdict.
+        assert_eq!(
+            resolve_rights_test(&a, &[refusal.clone(), failed.clone()], 1_010).outcome,
+            RightsTestOutcome::RefusedProviderSandbox
+        );
+        // Deux items : le refus de l'autre item ne contamine pas la commande attendue.
+        let other_item_failed = json!({ "message_id": "m-1", "event": "update", "payload": {
+            "kind": "command", "detail": "item/completed", "text": "ls", "state": "failed",
+            "exit_code": 1, "output_tail": "", "item_id": "item-2" } });
+        let other_item_refusal = json!({ "message_id": "m-1", "event": "update", "payload": {
+            "kind": "refusal", "layer": "provider_sandbox", "item_id": "item-2", "raw": "bwrap: y" } });
+        let ok = command_completed("m-1", &a.expected_command, "completed", 0, &a.token);
+        assert_eq!(
+            resolve_rights_test(&a, &[other_item_failed, other_item_refusal, ok], 1_010).outcome,
+            RightsTestOutcome::Passed
+        );
+        // Refus d'un autre item : non classé.
+        let other_refusal = json!({ "message_id": "m-1", "event": "update", "payload": {
+            "kind": "refusal", "layer": "provider_sandbox", "item_id": "item-9", "raw": "bwrap: x" } });
+        assert_eq!(
+            resolve_rights_test(&a, &[other_refusal, failed], 1_010).outcome,
+            RightsTestOutcome::UnknownExpired
+        );
+    }
+
+    #[test]
+    fn spec_088_internet_injoignable_reconnu_par_curl() {
+        let mut a = new_rights_test_attempt(RightsTestLine::Internet, "agent-1", "/x", 1_000);
+        a.message_id = Some("m-1".to_string());
+        let failed = command_completed(
+            "m-1",
+            &a.expected_command,
+            "failed",
+            6,
+            "curl: (6) Could not resolve host",
+        );
+        assert_eq!(
+            resolve_rights_test(&a, &[failed], 1_010).outcome,
+            RightsTestOutcome::Unreachable
+        );
+    }
+
+    #[test]
+    fn spec_088_une_tentative_par_ligne_et_document_0600() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-rights-tests-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("server-rights-tests.json");
+        let mut document = load_rights_tests(&path);
+        upsert_rights_test(
+            &mut document,
+            new_rights_test_attempt(RightsTestLine::Shell, "a", "/x", 1),
+        );
+        upsert_rights_test(
+            &mut document,
+            new_rights_test_attempt(RightsTestLine::Shell, "b", "/x", 2),
+        );
+        upsert_rights_test(
+            &mut document,
+            new_rights_test_attempt(RightsTestLine::Files, "a", "/x", 3),
+        );
+        assert_eq!(document.attempts.len(), 2);
+        assert_eq!(document.attempts[0].agent_id, "b");
+        save_rights_tests(&path, &document).unwrap();
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(load_rights_tests(&path), document);
+    }
 }
 
 #[cfg(test)]

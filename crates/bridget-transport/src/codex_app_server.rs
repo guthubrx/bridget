@@ -208,6 +208,21 @@ struct ReaderContext {
     writer: Writer,
     permissions: String,
     dynamic_tool_handler: Option<DynamicToolHandler>,
+    /// SPEC-088 : posture de lancement, lue une fois dans les arguments.
+    sandbox_posture: &'static str,
+}
+
+/// `--sandbox read-only` (définition de découverte du registre) ⇒ découverte ;
+/// tout autre lancement géré ⇒ complet. Pas de troisième posture (FR-016).
+fn sandbox_posture_from_args(args: &[String]) -> &'static str {
+    if args
+        .windows(2)
+        .any(|pair| pair[0] == "--sandbox" && pair[1] == "read-only")
+    {
+        "discovery"
+    } else {
+        "complete"
+    }
 }
 
 pub struct CodexAppServerTransport {
@@ -312,6 +327,7 @@ impl CodexAppServerTransport {
                 writer: writer.clone(),
                 permissions: options.permissions.clone(),
                 dynamic_tool_handler: options.dynamic_tool_handler.clone(),
+                sandbox_posture: sandbox_posture_from_args(&options.args),
             },
         );
 
@@ -1437,6 +1453,125 @@ fn record_active_act(
     }
 }
 
+/// SPEC-088 : retient, par item de commande, la première ligne de sortie qui
+/// correspond à un motif de sandbox. Aucun acte ici : une ligne seule n'est
+/// pas une preuve (contre-revue Jim, 2026-09-03).
+fn remember_sandbox_lines(delta: &str, item_id: &str, lines_by_item: &mut HashMap<String, String>) {
+    if lines_by_item.contains_key(item_id) {
+        return;
+    }
+    for line in delta.lines() {
+        if let Some(refusal) = crate::refusals::recognize_sandbox_refusal(line, 0) {
+            lines_by_item.insert(item_id.to_string(), refusal.raw);
+            return;
+        }
+    }
+}
+
+/// Fin d'une `commandExecution` : acte `command` mis à jour (état, code de
+/// sortie, queue de sortie bornée, `item_id`), puis, si la commande a ÉCHOUÉ
+/// et qu'une ligne de sandbox a été vue sur ce même item, UN acte `refusal`
+/// « signalement non attesté ». Une commande réussie n'en produit jamais.
+fn record_command_completion(
+    journal: &Journal,
+    observations: &Arc<(Mutex<Observations>, Condvar)>,
+    active_detail: &ActiveTurnDetail,
+    value: &Value,
+    sandbox_posture: &str,
+    lines_by_item: &mut HashMap<String, String>,
+    recorded: &mut HashSet<(String, String)>,
+) {
+    let message_id = active_detail
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .filter(|active| source_matches_active_turn(active, value))
+        .map(|active| active.message_id.clone());
+    let Some(message_id) = message_id else {
+        return;
+    };
+    let Some(item) = value.pointer("/params/item") else {
+        return;
+    };
+    let item_id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let command = item
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+    let status = item.get("status").and_then(Value::as_str).unwrap_or("");
+    let exit_code = item
+        .get("exitCode")
+        .or_else(|| item.get("exit_code"))
+        .and_then(Value::as_i64);
+    let output = item
+        .get("aggregatedOutput")
+        .or_else(|| item.get("aggregated_output"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let failed =
+        status == "failed" || status == "declined" || exit_code.is_some_and(|code| code != 0);
+    let state = if failed { "failed" } else { "completed" };
+    let output_tail: String = {
+        let chars: Vec<char> = output.chars().collect();
+        let start = chars.len().saturating_sub(crate::refusals::MAX_RAW_CHARS);
+        chars[start..].iter().collect()
+    };
+    let now = unix_now_secs_i64();
+    let mut payload = json!({
+        "kind": crate::act_kind::JournalUpdateKind::Command.as_str(),
+        "text": command,
+        "detail": "item/completed",
+        "state": state,
+        "item_id": item_id,
+        "output_tail": output_tail,
+        "status": status,
+    });
+    if let Some(code) = exit_code {
+        payload["exit_code"] = json!(code);
+    }
+    record_or_terminal(journal, observations, "update", Some(&message_id), payload);
+
+    let sandbox_line = lines_by_item.remove(&item_id);
+    if !failed {
+        return;
+    }
+    let Some(raw) = sandbox_line else {
+        return;
+    };
+    if !recorded.insert((message_id.clone(), item_id.clone())) {
+        return;
+    }
+    let refusal = json!({
+        "kind": crate::act_kind::JournalUpdateKind::Refusal.as_str(),
+        "text": raw,
+        "layer": crate::refusals::RefusalLayer::ProviderSandbox.as_str(),
+        "evidence": "output_and_exit",
+        "prevented": "shell",
+        "provider": "codex",
+        "posture": sandbox_posture,
+        "raw": raw,
+        "item_id": item_id,
+        "exit_code": exit_code,
+        "gesture": {"kind": "rights_line", "target": "shell"},
+        "attributed_to": "bridget",
+        "at": now,
+    });
+    record_or_terminal(journal, observations, "update", Some(&message_id), refusal);
+}
+
+fn unix_now_secs_i64() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// (A) Journalise un fragment texte assistant et incrémente `text_updates`.
 fn record_agent_text_delta(
     journal: &Journal,
@@ -2008,8 +2143,13 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
         writer,
         permissions,
         dynamic_tool_handler,
+        sandbox_posture,
     } = context;
     thread::spawn(move || {
+        // SPEC-088 : lignes de sandbox reconnues, par item de commande. Un
+        // acte `refusal` n'est écrit qu'à la fin en ÉCHEC du même item.
+        let mut sandbox_lines_by_item: HashMap<String, String> = HashMap::new();
+        let mut refusals_recorded: HashSet<(String, String)> = HashSet::new();
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
             let raw = line.as_bytes().to_vec();
@@ -2103,6 +2243,24 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                 // sans flux partiel). `item/completed` type agentMessage.
                 Some("item/completed") => {
                     let item = value.pointer("/params/item");
+                    // SPEC-088 : fin d'une commande. Journalisée avec son état
+                    // réel ; un signalement de sandbox n'existe qu'ici, et
+                    // seulement si la commande a échoué.
+                    if item
+                        .and_then(|item| item.get("type"))
+                        .and_then(Value::as_str)
+                        == Some("commandExecution")
+                    {
+                        record_command_completion(
+                            &journal,
+                            &observations,
+                            &active_detail,
+                            &value,
+                            sandbox_posture,
+                            &mut sandbox_lines_by_item,
+                            &mut refusals_recorded,
+                        );
+                    }
                     let is_agent = item
                         .and_then(|item| item.get("type"))
                         .and_then(Value::as_str)
@@ -2199,6 +2357,23 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                     // Sortie stdout uniquement — ne pas la journaliser comme
                     // acte « command » (sinon le fil affiche la sortie à la
                     // place du nom, constat relec*). Le nom vient de item/started.
+                    // SPEC-088 : un refus de sandbox reconnu sur cette sortie
+                    // devient un acte `refusal`, une fois par tour et couche.
+                    // Même garde de provenance que la fin de commande : une
+                    // sortie d'un autre tour ne contamine pas l'item actif.
+                    let from_active_turn = active_detail
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .as_ref()
+                        .is_some_and(|active| source_matches_active_turn(active, &value));
+                    if from_active_turn
+                        && let (Some(delta), Some(item_id)) = (
+                            value.pointer("/params/delta").and_then(Value::as_str),
+                            value.pointer("/params/itemId").and_then(Value::as_str),
+                        )
+                    {
+                        remember_sandbox_lines(delta, item_id, &mut sandbox_lines_by_item);
+                    }
                     push_source(
                         &observations,
                         raw,
@@ -2821,21 +2996,37 @@ mod tests {
     }
 
     fn codex_activity_turn_managed_events(label: &str) -> (Vec<ManagedEvent>, Vec<Value>) {
+        codex_activity_turn_managed_events_with(label, &[], None)
+    }
+
+    /// Variante paramétrée : variables d'environnement supplémentaires pour la
+    /// fixture, et arguments de lancement (posture SPEC-088).
+    fn codex_activity_turn_managed_events_with(
+        label: &str,
+        extra_environment: &[(&str, &str)],
+        args: Option<Vec<String>>,
+    ) -> (Vec<ManagedEvent>, Vec<Value>) {
         let root = root(label);
         let trace = root.join("trace.jsonl");
-        let environment = [
+        let mut environment = vec![
             (
                 "BRIDGET_CODEX_TRACE".to_string(),
                 trace.to_string_lossy().into_owned(),
             ),
             ("BRIDGET_CODEX_ACTIVITY".to_string(), "1".to_string()),
         ];
-        let mut transport = CodexAppServerTransport::spawn_with_environment(
-            fake_options(&trace),
-            &environment,
-            false,
-        )
-        .expect("session native e2e");
+        environment.extend(
+            extra_environment
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string())),
+        );
+        let mut options = fake_options(&trace);
+        if let Some(args) = args {
+            options.args = args;
+        }
+        let mut transport =
+            CodexAppServerTransport::spawn_with_environment(options, &environment, false)
+                .expect("session native e2e");
         transport
             .activate_journal(&root, "codex-native", None)
             .expect("journal e2e");
@@ -2868,6 +3059,109 @@ mod tests {
         let journal_events = crate::journal::valid_events(&journal_path);
         let _ = fs::remove_dir_all(&root);
         (events, journal_events)
+    }
+
+    /// SPEC-088 T006 révisé : ligne de sandbox + fin en ÉCHEC du même item ⇒
+    /// UN acte `refusal` (signalement non attesté) ; ligne + fin réussie ⇒
+    /// aucun ; fin en échec sans ligne ⇒ aucun refus mais l'acte `command`
+    /// porte l'échec. Contrôle positif : la posture est lue des arguments.
+    #[test]
+    fn spec_088_signalement_de_sandbox_exige_la_ligne_et_l_echec_du_meme_item() {
+        let _suite = crate::act_kind::pilot_kind_suite_lock();
+        let discovery_args = || {
+            let mut args = fake_options(Path::new("/tmp/unused")).args;
+            // Après le script `sh -c` : paramètres positionnels inoffensifs,
+            // mais visibles pour la lecture de posture.
+            args.extend(["--sandbox".to_string(), "read-only".to_string()]);
+            args
+        };
+        let refusals_of = |journal: &[Value]| -> Vec<Value> {
+            journal
+                .iter()
+                .filter(|event| event["event"] == "update" && event["payload"]["kind"] == "refusal")
+                .cloned()
+                .collect()
+        };
+
+        // 1. Ligne bwrap (deux fois) + fin en échec ⇒ un seul acte.
+        let (_events, journal) = codex_activity_turn_managed_events_with(
+            "spec-088-line-failed",
+            &[
+                ("BRIDGET_CODEX_SANDBOX_REFUSAL", "1"),
+                ("BRIDGET_CODEX_COMMAND_COMPLETION", "failed"),
+            ],
+            Some(discovery_args()),
+        );
+        let refusals = refusals_of(&journal);
+        assert_eq!(refusals.len(), 1, "un seul signalement, got {journal:?}");
+        let payload = &refusals[0]["payload"];
+        assert_eq!(payload["layer"], "provider_sandbox");
+        assert_eq!(payload["evidence"], "output_and_exit");
+        assert_eq!(payload["provider"], "codex");
+        assert_eq!(payload["posture"], "discovery");
+        assert_eq!(payload["item_id"], "command-1");
+        assert_eq!(payload["exit_code"], 1);
+        assert_eq!(payload["attributed_to"], "bridget");
+        assert_eq!(payload["gesture"]["target"], "shell");
+        assert!(
+            journal.iter().any(|event| {
+                event["payload"]["kind"] == "command"
+                    && event["payload"]["state"] == "failed"
+                    && event["payload"]["item_id"] == "command-1"
+            }),
+            "la fin de commande est journalisée en échec, got {journal:?}"
+        );
+
+        // 2. Ligne bwrap + fin RÉUSSIE ⇒ aucun signalement (un `echo` ne prouve rien).
+        let (_events, journal_ok) = codex_activity_turn_managed_events_with(
+            "spec-088-line-ok",
+            &[
+                ("BRIDGET_CODEX_SANDBOX_REFUSAL", "1"),
+                ("BRIDGET_CODEX_COMMAND_COMPLETION", "completed"),
+            ],
+            Some(discovery_args()),
+        );
+        assert!(
+            refusals_of(&journal_ok).is_empty(),
+            "sortie 0 ⇒ aucun refus, got {journal_ok:?}"
+        );
+        assert!(
+            journal_ok.iter().any(|event| {
+                event["payload"]["kind"] == "command"
+                    && event["payload"]["state"] == "completed"
+                    && event["payload"]["exit_code"] == 0
+                    && event["payload"]["output_tail"]
+                        .as_str()
+                        .is_some_and(|tail| tail.contains("BRIDGET-TEST-fixture"))
+            }),
+            "la fin réussie porte le code 0 et la queue de sortie, got {journal_ok:?}"
+        );
+
+        // 3. Fin en échec SANS ligne reconnue ⇒ aucun refus.
+        let (_events, journal_failed_only) = codex_activity_turn_managed_events_with(
+            "spec-088-failed-only",
+            &[("BRIDGET_CODEX_COMMAND_COMPLETION", "failed")],
+            None,
+        );
+        assert!(
+            refusals_of(&journal_failed_only).is_empty(),
+            "échec sans motif ⇒ aucun refus"
+        );
+
+        // 4. Ligne sans aucune fin ⇒ rien (une ligne seule n'est pas une preuve).
+        let (_events, journal_line_only) = codex_activity_turn_managed_events_with(
+            "spec-088-line-only",
+            &[("BRIDGET_CODEX_SANDBOX_REFUSAL", "1")],
+            None,
+        );
+        assert!(
+            refusals_of(&journal_line_only).is_empty(),
+            "ligne seule ⇒ aucun refus"
+        );
+        assert_eq!(
+            sandbox_posture_from_args(&fake_options(Path::new("/tmp/x")).args),
+            "complete"
+        );
     }
 
     #[test]
@@ -2979,6 +3273,15 @@ mod tests {
                                         printf '%s\n' '{"method":"item/reasoning/textDelta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"reasoning-1","contentIndex":0,"delta":"raison brute"}}'
                                         printf '%s\n' '{"method":"item/started","params":{"threadId":"thread-native","turnId":"turn-native","startedAtMs":1,"item":{"type":"commandExecution","id":"exec-mesure","command":"echo MESURE_CODEX_CMD_77","cwd":"/tmp/bt","status":"inProgress"}}}'
                                         printf '%s\n' '{"method":"item/commandExecution/outputDelta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"command-1","delta":"313 passés"}}'
+                                        if [ "${BRIDGET_CODEX_SANDBOX_REFUSAL:-0}" = 1 ]; then
+                                            printf '%s\n' '{"method":"item/commandExecution/outputDelta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"command-1","delta":"bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\nls: cannot access x\n"}}'
+                                            printf '%s\n' '{"method":"item/commandExecution/outputDelta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"command-1","delta":"bwrap: execvp: Permission denied\n"}}'
+                                        fi
+                                        if [ "${BRIDGET_CODEX_COMMAND_COMPLETION:-}" = failed ]; then
+                                            printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-native","turnId":"turn-native","item":{"type":"commandExecution","id":"command-1","command":"echo MESURE_CODEX_CMD_77","cwd":"/tmp/bt","status":"failed","exitCode":1,"aggregatedOutput":"bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n"}}}'
+                                        elif [ "${BRIDGET_CODEX_COMMAND_COMPLETION:-}" = completed ]; then
+                                            printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-native","turnId":"turn-native","item":{"type":"commandExecution","id":"command-1","command":"echo MESURE_CODEX_CMD_77","cwd":"/tmp/bt","status":"completed","exitCode":0,"aggregatedOutput":"313 passés\nBRIDGET-TEST-fixture\n"}}}'
+                                        fi
                                         printf '%s\n' '{"method":"item/commandExecution/outputDelta","params":{"threadId":"foreign-thread","turnId":"foreign-turn","itemId":"foreign-command","delta":"ne pas attribuer"}}'
                                         printf '%s\n' '{"method":"item/fileChange/patchUpdated","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"file-1","changes":[{"path":"src/main.rs","kind":{"type":"update"},"diff":"@@ -1 +1 @@"}]}}'
                                         printf '%s\n' '{"method":"item/plan/delta","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"plan-1","delta":"Tester le flux"}}'

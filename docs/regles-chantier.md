@@ -467,3 +467,7 @@ jury permanent transformerait la flotte en tribunal. Les erreurs de polarité
 observées le 24/08 sont apparues sur un lot d'attestation (critère 2), pas
 sur les lots simples. À terme : liste des chemins critiques portée en config
 Maicie pour que le déclenchement soit machine, pas jugement.
+
+## Droits (SPEC-088)
+
+Un refus dit toujours qui refuse, ce qu'il a empêché et le geste pour changer ça ; une couche inconnue est dite inconnue avec sa ligne brute, jamais déduite. La page Paramètres › Droits pose trois questions (ce que je vois, ce que les agents peuvent faire, combien ils décident seuls) ; un profil Prudent, Équilibré ou Confiant règle toutes les lignes, le mode expert montre le mécanisme et le stockage. Les lignes « ce que je vois » vivent dans le navigateur : un serveur relié, un agent ou un message ne peuvent pas les desserrer. Posture d'agent et réassignation automatique sont des colonnes de `control_state`, écrites par `ControlStateSet` sous la génération du contrôle référent (ADR-027, ADR-028) ; base neuve = Prudent, base existante = son comportement antérieur. Un signalement de sandbox n'est écrit que si une ligne reconnue ET la fin en échec de la même commande coïncident, et il reste « non attesté ». « Tester » est une tentative corrélée par `message_id` et commande exacte ; sans fin de commande dans les 120 s, l'issue est inconnue, jamais un refus.

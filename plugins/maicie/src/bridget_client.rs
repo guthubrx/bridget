@@ -1223,6 +1223,9 @@ pub struct ControlStateWire {
     #[serde(default)]
     pub pause_reason: Option<String>,
     pub auto_objectives_cap: u32,
+    /// SPEC-088 : absent d'un daemon antérieur ⇒ inconnu ⇒ différé.
+    #[serde(default)]
+    pub auto_reassignment: Option<bool>,
     pub updated_at: i64,
 }
 

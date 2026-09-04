@@ -425,6 +425,8 @@ mod control_pause_tests {
             paused_by: None,
             pause_reason: None,
             auto_objectives_cap: 5,
+            agent_posture: Some(bridget_transport::protocol::AgentPosture::Complete),
+            auto_reassignment: Some(true),
             updated_at: 0,
         }
     }

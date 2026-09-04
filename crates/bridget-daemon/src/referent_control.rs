@@ -7,7 +7,8 @@
 //! pas une limite acceptée (ADR 027).
 
 use bridget_transport::protocol::{
-    CONTROL_STATE_CONTRACT_VERSION, ControlFocusFrame, ControlStateFrame, ControlStateRefusal,
+    AgentPosture, CONTROL_STATE_CONTRACT_VERSION, ControlFocusFrame, ControlStateFrame,
+    ControlStateRefusal,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -44,16 +45,24 @@ pub enum ControlEventKind {
     PauseOn,
     PauseOff,
     BudgetSet,
+    /// SPEC-088 : posture d'agent ou réassignation automatique modifiée.
+    RightsSet,
 }
 
 impl ControlEventKind {
-    pub const ALL: [Self; 3] = [Self::PauseOn, Self::PauseOff, Self::BudgetSet];
+    pub const ALL: [Self; 4] = [
+        Self::PauseOn,
+        Self::PauseOff,
+        Self::BudgetSet,
+        Self::RightsSet,
+    ];
 
     pub fn as_sql(self) -> &'static str {
         match self {
             Self::PauseOn => "pause_on",
             Self::PauseOff => "pause_off",
             Self::BudgetSet => "budget_set",
+            Self::RightsSet => "rights_set",
         }
     }
 
@@ -87,6 +96,9 @@ pub struct ControlMutation<'a> {
     pub reason: Option<&'a str>,
     pub actor: &'a str,
     pub now: i64,
+    /// SPEC-088.
+    pub agent_posture: Option<AgentPosture>,
+    pub auto_reassignment: Option<bool>,
 }
 
 /// Effets autonomes du plan de contrôle Bridget. Fermé : ajouter un puits
@@ -122,6 +134,14 @@ pub fn admit_autonomous_effect(effect: AutonomousEffect, state: &ControlStateFra
 }
 
 pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
+    // SPEC-088 : « base existante » = la ligne de contrôle existait déjà
+    // avant cette passe, quelle que soit sa génération.
+    let pre_existing_row: bool = conn
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'control_state'")?
+        .exists([])?
+        && conn
+            .prepare("SELECT 1 FROM control_state WHERE id = 1")?
+            .exists([])?;
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS control_state (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -155,7 +175,74 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
         );",
         kinds = ControlEventKind::sql_in_clause(),
         cap = DEFAULT_AUTO_OBJECTIVES_CAP,
-    ))
+    ))?;
+    migrate_rights_columns(conn, pre_existing_row)?;
+    Ok(())
+}
+
+/// SPEC-088 : colonnes de droits. Base neuve (aucune génération encore
+/// écrite) ⇒ Prudent (découverte, réassignation différée). Base existante ⇒
+/// le comportement observable d'avant la migration (complète, réassignation
+/// active), pour ne pas changer un serveur en production à son redémarrage.
+fn migrate_rights_columns(conn: &Connection, pre_existing_row: bool) -> rusqlite::Result<()> {
+    let has_column = |name: &str| -> rusqlite::Result<bool> {
+        conn.prepare("SELECT 1 FROM pragma_table_info('control_state') WHERE name = ?1")?
+            .exists([name])
+    };
+    let events_accept_rights: bool = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'control_events'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .map(|sql| sql.contains("rights_set"))
+        .unwrap_or(false);
+    if has_column("agent_posture")? && has_column("auto_reassignment")? && events_accept_rights {
+        return Ok(());
+    }
+    let (posture, reassignment) = if pre_existing_row {
+        (AgentPosture::Complete, 1)
+    } else {
+        (AgentPosture::Discovery, 0)
+    };
+    // Une seule transaction : les deux colonnes ET la contrainte du journal,
+    // sinon une interruption laisse une base que personne ne répare.
+    let tx = conn.unchecked_transaction()?;
+    if !has_column("agent_posture")? {
+        tx.execute_batch(&format!(
+            "ALTER TABLE control_state ADD COLUMN agent_posture TEXT NOT NULL DEFAULT '{posture}'
+                CHECK (agent_posture IN ('discovery', 'complete'));",
+            posture = posture.as_sql(),
+        ))?;
+    }
+    if !has_column("auto_reassignment")? {
+        tx.execute_batch(&format!(
+            "ALTER TABLE control_state ADD COLUMN auto_reassignment INTEGER NOT NULL DEFAULT {reassignment}
+                CHECK (auto_reassignment IN (0, 1));"
+        ))?;
+    }
+    if !events_accept_rights {
+        // SQLite ne modifie pas une contrainte CHECK : la table est
+        // reconstruite avec la clause dérivée de `ControlEventKind::ALL`, et
+        // ses lignes recopiées à l'identique.
+        tx.execute_batch(&format!(
+            "CREATE TABLE control_events_v088 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                at INTEGER NOT NULL,
+                actor TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK (kind {kinds}),
+                reason TEXT,
+                generation_after INTEGER NOT NULL,
+                command_id TEXT NOT NULL UNIQUE
+            );
+            INSERT INTO control_events_v088 (id, at, actor, kind, reason, generation_after, command_id)
+                SELECT id, at, actor, kind, reason, generation_after, command_id FROM control_events;
+            DROP TABLE control_events;
+            ALTER TABLE control_events_v088 RENAME TO control_events;",
+            kinds = ControlEventKind::sql_in_clause(),
+        ))?;
+    }
+    tx.commit()
 }
 
 pub fn read_focus(conn: &Connection) -> rusqlite::Result<Option<ControlFocusFrame>> {
@@ -199,7 +286,7 @@ pub fn publish_focus(conn: &Connection, focus: Option<&ControlFocusFrame>) -> ru
 pub fn read(conn: &Connection) -> rusqlite::Result<ControlStateFrame> {
     conn.query_row(
         "SELECT generation, paused, paused_since, paused_by, pause_reason,
-                auto_objectives_cap, updated_at
+                auto_objectives_cap, updated_at, agent_posture, auto_reassignment
          FROM control_state WHERE id = 1",
         [],
         |row| {
@@ -211,6 +298,8 @@ pub fn read(conn: &Connection) -> rusqlite::Result<ControlStateFrame> {
                 paused_by: row.get(3)?,
                 pause_reason: row.get(4)?,
                 auto_objectives_cap: row.get::<_, i64>(5)?.clamp(0, i64::from(u32::MAX)) as u32,
+                agent_posture: AgentPosture::from_sql(&row.get::<_, String>(7)?),
+                auto_reassignment: Some(row.get::<_, i64>(8)? == 1),
                 updated_at: row.get(6)?,
             })
         },
@@ -254,7 +343,17 @@ pub fn set(
     let cap_change = mutation
         .auto_objectives_cap
         .filter(|cap| *cap != current.auto_objectives_cap);
-    if pause_change.is_none() && cap_change.is_none() {
+    let posture_change = mutation
+        .agent_posture
+        .filter(|posture| Some(*posture) != current.agent_posture);
+    let reassignment_change = mutation
+        .auto_reassignment
+        .filter(|value| Some(*value) != current.auto_reassignment);
+    if pause_change.is_none()
+        && cap_change.is_none()
+        && posture_change.is_none()
+        && reassignment_change.is_none()
+    {
         return Ok(Err(ControlStateRefusal::NothingToChange));
     }
     let reason = mutation
@@ -311,6 +410,38 @@ pub fn set(
                     mutation.now,
                     mutation.actor,
                     ControlEventKind::BudgetSet.as_sql(),
+                    reason,
+                    generation_after as i64,
+                    mutation.command_id,
+                ],
+            )?;
+        }
+    }
+    if posture_change.is_some() || reassignment_change.is_some() {
+        let posture = posture_change
+            .or(current.agent_posture)
+            .unwrap_or(AgentPosture::Discovery);
+        let reassignment = reassignment_change
+            .or(current.auto_reassignment)
+            .unwrap_or(false);
+        tx.execute(
+            "UPDATE control_state SET agent_posture = ?1, auto_reassignment = ?2,
+                    generation = ?3, updated_at = ?4 WHERE id = 1",
+            params![
+                posture.as_sql(),
+                i64::from(reassignment),
+                generation_after as i64,
+                mutation.now
+            ],
+        )?;
+        if pause_change.is_none() && cap_change.is_none() {
+            tx.execute(
+                "INSERT INTO control_events (at, actor, kind, reason, generation_after, command_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    mutation.now,
+                    mutation.actor,
+                    ControlEventKind::RightsSet.as_sql(),
                     reason,
                     generation_after as i64,
                     mutation.command_id,
@@ -393,7 +524,125 @@ mod tests {
             reason: None,
             actor: "humain",
             now: 1_788_400_000,
+            agent_posture: None,
+            auto_reassignment: None,
         }
+    }
+
+    #[test]
+    fn spec_088_base_neuve_est_prudente_et_base_existante_garde_son_comportement() {
+        // Neuve : découverte, réassignation différée.
+        let fresh = read(&conn()).unwrap();
+        assert_eq!(fresh.agent_posture, Some(AgentPosture::Discovery));
+        assert_eq!(fresh.auto_reassignment, Some(false));
+        // Existante : la table 087 sans les colonnes, avec sa ligne ⇒ complète, active.
+        // Schéma EXACT de a931a8ac (SPEC-087) : la contrainte CHECK du journal
+        // ne connaît que trois kinds, et une ligne d'historique existe.
+        let legacy = Connection::open_in_memory().unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE control_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1), generation INTEGER NOT NULL,
+                    paused INTEGER NOT NULL CHECK (paused IN (0, 1)), paused_since INTEGER, paused_by TEXT,
+                    pause_reason TEXT, auto_objectives_cap INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+                 CREATE TABLE control_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, actor TEXT NOT NULL,
+                    kind TEXT NOT NULL CHECK (kind IN ('pause_on', 'pause_off', 'budget_set')),
+                    reason TEXT, generation_after INTEGER NOT NULL, command_id TEXT NOT NULL UNIQUE);
+                 INSERT INTO control_state VALUES (1, 1, 0, NULL, NULL, NULL, 5, 0);
+                 INSERT INTO control_events (at, actor, kind, reason, generation_after, command_id)
+                    VALUES (10, 'humain', 'budget_set', NULL, 1, 'c-hist');",
+            )
+            .unwrap();
+        ensure_schema(&legacy).unwrap();
+        let migrated = read(&legacy).unwrap();
+        assert_eq!(migrated.agent_posture, Some(AgentPosture::Complete));
+        assert_eq!(migrated.auto_reassignment, Some(true));
+        assert_eq!(
+            history(&legacy, 5).unwrap().len(),
+            1,
+            "l'historique est recopié"
+        );
+        // Un changement de droits est réellement accepté par le journal migré.
+        let state = set(
+            &legacy,
+            ControlMutation {
+                auto_reassignment: Some(false),
+                ..mutation("r-legacy", 1)
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(state.generation, 2);
+        assert_eq!(history(&legacy, 1).unwrap()[0].kind, "rights_set");
+        // Idempotent : une seconde passe ne change rien.
+        ensure_schema(&legacy).unwrap();
+        assert_eq!(read(&legacy).unwrap(), state);
+    }
+
+    #[test]
+    fn spec_088_droits_journalises_sous_la_meme_generation() {
+        let conn = conn();
+        let state = set(
+            &conn,
+            ControlMutation {
+                agent_posture: Some(AgentPosture::Complete),
+                ..mutation("r1", 0)
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(state.generation, 1);
+        assert_eq!(state.agent_posture, Some(AgentPosture::Complete));
+        assert_eq!(
+            state.auto_reassignment,
+            Some(false),
+            "la réassignation ne bouge pas seule"
+        );
+        let events = history(&conn, 5).unwrap();
+        assert_eq!(events[0].kind, "rights_set");
+        assert_eq!(events[0].generation_after, 1);
+        // Rejeu du même command_id : état rendu, pas de génération.
+        let replayed = set(
+            &conn,
+            ControlMutation {
+                agent_posture: Some(AgentPosture::Complete),
+                ..mutation("r1", 0)
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(replayed.generation, 1);
+        // Même valeur, autre commande ⇒ rien à changer.
+        assert_eq!(
+            set(
+                &conn,
+                ControlMutation {
+                    agent_posture: Some(AgentPosture::Complete),
+                    ..mutation("r2", 1)
+                },
+            )
+            .unwrap()
+            .unwrap_err(),
+            ControlStateRefusal::NothingToChange
+        );
+        // Posture + plafond dans la même mutation : une seule génération, journal du plafond.
+        let both = set(
+            &conn,
+            ControlMutation {
+                auto_reassignment: Some(true),
+                auto_objectives_cap: Some(20),
+                ..mutation("r3", 1)
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(both.generation, 2);
+        assert_eq!(both.auto_reassignment, Some(true));
+        assert_eq!(both.auto_objectives_cap, 20);
+        assert_eq!(history(&conn, 1).unwrap()[0].generation_after, 2);
+        // La pause n'est jamais touchée par une mutation de droits.
+        assert!(!both.paused);
     }
 
     #[test]

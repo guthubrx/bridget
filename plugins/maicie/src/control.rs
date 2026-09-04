@@ -26,6 +26,9 @@ pub enum ControlSnapshot {
         auto_objectives_cap: u32,
         inbox_open_count: u32,
         read_at: i64,
+        /// SPEC-088 : réassignation automatique admise par le référent.
+        /// `None` = daemon antérieur ou inconnu ⇒ différé, jamais admis.
+        auto_reassignment: Option<bool>,
     },
 }
 
@@ -42,6 +45,7 @@ impl ControlSnapshot {
             auto_objectives_cap: reading.state.auto_objectives_cap,
             inbox_open_count: reading.inbox_open_count,
             read_at,
+            auto_reassignment: reading.state.auto_reassignment,
         }
     }
 
@@ -93,10 +97,24 @@ pub enum Admission {
 /// diffère tout : un daemon injoignable ne vaut jamais « pas de pause ».
 pub fn admit_autonomous_effect(effect: AutonomousEffect, snapshot: ControlSnapshot) -> Admission {
     match snapshot {
+        // SPEC-088 : réassigner exige un droit lu ; sans lecture (daemon
+        // antérieur ou commande locale), différé.
+        ControlSnapshot::Unread if effect == AutonomousEffect::Reassignment => {
+            Admission::Deferred { motif: "droits" }
+        }
         ControlSnapshot::Unread => Admission::Admitted,
         ControlSnapshot::Unknown => Admission::Deferred {
             motif: "controle_inconnu",
         },
+        // SPEC-088 : la réassignation automatique est un droit du référent.
+        // Inconnu ou refusé ⇒ différé, comme la pause.
+        ControlSnapshot::Read {
+            paused: false,
+            auto_reassignment,
+            ..
+        } if effect == AutonomousEffect::Reassignment && auto_reassignment != Some(true) => {
+            Admission::Deferred { motif: "droits" }
+        }
         ControlSnapshot::Read { paused: false, .. } => Admission::Admitted,
         ControlSnapshot::Read { paused: true, .. } => match effect {
             // Une outbox d'origine humaine est le référent qui parle : la
@@ -149,6 +167,49 @@ pub fn read_control_snapshot(
 mod tests {
     use super::*;
 
+    #[test]
+    fn spec_088_reassignation_differee_sauf_droit_explicite() {
+        let read = |paused: bool, auto_reassignment: Option<bool>| ControlSnapshot::Read {
+            paused,
+            auto_objectives_cap: 5,
+            inbox_open_count: 0,
+            read_at: 1,
+            auto_reassignment,
+        };
+        assert_eq!(
+            admit_autonomous_effect(AutonomousEffect::Reassignment, read(false, None)),
+            Admission::Deferred { motif: "droits" },
+            "daemon antérieur ⇒ inconnu ⇒ différé, jamais admis"
+        );
+        assert_eq!(
+            admit_autonomous_effect(AutonomousEffect::Reassignment, read(false, Some(false))),
+            Admission::Deferred { motif: "droits" }
+        );
+        assert_eq!(
+            admit_autonomous_effect(AutonomousEffect::Reassignment, read(false, Some(true))),
+            Admission::Admitted
+        );
+        // La pause prime sur le droit.
+        assert_eq!(
+            admit_autonomous_effect(AutonomousEffect::Reassignment, read(true, Some(true))),
+            Admission::Deferred { motif: "pause" }
+        );
+        // Sans lecture du tout (daemon antérieur) : réassignation différée, le reste admis.
+        assert_eq!(
+            admit_autonomous_effect(AutonomousEffect::Reassignment, ControlSnapshot::Unread),
+            Admission::Deferred { motif: "droits" }
+        );
+        assert_eq!(
+            admit_autonomous_effect(AutonomousEffect::RoutineOpening, ControlSnapshot::Unread),
+            Admission::Admitted
+        );
+        // Le droit ne touche pas les autres effets.
+        assert_eq!(
+            admit_autonomous_effect(AutonomousEffect::RoutineOpening, read(false, None)),
+            Admission::Admitted
+        );
+    }
+
     const EFFECTS: [AutonomousEffect; 6] = [
         AutonomousEffect::RoutineOpening,
         AutonomousEffect::Reassignment,
@@ -164,6 +225,7 @@ mod tests {
             auto_objectives_cap: 5,
             inbox_open_count: 0,
             read_at: 1,
+            auto_reassignment: Some(true),
         }
     }
 
