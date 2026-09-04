@@ -39,13 +39,13 @@
 - [x] T020 [US3] `control_settings.rs` : `RightsTestAttempt`, `RightsTestOutcome` fermé, `test_gesture(line, token, project_file, system_checkout)`, lecture/écriture 0600 de `server-rights-tests.json`, `resolve_attempt(attempt, journal_records, now)` pure selon le contrat ; tests : commande démarrée sans fin ⇒ `pending` ; fin en échec après ligne reconnue ⇒ `refused_provider_sandbox` ; jeton dans un autre `message_id` ⇒ `pending` ; fin réussie avec jeton ⇒ `passed` ; 121 s sans fin ⇒ `unknown_expired` ; aucune commande n'écrit (`rg -n ">|tee|rm |mv " ` sur les gestes vide)
 - [x] T021 [US3] `ui.rs` `POST /v1/control/rights/test` : `busy` si présence occupée à l'admission, `no_agent`, `refused_bridget` sans envoi ; sinon envoi par `post_ui_message`, `message_id` enregistré, réponse `pending` ; `GET /v1/control/rights` résout chaque tentative par lecture du journal filtré sur son `message_id` ; tests de route pour chaque issue
 - [x] T022 [US3] `app.js` : bouton « Tester » sur les lignes du bloc 2, choix parmi les agents connectés et libres, résultat daté attribué avec ligne brute repliée, « ancien » au-delà de 24 h ; tests Node : chaque issue a son libellé ; résultat de 25 h ⇒ « ancien »
-- [ ] T023 [US3] Gate story 3 : gates complets + `quickstart.md` §4 sur le serveur avec un Codex découverte puis complet ; consigner les deux résultats bruts
+- [x] T023 [US3] Gate story 3 : gates complets + `quickstart.md` §4 sur le serveur avec un Codex découverte puis complet ; consigner les deux résultats bruts
 
 ## Phase 6: Polish
 
 - [x] T024 Documentation : `docs/regles-chantier.md` (paragraphe Droits), `docs/decisions/028-…md` statut Accepté, `specs/088-droits/implementation.md` (journal par tâche, gates, mutants)
 - [ ] T025 Validation opérateur : dérouler `quickstart.md` en entier avec le référent ; consigner
-- [ ] T026 Mise en service après fusion : compilation release sur le checkout principal, binaire versionné, bascule du lien, redémarrage `bridget-ui.service` puis `bridget-daemon.service` (une seule fois), relance des agents gérés par UUID, `bridget who` sans avertissement `identity_version`
+- [x] T026 Mise en service après fusion : compilation release sur le checkout principal, binaire versionné, bascule du lien, redémarrage `bridget-ui.service` puis `bridget-daemon.service` (une seule fois), relance des agents gérés par UUID, `bridget who` sans avertissement `identity_version`
 
 ## Révision après contre-revue (2026-09-03, Jim, BLOCKED)
 

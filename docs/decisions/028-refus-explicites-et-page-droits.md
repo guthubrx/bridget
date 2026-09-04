@@ -1,6 +1,6 @@
 # ADR-028 : Refus explicites et page Droits
 
-Date : 2026-09-03. Statut : Proposé (Accepté à la livraison de SPEC-088).
+Date : 2026-09-03. Statut : Accepté (mis en service le 2026-09-04, build `918c7f0a`).
 
 ## Contexte
 
