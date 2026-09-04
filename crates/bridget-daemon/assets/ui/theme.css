@@ -5185,13 +5185,6 @@ body[data-desktop-shell="true"] .conversation {
   animation: rights-pulse 1.2s ease-in-out 3;
 }
 
-.timeline__older {
-  align-self: center;
-  margin: 0.4rem auto 0.8rem;
-  padding: 0.3rem 0.7rem;
-  color: var(--text-secondary);
-  font-size: 0.74rem;
-}
 
 .message-body--raw pre {
   max-height: 60vh;
@@ -5205,4 +5198,9 @@ body[data-desktop-shell="true"] .conversation {
   margin: 0 0 0.3rem;
   color: var(--text-secondary);
   font-size: 0.7rem;
+}
+
+/* SPEC-088 : tour en réserve, hauteur réservée avant construction. */
+.conversation-turn[data-turn-placeholder="true"] {
+  contain: layout style;
 }
