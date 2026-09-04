@@ -5192,3 +5192,17 @@ body[data-desktop-shell="true"] .conversation {
   color: var(--text-secondary);
   font-size: 0.74rem;
 }
+
+.message-body--raw pre {
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.72rem;
+}
+
+.message-body__raw-note {
+  margin: 0 0 0.3rem;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
