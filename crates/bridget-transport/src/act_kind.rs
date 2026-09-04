@@ -104,6 +104,9 @@ pub enum JournalUpdateKind {
     ToolCallLegacy,
     Plan,
     Approval,
+    /// SPEC-088 : refus reconnu sur la sortie brute d'une commande (sandbox du
+    /// fournisseur). Attribué à Bridget par la vue, jamais à l'agent.
+    Refusal,
 }
 
 impl JournalUpdateKind {
@@ -117,6 +120,7 @@ impl JournalUpdateKind {
         Self::ToolCallLegacy,
         Self::Plan,
         Self::Approval,
+        Self::Refusal,
     ];
 
     /// Actes projetés par la page (hors `text`). Doit rester égal à
@@ -129,6 +133,7 @@ impl JournalUpdateKind {
         Self::ToolCallLegacy,
         Self::Plan,
         Self::Approval,
+        Self::Refusal,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -141,6 +146,7 @@ impl JournalUpdateKind {
             Self::ToolCallLegacy => "tool_call",
             Self::Plan => "plan",
             Self::Approval => "approval",
+            Self::Refusal => "refusal",
         }
     }
 
@@ -185,7 +191,33 @@ pub fn validate_journal_write(event: &str, payload: &Value) -> Result<(), String
     let Some(kind) = kind_value.as_str() else {
         return Err("update journal : payload.kind doit être une chaîne".to_string());
     };
-    parse_update_kind(kind).map(|_| ())
+    let parsed = parse_update_kind(kind)?;
+    if parsed == JournalUpdateKind::Refusal {
+        validate_refusal_payload(payload)?;
+    }
+    Ok(())
+}
+
+/// Un acte `refusal` porte une couche fermée et une ligne brute bornée :
+/// sans elles, la vue ne pourrait ni attribuer ni permettre de contredire.
+fn validate_refusal_payload(payload: &Value) -> Result<(), String> {
+    let layer = payload
+        .get("layer")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "update refusal sans payload.layer — écriture refusée".to_string())?;
+    if crate::refusals::RefusalLayer::parse(layer).is_none() {
+        return Err(format!(
+            "update refusal : couche hors vocabulaire {layer:?}"
+        ));
+    }
+    let raw = payload
+        .get("raw")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "update refusal sans payload.raw — écriture refusée".to_string())?;
+    if raw.chars().count() > crate::refusals::MAX_RAW_CHARS {
+        return Err("update refusal : payload.raw dépasse la borne".to_string());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -323,8 +355,8 @@ mod tests {
         // Montre POURQUOI le parse source est abandonné : même littéraux via
         // `.map` → le parse forme reste vert ; seul le runtime distingue une
         // transformation qui change le sens.
-        let equivalent = r#"const JOURNAL_ACT_KINDS = new Set(["command","file","tool","artifact","tool_call","plan","approval"].map((k) => k));"#;
-        let mutated_sense = r#"const JOURNAL_ACT_KINDS = new Set(["command","file","tool","artifact","tool_call","plan","approval"].map((k) => k === "tool" ? "intent" : k));"#;
+        let equivalent = r#"const JOURNAL_ACT_KINDS = new Set(["command","file","tool","artifact","tool_call","plan","approval","refusal"].map((k) => k));"#;
+        let mutated_sense = r#"const JOURNAL_ACT_KINDS = new Set(["command","file","tool","artifact","tool_call","plan","approval","refusal"].map((k) => k === "tool" ? "intent" : k));"#;
         fn parse_form(source: &str) -> BTreeSet<String> {
             let marker = "const JOURNAL_ACT_KINDS = new Set([";
             let start = source.find(marker).expect("marker");

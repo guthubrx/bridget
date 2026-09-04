@@ -3193,6 +3193,209 @@
         assert.equal(api.messageDomHasForbiddenSurface(root), false);
       });
 
+      test("spec_088_renderRefusal_nomme_la_couche_le_geste_et_la_ligne_brute", () => {
+        const engines = loadMarkdownEngines();
+        for (const layer of Object.keys(api.REFUSAL_LAYER_LABELS)) {
+          const card = api.renderRefusal(engines.document, { layer, prevented: "x", gesture: { kind: "none" } });
+          assert.equal(card.dataset.layer, layer);
+          assert.equal(card.querySelector(".refusal__layer").textContent, api.REFUSAL_LAYER_LABELS[layer]);
+          assert.equal(card.querySelector(".refusal__gesture"), null, `sans geste, aucun bouton pour ${layer}`);
+        }
+        // Couche inconnue : dite comme telle, ligne brute obligatoire, rien d'inventé.
+        const unknown = api.renderRefusal(engines.document, { layer: "sandbox-magique", prevented: "?", raw: "ligne brute 42" });
+        assert.equal(unknown.dataset.layer, "unknown");
+        assert.equal(unknown.querySelector(".refusal__layer").textContent, "Couche inconnue");
+        assert.match(unknown.querySelector(".refusal__raw code").textContent, /ligne brute 42/);
+        // Geste vers la page Droits : libellé de la ligne.
+        let opened = null;
+        const line = api.renderRefusal(
+          engines.document,
+          { layer: "provider_sandbox", prevented: "Le shell de cet agent est bloqué", gesture: { kind: "rights_line", target: "shell" }, provider: "codex", posture: "discovery" },
+          { trustGestures: true, onOpenRightsLine: (target) => { opened = target; } },
+        );
+        assert.equal(line.querySelector(".refusal__gesture").textContent, "Droits › Shell");
+        assert.match(line.querySelector(".refusal__where").textContent, /codex · posture découverte/);
+        const hosted = api.renderRefusal(engines.document, api.refusalFromAct({ kind: "refusal", layer: "provider_sandbox", provider: "codex", posture: "discovery", prevented: "shell" }, { host: "cartae" }));
+        assert.match(hosted.querySelector(".refusal__where").textContent, /sur cartae$/);
+        line.querySelector(".refusal__gesture").dispatchEvent(new engines.window.MouseEvent("click", { bubbles: true }));
+        assert.equal(opened, "shell");
+        // Sans confiance, le geste ne se déclenche pas.
+        opened = null;
+        const guarded = api.renderRefusal(
+          engines.document,
+          { layer: "provider_sandbox", prevented: "x", gesture: { kind: "rights_line", target: "shell" } },
+          { onOpenRightsLine: (target) => { opened = target; } },
+        );
+        guarded.querySelector(".refusal__gesture").dispatchEvent(new engines.window.MouseEvent("click", { bubbles: true }));
+        assert.equal(opened, null);
+      });
+
+      test("spec_088_page_droits_projette_profils_lignes_locales_et_serveur", () => {
+        const matrix = [
+          { profile: "prudent", values: { agent_posture: "discovery", auto_reassignment: false, auto_objectives_cap: 5, external_links: false, remote_images: false, file_references: false } },
+          { profile: "balanced", values: { agent_posture: "complete", auto_reassignment: true, auto_objectives_cap: 5, external_links: true, remote_images: false, file_references: true } },
+          { profile: "confident", values: { agent_posture: "complete", auto_reassignment: true, auto_objectives_cap: 20, external_links: true, remote_images: true, file_references: true } },
+        ];
+        const server = (profile, extra = {}) => ({
+          profile, generation: 4, paused: false, auto_objectives_cap: 5, agent_posture: "complete", auto_reassignment: true, matrix,
+          lines: [
+            { key: "internet", phrase: "Les agents peuvent joindre internet.", requested: "complete", actual: "complete", mechanism: "posture", storage: "serveur", linked: ["internet", "files", "shell"] },
+            { key: "shell", phrase: "Les agents exécutent des commandes.", requested: "complete", actual: "complete", mechanism: "posture", storage: "serveur" },
+            { key: "cap", phrase: "Au plus 5 objectifs.", requested: 5, actual: 5, mechanism: "plafond", storage: "serveur" },
+          ],
+          tests: [],
+          ...extra,
+        });
+        // Lignes locales conformes à Équilibré ⇒ profil effectif Équilibré.
+        const balanced = api.rightsProfileProjection(server("balanced"), { externalLinks: true, remoteImages: false, fileReferences: true });
+        assert.equal(balanced.effectiveProfile, "balanced");
+        assert.equal(balanced.lines.filter((line) => line.local).length, 4);
+        assert.equal(balanced.lines.find((line) => line.key === "external_links").phrase, "Les liens s’ouvrent après ton clic.");
+        assert.equal(balanced.lines.find((line) => line.key === "shell").testable, true);
+        assert.equal(balanced.lines.find((line) => line.key === "cap").block, "autonomy");
+        // Lignes locales fermées (autre navigateur) ⇒ Personnalisé, et la raison est locale.
+        const other = api.rightsProfileProjection(server("balanced"), { externalLinks: false, remoteImages: false, fileReferences: false });
+        assert.equal(other.serverProfile, "balanced");
+        assert.equal(other.effectiveProfile, "custom");
+        assert.equal(other.localMatches, false);
+        // Un payload serveur qui porte des clés locales : ignoré et signalé, la ligne locale vient des préférences.
+        const hostile = api.rightsProfileProjection(
+          server("confident", { external_links: true, lines: [{ key: "external_links", phrase: "ouvert", requested: true, actual: true }] }),
+          { externalLinks: false, remoteImages: false, fileReferences: false },
+        );
+        assert.deepEqual(hostile.ignoredServerLocalKeys.sort(), ["external_links", "external_links"]);
+        assert.equal(hostile.lines.find((line) => line.key === "external_links").enabled, false);
+        // Demandé ≠ réel affiché tel quel.
+        const differs = api.rightsProfileProjection(server("balanced", { lines: [{ key: "internet", phrase: "x", requested: "complete", actual: "discovery", reason_if_differs: "runtime fermé" }] }), { externalLinks: true, remoteImages: false, fileReferences: true });
+        const internet = differs.lines.find((line) => line.key === "internet");
+        assert.equal(internet.differs, true);
+        assert.equal(internet.reasonIfDiffers, "runtime fermé");
+        // Payload absent ⇒ lignes locales seules, profil Personnalisé, rien d'inventé côté serveur.
+        const offline = api.rightsProfileProjection(null, { externalLinks: false, remoteImages: false, fileReferences: false });
+        assert.equal(offline.effectiveProfile, "custom");
+        assert.equal(offline.lines.filter((line) => !line.local).length, 0);
+        // Application locale d'un profil : seules les préférences locales bougent.
+        const storage = new Map();
+        const stub = { getItem: (key) => (storage.has(key) ? storage.get(key) : null), setItem: (key, value) => storage.set(key, String(value)) };
+        const applied = api.applyRightsProfileLocally(stub, matrix, "confident");
+        assert.deepEqual(applied, { externalLinks: true, remoteImages: true, fileReferences: true });
+        assert.equal(stub.getItem("bridget.rights.local-profile.v1"), "confident");
+        assert.equal(api.applyRightsProfileLocally(stub, matrix, "custom"), null);
+        // Résultat de test : libellé, date, ancien après 24 h.
+        const fresh = api.rightsTestProjection({ line: "shell", outcome: "passed", finished_at: 1_000_000, agent_id: "a" }, 1_000_100);
+        assert.equal(fresh.label, "Réussi");
+        assert.equal(fresh.stale, false);
+        const old = api.rightsTestProjection({ line: "shell", outcome: "refused_provider_sandbox", finished_at: 1_000_000, raw: "bwrap: x" }, 1_000_000 + 25 * 3600);
+        assert.equal(old.stale, true);
+        assert.match(old.staleLabel, /ancien/);
+        assert.equal(api.rightsTestProjection({ outcome: "n_importe_quoi" }, 1).outcome, "unknown_expired");
+        assert.ok(api.CONTROL_CENTER_NAVIGATION.some((entry) => entry.key === "rights" && entry.keywords.includes("sandbox")));
+      });
+
+      test("spec_088_un_refus_distant_ne_porte_jamais_de_geste_local", () => {
+        const engines = loadMarkdownEngines();
+        const storage = new Map();
+        const localStorageStub = { getItem: (key) => (storage.has(key) ? storage.get(key) : null), setItem: (key, value) => storage.set(key, String(value)) };
+        api.writeContentSecurityPreferences(localStorageStub, { externalLinks: false, remoteImages: false, fileReferences: false });
+        const before = localStorageStub.getItem("bridget.content-security.v1");
+        // Payload adverse : un serveur relié, un acte ou un message qui prétend porter un geste local.
+        const hostile = { layer: "browser_content", prevented: "x", gesture: { kind: "local_toggle", target: "externalLinks" } };
+        assert.deepEqual(api.normalizeRefusal(hostile).gesture, { kind: "none" });
+        assert.deepEqual(api.refusalFromAct({ kind: "refusal", ...hostile }).gesture, { kind: "none" });
+        const card = api.renderRefusal(engines.document, hostile, { trustGestures: true, onLocalToggle: () => { throw new Error("jamais appelé"); } });
+        assert.equal(card.querySelector(".refusal__gesture"), null);
+        // Seul le rendu local, avec une cible fermée, peut porter le geste.
+        assert.deepEqual(api.normalizeRefusal(hostile, { localOrigin: true }).gesture, { kind: "local_toggle", target: "externalLinks" });
+        assert.deepEqual(api.normalizeRefusal({ ...hostile, gesture: { kind: "local_toggle", target: "__proto__" } }, { localOrigin: true }).gesture, { kind: "none" });
+        assert.equal(localStorageStub.getItem("bridget.content-security.v1"), before);
+      });
+
+      test("spec_088_lien_ferme_dit_le_reglage_et_le_geste_active_la_preference", async () => {
+        const engines = loadMarkdownEngines();
+        const changed = [];
+        let preferences = { externalLinks: false, remoteImages: false, fileReferences: false };
+        const root = api.renderMessageMarkdown(
+          engines.document,
+          "[site](https://example.test/doc)",
+          {
+            parse: engines.parse,
+            purify: engines.purify,
+            contentSecurity: preferences,
+            trustGestures: true,
+            onContentSecurityChange: (key) => {
+              changed.push(key);
+              preferences = { ...preferences, [key]: true };
+              return preferences;
+            },
+          },
+        );
+        const refusal = root.querySelector(".content-reference .refusal");
+        assert.ok(refusal, "le refus est rendu dans la forme unique");
+        assert.equal(refusal.dataset.layer, "browser_content");
+        assert.match(refusal.querySelector(".refusal__prevented").textContent, /Ouverture au clic désactivée · Sécurité du contenu › Liens externes/);
+        assert.equal(root.textContent.includes("Bloqué par vos réglages locaux"), false);
+        const gesture = refusal.querySelector(".refusal__gesture");
+        assert.equal(gesture.textContent, "Autoriser les liens");
+        gesture.dispatchEvent(new engines.window.MouseEvent("click", { bubbles: true }));
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.deepEqual(changed, ["externalLinks"]);
+        assert.equal(root.querySelectorAll(".refusal").length, 0, "la carte se re-rend sans rechargement");
+        assert.equal(root.querySelector(".content-reference__action").textContent, "Ouvrir dans le navigateur");
+      });
+
+      test("spec_088_geste_local_refuse_sans_evenement_fiable_et_renvoie_vers_desktop", async () => {
+        const engines = loadMarkdownEngines();
+        let calls = 0;
+        const root = api.renderMessageMarkdown(
+          engines.document,
+          "[site](https://example.test/doc)",
+          { parse: engines.parse, purify: engines.purify, onContentSecurityChange: () => { calls += 1; return null; } },
+        );
+        root.querySelector(".refusal__gesture").dispatchEvent(new engines.window.MouseEvent("click", { bubbles: true }));
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(calls, 0, "un événement non fiable ne déclenche rien");
+        const managed = api.renderMessageMarkdown(
+          engines.document,
+          "[site](https://example.test/doc)",
+          { parse: engines.parse, purify: engines.purify, contentSecurityDesktopManaged: true },
+        );
+        assert.equal(managed.querySelector(".refusal__gesture"), null);
+        assert.match(managed.querySelector(".refusal__no-gesture").textContent, /Bridget Desktop/);
+      });
+
+      test("spec_088_acte_refusal_projete_avec_ses_champs_et_refus_de_controle", () => {
+        const update = (seq, payload) => ({
+          kind: "record",
+          record: { session_id: "session-1", message_id: "message-1", seq, event: "update", payload },
+        });
+        const timeline = api.projectTimeline([
+          update(1, { kind: "command", text: "ls" }),
+          update(2, {
+            kind: "refusal", text: "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted",
+            layer: "provider_sandbox", prevented: "shell", provider: "codex", posture: "discovery",
+            raw: "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted",
+            gesture: { kind: "rights_line", target: "shell" }, attributed_to: "bridget",
+          }),
+        ]);
+        const acts = timeline.flatMap((entry) => (Array.isArray(entry.acts) ? entry.acts : []));
+        const refusal = acts.find((act) => act.kind === "refusal");
+        assert.ok(refusal, `acte refusal attendu, got ${JSON.stringify(acts)}`);
+        assert.equal(refusal.layer, "provider_sandbox");
+        assert.equal(refusal.posture, "discovery");
+        assert.equal(refusal.state, "failed");
+        const card = api.refusalFromAct(refusal);
+        assert.match(card.prevented, /Signalement de sandbox \(non attesté\)/);
+        assert.deepEqual(card.gesture, { kind: "rights_line", target: "shell" });
+        // Refus du plan de contrôle dans la même forme.
+        assert.equal(api.controlRefusalFromCode("human_principal_required", "refus").layer, "referent_control");
+        assert.deepEqual(api.controlRefusalFromCode("budget_reached", "").gesture, { kind: "rights_line", target: "cap" });
+        assert.equal(api.controlRefusalFromCode("capability_not_negotiated", "").layer, "bridget_policy");
+        const unknown = api.controlRefusalFromCode("code_inconnu", "message du daemon");
+        assert.equal(unknown.layer, "unknown");
+        assert.equal(unknown.prevented, "message du daemon");
+        assert.equal(unknown.raw, "code_inconnu");
+      });
+
       test("spec_081_contenu_reference_n_est_activable_que_par_geste_fiable", () => {
         const engines = loadMarkdownEngines();
         const root = api.renderMessageMarkdown(
@@ -4778,6 +4981,7 @@
       if (state === "failed") return "Publication d’artefact en échec";
       return "Publie un artefact";
     }
+    if (kind === "refusal") return "Refus attribué à Bridget";
     if (kind === "plan") {
       if (state === "completed") return "Plan mis à jour";
       if (state === "failed") return "Mise à jour du plan en échec";
@@ -4793,6 +4997,7 @@
   // détail est elle-même une information sur ce que le fournisseur a émis.
   function liveActivityActDetail(act) {
     if (text(act && act.kind) === "approval") return "";
+    if (text(act && act.kind) === "refusal") return "";
     return text(act && act.text);
   }
 
@@ -5964,6 +6169,7 @@
     "tool_call",
     "plan",
     "approval",
+    "refusal",
   ]);
 
   const PERMISSION_OPTION_LABELS = Object.freeze({
@@ -6426,6 +6632,18 @@
               state,
               at: entry.at,
             };
+            if (displayKind === "refusal") {
+              Object.assign(act, {
+                layer: text(payload.layer, "unknown"),
+                raw: text(payload.raw, label),
+                prevented: text(payload.prevented),
+                provider: text(payload.provider),
+                posture: text(payload.posture),
+                gesture: payload.gesture && typeof payload.gesture === "object" ? payload.gesture : { kind: "none" },
+                attributed_to: text(payload.attributed_to, "bridget"),
+                state: "failed",
+              });
+            }
             turn.acts.push(act);
             appendActSegment(turn, act);
             turn.activity = { kind: displayKind, state, at: entry.at };
@@ -7102,6 +7320,7 @@
     { key: "time", label: "Date et heure", keywords: ["fuseau", "timezone", "iana", "heure"] },
     { key: "typography", label: "Typographie", keywords: ["police", "taille", "lisibilité"] },
     { key: "content-security", label: "Sécurité du contenu", keywords: ["liens", "fichiers", "images", "sécurité", "contenu"] },
+    { key: "rights", label: "Droits", keywords: ["droits", "permissions", "profil", "sandbox", "liens", "shell", "internet", "pause", "plafond", "réassignation", "prudent", "équilibré", "confiant"] },
     { key: "server", label: "Serveur", keywords: ["projets", "racines", "capacité", "configuration"] },
     { key: "bridget-system", label: "Projet système Bridget", keywords: ["dogfooding", "worktree", "docker", "bridget", "expert"] },
     { key: "usage", label: "Usage et facturation", keywords: ["jetons", "tokens", "coût", "fournisseur", "billing"] },
@@ -7119,6 +7338,331 @@
       monospaceFont: "system",
       monospaceFontSizePx: 13,
       wordWrap: true,
+    };
+  }
+
+  // SPEC-088 : forme unique d'un refus (ADR-028). La couche est un ensemble
+  // fermé ; « unknown » est rendu comme tel, jamais déduit.
+  const REFUSAL_LAYER_LABELS = Object.freeze({
+    browser_content: "Sécurité du contenu de ce navigateur",
+    artifact_sandbox: "Isolation des artefacts HTML",
+    provider_sandbox: "Sandbox du fournisseur de l’agent",
+    server_runtime: "Runtime des agents sur le serveur",
+    bridget_system: "Projet système Bridget",
+    referent_control: "Contrôle du référent",
+    bridget_policy: "Politique Bridget",
+    unknown: "Couche inconnue",
+  });
+  const REFUSAL_LAYERS = Object.freeze(Object.keys(REFUSAL_LAYER_LABELS));
+  const RIGHTS_LINE_LABELS = Object.freeze({
+    external_links: "Droits › Liens externes",
+    remote_images: "Droits › Images distantes",
+    file_references: "Droits › Aperçus de fichiers",
+    internet: "Droits › Internet",
+    files: "Droits › Fichiers du projet",
+    shell: "Droits › Shell",
+    bridget: "Droits › Modifier Bridget",
+    pause: "Droits › Pause",
+    cap: "Droits › Plafond d’objectifs",
+    reassignment: "Droits › Réassignation automatique",
+  });
+
+  const LOCAL_TOGGLE_TARGETS = Object.freeze(["externalLinks", "remoteImages", "fileReferences"]);
+
+  // `localOrigin` n'est posé que par le rendu local des références de contenu.
+  // Toute autre source (acte du journal, daemon, message, serveur relié) perd
+  // son geste local : un serveur ne peut pas fabriquer « Autoriser les liens ».
+  function normalizeRefusal(value, options = {}) {
+    const source = value && typeof value === "object" ? value : {};
+    const layer = REFUSAL_LAYERS.includes(source.layer) ? source.layer : "unknown";
+    const gestureSource = source.gesture && typeof source.gesture === "object" ? source.gesture : { kind: "none" };
+    let gesture = { kind: "none" };
+    if (gestureSource.kind === "rights_line") {
+      gesture = { kind: "rights_line", target: text(gestureSource.target) };
+    } else if (
+      gestureSource.kind === "local_toggle"
+      && options.localOrigin === true
+      && LOCAL_TOGGLE_TARGETS.includes(gestureSource.target)
+    ) {
+      gesture = { kind: "local_toggle", target: gestureSource.target };
+    }
+    return {
+      layer,
+      prevented: text(source.prevented, "Action empêchée"),
+      gesture,
+      raw: text(source.raw).slice(0, 512),
+      at: Number.isFinite(Number(source.at)) ? Number(source.at) : null,
+      attributed_to: source.attributed_to === "agent" ? "agent" : "bridget",
+      provider: text(source.provider),
+      posture: text(source.posture),
+      evidence: text(source.evidence),
+      host: text(source.host),
+    };
+  }
+
+  // Seul point de rendu d'un refus : carte de lien, acte `refusal`, refus du
+  // plan de contrôle. Le geste n'est déclenché que par un événement fiable.
+  function renderRefusal(documentRef, value, options = {}) {
+    const refusal = normalizeRefusal(value, { localOrigin: options.allowLocalToggle === true });
+    const card = documentRef.createElement("div");
+    card.className = "refusal";
+    card.dataset.layer = refusal.layer;
+    card.dataset.attributedTo = refusal.attributed_to;
+    const layer = documentRef.createElement("strong");
+    layer.className = "refusal__layer";
+    layer.textContent = REFUSAL_LAYER_LABELS[refusal.layer];
+    const prevented = documentRef.createElement("span");
+    prevented.className = "refusal__prevented";
+    prevented.textContent = refusal.prevented;
+    card.append(layer, prevented);
+    if (refusal.provider || refusal.posture || refusal.host) {
+      const where = documentRef.createElement("span");
+      where.className = "refusal__where";
+      where.textContent = [
+        refusal.provider,
+        refusal.posture === "discovery" ? "posture découverte, lecture seule" : refusal.posture === "complete" ? "posture complète" : refusal.posture,
+        refusal.host ? `sur ${refusal.host}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      card.append(where);
+    }
+    if (refusal.gesture.kind === "local_toggle") {
+      const button = documentRef.createElement("button");
+      button.type = "button";
+      button.className = "refusal__gesture";
+      button.textContent = text(options.localToggleLabel, "Autoriser");
+      button.addEventListener("click", (event) => {
+        if (!event.isTrusted && options.trustGestures !== true) return;
+        if (typeof options.onLocalToggle === "function") options.onLocalToggle(refusal.gesture.target, card);
+      });
+      card.append(button);
+    } else if (refusal.gesture.kind === "rights_line") {
+      const link = documentRef.createElement("button");
+      link.type = "button";
+      link.className = "refusal__gesture refusal__gesture--link";
+      link.textContent = text(RIGHTS_LINE_LABELS[refusal.gesture.target], "Ouvrir la page Droits");
+      link.addEventListener("click", (event) => {
+        if (!event.isTrusted && options.trustGestures !== true) return;
+        if (typeof options.onOpenRightsLine === "function") options.onOpenRightsLine(refusal.gesture.target);
+      });
+      card.append(link);
+    } else if (options.noGestureLabel) {
+      const note = documentRef.createElement("span");
+      note.className = "refusal__no-gesture";
+      note.textContent = options.noGestureLabel;
+      card.append(note);
+    }
+    if (refusal.raw || refusal.layer === "unknown") {
+      const details = documentRef.createElement("details");
+      details.className = "refusal__raw";
+      const summary = documentRef.createElement("summary");
+      summary.textContent = "Ligne brute";
+      const code = documentRef.createElement("code");
+      code.textContent = refusal.raw || "(aucune ligne transmise)";
+      details.append(summary, code);
+      card.append(details);
+    }
+    return card;
+  }
+
+  function refusalFromAct(act, context = {}) {
+    return normalizeRefusal({
+      host: context.host,
+      layer: act && act.layer,
+      prevented: act && act.prevented === "shell"
+        ? "Signalement de sandbox (non attesté) : la commande a échoué avec un diagnostic de sandbox"
+        : act && act.prevented,
+      evidence: act && act.evidence,
+      gesture: act && act.gesture,
+      raw: act && (act.raw || act.text),
+      at: act && act.at,
+      attributed_to: act && act.attributed_to,
+      provider: act && act.provider,
+      posture: act && act.posture,
+    });
+  }
+
+  // Refus du plan de contrôle (SPEC-087) exprimés dans la même forme.
+  const CONTROL_REFUSALS = Object.freeze({
+    human_principal_required: { layer: "referent_control", prevented: "Seul le référent, depuis cette interface ou un terminal, peut changer cet état.", gesture: { kind: "none" } },
+    generation_mismatch: { layer: "referent_control", prevented: "L’état a changé entre-temps ; la demande a été ignorée.", gesture: { kind: "none" } },
+    budget_out_of_range: { layer: "referent_control", prevented: "Le plafond demandé est hors des bornes admises.", gesture: { kind: "rights_line", target: "cap" } },
+    control_paused: { layer: "referent_control", prevented: "L’autonomie est en pause : aucun travail automatique ne démarre.", gesture: { kind: "rights_line", target: "pause" } },
+    budget_reached: { layer: "referent_control", prevented: "Le plafond d’objectifs automatiques est atteint.", gesture: { kind: "rights_line", target: "cap" } },
+    capability_not_negotiated: { layer: "bridget_policy", prevented: "Cette connexion n’a pas négocié la capacité requise.", gesture: { kind: "none" } },
+    human_origin_forbidden: { layer: "bridget_policy", prevented: "Une origine humaine ne peut pas être déclarée par un agent.", gesture: { kind: "none" } },
+  });
+
+  function controlRefusalFromCode(code, message) {
+    const known = CONTROL_REFUSALS[text(code)];
+    if (known) return { ...known, raw: text(message) };
+    return { layer: "unknown", prevented: text(message, "Le daemon a refusé la demande."), gesture: { kind: "none" }, raw: text(code) };
+  }
+
+  // SPEC-088 : page Droits. Lignes fermées ; chaque ligne dit son effet au
+  // présent, son mécanisme et l'endroit où elle vit. Les lignes locales ne
+  // sont composées que depuis les préférences de CE navigateur.
+  const RIGHTS_LOCAL_PROFILE_KEY = "bridget.rights.local-profile.v1";
+  const RIGHTS_EXPERT_KEY = "bridget.rights.expert.v1";
+  const RIGHTS_PROFILE_LABELS = Object.freeze({
+    prudent: "Prudent",
+    balanced: "Équilibré",
+    confident: "Confiant",
+    custom: "Personnalisé",
+  });
+  const RIGHTS_LOCAL_LINES = Object.freeze([
+    Object.freeze({
+      key: "external_links", preference: "externalLinks", matrix: "external_links", title: "Liens externes",
+      phrases: Object.freeze({ on: "Les liens s’ouvrent après ton clic.", off: "Les liens restent fermés : un clic ne les ouvre pas." }),
+      mechanism: "préférence « Sécurité du contenu › Liens externes »", storage: "ce navigateur (localStorage bridget.content-security.v1)",
+    }),
+    Object.freeze({
+      key: "remote_images", preference: "remoteImages", matrix: "remote_images", title: "Images distantes",
+      phrases: Object.freeze({ on: "Les images distantes se chargent après ton clic.", off: "Aucune image distante n’est chargée." }),
+      mechanism: "préférence « Sécurité du contenu › Images distantes »", storage: "ce navigateur (localStorage bridget.content-security.v1)",
+    }),
+    Object.freeze({
+      key: "file_references", preference: "fileReferences", matrix: "file_references", title: "Aperçus de fichiers",
+      phrases: Object.freeze({ on: "Un fichier du projet se prévisualise après ton clic.", off: "Aucun aperçu de fichier n’est demandé au relais." }),
+      mechanism: "préférence « Sécurité du contenu › Fichiers de projet »", storage: "ce navigateur (localStorage bridget.content-security.v1)",
+    }),
+    Object.freeze({
+      key: "artifacts", fixed: true, title: "Artefacts HTML",
+      phrases: Object.freeze({ on: "Les artefacts HTML s’exécutent isolés, sans réseau ni accès à cette page.", off: "" }),
+      mechanism: "isolation des artefacts (SPEC-083)", storage: "ce navigateur, par conception : non modifiable",
+    }),
+  ]);
+  const RIGHTS_SERVER_BLOCKS = Object.freeze({
+    agents: Object.freeze(["internet", "files", "shell", "bridget"]),
+    autonomy: Object.freeze(["pause", "cap", "reassignment"]),
+  });
+  const RIGHTS_SERVER_TITLES = Object.freeze({
+    internet: "Internet", files: "Fichiers du projet", shell: "Shell", bridget: "Modifier Bridget",
+    pause: "Pause", cap: "Plafond d’objectifs automatiques", reassignment: "Réassignation automatique",
+  });
+  const RIGHTS_TESTABLE_LINES = Object.freeze(["internet", "files", "shell", "bridget"]);
+  const RIGHTS_TEST_STALE_AFTER_SECS = 24 * 3600;
+  const RIGHTS_TEST_OUTCOME_LABELS = Object.freeze({
+    pending: "En cours : Bridget attend la fin de la commande.",
+    passed: "Réussi",
+    refused_provider_sandbox: "Refusé par la sandbox du fournisseur",
+    refused_server_runtime: "Refusé par le runtime du serveur",
+    refused_bridget: "Fermé par Bridget",
+    enabled_not_measured: "Activé dans la configuration, non mesuré par un geste",
+    unreachable: "Injoignable",
+    no_agent: "Aucun agent disponible",
+    unknown_expired: "Inconnu : aucune fin de commande dans le délai",
+  });
+
+  function rightsMatrixValues(matrix, profile) {
+    const entry = Array.isArray(matrix) ? matrix.find((item) => item && item.profile === profile) : null;
+    return entry && entry.values && typeof entry.values === "object" ? entry.values : null;
+  }
+
+  // Le profil effectif de CE navigateur : le profil serveur, ou « Personnalisé »
+  // dès qu'une ligne locale ne correspond pas à la matrice de ce profil.
+  function rightsProfileProjection(payload, preferences, options = {}) {
+    const source = payload && typeof payload === "object" ? payload : {};
+    const matrix = Array.isArray(source.matrix) ? source.matrix : [];
+    const serverProfile = RIGHTS_PROFILE_LABELS[source.profile] ? source.profile : "custom";
+    const local = normalizeContentSecurityPreferences(preferences);
+    const values = rightsMatrixValues(matrix, serverProfile);
+    let localMatches = values !== null;
+    if (values) {
+      for (const line of RIGHTS_LOCAL_LINES) {
+        if (line.fixed) continue;
+        if (Boolean(values[line.matrix]) !== local[line.preference]) localMatches = false;
+      }
+    }
+    // Un payload serveur qui prétend porter une ligne locale est ignoré et signalé.
+    const ignoredServerLocalKeys = [];
+    const serverLines = Array.isArray(source.lines) ? source.lines : [];
+    for (const line of serverLines) {
+      const key = line && line.key;
+      if (RIGHTS_LOCAL_LINES.some((local) => local.key === key) || ["externalLinks", "remoteImages", "fileReferences"].includes(key)) {
+        ignoredServerLocalKeys.push(String(key));
+      }
+    }
+    for (const key of ["externalLinks", "remoteImages", "fileReferences", "external_links", "remote_images", "file_references"]) {
+      if (Object.prototype.hasOwnProperty.call(source, key)) ignoredServerLocalKeys.push(key);
+    }
+    const localLines = RIGHTS_LOCAL_LINES.map((line) => {
+      const enabled = line.fixed ? true : local[line.preference] === true;
+      return {
+        key: line.key,
+        title: line.title,
+        block: "see",
+        enabled,
+        fixed: line.fixed === true,
+        phrase: enabled ? line.phrases.on : line.phrases.off,
+        mechanism: line.mechanism,
+        storage: line.storage,
+        local: true,
+        desktopManaged: options.desktopManaged === true,
+      };
+    });
+    const server = serverLines
+      .filter((line) => line && RIGHTS_SERVER_TITLES[line.key])
+      .map((line) => ({
+        key: line.key,
+        title: RIGHTS_SERVER_TITLES[line.key],
+        block: RIGHTS_SERVER_BLOCKS.agents.includes(line.key) ? "agents" : "autonomy",
+        phrase: text(line.phrase),
+        requested: line.requested,
+        actual: line.actual,
+        differs: line.requested !== undefined && line.actual !== undefined && line.requested !== line.actual,
+        reasonIfDiffers: text(line.reason_if_differs),
+        mechanism: text(line.mechanism),
+        storage: text(line.storage),
+        linked: Array.isArray(line.linked) ? line.linked : [],
+        local: false,
+        testable: RIGHTS_TESTABLE_LINES.includes(line.key),
+      }));
+    return {
+      serverProfile,
+      effectiveProfile: localMatches ? serverProfile : "custom",
+      localMatches,
+      matrix,
+      generation: Number.isFinite(Number(source.generation)) ? Number(source.generation) : null,
+      paused: source.paused === true,
+      cap: Number.isFinite(Number(source.auto_objectives_cap)) ? Number(source.auto_objectives_cap) : null,
+      agentPosture: text(source.agent_posture),
+      autoReassignment: source.auto_reassignment === true ? true : source.auto_reassignment === false ? false : null,
+      lines: [...localLines, ...server],
+      ignoredServerLocalKeys,
+      tests: Array.isArray(source.tests) ? source.tests : [],
+    };
+  }
+
+  // Applique les lignes LOCALES d'un profil dans ce navigateur seulement.
+  function applyRightsProfileLocally(storage, matrix, profile) {
+    const values = rightsMatrixValues(matrix, profile);
+    if (!values) return null;
+    const next = writeContentSecurityPreferences(storage, {
+      externalLinks: Boolean(values.external_links),
+      remoteImages: Boolean(values.remote_images),
+      fileReferences: Boolean(values.file_references),
+    });
+    try { storage && storage.setItem(RIGHTS_LOCAL_PROFILE_KEY, profile); } catch (_error) { /* stockage indisponible */ }
+    return next;
+  }
+
+  function rightsTestProjection(attempt, nowSecs) {
+    if (!attempt || typeof attempt !== "object") return null;
+    const outcome = RIGHTS_TEST_OUTCOME_LABELS[attempt.outcome] ? attempt.outcome : "unknown_expired";
+    const at = Number(attempt.finished_at || attempt.started_at || 0);
+    const ageSecs = Number.isFinite(at) && at > 0 ? Math.max(0, Number(nowSecs) - at) : null;
+    const stale = ageSecs !== null && ageSecs > RIGHTS_TEST_STALE_AFTER_SECS;
+    return {
+      line: text(attempt.line),
+      outcome,
+      label: RIGHTS_TEST_OUTCOME_LABELS[outcome],
+      stale,
+      when: at > 0 ? new Date(at * 1000).toLocaleString("fr-FR") : "",
+      agentId: text(attempt.agent_id),
+      raw: text(attempt.raw),
+      staleLabel: stale ? "Résultat ancien (plus d’un jour) : ne décrit pas l’état courant." : "",
     };
   }
 
@@ -7236,9 +7780,45 @@
           ? allowed.remoteImages
           : allowed.fileReferences;
       if (!enabled) {
-        const blocked = documentRef.createElement("p");
-        blocked.className = "content-reference__blocked";
-        blocked.textContent = "Bloqué par vos réglages locaux.";
+        const preferenceKey = reference.kind === "external_link"
+          ? "externalLinks"
+          : reference.kind === "remote_image"
+            ? "remoteImages"
+            : "fileReferences";
+        const prevented = reference.kind === "external_link"
+          ? "Ouverture au clic désactivée · Sécurité du contenu › Liens externes"
+          : reference.kind === "remote_image"
+            ? "Chargement au clic désactivé · Sécurité du contenu › Images distantes"
+            : "Aperçu désactivé · Sécurité du contenu › Fichiers de projet";
+        const desktopManaged = options.contentSecurityDesktopManaged === true;
+        const blocked = renderRefusal(
+          documentRef,
+          {
+            layer: "browser_content",
+            prevented,
+            gesture: desktopManaged ? { kind: "none" } : { kind: "local_toggle", target: preferenceKey },
+            attributed_to: "bridget",
+          },
+          {
+            allowLocalToggle: true,
+            trustGestures: options.trustGestures,
+            localToggleLabel: reference.kind === "external_link"
+              ? "Autoriser les liens"
+              : reference.kind === "remote_image"
+                ? "Autoriser les images"
+                : "Autoriser les aperçus",
+            noGestureLabel: desktopManaged ? "Modifiez cette autorisation dans les réglages de Bridget Desktop." : "",
+            onLocalToggle: async (target) => {
+              if (typeof options.onContentSecurityChange !== "function") return;
+              const next = await options.onContentSecurityChange(target);
+              if (next && typeof next === "object") {
+                list.remove();
+                renderContentReferences(documentRef, root, source, next, options);
+              }
+            },
+          },
+        );
+        blocked.classList.add("content-reference__blocked");
         card.append(blocked);
         list.append(card);
         continue;
@@ -7921,6 +8501,7 @@
     }
     let state = createUiState({ selectedAgent: isUiSender(requestedAgent) ? null : requestedAgent });
     let projects = [];
+    let pendingRightsLine = null;
     let missionObjectives = [];
     let currentFocus = null;
     let selectedProjectId = params.get("project_id") || null;
@@ -8406,6 +8987,285 @@
           }
           section.append(status);
           body.append(section);
+          return;
+        }
+
+        if (entry.key === "rights") {
+          const desktopManaged = desktopContentSecurity !== null;
+          const expert = (() => {
+            try { return windowRef.localStorage && windowRef.localStorage.getItem(RIGHTS_EXPERT_KEY) === "1"; } catch (_error) { return false; }
+          })();
+          const status = make("p", "control-center__status", "Lecture des droits…");
+          status.setAttribute("role", "status");
+          const intro = controlSection(
+            "Droits",
+            "Trois questions, chaque ligne dit son effet. Les lignes de « Ce que je vois » vivent dans ce navigateur : un serveur relié ne peut pas les changer.",
+            desktopManaged ? "Cette interface · Bridget Desktop" : "Cette interface · Serveur relié",
+          );
+          body.append(intro, status);
+          let payload = null;
+          try {
+            const response = await windowRef.fetch(controlResourceUrl("/v1/control/rights", token));
+            payload = await response.json();
+            if (!response.ok) throw new Error(text(payload && payload.message) || "rights_unavailable");
+          } catch (error) {
+            status.textContent = `Droits serveur indisponibles : ${error.message}. Les lignes locales restent modifiables.`;
+          }
+          const view = rightsProfileProjection(payload, contentSecurityPreferences, { desktopManaged });
+          if (view.ignoredServerLocalKeys.length > 0) {
+            status.textContent = `Le serveur a envoyé des clés locales (${view.ignoredServerLocalKeys.join(", ")}) : ignorées, consignées une fois.`;
+            console.warn("droits: clés locales envoyées par le serveur, ignorées", view.ignoredServerLocalKeys);
+          } else if (payload) {
+            status.textContent = "";
+          }
+
+          // Profils.
+          const profiles = controlSection(
+            "Profil",
+            "Choisir un profil règle toutes les lignes d’un coup : les lignes serveur par le daemon, les lignes locales dans ce navigateur.",
+            "Mode standard",
+          );
+          const choices = make("div", "control-center__choices");
+          for (const key of ["prudent", "balanced", "confident"]) {
+            const button = make("button", "control-center__choice", RIGHTS_PROFILE_LABELS[key]);
+            button.type = "button";
+            button.dataset.profile = key;
+            button.dataset.active = String(view.effectiveProfile === key);
+            button.setAttribute("aria-pressed", String(view.effectiveProfile === key));
+            button.disabled = !payload || view.generation === null;
+            button.addEventListener("click", async (event) => {
+              if (!event.isTrusted) return;
+              const values = rightsMatrixValues(view.matrix, key);
+              if (!values) return;
+              status.textContent = "Application du profil…";
+              try {
+                const response = await windowRef.fetch(controlResourceUrl("/v1/control/rights/apply", token), {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({
+                    expected_generation: view.generation,
+                    profile: key,
+                    agent_posture: values.agent_posture,
+                    auto_reassignment: Boolean(values.auto_reassignment),
+                    auto_objectives_cap: Number(values.auto_objectives_cap),
+                  }),
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                  const error = new Error(text(result && result.message) || "refus");
+                  error.code = result && result.code;
+                  throw error;
+                }
+                if (!desktopManaged) {
+                  const next = applyRightsProfileLocally(windowRef.localStorage, view.matrix, key);
+                  if (next) contentSecurityPreferences = next;
+                  renderThread(0);
+                }
+                void renderControlRoute("rights");
+              } catch (error) {
+                status.replaceChildren(renderRefusal(documentRef, controlRefusalFromCode(error.code, error.message)));
+              }
+            });
+            choices.append(button);
+          }
+          const current = make("p", "control-center__status", view.effectiveProfile === "custom"
+            ? (view.localMatches
+              ? "Profil : Personnalisé (les lignes serveur ne correspondent à aucun profil)."
+              : `Profil serveur : ${RIGHTS_PROFILE_LABELS[view.serverProfile]} · dans ce navigateur : Personnalisé (les lignes locales diffèrent).`)
+            : `Profil : ${RIGHTS_PROFILE_LABELS[view.effectiveProfile]}.`);
+          const expertToggle = make("label", "control-center__setting");
+          const expertInput = documentRef.createElement("input");
+          expertInput.type = "checkbox";
+          expertInput.checked = expert;
+          expertInput.setAttribute("aria-label", "Mode expert");
+          expertInput.addEventListener("change", () => {
+            try { windowRef.localStorage.setItem(RIGHTS_EXPERT_KEY, expertInput.checked ? "1" : "0"); } catch (_error) { /* stockage indisponible */ }
+            void renderControlRoute("rights");
+          });
+          expertToggle.append(expertInput, make("span", null, " Mode expert : montrer le mécanisme, le stockage et la valeur brute de chaque ligne"));
+          profiles.append(choices, current, expertToggle);
+          body.append(profiles);
+
+          // Blocs.
+          const blocks = [
+            ["see", "Ce que je vois", "Vit dans ce navigateur. Un serveur relié, un agent ou un message ne peuvent pas le changer.", "Cette interface"],
+            ["agents", "Ce que les agents peuvent faire", "Vit sur le serveur et chez le fournisseur de l’agent. Les trois premières lignes sont liées : une seule posture de lancement.", "Serveur relié"],
+            ["autonomy", "Combien ils décident seuls", "Vit sur le serveur (SPEC-087). La pause ne se change que par le bandeau ou la ligne de commande.", "Serveur relié"],
+          ];
+          const tests = new Map(view.tests.map((attempt) => [text(attempt.line), attempt]));
+          for (const [block, title, copy, scope] of blocks) {
+            const section = controlSection(title, copy, scope);
+            for (const line of view.lines.filter((item) => item.block === block)) {
+              const card = controlSetting(line.title, line.phrase, line.local ? "Cette interface" : "Serveur relié");
+              card.dataset.rightsLine = line.key;
+              if (line.local && !line.fixed) {
+                const input = documentRef.createElement("input");
+                input.type = "checkbox";
+                input.checked = line.enabled;
+                input.disabled = desktopManaged;
+                input.setAttribute("aria-label", line.title);
+                input.addEventListener("change", () => {
+                  if (desktopManaged) return;
+                  const preference = RIGHTS_LOCAL_LINES.find((item) => item.key === line.key).preference;
+                  contentSecurityPreferences = writeContentSecurityPreferences(windowRef.localStorage, {
+                    ...contentSecurityPreferences,
+                    [preference]: input.checked,
+                  });
+                  renderThread(0);
+                  void renderControlRoute("rights");
+                });
+                card.append(input);
+                card.append(make("p", "control-center__status", desktopManaged
+                  ? "Réglage piloté par Bridget Desktop."
+                  : "Réglage local à ce navigateur, non piloté par le serveur."));
+              }
+              if (!line.local && line.differs) {
+                card.append(make("p", "rights__differs", `Demandé : ${String(line.requested)} · Réel : ${String(line.actual)}${line.reasonIfDiffers ? ` · ${line.reasonIfDiffers}` : ""}`));
+              }
+              if (expert && !line.local && ["shell", "reassignment", "cap"].includes(line.key) && payload && view.generation !== null) {
+                // Modifier une ligne seule : le profil devient Personnalisé.
+                const applyCustom = async (overrides) => {
+                  status.textContent = "Application de la ligne…";
+                  try {
+                    const response = await windowRef.fetch(controlResourceUrl("/v1/control/rights/apply", token), {
+                      method: "POST",
+                      headers: { "content-type": "application/json" },
+                      body: JSON.stringify({
+                        expected_generation: view.generation,
+                        profile: "custom",
+                        agent_posture: view.agentPosture || "discovery",
+                        auto_reassignment: view.autoReassignment === true,
+                        auto_objectives_cap: view.cap === null ? 5 : view.cap,
+                        ...overrides,
+                      }),
+                    });
+                    const result = await response.json();
+                    if (!response.ok) {
+                      const error = new Error(text(result && result.message) || "refus");
+                      error.code = result && result.code;
+                      throw error;
+                    }
+                    void renderControlRoute("rights");
+                  } catch (error) {
+                    status.replaceChildren(renderRefusal(documentRef, controlRefusalFromCode(error.code, error.message)));
+                  }
+                };
+                const editor = make("div", "rights__editor");
+                if (line.key === "shell") {
+                  const select = documentRef.createElement("select");
+                  select.setAttribute("aria-label", "Posture des agents (internet, fichiers, shell)");
+                  for (const [value, label] of [["discovery", "Découverte : lecture seule, sans shell ni réseau"], ["complete", "Complète : shell, fichiers et internet"]]) {
+                    const option = documentRef.createElement("option");
+                    option.value = value;
+                    option.textContent = label;
+                    option.selected = view.agentPosture === value;
+                    select.append(option);
+                  }
+                  select.addEventListener("change", () => void applyCustom({ agent_posture: select.value }));
+                  editor.append(make("span", null, "Posture (lie internet, fichiers, shell) : "), select);
+                } else if (line.key === "reassignment") {
+                  const input = documentRef.createElement("input");
+                  input.type = "checkbox";
+                  input.checked = view.autoReassignment === true;
+                  input.setAttribute("aria-label", "Réassignation automatique");
+                  input.addEventListener("change", () => void applyCustom({ auto_reassignment: input.checked }));
+                  editor.append(input, make("span", null, " Réassigner automatiquement une délégation sans réponse"));
+                } else if (line.key === "cap") {
+                  const input = documentRef.createElement("input");
+                  input.type = "number";
+                  input.min = "1";
+                  input.max = "100";
+                  input.value = view.cap === null ? "" : String(view.cap);
+                  input.setAttribute("aria-label", "Plafond d’objectifs automatiques");
+                  const apply = make("button", "secondary", "Appliquer le plafond");
+                  apply.type = "button";
+                  apply.addEventListener("click", () => {
+                    const value = Number(input.value);
+                    if (!Number.isInteger(value) || value < 1 || value > 100) {
+                      status.textContent = "Le plafond doit être un entier entre 1 et 100.";
+                      return;
+                    }
+                    void applyCustom({ auto_objectives_cap: value });
+                  });
+                  editor.append(input, apply);
+                }
+                card.append(editor);
+              }
+              if (expert) {
+                const details = make("details", "rights__expert");
+                details.append(make("summary", null, "Mécanisme et stockage"));
+                details.append(make("p", null, `Mécanisme : ${line.mechanism}`));
+                details.append(make("p", null, `Stockage : ${line.storage}`));
+                if (!line.local) details.append(make("p", null, `Valeur brute : ${JSON.stringify(line.actual)}`));
+                if (line.linked && line.linked.length > 1) details.append(make("p", null, `Lignes liées : ${line.linked.join(", ")}`));
+                card.append(details);
+              }
+              if (line.testable) {
+                const attempt = tests.get(line.key);
+                const projection = rightsTestProjection(attempt, Math.floor(Date.now() / 1000));
+                const testRow = make("div", "rights__test");
+                const testButton = make("button", "secondary", "Tester");
+                testButton.type = "button";
+                testButton.addEventListener("click", async (event) => {
+                  if (!event.isTrusted) return;
+                  // Un agent libre : jamais un agent en plein tour (contrat rights-v1).
+                  const candidates = state.agents.filter((agent) => !["stopped", "busy"].includes(agent.state) && agent.name !== "humain");
+                  const agent = candidates[0];
+                  if (!agent) {
+                    testRow.append(make("p", "control-center__status", "Aucun agent disponible pour tester."));
+                    return;
+                  }
+                  testButton.disabled = true;
+                  try {
+                    const response = await windowRef.fetch(controlResourceUrl("/v1/control/rights/test", token), {
+                      method: "POST",
+                      headers: { "content-type": "application/json" },
+                      body: JSON.stringify({ line: line.key, agent_id: agent.name }),
+                    });
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(text(result && result.message) || "test refusé");
+                    void renderControlRoute("rights");
+                  } catch (error) {
+                    testButton.disabled = false;
+                    testRow.append(make("p", "control-center__status", `Test impossible : ${error.message}`));
+                  }
+                });
+                testRow.append(testButton);
+                if (projection) {
+                  const result = make("p", "rights__test-result", `${projection.label}${projection.when ? ` · ${projection.when}` : ""}${projection.agentId ? ` · ${projection.agentId}` : ""}`);
+                  result.dataset.outcome = projection.outcome;
+                  result.dataset.stale = String(projection.stale);
+                  testRow.append(result);
+                  if (projection.stale) testRow.append(make("p", "control-center__status", projection.staleLabel));
+                  if (projection.raw) {
+                    const raw = make("details", "refusal__raw");
+                    raw.append(make("summary", null, "Ligne brute"), make("code", null, projection.raw));
+                    testRow.append(raw);
+                  }
+                  if (projection.outcome === "pending") {
+                    const refreshButton = make("button", "quiet", "Actualiser");
+                    refreshButton.type = "button";
+                    refreshButton.addEventListener("click", () => void renderControlRoute("rights"));
+                    testRow.append(refreshButton);
+                  }
+                }
+                card.append(testRow);
+              }
+              if (line.key === "bridget") {
+                const link = make("button", "quiet", "Ouvrir le réglage expert « Projet système Bridget »");
+                link.type = "button";
+                link.addEventListener("click", () => void renderControlRoute("bridget-system"));
+                card.append(link);
+              }
+              section.append(card);
+            }
+            body.append(section);
+          }
+          if (pendingRightsLine) {
+            const target = body.querySelector(`[data-rights-line="${pendingRightsLine}"]`);
+            pendingRightsLine = null;
+            if (target && typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "center" });
+          }
           return;
         }
 
@@ -10534,6 +11394,15 @@
     const appendMessageContent = (surface, entry) => {
       const render = (value) => renderMessageMarkdown(documentRef, value, {
         contentSecurity: contentSecurityPreferences,
+        contentSecurityDesktopManaged: desktopContentSecurity !== null,
+        onContentSecurityChange: (key) => {
+          if (desktopContentSecurity !== null) return null;
+          contentSecurityPreferences = writeContentSecurityPreferences(windowRef.localStorage, {
+            ...contentSecurityPreferences,
+            [key]: true,
+          });
+          return contentSecurityPreferences;
+        },
         window: windowRef,
         previewProjectFile: async (pathname) => {
           if (!token) throw new Error("preview_unavailable");
@@ -11389,6 +12258,12 @@
         row.append(make("span", "agent-activity__act-label", liveActivityActLabel(act)));
         const actDetail = liveActivityActDetail(act);
         if (actDetail) row.append(make("code", "agent-activity__act-detail", actDetail));
+        if (act.kind === "refusal") {
+          const owner = state.agents.find((agent) => agent.name === state.selectedAgent);
+          row.append(renderRefusal(documentRef, refusalFromAct(act, { host: owner && owner.host }), {
+            onOpenRightsLine: (line) => { pendingRightsLine = line; openControlCenter("rights"); },
+          }));
+        }
         stream.append(row);
       });
       details.append(summary, stream);
@@ -12635,7 +13510,13 @@
             body: JSON.stringify({ expected_generation: generation, ...change }),
           }));
         } catch (error) {
-          if (banner) banner.append(make("span", "control-banner__error", error.message));
+          if (banner) {
+            const card = renderRefusal(documentRef, controlRefusalFromCode(error.code, error.message), {
+              onOpenRightsLine: (line) => { pendingRightsLine = line; openControlCenter("rights"); },
+            });
+            card.classList.add("control-banner__error");
+            banner.append(card);
+          }
           await refresh();
         }
       };
@@ -12841,6 +13722,17 @@
     extractContentReferences,
     buildFilePreviewUrl,
     renderContentReferences,
+    renderRefusal,
+    refusalFromAct,
+    rightsProfileProjection,
+    applyRightsProfileLocally,
+    rightsTestProjection,
+    rightsMatrixValues,
+    RIGHTS_LOCAL_LINES,
+    RIGHTS_PROFILE_LABELS,
+    controlRefusalFromCode,
+    normalizeRefusal,
+    REFUSAL_LAYER_LABELS,
     defaultControlCenterPreferences,
     normalizeControlCenterPreferences,
     readControlCenterPreferences,

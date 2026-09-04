@@ -13,6 +13,7 @@ pub mod greffe_policy_refresh;
 pub mod journal;
 pub mod managed_session;
 pub mod protocol;
+pub mod refusals;
 pub mod tmux;
 pub mod transport;
 

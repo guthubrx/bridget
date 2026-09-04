@@ -1128,7 +1128,41 @@ pub struct ControlStateFrame {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pause_reason: Option<String>,
     pub auto_objectives_cap: u32,
+    /// SPEC-088 : posture de lancement des agents gérés. Additif : un daemon
+    /// antérieur ne l'émet pas ; `None` = inconnu, jamais une valeur permissive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_posture: Option<AgentPosture>,
+    /// SPEC-088 : réassignation automatique admise. `None` = inconnu ⇒ différé.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_reassignment: Option<bool>,
     pub updated_at: i64,
+}
+
+/// Postures de lancement que Bridget sait produire (SPEC-088, FR-016) :
+/// définition normale du registre, ou définition de découverte en lecture
+/// seule. Pas de troisième valeur tant qu'aucune n'est attestée.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPosture {
+    Discovery,
+    Complete,
+}
+
+impl AgentPosture {
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            Self::Discovery => "discovery",
+            Self::Complete => "complete",
+        }
+    }
+
+    pub fn from_sql(raw: &str) -> Option<Self> {
+        match raw {
+            "discovery" => Some(Self::Discovery),
+            "complete" => Some(Self::Complete),
+            _ => None,
+        }
+    }
 }
 
 /// Projection minimale du focus courant, publiée par Maicie dans Bridget.
@@ -2497,6 +2531,11 @@ pub enum WrapperToDaemon {
         auto_objectives_cap: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        /// SPEC-088 : droits du référent, sous la même génération.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_posture: Option<AgentPosture>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auto_reassignment: Option<bool>,
     },
     /// Déposer un item dans la boîte de réception humaine (rôle service).
     #[serde(rename = "human_inbox_deposit")]
@@ -5789,6 +5828,8 @@ mod control_and_inbox_contract_tests {
             paused_by: Some("humain".to_string()),
             pause_reason: Some("revue en cours".to_string()),
             auto_objectives_cap: 5,
+            agent_posture: Some(AgentPosture::Complete),
+            auto_reassignment: Some(true),
             updated_at: 1_788_400_000,
         }
     }
@@ -5845,6 +5886,8 @@ mod control_and_inbox_contract_tests {
             paused: Some(true),
             auto_objectives_cap: None,
             reason: Some("revue".to_string()),
+            agent_posture: None,
+            auto_reassignment: None,
         };
         let encoded = encode(&set).unwrap();
         assert!(

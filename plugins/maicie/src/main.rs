@@ -3845,6 +3845,7 @@ fn control_status_output(store: &MaicieStore, now: i64) -> Result<ControlStatusO
             auto_objectives_cap,
             inbox_open_count,
             read_at,
+            ..
         } => (
             "read",
             Some(paused),

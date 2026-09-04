@@ -1406,6 +1406,7 @@ fn control_read(paused: bool, cap: u32) -> maicie::control::ControlSnapshot {
         auto_objectives_cap: cap,
         inbox_open_count: 0,
         read_at: 1,
+        auto_reassignment: Some(true),
     }
 }
 
