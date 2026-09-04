@@ -5184,3 +5184,11 @@ body[data-desktop-shell="true"] .conversation {
   border-radius: 0.5rem;
   animation: rights-pulse 1.2s ease-in-out 3;
 }
+
+.timeline__older {
+  align-self: center;
+  margin: 0.4rem auto 0.8rem;
+  padding: 0.3rem 0.7rem;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+}
