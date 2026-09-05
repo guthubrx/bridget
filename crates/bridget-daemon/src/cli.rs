@@ -2427,11 +2427,21 @@ fn cmd_cancel(args: &[String]) {
         eprintln!("usage: bridget cancel <id> [--reason <texte>]");
         std::process::exit(2);
     });
-    match send_control_to_daemon(WrapperToDaemon::CancelRequest {
-        id: parsed.id.clone(),
-        sender: current_agent_id(),
-        reason: parsed.reason,
-    }) {
+    let identity = crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
+        eprintln!(
+            "bridget cancel : {} : {}",
+            error.code(),
+            error.remediation()
+        );
+        std::process::exit(1);
+    });
+    match crate::communication::client::cancel_request(
+        &identity.name,
+        &identity.instance_id,
+        &socket_path(),
+        &parsed.id,
+        parsed.reason,
+    ) {
         Ok(DaemonToWrapper::RequestCancelled { state, .. }) => {
             println!("Demande #{} : {}", parsed.id, state)
         }

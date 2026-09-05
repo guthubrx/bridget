@@ -11351,10 +11351,19 @@ fn handle_wrapper_message(
 
         WrapperToDaemon::CancelRequest { id, sender, reason } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            if st.router.get_agent(&sender).is_none() {
+            // Le champ sender désigne la demande, pas une autorité. La route
+            // appartient au wrapper lui-même, ou à son client auxiliaire déjà
+            // attesté par le même helper que rename et les contenus privés.
+            let authorized = st
+                .router
+                .get_agent(&sender)
+                .is_some_and(|route| route.connection_id == conn_id)
+                || live_connection_identity(&st, conn_id)
+                    .is_some_and(|(agent_id, _)| agent_id == sender);
+            if !authorized {
                 return Some(DaemonToWrapper::Nack {
                     id,
-                    reason: "annulation réservée à un agent Bridget connecté".to_string(),
+                    reason: "annulation réservée à la connexion de l'émetteur ou à son client auxiliaire attesté".to_string(),
                 });
             }
             match st.store.cancel_request(&id, &sender, reason.as_deref()) {

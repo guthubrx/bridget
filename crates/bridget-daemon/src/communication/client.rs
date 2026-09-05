@@ -11,6 +11,31 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 const DAEMON_BUDGET: Duration = Duration::from_secs(10);
+
+pub(crate) fn cancel_request(
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+    id: &str,
+    reason: Option<String>,
+) -> Result<DaemonToWrapper, ClientError> {
+    let mut connection = registered_connection(identity, instance_id, socket)?;
+    let response = connection.send_then_wait(&WrapperToDaemon::CancelRequest {
+        id: id.into(),
+        sender: identity.into(),
+        reason,
+    })?;
+    match &response {
+        DaemonToWrapper::RequestCancelled { id: actual, .. }
+        | DaemonToWrapper::Nack { id: actual, .. }
+            if actual == id =>
+        {
+            Ok(response)
+        }
+        _ => unexpected_response(response),
+    }
+}
+
 /// Borne mémoire du client, délimiteur LF inclus ; distincte de la borne
 /// guichet (64 Kio) et des fragments attach (256 Kio). Une réponse plus grande
 /// est une erreur explicite, jamais tronquée ni partiellement présentée.

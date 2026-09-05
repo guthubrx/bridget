@@ -2,6 +2,28 @@
 
 ## T034 — unités historiques du daemon portées, gate global encore ouvert
 
+`integration_test.rs` est désormais isolé via le harnais commun `test-support` :
+sept scénarios conservés, daemon/processus privés et identités opaques. Les trois
+anciens scénarios de renommage de ce fichier sont remplacés par les trois
+oracles CLI/wrapper/crash de `core_089_identity_test.rs` (T015), pas ignorés ni
+comptés deux fois. Le type ouvert ACP et la reconnexion idempotente gardent un
+vrai wrapper enfant ; le compteur de prompts est lu après sa terminaison. Les
+rappels sont contrôlés après l'expiration attestée d'une demande sentinelle,
+pas après une attente arbitraire.
+
+Le port a révélé une faille réelle : sur le daemon, `CancelRequest.sender`
+suffisait à annuler la demande d'autrui. Le nouveau scénario hostile a reçu
+`RequestCancelled` avant correction. La garde réutilise maintenant l'identité
+de connexion attestée ; le CLI passe par le client auxiliaire partagé, avec
+résolution privée de son identité. Les deux tentatives étrangères sont refusées
+sans mutation ; l'absence de marqueur est refusée avant connexion ; le CLI
+légitime peut encore annuler. Aucun nouveau mécanisme d'identité n'est ajouté.
+
+Validation isolée : `cargo test --offline --locked -p bridget-daemon --features
+test-support --test integration_test --test core_089_reply_test --
+--test-threads=4 --nocapture` : 7 + 1 réussis, 0 échec, 2 helpers subprocess
+ignorés, 7,33 + 7,25 s ; `env -i`, namespace neuf, watchdog 90 s.
+
 Les identifiants des fixtures de présence/routage sont des UUID v2 ; les
 assertions de présence comparent `agent_id`, pas le nom affiché. Les contrôles
 de mode, transport, domaine, modèle, DND, demande liée et refus restent présents.
