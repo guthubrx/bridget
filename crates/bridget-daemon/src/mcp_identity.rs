@@ -117,13 +117,15 @@ pub fn resolve_current_identity() -> Result<ResolvedIdentity, IdentityError> {
     let expected_instance_id = std::env::var("BRIDGET_AGENT_INSTANCE_ID")
         .ok()
         .filter(|value| !value.is_empty());
-    let home = std::env::var_os("HOME").ok_or(IdentityError::IdentityNotFound)?;
-    resolve_identity_with(
+    let namespace = crate::environment::Namespace::from_environment()
+        .map_err(|_| IdentityError::IdentityNotFound)?;
+    resolve_identity_scoped(
         name_file.as_deref(),
-        &PathBuf::from(home).join(".cache/bridget/agent-pids"),
+        &namespace.root.join("agent-pids"),
         expected_instance_id.as_deref(),
         std::process::id(),
         &SystemProcessTree,
+        Some(&namespace.root),
     )
 }
 
@@ -204,7 +206,31 @@ pub fn resolve_identity_with(
     pid: u32,
     processes: &impl ProcessTree,
 ) -> Result<ResolvedIdentity, IdentityError> {
+    resolve_identity_scoped(
+        name_file,
+        marker_directory,
+        expected_instance_id,
+        pid,
+        processes,
+        None,
+    )
+}
+
+fn resolve_identity_scoped(
+    name_file: Option<&Path>,
+    marker_directory: &Path,
+    expected_instance_id: Option<&str>,
+    pid: u32,
+    processes: &impl ProcessTree,
+    namespace: Option<&Path>,
+) -> Result<ResolvedIdentity, IdentityError> {
+    let permitted = |path: &Path| {
+        namespace.is_none_or(|root| {
+            path.starts_with(root) && crate::environment::validate_state_file(path, false).is_ok()
+        })
+    };
     if let (Some(instance_id), Some(path)) = (expected_instance_id, name_file)
+        && permitted(path)
         && let Some(name) = read_name(path)
     {
         return Ok(ResolvedIdentity {
@@ -217,6 +243,9 @@ pub fn resolve_identity_with(
         let Some(candidate) = current else { break };
         let marker_path = marker_directory.join(candidate.to_string());
         if marker_path.exists() {
+            if !permitted(&marker_path) {
+                return Err(IdentityError::IdentityNotFound);
+            }
             let raw =
                 fs::read_to_string(&marker_path).map_err(|_| IdentityError::IdentityNotFound)?;
             let marker: AgentPidMarker =
@@ -225,6 +254,7 @@ pub fn resolve_identity_with(
                 && !marker.instance_id.is_empty()
                 && expected_instance_id.is_none_or(|expected| expected == marker.instance_id)
                 && processes.birth(candidate) == Some(marker.birth)
+                && permitted(&marker.name_file)
                 && let Some(name) = read_name(&marker.name_file)
             {
                 return Ok(ResolvedIdentity {

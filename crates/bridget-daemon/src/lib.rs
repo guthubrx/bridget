@@ -16,6 +16,7 @@ pub mod daemon;
 pub mod desired_state;
 pub mod disk_hygiene;
 pub mod disk_trend;
+pub mod environment;
 pub mod execution_store;
 pub use execution_store::{
     ConditionalTransition, ExecutionSnapshot, ExecutionStore, QueuedSubmission,

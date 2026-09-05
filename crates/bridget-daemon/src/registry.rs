@@ -115,7 +115,7 @@ fn default_capabilities() -> AdapterCapabilities {
 
 impl AgentRegistry {
     pub fn load() -> Result<Self, String> {
-        Self::load_from_path(config_path())
+        Self::load_from_path(config_path()?)
     }
 
     fn load_from_path(source: PathBuf) -> Result<Self, String> {
@@ -753,11 +753,9 @@ fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefi
     })
 }
 
-fn config_path() -> PathBuf {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
-        .join(".config/bridget/agents.json")
+fn config_path() -> Result<PathBuf, String> {
+    crate::environment::Namespace::from_environment()
+        .map(|namespace| namespace.root.join("agents.json"))
 }
 
 fn validate_registry(

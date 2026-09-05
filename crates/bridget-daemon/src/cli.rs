@@ -97,6 +97,14 @@ pub fn run() {
 
     let cmd = &args[1];
 
+    if !matches!(
+        cmd.as_str(),
+        "version" | "--version" | "-v" | "help" | "--help" | "-h"
+    ) && let Err(error) = crate::environment::initialize_process()
+    {
+        exit_argument_error(&error);
+    }
+
     // Les lanceurs historiques restent interactifs ; leur type et leur
     // autorisation viennent désormais du registre, pas d'une liste CLI.
     if let Some(agent_type) = crate::registry::AgentRegistry::interactive_alias(cmd) {
@@ -215,7 +223,7 @@ fn parse_identity_command(args: &[String]) -> Result<IdentityCommand, String> {
     let mut apply = None;
     let mut db_path = None;
     let mut fleet_path = None;
-    let mut maicie_config = None;
+    let maicie_config: Option<PathBuf> = None;
     let mut index = 1;
     while index < args.len() {
         match args[index].as_str() {
@@ -248,20 +256,23 @@ fn parse_identity_command(args: &[String]) -> Result<IdentityCommand, String> {
                 }
             }
             "--maicie-config" => {
-                index += 1;
-                maicie_config = args.get(index).map(PathBuf::from);
-                if maicie_config.is_none() {
-                    return Err(
-                        "bridget identity migrate: --maicie-config requiert un chemin absolu"
-                            .to_string(),
-                    );
-                }
+                return Err(
+                    "bridget identity migrate: migration Maicie hors noyau communication".into(),
+                );
             }
             option => return Err(unknown_argument("identity migrate", option)),
         }
         index += 1;
     }
     let db_path = db_path.unwrap_or_else(|| DaemonConfig::default().db_path);
+    // La migration explicite n'est pas une échappatoire au namespace :
+    // valider avant toute lecture de plan et avant tout --apply.
+    for path in std::iter::once(&db_path)
+        .chain(fleet_path.iter())
+        .chain(maicie_config.iter())
+    {
+        crate::environment::validate_path(path)?;
+    }
     for path in [&db_path, fleet_path.as_ref().unwrap_or(&PathBuf::new())] {
         if !path.as_os_str().is_empty() && !path.is_absolute() {
             return Err("bridget identity migrate: les chemins doivent être absolus".to_string());
@@ -1014,6 +1025,7 @@ fn resolve_spawn_order(
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let path = spawn_order_path(home, &command_id);
+    crate::environment::validate_state_file(&path, false)?;
     if path.exists() {
         let content = std::fs::read_to_string(&path)
             .map_err(|error| format!("ordre mémorisé illisible {}: {error}", path.display()))?;
@@ -1269,7 +1281,9 @@ fn stored_spawn_timeout(stored: &WrapperToDaemon) -> Option<i64> {
 }
 
 fn spawn_order_path(home: &std::path::Path, command_id: &str) -> std::path::PathBuf {
-    home.join(".local/state/bridget/spawn-orders")
+    crate::environment::root_for_home(home)
+        .expect("namespace validé avant la lecture des ordres")
+        .join("spawn-orders")
         .join(format!("{command_id}.json"))
 }
 
@@ -4904,6 +4918,8 @@ fn cmd_reaper(args: &[String]) {
         std::process::exit(2);
     });
 
+    crate::environment::validate_existing_tree(&state_dir)
+        .unwrap_or_else(|error| exit_argument_error(&error));
     // Relève disque à chaque observation (fait attesté, pas de panique auto).
     crate::disk_hygiene::warn_if_disk_low(Path::new("/"));
 

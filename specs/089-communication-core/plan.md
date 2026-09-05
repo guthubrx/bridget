@@ -2,7 +2,7 @@
 
 **Branche :** session-089-communication-core | **Date :** 2026-09-05 | **Spécification :** spec.md
 **Base immuable :** dfa2134dcfe2a2522e3ae77d93561e6ae72556b3.
-**État :** corpus, inventaire et revue pré-coupe réalisés ; isolation en cours.
+**État :** corpus, inventaire, revue pré-coupe, canon neutre et isolation réalisés ; baseline globale et découplage métier restent ouverts.
 
 ## Résumé et approche
 

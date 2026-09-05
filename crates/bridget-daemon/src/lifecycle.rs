@@ -521,6 +521,20 @@ pub fn build_environment(
             env.insert((*name).to_string(), value.clone());
         }
     }
+    // Configuration IPC opérateur, distincte des capacités et des secrets
+    // fournisseur. Le bootstrap vide son environnement : ne pas perdre la
+    // racine du daemon et rejoindre implicitement une autre instance.
+    if source.contains_key("BRIDGET_HOME") || source.contains_key("BRIDGET_SOCKET") {
+        let namespace = crate::environment::Namespace::resolve(
+            source.get("BRIDGET_HOME").map(PathBuf::from),
+            source.get("BRIDGET_SOCKET").map(PathBuf::from),
+            Some(PathBuf::from(home)),
+        )
+        .map_err(|detail| SpawnRefusal::EnvUnfit { detail })?;
+        for (name, value) in namespace.child_environment() {
+            env.insert(name.to_string_lossy().into_owned(), value);
+        }
+    }
     env.entry("PATH".to_string())
         .or_insert_with(|| OsString::from(FALLBACK_PATH));
     if let Some(path) = env.get("PATH").cloned() {

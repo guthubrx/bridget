@@ -41,13 +41,16 @@ pub(crate) fn attested_channel_from_sources(
 }
 
 fn federation_config_path() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .map(|home| home.join(".config/bridget/federation.env"))
+    crate::environment::Namespace::from_environment()
+        .ok()
+        .map(|namespace| namespace.root.join("federation.env"))
 }
 
 fn read_federation_config(path: Option<&Path>) -> Option<String> {
-    path.and_then(|path| std::fs::read_to_string(path).ok())
+    path.and_then(|path| {
+        crate::environment::validate_state_file(path, false).ok()?;
+        std::fs::read_to_string(path).ok()
+    })
 }
 
 /// Canal attesté pour le processus courant. L'absence ou la contradiction

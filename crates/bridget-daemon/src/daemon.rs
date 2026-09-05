@@ -612,9 +612,11 @@ pub struct DaemonConfig {
 
 impl Default for DaemonConfig {
     fn default() -> Self {
-        let cache_dir = dirs_cache();
+        let namespace = crate::environment::Namespace::from_environment()
+            .expect("namespace Bridget invalide ; valider avant de construire la configuration");
+        let cache_dir = namespace.root;
         DaemonConfig {
-            socket_path: cache_dir.join("bridget.sock"),
+            socket_path: namespace.socket,
             db_path: cache_dir.join("bridget.db"),
             log_path: cache_dir.join("daemon.log"),
             circuit_breaker_window: 180,
@@ -630,66 +632,21 @@ impl Default for DaemonConfig {
 }
 
 impl DaemonConfig {
-    /// Racine des contenus canoniques, distincte du cache de sockets et logs.
-    ///
-    /// `BRIDGET_ARTIFACT_ROOT` fournit un override opérateur, uniquement
-    /// absolu. L'absence d'override choisit le répertoire de données durable
-    /// de Bridget, jamais `~/.cache/bridget`.
+    /// Contenus canoniques dans le même namespace privé. Une configuration
+    /// explicite de test dérive ses contenus de son propre magasin.
     pub fn canonical_artifact_root(&self) -> Result<PathBuf, String> {
         if let Some(raw) = std::env::var_os("BRIDGET_ARTIFACT_ROOT") {
             let path = PathBuf::from(raw);
-            if !path.is_absolute() {
-                return Err("BRIDGET_ARTIFACT_ROOT doit être un chemin absolu".to_string());
+            crate::environment::validate_private_directory_if_present(&path)?;
+            let root = self.db_path.parent().ok_or("magasin sans racine")?;
+            if !path.starts_with(root) {
+                return Err("BRIDGET_ARTIFACT_ROOT doit rester dans la racine du magasin".into());
             }
             return Ok(path);
         }
-        Ok(dirs_data().join("bridget").join("artifacts"))
+        let root = self.db_path.parent().ok_or("magasin sans racine")?;
+        Ok(root.join("artifacts"))
     }
-}
-
-fn dirs_cache() -> PathBuf {
-    let cache_dir = if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".cache").join("bridget")
-    } else {
-        PathBuf::from("/tmp").join("bridget") // Fallback non sécurisé
-    };
-
-    // Créer avec permissions sécurisées (M-003)
-    let _ = std::fs::create_dir_all(&cache_dir);
-
-    // Vérifier les permissions (Unix seulement) (M-003)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(&cache_dir) {
-            let perms = meta.permissions();
-            let mode = perms.mode();
-            if mode & 0o077 != 0 {
-                warn!(
-                    "Permissions non sécurisées sur {:?} - autres utilisateurs peuvent lire/écrire",
-                    cache_dir
-                );
-            }
-        }
-    }
-
-    cache_dir
-}
-
-fn dirs_data() -> PathBuf {
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join("Library/Application Support");
-        }
-    }
-    if let Some(path) = std::env::var_os("XDG_DATA_HOME") {
-        return PathBuf::from(path);
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".local").join("share");
-    }
-    PathBuf::from("/tmp").join("bridget-data")
 }
 
 fn desired_state_path(config: &DaemonConfig) -> PathBuf {
@@ -4344,6 +4301,17 @@ fn schedule_execution_recovery(
 
 /// Lance le daemon.
 pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let state_root = config.db_path.parent().ok_or("magasin sans racine")?;
+    crate::environment::validate_existing_tree(state_root)?;
+    crate::environment::ensure_private_directory(state_root)?;
+    let socket_root = config.socket_path.parent().ok_or("socket sans racine")?;
+    if socket_root != state_root {
+        crate::environment::validate_existing_tree(socket_root)?;
+    }
+    crate::environment::ensure_private_directory(socket_root)?;
+    crate::environment::validate_state_file(&config.db_path, false)?;
+    crate::environment::validate_state_file(&config.log_path, false)?;
+    crate::environment::validate_state_file(&config.socket_path, true)?;
     // Gestionnaires de signaux AVANT toute trace visible de l'extérieur.
     //
     // Ils étaient installés après la liaison de la socket : entre le moment où
@@ -4359,16 +4327,20 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Verrouillage exclusif avec flock — empêche deux daemons de démarrer en même temps
     // Évite la race condition TOCTOU du PID file traditionnel
     let pid_file = config.socket_path.with_extension("pid");
+    crate::environment::validate_state_file(&pid_file, false)?;
 
     // Créer le fichier et obtenir un verrou exclusif avec flock
+    use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::io::AsRawFd;
 
-    let file = std::fs::OpenOptions::new()
+    let mut file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
         // Ce descripteur ne sert qu'au verrou flock ; l'écriture du PID suit
         // avec std::fs::write et effectue explicitement le remplacement.
         .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
         .open(&pid_file)
         .map_err(|e| format!("Impossible de créer PID file {}: {}", pid_file.display(), e))?;
 
@@ -4380,25 +4352,20 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                 "bridget: un daemon tourne déjà (verrou sur {})",
                 pid_file.display()
             );
-            std::process::exit(0);
+            return Err("namespace occupé : daemon déjà démarré".into());
         }
     }
 
     // Écrire notre PID maintenant qu'on a le verrou
-    std::fs::write(&pid_file, std::process::id().to_string())?;
+    file.set_len(0)?;
+    file.write_all(std::process::id().to_string().as_bytes())?;
     eprintln!(
         "[BRIDGET] PID file écrit avec verrou exclusif: {} (PID {})",
         pid_file.display(),
         std::process::id()
     );
 
-    let marker_store = ManagedMarkerStore::at_directory(
-        config
-            .db_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("/tmp"))
-            .join("managed"),
-    );
+    let marker_store = ManagedMarkerStore::at_directory(state_root.join("managed"));
     let reconciled =
         marker_store.reconcile_stale_groups(MANAGED_STOP_FORCED_GRACE, MANAGED_STOP_POLL)?;
     if !reconciled.is_empty() {
@@ -4410,6 +4377,9 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if config.socket_path.exists() {
+        if UnixStream::connect(&config.socket_path).is_ok() {
+            return Err("socket occupée : refus de remplacer un daemon actif".into());
+        }
         std::fs::remove_file(&config.socket_path)?;
     }
     std::fs::create_dir_all(config.socket_path.parent().unwrap())?;
@@ -4421,14 +4391,16 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     let listener = UnixListener::bind(&config.socket_path)?;
     info!("bridget daemon écoute sur {}", config.socket_path.display());
 
-    let tmp_dir = std::env::temp_dir();
+    // Ne jamais balayer le /tmp partagé : seuls nos temporaires privés.
+    let tmp_dir = state_root.join("tmp");
+    crate::environment::ensure_private_directory(&tmp_dir)?;
     if let Err(error) = std::thread::Builder::new()
         .name("ramasse-copies".into())
         .spawn(move || {
             let report = crate::disk_hygiene::purge_orphan_bridget_tmp(&tmp_dir);
             if !report.deleted.is_empty() {
                 info!(
-                    "ramasse-copies: {} orphelin(s) /tmp/bridget-* retiré(s)",
+                    "ramasse-copies: {} temporaire(s) privé(s) retiré(s)",
                     report.deleted.len()
                 );
             }

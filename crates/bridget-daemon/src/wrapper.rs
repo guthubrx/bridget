@@ -838,7 +838,8 @@ enum IdempotentDeliveryAction {
 
 impl IdempotentDeliveryTracker {
     fn open(home: &std::path::Path, instance_id: &str) -> Result<Self, String> {
-        let state_home = home.join(".local/state");
+        let state_home = crate::environment::root_for_home(home)?.join("state");
+        crate::environment::validate_existing_tree(&state_home)?;
         Self::open_at(&state_home, instance_id)
     }
 
@@ -1035,15 +1036,15 @@ fn deliver_idempotent_to_interactive(
 }
 
 fn socket_path() -> PathBuf {
-    socket_path_from(
-        std::env::var_os("BRIDGET_RUNTIME_SOCKET").map(PathBuf::from),
-        std::env::var_os("HOME").map(PathBuf::from),
-    )
+    crate::environment::Namespace::from_environment()
+        .expect("namespace Bridget non validé avant lancement du wrapper")
+        .socket
 }
 
 /// Le runtime Docker fournit son socket explicitement. Sa présence interdit
 /// toute dérivation depuis HOME: un chemin relatif ferme simplement la
 /// connexion au lieu de retomber sur le socket hôte.
+#[cfg(test)]
 fn socket_path_from(runtime_socket: Option<PathBuf>, home: Option<PathBuf>) -> PathBuf {
     if let Some(socket) = runtime_socket {
         return if socket.is_absolute() {
@@ -1052,11 +1053,9 @@ fn socket_path_from(runtime_socket: Option<PathBuf>, home: Option<PathBuf>) -> P
             PathBuf::from("/run/bridget/runtime/invalid.sock")
         };
     }
-    if let Some(home) = home {
-        home.join(".cache").join("bridget").join("bridget.sock")
-    } else {
-        PathBuf::from("/tmp").join("bridget.sock")
-    }
+    crate::environment::Namespace::resolve(None, None, home)
+        .expect("HOME absent ou namespace non valide")
+        .socket
 }
 fn runtime_ingress_required_value(value: Option<&str>, field: &str) -> Result<String, String> {
     value
@@ -1272,8 +1271,13 @@ fn load_persistent_name(_agent_type: &str, agent_args: &[String]) -> Option<Stri
         return None; // Pas de session-id → auto-incrément normal
     }
     let name_file = persistent_name_path(&hash);
+    load_persistent_name_at(&name_file)
+}
+
+fn load_persistent_name_at(name_file: &Path) -> Option<String> {
+    crate::environment::validate_state_file(name_file, false).ok()?;
     if name_file.exists() {
-        let name = std::fs::read_to_string(&name_file).ok()?;
+        let name = std::fs::read_to_string(name_file).ok()?;
         let name = name.trim().to_string();
         if !name.is_empty() {
             eprintln!("[bridget] Nom retrouvé: « {} »", name);
@@ -1290,10 +1294,27 @@ fn save_persistent_name(_agent_type: &str, agent_args: &[String], name: &str) {
         return; // Pas de session-id, rien à sauver
     }
     let name_file = persistent_name_path(&hash);
-    if let Some(parent) = name_file.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    if let Err(error) = save_persistent_name_at(&name_file, name) {
+        warn!("nom persistant refusé : {error}");
     }
-    let _ = std::fs::write(&name_file, name);
+}
+
+fn save_persistent_name_at(name_file: &Path, name: &str) -> Result<(), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    crate::environment::validate_state_file(name_file, false)?;
+    if let Some(parent) = name_file.parent() {
+        crate::environment::ensure_private_directory(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(name_file)
+        .map_err(|error| error.to_string())?;
+    file.write_all(name.as_bytes())
+        .map_err(|error| error.to_string())
 }
 
 fn persistent_name_path(hash: &str) -> std::path::PathBuf {
@@ -1932,8 +1953,9 @@ pub fn launch(
         }
     };
     if let Some(parent) = name_state_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        crate::environment::ensure_private_directory(parent)?;
     }
+    crate::environment::validate_state_file(&name_state_path, false)?;
     std::fs::write(&name_state_path, &my_name)?;
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -1948,7 +1970,8 @@ pub fn launch(
     // JournalReady atteste la réalité une fois le writer ouvert. Aucune
     // inversion en dur — un chemin sans activation reste refusé par le gate.
     let live_feed = JournalLiveFeed::default();
-    let journal_root = home.join(".cache/bridget/sessions");
+    let journal_root = crate::environment::root_for_home(&home)?.join("sessions");
+    crate::environment::validate_existing_tree(&journal_root.join(&my_name))?;
     let journal = Arc::new(
         JournalWriter::start_with_live_feed_and_failure(
             &journal_root,
@@ -3451,7 +3474,7 @@ fn spawn_managed_session_transport(
     mcp_environment: &[(OsString, OsString)],
     mcp_servers: Vec<serde_json::Value>,
     inherit_stderr: bool,
-    home: &Path,
+    _home: &Path,
     agent_name: Option<String>,
     instance_id: &str,
     socket: &Path,
@@ -3492,7 +3515,12 @@ fn spawn_managed_session_transport(
                 provider_observation: definition.capabilities.observed.clone(),
                 // Même arbre que le journal d'agent : survit à la mort du
                 // managed-wrapper et au redémarrage du daemon (lot cursor2).
-                session_store_root: Some(home.join(".cache/bridget/sessions")),
+                session_store_root: Some(
+                    socket
+                        .parent()
+                        .ok_or("socket sans racine")?
+                        .join("sessions"),
+                ),
                 agent_name,
             };
             let environment = string_environment(mcp_environment);
@@ -3719,6 +3747,22 @@ fn launch_acp_with_status(
     mut managed_reporter: Option<&mut crate::managed_process::ManagedStatusReporter>,
     frozen_definition_digest: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Les API injectables ne peuvent envoyer le wrapper sur un socket et ses
+    // outils MCP sur un autre. Refus avant création d'état ou fournisseur.
+    let configured_namespace = crate::environment::Namespace::from_environment()?;
+    let session_namespace = crate::environment::Namespace::resolve(
+        Some(socket.parent().ok_or("socket sans racine")?.to_path_buf()),
+        Some(socket.to_path_buf()),
+        Some(home.to_path_buf()),
+    )?;
+    if session_namespace != configured_namespace {
+        return Err(
+            "namespace de session différent du namespace de processus : lancement refusé".into(),
+        );
+    }
+    let state_root = session_namespace.root;
+    crate::environment::ensure_private_directory(&state_root)?;
+    let journal_root = state_root.join("sessions");
     if !agent_args.is_empty() {
         return Err("le mode --equipier n'accepte pas d'arguments d'agent".into());
     }
@@ -3765,8 +3809,9 @@ fn launch_acp_with_status(
         .or_else(derive_domain);
     let name_state_path = managed_instance_name_state_path(socket, home, &instance_id);
     if let Some(parent) = name_state_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        crate::environment::ensure_private_directory(parent)?;
     }
+    crate::environment::validate_state_file(&name_state_path, false)?;
     // Indexé par instance (pas par nom) : un rename ne déplace pas le chemin et
     // un concurrent ne peut pas usurper le fichier d'un autre équipier.
     std::fs::write(
@@ -3774,7 +3819,7 @@ fn launch_acp_with_status(
         explicit_name.unwrap_or_default().as_bytes(),
     )?;
     let mut mcp_environment =
-        managed_adapter_environment(&instance_id, explicit_name, Some(&name_state_path));
+        managed_adapter_environment(&instance_id, explicit_name, Some(&name_state_path))?;
     let process_env_requested = std::env::var_os("BRIDGET_RUNTIME_SECRET_ENV_FILES").is_some();
     let runtime_admitted = if process_env_requested {
         pre_admit_runtime_ingress(socket)?
@@ -3857,14 +3902,11 @@ fn launch_acp_with_status(
         &name_state_path,
     )?;
     let live_feed = JournalLiveFeed::default();
-    transport.activate_journal(
-        &home.join(".cache/bridget/sessions"),
-        &my_name,
-        Some(live_feed.clone()),
-    )?;
+    crate::environment::validate_existing_tree(&journal_root.join(&my_name))?;
+    transport.activate_journal(&journal_root, &my_name, Some(live_feed.clone()))?;
     apply_pending_profile_instructions(socket, transport.as_mut(), &my_name, &instance_id);
     send_wrapper_message(&writer, WrapperToDaemon::JournalReady);
-    let journal_directory = home.join(".cache/bridget/sessions").join(&my_name);
+    let journal_directory = journal_root.join(&my_name);
     let relay_writer = writer.clone();
     let mut relay = AttachRelayWorker::start(
         journal_directory,
@@ -4241,11 +4283,9 @@ fn launch_acp_with_status(
                         }
                     }
                     let live_feed = JournalLiveFeed::default();
-                    if let Err(error) = transport.activate_journal(
-                        &home.join(".cache/bridget/sessions"),
-                        &my_name,
-                        Some(live_feed.clone()),
-                    ) {
+                    if let Err(error) =
+                        transport.activate_journal(&journal_root, &my_name, Some(live_feed.clone()))
+                    {
                         warn!("journal après relance impossible: {error}");
                     }
                     apply_pending_profile_instructions(
@@ -4257,7 +4297,7 @@ fn launch_acp_with_status(
                     relay.shutdown();
                     let relay_writer = writer.clone();
                     relay = AttachRelayWorker::start(
-                        home.join(".cache/bridget/sessions").join(&my_name),
+                        journal_root.join(&my_name),
                         live_feed,
                         Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
                     );
@@ -4325,7 +4365,9 @@ fn billing_guard_error(variable: &str) -> String {
 /// montage persistant explicitement autorisé par la politique runtime.
 fn managed_wrapper_state_directory(socket: &Path, home: &Path) -> PathBuf {
     if std::env::var_os("BRIDGET_RUNTIME_SOCKET").is_some() {
-        home.join(".cache/bridget/runtime")
+        crate::environment::root_for_home(home)
+            .expect("namespace runtime non validé")
+            .join("runtime")
     } else {
         socket.parent().unwrap_or(socket).to_path_buf()
     }
@@ -4357,11 +4399,12 @@ fn managed_adapter_environment(
     instance_id: &str,
     explicit_name: Option<&str>,
     name_state_path: Option<&Path>,
-) -> Vec<(OsString, OsString)> {
+) -> Result<Vec<(OsString, OsString)>, String> {
     let mut environment = vec![(
         OsString::from("BRIDGET_AGENT_INSTANCE_ID"),
         OsString::from(instance_id),
     )];
+    environment.extend(crate::environment::Namespace::from_environment()?.child_environment());
     if let Some(name) = explicit_name.filter(|value| !value.is_empty()) {
         environment.push((OsString::from("BRIDGET_AGENT_ID"), OsString::from(name)));
     }
@@ -4374,7 +4417,7 @@ fn managed_adapter_environment(
     if let Some(path) = path_with_current_exe_dir() {
         environment.push((OsString::from("PATH"), OsString::from(path)));
     }
-    environment
+    Ok(environment)
 }
 
 fn path_with_current_exe_dir() -> Option<String> {
@@ -4515,18 +4558,24 @@ fn mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     }
 
     let command = std::env::current_exe()?.to_string_lossy().into_owned();
+    let environment = mcp_server_environment()?;
+    let environment = environment
+        .as_object()
+        .ok_or("environnement MCP absent")?
+        .iter()
+        .map(|(name, value)| serde_json::json!({"name": name, "value": value}))
+        .collect::<Vec<_>>();
     Ok(serde_json::json!({
         "name": "bridget",
         "type": "stdio",
         "command": command,
         "args": ["mcp"],
-        "env": []
+        "env": environment
     }))
 }
 
-/// La négociation ACP validée par le spike attend `env: []`. Les clients
-/// interactifs, eux, démarrent le serveur MCP dans un environnement parfois
-/// filtré : ils reçoivent donc explicitement le seul `HOME` requis.
+/// ACP utilise une liste nom/valeur ; les clients interactifs un objet.
+/// Les trois projections portent le même namespace, sans changer HOME.
 fn interactive_mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let mut server = mcp_server_entry()?;
     server["env"] = mcp_server_environment()?;
@@ -4535,10 +4584,16 @@ fn interactive_mcp_server_entry() -> Result<serde_json::Value, Box<dyn std::erro
 
 /// Codex peut filtrer l'environnement du serveur MCP qu'il lance. `HOME` est
 /// la dépendance minimale et non sensible qui permet à cette projection de
-/// retrouver la socket publique du daemon.
+/// retrouver la socket publique du daemon. Le namespace est transmis même
+/// quand le fournisseur filtre son environnement.
 fn mcp_server_environment() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let home = std::env::var("HOME").map_err(|_| "HOME absent pour le serveur MCP Bridget")?;
-    Ok(serde_json::json!({ "HOME": home }))
+    let namespace = crate::environment::Namespace::from_environment()?;
+    Ok(serde_json::json!({
+        "HOME": home,
+        "BRIDGET_HOME": namespace.root,
+        "BRIDGET_SOCKET": namespace.socket
+    }))
 }
 
 /// Injection réservée au banc d'intégration T1006. Cette surface est absente
@@ -4650,8 +4705,17 @@ pub(crate) fn purge_orphan_mcp_configs(directory: &Path) {
 
 fn codex_mcp_override(server: &serde_json::Value) -> Result<String, Box<dyn std::error::Error>> {
     let command = server["command"].as_str().ok_or("commande MCP absente")?;
-    let home = server["env"]["HOME"].as_str().ok_or("HOME MCP absent")?;
-    let environment = format!("{{HOME={home:?}}}");
+    let environment = ["HOME", "BRIDGET_HOME", "BRIDGET_SOCKET"]
+        .iter()
+        .map(|key| {
+            let value = server["env"][key]
+                .as_str()
+                .ok_or("namespace MCP incomplet")?;
+            Ok(format!("{key}={}", serde_json::to_string(value)?))
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?
+        .join(",");
+    let environment = format!("{{{environment}}}");
     Ok(format!(
         "mcp_servers.bridget={{command={command:?},args=[\"mcp\"],env={environment}}}"
     ))
@@ -7325,7 +7389,8 @@ mod reconnect_tests {
         let socket = root.join("bridget.sock");
         let name_file = root.join("agent-names").join("instance-instance-1");
         let env =
-            managed_adapter_environment("instance-1", Some("fable-reviewer"), Some(&name_file));
+            managed_adapter_environment("instance-1", Some("fable-reviewer"), Some(&name_file))
+                .unwrap();
         let pairs: Vec<(String, String)> = string_environment(&env);
         assert_eq!(
             pairs
@@ -7415,11 +7480,9 @@ mod reconnect_tests {
         );
         assert!(none_args.is_empty());
 
-        let unnamed = string_environment(&managed_adapter_environment(
-            "instance-1",
-            None,
-            Some(&name_file),
-        ));
+        let unnamed = string_environment(
+            &managed_adapter_environment("instance-1", None, Some(&name_file)).unwrap(),
+        );
         assert!(
             unnamed.iter().all(|(key, _)| key != "BRIDGET_AGENT_ID"),
             "{unnamed:?}"
@@ -7527,9 +7590,41 @@ mod reconnect_tests {
     }
 
     #[test]
-    fn projection_acp_conserve_l_environnement_vide_valide() {
+    fn projections_mcp_portent_le_namespace_sans_modifier_home_fournisseur() {
         let server = mcp_server_entry().unwrap();
-        assert_eq!(server["env"], serde_json::json!([]));
+        let expected = mcp_server_environment().unwrap();
+        let pairs = server["env"].as_array().unwrap();
+        assert_eq!(pairs.len(), 3);
+        for pair in pairs {
+            assert_eq!(pair["value"], expected[pair["name"].as_str().unwrap()]);
+        }
+        assert_eq!(interactive_mcp_server_entry().unwrap()["env"], expected);
+        let codex = codex_mcp_override(&interactive_mcp_server_entry().unwrap()).unwrap();
+        for name in ["HOME", "BRIDGET_HOME", "BRIDGET_SOCKET"] {
+            assert!(codex.contains(&format!(
+                "{name}={}",
+                serde_json::to_string(&expected[name]).unwrap()
+            )));
+        }
+        assert_eq!(expected["HOME"], std::env::var("HOME").unwrap());
+    }
+
+    #[test]
+    fn nom_persistant_ne_lit_ni_n_ecrase_une_cible_liee() {
+        let root = std::env::temp_dir().join(format!("b89-name-{}", uuid::Uuid::new_v4()));
+        crate::environment::ensure_private_directory(&root).unwrap();
+        let original = root.join("original");
+        save_persistent_name_at(&original, "nom-intact").unwrap();
+        let linked = root.join("session");
+        std::os::unix::fs::symlink(&original, &linked).unwrap();
+        assert!(load_persistent_name_at(&linked).is_none());
+        assert!(save_persistent_name_at(&linked, "nouveau-nom").is_err());
+        assert_eq!(std::fs::read_to_string(&original).unwrap(), "nom-intact");
+        assert_eq!(
+            load_persistent_name_at(&original).as_deref(),
+            Some("nom-intact")
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

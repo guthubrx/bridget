@@ -1095,13 +1095,10 @@ fn stable_cmdline_digest(command: &str) -> String {
 }
 
 pub fn default_state_dir() -> PathBuf {
-    dirs_home()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".cache/bridget/reaper")
-}
-
-fn dirs_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    crate::environment::Namespace::from_environment()
+        .expect("namespace validé avant le reaper")
+        .root
+        .join("reaper")
 }
 
 #[cfg(test)]

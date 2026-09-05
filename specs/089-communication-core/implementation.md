@@ -1,5 +1,59 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T007 : espace d'état indépendant réellement traversé
+
+BRIDGET_HOME contient les états du noyau (défaut HOME/.cache/bridget-core),
+BRIDGET_SOCKET reste directement dans cette racine privée, limite portable
+104 octets exclue. HOME fournisseur est inchangé : aucune copie de credentials
+ni migration des données historiques. Le namespace suit env_clear et les
+trois projections MCP. Les API wrapper explicitement injectées refusent une
+socket différente de celle du processus avant fichier ou fournisseur.
+
+Refus avant accès des chemins historiques, répertoires/fichiers détournés,
+propriétaire/droits inadéquats. Le bootstrap valide les sous-états avant
+réconciliation des groupes ; la résolution ordinaire ne scanne PAS les
+journaux. Le parcours de bootstrap est borné (100 000 entrées, profondeur 64)
+et refuse un dépassement ; il n'est pas une preuve contre un attaquant du
+même UID modifiant simultanément l'arbre après inspection (T029 reste ouvert).
+PID ouvert O_NOFOLLOW/0600 sous verrou, doublon daemon refusé, purge limitée
+au tmp privé. Configurations de fédération, notification humaine et reaper
+ne relisent plus les chemins historiques ; leurs entrées explicites sont gardées.
+
+Retraits anticipés de surfaces dangereuses : BRIDGET_RUNTIME_SOCKET et
+identity migrate --maicie-config sont refusés. Le second évite qu'une config
+neuve redirige vers le magasin privé historique de Maicie ; son implémentation
+de migration sera retirée en T009, pas remplacée par une copie de son schéma.
+
+Commandes dans le worktree :
+- `cargo test --offline -p bridget-daemon --test core_089_isolation_test` :
+  8/8, 0,52 s ; vrais daemon/client/MCP nettoyés sous racines /tmp/b89-<UUID>,
+  HOME fournisseur séparé, sentinelles intactes, seconde instance refusée,
+  erreurs avant bootstrap et divergence d'API attestées. Arrêts SIGTERM
+  propres ; ces tests ne prétendent PAS prouver un crash.
+- Sous env_clear privé, filtres
+  `projections_mcp_portent_le_namespace_sans_modifier_home_fournisseur` et
+  oracle de nom persistant lié : 1/1 chacun ; les formats ACP/Codex/Claude
+  portent les mêmes trois variables, la cible liée reste intacte.
+- `cargo test --offline -p bridget-daemon --lib --no-run` : compilation verte,
+  873 scénarios construits avant les deux derniers oracles, aucun lancement
+  implicite de toute cette suite.
+- `cargo fmt --all --check` et `git diff --check` : exit 0.
+
+Clippy n'est PAS annoncé vert : avec --no-deps, neuf lints historiques hors
+hunks T007 persistent (daemon too_many_arguments/empty_line_after_doc_comments,
+artifact_service obfuscated_if_else, artifact_store collapsible_if,
+execution_store nonminimal_bool, identity_migration collapsible_if et trois
+collapsible_if de UI). Sans --no-deps s'ajoutent trois lints Maicie.
+Le gate final T034 doit les éliminer ou constater leur suppression de périmètre.
+
+Revue indépendante : trois réserves initiales réellement corrigées (liens
+managed/agent-names, migration transitive, anciennes configurations), puis
+APPROVE limité à ces frontières ; contre-run intermédiaire 7/7. Self-review
+XIX/XX : une seule résolution, gardes aux points d'accès, retrait des replis
+temporaires ; pas de framework/config fournisseur supplémentaire. Le coût
+du scan reste au bootstrap, pas à chaque appel. Les tests de flotte, de
+fournisseur réel et SSH restent distincts et non validés à ce stade.
+
 ## 2026-09-05 — T008 : canon neutre, sans changement de protocole
 
 Les algorithmes historiques issuer_scope et canonical_send sont déplacés dans
@@ -80,6 +134,14 @@ validate_agent_id UUID déjà utilisé par read_name. Le diff T007 ne change
 pas ce validateur ni ces fixtures ; resolve_identity_with garde sa voie
 sans namespace via None. Les échecs sont consignés pour les fixtures T015,
 pas effacés par un assouplissement de validation du produit.
+
+CLI : après correction d'un premier filtre sans correspondance (0 test,
+non compté), `cli::idempotency_projection_tests::options_`, `depot_`, `who_`
+et `cli::ledger_borne_tests::` sous la même enveloppe env-i/watchdog,
+racine /private/tmp/bg089-cli.* : 11 réussis / 3 rouges, 0,01 s.
+Les trois parseurs de dépôt refusent leurs anciennes fixtures avec
+« agent_id doit être un UUID v4 canonique ». Le nom invalide ne doit pas
+redevenir admissible pour verdir ces tests ; correction de fixtures en T015/T018.
 
 T002 : gel complet de familles, 17 fichiers, référence produit dfa2134 et
 capture bd1cbe0 épinglées séparément. Vérificateur --self-test --require-complete

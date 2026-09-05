@@ -436,13 +436,15 @@ fn default_reminder_after_secs() -> i64 {
 }
 
 pub fn default_channel_config_path() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(|home| PathBuf::from(home).join(".config/bridget/human-channel.json"))
+    crate::environment::Namespace::from_environment()
+        .ok()
+        .map(|namespace| namespace.root.join("human-channel.json"))
 }
 
 /// Charge la configuration si elle existe et est valide ; `None` sinon, avec
 /// la raison dans le journal. L'absence de fichier n'est pas une erreur.
 pub fn load_channel_config(path: &Path) -> Result<Option<HumanChannelConfig>, String> {
+    crate::environment::validate_state_file(path, false)?;
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
