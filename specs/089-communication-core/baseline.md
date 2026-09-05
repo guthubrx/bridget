@@ -1,5 +1,30 @@
 # Baseline 089 — carte de l'extraction
 
+## Comparaison exécutée T033 — 2026-09-05
+
+`python3 scripts/measure-089-core.py`, macOS arm64, rustc/cargo 1.92.0. Deux archives Git immuables, référence dfa2134dcfe2a2522e3ae77d93561e6ae72556b3 et candidat fe2ee8513ec6e050d3263d416dcba0f1a7207ea9 ; aucun lancement de l'ancien daemon ni lecture du checkout de production. Racine des preuves `/private/tmp/b089-measure-xiqs1kos`. Rapport des valeurs brutes et modules dans `artifacts/comparison-reference-core.json`. Premier préflight offline refusé pour crates non présentes dans le cache : téléchargement explicite par `cargo fetch --locked` AVANT les mesures ; aucun temps réseau attribué au build.
+
+| Même mesure / même hôte | Référence complète | Noyau extrait |
+|---|---:|---:|
+| Crates workspace | 4 | 3 |
+| Packages résolus toutes cibles | 187 | 94 |
+| Déclarations de modules racine core / transport / daemon | 8 / 14 / 45 | 8 / 15 / 41 |
+| Modules racine Maicie | 21 | absent |
+| Build debug, target neuf, 2 jobs, cache Cargo partagé | 39,935 s | 27,047 s |
+| RSS maximal rapporté par time pour le build | 1 040 105 472 octets | 1 187 430 400 octets |
+| Binaire debug non stripé | 46 468 120 octets | 37 403 752 octets |
+| Projection mémoire 256 agents, 20 processus, p95 mur | 14,563 ms | 13,635 ms |
+| Même scénario, max mur | 15,230 ms | 14,081 ms |
+| Même scénario, médiane RSS max | 4 333 568 octets | 4 325 376 octets |
+
+Lecture honnête : graphe presque divisé par deux et build observé ~32 % plus court ; **RSS de compilation ~14 % plus élevé**, pas de prétention baisse mémoire universelle. Une seule reconstruction de chaque arbre ne démontre pas une loi de performance, le cache de fichiers du système n'est pas purgé. RSS time n'est pas une mesure de somme instantanée de tous les processus Cargo. Le scénario de projection est le MÊME test historique `execution_scale_test::projection_execution_reste_bornee_sur_256_agents`, mêmes assertions et seuil 3 s : vingt paires, ordre alterné, zéro échec. La mesure mur inclut lancement du processus de test et time ; le RSS concerne ce scénario synthétique, pas un modèle fournisseur ni un daemon chargé. Aucun gain non mesuré annoncé sur ces derniers.
+
+Le budget produit est également protégé par T028 : 600/600 événements locaux et distants, mêmes bytes/séquences, p95 local 12,242 ms et distant corrigé 15,792 ms ; append SC-005 à budget INCHANGÉ, médiane des deltas appariés 334 ns <=5 000 ns. Ces mesures ne sont pas présentées comme une comparaison historique de réseau non exécutée.
+
+Inventaire rectifié par les objets Git : la table descriptive historique plus bas annonce « 22 modules core/transport » mais le commit effectivement épinglé déclare 8+14 modules racine, notamment parce qu'une ancienne lecture de la table comptait des lignes d'exports comme dispositions distinctes. Le rapport machine fait foi sur les déclarations. Le compteur inclut les déclarations conditionnelles de test-support ; ce n'est pas une preuve d'imports compilés en release. Les sous-modules extraits de store/idempotency/communication et le lecteur jsonl ajoutent des fichiers pour isoler des responsabilités sans ajouter une nouvelle autorité ni découper une transaction. Leurs tests de fautes/bytes sont la preuve de modularisation, pas une course au nombre de modules.
+
+Graphe local conservé : daemon → transport/core ; transport → core ; core → bibliothèques Rust/SQLite. Aucune dépendance vers Maicie, UI ou runtime de projet ; preuve transitive indépendante T013 et audit T032. Nouveaux points partagés depuis la coupe : communication/client pour CLI/MCP, jsonl pour trames bornées, store_schema pour préflight sans écriture. Les façades ne doivent plus posséder leur variante de ces garanties. Le lecteur spécialisé status reste la consolidation explicitement ouverte à T035.
+
 Référence immuable : `dfa2134dcfe2a2522e3ae77d93561e6ae72556b3`. Lecture du 2026-09-05 ; chemins et lignes ci-dessous relatifs à cette référence. C'est une disposition avant découplage, **pas une permission de suppression**.
 
 ## Dépendances constatées

@@ -1,5 +1,9 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T033 : comparaison reconstruite depuis Git
+
+Deux builds offline/locked/2 jobs depuis archives immuables avec targets neufs, 39,935 s référence contre 27,047 s noyau ; 187 contre 94 packages. Les deux compilent. Vingt paires du même test de projection 256 agents, ordre alterné, **40/40**, p95 14,563 contre 13,635 ms. RSS du scénario quasi identique ; **RSS maximal de compilation augmente ~14 %**, explicitement conservé dans baseline.md. Aucun cold-cache système prétendu, aucun benchmark fournisseur extrapolé depuis ce test en mémoire. Script reproductible `scripts/measure-089-core.py`, rapport brut `artifacts/comparison-reference-core.json`. T028 conserve les vrais budgets append/rendu local/distant ; les graphiques de dépendances et nombres de modules ne les remplacent pas. Les archives de mesure sont privées, aucune flotte lancée.
+
 ## 2026-09-05 — T032 : dépendances et scripts audités
 
 `dependencies.md` documente le périmètre et les limites ; sorties machine dans `artifacts/rustsec-audit.json` et `artifacts/dependency-licenses.json`. cargo-audit 0.22.2 privé : exit 0, 94 dépendances, zéro vulnérabilité/avertissement, aucune exception ; base RustSec épinglée `5a0ebedfe8bdd2e295b171f4162f8c977bcad9a5`. Licences présentes pour toutes les entrées metadata, y compris plateformes non compilées ; pas d'affirmation juridique ni de texte de notices inventé. Dette explicite : serde_yaml 0.9.34+deprecated reste le lecteur compatible de pins, pas de remplacement improvisé.

@@ -1,0 +1,456 @@
+{
+  "schema_version": 1,
+  "root": "/private/tmp/b089-measure-xiqs1kos",
+  "versions": [
+    {
+      "label": "reference",
+      "commit": "dfa2134dcfe2a2522e3ae77d93561e6ae72556b3",
+      "resolved_packages": 187,
+      "workspace_members": 4,
+      "root_modules": {
+        "bridget-core": [
+          "circuit_breaker",
+          "dedup",
+          "envelope",
+          "execution",
+          "host",
+          "message",
+          "router",
+          "text_guards"
+        ],
+        "bridget-daemon": [
+          "agent_profile",
+          "artifact_blob_store",
+          "artifact_fetch",
+          "artifact_policy",
+          "artifact_service",
+          "artifact_store",
+          "artifact_types",
+          "attach",
+          "build_identity",
+          "build_info",
+          "cli",
+          "connection_channel",
+          "control_settings",
+          "daemon",
+          "desired_state",
+          "disk_hygiene",
+          "disk_trend",
+          "execution_store",
+          "fleet",
+          "greffe_policy_refresh",
+          "human_inbox",
+          "idempotency",
+          "identity_migration",
+          "ledger",
+          "lifecycle",
+          "managed_process",
+          "managed_supervisor",
+          "managers",
+          "mcp",
+          "mcp_identity",
+          "mission_projection",
+          "project_policy",
+          "project_runtime",
+          "project_workspace",
+          "reaper",
+          "receipt_store",
+          "recovery_trace",
+          "referent_control",
+          "registry",
+          "reprise",
+          "runtime",
+          "store",
+          "test_sync",
+          "ui",
+          "wrapper"
+        ],
+        "bridget-transport": [
+          "acp",
+          "act_kind",
+          "claude_provider_session",
+          "claude_stream_json",
+          "codex_app_server",
+          "fsutil",
+          "greffe_authorization",
+          "greffe_policy_refresh",
+          "journal",
+          "managed_session",
+          "protocol",
+          "refusals",
+          "tmux",
+          "transport"
+        ],
+        "maicie": [
+          "app",
+          "bridget_client",
+          "catalogue",
+          "citation",
+          "config",
+          "control",
+          "domain",
+          "greffe_service",
+          "install_publish",
+          "outbox",
+          "preuve",
+          "profiles",
+          "reconcile",
+          "review",
+          "review_continuity",
+          "review_git",
+          "routines",
+          "runtime",
+          "store",
+          "telemetry",
+          "ui_projection"
+        ]
+      },
+      "build_seconds": 39.93509966699639,
+      "build_exit": 0,
+      "build_max_rss_bytes": 1040105472,
+      "binary_bytes": 46468120,
+      "scenario": {
+        "count": 20,
+        "median_ns": 13098499.5,
+        "p95_ns": 14563208,
+        "max_ns": 15229500,
+        "median_max_rss_bytes": 4333568
+      }
+    },
+    {
+      "label": "core",
+      "commit": "fe2ee8513ec6e050d3263d416dcba0f1a7207ea9",
+      "resolved_packages": 94,
+      "workspace_members": 3,
+      "root_modules": {
+        "bridget-core": [
+          "circuit_breaker",
+          "dedup",
+          "envelope",
+          "execution",
+          "host",
+          "message",
+          "router",
+          "text_guards"
+        ],
+        "bridget-daemon": [
+          "agent_profile",
+          "artifact_blob_store",
+          "artifact_policy",
+          "artifact_service",
+          "artifact_store",
+          "artifact_types",
+          "attach",
+          "build_identity",
+          "build_info",
+          "cli",
+          "communication",
+          "connection_channel",
+          "daemon",
+          "desired_state",
+          "disk_hygiene",
+          "environment",
+          "execution_store",
+          "fleet",
+          "greffe_policy_refresh",
+          "human_inbox",
+          "idempotency",
+          "identity_migration",
+          "ledger",
+          "lifecycle",
+          "managed_process",
+          "managed_supervisor",
+          "managers",
+          "mcp",
+          "mcp_identity",
+          "project_compat",
+          "reaper",
+          "receipt_store",
+          "recovery_trace",
+          "referent_control",
+          "registry",
+          "reprise",
+          "runtime",
+          "store",
+          "store_schema",
+          "test_sync",
+          "wrapper"
+        ],
+        "bridget-transport": [
+          "acp",
+          "act_kind",
+          "claude_provider_session",
+          "claude_stream_json",
+          "codex_app_server",
+          "fsutil",
+          "greffe_authorization",
+          "greffe_policy_refresh",
+          "journal",
+          "jsonl",
+          "managed_session",
+          "protocol",
+          "refusals",
+          "tmux",
+          "transport"
+        ]
+      },
+      "build_seconds": 27.047043166996446,
+      "build_exit": 0,
+      "build_max_rss_bytes": 1187430400,
+      "binary_bytes": 37403752,
+      "scenario": {
+        "count": 20,
+        "median_ns": 13168979,
+        "p95_ns": 13634791,
+        "max_ns": 14080875,
+        "median_max_rss_bytes": 4325376
+      }
+    }
+  ],
+  "samples": [
+    {
+      "label": "reference",
+      "pair": 0,
+      "wall_ns": 14563208,
+      "max_rss_bytes": 4341760
+    },
+    {
+      "label": "core",
+      "pair": 0,
+      "wall_ns": 14080875,
+      "max_rss_bytes": 4292608
+    },
+    {
+      "label": "core",
+      "pair": 1,
+      "wall_ns": 13450542,
+      "max_rss_bytes": 4292608
+    },
+    {
+      "label": "reference",
+      "pair": 1,
+      "wall_ns": 13278417,
+      "max_rss_bytes": 4341760
+    },
+    {
+      "label": "reference",
+      "pair": 2,
+      "wall_ns": 13231292,
+      "max_rss_bytes": 4308992
+    },
+    {
+      "label": "core",
+      "pair": 2,
+      "wall_ns": 13043250,
+      "max_rss_bytes": 4341760
+    },
+    {
+      "label": "core",
+      "pair": 3,
+      "wall_ns": 12886709,
+      "max_rss_bytes": 4325376
+    },
+    {
+      "label": "reference",
+      "pair": 3,
+      "wall_ns": 12697667,
+      "max_rss_bytes": 4308992
+    },
+    {
+      "label": "reference",
+      "pair": 4,
+      "wall_ns": 13061166,
+      "max_rss_bytes": 4276224
+    },
+    {
+      "label": "core",
+      "pair": 4,
+      "wall_ns": 13634791,
+      "max_rss_bytes": 4325376
+    },
+    {
+      "label": "core",
+      "pair": 5,
+      "wall_ns": 13355917,
+      "max_rss_bytes": 4292608
+    },
+    {
+      "label": "reference",
+      "pair": 5,
+      "wall_ns": 14256958,
+      "max_rss_bytes": 4308992
+    },
+    {
+      "label": "reference",
+      "pair": 6,
+      "wall_ns": 13315583,
+      "max_rss_bytes": 4341760
+    },
+    {
+      "label": "core",
+      "pair": 6,
+      "wall_ns": 13184875,
+      "max_rss_bytes": 4308992
+    },
+    {
+      "label": "core",
+      "pair": 7,
+      "wall_ns": 13089625,
+      "max_rss_bytes": 4308992
+    },
+    {
+      "label": "reference",
+      "pair": 7,
+      "wall_ns": 13167000,
+      "max_rss_bytes": 4341760
+    },
+    {
+      "label": "reference",
+      "pair": 8,
+      "wall_ns": 13135833,
+      "max_rss_bytes": 4325376
+    },
+    {
+      "label": "core",
+      "pair": 8,
+      "wall_ns": 13234750,
+      "max_rss_bytes": 4341760
+    },
+    {
+      "label": "core",
+      "pair": 9,
+      "wall_ns": 12854667,
+      "max_rss_bytes": 4341760
+    },
+    {
+      "label": "reference",
+      "pair": 9,
+      "wall_ns": 12778500,
+      "max_rss_bytes": 4292608
+    },
+    {
+      "label": "reference",
+      "pair": 10,
+      "wall_ns": 12689792,
+      "max_rss_bytes": 4341760
+    },
+    {
+      "label": "core",
+      "pair": 10,
+      "wall_ns": 13153083,
+      "max_rss_bytes": 4341760
+    },
+    {
+      "label": "core",
+      "pair": 11,
+      "wall_ns": 12783166,
+      "max_rss_bytes": 4259840
+    },
+    {
+      "label": "reference",
+      "pair": 11,
+      "wall_ns": 13009541,
+      "max_rss_bytes": 4341760
+    },
+    {
+      "label": "reference",
+      "pair": 12,
+      "wall_ns": 15229500,
+      "max_rss_bytes": 4325376
+    },
+    {
+      "label": "core",
+      "pair": 12,
+      "wall_ns": 13290334,
+      "max_rss_bytes": 4325376
+    },
+    {
+      "label": "core",
+      "pair": 13,
+      "wall_ns": 13065750,
+      "max_rss_bytes": 4341760
+    },
+    {
+      "label": "reference",
+      "pair": 13,
+      "wall_ns": 12713625,
+      "max_rss_bytes": 4341760
+    },
+    {
+      "label": "reference",
+      "pair": 14,
+      "wall_ns": 12656625,
+      "max_rss_bytes": 4325376
+    },
+    {
+      "label": "core",
+      "pair": 14,
+      "wall_ns": 13236584,
+      "max_rss_bytes": 4325376
+    },
+    {
+      "label": "core",
+      "pair": 15,
+      "wall_ns": 12901084,
+      "max_rss_bytes": 4292608
+    },
+    {
+      "label": "reference",
+      "pair": 15,
+      "wall_ns": 12897292,
+      "max_rss_bytes": 4325376
+    },
+    {
+      "label": "reference",
+      "pair": 16,
+      "wall_ns": 12708042,
+      "max_rss_bytes": 4374528
+    },
+    {
+      "label": "core",
+      "pair": 16,
+      "wall_ns": 12767750,
+      "max_rss_bytes": 4325376
+    },
+    {
+      "label": "core",
+      "pair": 17,
+      "wall_ns": 13138083,
+      "max_rss_bytes": 4325376
+    },
+    {
+      "label": "reference",
+      "pair": 17,
+      "wall_ns": 13554917,
+      "max_rss_bytes": 4341760
+    },
+    {
+      "label": "reference",
+      "pair": 18,
+      "wall_ns": 13204041,
+      "max_rss_bytes": 4325376
+    },
+    {
+      "label": "core",
+      "pair": 18,
+      "wall_ns": 13218500,
+      "max_rss_bytes": 4325376
+    },
+    {
+      "label": "core",
+      "pair": 19,
+      "wall_ns": 13238916,
+      "max_rss_bytes": 4325376
+    },
+    {
+      "label": "reference",
+      "pair": 19,
+      "wall_ns": 12884375,
+      "max_rss_bytes": 4341760
+    }
+  ],
+  "toolchain": "cargo 1.92.0 (344c4567c 2025-10-21)",
+  "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+  "platform": "Darwin arm64",
+  "status": "passed"
+}
