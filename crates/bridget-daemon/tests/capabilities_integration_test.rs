@@ -22,6 +22,8 @@ impl DaemonProcess {
             .arg("daemon")
             .env_clear()
             .env("HOME", home)
+            .env("BRIDGET_HOME", home.join("state"))
+            .env("BRIDGET_SOCKET", home.join("state/bridget.sock"))
             .env("PATH", "/usr/bin:/bin")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -58,6 +60,12 @@ struct Peer {
 impl Peer {
     fn connect(socket: &Path) -> Self {
         let stream = UnixStream::connect(socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         let reader = BufReader::new(stream.try_clone().unwrap());
         Self {
             writer: BufWriter::new(stream),
@@ -109,16 +117,44 @@ fn root() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    // Le socket daemon ajoute `.cache/bridget/bridget.sock` : un préfixe court
+    // Le socket daemon ajoute `state/bridget.sock` : un préfixe court
     // évite de transformer cette couture en faux rouge SUN_LEN.
     let root = PathBuf::from(format!("/tmp/bcap-{}-{nonce:x}", std::process::id()));
-    std::fs::create_dir_all(root.join(".config/bridget")).unwrap();
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    bridget_daemon::environment::Namespace::resolve(
+        Some(root.join("state")),
+        None,
+        Some(root.clone()),
+    )
+    .unwrap()
+    .prepare()
+    .unwrap();
+    // Précondition durable, avant tout daemon : le script de cette couture
+    // vérifie le préflight de capacités, pas la posture découverte.
+    let database = root.join("state/bridget.db");
+    drop(bridget_daemon::store::Store::open(&database).unwrap());
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let initial = bridget_daemon::referent_control::read(&connection).unwrap();
+    bridget_daemon::referent_control::set(
+        &connection,
+        bridget_daemon::referent_control::ControlMutation {
+            command_id: "capability-fixture-complete",
+            expected_generation: initial.generation,
+            paused: None,
+            auto_objectives_cap: None,
+            reason: None,
+            actor: "test",
+            now: 1,
+            agent_posture: Some(bridget_transport::protocol::AgentPosture::Complete),
+            auto_reassignment: None,
+        },
+    )
+    .unwrap()
+    .unwrap();
     root
 }
 
 fn socket_path(root: &Path) -> PathBuf {
-    root.join(".cache/bridget/bridget.sock")
+    root.join("state/bridget.sock")
 }
 
 fn write_registry(root: &Path, marker: &Path, supports_requested_model: bool) {
@@ -147,7 +183,7 @@ fn write_registry(root: &Path, marker: &Path, supports_requested_model: bool) {
             }
         }
     });
-    let path = root.join(".config/bridget/agents.json");
+    let path = root.join("state/agents.json");
     std::fs::write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
@@ -169,7 +205,7 @@ fn write_missing_command_registry(root: &Path) {
             }
         }
     });
-    let path = root.join(".config/bridget/agents.json");
+    let path = root.join("state/agents.json");
     std::fs::write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
@@ -182,7 +218,7 @@ fn spawn_order(command_id: &str) -> WrapperToDaemon {
     WrapperToDaemon::SpawnOrder {
         agent_type: "fixture".to_string(),
         project: None,
-        agent_id: Some("capability-fixture".to_string()),
+        agent_id: Some("89000000-0000-4000-8000-000000000201".to_string()),
         cwd: "/tmp".to_string(),
         persistent: false,
         command_id: command_id.to_string(),
@@ -292,13 +328,17 @@ fn contexte_fournisseur_refuse_le_non_proprietaire_la_generation_et_le_binding_i
     let daemon = DaemonProcess::start(&root);
     let socket = socket_path(&root);
     let mut owner = Peer::connect(&socket);
-    owner.register_as("agent-owner");
+    owner.register_as("89000000-0000-4000-8000-000000000202");
     let mut intrus = Peer::connect(&socket);
-    intrus.register_as("agent-intrus");
+    intrus.register_as("89000000-0000-4000-8000-000000000203");
     let mut source = Peer::connect(&socket);
-    source.register_as("agent-source");
+    source.register_as("89000000-0000-4000-8000-000000000204");
 
-    let mut trigger = BridgetMessage::new("maicie", "agent-owner", "démarrer");
+    let mut trigger = BridgetMessage::new(
+        "89000000-0000-4000-8000-000000000204",
+        "89000000-0000-4000-8000-000000000202",
+        "démarrer",
+    );
     trigger.id = "provider-context-trigger".to_string();
     trigger.intent = Some(MessageIntent::TriggerTurn);
     source.send(&WrapperToDaemon::Send(trigger));

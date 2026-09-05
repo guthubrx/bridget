@@ -52,6 +52,8 @@ fn build_cli(root: &Path, target: &Path, build_id: &str) -> PathBuf {
         .current_dir(root)
         .args([
             "build",
+            "--offline",
+            "--locked",
             "-p",
             "bridget-daemon",
             "--bin",
@@ -89,6 +91,8 @@ impl DaemonGuard {
                 .arg("daemon")
                 .env_clear()
                 .env("HOME", home)
+                .env("BRIDGET_HOME", home.join("state"))
+                .env("BRIDGET_SOCKET", home.join("state/bridget.sock"))
                 // Machine du banc, imposée : l'oracle peut alors nommer la
                 // VALEUR attendue au lieu de la recalculer.
                 .env("HOSTNAME", BANC_HOST)
@@ -100,7 +104,7 @@ impl DaemonGuard {
                 .expect("lancer le daemon réel"),
         );
 
-        let socket = home.join(".cache/bridget/bridget.sock");
+        let socket = home.join("state/bridget.sock");
         let deadline = Instant::now() + Duration::from_secs(5);
         while UnixStream::connect(&socket).is_err() {
             assert!(
@@ -158,6 +162,8 @@ fn status(binary: &Path, home: &Path) -> std::process::Output {
         .arg("status")
         .env_clear()
         .env("HOME", home)
+        .env("BRIDGET_HOME", home.join("state"))
+        .env("BRIDGET_SOCKET", home.join("state/bridget.sock"))
         .env("HOSTNAME", BANC_HOST)
         .env("PATH", env::var("PATH").unwrap_or_default())
         .output()
@@ -201,7 +207,7 @@ fn daemon_et_cli_reels_transmettent_et_comparent_le_build_id() {
         rendu.contains(&format!("Machine du daemon: {BANC_HOST}")),
         "la machine attestée doit être celle du banc: {rendu}"
     );
-    let base_attendue = home.join(".cache/bridget/bridget.db");
+    let base_attendue = home.join("state/bridget.db");
     assert!(
         rendu.contains(&format!(
             "Base de données du daemon: {}",

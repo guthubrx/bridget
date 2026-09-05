@@ -2,6 +2,15 @@
 
 ## T034 — unités historiques du daemon portées, gate global encore ouvert
 
+Coutures capacités et version : chemins privés `BRIDGET_HOME/BRIDGET_SOCKET`,
+UUID explicites et précondition de posture complète pour le seul script de
+préflight ; lectures de pair bornées à 5 s. Les deux reconstructions du CLI
+de version sont verrouillées et hors réseau. Les quatre scénarios build-id
+passent (16,54 s), ainsi que les trois scénarios de capacités (0,70 s) :
+refus avant lancement, absence de résidu au même command_id après correction,
+propriété/génération/contexte fournisseur. La remédiation textuelle historique
+launchd reste à remplacer à T035 : ce test n'autorise pas à relancer la flotte.
+
 Parité gérée : les dix tests de `managed_parity_test.rs` sont conservés et
 passent ensemble, sans ignoré (91,20 s, quatre threads, watchdog 240 s). La
 matrice compare toujours les mêmes réponses, états et fragments attach. Le
