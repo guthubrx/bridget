@@ -34,7 +34,7 @@ impl SshChild {
             .expect("enfant SSH isolé");
         Self {
             child,
-            marker: root.to_path_buf(),
+            marker: PathBuf::from(root.file_name().unwrap()),
         }
     }
     fn stop(mut self) {
@@ -76,6 +76,473 @@ impl SshChild {
             eprintln!("nettoyage SSH non attesté pour l'enfant {pid}");
         }
     }
+}
+
+fn ssh_output(mut command: Command, root: &Path, label: &str) -> std::process::Output {
+    let out = root.join(format!("{label}.stdout"));
+    let err = root.join(format!("{label}.stderr"));
+    let create = |path: &Path| {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .unwrap()
+    };
+    let child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(create(&out)))
+        .stderr(Stdio::from(create(&err)))
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let mut child = SshChild {
+        child,
+        marker: PathBuf::from(root.file_name().unwrap()),
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "commande SSH hors budget : {}",
+            fs::read_to_string(&err).unwrap()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    std::process::Output {
+        status,
+        stdout: fs::read(out).unwrap(),
+        stderr: fs::read(err).unwrap(),
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    assert!(!value.contains('\0'));
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+struct Remote {
+    host: String,
+    user: String,
+    port: String,
+    identity: String,
+    known_hosts: String,
+    binary: String,
+    root: PathBuf,
+}
+impl Remote {
+    fn configured(root: &Path) -> Self {
+        let required = |key| {
+            std::env::var(key).unwrap_or_else(|_| panic!("paramètre de recette absent : {key}"))
+        };
+        let parent: String = required("BRIDGET_SSH_REMOTE_PARENT");
+        Self {
+            host: required("BRIDGET_SSH_REMOTE_HOST"),
+            user: required("BRIDGET_SSH_REMOTE_USER"),
+            port: required("BRIDGET_SSH_REMOTE_PORT"),
+            identity: required("BRIDGET_SSH_IDENTITY"),
+            known_hosts: required("BRIDGET_SSH_KNOWN_HOSTS"),
+            binary: required("BRIDGET_SSH_REMOTE_BIN"),
+            root: Path::new(&parent).join(format!(
+                "bg089-{}",
+                root.file_name().unwrap().to_str().unwrap()
+            )),
+        }
+    }
+    fn socket(&self) -> PathBuf {
+        self.root.join("peer.sock")
+    }
+    fn command(&self, program: &str) -> Command {
+        let mut command = Command::new("/usr/bin/ssh");
+        command
+            .args([
+                "-F",
+                "/dev/null",
+                "-p",
+                &self.port,
+                "-i",
+                &self.identity,
+                "-o",
+                "IdentitiesOnly=yes",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=yes",
+                "-o",
+                &format!("UserKnownHostsFile={}", shell_quote(&self.known_hosts)),
+                "-o",
+                "GlobalKnownHostsFile=/dev/null",
+                "-o",
+                "UpdateHostKeys=no",
+                "-o",
+                "ControlMaster=no",
+                "-o",
+                "ControlPath=none",
+                "-o",
+                "ForwardAgent=no",
+                "-o",
+                "PermitLocalCommand=no",
+                "-o",
+                "ConnectTimeout=10",
+                "-o",
+                "ServerAliveInterval=5",
+                "-o",
+                "ServerAliveCountMax=2",
+            ])
+            .arg(format!("{}@{}", self.user, self.host))
+            .arg(program);
+        command
+    }
+    fn cli(
+        &self,
+        root: &Path,
+        label: &str,
+        agent: &str,
+        instance: &str,
+        args: &[&str],
+    ) -> std::process::Output {
+        let arguments = args
+            .iter()
+            .map(|s| shell_quote(s))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let program = format!(
+            "env -i PATH=/usr/bin:/bin HOME={home} BRIDGET_HOME={home} BRIDGET_SOCKET={socket} BRIDGET_CHANNEL=ssh-unix BRIDGET_AGENT_ID={agent} BRIDGET_AGENT_INSTANCE_ID={instance} {binary} {arguments}",
+            home = shell_quote(self.root.to_str().unwrap()),
+            socket = shell_quote(self.socket().to_str().unwrap()),
+            agent = shell_quote(agent),
+            instance = shell_quote(instance),
+            binary = shell_quote(&self.binary)
+        );
+        ssh_output(self.command(&program), root, label)
+    }
+    fn tunnel(&self, root: &Path, label: &str) -> SshChild {
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/federate-ssh.sh");
+        let mut command = Command::new("/bin/bash");
+        command
+            .arg(script)
+            .args([
+                "run",
+                "--label",
+                label,
+                "--host",
+                &self.host,
+                "--user",
+                &self.user,
+                "--port",
+                &self.port,
+                "--identity",
+                &self.identity,
+                "--known-hosts",
+                &self.known_hosts,
+            ])
+            .arg("--root")
+            .arg(root.join("state"))
+            .arg("--socket")
+            .arg(socket(root))
+            .arg("--remote-root")
+            .arg(&self.root)
+            .arg("--remote-socket")
+            .arg(self.socket());
+        SshChild::start(&mut command, root, label)
+    }
+}
+
+fn ack(peer: &mut Client, expected: &str) {
+    match receive_delivery(peer) {
+        bridget_transport::DaemonToWrapper::DeliverIdempotent {
+            message,
+            delivery_id,
+            delivery_generation,
+            ..
+        } => {
+            assert_eq!(message.id, expected);
+            peer.send(WrapperToDaemon::DeliverAcked {
+                delivery_id,
+                delivery_generation,
+            });
+        }
+        other => panic!("remise attendue : {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "deux machines autorisées requises ; paramètres BRIDGET_SSH_REMOTE_* explicites"]
+fn deux_machines_cli_reel_demande_reponse_ledger_journal() {
+    assert_eq!(std::env::var("BRIDGET_SSH_REMOTE_GATE").as_deref(), Ok("1"));
+    let root = fs::canonicalize(test_root("089-ssh-remote")).unwrap();
+    let remote = Remote::configured(&root);
+    let daemon = spawn_daemon(&root, None);
+    let mut actor = register_agent_as(&socket(&root), ACTOR, "shared-cli-mcp-instance");
+    let mut recipient = register_recipient_as(&socket(&root), "089-remote-recipient");
+    let (registry, registry_root, counter) = registry_with_counting_acp_agent(2);
+    let wrapper = WrapperProcess::start(&root, &registry, ACP_AGENT);
+    wait_for_registered_agent(&socket(&root), ACP_AGENT);
+    let tunnel = remote.tunnel(&root, "remote-tunnel");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut attempt = 0;
+    loop {
+        let who = remote.cli(
+            &root,
+            &format!("who-{attempt}"),
+            ACTOR,
+            "shared-cli-mcp-instance",
+            &["who"],
+        );
+        if who.status.success() {
+            assert!(String::from_utf8_lossy(&who.stdout).contains("fixture-acp"));
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "tunnel jamais prêt : {}",
+            output_text(&who)
+        );
+        attempt += 1;
+    }
+    let directory = remote.cli(
+        &root,
+        "agents",
+        ACTOR,
+        "shared-cli-mcp-instance",
+        &["agents", "--json"],
+    );
+    assert!(directory.status.success(), "{}", output_text(&directory));
+    let directory: serde_json::Value = serde_json::from_slice(&directory.stdout).unwrap();
+    assert!(
+        directory.to_string().contains(ACTOR),
+        "identité UUID absente de la projection machine"
+    );
+    let timestamp = issued_at().to_string();
+    let question = [
+        "send",
+        "--to",
+        RECIPIENT,
+        "--reply",
+        "--timeout",
+        "60",
+        "--id",
+        "089-ssh-question",
+        "--issued-at",
+        &timestamp,
+        "--issuer-scope",
+        SCOPE,
+        "--",
+        "Question SSH : été $VAR ' intact\nligne 2",
+    ];
+    let request = remote.cli(
+        &root,
+        "request",
+        ACTOR,
+        "shared-cli-mcp-instance",
+        &question,
+    );
+    assert!(request.status.success(), "{}", output_text(&request));
+    ack(&mut recipient, "089-ssh-question");
+    let reply = [
+        "send",
+        "--to",
+        ACTOR,
+        "--in-reply-to",
+        "089-ssh-question",
+        "--id",
+        "089-ssh-answer",
+        "--issued-at",
+        &timestamp,
+        "--issuer-scope",
+        SCOPE,
+        "--",
+        "Réponse distante corrélée — intacte",
+    ];
+    let response = remote.cli(&root, "reply", RECIPIENT, "089-remote-recipient", &reply);
+    assert!(response.status.success(), "{}", output_text(&response));
+    ack(&mut actor, "089-ssh-answer");
+    let replay = remote.cli(
+        &root,
+        "request-replay",
+        ACTOR,
+        "shared-cli-mcp-instance",
+        &question,
+    );
+    assert!(replay.status.success(), "{}", output_text(&replay));
+    assert!(String::from_utf8_lossy(&replay.stdout).starts_with("OK: accepted "));
+    let reply_replay = remote.cli(
+        &root,
+        "reply-replay",
+        RECIPIENT,
+        "089-remote-recipient",
+        &reply,
+    );
+    assert!(
+        reply_replay.status.success(),
+        "{}",
+        output_text(&reply_replay)
+    );
+    assert!(String::from_utf8_lossy(&reply_replay.stdout).starts_with("OK: accepted "));
+    let store = fixture_store(&root.join("state/bridget.db")).unwrap();
+    assert_eq!(store.recent_messages(100).unwrap().len(), 2);
+    let mut observer = Client::connect(&socket(&root));
+    observer.send(WrapperToDaemon::ListRequests {
+        sender: ACTOR.into(),
+        limit: 20,
+    });
+    match observer.receive() {
+        bridget_transport::DaemonToWrapper::RequestList { requests } => {
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].state, "answered");
+        }
+        other => panic!("projection des demandes : {other:?}"),
+    }
+    let local = run_isolated(&root, &["ledger", "--limit", "20"], false);
+    let distant = remote.cli(
+        &root,
+        "ledger",
+        ACTOR,
+        "shared-cli-mcp-instance",
+        &["ledger", "--limit", "20"],
+    );
+    assert!(
+        local.status.success() && distant.status.success(),
+        "{}",
+        output_text(&distant)
+    );
+    assert_eq!(local.stdout, distant.stdout);
+    let prompt = remote.cli(
+        &root,
+        "prompt",
+        ACTOR,
+        "shared-cli-mcp-instance",
+        &[
+            "send",
+            "--to",
+            ACP_AGENT,
+            "--id",
+            "089-ssh-journal",
+            "--issued-at",
+            &timestamp,
+            "--issuer-scope",
+            SCOPE,
+            "--",
+            "Tour au vrai wrapper depuis Linux",
+        ],
+    );
+    assert!(prompt.status.success(), "{}", output_text(&prompt));
+    // Client public indépendant côté Linux : pas de fichier/base locale lu.
+    let frames = serde_json::json!([
+        WrapperToDaemon::RoleHandshake {
+            role: bridget_transport::protocol::ConnectionRole::Attach
+        },
+        WrapperToDaemon::Subscribe {
+            agent: ACP_AGENT.into(),
+            window: bridget_transport::protocol::AttachWindow::Seq(0)
+        }
+    ]);
+    let script = r#"import socket,sys,json,time
+deadline=time.monotonic()+10
+s=socket.socket(socket.AF_UNIX); s.settimeout(10); s.connect(sys.argv[1]); f=s.makefile('rb')
+def receive():
+ s.settimeout(max(0.001,deadline-time.monotonic()))
+ raw=f.readline(16*1024*1024)
+ assert raw.endswith(b'\n'), 'trame incomplete'
+ return raw,json.loads(raw)
+for request in json.loads(sys.argv[2]):
+ s.sendall((json.dumps(request,separators=(',',':'))+'\n').encode())
+ raw,event=receive(); assert event['type'] in ('RoleAccepted','Subscribed'), event
+caught=False; seq=0
+while not (caught and seq>=3):
+ raw,event=receive(); sys.stdout.buffer.write(raw); sys.stdout.buffer.flush()
+ if event['type']=='SnapshotCaughtUp': caught=True
+ elif event['type']=='JournalFragment':
+  if event['final']: seq=event['seq']
+ else: raise AssertionError(event)
+"#;
+    let program = format!(
+        "python3 -c {} {} {}",
+        shell_quote(script),
+        shell_quote(remote.socket().to_str().unwrap()),
+        shell_quote(&frames.to_string())
+    );
+    let capture = ssh_output(remote.command(&program), &root, "journal");
+    assert!(capture.status.success(), "{}", output_text(&capture));
+    let mut lines = std::collections::BTreeMap::<u64, Vec<u8>>::new();
+    for raw in capture
+        .stdout
+        .split(|b| *b == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        match bridget_transport::protocol::decode::<bridget_transport::DaemonToWrapper>(
+            std::str::from_utf8(raw).unwrap(),
+        )
+        .unwrap()
+        {
+            bridget_transport::DaemonToWrapper::JournalFragment {
+                seq, offset, bytes, ..
+            } => {
+                let line = lines.entry(seq).or_default();
+                assert_eq!(line.len() as u64, offset);
+                line.extend(bytes);
+            }
+            bridget_transport::DaemonToWrapper::SnapshotCaughtUp { .. } => {}
+            other => panic!("fait inattendu : {other:?}"),
+        }
+    }
+    assert_eq!(lines.keys().copied().collect::<Vec<_>>(), [1, 2, 3]);
+    let journal = root.join("state/sessions").join(ACP_AGENT).join(format!(
+        "{}.jsonl",
+        bridget_transport::journal::current_host_date()
+    ));
+    for raw in fs::read(journal)
+        .unwrap()
+        .split(|b| *b == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        let parsed: serde_json::Value = serde_json::from_slice(raw).unwrap();
+        assert_eq!(lines[&parsed["seq"].as_u64().unwrap()], raw);
+    }
+    assert_eq!(fs::read(&counter).unwrap(), b"x");
+    assert_no_delivery(&mut actor);
+    assert_no_delivery(&mut recipient);
+    drop(store);
+    drop(actor);
+    drop(recipient);
+    drop(observer);
+    tunnel.stop();
+    daemon.stop();
+    assert_eq!(wrapper.join(), Ok(()));
+    // Pas de rm -rf distant : suppression de la seule socket créée, après
+    // échec de connexion, propriétaire/type vérifiés ; racine vide exigée.
+    let cleanup = r#"import os,sys,socket,stat
+p=sys.argv[1]; r=sys.argv[2]
+if os.path.lexists(p):
+ m=os.lstat(p); assert stat.S_ISSOCK(m.st_mode) and m.st_uid==os.getuid()
+ s=socket.socket(socket.AF_UNIX); s.settimeout(2)
+ try: s.connect(p)
+ except ConnectionRefusedError: pass
+ else: raise AssertionError('socket encore vivante')
+ s.close(); assert os.lstat(p).st_ino==m.st_ino; os.unlink(p)
+# Le bootstrap CLI crée seulement ce répertoire temporaire privé et vide.
+temporary=os.path.join(r,'tmp')
+if os.path.lexists(temporary):
+ m=os.lstat(temporary); assert stat.S_ISDIR(m.st_mode) and m.st_uid==os.getuid() and stat.S_IMODE(m.st_mode)==0o700
+ os.rmdir(temporary)
+os.rmdir(r)
+"#;
+    let cleaned = ssh_output(
+        remote.command(&format!(
+            "python3 -c {} {} {}",
+            shell_quote(cleanup),
+            shell_quote(remote.socket().to_str().unwrap()),
+            shell_quote(remote.root.to_str().unwrap())
+        )),
+        &root,
+        "cleanup",
+    );
+    assert!(cleaned.status.success(), "{}", output_text(&cleaned));
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(registry_root).unwrap();
 }
 
 impl Drop for SshChild {

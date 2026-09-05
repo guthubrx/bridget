@@ -87,6 +87,7 @@ elif name == 'cargo':
     assert args == ['build','--locked','--offline','--release','-p','bridget-daemon','--bin','bridget'],args
     assert os.environ['RUSTUP_AUTO_INSTALL']=='0'
     assert os.environ['CARGO_NET_OFFLINE']=='true'
+    assert os.environ['BRIDGET_BUILD_ID']=='a'*12
     if os.environ.get('TEST_BUILD_FAIL'):
         print('ERREUR_BUILD_FIXTURE'); sys.exit(23)
     binary=pathlib.Path('target/release/bridget')

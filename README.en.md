@@ -13,8 +13,9 @@ primary session path; tmux is not required.
 
 Session 089 is being validated. Physical extraction and local guarantees are
 implemented progressively. A real native Codex exchange and journal attachment
-have passed. The real Claude gate remains open on local authentication; GLM and
-cross-server SSH are not yet declared validated. Migration, security and full
+have passed. The real Claude gate remains open on local authentication; GLM has
+not been validated. The first cross-server SSH exchange passed; reconnect and
+remote load gates are still pending. Migration, security and full
 regression gates remain mandatory. Nothing has been deployed to the existing fleet.
 
 See the [evidence log](specs/089-communication-core/implementation.md),
@@ -27,12 +28,14 @@ From an agent already registered in the current Bridget namespace:
 
 ```sh
 bridget who
+bridget agents --json
 bridget send --to '<agent_id_uuid>' --reply --timeout 120 -- 'Check this point and reply with your findings.'
 bridget send --to '<sender_uuid>' --in-reply-to '<full_message_id>' -- 'Verified result: …'
 bridget ledger --limit 20
 bridget attach '<agent_id_uuid>'
 ```
 
+`agents --json` (or MCP who) exposes addressable UUIDs; CLI `who` shows human names.
 Replace placeholders with identifiers from the directory and received message.
 `--reply` opens a tracked request; `in_reply_to` binds a response to THAT request.
 Never shorten its ID. `bridget reply` targets the last remembered sender; explicit

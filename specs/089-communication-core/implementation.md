@@ -1,5 +1,27 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T026 : macOS ↔ Linux exécuté, sans flotte historique
+
+Déploiement exécuté depuis le worktree 089 propre à cb62fdf :
+
+```sh
+bash scripts/deploy-remote.sh --label core-089 --host 37.59.185.67 --user moi --port 2222 --identity /Users/moi/.ssh/id_ed25519 --known-hosts /Users/moi/.ssh/known_hosts --source /Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core --remote-prefix /home/moi/bg089-cb62fdf --remote-cargo /home/moi/.cargo/bin/cargo
+```
+
+Client Linux construit hors ligne en 47,38 s avec Rust 1.92.0 déjà installé. Binaire privé `/home/moi/bg089-cb62fdf/bin/bridget` ; aucun daemon, wrapper, profil, skill ou service distant démarré. Cette copie demeure pour T027/T028, distincte du namespace de chaque recette. Le gate a révélé le SHA complet injecté par le script contre les 12 caractères du build local : même représentation désormais utilisée, verrouillée par la doublure Cargo. Les écarts du binaire de test local dirty restent honnêtement avertis, pas masqués.
+
+Recette exécutable (préfixer avec l'environnement privé HOME/BRIDGET_HOME/TMPDIR/CARGO_HOME/RUSTUP_HOME/PATH documenté T014 et watchdog 180 s) :
+
+```sh
+BRIDGET_SSH_REMOTE_GATE=1 BRIDGET_SSH_REMOTE_HOST=37.59.185.67 BRIDGET_SSH_REMOTE_USER=moi BRIDGET_SSH_REMOTE_PORT=2222 BRIDGET_SSH_IDENTITY=/Users/moi/.ssh/id_ed25519 BRIDGET_SSH_KNOWN_HOSTS=/Users/moi/.ssh/known_hosts BRIDGET_SSH_REMOTE_PARENT=/home/moi BRIDGET_SSH_REMOTE_BIN=/home/moi/bg089-cb62fdf/bin/bridget cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_federation_test deux_machines -- --include-ignored --nocapture
+```
+
+Résultat final 1/1 en 4,44 s, compilation 1,96 s. Daemon macOS enfant sous `/private/tmp/bid-<uuid>/state`, tunnel -R vers `/home/moi/bg089-bid-<uuid>/peer.sock` sous compte Linux autorisé. Vrai CLI Linux : who puis agents --json UUID ; send suivi avec corps UTF-8/apostrophe/newline ; réponse liée ; les deux retries donnent accepted ; deux messages uniques et une demande answered dans le store maître. Ledger CLI macOS/Linux identique octet pour octet. Un troisième envoi traverse le VRAI wrapper ACP vers un fournisseur synthétique compté : un prompt ; client Python public côté Linux via la socket tunnelée relève journal séquences 1..3, payloads comparés byte à byte au fichier du wrapper. Cela prouve SSH et le wrapper, pas un compte fournisseur supplémentaire ni une nouvelle recette Codex/Claude.
+
+Nettoyage nominal : arrêt/récolte SSH, daemon, wrapper ; socket distante retirée uniquement après ConnectionRefused, type/propriétaire/inode contrôlés ; rmdir du seul tmp privé vide créé par le CLI puis de la racine vide. Aucun rm récursif distant. Les échecs intermédiaires ont conservé leurs répertoires privés de diagnostic, pas de processus ; ils seront inventoriés au nettoyage final. L'assert initial de who cherchait l'UUID dans la vue humaine : remplacé par la projection agents --json ; les docs donnent maintenant cette commande pour trouver une adresse.
+
+Tests scripts après correction build-id : 23/23 en 3,249 s. Clippy workspace/all-targets/test-support -D warnings vert en 6,45 s ; fmt vérifié. La mesure de charge 600 événements, le biais d'horloge et la reprise du curseur après coupure restent T027/T028 ; les 4,44 s de ce scénario ne sont PAS un p95 ni une mesure de livraison fournisseur.
+
 ## 2026-09-05 — T025 : transfert Unix à travers OpenSSH réel
 
 `BRIDGET_SSH_LOCAL_GATE=1 cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_federation_test -- --include-ignored --nocapture`, environnement privé T014, watchdog externe 180 s : 1/1, 0,45 s, compilation 1,84 s. sshd OpenSSH 10.0p2 enfant sans privilèges, port loopback dynamique, clés hôte/client neuves, authorized_keys de fixture sous target et StrictModes conservé, aucun ~/.ssh ou /etc/ssh modifié. Le script de production établit le vrai transfert -R. CLI et client protocole lisent le même annuaire/ledger byte-identique, socket distante 0600/racine 0700 ; après arrêt/récolte du seul client SSH, lecture en échec sans DB locale, daemon et présence locale toujours disponibles. Clôture/récolte du sshd et du daemon puis nettoyage des seules racines du test. Il n'y a encore ni deuxième machine ni fournisseur dans CET oracle.

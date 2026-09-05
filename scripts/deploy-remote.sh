@@ -45,6 +45,9 @@ if $dry_run; then
 fi
 [[ $(git -C "$source_dir" rev-parse --show-toplevel) == "$source_dir" ]] || federation_fail "--source doit être la racine du dépôt Git"
 build_id=$(git -C "$source_dir" rev-parse HEAD)
+# Même représentation que build_identity.rs : ne pas provoquer un faux écart
+# entre SHA complet distant et SHA 12 caractères du même code côté maître.
+build_id=${build_id:0:12}
 [[ -z $(git -C "$source_dir" status --porcelain --untracked-files=no) ]] || build_id+="-dirty"
 
 # Préflight outil avant réservation : un Cargo absent ne laisse aucun préfixe.

@@ -49,6 +49,7 @@ Au shell, depuis une session enregistrée :
 
 ```sh
 bridget who
+bridget agents --json
 bridget send --to '<destinataire_uuid>' --reply --timeout 60 -- 'Peux-tu confirmer la réception ?'
 bridget send --to '<emetteur_uuid>' --in-reply-to '<message_id_integral>' -- 'Réception confirmée.'
 bridget ledger --limit 20
@@ -58,6 +59,7 @@ bridget attach '<destinataire_uuid>'
 La commodité `bridget reply` vise le dernier expéditeur mémorisé par le wrapper :
 ne l'utiliser que si ce destinataire est bien celui de la demande. La forme
 `send --to … --in-reply-to …` évite l'ambiguïté de demandes concurrentes.
+Au CLI, `who` affiche les noms ; `agents --json` donne les UUID adressables.
 
 Ne pas utiliser `--from` pour emprunter une autre identité. Le CLI ordinaire sans
 clé ne promet pas de rejeu idempotent : pour cet usage, préférer MCP ou fournir

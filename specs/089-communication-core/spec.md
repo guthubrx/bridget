@@ -7,7 +7,7 @@ Spec: 089-communication-core
 Titre: Extraire et consolider la communication inter-agents
 Statut: In Progress
 Priorité: P1
-Tâches: 23/36 (64%)
+Tâches: 24/36 (67%)
 Tests: 0/12 (0%)
 Résumé: Conserver les communications éprouvées, leur reprise et leur fédération SSH, sans dépendance obligatoire à une interface graphique ou à Maicie.
 Fichiers: spec.md, plan.md, tasks.md, research.md, data-model.md, contracts/communication.md, quickstart.md, implementation.md

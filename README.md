@@ -13,8 +13,9 @@ utilise les pilotes natifs Codex/Claude ou ACP ; tmux n'est pas requis.
 
 Extraction physique et garanties locales en cours de validation dans la session
 089. Codex natif a répondu réellement avec journal attachable. La recette Claude
-réelle reste ouverte sur l'authentification locale ; GLM et SSH interserveur ne
-sont pas encore déclarés validés. Les tests longs, migrations et sécurité finale
+réelle reste ouverte sur l'authentification locale ; GLM n'est pas encore validé.
+L'échange SSH interserveur a passé sa première recette ; coupure/reprise et
+charge distante restent à mesurer. Les tests longs, migrations et sécurité finale
 doivent tous passer avant une bascule. Rien n'a été déployé dans la flotte.
 
 Preuves, refus observés et tâches ouvertes :
@@ -28,13 +29,15 @@ Depuis une session Bridget enregistrée, dans le namespace de cette session :
 
 ```sh
 bridget who
+bridget agents --json
 bridget send --to '<agent_id_uuid>' --reply --timeout 120 -- 'Vérifie ce point et réponds avec ton résultat.'
 bridget send --to '<emetteur_uuid>' --in-reply-to '<message_id_integral>' -- 'Résultat vérifié : …'
 bridget ledger --limit 20
 bridget attach '<agent_id_uuid>'
 ```
 
-Les chevrons désignent les identifiants lus dans l'annuaire et le message reçu,
+Les UUID sont exposés par `agents --json` (ou MCP who), tandis que `who` affiche
+les noms humains. Les chevrons désignent les identifiants lus dans l'annuaire et le message reçu,
 pas des valeurs à envoyer. `--reply` ouvre une demande suivie ; `in_reply_to`
 lie une réponse à CETTE demande. Ne pas raccourcir l'identifiant. `bridget reply`
 est une commodité visant le dernier expéditeur : pour plusieurs demandes
