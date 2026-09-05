@@ -6,7 +6,7 @@ use bridget_transport::protocol::{
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -17,52 +17,53 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const SCOPE: &str = "015_scope_0123456789abcdef0123456789abcdef";
 const SERVICE_SCOPE: &str = "015_service_abcdef0123456789abcdef0123456789";
 
-// Le daemon et ses wrappers propagent ces variables à leurs descendants. Un
-// harnais qui remplace seulement HOME hériterait sinon l'identité de l'agent
-// qui lance cargo, notamment son fichier de nom absolu.
-const INHERITED_BRIDGET_ENV: &[&str] = &[
-    "BRIDGET_AGENT_NAME",
-    "BRIDGET_AGENT_NAME_FILE",
-    "BRIDGET_AGENT_INSTANCE_ID",
-    "BRIDGET_MANAGED_STATUS_FD",
-    "BRIDGET_MANAGED_INSTANCE_ID",
-    "BRIDGET_MANAGED_COMMAND_ID",
-    "BRIDGET_MANAGED_GENERATION",
-    "BRIDGET_TRANSPORT",
-    "BRIDGET_GREFFE_POLICY_PATH",
-    "BRIDGET_GREFFE_AUDIT_PATH",
-];
+const PRODUCER: &str = "89000000-0000-4000-8000-000000000001";
+const COORDINATOR: &str = "89000000-0000-4000-8000-000000000002";
+const TARGET: &str = "89000000-0000-4000-8000-000000000003";
 
-fn isolated_bridget_command() -> Command {
+fn isolated_bridget_command(home: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
-    for variable in INHERITED_BRIDGET_ENV {
-        command.env_remove(variable);
-    }
+    command
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("HOME", home)
+        .env("TMPDIR", home.join("tmp"))
+        .env("BRIDGET_HOME", home.join("state"))
+        .env("BRIDGET_SOCKET", socket(home))
+        .env("HOSTNAME", "guichet-fixture")
+        .env(
+            "BRIDGET_GREFFE_POLICY_PATH",
+            home.join("greffe-authorization.json"),
+        )
+        .env("BRIDGET_GREFFE_AUDIT_PATH", home.join("greffe-audit.jsonl"));
     command
 }
 
 fn unique_home() -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    // Racine courte, canonique, privée et sans collision entre tests parallèles.
+    let home = std::fs::canonicalize("/tmp")
         .unwrap()
-        .as_nanos();
-    // Le socket Unix du daemon est sous HOME/.cache/bridget. Garder HOME
-    // volontairement court rend ce test portable vis-à-vis de SUN_LEN.
-    std::env::temp_dir().join(format!("bg-{}-{:x}", std::process::id(), nonce & 0xffff))
+        .join(format!("b89g-{}", uuid::Uuid::new_v4().simple()));
+    for path in [&home, &home.join("tmp"), &home.join("state")] {
+        std::fs::DirBuilder::new().mode(0o700).create(path).unwrap();
+    }
+    home
 }
 
 fn socket(home: &Path) -> PathBuf {
-    home.join(".cache/bridget/bridget.sock")
+    home.join("state/bridget.sock")
 }
 
 fn write_greffe_policy(home: &Path, principal: &str, instance_id: &str, expires_at: i64) {
-    let directory = home.join(".config/bridget");
-    std::fs::create_dir_all(&directory).unwrap();
-    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let path = directory.join("greffe-authorization.json");
-    std::fs::write(
-        &path,
-        serde_json::to_vec(&serde_json::json!({
+    let path = home.join("greffe-authorization.json");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .unwrap();
+    file.write_all(
+        &serde_json::to_vec(&serde_json::json!({
             "version": 1,
             "generation": 1,
             "attestation_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -79,7 +80,6 @@ fn write_greffe_policy(home: &Path, principal: &str, instance_id: &str, expires_
         .unwrap(),
     )
     .unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
 
 fn git(repo: &Path, arguments: &[&str]) -> String {
@@ -107,7 +107,7 @@ impl DaemonGuard {
         let mut guard = Self { child: None };
         std::fs::create_dir_all(home).unwrap();
         guard.child = Some(
-            isolated_bridget_command()
+            isolated_bridget_command(home)
                 .arg("daemon")
                 .env("HOME", home)
                 .spawn()
@@ -124,10 +124,22 @@ impl DaemonGuard {
     /// Crash réel : ce n'est pas le chemin SIGTERM coopératif du daemon.
     fn kill(mut self) {
         if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+            assert!(is_owned_daemon(&child), "PID extérieur au harnais");
+            child.kill().expect("SIGKILL du seul daemon enfant du test");
+            child.wait().expect("récolte du daemon tué");
         }
     }
+}
+
+fn is_owned_daemon(child: &Child) -> bool {
+    let output = Command::new("/bin/ps")
+        .args(["-p", &child.id().to_string(), "-o", "command="])
+        .output();
+    output.is_ok_and(|output| {
+        output.status.success()
+            && String::from_utf8_lossy(&output.stdout).trim()
+                == format!("{} daemon", env!("CARGO_BIN_EXE_bridget"))
+    })
 }
 
 impl Drop for DaemonGuard {
@@ -145,6 +157,9 @@ fn stop_daemon_child_best_effort(child: Option<&mut Child>) -> bool {
         Ok(None) => {}
         Err(_) => {}
     }
+    if !is_owned_daemon(child) {
+        return false;
+    }
     let _ = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
@@ -153,6 +168,9 @@ fn stop_daemon_child_best_effort(child: Option<&mut Child>) -> bool {
             Ok(None) => std::thread::sleep(Duration::from_millis(10)),
             Err(_) => break,
         }
+    }
+    if !is_owned_daemon(child) {
+        return false;
     }
     let _ = child.kill();
     child.wait().is_ok()
@@ -276,7 +294,7 @@ fn delegate_est_admis_comme_depot_sans_etre_confondu_avec_un_succes_metier() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
-    write_greffe_policy(&home, "jc6", "delegate-admission-instance", now + 300);
+    write_greffe_policy(&home, PRODUCER, "delegate-admission-instance", now + 300);
     let daemon = DaemonGuard::start(&home);
     let (mut wrapper_reader, mut wrapper_writer) = connect(&home);
     assert!(matches!(
@@ -286,7 +304,7 @@ fn delegate_est_admis_comme_depot_sans_etre_confondu_avec_un_succes_metier() {
             WrapperToDaemon::Register {
                 agent_type: "codex".to_string(),
                 identity_version: 2,
-                agent_id: "jc6".to_string(),
+                agent_id: PRODUCER.to_string(),
                 host: None,
                 transport: Some("unix".to_string()),
                 channel: Some("unix".to_string()).into(),
@@ -307,13 +325,13 @@ fn delegate_est_admis_comme_depot_sans_etre_confondu_avec_un_succes_metier() {
         issuer_scope: SCOPE.to_string(),
         request_id: "delegate-admission-request".to_string(),
         issued_at: now,
-        from: "jc6".to_string(),
+        from: PRODUCER.to_string(),
         to: "maicie".to_string(),
         operation: ServiceRequestOperation::Delegate,
         payload: ServiceRequestPayload::Delegate {
             goal: format!("lot dépendant de {prerequisite}"),
             review_target: None,
-            explicit_target: Some("prospective".to_string()),
+            explicit_target: Some(TARGET.to_string()),
             required_tags: Vec::new(),
             duration: GuichetDurationClass::Normale,
             suite: ServiceSuiteDeclaration::Aucune,
@@ -388,7 +406,7 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
             WrapperToDaemon::Register {
                 agent_type: "codex".to_string(),
                 identity_version: 2,
-                agent_id: "codex-1".to_string(),
+                agent_id: PRODUCER.to_string(),
                 host: None,
                 transport: Some("unix".to_string()),
                 channel: None.into(),
@@ -408,7 +426,7 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
         issuer_scope: SCOPE.to_string(),
         request_id: "gate-request-1".to_string(),
         issued_at: now,
-        from: "codex-1".to_string(),
+        from: PRODUCER.to_string(),
         to: "maicie".to_string(),
         operation: ServiceRequestOperation::DeliveryReport,
         payload: ServiceRequestPayload::DeliveryReport {
@@ -434,15 +452,16 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
             version: SERVICE_CONTRACT_VERSION,
         },
     );
-    let (generation_a, token_a) = match claim_a {
+    let (generation_a, token_a, bytes_a) = match claim_a {
         DaemonToWrapper::GuichetClaimed {
             request_id,
             claim_generation,
             claim_token,
+            canonical_request,
             ..
         } => {
             assert_eq!(request_id, "gate-request-1");
-            (claim_generation, claim_token)
+            (claim_generation, claim_token, canonical_request)
         }
         other => panic!("claim A attendu, reçu {other:?}"),
     };
@@ -464,20 +483,24 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
             version: SERVICE_CONTRACT_VERSION,
         },
     );
-    let (generation_b, token_b) = match claim_b {
+    let (generation_b, token_b, bytes_b) = match claim_b {
         DaemonToWrapper::GuichetClaimed {
             request_id,
             claim_generation,
             claim_token,
+            canonical_request,
             ..
         } => {
             assert_eq!(request_id, "gate-request-1");
-            (claim_generation, claim_token)
+            (claim_generation, claim_token, canonical_request)
         }
         other => panic!("claim B attendu après crash, reçu {other:?}"),
     };
     assert!(generation_b > generation_a);
     assert_ne!(token_b, token_a);
+    // Un rejeu ne reconstruit pas une requête seulement équivalente : même
+    // dépôt durable, mêmes octets malgré le remplacement de génération.
+    assert_eq!(bytes_b, bytes_a);
 
     // Mutation discriminante : retirer l'un des prédicats lease/génération/
     // token/propriétaire ferait accepter cette réponse périmée au lieu de
@@ -593,7 +616,7 @@ fn depot_cli_reel_mesure_head_et_remote_au_lieu_de_copier_le_mandat() {
             WrapperToDaemon::Register {
                 agent_type: "codex".to_string(),
                 identity_version: 2,
-                agent_id: "codex-1".to_string(),
+                agent_id: PRODUCER.to_string(),
                 host: None,
                 transport: Some("unix".to_string()),
                 channel: Some("unix".to_string()).into(),
@@ -616,7 +639,7 @@ fn depot_cli_reel_mesure_head_et_remote_au_lieu_de_copier_le_mandat() {
             WrapperToDaemon::Register {
                 agent_type: "maicie".to_string(),
                 identity_version: 2,
-                agent_id: "maicie".to_string(),
+                agent_id: COORDINATOR.to_string(),
                 host: None,
                 transport: Some("unix".to_string()),
                 channel: Some("unix".to_string()).into(),
@@ -631,7 +654,7 @@ fn depot_cli_reel_mesure_head_et_remote_au_lieu_de_copier_le_mandat() {
         ),
         DaemonToWrapper::Registered { .. }
     ));
-    let mut tracked = BridgetMessage::new("maicie", "codex-1", "revue attendue");
+    let mut tracked = BridgetMessage::new(COORDINATOR, PRODUCER, "revue attendue");
     tracked.reply = true;
     tracked.reply_timeout = Some(60);
     assert!(matches!(
@@ -643,7 +666,7 @@ fn depot_cli_reel_mesure_head_et_remote_au_lieu_de_copier_le_mandat() {
         DaemonToWrapper::Ack { .. }
     ));
 
-    let output = isolated_bridget_command()
+    let output = isolated_bridget_command(&home)
         .args([
             "guichet",
             "deposer",
@@ -671,7 +694,7 @@ fn depot_cli_reel_mesure_head_et_remote_au_lieu_de_copier_le_mandat() {
         ])
         .current_dir(&repository)
         .env("HOME", &home)
-        .env("BRIDGET_AGENT_NAME", "codex-1")
+        .env("BRIDGET_AGENT_ID", PRODUCER)
         .output()
         .unwrap();
     assert!(
@@ -893,7 +916,7 @@ esac
             "deposer",
             "delivery-report",
             "--from",
-            "codex-review",
+            PRODUCER,
             "--objective",
             "objective-review",
             "--delegation",
@@ -904,12 +927,12 @@ esac
             "message-review",
         ];
         args.extend_from_slice(case.review_args);
-        let output = isolated_bridget_command()
+        let output = isolated_bridget_command(&root)
             .args(args)
             .current_dir(&root)
             .env("HOME", &root)
             .env("PATH", &bin)
-            .env("BRIDGET_AGENT_NAME", "codex-review")
+            .env("BRIDGET_AGENT_ID", PRODUCER)
             .env("BRIDGET_TEST_GIT_CASE", case.git_case)
             .output()
             .unwrap();
@@ -956,7 +979,7 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
             WrapperToDaemon::Register {
                 agent_type: "codex".to_string(),
                 identity_version: 2,
-                agent_id: "codex-1".to_string(),
+                agent_id: PRODUCER.to_string(),
                 host: None,
                 transport: Some("unix".to_string()),
                 channel: None.into(),
@@ -979,7 +1002,7 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
             WrapperToDaemon::Register {
                 agent_type: "maicie".to_string(),
                 identity_version: 2,
-                agent_id: "maicie".to_string(),
+                agent_id: COORDINATOR.to_string(),
                 host: None,
                 transport: Some("unix".to_string()),
                 channel: None.into(),
@@ -994,7 +1017,7 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
         ),
         DaemonToWrapper::Registered { .. }
     ));
-    let mut tracked = BridgetMessage::new("maicie", "codex-1", "rapport attendu");
+    let mut tracked = BridgetMessage::new(COORDINATOR, PRODUCER, "rapport attendu");
     tracked.reply = true;
     tracked.reply_timeout = Some(60);
     assert!(matches!(
@@ -1028,10 +1051,10 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
         "--issuer-scope",
         SCOPE,
     ];
-    let output = isolated_bridget_command()
+    let output = isolated_bridget_command(&home)
         .args(&cli_args)
         .env("HOME", &home)
-        .env("BRIDGET_AGENT_NAME", "codex-1")
+        .env("BRIDGET_AGENT_ID", PRODUCER)
         .output()
         .unwrap();
     assert!(
@@ -1040,10 +1063,10 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("DÉPÔT: queued"));
-    let retry = isolated_bridget_command()
+    let retry = isolated_bridget_command(&home)
         .args(&cli_args)
         .env("HOME", &home)
-        .env("BRIDGET_AGENT_NAME", "codex-1")
+        .env("BRIDGET_AGENT_ID", PRODUCER)
         .output()
         .unwrap();
     assert!(retry.status.success());
@@ -1138,7 +1161,7 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
         request(
             &mut maicie_reader,
             &mut maicie_writer,
-            WrapperToDaemon::ListRequests { sender: "maicie".to_string(), limit: 10 },
+            WrapperToDaemon::ListRequests { sender: COORDINATOR.to_string(), limit: 10 },
         ),
         DaemonToWrapper::RequestList { requests }
             if requests.iter().any(|request| request.id == tracked.id && request.state == "answered")
@@ -1151,7 +1174,7 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
         request(&mut service_reader, &mut service_writer, accepted),
         DaemonToWrapper::GuichetResult { ref issue, .. } if issue == "accepted"
     ));
-    let database = rusqlite::Connection::open(home.join(".cache/bridget/bridget.db")).unwrap();
+    let database = rusqlite::Connection::open(home.join("state/bridget.db")).unwrap();
     let event_count: i64 = database
         .query_row(
             "SELECT COUNT(*) FROM guichet_lifecycle_events

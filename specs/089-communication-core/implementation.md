@@ -1,5 +1,52 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T005 : reprise des crash-tests autorisés et baseline guichet
+
+Autorisation explicite de l'utilisateur (« oups pardon oui kill ») : SIGKILL
+uniquement sur les enfants créés par les harnais isolés. Aucun signal à la
+flotte existante, à Firefox ou à un processus tiers. Le banc guichet vérifie
+le PID et sa commande avant signal, puis récolte l'enfant ; sa garde protège
+aussi le chemin de panique. Aucun déploiement ni changement de configuration
+globale.
+
+Portage de guichet_integration_test.rs, sans correction du produit :
+env_clear, HOME/TMPDIR/BRIDGET_HOME/BRIDGET_SOCKET privés, racine canonique
+0700 courte et UUID aléatoire complet ; politique créée en 0600 ; identités
+UUID v4 et BRIDGET_AGENT_ID conformes au protocole actuel. Les anciens noms
+de test ne passaient plus Register. Le nom du service « maicie » reste la
+cible publique, ce n'est pas un import de son implémentation.
+
+Commande : `cargo test --offline -p bridget-daemon --test guichet_integration_test --no-run`,
+puis sous umask 077, env -i et HOME/TMPDIR=/private/tmp/bg089-guichet-run.Zd0Ouj :
+`/usr/bin/perl -e 'alarm 180; exec @ARGV' target/debug/deps/guichet_integration_test-9fb41b9c3d04aab5 --test-threads=4`.
+Premier résultat : **4/6 réussis, 2 échecs**, 0,84 s (compilation 2,11 s).
+Le SIGKILL après réception du claim durable, la génération neuve, le refus
+claim_stale et l'égalité byte-à-byte des dépôts A/B sont verts ; les neuf
+refus Git exacts, le dépôt autorisé et la garde de panique également.
+
+Les deux échecs sont une couture historique du produit, pas masquée par le
+portage : `cmd_guichet` ouvre une connexion via `cli_register` (UUID v4 neuf),
+mais ServiceRequest n'accepte l'expéditeur délégué que si le nom enregistré
+commence par `cli-send-`. Sortie réelle dans les deux cas :
+`REJET: DeclaredSenderMismatch`. Le rapport Git et la clôture CLI ne sont
+donc PAS prouvés verts. À corriger dans T014/T018 avec une autorité de
+connexion explicite, sans réintroduire des noms invalides ni élargir les
+droits à toute connexion UUID.
+
+Contre-run après relecture de la garde : mêmes 4/6 et mêmes deux refus,
+0,77 s. `cargo fmt --all --check` et `git diff --check` passent. Aucun test
+désactivé ni attendu remplacé par le refus observé ; ce commit de baseline
+ne prétend pas réparer le guichet.
+
+Validation indépendante supplémentaire, sous env_clear/umask 077 et
+watchdog 600 s : core --lib **39/39**, 1,11 s ; transport --lib **248/248**,
+5,54 s, un micro-banc historique ignoré et un test Node/UI explicitement
+exclu (`TEMOIN_vocabulaire_vue_et_ecriture_ne_divergent_pas`, à découpler
+en T010). Premier passage transport : 11 PolicyPathNotCanonical à cause de
+l'alias macOS /tmp ; seul TMPDIR canonicalisé en /private/tmp les referme,
+sans modification de code. Aucun fournisseur réel ni processus résiduel
+de ces deux validations. Ces résultats ne valent pas gate global T034.
+
 ## 2026-09-05 — T007 : espace d'état indépendant réellement traversé
 
 BRIDGET_HOME contient les états du noyau (défaut HOME/.cache/bridget-core),
