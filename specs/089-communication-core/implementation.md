@@ -1,5 +1,32 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — P0 vérifiée et baseline T005 partielle
+
+T002 : gel complet de familles, 17 fichiers, référence produit dfa2134 et
+capture bd1cbe0 épinglées séparément. Vérificateur --self-test --require-complete
+exit 0, six mutants refusés. T003 : 264 fichiers historiques classés, zéro
+oublié/doublon, 12 critères reliés aux scénarios Gherkin. T004 : 14 frontières
+de confiance. T006 : revue indépendante PASS sur la stratégie, sans transformer
+les gates non exécutées en succès.
+
+| Commande réelle | Résultat et durée |
+|---|---|
+| PATH=/Users/moi/.cargo/bin:$PATH cargo test --offline --workspace --no-run | Compilation de toutes les cibles, exit 0, 32,12 s ; aucun test lancé par cette commande |
+| PATH=/Users/moi/.cargo/bin:$PATH cargo test --offline -p bridget-core --lib | 39/39, 1,10 s |
+| env -i PATH=/usr/bin:/bin TMPDIR=<racine privée> HOME=<racine privée> XDG_DATA_HOME=<racine privée> BRIDGET_ARTIFACT_ROOT=<racine privée>/artifacts target/debug/deps/bridget_daemon-b7902f0f20bc17cc 'store::tests::' --test-threads=4 | 43/43, 0,95 s ; inclut receipt_store et artifact_blob_store par filtre, aucun daemon lancé |
+| même environnement fermé, filtre 'idempotency::tests::' | 39/39, 0,20 s |
+| PATH=/Users/moi/.cargo/bin:$PATH cargo test --offline -p bridget-daemon --test mission_boundary_test | Rouge PRÉEXISTANT confirmé : « Maicie ne doit être disponible que pour les fixtures de test » ; le manifeste produit dépend de Maicie. Le test est conservé, T009 doit fermer ce défaut. |
+
+Les racines des deux lots SQLite sont créées par mktemp -d /tmp/bg089-store.XXXXXX
+et /tmp/bg089-idem.XXXXXX ; aucune variable BRIDGET_AGENT ni home de production
+n'est héritée. Les tests utilisent uniquement leurs DB de fixture.
+
+L'audit a trouvé que le daemon historique peut ramasser le TMPDIR partagé même
+avec HOME isolé. Le plan avance donc T007 avant les bancs de daemon de T005 :
+isoler avant d'exécuter, pas un skip de gate. La baseline totale, les fournisseurs
+réels et SSH restent non validés. L'utilisateur a autorisé les revues/validations
+et le travail complet ; aucune bascule de la flotte n'est nécessaire ni engagée.
+
 ## 2026-09-05 — Matérialisation du codec de référence (suite T002)
 
 42 trames de cinq familles passent dans le codec de production inchangé de

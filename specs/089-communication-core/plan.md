@@ -2,7 +2,7 @@
 
 **Branche :** session-089-communication-core | **Date :** 2026-09-05 | **Spécification :** spec.md
 **Base immuable :** dfa2134dcfe2a2522e3ae77d93561e6ae72556b3.
-**État :** préparation réalisée ; extraction et gates fonctionnels non exécutés.
+**État :** corpus, inventaire et revue pré-coupe réalisés ; isolation en cours.
 
 ## Résumé et approche
 
@@ -66,6 +66,13 @@ Les clients Maicie restent externes, mais la communication durable avec un servi
 ### P0 — Inventaire et contrats (T001–T006)
 
 Inventaire exact des couplages/commandes, fixtures gelées avec empreintes et mutation d'un octet, inventaire des tests retenus/retirés, menaces et espaces isolés. Produire une baseline exécutable dans un worktree de la référence, jamais dans la production. Le premier jalon de revue vérifie surtout ce qui serait perdu, avant suppression.
+
+Ordre corrigé par l'audit T004/T005 : T007 (isolation additive, sans retrait de
+fonction) précède la partie daemon réel de T005. Le code historique ramasse le
+TMPDIR partagé même sous HOME isolé ; certains bancs effacent TMPDIR dans leur
+env_clear. Lancer d'abord la suite complète serait donc contraire à l'isolation.
+La baseline pure et la compilation sont mesurées avant cette correction ; la
+baseline réelle reprend ensuite. Aucun retrait n'est autorisé par ce déplacement.
 
 ### P1 — Couper les dépendances (T007–T013)
 
