@@ -117,7 +117,7 @@ struct AttachViewConsumer {
     handle: thread::JoinHandle<Vec<String>>,
 }
 
-fn connect_attach(socket: &Path, agent: &str) -> AttachViewConsumer {
+fn connect_attach(socket: &Path, agent: &str, deadline: Instant) -> AttachViewConsumer {
     let stream = UnixStream::connect(socket).expect("connexion attach");
     let reader_stream = stream.try_clone().expect("clone lecteur attach");
     reader_stream
@@ -137,16 +137,29 @@ fn connect_attach(socket: &Path, agent: &str) -> AttachViewConsumer {
         } => {}
         other => panic!("RoleHandshake attach inattendu: {other:?}"),
     }
-    write_message(
-        &mut writer,
-        &WrapperToDaemon::Subscribe {
-            agent: agent.to_string(),
-            window: AttachWindow::Seq(0),
-        },
-    );
-    let subscription_id = match read_message(&mut reader) {
-        DaemonToWrapper::Subscribed { subscription_id } => subscription_id,
-        other => panic!("abonnement attach refusé ou inattendu: {other:?}"),
+    // Register précède l'activation du journal. « connected » ne l'atteste
+    // pas : seule l'acceptation de Subscribe ouvre la mesure. Un autre refus
+    // reste une erreur ; aucune attente aveugle ni fenêtre de mesure amputée.
+    let subscription_id = loop {
+        assert!(
+            Instant::now() < deadline,
+            "journal non disponible avant le budget du banc"
+        );
+        write_message(
+            &mut writer,
+            &WrapperToDaemon::Subscribe {
+                agent: agent.to_string(),
+                window: AttachWindow::Seq(0),
+            },
+        );
+        match read_message(&mut reader) {
+            DaemonToWrapper::Subscribed { subscription_id } => break subscription_id,
+            DaemonToWrapper::AttachRejected {
+                reason: bridget_transport::protocol::AttachRefusal::JournalUnavailable,
+                ..
+            } => thread::yield_now(),
+            other => panic!("abonnement attach refusé ou inattendu: {other:?}"),
+        }
     };
     let final_fragments = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&final_fragments);
@@ -349,7 +362,7 @@ impl LocalHarness {
         wait_for_agent_ready_for_send(&socket, AGENT, deadline);
         let (sender, sender_reader) = connect_sender(&socket);
         let views = (0..view_count)
-            .map(|_| connect_attach(&socket, AGENT))
+            .map(|_| connect_attach(&socket, AGENT, deadline))
             .collect::<Vec<_>>();
         for view in &views {
             wait_until(deadline, "snapshot initial non terminé", || {

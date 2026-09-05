@@ -3573,10 +3573,17 @@ fn parse_directory_args(
 }
 
 fn daemon_status_or_exit(command: &str, config: &DaemonConfig) -> daemon::DaemonStatus {
-    daemon::get_status(config).unwrap_or_else(|error| {
+    let status = daemon::get_status(config).unwrap_or_else(|error| {
         eprintln!("bridget {command}: {error}");
         std::process::exit(1);
-    })
+    });
+    if !status.agents_inventory_available {
+        eprintln!(
+            "bridget {command}: daemon présent, inventaire indisponible — aucune liste vide n'est attestée"
+        );
+        std::process::exit(1);
+    }
+    status
 }
 
 fn cmd_agents(args: &[String]) {
@@ -4436,10 +4443,7 @@ fn cmd_status() {
     println!("Agents connectés: {}", status.agents.len());
     match status.message_count {
         Some(count) => println!("Messages en base: {count}"),
-        None => println!(
-            "Messages en base: non mesurable d'ici — la base locale ({}) n'est pas celle du daemon",
-            config.db_path.display()
-        ),
+        None => println!("Messages en base: total non publié par le daemon — consulter ledger"),
     }
     println!(
         "Build-id daemon: {}",

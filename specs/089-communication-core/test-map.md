@@ -311,8 +311,8 @@ git grep -l -E '#\[(test|tokio::test)|#\[cfg\(test\)\]' dfa2134dcfe2a2522e3ae77d
 
 Filtre complémentaire sur la première liste : sources `.rs/.sh/.py/.mjs/.js/.ts/.tsx/.feature` sous `tests|test|__tests__` hors `fixtures`, suffixes `.test/.spec` JS/TS et noms `test-*/test_*` shell/Python. Union sans doublon avec la deuxième liste. Toute disparition d'un fichier de cet univers doit avoir sa disposition ci-dessous ; un nouveau fichier n'autorise pas à retirer un ancien oracle.
 
-- **C — conserver** (58 fichiers) : même exigence et nom historique, adaptation des chemins isolés seulement si nécessaire.
-- **M — déplacer/scinder** (67) : fichier mixte ou harnais dépendant d'un composant sorti. **Aucune suppression globale autorisée** ; préserver l'oracle transport dans les trois crates ou dans le harnais client public sans Maicie, avant de sortir la partie métier/présentation. La revue du diff doit nommer chaque test déplacé.
+- **C — conserver** (56 fichiers) : même exigence et nom historique, adaptation des chemins isolés seulement si nécessaire.
+- **M — déplacer/scinder** (69) : fichier mixte ou harnais dépendant d'un composant sorti. **Aucune suppression globale autorisée** ; préserver l'oracle transport dans les trois crates ou dans le harnais client public sans Maicie, avant de sortir la partie métier/présentation. La revue du diff doit nommer chaque test déplacé.
 - **R — retirer du paquet cible** (139) : comportement explicitement hors périmètre. Le test et son implémentation sortent ensemble après T006 ; l'historique Git reste. Cela ne supprime pas l'exigence équivalente de sécurité de la communication.
 
 Ces dispositions ne dépendent d'aucun résultat rouge. Elles ne déclarent aucun scénario validé. **Aucun daemon, compte fournisseur ni tunnel n'a été lancé pour établir cette carte.** T005 reste le point d'audit puis d'exécution de la référence.

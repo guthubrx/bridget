@@ -1,5 +1,92 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T034/T035 : paquet autonome et fermeture des dernières coutures
+
+Base `1559f36b`, puis correctifs ci-dessous. Le paquet dans
+`/private/tmp/b89install.oplsZo/source` ne contient ni Git, ni apps/plugins/infra,
+ni node_modules. Construction de tous les tests depuis ce paquet, hors ligne :
+`cargo test --offline --locked --workspace --features test-support --no-run`,
+exit 0 en 36,21 s. La première suite complète est **rouge**, pas une dérogation :
+1 193 réussites, 2 échecs et 35 entrées ignorées (dont workers privés),
+68 résumés de tests. Commande : `cargo test --offline --locked --workspace
+--features test-support --no-fail-fast -- --test-threads=4`, watchdog Perl
+`alarm 900; exec @ARGV`. Log `/private/tmp/b89install.oplsZo/workspace.log`,
+18:05:54–18:09:30, soit 3 min 36 s (compilation comprise).
+
+Environnement de cette passe : `env -i`, HOME privé `.../h`, BRIDGET_HOME
+`.../s`, BRIDGET_SOCKET `.../s/s`, TMPDIR `.../t` sous
+`/private/tmp/b89install.oplsZo`, BUILD_ID lu dans le paquet,
+CARGO_HOME=/Users/moi/.cargo, RUSTUP_HOME=/Users/moi/.rustup et PATH limité
+au Cargo de référence et aux outils système. Aucun compte fournisseur ni
+daemon historique n'est utilisé. Les gates ignorés ne sont pas comptés comme
+réussites ; les preuves fournisseurs/SSH restent celles de leurs sections.
+
+Deux erreurs du premier paquet, corrigées sans affaiblir les oracles :
+
+- Le domaine du wrapper utilisait correctement le nom du répertoire hors Git,
+  mais son test attendait une racine Git dans l'archive livrée. La fixture crée
+  maintenant son propre dépôt et son sous-répertoire, puis un répertoire sans
+  Git : noms attendus explicites, pas de changement du cwd global. Ciblé 1/1,
+  0,03 s ; aucune nouvelle dépendance temporaire.
+- SC-002 ouvrait attach dès Register, avant JournalReady : refus réel
+  `JournalUnavailable`. Le banc attend désormais l'acceptation de Subscribe
+  dans son budget ; tout autre refus échoue. Mesure et oracles de séquences
+  inchangés, SnapshotCaughtUp toujours requis avant le tour live. Ciblé 1/1,
+  puis cinq répétitions réussies, 1,35–1,39 s chacune (logs
+  `/private/tmp/b89final.q4cT33/sc002-1.log` à `sc002-5.log`).
+
+La sonde status consomme une échéance commune pour identité, connexion et
+inventaire ; Registered doit être typé et corrélé. Inventaire inaccessible =
+erreur CLI, pas liste vide. Le client ne crée/migre plus de SQLite et ne
+présente plus une lecture limitée à 1 000 messages comme total exhaustif.
+Les tests couvrent JSON invalide, mauvais UUID, inventaire muet et réponse
+lente sur plusieurs phases. Le diagnostic de build-id ne recommande plus le
+service launchd/systemd de l'ancien produit : relance manuelle du seul namespace
+explicitement vérifié. Couture réelle build-id 4/4 (17,47 s), égalité CLI
+silencieuse 2/2 (2,03 s). Le scénario de mort supervisée emploie maintenant une
+racine `/tmp` courte : diagnostic empirique `socket trop longue`, pas un délai
+augmenté pour cacher un flake ; vingt répétitions ciblées réussies.
+
+Revue indépendante finale autorisée par l'utilisateur et effectuée en lecture
+seule : le contrôle structure/corpus ne trouve pas de dépendance métier manquante
+ni de test perdu prouvé (264 dispositions uniques, compte corrigé 56 C/69 M/139 R).
+Contrôle exécuté : 17 fixtures identiques aux objets Git épinglés. La revue de
+sécurité rend **AMENDER** : annulation bloquante sous verrou global, ancêtres
+symboliques de sources non contrôlés et profil durable créé par chaque status.
+Les deux derniers points sont corrigés et leur relecture indépendante est PASS :
+
+- Paquet : chaque ancêtre source est vérifié avant création. Oracle rouge
+  avant correction sur `skills` symbolique et `skills/bridget` ordinaire ;
+  refus code 2 après correction, destination absente et source intacte.
+  Preuve `/private/tmp/b89-package-test.JFHJhu/source-parent.log` ; syntaxe Bash,
+  hash global du paquet et mutant d'un octet également vérifiés.
+- Sonde : seule l'inscription CLI `status-probe` sans instance est éphémère,
+  sans profil durable. Trois vrais CLI interrogent un vrai daemon et une
+  connexion SQLite read-only compare les deux tables après chaque commande.
+  Rouge avant correction : `[1,1]` au lieu de `[0,0]` dès who ; vert après.
+  `core_089_status_test` : 2 réussis, un worker privé ignoré, 0,48 s. La fixture
+  rend son socket privé explicitement sans modifier l'umask global ; le premier
+  refus de permissions du harnais reste expliqué, pas imputé au produit.
+
+Annulation : après la transition durable et le retrait du pending, le verrou
+global est libéré avant toute attente du writer. Une échéance commune d'une
+seconde borne attente et écritures de notification ACP/interactive ; tampon
+préexistant conservé, timeout restauré, flux fermé après écriture incomplète.
+Deux oracles rouges avant correction (8,08 s), trois verts après (2,12 s) :
+socket réellement saturée, writer verrouillé, et préfixe tamponné suivi d'une
+seule notification corrélée. Le commit est observé via SQLite read-only et
+l'état global doit rester accessible pendant l'attente du destinataire.
+Commande ciblée : `cargo test --offline -p bridget-daemon --lib
+core_089_cancel_pressure_tests -- --nocapture`, namespace privé, watchdog 45 s.
+Relecture indépendante du correctif : PASS. Ce budget porte sur la notification
+après commit : il n'est pas une preuve de borne de toutes les anciennes
+écritures du serveur, ni de l'attente initiale SQLite/verrou global.
+
+La clôture de T034/T035/T036 sera consignée après la nouvelle passe globale ;
+cette entrée intermédiaire ne les coche pas. Les relectures sont limitées à
+leurs périmètres (corpus/extraction et frontières ciblées), pas une certification
+exhaustive de sécurité de tout l'héritage.
+
 ## 2026-09-05 — T033 : comparaison reconstruite depuis Git
 
 Deux builds offline/locked/2 jobs depuis archives immuables avec targets neufs, 39,935 s référence contre 27,047 s noyau ; 187 contre 94 packages. Les deux compilent. Vingt paires du même test de projection 256 agents, ordre alterné, **40/40**, p95 14,563 contre 13,635 ms. RSS du scénario quasi identique ; **RSS maximal de compilation augmente ~14 %**, explicitement conservé dans baseline.md. Aucun cold-cache système prétendu, aucun benchmark fournisseur extrapolé depuis ce test en mémoire. Script reproductible `scripts/measure-089-core.py`, rapport brut `artifacts/comparison-reference-core.json`. T028 conserve les vrais budgets append/rendu local/distant ; les graphiques de dépendances et nombres de modules ne les remplacent pas. Les archives de mesure sont privées, aucune flotte lancée.

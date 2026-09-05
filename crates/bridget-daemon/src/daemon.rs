@@ -28,7 +28,9 @@ use bridget_transport::protocol::{
 use bridget_transport::{ChannelReport, DaemonToWrapper, ResolvedAgentDefinition, WrapperToDaemon};
 use log::{error, info, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+#[cfg(test)]
+use std::io::BufRead;
+use std::io::{BufReader, BufWriter, Write};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -1251,6 +1253,318 @@ fn deliver_to_agent(
 
     info!("Message délivré à {}", target_name);
     Ok(message_id)
+}
+
+#[cfg(test)]
+mod core_089_cancel_pressure_tests {
+    use super::*;
+    use std::os::unix::fs::DirBuilderExt;
+
+    const SENDER: &str = "89000000-0000-4000-8000-000000000301";
+    const TARGET: &str = "89000000-0000-4000-8000-000000000302";
+
+    fn run_pressure(mode: PresenceMode, locked: bool) {
+        let root = std::env::temp_dir().join(format!(
+            "cp{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
+        let config = DaemonConfig {
+            socket_path: root.join("s"),
+            db_path: root.join("state.db"),
+            log_path: root.join("log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+        };
+        let (managed_tx, _managed_rx) = mpsc::channel();
+        let mut state = DaemonState::new(&config, managed_tx).unwrap();
+        let mut peers = Vec::new();
+        for (conn, agent, mode) in [
+            ("sender", SENDER, PresenceMode::Cli),
+            ("target", TARGET, mode),
+        ] {
+            let (daemon, peer) = UnixStream::pair().unwrap();
+            state
+                .connections
+                .insert(conn.into(), Arc::new(Mutex::new(BufWriter::new(daemon))));
+            let registered = handle_register_with_channel(
+                conn,
+                2,
+                "fixture".into(),
+                agent.into(),
+                Some("test".into()),
+                Some("acp".into()),
+                ChannelReport::Known("unix".into()),
+                Some(mode),
+                None,
+                Some("test".into()),
+                Some(format!("instance-{conn}")),
+                None,
+                false,
+                Some(false),
+                &mut state,
+            );
+            assert!(
+                matches!(registered, DaemonToWrapper::Registered { .. }),
+                "{registered:?}"
+            );
+            peers.push(peer);
+        }
+        state
+            .store
+            .create_request("cancel-pressure", SENDER, TARGET, 60)
+            .unwrap();
+        let writer = Arc::clone(state.connections.get("target").unwrap());
+        if !locked {
+            let locked = writer.lock().unwrap();
+            locked.get_ref().set_nonblocking(true).unwrap();
+            let bytes = [b'x'; 4096];
+            let mut sent = 0usize;
+            loop {
+                let n = unsafe {
+                    libc::send(
+                        locked.get_ref().as_raw_fd(),
+                        bytes.as_ptr().cast(),
+                        bytes.len(),
+                        libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL,
+                    )
+                };
+                if n < 0 {
+                    assert_eq!(
+                        std::io::Error::last_os_error().kind(),
+                        std::io::ErrorKind::WouldBlock
+                    );
+                    break;
+                }
+                assert!(n > 0);
+                sent += n as usize;
+                assert!(sent < 16 * 1024 * 1024, "la socket ne sature pas");
+            }
+            locked.get_ref().set_nonblocking(false).unwrap();
+            // Filet du harnais seulement : nettement au-delà de l'oracle 1,9 s.
+            // Le mutant bloquant doit échouer, jamais retenir un thread du banc.
+            locked
+                .get_ref()
+                .set_write_timeout(Some(Duration::from_secs(4)))
+                .unwrap();
+            assert!(sent > 0, "aucun octet réellement envoyé");
+        }
+        let held_writer = locked.then(|| writer.lock().unwrap());
+        let state = Arc::new(Mutex::new(state));
+        let worker_state = Arc::clone(&state);
+        let (done_tx, done_rx) = mpsc::channel();
+        // Le fait durable est observé via une connexion SQLite indépendante :
+        // cette barrière ne dépend ni du mutex global ni d'un sleep métier.
+        let db = rusqlite::Connection::open_with_flags(
+            &config.db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        db.busy_timeout(Duration::from_millis(50)).unwrap();
+        let started = Instant::now();
+        let worker = thread::spawn(move || {
+            let result = handle_wrapper_message(
+                "sender",
+                WrapperToDaemon::CancelRequest {
+                    id: "cancel-pressure".into(),
+                    sender: SENDER.into(),
+                    reason: Some("priorité changée".into()),
+                },
+                &worker_state,
+            );
+            let _ = done_tx.send(result);
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut durable = false;
+        while Instant::now() < deadline {
+            durable = db
+                .query_row(
+                    "SELECT state = 'cancelled' FROM tracked_requests WHERE id = 'cancel-pressure'",
+                    [],
+                    |r| r.get::<_, bool>(0),
+                )
+                .unwrap_or(false);
+            if durable {
+                break;
+            }
+            thread::yield_now();
+        }
+        let state_deadline = Instant::now() + Duration::from_millis(200);
+        let mut state_available = false;
+        while Instant::now() < state_deadline {
+            if let Ok(guard) = state.try_lock() {
+                state_available = true;
+                drop(guard);
+                break;
+            }
+            thread::yield_now();
+        }
+        let result = done_rx.recv_timeout(Duration::from_secs(2));
+        let elapsed = started.elapsed();
+        // Nettoyage AVANT les assertions : le mutant ancien reste bloqué ; la
+        // libération du verrou et le filet socket de 4 s bornent son nettoyage.
+        drop(held_writer);
+        for peer in &peers {
+            let _ = peer.shutdown(std::net::Shutdown::Both);
+        }
+        worker.join().unwrap();
+        let stored = state
+            .lock()
+            .unwrap()
+            .store
+            .get_request("cancel-pressure")
+            .unwrap()
+            .unwrap();
+        drop(db);
+        drop(state);
+        drop(writer);
+        drop(peers);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(
+            durable,
+            "l'annulation doit être commitée même si la notification échoue"
+        );
+        assert!(
+            state_available,
+            "le destinataire retient le mutex global après le commit"
+        );
+        assert!(
+            elapsed < Duration::from_millis(1900),
+            "annulation non bornée : {elapsed:?}"
+        );
+        assert!(
+            matches!(result, Ok(Some(DaemonToWrapper::RequestCancelled { state, .. })) if state == "cancelled"),
+            "réponse d'annulation absente"
+        );
+        assert_eq!(stored.state, "cancelled");
+        assert_eq!(stored.cancel_reason.as_deref(), Some("priorité changée"));
+    }
+
+    #[test]
+    fn socket_saturee_ne_bloque_ni_annulation_ni_etat_global() {
+        // Deux voies historiques, aucune ne peut redevenir un envoi libre bloquant.
+        run_pressure(PresenceMode::Acp, false);
+        run_pressure(PresenceMode::Cli, false);
+    }
+
+    #[test]
+    fn verrou_writer_occupe_ne_bloque_ni_annulation_ni_etat_global() {
+        run_pressure(PresenceMode::Acp, true);
+    }
+
+    #[test]
+    fn notification_conserve_les_octets_tamponnes_et_le_timeout_du_writer() {
+        let (socket, peer) = UnixStream::pair().unwrap();
+        let previous = Some(Duration::from_millis(270));
+        socket.set_write_timeout(previous).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(socket)));
+        let prefix = b"{ \"type\" : \"pong\" }\n";
+        writer.lock().unwrap().write_all(prefix).unwrap();
+        let message = DaemonToWrapper::CancelDelivery {
+            id: "request-exact".into(),
+            reason: "annulation attestée".into(),
+        };
+        push_control_message_until(&writer, &message, Instant::now() + Duration::from_secs(1))
+            .unwrap();
+        let mut reader = BufReader::new(peer);
+        let mut first = Vec::new();
+        reader.read_until(b'\n', &mut first).unwrap();
+        assert_eq!(
+            first, prefix,
+            "le préfixe doit rester octet-identique et unique"
+        );
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(
+            matches!(decode::<DaemonToWrapper>(line.trim_end()).unwrap(),
+            DaemonToWrapper::CancelDelivery { id, reason }
+                if id == "request-exact" && reason == "annulation attestée")
+        );
+        let writer = writer.lock().unwrap();
+        assert!(writer.buffer().is_empty(), "aucun tampon à redélivrer");
+        assert_eq!(writer.get_ref().write_timeout().unwrap(), previous);
+    }
+}
+
+/// Budget global de notification d'annulation, incluant l'attente du writer.
+/// L'issue durable ne dépend pas de la disponibilité du destinataire.
+const CANCEL_NOTIFICATION_BUDGET: Duration = Duration::from_secs(1);
+
+fn push_control_message_until(
+    writer: &Arc<Mutex<BufWriter<UnixStream>>>,
+    message: &DaemonToWrapper,
+    deadline: Instant,
+) -> std::io::Result<()> {
+    let timeout = || {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "budget de notification dépassé",
+        )
+    };
+    let mut json = encode(message)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    json.push('\n');
+    let mut writer = loop {
+        if Instant::now() >= deadline {
+            return Err(timeout());
+        }
+        match writer.try_lock() {
+            Ok(writer) => break writer,
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err(std::io::Error::other("writer empoisonné"));
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                thread::sleep(
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(Duration::from_millis(1)),
+                );
+            }
+        }
+    };
+    // Reprendre le tampon EXISTANT sans le perdre ni le rejouer. into_parts
+    // ne flush pas : chaque write ci-dessous reçoit le temps encore disponible.
+    // Ne pas changer O_NONBLOCK, qui affecterait aussi le lecteur du wrapper.
+    let replacement = BufWriter::with_capacity(writer.capacity(), writer.get_ref().try_clone()?);
+    let old = std::mem::replace(&mut *writer, replacement);
+    let (old_socket, pending) = old.into_parts();
+    let result = (|| {
+        let pending = pending.map_err(|_| std::io::Error::other("tampon du writer indéterminé"))?;
+        let old_timeout = old_socket.write_timeout()?;
+        let result = (|| {
+            for mut bytes in [pending.as_slice(), json.as_bytes()] {
+                while !bytes.is_empty() {
+                    let remaining = deadline
+                        .checked_duration_since(Instant::now())
+                        .filter(|remaining| !remaining.is_zero())
+                        .ok_or_else(timeout)?;
+                    writer.get_ref().set_write_timeout(Some(remaining))?;
+                    match writer.get_mut().write(bytes) {
+                        Ok(0) => return Err(std::io::Error::from(std::io::ErrorKind::WriteZero)),
+                        Ok(count) => bytes = &bytes[count..],
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
+            Ok(())
+        })();
+        let restored = writer.get_ref().set_write_timeout(old_timeout);
+        result.and(restored)
+    })();
+    if result.is_err() {
+        // Une ligne partielle n'est pas rejouable sur ce flux : fermer plutôt
+        // que concaténer une future trame à des octets incomplets.
+        let _ = writer.get_ref().shutdown(std::net::Shutdown::Both);
+    }
+    result
 }
 
 fn push_control_message(
@@ -5217,6 +5531,12 @@ fn handle_register_with_channel(
     }
 
     let auxiliary_mcp = agent_type == "mcp";
+    // La sonde d'inventaire n'est pas un équipier. Sa route de réponse est
+    // éphémère et ne doit pas créer une identité/un profil à chaque lecture.
+    // Aucun droit supplémentaire : l'autorisation des mutations reste celle
+    // de la connexion, et une sonde ne revendique aucune instance fournisseur.
+    let ephemeral_status_probe =
+        agent_type == "status-probe" && mode == Some(PresenceMode::Cli) && instance_id.is_none();
     let requested_agent_id = agent_id.clone();
     let parsed_type = agent_type
         .parse()
@@ -5251,7 +5571,9 @@ fn handle_register_with_channel(
     match state.router.register(&agent_id, &parsed_type, conn_id) {
         Ok(()) => {
             let final_agent_id = agent_id.clone();
-            ensure_agent_profile_for_registration(state, &final_agent_id);
+            if !ephemeral_status_probe {
+                ensure_agent_profile_for_registration(state, &final_agent_id);
+            }
             state
                 .conn_names
                 .insert(conn_id.to_string(), final_agent_id.clone());
@@ -11374,56 +11696,41 @@ fn handle_wrapper_message(
                 Ok(Some(request)) if request.state == "cancelled" => {
                     st.pending_replies
                         .retain(|pending| pending.msg_id != request.id);
-                    if let Some(agent) = st.router.get_agent(&request.target)
-                        && let Some(writer) = st.connections.get(&agent.connection_id)
-                    {
-                        let is_acp = st
-                            .conn_instances
-                            .get(&agent.connection_id)
-                            .and_then(|instance| st.presences.get(instance))
-                            .is_some_and(|presence| presence.mode == Some(PresenceMode::Acp));
-                        if is_acp {
-                            let cancel = DaemonToWrapper::CancelDelivery {
-                                id: request.id.clone(),
-                                reason: request
-                                    .cancel_reason
-                                    .clone()
-                                    .unwrap_or_else(|| "demande annulée".to_string()),
+                    let notification = st.router.get_agent(&request.target)
+                        .and_then(|agent| st.connections.get(&agent.connection_id).map(|writer| {
+                            let is_acp = st.conn_instances.get(&agent.connection_id)
+                                .and_then(|instance| st.presences.get(instance))
+                                .is_some_and(|presence| presence.mode == Some(PresenceMode::Acp));
+                            let message = if is_acp {
+                                DaemonToWrapper::CancelDelivery {
+                                    id: request.id.clone(),
+                                    reason: request.cancel_reason.clone()
+                                        .unwrap_or_else(|| "demande annulée".to_string()),
+                                }
+                            } else {
+                                DaemonToWrapper::Deliver(bridget_core::BridgetMessage::new(
+                                    "bridget", &request.target,
+                                    format!("Demande #{} annulée par {}. Aucune réponse n'est requise.{}",
+                                        request.id, sender, request.cancel_reason.as_deref()
+                                            .map(|reason| format!(" Motif : {reason}")).unwrap_or_default()),
+                                ))
                             };
-                            match encode(&cancel).map_err(|error| error.to_string()).and_then(
-                                |json| {
-                                    let mut writer =
-                                        writer.lock().map_err(|error| error.to_string())?;
-                                    writeln!(writer, "{json}")
-                                        .map_err(|error| error.to_string())?;
-                                    writer.flush().map_err(|error| error.to_string())
-                                },
-                            ) {
-                                Ok(()) => {}
-                                Err(error) => error!(
-                                    "Impossible de signaler l'annulation à {}: {}",
-                                    request.target, error
-                                ),
-                            }
-                        } else if let Err(error) = deliver_to_agent(
-                            writer,
-                            &request.target,
-                            &format!(
-                                "Demande #{} annulée par {}. Aucune réponse n'est requise.{}",
-                                request.id,
-                                sender,
-                                request
-                                    .cancel_reason
-                                    .as_deref()
-                                    .map(|reason| format!(" Motif : {reason}"))
-                                    .unwrap_or_default()
-                            ),
-                        ) {
-                            error!(
-                                "Impossible de délivrer l'annulation à {}: {}",
-                                request.target, error
-                            );
-                        }
+                            (Arc::clone(writer), message)
+                        }));
+                    // Commit et pending sont terminés. Aucun accès au writer,
+                    // même son verrou, ne peut désormais retenir l'état global.
+                    drop(st);
+                    if let Some((writer, message)) = notification
+                        && let Err(error) = push_control_message_until(
+                            &writer,
+                            &message,
+                            Instant::now() + CANCEL_NOTIFICATION_BUDGET,
+                        )
+                    {
+                        error!(
+                            "Annulation durable {}, notification à {} indisponible: {}",
+                            request.id, request.target, error
+                        );
                     }
                     Some(DaemonToWrapper::RequestCancelled {
                         id: request.id,
@@ -11500,34 +11807,33 @@ fn handle_wrapper_message(
 
 /// Statut du daemon — interroge le daemon via la socket locale.
 pub fn get_status(config: &DaemonConfig) -> Result<DaemonStatus, String> {
-    use std::io::{BufReader, BufWriter, Write};
-    use std::os::unix::net::UnixStream;
+    get_status_until(config, std::time::Instant::now() + Duration::from_secs(10))
+}
 
-    let identity = match daemon_identity(&config.socket_path)? {
+fn get_status_until(
+    config: &DaemonConfig,
+    deadline: std::time::Instant,
+) -> Result<DaemonStatus, String> {
+    use crate::communication::client::DaemonConnection;
+
+    let identity = match daemon_identity_until(
+        &config.socket_path,
+        deadline.min(std::time::Instant::now() + DAEMON_IDENTITY_READ_TIMEOUT),
+    )? {
         Some(identity) => identity,
-        // La socket a disparu ou refuse la connexion : aucun daemon n'est
-        // observable. C'est distinct d'un pair qui a accepté puis s'est tu.
         None => return Ok(daemon_absent_status()),
     };
-
-    let stream = match UnixStream::connect(&config.socket_path) {
-        Ok(s) => s,
+    // Identité, connexion et inventaire consomment le même budget. Une seconde
+    // connexion muette ne doit ni suspendre status ni annoncer « aucun agent ».
+    let mut connection = match DaemonConnection::connect_until(&config.socket_path, deadline) {
+        Ok(connection) => connection,
         Err(_) => return Ok(daemon_inventory_unavailable(&identity)),
     };
-
-    let read_stream = match stream.try_clone() {
-        Ok(s) => s,
-        Err(_) => return Ok(daemon_inventory_unavailable(&identity)),
-    };
-
-    let mut writer = BufWriter::new(stream);
-    let mut reader = BufReader::new(read_stream);
-
-    // Register
-    let reg = WrapperToDaemon::Register {
+    let probe_id = uuid::Uuid::new_v4().to_string();
+    let registration = WrapperToDaemon::Register {
         agent_type: "status-probe".to_string(),
         identity_version: 2,
-        agent_id: uuid::Uuid::new_v4().to_string(),
+        agent_id: probe_id.clone(),
         host: Some(crate::build_info::local_host()),
         transport: None,
         channel: ChannelReport::Unknown,
@@ -11539,78 +11845,30 @@ pub fn get_status(config: &DaemonConfig) -> Result<DaemonStatus, String> {
         turn_in_progress: false,
         journal_available: None,
     };
-    let reg_json = match encode(&reg) {
-        Ok(j) => j,
-        Err(_) => return Ok(daemon_inventory_unavailable(&identity)),
+    if !matches!(
+        connection.exchange(&registration),
+        Ok(DaemonToWrapper::Registered { agent_id }) if agent_id == probe_id
+    ) {
+        return Ok(daemon_inventory_unavailable(&identity));
+    }
+    let agents = match connection.exchange(&WrapperToDaemon::ListAgents) {
+        Ok(DaemonToWrapper::AgentList { agents }) => agents
+            .into_iter()
+            .filter(|agent| agent.agent_id != probe_id)
+            .collect(),
+        _ => return Ok(daemon_inventory_unavailable(&identity)),
     };
-    if writeln!(writer, "{}", reg_json).is_err() {
-        return Ok(daemon_inventory_unavailable(&identity));
-    }
-    if writer.flush().is_err() {
-        return Ok(daemon_inventory_unavailable(&identity));
-    }
-
-    // Lire Registered
-    let mut line = String::new();
-    if reader.read_line(&mut line).is_err() {
-        return Ok(daemon_inventory_unavailable(&identity));
-    }
-
-    // Demander la liste des agents
-    let list_req = WrapperToDaemon::ListAgents;
-    let list_json = match encode(&list_req) {
-        Ok(j) => j,
-        Err(_) => return Ok(daemon_inventory_unavailable(&identity)),
-    };
-    if writeln!(writer, "{}", list_json).is_err() {
-        return Ok(daemon_inventory_unavailable(&identity));
-    }
-    if writer.flush().is_err() {
-        return Ok(daemon_inventory_unavailable(&identity));
-    }
-
-    // Lire AgentList
-    let mut resp_line = String::new();
-    if reader.read_line(&mut resp_line).is_err() {
-        return Ok(daemon_inventory_unavailable(&identity));
-    }
-    let (agents, agents_inventory_available) = match decode::<DaemonToWrapper>(resp_line.trim()) {
-        Ok(DaemonToWrapper::AgentList { agents }) => (
-            agents
-                .into_iter()
-                .filter(|agent| agent.agent_type != "status-probe")
-                .collect(),
-            true,
-        ),
-        _ => (vec![], false),
-    };
-
-    // Compter les messages en base — mais SEULEMENT si la base locale est
-    // celle du daemon interrogé. Sur une machine fédérée, `config.db_path`
-    // désigne un fichier d'ici, pas celui du daemon qui vient de répondre :
-    // le compte était lu dans un orphelin local et présenté sous le chemin
-    // d'à côté, comme s'il décrivait le daemon.
-    let daemon_host = identity.host.clone();
-    let daemon_db_path = identity.db_path.clone();
-    let message_count = daemon_store_is_local(
-        daemon_host.as_deref(),
-        daemon_db_path.as_deref(),
-        &crate::build_info::local_host(),
-        &config.db_path,
-    )
-    .then(|| match Store::open(&config.db_path) {
-        Ok(store) => store.recent_messages(1000).map(|v| v.len()).unwrap_or(0),
-        Err(_) => 0,
-    });
-
     Ok(DaemonStatus {
         running: true,
         agents,
-        agents_inventory_available,
-        message_count,
+        agents_inventory_available: true,
+        // Le protocole ne publie pas de total exhaustif. Une lecture locale
+        // créait/migrait SQLite et présentait au plus 1000 lignes comme total.
+        // Ne pas inventer ce chiffre, même si le daemon paraît être local.
+        message_count: None,
         build_id: Some(identity.build_id),
-        daemon_host,
-        daemon_db_path,
+        daemon_host: identity.host,
+        daemon_db_path: identity.db_path,
     })
 }
 
@@ -12213,11 +12471,21 @@ pub struct DaemonIdentity {
     pub instance_id: Option<String>,
 }
 
+#[cfg(test)]
 fn daemon_identity(socket_path: &std::path::Path) -> Result<Option<DaemonIdentity>, String> {
-    use std::io::{BufReader, BufWriter};
-    use std::os::unix::net::UnixStream;
+    daemon_identity_until(
+        socket_path,
+        std::time::Instant::now() + DAEMON_IDENTITY_READ_TIMEOUT,
+    )
+}
 
-    let stream = match UnixStream::connect(socket_path) {
+fn daemon_identity_until(
+    socket_path: &std::path::Path,
+    deadline: std::time::Instant,
+) -> Result<Option<DaemonIdentity>, String> {
+    use std::io::BufReader;
+
+    let stream = match crate::communication::client::connect_nonblocking(socket_path, deadline) {
         Ok(stream) => stream,
         Err(error)
             if matches!(
@@ -12234,13 +12502,9 @@ fn daemon_identity(socket_path: &std::path::Path) -> Result<Option<DaemonIdentit
     let read_stream = stream
         .try_clone()
         .map_err(|error| identity_probe_error("clonage de la socket impossible", error))?;
-    // La borne est posée AVANT le premier read_line. Elle couvre les trois
-    // petites réponses de négociation et interdit qu'un pair ayant accepté la
-    // connexion transforme l'incertitude en attente infinie.
-    read_stream
-        .set_read_timeout(Some(DAEMON_IDENTITY_READ_TIMEOUT))
-        .map_err(|error| identity_probe_error("pose du délai de lecture impossible", error))?;
-    let mut writer = BufWriter::new(stream);
+    // Une échéance absolue couvre connexion, écritures et trois réponses,
+    // y compris un pair qui fournit un octet juste avant chaque ancien délai.
+    let mut writer = stream;
     let mut reader = BufReader::new(read_stream);
     write_identity_message(
         &mut writer,
@@ -12248,9 +12512,10 @@ fn daemon_identity(socket_path: &std::path::Path) -> Result<Option<DaemonIdentit
             role: ConnectionRole::Client,
         },
         "du rôle",
+        deadline,
     )?;
     let mut line = String::new();
-    if read_identity_line(&mut reader, &mut line, "l'acceptation du rôle")? == 0 {
+    if read_identity_line(&mut reader, &mut line, "l'acceptation du rôle", deadline)? == 0 {
         return Err(
             "identité du daemon indisponible: connexion fermée avant l'acceptation du rôle"
                 .to_string(),
@@ -12275,9 +12540,10 @@ fn daemon_identity(socket_path: &std::path::Path) -> Result<Option<DaemonIdentit
             capabilities: Vec::new(),
         },
         "du contrat",
+        deadline,
     )?;
     line.clear();
-    match read_identity_line(&mut reader, &mut line, "l'accueil du client")? {
+    match read_identity_line(&mut reader, &mut line, "l'accueil du client", deadline)? {
         0 => Err(
             "identité du daemon indisponible: connexion fermée avant l'accueil du client"
                 .to_string(),
@@ -12289,7 +12555,7 @@ fn daemon_identity(socket_path: &std::path::Path) -> Result<Option<DaemonIdentit
                 // Second aller-retour, sur la MÊME connexion : la machine et la
                 // base ne sont pas déductibles côté client.
                 let (host, db_path, instance_id) =
-                    match probe_daemon_identity(&mut writer, &mut reader, &mut line)? {
+                    match probe_daemon_identity(&mut writer, &mut reader, &mut line, deadline)? {
                         Some((host, db_path, instance_id)) => {
                             (Some(host), Some(db_path), Some(instance_id))
                         }
@@ -12309,18 +12575,20 @@ fn daemon_identity(socket_path: &std::path::Path) -> Result<Option<DaemonIdentit
 }
 
 /// Demande au daemon ce qu'il atteste de lui-même. `None` = daemon antérieur.
-fn probe_daemon_identity<W: std::io::Write, R: std::io::BufRead>(
-    writer: &mut W,
-    reader: &mut R,
+fn probe_daemon_identity(
+    writer: &mut std::os::unix::net::UnixStream,
+    reader: &mut std::io::BufReader<std::os::unix::net::UnixStream>,
     line: &mut String,
+    deadline: std::time::Instant,
 ) -> Result<Option<(String, String, String)>, String> {
     write_identity_message(
         writer,
         &WrapperToDaemon::DaemonIdentityRequest,
         "de la sonde",
+        deadline,
     )?;
     line.clear();
-    if read_identity_line(reader, line, "le rapport d'identité")? == 0 {
+    if read_identity_line(reader, line, "le rapport d'identité", deadline)? == 0 {
         // Une ancienne version peut fermer après un message qu'elle ne connaît
         // pas. Le ClientWelcome déjà reçu atteste sa présence, pas son identité.
         return Ok(None);
@@ -12339,26 +12607,51 @@ fn probe_daemon_identity<W: std::io::Write, R: std::io::BufRead>(
     }
 }
 
-fn write_identity_message<W: std::io::Write>(
-    writer: &mut W,
+fn write_identity_message(
+    writer: &mut std::os::unix::net::UnixStream,
     message: &WrapperToDaemon,
     phase: &str,
+    deadline: std::time::Instant,
 ) -> Result<(), String> {
-    let encoded = encode(message)
+    let mut encoded = encode(message)
         .map_err(|error| identity_probe_error(&format!("encodage {phase} impossible"), error))?;
-    writeln!(writer, "{encoded}")
-        .map_err(|error| identity_probe_error(&format!("envoi {phase} impossible"), error))?;
-    writer
-        .flush()
-        .map_err(|error| identity_probe_error(&format!("flush {phase} impossible"), error))
+    encoded.push('\n');
+    let mut remaining_bytes = encoded.as_bytes();
+    while !remaining_bytes.is_empty() {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|duration| !duration.is_zero())
+            .ok_or_else(|| identity_probe_error("budget total dépassé", phase))?;
+        writer
+            .set_write_timeout(Some(remaining))
+            .map_err(|error| identity_probe_error("écriture non bornable", error))?;
+        match writer.write(remaining_bytes) {
+            Ok(0) => {
+                return Err(identity_probe_error(
+                    "connexion fermée pendant l'envoi",
+                    phase,
+                ));
+            }
+            Ok(size) => remaining_bytes = &remaining_bytes[size..],
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(identity_probe_error("envoi impossible", error)),
+        }
+    }
+    Ok(())
 }
 
-fn read_identity_line<R: std::io::BufRead>(
-    reader: &mut R,
+fn read_identity_line(
+    reader: &mut std::io::BufReader<std::os::unix::net::UnixStream>,
     line: &mut String,
     phase: &str,
+    deadline: std::time::Instant,
 ) -> Result<usize, String> {
-    reader.read_line(line).map_err(|error| {
+    let frame = bridget_transport::jsonl::read_unix_line(
+        reader,
+        bridget_transport::jsonl::MAX_DAEMON_FRAME_BYTES,
+        bridget_transport::jsonl::LineDeadline::Absolute(deadline),
+    )
+    .map_err(|error| {
         if matches!(
             error.kind(),
             std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
@@ -12370,7 +12663,11 @@ fn read_identity_line<R: std::io::BufRead>(
         } else {
             identity_probe_error(&format!("lecture impossible pendant {phase}"), error)
         }
-    })
+    })?;
+    let Some(frame) = frame else { return Ok(0) };
+    *line = String::from_utf8(frame)
+        .map_err(|_| identity_probe_error("réponse invalide", "UTF-8 attendu"))?;
+    Ok(line.len())
 }
 
 fn identity_probe_error(context: &str, error: impl std::fmt::Display) -> String {
@@ -12390,8 +12687,8 @@ pub struct DaemonStatus {
     pub running: bool,
     pub agents: Vec<bridget_transport::protocol::AgentInfo>,
     pub agents_inventory_available: bool,
-    /// `None` quand la base locale n'est PAS celle du daemon interrogé : on ne
-    /// rend alors aucun chiffre plutôt qu'un chiffre pris ailleurs.
+    /// Total non publié par le protocole : `None`, jamais une lecture locale
+    /// ou le nombre tronqué d'une projection présenté comme exhaustif.
     pub message_count: Option<usize>,
     pub build_id: Option<String>,
     /// Machine et base attestées par le daemon lui-même.
@@ -12437,7 +12734,11 @@ mod inventory_provenance_tests {
     /// Sert l'aller-retour d'identité complet qu'emprunte réellement
     /// `get_status`, puis rend la connexion au scénario qui suit. Sans cette
     /// négociation, un EOF ici ne prouverait que l'échec de la sonde préalable.
-    fn serve_daemon_identity(mut stream: UnixStream) -> UnixStream {
+    fn serve_daemon_identity(stream: UnixStream) -> UnixStream {
+        serve_daemon_identity_at(stream, "fixture-host", "/fixture/status.db")
+    }
+
+    fn serve_daemon_identity_at(mut stream: UnixStream, host: &str, db_path: &str) -> UnixStream {
         let read_stream = stream.try_clone().expect("cloner la connexion d'identité");
         let mut reader = BufReader::new(read_stream);
         let mut line = String::new();
@@ -12491,8 +12792,8 @@ mod inventory_provenance_tests {
             stream,
             "{}",
             encode(&DaemonToWrapper::DaemonIdentityReport {
-                host: "fixture-host".to_string(),
-                db_path: "/fixture/status.db".to_string(),
+                host: host.to_string(),
+                db_path: db_path.to_string(),
                 instance_id: "fixture-instance".to_string(),
             })
             .expect("encoder le rapport")
@@ -12500,6 +12801,190 @@ mod inventory_provenance_tests {
         .expect("répondre au rapport");
         stream.flush().expect("flush du rapport");
         stream
+    }
+
+    #[test]
+    fn statut_refuse_un_accuse_invalide_ou_non_correle_sans_lire_la_base() {
+        use std::os::unix::fs::DirBuilderExt;
+        for bad_ack in [None, Some(false), Some(true)] {
+            let root = std::path::PathBuf::from(format!("/tmp/b89status-{}", uuid::Uuid::new_v4()));
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&root)
+                .unwrap();
+            let socket = root.join("s");
+            let db = root.join("must-not-create.db");
+            let listener = UnixListener::bind(&socket).unwrap();
+            let daemon_db = db.clone();
+            let handle = thread::spawn(move || {
+                let (first, _) = listener.accept().unwrap();
+                drop(serve_daemon_identity_at(
+                    first,
+                    &crate::build_info::local_host(),
+                    daemon_db.to_str().unwrap(),
+                ));
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                    .unwrap();
+                let mut line = String::new();
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut line)
+                    .unwrap();
+                let WrapperToDaemon::Register { agent_id, .. } =
+                    super::decode(line.trim()).unwrap()
+                else {
+                    panic!("Register attendu")
+                };
+                // Le pair malformé fournit aussi une liste plausible : l'ancien
+                // client ignorait l'accusé et annonçait un inventaire valide.
+                let ack = match bad_ack {
+                    Some(true) => "{}".to_string(),
+                    Some(false) => encode(&DaemonToWrapper::Registered {
+                        agent_id: format!("autre-{agent_id}"),
+                    })
+                    .unwrap(),
+                    None => encode(&DaemonToWrapper::Registered { agent_id }).unwrap(),
+                };
+                writeln!(
+                    stream,
+                    "{ack}\n{}",
+                    encode(&DaemonToWrapper::AgentList { agents: vec![] }).unwrap()
+                )
+                .unwrap();
+                let mut rest = String::new();
+                let _ = BufReader::new(stream).read_line(&mut rest);
+            });
+            let mut config = DaemonConfig::default();
+            config.socket_path = socket;
+            config.db_path = db.clone();
+            let status = get_status(&config).unwrap();
+            handle.join().unwrap();
+            assert!(status.running);
+            assert_eq!(
+                status.agents_inventory_available,
+                bad_ack.is_none(),
+                "validation de l'accusé"
+            );
+            assert!(
+                !db.exists(),
+                "la commande de lecture a ouvert une base locale"
+            );
+            assert!(status.message_count.is_none());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn inventaire_muet_consomme_le_budget_de_status_sans_devenir_vide() {
+        use std::time::{Duration, Instant};
+        let path =
+            std::path::PathBuf::from(format!("/tmp/b89status-{}.sock", uuid::Uuid::new_v4()));
+        let listener = UnixListener::bind(&path).unwrap();
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+        let handle = thread::spawn(move || {
+            let (first, _) = listener.accept().unwrap();
+            drop(serve_daemon_identity(first));
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let WrapperToDaemon::Register { agent_id, .. } = super::decode(line.trim()).unwrap()
+            else {
+                panic!("Register attendu")
+            };
+            writeln!(
+                stream,
+                "{}",
+                encode(&DaemonToWrapper::Registered { agent_id }).unwrap()
+            )
+            .unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                super::decode(line.trim()).unwrap(),
+                WrapperToDaemon::ListAgents
+            ));
+            seen_tx.send(()).unwrap();
+            // La durée est une faute du pair, pas un moyen de synchroniser le test.
+            let _ = stop_rx.recv_timeout(Duration::from_secs(3));
+        });
+        let mut config = DaemonConfig::default();
+        config.socket_path = path.clone();
+        let started = Instant::now();
+        let status =
+            super::get_status_until(&config, started + Duration::from_millis(500)).unwrap();
+        let elapsed = started.elapsed();
+        stop_tx.send(()).unwrap();
+        handle.join().unwrap();
+        seen_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(status.running && !status.agents_inventory_available);
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "attente non bornée : {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn sonde_identite_lente_ne_renouvelle_pas_le_budget_entre_phases() {
+        use std::time::{Duration, Instant};
+        let path = std::path::PathBuf::from(format!("/tmp/b89ident-{}.sock", uuid::Uuid::new_v4()));
+        let listener = UnixListener::bind(&path).unwrap();
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            for response in [
+                DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client,
+                },
+                DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "fixture".into(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: vec![],
+                },
+                DaemonToWrapper::DaemonIdentityReport {
+                    host: "fixture".into(),
+                    db_path: "/fixture".into(),
+                    instance_id: "fixture".into(),
+                },
+            ] {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                seen_tx.send(()).unwrap();
+                thread::sleep(Duration::from_millis(400));
+                if writeln!(stream, "{}", encode(&response).unwrap()).is_err() {
+                    break;
+                }
+            }
+        });
+        let started = Instant::now();
+        let result = super::daemon_identity_until(&path, started + Duration::from_secs(1));
+        let elapsed = started.elapsed();
+        handle.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(
+            seen_rx.try_iter().count(),
+            3,
+            "troisième phase réellement atteinte"
+        );
+        assert!(
+            result.is_err(),
+            "réinitialiser le délai accepterait les trois réponses"
+        );
+        assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
     }
 
     #[test]
@@ -12528,11 +13013,17 @@ mod inventory_provenance_tests {
             BufReader::new(stream.try_clone().unwrap())
                 .read_line(&mut line)
                 .unwrap();
-            assert!(matches!(
-                super::decode(line.trim()).expect("décoder Register"),
-                WrapperToDaemon::Register { .. }
-            ));
-            writeln!(stream, "{{}}").unwrap();
+            let WrapperToDaemon::Register { agent_id, .. } =
+                super::decode(line.trim()).expect("décoder Register")
+            else {
+                panic!("Register attendu")
+            };
+            writeln!(
+                stream,
+                "{}",
+                encode(&DaemonToWrapper::Registered { agent_id }).unwrap()
+            )
+            .unwrap();
             stream.flush().unwrap();
             let mut list_line = String::new();
             BufReader::new(stream.try_clone().unwrap())
@@ -12566,11 +13057,17 @@ mod inventory_provenance_tests {
             BufReader::new(stream.try_clone().unwrap())
                 .read_line(&mut line)
                 .unwrap();
-            assert!(matches!(
-                super::decode(line.trim()).expect("décoder Register"),
-                WrapperToDaemon::Register { .. }
-            ));
-            writeln!(stream, "{{}}").unwrap();
+            let WrapperToDaemon::Register { agent_id, .. } =
+                super::decode(line.trim()).expect("décoder Register")
+            else {
+                panic!("Register attendu")
+            };
+            writeln!(
+                stream,
+                "{}",
+                encode(&DaemonToWrapper::Registered { agent_id }).unwrap()
+            )
+            .unwrap();
             stream.flush().unwrap();
             let mut list_line = String::new();
             BufReader::new(stream.try_clone().unwrap())
@@ -22413,8 +22910,10 @@ mod presence_tests {
             .unwrap()
             .join("bridget");
         assert!(executable.exists(), "binaire bridget de test absent");
+        // TMPDIR du runner peut déjà être long : le bootstrap initialise une
+        // socket Unix sous cette racine, limitée par sockaddr_un sur macOS.
         let process_root =
-            std::env::temp_dir().join(format!("bridget-t906-death-{}", uuid::Uuid::new_v4()));
+            PathBuf::from("/tmp").join(format!("b89death-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&process_root).unwrap();
         let launch = ManagedLaunch {
             bootstrap_executable: executable,
@@ -22429,14 +22928,19 @@ mod presence_tests {
             env: managed_test_prepared(&lease, &process_root).env,
         };
         let marker_store = ManagedMarkerStore::at_directory(process_root.join("managed"));
-        let child = crate::managed_process::spawn_managed_bootstrap(&launch)
-            .unwrap()
-            .wait_ready()
-            .unwrap()
-            .persist_marker(&marker_store, "89000000-0000-4000-8000-000000000102")
-            .unwrap()
-            .release()
-            .unwrap();
+        // Garder le diagnostic du vrai bootstrap si sa préparation échoue :
+        // EOF seul ne permet pas de distinguer un refus de namespace d'un crash.
+        let child = crate::managed_process::spawn_managed_bootstrap_with_stderr(
+            &launch,
+            std::process::Stdio::inherit(),
+        )
+        .unwrap()
+        .wait_ready()
+        .unwrap()
+        .persist_marker(&marker_store, "89000000-0000-4000-8000-000000000102")
+        .unwrap()
+        .release()
+        .unwrap();
         let prepared = PreparedSpawn {
             lease: lease.clone(),
             agent_type: "fixture".to_string(),

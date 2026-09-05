@@ -234,18 +234,10 @@ fn daemon_et_cli_reels_transmettent_et_comparent_le_build_id() {
         String::from_utf8_lossy(&different_build.stdout)
             .contains("Build-id daemon: daemon-build-test")
     );
-    // Le daemon de ce banc tourne SUR CETTE MACHINE : le verdict doit donc la
-    // nommer, et la remédiation doit être la commande de CETTE plateforme.
-    // Deux littéraux, un par plateforme — l'oracle nomme la valeur au lieu de
-    // la recalculer avec le code de production.
+    // Le daemon de ce banc est local mais indépendant du service historique.
+    // L'oracle fixe le texte sans rappeler son producteur.
     let ici = BANC_HOST;
-    let remediation = if cfg!(target_os = "macos") {
-        format!("launchctl kickstart -k gui/{}/com.bridget.daemon", unsafe {
-            libc::getuid()
-        })
-    } else {
-        "systemctl --user restart bridget-daemon".to_string()
-    };
+    let remediation = "relancer manuellement le daemon Bridget communication du namespace BRIDGET_HOME/BRIDGET_SOCKET vérifié — ne pas relancer le service historique";
     let expected = format!(
         "daemon périmé sur {ici} (daemon-build-test) — client client-build-avance sur {ici} : {remediation}\n"
     );

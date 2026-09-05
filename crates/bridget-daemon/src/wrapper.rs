@@ -919,7 +919,12 @@ fn connection_channel() -> Option<String> {
 /// de nettoyage implicite serait indevinable pour l'utilisateur, qui peut de
 /// toute façon surcharger avec `bridget domain`.
 fn derive_domain() -> Option<String> {
+    derive_domain_at(&std::env::current_dir().ok()?)
+}
+
+fn derive_domain_at(directory: &Path) -> Option<String> {
     let git_root = Command::new("git")
+        .current_dir(directory)
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .ok()
@@ -931,7 +936,7 @@ fn derive_domain() -> Option<String> {
 
     let base = match git_root {
         Some(root) => root,
-        None => std::env::current_dir().ok()?,
+        None => directory.to_path_buf(),
     };
     base.file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -7198,26 +7203,31 @@ mod reconnect_tests {
 
     #[test]
     fn le_domaine_derive_nomme_le_depot_courant() {
-        // La règle vérifiée est « nom de la racine du dépôt », et non « chemin
-        // complet » ni « répertoire courant ». On ne peut pas comparer à une
-        // chaîne en dur : le dépôt peut être cloné sous n'importe quel nom, et
-        // les tests s'exécutent aussi depuis un sous-répertoire.
-        let racine = Command::new("git")
-            .args(["rev-parse", "--show-toplevel"])
-            .output()
-            .expect("git doit être disponible pour ce test");
-        let racine = PathBuf::from(String::from_utf8_lossy(&racine.stdout).trim().to_string());
-        let attendu = racine
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string());
-
-        assert_eq!(derive_domain(), attendu);
-        // Le domaine est un nom court, jamais un chemin.
-        let domaine = derive_domain().unwrap();
+        // Le paquet livré n'a pas de .git. Le dépôt de l'oracle est privé,
+        // indépendant du checkout de compilation et du cwd des autres tests.
+        let root = std::env::temp_dir().join(format!("b89-domain-{}", uuid::Uuid::new_v4()));
+        let repository = root.join("depot-atteste");
+        let nested = repository.join("sous-repertoire");
+        std::fs::create_dir_all(&nested).unwrap();
         assert!(
-            !domaine.contains('/'),
-            "le domaine ne doit pas être un chemin"
+            Command::new("git")
+                .arg("init")
+                .arg(&repository)
+                .output()
+                .unwrap()
+                .status
+                .success()
         );
+        assert_eq!(derive_domain_at(&nested).as_deref(), Some("depot-atteste"));
+        let archive = root.join("archive-sans-git");
+        std::fs::create_dir(&archive).unwrap();
+        // Mutant : toujours retenir le cwd casse le premier assert ; exiger
+        // une racine Git casse celui-ci. Aucun nom reconstruit par l'oracle.
+        assert_eq!(
+            derive_domain_at(&archive).as_deref(),
+            Some("archive-sans-git")
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

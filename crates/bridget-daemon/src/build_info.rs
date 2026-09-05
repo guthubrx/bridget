@@ -63,12 +63,9 @@ fn remediation(local_host: &str, daemon_host: Option<&str>) -> String {
         Some(host) if host != local_host => {
             format!("relancer le daemon sur {host} — aucune commande locale ne l'atteint")
         }
-        _ if cfg!(target_os = "macos") => {
-            format!("launchctl kickstart -k gui/{}/com.bridget.daemon", unsafe {
-                libc::getuid()
-            })
-        }
-        _ => "systemctl --user restart bridget-daemon".to_string(),
+        // Le noyau extrait n'installe aucun service global. Recommander le
+        // label historique agirait sur une autre installation de Bridget.
+        _ => "relancer manuellement le daemon Bridget communication du namespace BRIDGET_HOME/BRIDGET_SOCKET vérifié — ne pas relancer le service historique".to_string(),
     }
 }
 
@@ -199,25 +196,23 @@ mod tests {
         );
     }
 
-    /// POINT 4 — la commande locale est celle de CETTE plateforme.
-    /// Deux littéraux, un par plateforme : l'oracle ne recalcule pas la valeur
-    /// avec le code de production, il la nomme.
-    /// Mutant qui tue ce test : retirer le `cfg!(target_os = "macos")` → une des
-    /// deux plateformes reçoit la commande de l'autre.
+    /// Une remédiation du noyau indépendant ne doit jamais cibler le service
+    /// installé par l'ancien produit, quelle que soit la plateforme.
     #[test]
-    fn la_remediation_locale_est_celle_de_la_plateforme() {
+    fn la_remediation_locale_reste_dans_le_namespace_independant() {
         let warning = stale_daemon_warning_for("client-neuf", "cartae", "24e8003", Some("cartae"))
             .expect("écart signalé");
-        if cfg!(target_os = "macos") {
-            assert!(warning.contains("launchctl kickstart -k gui/"), "{warning}");
-            assert!(!warning.contains("systemctl"), "{warning}");
-        } else {
-            assert!(
-                warning.contains("systemctl --user restart bridget-daemon"),
-                "{warning}"
-            );
-            assert!(!warning.contains("launchctl"), "{warning}");
-        }
+        assert!(
+            warning.contains("namespace BRIDGET_HOME/BRIDGET_SOCKET vérifié"),
+            "{warning}"
+        );
+        assert!(
+            warning.contains("ne pas relancer le service historique"),
+            "{warning}"
+        );
+        assert!(!warning.contains("launchctl"), "{warning}");
+        assert!(!warning.contains("systemctl"), "{warning}");
+        assert!(!warning.contains("com.bridget.daemon"), "{warning}");
     }
 
     /// Machine du daemon non attestée : le message le DIT au lieu de laisser
@@ -292,14 +287,13 @@ mod tests {
             "{mixte}"
         );
 
-        // CONTRÔLE POSITIF : deux machines attestées et identiques → la
-        // commande locale revient. Sans lui, une remédiation qui ne proposerait
-        // JAMAIS rien passerait les assertions ci-dessus.
+        // CONTRÔLE POSITIF : deux machines attestées et identiques → une
+        // relance manuelle du namespace local, jamais du service historique.
         let local = stale_daemon_warning_for("client", "cartae", "daemon", Some("cartae"))
             .expect("écart signalé");
         assert!(
-            local.contains("systemctl") || local.contains("launchctl"),
-            "une machine attestée et locale doit recevoir sa commande : {local}"
+            local.contains("relancer manuellement le daemon Bridget communication"),
+            "une machine attestée et locale doit recevoir sa remédiation : {local}"
         );
     }
 
