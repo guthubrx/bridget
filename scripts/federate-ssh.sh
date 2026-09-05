@@ -1,91 +1,164 @@
 #!/usr/bin/env bash
-# Enrôle une machine distante dans le daemon Bridget local via SSH.
-set -euo pipefail
+# Fédération 089 : un transfert Unix, aucune installation de service implicite.
+# Gardes communes à deploy-remote.sh ; sourcer ce fichier n'a aucun effet.
 
-usage() {
-  cat <<'EOF'
-Usage: federate-ssh.sh install|status|remove NAME [--host HOST] [--user USER] [--port PORT] [--identity FILE] [--remote-socket PATH]
+federation_fail() { printf '%s\n' "$*" >&2; exit 2; }
 
-Le tunnel reverse rend le socket du daemon maître disponible sur la machine distante.
-EOF
+federation_path() {
+  local path=$1
+  # Alphabet fermé : espaces admis, expansions shell et séparateur Unix exclus.
+  [[ "$path" =~ ^/[a-zA-Z0-9_./\ -]+$ ]] || federation_fail "chemin absolu invalide : $path"
+  case "$path" in
+    /|*/|*//*|*/./*|*/.|*/../*|*/..) federation_fail "chemin non normalisé : $path" ;;
+  esac
 }
 
-action=${1:-}
-name=${2:-}
-shift $(( $# >= 2 ? 2 : $# ))
-[[ -n "$action" && -n "$name" ]] || { usage >&2; exit 2; }
-
-host=""; user="${USER}"; port=22; identity=""; remote_socket=""
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --host) host=${2:?}; shift 2 ;;
-    --user) user=${2:?}; shift 2 ;;
-    --port) port=${2:?}; shift 2 ;;
-    --identity) identity=${2:?}; shift 2 ;;
-    --remote-socket) remote_socket=${2:?}; shift 2 ;;
-    *) usage >&2; exit 2 ;;
+federation_state_path() {
+  federation_path "$1"
+  case "$1/" in
+    /tmp/|/private/tmp/|/var/|/private/var/|/Users/|/home/|/root/|"${HOME:-/}/"|\
+    */.ssh/*|*/.codex/*|*/.claude/*|*/.gemini/*|*/.cache/bridget/*|*/.config/bridget/*|\
+    */.local/share/bridget/*|*/.local/state/bridget/*|*/.local/bin/*|\
+    */Library/LaunchAgents/*|*/Library/Application\ Support/bridget/*|\
+    */.config/systemd/*|*/bridget/|*/bridget/*|*/bridget.sock/)
+      federation_fail "cible historique ou globale interdite : $1" ;;
   esac
-done
+}
 
-[[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "nom d'enrôlement invalide" >&2; exit 2; }
-config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/bridget/federation"
-plist="$HOME/Library/LaunchAgents/com.bridget.federation.${name}.plist"
-config="$config_dir/${name}.env"
-local_socket="$HOME/.cache/bridget/bridget.sock"
-label="com.bridget.federation.${name}"
+federation_ancestors() {
+  local part current= rest=${1#/}
+  while [[ -n "$rest" ]]; do
+    part=${rest%%/*}; current="$current/$part"
+    [[ ! -L "$current" ]] || federation_fail "lien symbolique interdit : $current"
+    [[ "$rest" == */* ]] || break
+    [[ ! -e "$current" || -d "$current" ]] || federation_fail "parent non répertoire : $current"
+    rest=${rest#*/}
+  done
+}
 
-# Un tunnel durable ne doit pas réutiliser un ControlMaster interactif : celui-ci
-# peut refuser un nouveau reverse forward sans que launchd puisse le rétablir.
-ssh_args=(-p "$port" -o BatchMode=yes -o ControlMaster=no -o ControlPath=none -o ExitOnForwardFailure=yes -o ServerAliveInterval=20 -o ServerAliveCountMax=3)
-[[ -n "$identity" ]] && ssh_args+=(-i "$identity")
-target="${user}@${host}"
+federation_metadata() {
+  if [[ $(uname -s) == Darwin ]]; then stat -f '%u %Lp' "$1"; else stat -c '%u %a' "$1"; fi
+}
 
-case "$action" in
-  install)
-    [[ -n "$host" ]] || { echo "--host est requis pour l'installation" >&2; exit 2; }
-    [[ -S "$local_socket" ]] || { echo "daemon maître absent : $local_socket" >&2; exit 1; }
-    if [[ -z "$remote_socket" ]]; then
-      remote_home=$(ssh "${ssh_args[@]}" "$target" 'printf %s "$HOME"')
-      [[ "$remote_home" == /* ]] || { echo "HOME distant invalide : $remote_home" >&2; exit 1; }
-      remote_socket="$remote_home/.cache/bridget/bridget.sock"
-    fi
-    remote_dir=$(dirname "$remote_socket")
-    ssh "${ssh_args[@]}" "$target" bash -s -- "$remote_dir" "$remote_socket" <<'REMOTE_SCRIPT'
-mkdir -p "$1"
-rm -f "$2"
-mkdir -p "$HOME/.config/bridget"
-printf 'channel=ssh-unix\ntransport=ssh-unix\n' > "$HOME/.config/bridget/federation.env"
-REMOTE_SCRIPT
-    mkdir -p "$config_dir"
-    umask 077
-    printf 'host=%q\nuser=%q\nport=%q\nidentity=%q\nremote_socket=%q\nlocal_socket=%q\n' "$host" "$user" "$port" "$identity" "$remote_socket" "$local_socket" > "$config"
-    cat > "$plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>Label</key><string>$label</string><key>ProgramArguments</key><array><string>/usr/bin/ssh</string><string>-N</string><string>-p</string><string>$port</string><string>-o</string><string>BatchMode=yes</string><string>-o</string><string>ControlMaster=no</string><string>-o</string><string>ControlPath=none</string><string>-o</string><string>ExitOnForwardFailure=yes</string><string>-o</string><string>ServerAliveInterval=20</string><string>-o</string><string>ServerAliveCountMax=3</string>$( [[ -n "$identity" ]] && printf '<string>-i</string><string>%s</string>' "$identity" )<string>-R</string><string>$remote_socket:$local_socket</string><string>$target</string></array><key>KeepAlive</key><true/><key>RunAtLoad</key><true/><key>StandardOutPath</key><string>$HOME/Library/Logs/Bridget/federation-$name.log</string><key>StandardErrorPath</key><string>$HOME/Library/Logs/Bridget/federation-$name.err</string></dict></plist>
-EOF
-    mkdir -p "$HOME/Library/Logs/Bridget"
-    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
-    launchctl bootstrap "gui/$(id -u)" "$plist"
-    for _ in {1..5}; do
-      ssh "${ssh_args[@]}" "$target" "test -S '$remote_socket'" && break
-      sleep 1
-    done
-    if ! ssh "${ssh_args[@]}" "$target" "test -S '$remote_socket'"; then
-      launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
-      echo "échec d'activation du tunnel ; vérifier AllowTcpForwarding remote (ou yes) dans sshd sur $host" >&2
-      exit 1
-    fi
-    echo "enrôlé : $name ($target:$port)"
-    ;;
-  status)
-    [[ -f "$plist" ]] || { echo "inconnu : $name" >&2; exit 1; }
-    launchctl print "gui/$(id -u)/$label" | sed -n '1,32p'
-    ;;
-  remove)
-    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
-    rm -f "$plist" "$config"
-    echo "retiré : $name"
-    ;;
-  *) usage >&2; exit 2 ;;
-esac
+federation_private_dir() {
+  federation_ancestors "$1"
+  [[ -d "$1" && $(federation_metadata "$1") == "$(id -u) 700" ]] ||
+    federation_fail "répertoire 0700 possédé par le compte requis : $1"
+}
+
+federation_private_file() {
+  federation_path "$1"
+  federation_ancestors "$1"
+  [[ -f "$1" && $(federation_metadata "$1") == "$(id -u) 600" ]] ||
+    federation_fail "fichier régulier privé 0600 requis : $1"
+}
+
+federation_new_dir() {
+  federation_state_path "$1"
+  federation_ancestors "$1"
+  [[ ! -e "$1" && ! -L "$1" ]] || federation_fail "destination déjà occupée : $1"
+  [[ -d ${1%/*} ]] || federation_fail "parent à préparer explicitement : ${1%/*}"
+  mkdir -m 700 "$1"
+  federation_private_dir "$1"
+}
+
+federation_connection() {
+  [[ "$host" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ && "$host" != *..* ]] || federation_fail "hôte invalide"
+  [[ "$user" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]] || federation_fail "utilisateur invalide"
+  [[ "$port" =~ ^[0-9]{1,5}$ ]] && (( 10#$port >= 1 && 10#$port <= 65535 )) || federation_fail "port invalide"
+  [[ "$label" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}$ ]] || federation_fail "label privé invalide"
+  federation_private_file "$identity"
+  federation_private_file "$known_hosts"
+  target="$user@$host"
+  # -F neutralise LocalCommand/ProxyCommand/RemoteForward hérités. Aucun TOFU :
+  # le fichier de clés d'hôte est explicite, prérempli, jamais modifié.
+  ssh_args=(-F /dev/null -p "$port" -i "$identity"
+    -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes
+    -o "UserKnownHostsFile=\"$known_hosts\"" -o GlobalKnownHostsFile=/dev/null
+    -o UpdateHostKeys=no -o ControlMaster=no -o ControlPath=none -o ControlPersist=no
+    -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3
+    -o ConnectTimeout=10 -o ConnectionAttempts=1 -o RequestTTY=no
+    -o ForwardAgent=no -o ForwardX11=no -o PermitLocalCommand=no
+    -o StreamLocalBindUnlink=no -o StreamLocalBindMask=0177)
+}
+
+# SSH joint ses arguments avant le shell distant : transmettre les quotes.
+federation_remote_command() {
+  remote_command='bash -s --'
+  local value
+  for value in "$@"; do
+    [[ "$value" != *"'"* && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || federation_fail "argument distant invalide"
+    remote_command+=" '$value'"
+  done
+}
+
+federation_remote_guards() {
+  printf 'set -euo pipefail\numask 077\n'
+  declare -f federation_fail federation_path federation_state_path federation_ancestors federation_metadata federation_private_dir federation_new_dir
+}
+
+federation_usage() {
+  printf '%s\n' \
+    'Usage: federate-ssh.sh run --label NAME --host HOST --user USER --identity FILE --known-hosts FILE' \
+    '       --root DIR --socket PATH --remote-root DIR --remote-socket PATH [--port 22] [--dry-run]' \
+    'Racines/socket absolues privées ; fichiers SSH déjà en 0600.' \
+    'run au premier plan. Aucun install/status/remove, launchd ni configuration historique.' \
+    'Clients distants : BRIDGET_HOME=remote-root BRIDGET_SOCKET=remote-socket BRIDGET_CHANNEL=ssh-unix.' \
+    'dry-run : lectures locales seulement, aucune écriture ni commande SSH/rsync.' \
+    'Socket distante même stale refusée ; aucun effacement automatique. Le serveur SSH doit créer' \
+    'ses sockets StreamLocal en privé (StreamLocalBindMask 0177, à vérifier à la recette).' \
+    'Après coupure, vérifier son absence avant reprise au même chemin. La recette SSH réelle doit' \
+    'encore prouver le nettoyage OpenSSH ; si stale, nettoyage explicite avec preuve de propriété requis.'
+}
+
+federation_main() {
+  set -euo pipefail
+  umask 077
+  [[ ${1:-} != --help ]] || { federation_usage; return; }
+  [[ ${1:-} == run ]] || federation_fail "usage changé : run au premier plan uniquement ; voir --help"
+  shift
+  local host= user= port=22 label= identity= known_hosts= root= socket= remote_root= remote_socket= dry_run=false target remote_command
+  local -a ssh_args
+  while (( $# )); do
+    case "$1" in
+      --dry-run) dry_run=true; shift; continue ;;
+      --host|--user|--port|--label|--identity|--known-hosts|--root|--socket|--remote-root|--remote-socket)
+        (( $# >= 2 )) || federation_fail "valeur absente pour $1" ;;
+      *) federation_fail "option inconnue : $1" ;;
+    esac
+    case "$1" in
+      --host) host=$2 ;; --user) user=$2 ;; --port) port=$2 ;; --label) label=$2 ;;
+      --identity) identity=$2 ;; --known-hosts) known_hosts=$2 ;; --root) root=$2 ;;
+      --socket) socket=$2 ;; --remote-root) remote_root=$2 ;; --remote-socket) remote_socket=$2 ;;
+    esac
+    shift 2
+  done
+  federation_connection
+  federation_state_path "$root"
+  federation_state_path "$remote_root"
+  federation_path "$socket"
+  federation_path "$remote_socket"
+  [[ ${socket%/*} == "$root" && ${remote_socket%/*} == "$remote_root" ]] || federation_fail "socket hors de sa racine explicite"
+  (( ${#socket} <= 100 && ${#remote_socket} <= 100 )) || federation_fail "socket Unix trop longue (100 octets maximum)"
+  federation_private_dir "$root"
+  federation_ancestors "$socket"
+  [[ -S "$socket" && $(federation_metadata "$socket") == "$(id -u) 600" ]] || federation_fail "socket maître privée absente : $socket"
+  if $dry_run; then
+    printf 'dry-run [%s] : %s:%s, transfert Unix %s -> %s ; préflight distant non exécuté\n' "$label" "$target" "$port" "$remote_socket" "$socket"
+    return
+  fi
+  federation_remote_command "$remote_root" "$remote_socket"
+  {
+    federation_remote_guards
+    printf '%s\n' \
+      'federation_state_path "$1"; federation_path "$2"; federation_ancestors "$2"' \
+      '[[ ${2%/*} == "$1" ]] || federation_fail "socket hors racine"' \
+      '[[ ! -e "$2" && ! -L "$2" ]] || federation_fail "socket distante déjà occupée (même stale)"' \
+      'if [[ -e "$1" ]]; then federation_private_dir "$1"; else federation_new_dir "$1"; fi'
+  } | ssh "${ssh_args[@]}" "$target" "$remote_command"
+  printf 'Tunnel [%s] au premier plan ; aucun service installé.\n' "$label" >&2
+  printf 'Environnement des clients distants : BRIDGET_HOME=%q BRIDGET_SOCKET=%q BRIDGET_CHANNEL=ssh-unix\n' "$remote_root" "$remote_socket" >&2
+  exec ssh "${ssh_args[@]}" -N -R "$remote_socket:$socket" "$target"
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then federation_main "$@"; fi

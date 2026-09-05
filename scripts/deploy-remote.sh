@@ -1,112 +1,85 @@
-#!/bin/bash
-# Déploie Bridget sur un hôte Linux distant.
-# Le mode "client-only" est destiné à un hôte fédéré via federate-ssh.sh :
-# il installe le client sans lancer de daemon concurrent.
-set -e
-REMOTE="${1:?Usage: deploy-remote.sh <utilisateur@hôte> [port] [daemon|client-only]}"
-PORT="${2:-22}"
-MODE="${3:-daemon}"
-REMOTE_DIR="~/bridget"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-CODEX_SKILL="$HOME/.codex/skills/bridget/SKILL.md"
-CLAUDE_SKILL="$HOME/.claude/skills/bridget/SKILL.md"
+#!/usr/bin/env bash
+# Client-only, préfixe neuf. Aucun service, symlink global, profil ou skill.
+set -euo pipefail
+umask 077
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# shellcheck source=federate-ssh.sh
+source "$SCRIPT_DIR/federate-ssh.sh"
 
-case "$MODE" in
-    daemon|client-only) ;;
-    *) echo "Mode invalide : $MODE (daemon ou client-only)" >&2; exit 2 ;;
-esac
+usage() {
+  printf '%s\n' \
+    'Usage: deploy-remote.sh --label NAME --host HOST --user USER --identity FILE --known-hosts FILE' \
+    '       --source DIR --remote-prefix DIR --remote-cargo PATH [--port 22] [--dry-run]' \
+    'Client-only exclusivement. Préfixe distant neuf, parent déjà préparé.' \
+    'Seuls les fichiers suivis Git sont transférés, modifications suivies incluses, sans les non-suivis.' \
+    'Cargo/Rust et leur cache doivent être disponibles : build --locked --offline.' \
+    'Aucune installation Rust automatique, aucun profil/skill/service/binaire global modifié.' \
+    'dry-run ne contacte pas SSH/rsync et ne crée aucun fichier. Ancienne syntaxe daemon retirée.'
+}
 
-echo "=== Déploiement bridget vers $REMOTE:$PORT ==="
-
-# Le rsync exclut .git : sans cette variable, build.rs ne trouve aucun dépôt et
-# retombe sur "unknown", ce qui fait afficher « daemon périmé » à CHAQUE commande
-# sur toute machine déployée — en accusant le daemon alors que c'est le client
-# qui n'est pas identifiable. `build.rs` lit BRIDGET_BUILD_ID en priorité.
-BUILD_ID="$(git -C "$PROJECT_DIR" rev-parse --short=12 HEAD 2>/dev/null || true)"
-if [[ -n "$BUILD_ID" ]] \
-    && [[ -n "$(git -C "$PROJECT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
-    BUILD_ID="${BUILD_ID}-dirty"
-fi
-: "${BUILD_ID:=unknown}"
-echo "→ Identité de compilation : $BUILD_ID"
-
-echo "→ Synchronisation du code source..."
-rsync -az --delete --exclude 'target' --exclude '.git' --exclude '*.db' --exclude '*.sock' \
-    "$PROJECT_DIR/" -e "ssh -p $PORT" "$REMOTE:$REMOTE_DIR/"
-
-echo "→ Vérification de Rust..."
-ssh -p $PORT "$REMOTE" 'bash -s' << 'REMOTE_SCRIPT'
-if ! command -v cargo &>/dev/null; then
-    echo "  Installation de Rust..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    source "$HOME/.cargo/env"
-fi
-echo "  Rust: $(rustc --version)"
-REMOTE_SCRIPT
-
-echo "→ Compilation..."
-ssh -p $PORT "$REMOTE" 'bash -s' -- "$BUILD_ID" << 'REMOTE_SCRIPT'
-source "$HOME/.cargo/env" 2>/dev/null || true
-cd ~/bridget
-export BRIDGET_BUILD_ID="$1"
-cargo build --release 2>&1 | tail -5
-echo "  Binaire: $(ls -la target/release/bridget 2>/dev/null | awk '{print $5}') bytes"
-echo "  Build-id: $BRIDGET_BUILD_ID"
-REMOTE_SCRIPT
-
-echo "→ Installation..."
-ssh -p $PORT "$REMOTE" 'bash -s' << 'REMOTE_SCRIPT'
-source "$HOME/.cargo/env" 2>/dev/null || true
-mkdir -p ~/.local/bin
-ln -sf ~/bridget/target/release/bridget ~/.local/bin/bridget
-for shell_file in ~/.profile ~/.bashrc; do
-    touch "$shell_file"
-    grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$shell_file" || \
-        printf '\n# Bridget CLI\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$shell_file"
+host= user= port=22 label= identity= known_hosts= source_dir= remote_prefix= remote_cargo= dry_run=false
+while (( $# )); do
+  case "$1" in
+    --help) usage; exit 0 ;;
+    --dry-run) dry_run=true; shift; continue ;;
+    --host|--user|--port|--label|--identity|--known-hosts|--source|--remote-prefix|--remote-cargo)
+      (( $# >= 2 )) || federation_fail "valeur absente pour $1" ;;
+    *) federation_fail "option inconnue (client-only) : $1" ;;
+  esac
+  case "$1" in
+    --host) host=$2 ;; --user) user=$2 ;; --port) port=$2 ;; --label) label=$2 ;;
+    --identity) identity=$2 ;; --known-hosts) known_hosts=$2 ;; --source) source_dir=$2 ;;
+    --remote-prefix) remote_prefix=$2 ;; --remote-cargo) remote_cargo=$2 ;;
+  esac
+  shift 2
 done
-echo "  $(~/.local/bin/bridget version)"
-REMOTE_SCRIPT
-
-echo "→ Installation des skills Bridget pour les agents..."
-ssh -p $PORT "$REMOTE" 'mkdir -p ~/.codex/skills/bridget ~/.claude/skills/bridget'
-for skill in "$CODEX_SKILL" "$CLAUDE_SKILL"; do
-    if [[ ! -f "$skill" ]]; then
-        echo "Skill locale absente : $skill" >&2
-        exit 1
-    fi
-done
-rsync -az -e "ssh -p $PORT" "$CODEX_SKILL" "$REMOTE:~/.codex/skills/bridget/SKILL.md"
-rsync -az -e "ssh -p $PORT" "$CLAUDE_SKILL" "$REMOTE:~/.claude/skills/bridget/SKILL.md"
-echo "  Codex : ~/.codex/skills/bridget/SKILL.md"
-echo "  Claude : ~/.claude/skills/bridget/SKILL.md"
-
-if [[ "$MODE" == "client-only" ]]; then
-    echo "=== Client Bridget installé (mode fédéré, aucun daemon distant) ==="
-    exit 0
+federation_connection
+federation_path "$source_dir"
+federation_ancestors "$source_dir"
+[[ -f "$source_dir/Cargo.toml" && -f "$source_dir/Cargo.lock" ]] || federation_fail "source Cargo explicite incomplète"
+federation_state_path "$remote_prefix"
+federation_path "$remote_cargo"
+if $dry_run; then
+  printf 'dry-run [%s] : client-only %s -> %s:%s ; cargo=%s ; préflight distant non exécuté\n' "$label" "$source_dir" "$target" "$remote_prefix" "$remote_cargo"
+  exit 0
 fi
+[[ $(git -C "$source_dir" rev-parse --show-toplevel) == "$source_dir" ]] || federation_fail "--source doit être la racine du dépôt Git"
+build_id=$(git -C "$source_dir" rev-parse HEAD)
+[[ -z $(git -C "$source_dir" status --porcelain --untracked-files=no) ]] || build_id+="-dirty"
 
-echo "→ Configuration systemd utilisateur Linux..."
-ssh -p $PORT "$REMOTE" 'bash -s' << 'REMOTE_SCRIPT'
-mkdir -p ~/.config/systemd/user
-cat > ~/.config/systemd/user/bridget-daemon.service << 'SERVICE'
-[Unit]
-Description=Bridget daemon
-After=network.target
-[Service]
-Type=simple
-ExecStart=%h/.local/bin/bridget daemon
-Environment=RUST_LOG=info
-Restart=always
-RestartSec=3
-[Install]
-WantedBy=default.target
-SERVICE
-systemctl --user daemon-reload
-systemctl --user enable bridget-daemon 2>/dev/null
-systemctl --user start bridget-daemon 2>/dev/null || true
-echo "  systemd: $(systemctl --user is-active bridget-daemon 2>/dev/null || echo 'n/a')"
-REMOTE_SCRIPT
+# Préflight outil avant réservation : un Cargo absent ne laisse aucun préfixe.
+federation_remote_command "$remote_prefix" "$remote_cargo"
+{
+  federation_remote_guards
+  printf '%s\n' \
+    'federation_state_path "$1"; federation_ancestors "$1"; federation_path "$2"' \
+    '[[ ! -e "$1" && ! -L "$1" ]] || federation_fail "préfixe distant déjà occupé"' \
+    '[[ -f "$2" && -x "$2" ]] || federation_fail "toolchain absente : --remote-cargo doit désigner Cargo déjà installé"' \
+    'export RUSTUP_AUTO_INSTALL=0 CARGO_NET_OFFLINE=true' \
+    '"$2" --version >/dev/null || federation_fail "toolchain indisponible ; aucune installation automatique"' \
+    'federation_new_dir "$1"; mkdir -m 700 "$1/source" "$1/bin"'
+} | ssh "${ssh_args[@]}" "$target" "$remote_command"
 
-echo "=== Déploiement terminé ==="
-echo "  Test: ssh -p $PORT $REMOTE 'bridget status'"
+# Le parseur de rsync -e reconnaît les quotes, PAS les échappements Bash %q.
+# Les chemins/arguments ont déjà un alphabet fermé sans apostrophe ; les
+# quotes simples préservent aussi les quotes doubles de UserKnownHostsFile.
+printf -v rsync_shell "'%s' " ssh "${ssh_args[@]}"
+git -C "$source_dir" ls-files -z | rsync -rltz --no-links --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= \
+  --from0 --files-from=- --exclude=.git --exclude=target --exclude='*.db' --exclude='*.sock' \
+  --rsync-path='umask 077 && rsync' -e "$rsync_shell" \
+  "$source_dir/" "$target:'$remote_prefix/source/'"
+
+federation_remote_command "$remote_prefix" "$remote_cargo" "$build_id"
+{
+  federation_remote_guards
+  printf '%s\n' \
+    'federation_private_dir "$1"; federation_private_dir "$1/source"; federation_private_dir "$1/bin"' \
+    '[[ ! -e "$1/bin/bridget" && ! -L "$1/bin/bridget" ]] || federation_fail "binaire destination déjà occupé"' \
+    'export RUSTUP_AUTO_INSTALL=0 CARGO_NET_OFFLINE=true' \
+    'export PATH="${2%/*}:/usr/bin:/bin" BRIDGET_BUILD_ID="$3"' \
+    'cd "$1/source"' \
+    '"$2" build --locked --offline --release -p bridget-daemon --bin bridget 2>&1 | tail -n 20' \
+    '[[ -f target/release/bridget && ! -L target/release/bridget && -x target/release/bridget ]] || federation_fail "binaire de compilation absent"' \
+    'install -m 700 target/release/bridget "$1/bin/bridget"'
+} | ssh "${ssh_args[@]}" "$target" "$remote_command"
+printf 'Client installé [%s] : %s:%s/bin/bridget ; aucun daemon démarré.\n' "$label" "$target" "$remote_prefix"

@@ -1,5 +1,15 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T024 : scripts SSH privés, effets bornés
+
+federate-ssh run reste au premier plan et exige racines/socket/label/clés explicites. Aucun launchd, configuration SSH héritée, suppression de socket stale ou remplacement d'une cible occupée. Préflight propriétaire/0700/0600, composants sans symlink, alphabet de chemins fermé, socket courte ; StrictHostKeyChecking=yes et known_hosts explicite sans écriture. Le transfert reste une socket Unix, pas un protocole réseau supplémentaire. Le masque de la socket distante relève du serveur SSH et reste à constater au gate réel.
+
+deploy-remote est client-only, préfixe neuf, source Git explicite et fichiers suivis uniquement ; aucune installation Rust, pas de fichiers non suivis/profils globaux ni secret copié volontairement. Cargo doit être déjà disponible avec cache : --locked --offline, pipefail empêche tail de masquer l'échec. L'identité de build accompagne la source dépourvue de .git. Les gardes ne prétendent pas empêcher une modification concurrente du dépôt par le même compte durant le transfert ; exécuter depuis une tranche figée.
+
+`bash scripts/test-federate-ssh.sh` : 22/22 en 2,583 s. SSH/Git/Cargo sont des doublures ; les scripts distants sont réellement exécutés dans des répertoires privés et le parseur du VRAI rsync -e est exercé avec chemins à espaces et faux shell, sans serveur. Les permissions, cibles occupées/stale, injections, ancienne syntaxe, dry-run strict sans effets, non-suivis exclus et erreurs de build/forwarding sont vérifiés. Les deux scripts passent bash -n. Ces tests ne sont PAS une preuve SSH interserveur, réservée à T025–T028.
+
+Préflight réseau lecture seule distinct : SSH authentifié avec la clé existante, contrôle strict des clés d'hôte et sans configuration héritée vers moi@37.59.185.67:2222 ; Linux x86_64, utilisateur moi, Cargo 1.98.0 détecté. Aucun déploiement, service ni socket distante créé à cette étape.
+
 ## 2026-09-05 — T023 : skill exercée, documentation communication seule
 
 La skill du dépôt est courte et n'orchestre aucune tâche métier : annuaire UUID, envoi/réponse liée, reçu et retry identiques, lecture maître et signaux inconnus conservés. Aucun fichier de skill global n'est modifié. Les README FR/EN remplacent les surfaces du produit complet et distinguent les recettes réellement passées de Claude/GLM/SSH encore ouverts. Le quickstart est aligné sur l'isolation déjà livrée (BRIDGET_HOME/BRIDGET_SOCKET), sans installation implicite.

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
-script="$(cd "$(dirname "$0")" && pwd)/federate-ssh.sh"
-bash -n "$script"
-bash -n "$(dirname "$script")/deploy-remote.sh"
-grep -q "channel=ssh-unix" "$script"
-grep -q "transport=ssh-unix" "$script"
-if "$script" install 'mauvais nom' --host example.invalid 2>/dev/null; then exit 1; fi
-if "$script" invalid test --host example.invalid 2>/dev/null; then exit 1; fi
-echo "tests de syntaxe et d'usage réussis"
+script_dir="$(cd "$(dirname "$0")" && pwd -P)"
+bash -n "$script_dir/federate-ssh.sh"
+bash -n "$script_dir/deploy-remote.sh"
+# Les anciens grep validaient l'écriture du fichier de configuration global,
+# retirée en 089. Les oracles vivent désormais dans le banc sans réseau :
+# BRIDGET_CHANNEL explicite, paramètres fermés, anciennes actions refusées,
+# dry-run sans effets et aucun écrasement de socket.
+printf '%s\n' 'Recette 089 : doublures SSH/rsync uniquement, aucune connexion réelle.' >&2
+exec bash "$script_dir/tests/federation_089_test.sh"
