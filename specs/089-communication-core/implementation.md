@@ -1,6 +1,73 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T005 : reprise du flux public après crash
+
+coordination_events_test.rs porté exclusivement côté harnais : env_clear,
+namespace 0700 court/canonique, identités UUID v4, daemon possédé par une
+garde dès spawn, contrôle du PID/exécutable avant SIGKILL, wait borné même
+sur erreur. La sonde SQLite ouvre en lecture seule ; elle ne fabrique plus
+un fichier avant les migrations du daemon. Les FIFO des jalons sont dans
+une racine sœur privée : le namespace de production refuse les fichiers
+spéciaux et cette garde n'a PAS été relâchée pour le test.
+
+`cargo test --offline -p bridget-daemon --features test-support --test coordination_events_test -- --test-threads=2`,
+sous env nettoyé et racine /private/tmp/b89ce-ukgi9u56 : **6/6 réussis**, zéro
+ignoré, 3,67 s (5,846 s total), watchdog global 180 s non atteint. Vrais
+SIGKILL avant/après persistance et relectures conservant bytes/event_id/curseur ;
+Gap et Unavailable restent deux observations distinctes. Les oracles de refus
+entrant et de non-inférence depuis le texte sont inchangés. Le premier run
+5/6 s'arrêtait avant le jalon sur la FIFO placée dans l'état ; le déplacement
+du seul harnais ferme ce refus, pas une modification de la sécurité produit.
+
+`cargo clippy --offline -p bridget-daemon --features test-support --test coordination_events_test -- -D warnings`
+est rouge sur les trois lints Maicie déjà consignés (control Default,
+guichet large_enum_variant, store too_many_arguments). Format ciblé et
+diff-check verts. Aucun gate fournisseur ni SSH n'est confondu avec ces tests.
+
+## 2026-09-05 — T005 : passe lib élargie auditée, pas un gate vert
+
+Après audit indépendant des lancements, 646 scénarios lib sélectionnés sous
+env_clear/private HOME et TMPDIR, umask 077, watchdog 600 s, quatre threads :
+**585 réussis, 55 échecs, 6 ignorés, 228 filtrés ; 8,39 s.** Commande exacte
+et liste brute des échecs : baseline-daemon-lib-2026-09-05.txt.
+Les totaux des passes ciblées ne s'ajoutent PAS à ce total : elles se recouvrent.
+
+Exclusions de sécurité, pas masquage d'un rouge : wrapper et presence_tests
+(anciens bootstrap/fournisseurs et cargo Maicie imbriqué), test managed_process
+utilisant le PGID du harnais, test reaper scannant l'hôte, deux sondes sur socket
+/tmp fixe. Elles restent à porter ; aucun --ignored global.
+
+La majorité des rouges concerne des fixtures antérieures à UUID/--agent-id
+(CLI, fleet, lifecycle, MCP identity, helper daemon). Fleet crash échoue
+avant son oracle sur EOF de son enfant. Six rouges UI viennent de SUN_LEN
+sous TMPDIR long ; les scénarios runtime/projet ont aussi des gardes de
+politique/activation en échec. Ils seront retirés pour leur périmètre T010/T011,
+jamais pour leur couleur. Un rouge human_inbox est une adaptation T007 encore
+nécessaire : l'ancien test attend « 0600 », mais la nouvelle garde peut
+refuser son chemin extérieur au namespace avant les permissions. Ne pas
+présenter ces 55 rouges comme tous antérieurs à T007 sans distinction.
+
 ## 2026-09-05 — T005 : reprise des crash-tests autorisés et baseline guichet
+
+Passe complémentaire auditée des unités daemon : compilation `cargo test
+--offline -p bridget-daemon --lib --no-run` (3,06 s), puis sous env -i,
+umask 077, HOME/TMPDIR=/private/tmp/bg089-lib-safe.ZF3jFl et
+BRIDGET_HOME=.../state, BRIDGET_SOCKET=.../state/bridget.sock :
+`/usr/bin/perl -e 'alarm 180; exec @ARGV' target/debug/deps/bridget_daemon-b7902f0f20bc17cc registry::tests:: lifecycle::tests:: attach::tests:: runtime::tests:: disk_hygiene::tests:: reprise::tests:: --skip project_runtime:: --skip la_trace_de_reprise_n_est_pas_lue_quand_la_base_est_ailleurs --test-threads=4`.
+Résultat : **121 réussis, 5 échecs**, 0,50 s, 748 filtrés. Les PTY réels,
+POLLIN|POLLHUP, raw/termios, journal fragmenté, reprise last_seq+1, gaps,
+limites de mémoire et saturation attach sont verts. Pas de fournisseur,
+Docker ou tmux réel ; le test Git initialise seulement un dépôt privé.
+Échecs historiques d'identité : attach::explique_les_refus_non_acp_et_nom_inconnu
+compare désormais des UUID à ses anciens libellés ; les quatre tests
+lifecycle le_refus_de_cwd_nomme_la_machine_cherchee_et_la_machine_demandeuse,
+matrice_sc003_couvre_les_onze_familles_sans_residu_operationnel,
+session_claude_native_est_preparable_comme_equipier_gere et
+spec_066_runtime_docker_n_exige_jamais_la_commande_fournisseur_sur_l_hote
+construisent un agent_id de spawn invalide. Leurs attendus ne sont pas
+affaiblis ; adaptation des fixtures dans T015/T019 et retrait justifié du
+seul scénario Docker dans T011. Le filtre reprise exclu utilise une socket
+fixe /tmp : il n'est pas compté parmi les réussites.
 
 Autorisation explicite de l'utilisateur (« oups pardon oui kill ») : SIGKILL
 uniquement sur les enfants créés par les harnais isolés. Aucun signal à la

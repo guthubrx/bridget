@@ -5,42 +5,51 @@ use bridget_transport::protocol::{
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
 const SERVICE_SCOPE: &str = "016_service_abcdef0123456789abcdef0123456789";
 
 fn unique_home() -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!("bc-{}-{:x}", std::process::id(), nonce & 0xffff))
+    let path = std::env::temp_dir().join(format!(
+        "bc-{}-{}",
+        std::process::id(),
+        &uuid::Uuid::new_v4().simple().to_string()[..12]
+    ));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&path)
+        .unwrap();
+    path.canonicalize().unwrap()
 }
 
 fn socket(home: &Path) -> PathBuf {
-    home.join(".cache/bridget/bridget.sock")
+    home.join("bridget.sock")
 }
 
 fn wait_for_coordination_schema(home: &Path) {
-    let database = home.join(".cache/bridget/bridget.db");
+    let database = home.join("bridget.db");
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        let schema_ready = rusqlite::Connection::open(&database)
-            .and_then(|connection| {
-                connection.query_row(
-                    "SELECT EXISTS(
+        let schema_ready = rusqlite::Connection::open_with_flags(
+            &database,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .and_then(|connection| {
+            connection.query_row(
+                "SELECT EXISTS(
                          SELECT 1 FROM sqlite_master
                          WHERE type = 'table'
                            AND name = 'guichet_coordination_stream_state'
                      )",
-                    [],
-                    |row| row.get::<_, bool>(0),
-                )
-            })
-            .unwrap_or(false);
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+        })
+        .unwrap_or(false);
         if schema_ready {
             return;
         }
@@ -52,45 +61,119 @@ fn wait_for_coordination_schema(home: &Path) {
     }
 }
 
-fn start_daemon(home: &Path) -> Child {
-    std::fs::create_dir_all(home).unwrap();
-    let child = Command::new(env!("CARGO_BIN_EXE_bridget"))
-        .arg("daemon")
-        .env("HOME", home)
-        .spawn()
+struct TestDaemon(Child);
+
+impl TestDaemon {
+    fn signal(&mut self, signal: libc::c_int) -> std::io::Result<()> {
+        if self.0.try_wait()?.is_some() {
+            return Ok(());
+        }
+        let observed = Command::new("/bin/ps")
+            .args(["-ww", "-p", &self.0.id().to_string(), "-o", "command="])
+            .output()?;
+        let command = String::from_utf8_lossy(&observed.stdout);
+        if !command.contains(env!("CARGO_BIN_EXE_bridget"))
+            || command.to_ascii_lowercase().contains("firefox")
+        {
+            if self.0.try_wait()?.is_some() {
+                return Ok(());
+            }
+            return Err(std::io::Error::other(format!(
+                "PID enfant inattendu : {command}"
+            )));
+        }
+        if unsafe { libc::kill(self.0.id() as libc::pid_t, signal) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    fn kill(&mut self) -> std::io::Result<()> {
+        self.signal(libc::SIGKILL)
+    }
+
+    fn wait(&mut self) -> std::io::Result<ExitStatus> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = self.0.try_wait()? {
+                return Ok(status);
+            }
+            if Instant::now() >= deadline {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "enfant non récolté",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+impl Drop for TestDaemon {
+    fn drop(&mut self) {
+        if matches!(self.0.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        let _ = self.signal(libc::SIGKILL);
+        let _ = self.wait();
+    }
+}
+
+fn start_daemon(home: &Path) -> TestDaemon {
+    spawn_daemon(home, None)
+}
+
+fn start_daemon_with_sync(home: &Path, sync: &Path) -> TestDaemon {
+    spawn_daemon(home, Some(sync))
+}
+
+fn spawn_daemon(home: &Path, sync: Option<&Path>) -> TestDaemon {
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(home.join("test-daemon.log"))
         .unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
+    command
+        .arg("daemon")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", home)
+        .env("TMPDIR", home)
+        .env("BRIDGET_HOME", home)
+        .env("BRIDGET_SOCKET", socket(home))
+        .env("HOSTNAME", "coordination-test")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(log);
+    if let Some(sync) = sync {
+        command.env("BRIDGET_TEST_SYNC_DIR", sync);
+    }
+    let mut child = TestDaemon(command.spawn().unwrap());
     let deadline = Instant::now() + Duration::from_secs(3);
     while UnixStream::connect(socket(home)).is_err() {
+        assert!(
+            child.0.try_wait().unwrap().is_none(),
+            "daemon sorti : {}",
+            std::fs::read_to_string(home.join("test-daemon.log")).unwrap()
+        );
         assert!(
             Instant::now() < deadline,
             "daemon de coordination non démarré"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    // `listen(2)` précède l'ouverture du Store dans le daemon : une connexion
-    // réussie ne prouve donc pas encore que les migrations sont terminées.
     wait_for_coordination_schema(home);
     child
 }
 
-fn start_daemon_with_sync(home: &Path, sync: &Path) -> Child {
-    std::fs::create_dir_all(home).unwrap();
-    let child = Command::new(env!("CARGO_BIN_EXE_bridget"))
-        .arg("daemon")
-        .env("HOME", home)
-        .env("BRIDGET_TEST_SYNC_DIR", sync)
-        .spawn()
-        .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while UnixStream::connect(socket(home)).is_err() {
-        assert!(
-            Instant::now() < deadline,
-            "daemon de coordination non démarré"
-        );
-        std::thread::sleep(Duration::from_millis(10));
+fn agent_id(name: &str) -> &'static str {
+    match name {
+        "maicie" => "00000000-0000-4000-8000-000000000161",
+        "codex-1" => "00000000-0000-4000-8000-000000000162",
+        _ => panic!("agent hors fixture"),
     }
-    wait_for_coordination_schema(home);
-    child
 }
 
 fn connect(home: &Path) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
@@ -131,10 +214,10 @@ fn next_raw(reader: &mut BufReader<UnixStream>) -> String {
 fn register(
     reader: &mut BufReader<UnixStream>,
     writer: &mut BufWriter<UnixStream>,
-    _name: &str,
+    name: &str,
     instance_id: &str,
 ) {
-    let agent_id = uuid::Uuid::new_v4().to_string();
+    let agent_id = agent_id(name).to_string();
     assert!(matches!(
         request(
             reader,
@@ -265,12 +348,8 @@ fn wait_marker(marker: &Path) {
     }
 }
 
-fn kill_sigkill(child: &mut Child) {
-    assert_eq!(
-        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGKILL) },
-        0,
-        "SIGKILL réel du daemon"
-    );
+fn kill_sigkill(child: &mut TestDaemon) {
+    child.kill().expect("SIGKILL réel du daemon enfant vérifié");
     child.wait().unwrap();
 }
 
@@ -294,7 +373,8 @@ fn reminder_sent_est_atteste_apres_ecriture_et_releve_au_meme_event_id() {
     );
     let (mut service_reader, service_writer) = coordination_service(&home);
 
-    let mut tracked = BridgetMessage::new("maicie", "codex-1", "rapport attendu");
+    let mut tracked =
+        BridgetMessage::new(agent_id("maicie"), agent_id("codex-1"), "rapport attendu");
     tracked.reply = true;
     tracked.reply_timeout = Some(3);
     let request_id = tracked.id.clone();
@@ -328,7 +408,7 @@ fn reminder_sent_est_atteste_apres_ecriture_et_releve_au_meme_event_id() {
         } => {
             assert_eq!(version, 1);
             assert_eq!(event_request_id, request_id);
-            assert_eq!(recipient, "codex-1");
+            assert_eq!(recipient, agent_id("codex-1"));
             assert_eq!(generation, 1);
             assert!(observed_at > 0, "l'instant est attesté par Bridget");
             (event_id, reminder_message_id, observed_at)
@@ -448,8 +528,8 @@ fn texte_relance_ne_fabrique_jamais_un_fait_de_coordination() {
             &mut sender_reader,
             &mut sender_writer,
             WrapperToDaemon::Send(BridgetMessage::new(
-                "maicie",
-                "codex-1",
+                agent_id("maicie"),
+                agent_id("codex-1"),
                 "relance : ce texte ordinaire ne constitue pas un fait",
             )),
         ),
@@ -487,8 +567,9 @@ fn texte_relance_ne_fabrique_jamais_un_fait_de_coordination() {
 )]
 fn reprise_cursee_survit_aux_crashs_reels_et_conserve_les_octets() {
     let home = unique_home();
-    let sync = home.join("sync");
-    std::fs::create_dir_all(&sync).unwrap();
+    // Les FIFO du harnais ne sont pas de l'état Bridget : le namespace
+    // refuse justement les types spéciaux. Barrières dans une racine sœur.
+    let sync = unique_home();
 
     // Frontière avant persistance : le SIGKILL au jalon prouve qu'aucun fait
     // n'est inventé après redémarrage. Ce n'est pas un arrêt coopératif.
@@ -510,7 +591,7 @@ fn reprise_cursee_survit_aux_crashs_reels_et_conserve_les_octets() {
         "codex-1",
         "cursor-recipient",
     );
-    let mut tracked = BridgetMessage::new("maicie", "codex-1", "rappel cursé");
+    let mut tracked = BridgetMessage::new(agent_id("maicie"), agent_id("codex-1"), "rappel cursé");
     tracked.reply = true;
     tracked.reply_timeout = Some(3);
     assert!(matches!(
@@ -527,7 +608,7 @@ fn reprise_cursee_survit_aux_crashs_reels_et_conserve_les_octets() {
     ));
     wait_marker(&before_marker);
     kill_sigkill(&mut daemon);
-    let database = home.join(".cache/bridget/bridget.db");
+    let database = home.join("bridget.db");
     let connection = rusqlite::Connection::open(&database).unwrap();
     let before_count: i64 = connection
         .query_row(
@@ -563,7 +644,11 @@ fn reprise_cursee_survit_aux_crashs_reels_et_conserve_les_octets() {
         "codex-1",
         "cursor-recipient-restarted",
     );
-    let mut tracked = BridgetMessage::new("maicie", "codex-1", "rappel durable cursé");
+    let mut tracked = BridgetMessage::new(
+        agent_id("maicie"),
+        agent_id("codex-1"),
+        "rappel durable cursé",
+    );
     tracked.reply = true;
     tracked.reply_timeout = Some(3);
     assert!(matches!(
@@ -649,13 +734,14 @@ fn reprise_cursee_survit_aux_crashs_reels_et_conserve_les_octets() {
     daemon.kill().unwrap();
     daemon.wait().unwrap();
     let _ = std::fs::remove_dir_all(home);
+    let _ = std::fs::remove_dir_all(sync);
 }
 
 #[test]
 fn gap_et_unavailable_restant_des_observations_distinctes() {
     let home = unique_home();
     let mut daemon = start_daemon(&home);
-    let database = home.join(".cache/bridget/bridget.db");
+    let database = home.join("bridget.db");
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
         .execute(

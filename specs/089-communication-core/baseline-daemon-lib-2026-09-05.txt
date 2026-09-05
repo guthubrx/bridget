@@ -1,0 +1,64 @@
+Référence 089 — passe lib conservatrice après 10cd5f0
+Source : sortie réelle du binaire de tests ; aucune expectation régénérée.
+HOME/TMPDIR privés : /private/tmp/bg089-lib-safe.ZF3jFl
+Commande exacte (umask 077) :
+env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME=/private/tmp/bg089-lib-safe.ZF3jFl TMPDIR=/private/tmp/bg089-lib-safe.ZF3jFl BRIDGET_HOME=/private/tmp/bg089-lib-safe.ZF3jFl/state BRIDGET_SOCKET=/private/tmp/bg089-lib-safe.ZF3jFl/state/bridget.sock HOSTNAME=baseline-089 /usr/bin/perl -e 'alarm 600; exec @ARGV' target/debug/deps/bridget_daemon-b7902f0f20bc17cc --skip wrapper:: --skip daemon::presence_tests:: --skip managed_process::tests::marqueur_perime_est_retire_sans_signaler_le_pid_recycle --skip reaper::tests::raccord_productif_lit_la_racine_fournie_et_protege_un_nom_avec_tiret --skip reprise::tests::la_trace_de_reprise_n_est_pas_lue_quand_la_base_est_ailleurs --skip cli::idempotency_projection_tests::status_ne_compte_pas_les_messages_d_une_base_qui_n_est_pas_celle_du_daemon --test-threads=4 --quiet
+
+failures:
+    attach::tests::explique_les_refus_non_acp_et_nom_inconnu
+    cli::hook_tests::arguments_attach_resolvent_les_trois_fenetres
+    cli::hook_tests::rejeu_d_un_ordre_memorise_n_exige_pas_de_redeclarer_la_survie
+    cli::hook_tests::spawn_cli_rejoue_l_enveloppe_memorisee_octet_pour_octet
+    cli::hook_tests::spawn_neuf_refuse_de_partir_sans_choix_de_survie
+    cli::hook_tests::statusline_attribue_ses_faits_sans_se_declarer
+    cli::hook_tests::stop_cli_genere_ou_reutilise_un_command_id
+    cli::idempotency_projection_tests::depot_delegate_versionne_atomiquement_sa_cible_de_revue
+    cli::idempotency_projection_tests::depot_guichet_parse_les_trois_mutations_sans_chemin_ni_principal_annexe
+    cli::idempotency_projection_tests::depot_guichet_rejoue_le_canon_ferme_avec_les_trois_cles
+    cli::idempotency_projection_tests::json_publie_la_persistance_meme_indeterminee
+    daemon::intentions_de_soumission_restent_distinctes_et_persistantes
+    daemon::spec_066_ingress_accepte_uniquement_la_reservation_avant_register
+    daemon::spec_066_ingress_prive_refuse_sans_reservation_avant_toute_inscription
+    daemon::spec_066_lifecycle_refuse_l_action_destructive_si_agent_projet_actif
+    daemon::spec_066_redemarrage_retablit_ingress_sans_dupliquer_l_agent_docker
+    daemon::spec_068_daemon_persiste_remet_et_accuse_l_incident_delegue_au_seul_parent
+    daemon::spec_068_enfant_sans_lien_ne_notifie_aucun_coordinateur
+    daemon::spec_068_register_rejoue_apres_registered_les_incidents_delegues_en_ordre
+    daemon::spec_085_activation_echouee_compense_conteneur_ingress_et_conserve_host
+    daemon::spec_085_redemarrage_reconcilie_runtime_sans_creer_un_second_conteneur
+    daemon::temoin_commande_controle_est_recue_puis_resolue_par_le_wrapper_cible
+    daemon::transition_execution_refusee_si_wrapper_non_proprietaire
+    fleet::tests::adoption_exige_une_generation_connectee_et_reconstruit_un_stopped_complet
+    fleet::tests::crash_reel_aux_frontieres_d503_rejoue_une_issue_unique
+    fleet::tests::deux_spawns_simultanes_du_meme_nom_reservent_un_seul_slot
+    fleet::tests::domain_est_persiste_dans_fleet_json_apres_connexion
+    fleet::tests::mismatch_expiration_et_register_tardif_sont_terminaux
+    fleet::tests::quota_est_reserve_atomiquement_et_le_refus_est_rejouable
+    fleet::tests::relance_change_de_generation_sans_perdre_le_stopped_et_decommission_reserve_le_nom
+    fleet::tests::reprise_expose_les_generations_en_vol_dans_l_ordre_des_noms
+    fleet::tests::retry_en_vol_attend_le_vrai_register_sans_connected_synthetique
+    fleet::tests::scope_superviseur_et_issue_persistante_survivent_au_redemarrage
+    fleet::tests::stop_connecte_preserve_l_issue_spawn_et_marque_l_agent_arrete
+    fleet::tests::stop_invalide_un_lancement_avant_toute_io_et_rejoue_cancelled
+    human_inbox::tests::configuration_du_canal_exige_0600_et_chemin_absolu
+    lifecycle::tests::le_refus_de_cwd_nomme_la_machine_cherchee_et_la_machine_demandeuse
+    lifecycle::tests::matrice_sc003_couvre_les_onze_familles_sans_residu_operationnel
+    lifecycle::tests::session_claude_native_est_preparable_comme_equipier_gere
+    lifecycle::tests::spec_066_runtime_docker_n_exige_jamais_la_commande_fournisseur_sur_l_hote
+    mcp_identity::tests::ignore_un_nom_invalide_avant_de_consulter_les_ancetres
+    mcp_identity::tests::inventaire_mesure_sur_l_hote_distingue_vivant_et_pid_recycle
+    mcp_identity::tests::premier_agent_du_meme_binaire_gagne_dans_la_filiation
+    mcp_identity::tests::resout_la_filiation_sans_variables_applicatives
+    mcp_identity::tests::suit_rename_et_les_ancetres_valides
+    mcp_identity::tests::traverse_une_chaine_npx_de_trois_processus
+    project_runtime::tests::absent_policy_file_closes_only_docker_runtime
+    project_runtime::tests::ingress_prive_est_deterministe_et_refuse_toute_identite_divergente
+    project_runtime::tests::policy_loader_rejects_group_writable_file
+    ui::tests::spec_080_confirmation_ui_cree_puis_enregistre_le_projet_dans_le_registre
+    ui::tests::spec_081_capacite_ronde_absente_ne_fabrique_pas_un_etat
+    ui::tests::spec_081_perte_de_reponse_ronde_reste_une_indisponibilite_fermee
+    ui::tests::spec_081_relais_valide_et_confirme_la_mutation_de_ronde
+    ui::tests::spec_085_route_runtime_projette_etat_confirme_sans_details_docker
+    ui::tests::spec_086_relais_dogfooding_exige_confirmation_et_projette_les_etats
+
+test result: FAILED. 585 passed; 55 failed; 6 ignored; 0 measured; 228 filtered out; finished in 8.39s
