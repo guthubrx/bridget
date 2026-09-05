@@ -20,10 +20,6 @@ fn le_noyau_n_a_aucune_dependance_maicie_meme_en_test() {
         ("daemon", include_str!("../src/daemon.rs")),
         ("migration", include_str!("../src/identity_migration.rs")),
         ("reprise", include_str!("../src/reprise.rs")),
-        (
-            "projection publique",
-            include_str!("../src/mission_projection.rs"),
-        ),
         ("migration test", include_str!("identity_migration_test.rs")),
     ] {
         assert!(!source.contains("maicie::"), "{name}: import privé");

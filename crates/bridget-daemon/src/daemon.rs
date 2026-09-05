@@ -8,6 +8,9 @@ use bridget_transport::greffe_authorization::{
 #[cfg(test)]
 use bridget_transport::protocol::ProjectSystemRequest;
 use bridget_transport::protocol::{
+    ARTIFACT_READ_VERSION, ArtifactReadOutcome, ArtifactReadRefusal, ArtifactReadRequest,
+};
+use bridget_transport::protocol::{
     AdoptStoppedOutcome, AgentLinkEventFrame, AttachRefusal, CLIENT_CONTRACT_VERSION,
     COORDINATION_EVENTS_VERSION, COORDINATION_STREAM_VERSION, ClientCapability, ClientRefusal,
     ConnectionRole, DecommissionOutcome, DelegatedRuntimeEventFrame, DiskSpaceFact,
@@ -4899,6 +4902,34 @@ fn handle_connection(
                 continue;
             }
 
+            // Contrat fermé de lecture : une extension inconnue ne disparaît
+            // pas silencieusement dans les defaults Serde de l'enveloppe commune.
+            if serde_json::from_str::<serde_json::Value>(&line)
+                .ok()
+                .is_some_and(|value| {
+                    value.get("type").and_then(|kind| kind.as_str()) == Some("artifact_read")
+                })
+                && !decode::<WrapperToDaemon>(&line)
+                    .ok()
+                    .is_some_and(|message| {
+                        matches!(message, WrapperToDaemon::ArtifactRead { .. })
+                            && encode(&message).is_ok_and(|canonical| canonical == line)
+                    })
+            {
+                writeln!(
+                    my_writer,
+                    "{}",
+                    encode(&artifact_read_response(
+                        None,
+                        ArtifactReadOutcome::Rejected {
+                            reason: ArtifactReadRefusal::InvalidRequest
+                        }
+                    ))?
+                )?;
+                my_writer.flush()?;
+                continue;
+            }
+
             let msg: WrapperToDaemon = match decode(&line) {
                 Ok(m) => m,
                 Err(e) => {
@@ -5364,6 +5395,7 @@ fn project_runtime_view(
 /// Projection unique de la capacité Docker. Elle ne transporte ni chemin de
 /// configuration, ni sortie Docker, ni détail de l'image : l'UI et le daemon
 /// ne publient que les raisons fermées du contrat de contrôle.
+#[cfg(test)]
 pub(crate) fn project_runtime_capability(
     runtime_config: Option<&ProjectRuntimePolicyConfig>,
     resource_catalog_available: bool,
@@ -7817,6 +7849,73 @@ fn artifact_scope_for_agent(agent_id: &str) -> String {
     format!("conversation-agent:{agent_id}")
 }
 
+/// Autorité unique de publication ET lecture : principal/instance attestés,
+/// route vivante, ou connexion MCP auxiliaire déjà reconnue pour cette même
+/// instance. Le client n'élargit jamais sa portée en fournissant un identifiant.
+fn artifact_access_scope(
+    st: &DaemonState,
+    conn_id: &str,
+) -> Result<(String, String, String), ArtifactReadRefusal> {
+    let agent = st
+        .conn_names
+        .get(conn_id)
+        .ok_or(ArtifactReadRefusal::IdentityUnavailable)?;
+    let instance = st
+        .conn_instances
+        .get(conn_id)
+        .ok_or(ArtifactReadRefusal::IdentityUnavailable)?;
+    let route = st
+        .router
+        .get_agent(agent)
+        .ok_or(ArtifactReadRefusal::IdentityUnavailable)?;
+    if !st.connections.contains_key(&route.connection_id)
+        || st.conn_instances.get(&route.connection_id) != Some(instance)
+        || (route.connection_id != conn_id && !st.auxiliary_connections.contains(conn_id))
+        || !st.presences.get(instance).is_some_and(|presence| {
+            presence.name == *agent
+                && presence_within_retention(presence)
+                && matches!(presence.state.as_str(), "connected" | "busy")
+        })
+    {
+        return Err(ArtifactReadRefusal::IdentityUnavailable);
+    }
+    let scope = match st.fleet.project_for_agent(agent) {
+        Some(project) => {
+            let binding = st
+                .store
+                .project_binding(&project.project_id)
+                .map_err(|_| ArtifactReadRefusal::StorageUnavailable)?
+                .ok_or(ArtifactReadRefusal::ScopeUnavailable)?;
+            if binding.state != crate::store::ProjectBindingState::Active
+                || binding.generation != project.binding_generation
+            {
+                return Err(ArtifactReadRefusal::ScopeUnavailable);
+            }
+            project.project_id
+        }
+        None => artifact_scope_for_agent(agent),
+    };
+    Ok((agent.clone(), instance.clone(), scope))
+}
+
+fn artifact_read_response(
+    request: Option<&ArtifactReadRequest>,
+    outcome: ArtifactReadOutcome,
+) -> DaemonToWrapper {
+    DaemonToWrapper::ArtifactReadResult {
+        version: ARTIFACT_READ_VERSION,
+        artifact_ref: request
+            .filter(|r| r.artifact_ref.len() <= bridget_transport::protocol::MAX_ARTIFACT_REF_BYTES)
+            .map(|r| r.artifact_ref.clone())
+            .unwrap_or_default(),
+        version_ref: request
+            .filter(|r| r.version_ref.len() <= bridget_transport::protocol::MAX_ARTIFACT_REF_BYTES)
+            .map(|r| r.version_ref.clone())
+            .unwrap_or_default(),
+        outcome,
+    }
+}
+
 fn prepare_dispatch(
     st: &mut DaemonState,
     message: &mut bridget_core::BridgetMessage,
@@ -9343,6 +9442,7 @@ fn handle_wrapper_message(
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ClientHello { .. }
                 | WrapperToDaemon::ArtifactPublish { .. }
+                | WrapperToDaemon::ArtifactRead { .. }
                 | WrapperToDaemon::ProjectRoundRequest { .. }
                 | WrapperToDaemon::ProjectRoundDispatch { .. }
                 | WrapperToDaemon::RuntimeIngressHello { .. }
@@ -9544,6 +9644,7 @@ fn handle_wrapper_message(
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ServiceHello { .. }
                 | WrapperToDaemon::ArtifactPublish { .. }
+                | WrapperToDaemon::ArtifactRead { .. }
                 | WrapperToDaemon::RuntimeIngressHello { .. }
                 | WrapperToDaemon::RuntimeIngressPreflight { .. }
                 | WrapperToDaemon::ProjectRegistryRequest { .. }
@@ -9711,6 +9812,22 @@ fn handle_wrapper_message(
                 reason: RuntimeIngressRefusal::ReservationMissing,
             })
         }
+        WrapperToDaemon::ArtifactRead { request } => {
+            let result = (|| {
+                let (scope, database_path, artifact_root) = {
+                    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                    let (_, _, scope) = artifact_access_scope(&st, conn_id)?;
+                    (scope, st.db_path.clone(), st.artifact_root.clone())
+                };
+                ArtifactService::open(&database_path, &artifact_root, ArtifactPolicy::default())
+                    .map_err(|_| ArtifactReadRefusal::StorageUnavailable)?
+                    .read(&scope, &request)
+            })();
+            Some(artifact_read_response(
+                Some(&request),
+                result.unwrap_or_else(|reason| ArtifactReadOutcome::Rejected { reason }),
+            ))
+        }
         WrapperToDaemon::ArtifactPublish {
             contract_version,
             canonical_publication,
@@ -9741,38 +9858,22 @@ fn handle_wrapper_message(
                 };
             let (context, database_path, artifact_root) = {
                 let st = state.lock().unwrap_or_else(|error| error.into_inner());
-                let Some(agent_name) = st.conn_names.get(conn_id).cloned() else {
-                    return Some(artifact_publication_refusal(
-                        "identity_unavailable",
-                        "La publication exige une identité d'agent enregistrée.",
-                    ));
-                };
-                let Some(instance_id) = st.conn_instances.get(conn_id).cloned() else {
-                    return Some(artifact_publication_refusal(
-                        "identity_unavailable",
-                        "La publication exige une instance d'agent attestée.",
-                    ));
-                };
-                let project_id = match st.fleet.project_for_agent(&agent_name) {
-                    Some(project) => {
-                        let binding_matches = st
-                            .store
-                            .project_binding(&project.project_id)
-                            .ok()
-                            .flatten()
-                            .is_some_and(|binding| {
-                                binding.state == crate::store::ProjectBindingState::Active
-                                    && binding.generation == project.binding_generation
-                            });
-                        if !binding_matches {
-                            return Some(artifact_publication_refusal(
-                                "project_binding_unavailable",
-                                "La liaison de projet n'est plus active ou n'est plus cohérente.",
-                            ));
-                        }
-                        project.project_id
+                let (agent_name, instance_id, project_id) = match artifact_access_scope(
+                    &st, conn_id,
+                ) {
+                    Ok(scope) => scope,
+                    Err(reason) => {
+                        return Some(artifact_publication_refusal(
+                            match reason {
+                                ArtifactReadRefusal::ScopeUnavailable => {
+                                    "project_binding_unavailable"
+                                }
+                                ArtifactReadRefusal::StorageUnavailable => "storage_unavailable",
+                                _ => "identity_unavailable",
+                            },
+                            "La connexion ne porte pas une identité, une instance et une portée actives.",
+                        ));
                     }
-                    None => artifact_scope_for_agent(&agent_name),
                 };
                 let context = ArtifactPublicationContext {
                     conversation_reference: format!("conversation:{project_id}:{agent_name}"),
@@ -17091,6 +17192,38 @@ mod presence_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    // La lecture et la publication partagent l'autorité d'un vrai Register,
+    // pas des entrées fabriquées dans conn_names/conn_instances.
+    fn register_artifact_fixture(state: &mut DaemonState, conn: &str, agent: &str) -> UnixStream {
+        let (daemon, peer) = UnixStream::pair().unwrap();
+        state.connections.insert(
+            conn.to_owned(),
+            Arc::new(Mutex::new(BufWriter::new(daemon))),
+        );
+        let registered = handle_register_with_channel(
+            conn,
+            2,
+            "fixture".into(),
+            agent.into(),
+            Some("fixture".into()),
+            Some("acp".into()),
+            ChannelReport::Known("unix".into()),
+            Some(PresenceMode::Cli),
+            None,
+            Some("test".into()),
+            Some("instance-artifact".into()),
+            None,
+            false,
+            Some(false),
+            state,
+        );
+        assert!(
+            matches!(registered, DaemonToWrapper::Registered { .. }),
+            "{registered:?}"
+        );
+        peer
+    }
+
     #[test]
     fn publication_artefact_sans_projet_reste_dans_la_portee_de_conversation() {
         let root = std::env::temp_dir().join(format!(
@@ -17100,12 +17233,7 @@ mod presence_tests {
         ));
         let (mut state, config) = recovery_fixture_state(&root);
         let agent_id = "a3d27a89-80d5-4e0f-9b84-cf5523ecb026";
-        state
-            .conn_names
-            .insert("conn-artifact".to_string(), agent_id.to_string());
-        state
-            .conn_instances
-            .insert("conn-artifact".to_string(), "instance-artifact".to_string());
+        let _peer = register_artifact_fixture(&mut state, "conn-artifact", agent_id);
         state.artifact_root = config.db_path.with_extension("artifacts");
         let publication: ArtifactPublicationV1 = serde_json::from_str(include_str!(
             "../tests/fixtures/artifacts/chart-external-v1.json"
@@ -24618,51 +24746,10 @@ mod presence_tests {
             std::process::id(),
             Uuid::new_v4()
         ));
-        let registry_home = base.join("home");
-        std::fs::create_dir_all(registry_home.join(".config/bridget")).unwrap();
-        let registry_file = registry_home.join(".config/bridget/agents.json");
-        std::fs::write(
-            &registry_file,
-            r#"{"agents":{"fixture":{"command":"/bin/sh","protocol":"acp","forbidden_env":[],"pass_env":[]}}}"#,
-        )
-        .unwrap();
-        std::fs::set_permissions(&registry_file, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let config = DaemonConfig {
-            socket_path: base.join("bridget.sock"),
-            db_path: base.join("bridget.db"),
-            log_path: base.join("daemon.log"),
-            circuit_breaker_window: 180,
-            circuit_breaker_limit: 8,
-            dedup_window: 180,
-            quarantine_window: 3600,
-            retention_days: 7,
-            project_root_policy_path: None,
-            project_runtime_policy_path: None,
-            project_resource_catalog_path: None,
-        };
-        // Un test qui panique en tenant ce verrou ne doit pas empoisonner les
-        // suivants : on relit le verrou empoisonné plutôt que de propager.
-        let _home_lock = HOME_REGISTRY_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_home = std::env::var_os("HOME");
-        unsafe { std::env::set_var("HOME", &registry_home) };
-        let (managed_tx, _managed_rx) = mpsc::channel();
-        let state_result = DaemonState::new(&config, managed_tx);
-        if let Some(home) = previous_home {
-            unsafe { std::env::set_var("HOME", home) };
-        } else {
-            unsafe { std::env::remove_var("HOME") };
-        }
-        let mut state = state_result.unwrap();
+        let (mut state, config) = recovery_fixture_state(&base);
         let agent_id = "a3d27a89-80d5-4e0f-9b84-cf5523ecb026";
         let now = unix_timestamp();
-        state
-            .conn_names
-            .insert("conn-1".to_string(), agent_id.to_string());
-        state
-            .conn_instances
-            .insert("conn-1".to_string(), "instance-artifact".to_string());
+        let _peer = register_artifact_fixture(&mut state, "conn-1", agent_id);
         state.artifact_root = config.db_path.with_extension("artifacts");
         state
             .store
@@ -24728,6 +24815,117 @@ mod presence_tests {
                 ..
             })
         ));
+        let Some(DaemonToWrapper::ArtifactPublicationResult {
+            receipt_json: Some(bytes),
+            ..
+        }) = response
+        else {
+            panic!("reçu attendu")
+        };
+        let receipt: crate::artifact_types::ArtifactReceiptV1 =
+            serde_json::from_slice(&bytes).unwrap();
+        let read = WrapperToDaemon::ArtifactRead {
+            request: ArtifactReadRequest {
+                version: 1,
+                artifact_ref: receipt.artifact_ref.clone(),
+                version_ref: receipt.version_ref.clone(),
+                kind: bridget_transport::protocol::ArtifactReadKind::Manifest,
+                offset: 0,
+                limit: 4096,
+            },
+        };
+        assert!(matches!(
+            handle_wrapper_message("conn-1", read.clone(), &shared),
+            Some(DaemonToWrapper::ArtifactReadResult {
+                outcome: ArtifactReadOutcome::Chunk { .. },
+                ..
+            })
+        ));
+
+        // Oracle conservé du relais retiré : une version d'un AUTRE projet
+        // reste invisible, même si son identifiant est connu.
+        let mut service = ArtifactService::open(
+            &config.db_path,
+            &config.db_path.with_extension("artifacts"),
+            Default::default(),
+        )
+        .unwrap();
+        let other = service
+            .publish(
+                ArtifactPublicationContext {
+                    project_id: "project-other".into(),
+                    conversation_reference: "conversation:other".into(),
+                    turn_reference: "turn:other".into(),
+                    created_by: agent_id.into(),
+                    origin_instance: "instance-other".into(),
+                    observed_at: now,
+                },
+                publication.clone(),
+            )
+            .unwrap();
+        let other = match other {
+            ArtifactPersistResult::Created(r) | ArtifactPersistResult::Replayed(r) => r,
+        };
+        let cross_project = WrapperToDaemon::ArtifactRead {
+            request: ArtifactReadRequest {
+                version: 1,
+                artifact_ref: other.artifact_ref,
+                version_ref: other.version_ref,
+                kind: bridget_transport::protocol::ArtifactReadKind::Manifest,
+                offset: 0,
+                limit: 4096,
+            },
+        };
+        assert!(matches!(
+            handle_wrapper_message("conn-1", cross_project, &shared),
+            Some(DaemonToWrapper::ArtifactReadResult {
+                outcome: ArtifactReadOutcome::Rejected {
+                    reason: ArtifactReadRefusal::NotFound
+                },
+                ..
+            })
+        ));
+
+        // Mutation : retirer le contrôle Active rend cette lecture possible.
+        shared
+            .lock()
+            .unwrap()
+            .store
+            .mark_project_binding_path_missing("project-artifact", now + 1)
+            .unwrap();
+        assert!(matches!(
+            handle_wrapper_message("conn-1", read.clone(), &shared),
+            Some(DaemonToWrapper::ArtifactReadResult {
+                outcome: ArtifactReadOutcome::Rejected {
+                    reason: ArtifactReadRefusal::ScopeUnavailable
+                },
+                ..
+            })
+        ));
+        // La liaison redevient active, mais sa génération n'est PLUS celle
+        // figée au lancement. Retirer cette comparaison casse cet oracle.
+        let rebound = shared
+            .lock()
+            .unwrap()
+            .store
+            .rebind_project_binding("project-artifact", "/srv/projects/artifact-new", now + 2)
+            .unwrap();
+        assert_eq!(rebound.generation, 2);
+        assert!(matches!(
+            handle_wrapper_message("conn-1", read, &shared),
+            Some(DaemonToWrapper::ArtifactReadResult {
+                outcome: ArtifactReadOutcome::Rejected {
+                    reason: ArtifactReadRefusal::ScopeUnavailable
+                },
+                ..
+            })
+        ));
+        assert!(
+            matches!(handle_wrapper_message("conn-1", WrapperToDaemon::ArtifactPublish {
+            contract_version: ARTIFACT_CONTRACT_VERSION, canonical_publication: publication.canonical_bytes(),
+        }, &shared), Some(DaemonToWrapper::ArtifactPublicationResult { refusal_code: Some(code), .. }) if code == "project_binding_unavailable")
+        );
+        drop(service);
         drop(shared);
         let _ = std::fs::remove_dir_all(base);
     }

@@ -126,7 +126,6 @@ impl ArtifactService {
         self.policy
             .validate_publication(&publication)
             .map_err(|error| ArtifactServiceError::Validation(error.to_string()))?;
-        validate_native_kind(publication.kind)?;
         validate_provenance(&publication)?;
         self.prepare_html_publication(&mut publication)?;
         if cancelled() {
@@ -192,25 +191,6 @@ impl ArtifactService {
     ) -> Result<ArtifactPersistResult, ArtifactServiceError> {
         publication.parent_artifact_ref = Some(parent_artifact_ref.to_string());
         publication.publication_reason = crate::artifact_types::PublicationReason::Refresh;
-        self.publish(context, publication)
-    }
-
-    /// Enregistre explicitement l'état d'une interaction HTML comme une version
-    /// enfant. L'appelant fournit le manifeste complet attesté par Bridget :
-    /// aucune vue ne peut muter la version d'origine en place.
-    pub fn save_html_interaction(
-        &mut self,
-        context: ArtifactPublicationContext,
-        parent_artifact_ref: &str,
-        mut publication: ArtifactPublicationV1,
-    ) -> Result<ArtifactPersistResult, ArtifactServiceError> {
-        if publication.kind != ArtifactKind::Html {
-            return Err(ArtifactServiceError::Validation(
-                "la sauvegarde d'interaction exige un artefact HTML".to_owned(),
-            ));
-        }
-        publication.parent_artifact_ref = Some(parent_artifact_ref.to_owned());
-        publication.publication_reason = crate::artifact_types::PublicationReason::SaveInteraction;
         self.publish(context, publication)
     }
 
@@ -294,6 +274,96 @@ impl ArtifactService {
             .map_err(ArtifactServiceError::BlobStore)
     }
 
+    /// Même magasin canonique que la publication ; la portée a déjà été
+    /// attestée par le daemon. Ni chemin physique, ni accès par digest seul.
+    pub fn read(
+        &self,
+        scope: &str,
+        request: &bridget_transport::protocol::ArtifactReadRequest,
+    ) -> Result<
+        bridget_transport::protocol::ArtifactReadOutcome,
+        bridget_transport::protocol::ArtifactReadRefusal,
+    > {
+        use bridget_transport::protocol::{
+            ARTIFACT_READ_VERSION, ArtifactReadKind, ArtifactReadOutcome,
+            ArtifactReadRefusal as Refusal, MAX_ARTIFACT_READ_BYTES,
+        };
+        if request.version != ARTIFACT_READ_VERSION {
+            return Err(Refusal::UnsupportedVersion);
+        }
+        if request.limit == 0
+            || request.limit > MAX_ARTIFACT_READ_BYTES
+            || request.artifact_ref.is_empty()
+            || request.artifact_ref.len() > bridget_transport::protocol::MAX_ARTIFACT_REF_BYTES
+            || request.version_ref.is_empty()
+            || request.version_ref.len() > bridget_transport::protocol::MAX_ARTIFACT_REF_BYTES
+        {
+            return Err(Refusal::InvalidRequest);
+        }
+        let detail = self
+            .store
+            .version_detail(scope, &request.version_ref)
+            .map_err(|error| match error {
+                ArtifactStoreError::CorruptManifest => Refusal::CorruptContent,
+                _ => Refusal::StorageUnavailable,
+            })?
+            .filter(|detail| detail.item.artifact_ref == request.artifact_ref)
+            .ok_or(Refusal::NotFound)?;
+        let (bytes, total_len, digest) = match &request.kind {
+            ArtifactReadKind::Manifest => {
+                let total_len = detail.manifest_bytes.len() as u64;
+                if request.offset > total_len {
+                    return Err(Refusal::OffsetOutOfRange);
+                }
+                let end = request
+                    .offset
+                    .saturating_add(u64::from(request.limit))
+                    .min(total_len);
+                (
+                    detail.manifest_bytes[request.offset as usize..end as usize].to_vec(),
+                    total_len,
+                    detail.content_digest,
+                )
+            }
+            ArtifactReadKind::Blob { digest } => {
+                if digest.len() != 64
+                    || !digest
+                        .bytes()
+                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                {
+                    return Err(Refusal::InvalidRequest);
+                }
+                let blob = self
+                    .store
+                    .version_blob(scope, &request.version_ref, digest)
+                    .map_err(|_| Refusal::StorageUnavailable)?
+                    .ok_or(Refusal::BlobNotLinked)?;
+                if request.offset > blob.byte_length {
+                    return Err(Refusal::OffsetOutOfRange);
+                }
+                let bytes = self
+                    .blobs
+                    .read_slice(digest, blob.byte_length, request.offset, request.limit)
+                    .map_err(|error| match error {
+                        ArtifactBlobStoreError::Missing => Refusal::ContentUnavailable,
+                        ArtifactBlobStoreError::Corrupt { .. }
+                        | ArtifactBlobStoreError::Policy(_) => Refusal::CorruptContent,
+                        ArtifactBlobStoreError::InvalidDigest => Refusal::InvalidRequest,
+                        ArtifactBlobStoreError::Io(_) => Refusal::StorageUnavailable,
+                    })?;
+                (bytes, blob.byte_length, digest.clone())
+            }
+        };
+        let end = request.offset + bytes.len() as u64;
+        Ok(ArtifactReadOutcome::Chunk {
+            bytes,
+            total_len,
+            digest,
+            offset: request.offset,
+            next_offset: (end < total_len).then_some(end),
+        })
+    }
+
     pub fn blob_bytes(&self, digest: &str) -> Result<Vec<u8>, ArtifactServiceError> {
         self.blobs
             .read(digest)
@@ -348,7 +418,7 @@ impl ArtifactService {
             .ok_or_else(|| ArtifactServiceError::Validation("html canonique absent".to_owned()))?;
         if html.len() > 512 * 1024 {
             return Err(ArtifactServiceError::Validation(
-                "html sandboxé supérieur à 512 Kio".to_owned(),
+                "contenu HTML supérieur à 512 Kio".to_owned(),
             ));
         }
         let digest = self.ingest_blob(html.as_bytes())?;
@@ -372,13 +442,6 @@ impl ArtifactService {
             .total_published_blob_bytes()
             .map_err(ArtifactServiceError::Store)
     }
-}
-
-fn validate_native_kind(kind: ArtifactKind) -> Result<(), ArtifactServiceError> {
-    // Les HTML sont acceptés seulement après transformation en blob canonique
-    // et rendus par le runtime sandbox-v1, jamais par Markdown.
-    let _ = kind;
-    Ok(())
 }
 
 fn validate_provenance(publication: &ArtifactPublicationV1) -> Result<(), ArtifactServiceError> {

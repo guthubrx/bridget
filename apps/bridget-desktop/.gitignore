@@ -1,4 +1,0 @@
-src-tauri/target/
-src-tauri/gen/
-*.log
-.env

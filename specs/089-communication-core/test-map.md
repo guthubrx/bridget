@@ -79,6 +79,76 @@ Comptage statique de ces six fichiers : 282→276 tests (−6), pas un résultat
 d'exécution. Le détail des validations et des exclusions demeure dans
 implementation.md ; aucun retrait n'est motivé par un rouge.
 
+## Dispositions exécutées T010 — contenu sans interface
+
+ui.rs, ses assets et apps/bridget-desktop sortent ensemble : HTTP/WebView,
+cache de présentation, JS/CSS et renderers sont retirés, avec leurs tests R.
+artifact_fetch.rs sort avec `collecte_refuse_destinations_et_source_distante_non_autorisee`
+(collecte HTTP hors périmètre). mission_projection.rs sort avec son lecteur UI.
+Aucune table de contenu/provenance/ledger ni fixture épinglée n'est supprimée.
+Les fichiers retirés, dont les deux icônes binaires, restent dans Git.
+
+Scission de ui_relay_test.rs (25 tests) :
+
+- Quatre oracles déplacés vers channel_observation_test.rs :
+  `spec_024_reconnexion_inconnue_explicite_efface_le_canal_precedent`,
+  `spec_024_reconnexion_historique_omise_conserve_le_canal_precedent`,
+  `spec_024_inconnu_explicite_interdit_repli_transport_historique`,
+  `spec_024_omission_historique_conserve_repli_transport`.
+  Register/ListAgents réels remplacent HTTP, mêmes faits et contre-oracles.
+- Quatre attestations propres au relais HTTP retirées :
+  `spec_024_ui_locale_attestee_projette_unix_dans_agent_info`,
+  `spec_024_ui_federee_projette_ssh_unix_dans_agent_info`,
+  `spec_024_ui_sans_attestation_reste_inconnue_dans_agent_info`,
+  `spec_024_ui_aux_attestations_divergentes_reste_inconnue_dans_agent_info`.
+- Huit tests de surface HTTP retirés avec leurs routes :
+  `requete_loopback_sans_jeton_est_refusee`,
+  `get_sur_v1_send_reste_interdit_apres_ouverture_du_post`,
+  `spec_073_route_stop_verrouille_methode_jeton_et_version`,
+  `spec_073_route_stop_relaie_le_verdict_correle`,
+  `spec_073_route_stop_ferme_l_erreur_de_protocole`,
+  `post_v1_send_corps_vide_rend_le_code_ferme_invalid_body`,
+  `post_v1_send_valide_repond_202_et_livre_un_identifiant_non_vide`,
+  `relais_sert_les_trois_assets_hors_du_source_rust`.
+- `spec_074_cli_endpoint_lit_l_etat_sans_demarrer_de_relais_ni_divulguer_en_erreur`
+  et l'unité CLI `endpoint_ui_exige_un_contrat_json_ferme` remplacés par
+  `ui_est_refusee_avant_namespace_socket_endpoint_ou_execution` : ancien verbe
+  refusé avant même l'initialisation, zéro lecture/connexion/divulgation.
+- Huit projections UI retirées ; garanties transport toujours conservées :
+  `loopback_rend_snapshot_et_relaie_un_fragment_attach_d_un_agent_vivant`,
+  `watch_annonce_reconnecting_puis_connected_apres_coupure_daemon` → journal,
+  attach_journal_attestation_test, managed_parity_test, sc005_attach_budget ;
+  `post_v1_send_reply_true_cree_une_demande_suivie`,
+  `post_v1_send_destinataire_inconnu_refuse_sans_archiver` → integration_test,
+  idempotency_crash_test et ledger ;
+  `snapshot_compose_la_ligne_agent_avec_les_faits_du_ledger`,
+  `snapshot_sans_agent_omet_les_pairs_et_watch_agent_les_projette`,
+  `watch_pousse_thread_message_sortant_apres_ouverture`,
+  `relais_ui_expose_separement_connexion_vitalite_tour_attente_et_file` →
+  projections publiques annuaire/ledger/exécution. Cette correspondance ne
+  prétend pas rejouer toutes les gates : T019/T022/T025–T028 restent à faire.
+
+execution_observability_test retire seulement
+`alertes_couvrent_vieillissement_sans_progres_autorisation_et_saturation`
+(seuils UI), conserve les compteurs bornés. project_profile_surface_test
+conserve l'interdiction MCP d'approbation distante sans inclure ui.rs.
+mission_boundary_test ne lit plus mission_projection.rs.
+artifact_service_test remplace save_html_interaction par refresh explicite :
+enfant distinct/HTML canonique/blob absent refusé restent exercés.
+
+act_kind.rs garde le vocabulaire fermé et ses deux oracles d'écriture ; seuls
+les quatre oracles JS/Node sortent :
+`TEMOIN_vocabulaire_vue_et_ecriture_ne_divergent_pas`,
+`mutant_parse_source_reste_vert_sur_map_equivalent_mais_runtime_voit_le_sens`,
+`TEMOIN_projectTimeline_filtre_par_defaut_est_JOURNAL_ACT_KINDS`,
+`mutant_REAL_ACT_KINDS_tue_TEMOIN_projectTimeline_filtre_par_defaut`.
+Le pilote Codex ne préfixe plus de consigne UI à tous les tours : son témoin
+réel côté adaptateur compare les deux corps reçus (saturation/retry) au
+document source ; raw/provenance conservés. Les lectures CLI/MCP relisent
+les octets stockés et refusent les extensions de portée. Le cas HTML à
+512K couvre aussi l'enrichissement historique, après correction de la borne
+trop étroite trouvée par contre-revue. Aucun retrait n'est motivé par un rouge.
+
 ## Points de vigilance avant exécution ou retrait
 
 1. **Faux fournisseur vs fournisseur réel.** Un vrai daemon et une fausse commande shell sont une couture réelle de Bridget, pas une preuve de compatibilité de l'abonnement Codex/Claude/GLM. Les deux niveaux ont leur utilité et doivent rester étiquetés.

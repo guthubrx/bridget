@@ -44,4 +44,41 @@ Un contenu d'agent est une donnée non fiable, pas une autorité d'administratio
 
 T002 doit matérialiser les bytes réels, leur SHA-256 et leur origine Git pour : négociations, envois et replies, lookup et issues, annuaire/ledger, attach snapshot/live/Gap/End, lifecycle de processus, services/claims/replies/événements. Chaque famille conservée reçoit un test de lecture dans le daemon et un consommateur ; une mutation d'un octet doit être détectée. Ne pas geler seulement le handshake.
 
-L'évolution additive nécessaire à l'isolation est versionnée et testée avec le client précédent. Une inconnue n'est ni ignorée silencieusement ni déclarée disponible. Ce document ne crée aucun champ filaire nouveau.
+L'évolution additive nécessaire à l'isolation est versionnée et testée avec le client précédent. Une inconnue n'est ni ignorée silencieusement ni déclarée disponible. Le corpus historique épinglé n'est pas réécrit.
+
+## Lecture de contenu sans interface — extension additive T010, version 1
+
+Le renderer retiré n'est pas remplacé par un serveur web. `artifact_read` sur
+la socket existante porte un ArtifactReadRequest fermé : version=1,
+artifact_ref, version_ref (256 octets maximum), kind={kind:manifest} ou
+{kind:blob,digest:SHA256}, offset et limit (1..16384). Aucun chemin, projet ou
+principal n'est fourni par le client. L'enveloppe est l'encodage canonique
+du protocole, sans champs supplémentaires.
+
+La portée vient de l'inscription attestée : propriétaire vivant, ou auxiliaire
+reconnu du même principal ET de la même instance vivante. Un projet historique
+exige sa liaison active et la même génération. Le digest seul n'autorise rien :
+le blob doit appartenir à cette version autorisée. Aucune visibilité globale.
+
+ArtifactReadResult retourne version/références et une issue fermée : Chunk
+(bytes, digest du contenu ENTIER, total_len, offset, next_offset) ou Rejected
+(motif typé). Manifestes stockés et blobs sont vérifiés par SHA-256, jamais
+reconstruits. Corruption, absence et défaut d'autorité restent des refus.
+Offset à la fin rend une page vide terminale ; au-delà, refus. Le blob est
+vérifié en flux sur le même descripteur, au plus 16K retournés par page.
+Le manifeste historique enrichi est plafonné avant allocation à 512K+256 :
+la réserve couvre les seules métadonnées HTML ajoutées après validation.
+
+CLI : `bridget artifact read --artifact-ref REF --version-ref REF [--blob SHA256]
+[--offset N] [--limit N]`. MCP : `bridget_read_artifact`, arguments identiques
+au DTO. Même client Unix, résolution d'identité et inscription auxiliaire.
+Le JSON CLI est celui du protocole ; MCP le duplique en structuredContent et
+TextContent. Rejet métier : issue déclarée et exit CLI non nul ; panne : erreur
+technique. Publication/références/provenance/quota antérieurs sont conservés.
+HTML est inerte : runtime_policy reste dans son canon historique, sans moteur
+pour l'exécuter. Aucun upload, fetch HTTP ou filesystem partagé nouveau.
+
+Preuves : core_089_content_test (daemon/CLI/MCP réels, portée, bytes, bornes),
+core_089_removed_surface_test (UI refusée avant effet), tests historiques
+de publication/store/policy/service. La dette historique des lectures de
+lignes et de leurs budgets IO reste explicitement à fermer en T029/T030.

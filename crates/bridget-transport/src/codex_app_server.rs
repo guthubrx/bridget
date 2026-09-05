@@ -926,19 +926,16 @@ fn private_prompt(instructions: Option<&str>, body: &str) -> String {
     format!("[Instructions individuelles Bridget]\n{instructions}\n\n[Demande]\n{body}")
 }
 
-fn bridget_tool_prompt(body: &str) -> String {
-    format!(
-        "[Outils Bridget disponibles]\nLe serveur MCP Bridget est disponible dans ce tour. Si la demande porte sur un artefact HTML ou JavaScript interactif, appelle `bridget_publish_artifact` avec `kind: html` et son document autonome. Ne réponds jamais que le sandbox ou la publication est indisponible avant d'avoir appelé cet outil. Après succès, réponds brièvement sans recopier le HTML en Markdown.\n\n[Demande]\n{body}"
-    )
-}
-
 fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<String, String> {
     let instructions = worker
         .private_profile_instructions
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .clone();
-    let prompt = bridget_tool_prompt(&private_prompt(instructions.as_deref(), &message.body));
+    // Les outils exposent leurs capacités ; le pilote ne promet ni interface
+    // de rendu ni disponibilité du sandbox et ne transforme pas un document
+    // HTML en ordre de publication ou d'exécution.
+    let prompt = private_prompt(instructions.as_deref(), &message.body);
     for attempt in 0..=SATURATION_RETRIES {
         match request(
             &worker.writer,
@@ -1782,19 +1779,27 @@ fn dynamic_tool_response(
     let params = value.get("params")?;
     let tool = params.get("tool").and_then(Value::as_str)?;
     let arguments = params.get("arguments").unwrap_or(&Value::Null);
-    let label = if tool == "bridget_publish_artifact" {
-        "publication d’artefact Bridget"
-    } else {
-        "outil dynamique Bridget refusé"
+    let label = match tool {
+        "bridget_publish_artifact" => "publication d’artefact Bridget",
+        "bridget_read_artifact" => "lecture d’artefact Bridget",
+        _ => "outil dynamique Bridget refusé",
     };
     let outcome = match handler {
-        Some(handler) if tool == "bridget_publish_artifact" => handler(tool, arguments)
-            .map(|payload| {
-                serde_json::to_string(&payload).unwrap_or_else(|_| {
-                    "{\"status\":\"refused\",\"code\":\"serialization\"}".to_string()
+        Some(handler) if matches!(tool, "bridget_publish_artifact" | "bridget_read_artifact") => {
+            handler(tool, arguments)
+                .map(|payload| {
+                    serde_json::to_string(&payload).unwrap_or_else(|_| {
+                        "{\"status\":\"refused\",\"code\":\"serialization\"}".to_string()
+                    })
                 })
-            })
-            .map_err(|_| "La publication Bridget a été refusée.".to_string()),
+                .map_err(|_| {
+                    if tool == "bridget_read_artifact" {
+                        "La lecture Bridget a été refusée.".to_string()
+                    } else {
+                        "La publication Bridget a été refusée.".to_string()
+                    }
+                })
+        }
         Some(_) => Err("Cet outil dynamique Bridget n’est pas autorisé.".to_string()),
         None => Err("Aucun exécuteur Bridget n’est disponible dans cette session.".to_string()),
     };
@@ -5165,6 +5170,7 @@ mod tests {
             .expect("journal activé");
         let mut sent = message("native-1");
         sent.reply = true;
+        sent.body = "<!doctype html>\n<script>const texte = 'été';</script>\n".to_string();
         transport.deliver(&sent).expect("livraison");
 
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -5240,6 +5246,21 @@ mod tests {
             ]
         );
         assert!(frames.iter().all(|frame| !frame.contains("jsonrpc")));
+        // Oracle au destinataire (la trace écrite par le faux fournisseur),
+        // pas sur le générateur de prompt : réintroduire le préfixe UI ou
+        // l'ordre kind:html ferait échouer les DEUX tentatives de remise.
+        let turns = frames
+            .iter()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|frame| frame["method"] == "turn/start")
+            .collect::<Vec<_>>();
+        assert_eq!(turns.len(), 2);
+        for turn in turns {
+            assert_eq!(
+                turn["params"]["input"][0]["text"].as_str(),
+                Some(sent.body.as_str())
+            );
+        }
         transport.stop();
         let _ = fs::remove_dir_all(root);
     }
@@ -5555,13 +5576,10 @@ mod tests {
     }
 
     #[test]
-    fn consigne_outil_bridget_exige_la_publication_html_avant_un_refus() {
-        let prompt = bridget_tool_prompt("Construis un simulateur HTML interactif.");
-
-        assert!(prompt.contains("bridget_publish_artifact"));
-        assert!(prompt.contains("kind: html"));
-        assert!(prompt.contains("Ne réponds jamais que le sandbox"));
-        assert!(prompt.ends_with("Construis un simulateur HTML interactif."));
+    fn document_html_reste_un_corps_sans_consigne_ui_implicite() {
+        let body = "<html>  <script>window.contenu = 'é';</script>\n</html>";
+        assert_eq!(private_prompt(None, body).as_bytes(), body.as_bytes());
+        assert_eq!(private_prompt(Some("  "), body).as_bytes(), body.as_bytes());
     }
 
     #[test]
@@ -5597,11 +5615,49 @@ mod tests {
             "method": "item/tool/call",
             "params": { "tool": "arbitrary_tool", "arguments": {} }
         });
-        let handler: DynamicToolHandler = Arc::new(|_, _| Ok(json!({ "unexpected": true })));
+        let handler: DynamicToolHandler =
+            Arc::new(|_, _| panic!("outil inconnu ne doit jamais atteindre l'exécuteur"));
 
         let (reply, detail) = dynamic_tool_response(&request, Some(&handler)).expect("réponse");
         assert_eq!(detail, "outil dynamique Bridget refusé");
         assert_eq!(reply["result"]["success"], false);
+    }
+
+    #[test]
+    fn outil_dynamique_lecture_conserve_reference_et_document_inerte() {
+        let arguments = json!({"artifact_id": "artifact-089", "version": 1});
+        let document = "<!doctype html>\n<script>alerte('é');</script>\n";
+        let expected = json!({"status":"read", "artifact_id":"artifact-089", "content":document});
+        let expected_arguments = arguments.clone();
+        let result = expected.clone();
+        let handler: DynamicToolHandler = Arc::new(move |tool, actual| {
+            assert_eq!(tool, "bridget_read_artifact");
+            assert_eq!(actual, &expected_arguments);
+            Ok(result.clone())
+        });
+        let request = json!({"id":"read-089", "method":"item/tool/call", "params":{
+            "tool":"bridget_read_artifact", "arguments":arguments
+        }});
+        let (reply, detail) = dynamic_tool_response(&request, Some(&handler)).unwrap();
+        assert_eq!(detail, "lecture d’artefact Bridget");
+        assert_eq!(reply["id"], "read-089");
+        assert_eq!(reply["result"]["success"], true);
+        assert_eq!(reply["result"]["contentItems"][0]["type"], "inputText");
+        let content = reply["result"]["contentItems"][0]["text"].as_str().unwrap();
+        assert_eq!(serde_json::from_str::<Value>(content).unwrap(), expected);
+    }
+
+    #[test]
+    fn outil_dynamique_lecture_sans_autorite_ou_en_echec_ne_pretend_pas_reussir() {
+        let request = json!({"id":89, "method":"item/tool/call", "params":{
+            "tool":"bridget_read_artifact", "arguments":{"artifact_id":"absent"}
+        }});
+        let (reply, _) = dynamic_tool_response(&request, None).unwrap();
+        assert_eq!(reply["result"]["success"], false);
+        let handler: DynamicToolHandler = Arc::new(|_, _| Err("SECRET_FIXTURE_089".to_string()));
+        let (reply, _) = dynamic_tool_response(&request, Some(&handler)).unwrap();
+        assert_eq!(reply["result"]["success"], false);
+        assert!(!reply.to_string().contains("SECRET_FIXTURE_089"));
     }
 
     #[test]

@@ -78,7 +78,7 @@ fn publication_attribuee_est_rejouable_et_versionnee_sans_recalculer_le_quota() 
 }
 
 #[test]
-fn html_sandboxe_est_canonique_et_blob_absent_ne_devient_pas_un_succes() {
+fn html_inerte_est_canonique_et_blob_absent_ne_devient_pas_un_succes() {
     let root = fixture_root("refusal");
     fs::create_dir_all(&root).unwrap();
     let mut service = ArtifactService::open(
@@ -103,7 +103,7 @@ fn html_sandboxe_est_canonique_et_blob_absent_ne_devient_pas_un_succes() {
     html.idempotency_key = "fixture-html-sandbox-child-v1".to_owned();
     html.payload["ui_state"] = serde_json::json!({ "filter": "2026" });
     let child = service
-        .save_html_interaction(context("turn:html-child"), &parent, html)
+        .refresh(context("turn:html-child"), &parent, html)
         .unwrap();
     assert!(matches!(child, ArtifactPersistResult::Created(_)));
     let mut file: ArtifactPublicationV1 =

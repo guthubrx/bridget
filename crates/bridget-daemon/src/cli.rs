@@ -97,6 +97,14 @@ pub fn run() {
 
     let cmd = &args[1];
 
+    // Refus avant même l'ouverture du namespace : une ancienne commande UI
+    // ne doit ni lancer un programme homonyme ni relire un endpoint historique.
+    if cmd == "ui" {
+        exit_argument_error(
+            "ui : interface retirée du noyau de communication ; utiliser who, ledger et attach",
+        );
+    }
+
     if !matches!(
         cmd.as_str(),
         "version" | "--version" | "-v" | "help" | "--help" | "-h"
@@ -142,8 +150,8 @@ pub fn run() {
         "managed-runtime-wrapper" => cmd_managed_runtime_wrapper(&args[2..]),
         "managed-runtime-stop" => cmd_managed_runtime_stop(&args[2..]),
         "mcp" => cmd_mcp(),
-        "ui" => cmd_ui(&args[2..]),
         "attach" => cmd_attach(&args[2..]),
+        "artifact" => cmd_artifact(&args[2..]),
         "spawn" => cmd_spawn(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
         "relaunch" => cmd_relaunch(&args[2..]),
@@ -203,6 +211,173 @@ fn cmd_mcp() {
     if let Err(error) = crate::mcp::run_stdio() {
         eprintln!("bridget mcp: {error}");
         std::process::exit(1);
+    }
+}
+
+fn parse_artifact_read(
+    args: &[String],
+) -> Result<bridget_transport::protocol::ArtifactReadRequest, String> {
+    use bridget_transport::protocol::{
+        ARTIFACT_READ_VERSION, ArtifactReadKind, ArtifactReadRequest, MAX_ARTIFACT_READ_BYTES,
+    };
+    if args.first().map(String::as_str) != Some("read") {
+        return Err("artifact : attendu read --artifact-ref REF --version-ref REF [--blob SHA256] [--offset N] [--limit N]".into());
+    }
+    let mut values = std::collections::BTreeMap::new();
+    let mut arguments = args[1..].iter();
+    while let Some(option) = arguments.next() {
+        if ![
+            "--artifact-ref",
+            "--version-ref",
+            "--blob",
+            "--offset",
+            "--limit",
+        ]
+        .contains(&option.as_str())
+        {
+            return Err(unknown_argument("artifact read", option));
+        }
+        let value = arguments
+            .next()
+            .filter(|value| !value.starts_with("--"))
+            .ok_or_else(|| format!("artifact read : valeur manquante pour {option}"))?;
+        if values.insert(option.as_str(), value.as_str()).is_some() {
+            return Err(format!("artifact read : option répétée {option}"));
+        }
+    }
+    let required = |key: &str| {
+        values
+            .get(key)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .ok_or_else(|| format!("artifact read : {key} requis"))
+    };
+    let offset = values
+        .get("--offset")
+        .unwrap_or(&"0")
+        .parse::<u64>()
+        .map_err(|_| "artifact read : offset invalide".to_string())?;
+    let limit = values
+        .get("--limit")
+        .map(|value| value.parse::<u32>())
+        .transpose()
+        .map_err(|_| "artifact read : limit invalide".to_string())?
+        .unwrap_or(MAX_ARTIFACT_READ_BYTES);
+    if limit == 0 || limit > MAX_ARTIFACT_READ_BYTES {
+        return Err("artifact read : limit doit être comprise entre 1 et 16384".into());
+    }
+    Ok(ArtifactReadRequest {
+        version: ARTIFACT_READ_VERSION,
+        artifact_ref: required("--artifact-ref")?,
+        version_ref: required("--version-ref")?,
+        kind: values
+            .get("--blob")
+            .map(|digest| ArtifactReadKind::Blob {
+                digest: digest.to_string(),
+            })
+            .unwrap_or(ArtifactReadKind::Manifest),
+        offset,
+        limit,
+    })
+}
+
+fn cmd_artifact(args: &[String]) {
+    let request = parse_artifact_read(args).unwrap_or_else(|error| exit_argument_error(&error));
+    let identity = crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
+        eprintln!(
+            "bridget artifact : {} : {}",
+            error.code(),
+            error.remediation()
+        );
+        std::process::exit(1);
+    });
+    let response = crate::communication::client::read_artifact(
+        &identity.name,
+        &identity.instance_id,
+        &DaemonConfig::default().socket_path,
+        request,
+    )
+    .unwrap_or_else(|error| {
+        match error {
+            crate::communication::client::ClientError::InvalidParams(message) => {
+                exit_argument_error(&message)
+            }
+            crate::communication::client::ClientError::Technical { code, message } => {
+                eprintln!("bridget artifact : {code} : {message}")
+            }
+        }
+        std::process::exit(1);
+    });
+    println!(
+        "{}",
+        serde_json::to_string(&response).expect("DTO de lecture sérialisable")
+    );
+    if matches!(
+        response,
+        DaemonToWrapper::ArtifactReadResult {
+            outcome: bridget_transport::protocol::ArtifactReadOutcome::Rejected { .. },
+            ..
+        }
+    ) {
+        std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod artifact_read_tests {
+    use super::parse_artifact_read;
+    use bridget_transport::protocol::{ArtifactReadKind, MAX_ARTIFACT_READ_BYTES};
+
+    #[test]
+    fn lecture_cli_construit_le_dto_ferme_sans_identite_ou_chemin() {
+        let args = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+        };
+        let base = ["read", "--artifact-ref", "a", "--version-ref", "v"];
+        let request = parse_artifact_read(&args(&base)).unwrap();
+        assert_eq!(request.version, 1);
+        assert_eq!(request.kind, ArtifactReadKind::Manifest);
+        assert_eq!(request.offset, 0);
+        assert_eq!(request.limit, MAX_ARTIFACT_READ_BYTES);
+        let blob = parse_artifact_read(&args(&[
+            "read",
+            "--artifact-ref",
+            "a",
+            "--version-ref",
+            "v",
+            "--blob",
+            "digest",
+            "--offset",
+            "32",
+            "--limit",
+            "7",
+        ]))
+        .unwrap();
+        assert_eq!(
+            blob.kind,
+            ArtifactReadKind::Blob {
+                digest: "digest".into()
+            }
+        );
+        assert_eq!((blob.offset, blob.limit), (32, 7));
+        for extra in [
+            vec!["--project", "autre"],
+            vec!["--agent", "autre"],
+            vec!["--path", "/etc/passwd"],
+            vec!["--limit", "0"],
+            vec!["--limit", "16385"],
+            vec!["--offset", "-1"],
+            vec!["--limit"],
+            vec!["--artifact-ref", "b"],
+        ] {
+            let mut invalid = args(&base);
+            invalid.extend(args(&extra));
+            assert!(parse_artifact_read(&invalid).is_err(), "{invalid:?}");
+        }
+        assert!(parse_artifact_read(&args(&["read", "--artifact-ref", "a"])).is_err());
     }
 }
 
@@ -336,114 +511,6 @@ fn cmd_identity(args: &[String]) {
     );
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum UiCommand {
-    Serve {
-        maicie_config: PathBuf,
-        project_root_policy_path: Option<PathBuf>,
-    },
-    EndpointJson,
-}
-
-/// Grammaire fermée de `bridget ui`: démarrer le relais exige sa configuration
-/// explicite, tandis que Desktop ne peut lire que le contrat JSON versionné.
-fn parse_ui_command(args: &[String]) -> Result<UiCommand, String> {
-    if matches!(args.first().map(String::as_str), Some("endpoint")) {
-        return match &args[1..] {
-            [format] if format == "--json" => Ok(UiCommand::EndpointJson),
-            [] => Err("bridget ui endpoint: --json est obligatoire".to_string()),
-            [option, ..] => Err(unknown_argument("ui endpoint", option)),
-        };
-    }
-
-    let mut maicie_config = None;
-    let mut project_root_policy_path = None;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--maicie-config" => {
-                index += 1;
-                maicie_config = args.get(index).map(PathBuf::from);
-                if maicie_config.is_none() {
-                    return Err("bridget ui: --maicie-config requiert un chemin absolu".to_string());
-                }
-            }
-            "--project-root-policy" => {
-                if project_root_policy_path.is_some() {
-                    return Err("bridget ui: --project-root-policy dupliqué".to_string());
-                }
-                index += 1;
-                project_root_policy_path = args.get(index).map(PathBuf::from);
-                if project_root_policy_path.is_none() {
-                    return Err(
-                        "bridget ui: --project-root-policy requiert un chemin absolu".to_string(),
-                    );
-                }
-                if !project_root_policy_path
-                    .as_ref()
-                    .is_some_and(|path| path.is_absolute())
-                {
-                    return Err(
-                        "bridget ui: le chemin --project-root-policy doit être absolu".to_string(),
-                    );
-                }
-            }
-            option => {
-                return Err(unknown_argument("ui", option));
-            }
-        }
-        index += 1;
-    }
-    let maicie_config = maicie_config
-        .ok_or_else(|| "bridget ui: --maicie-config <chemin-absolu> est obligatoire".to_string())?;
-    if !maicie_config.is_absolute() {
-        return Err("bridget ui: le chemin --maicie-config doit être absolu".to_string());
-    }
-    Ok(UiCommand::Serve {
-        maicie_config,
-        project_root_policy_path,
-    })
-}
-
-fn render_ui_endpoint_json(endpoint: &crate::ui::UiEndpoint) -> String {
-    serde_json::json!({
-        "version": 1,
-        "port": endpoint.port,
-        "token": endpoint.token,
-    })
-    .to_string()
-}
-
-fn cmd_ui(args: &[String]) {
-    match parse_ui_command(args) {
-        Ok(UiCommand::Serve {
-            maicie_config,
-            project_root_policy_path,
-        }) => {
-            if let Err(error) = crate::ui::run_with_project_root_policy(
-                socket_path(),
-                maicie_config,
-                project_root_policy_path,
-            ) {
-                eprintln!("bridget ui: {error}");
-                std::process::exit(1);
-            }
-        }
-        Ok(UiCommand::EndpointJson) => {
-            let endpoint = crate::ui::load_ui_endpoint(&crate::ui::ui_endpoint_state_path())
-                .unwrap_or_else(|error| {
-                    eprintln!("bridget ui endpoint: endpoint UI indisponible: {error}");
-                    std::process::exit(1);
-                });
-            println!("{}", render_ui_endpoint_json(&endpoint));
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            std::process::exit(2);
-        }
-    }
-}
-
 fn cmd_managed_bootstrap(args: &[String]) {
     if let Err(error) = crate::managed_process::run_managed_bootstrap(args) {
         eprintln!("bridget managed-bootstrap: {error}");
@@ -552,8 +619,6 @@ fn print_usage() {
          Daemon & client :\n  \
            daemon                 Lance le daemon\n  \
            mcp                    Lance le serveur MCP sur stdio\n  \
-           ui --maicie-config <P> Lance le relais UI (port+jeton stables)\n  \
-           ui endpoint --json     Lit l'endpoint UI existant pour un client SSH\n  \
            attach <N>             Suit un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID]\n  \
            stop <N>               Arrête un équipier géré\n  \
@@ -577,6 +642,7 @@ fn print_usage() {
            agents [--json]        Idem, format machine [--domain <D>]\n  \
            status                 Santé du daemon\n  \
            ledger [--limit N]     Historique des messages (défaut : maximum lisible)\n  \
+           artifact read          Lit un contenu exact par références, sans exécution\n  \
            reprise [--write P]    Carte de reprise du référent\n  \
            reaper report          Observateur J2 (ne tue jamais)\n  \
            cleanup --dry-run      Liste target/ des worktrees mergés\n  \
@@ -5302,27 +5368,6 @@ mod hook_tests {
 
     fn argv(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
-    }
-
-    #[test]
-    fn endpoint_ui_exige_un_contrat_json_ferme() {
-        assert!(matches!(
-            parse_ui_command(&argv(&["endpoint", "--json"])),
-            Ok(UiCommand::EndpointJson)
-        ));
-
-        for invalid in [
-            argv(&["endpoint"]),
-            argv(&["endpoint", "--text"]),
-            argv(&["endpoint", "--json", "surplus"]),
-            argv(&["endpoint", "--maicie-config", "/tmp/config"]),
-        ] {
-            let error = parse_ui_command(&invalid).expect_err("forme endpoint refusée");
-            assert!(
-                !error.contains("jeton-de-test-074"),
-                "une erreur de grammaire ne divulgue jamais un jeton: {error}"
-            );
-        }
     }
 
     #[test]

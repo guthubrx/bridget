@@ -6,8 +6,10 @@
 use crate::artifact_policy::{ArtifactPolicy, ArtifactPolicyError};
 use crate::artifact_types::sha256_hex;
 use bridget_transport::fsutil::{create_private_dir, write_private_file_atomic};
+use sha2::{Digest, Sha256};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
@@ -98,6 +100,96 @@ impl ArtifactBlobStore {
         }
         self.verify_at_path(&path, digest)?;
         Ok(fs::read(path)?)
+    }
+
+    /// Vérifie le blob entier sur un descripteur privé unique, mais ne conserve
+    /// en mémoire que le fragment demandé. Aucun cache de vérification : une
+    /// altération entre deux appels doit être refusée au second appel aussi.
+    pub fn read_slice(
+        &self,
+        digest: &str,
+        expected_len: u64,
+        offset: u64,
+        limit: u32,
+    ) -> Result<Vec<u8>, ArtifactBlobStoreError> {
+        self.policy.validate_blob_length(expected_len)?;
+        if limit == 0
+            || limit > bridget_transport::protocol::MAX_ARTIFACT_READ_BYTES
+            || offset > expected_len
+        {
+            return Err(ArtifactBlobStoreError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "fenêtre de lecture invalide",
+            )));
+        }
+        let path = self.path_for_digest(digest)?;
+        crate::environment::validate_state_file(&path, false)
+            .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&path)
+            .map_err(|error| {
+                if error.kind() == io::ErrorKind::NotFound {
+                    ArtifactBlobStoreError::Missing
+                } else {
+                    error.into()
+                }
+            })?;
+        let before = file.metadata()?;
+        if !before.is_file()
+            || before.uid() != unsafe { libc::geteuid() }
+            || before.mode() & 0o077 != 0
+            || before.len() != expected_len
+        {
+            return Err(ArtifactBlobStoreError::Corrupt {
+                expected: digest.into(),
+                actual: "métadonnées incohérentes".into(),
+            });
+        }
+        let mut hash = Sha256::new();
+        let mut buffer = [0_u8; 16 * 1024];
+        let mut observed = 0_u64;
+        let mut bytes = Vec::with_capacity(limit as usize);
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            let end = observed
+                .checked_add(count as u64)
+                .ok_or_else(|| io::Error::other("taille débordée"))?;
+            if end > expected_len {
+                return Err(ArtifactBlobStoreError::Corrupt {
+                    expected: digest.into(),
+                    actual: "taille modifiée".into(),
+                });
+            }
+            hash.update(&buffer[..count]);
+            let from = offset.max(observed);
+            let to = offset.saturating_add(u64::from(limit)).min(end);
+            if from < to {
+                bytes.extend_from_slice(
+                    &buffer[(from - observed) as usize..(to - observed) as usize],
+                );
+            }
+            observed = end;
+        }
+        let actual = format!("{:x}", hash.finalize());
+        let after = file.metadata()?;
+        if actual != digest
+            || observed != expected_len
+            || before.mtime() != after.mtime()
+            || before.mtime_nsec() != after.mtime_nsec()
+            || before.ctime() != after.ctime()
+            || before.ctime_nsec() != after.ctime_nsec()
+        {
+            return Err(ArtifactBlobStoreError::Corrupt {
+                expected: digest.into(),
+                actual,
+            });
+        }
+        Ok(bytes)
     }
 
     pub fn contains(&self, digest: &str) -> Result<bool, ArtifactBlobStoreError> {

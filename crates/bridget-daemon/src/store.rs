@@ -24,9 +24,6 @@ const GUICHET_LEASE_SECS: i64 = 60;
 pub(crate) const MAX_GUICHET_FRAME_BYTES: usize = 64 * 1024;
 const MAX_LEDGER_SEARCH: usize = 100;
 
-/// Plafond exposé au relais UI (même borne que la recherche store).
-pub(crate) const MAX_LEDGER_SEARCH_PUBLIC: usize = MAX_LEDGER_SEARCH;
-
 /// Échappe les jokers LIKE pour une recherche littérale.
 pub(crate) fn escape_like_needle(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());

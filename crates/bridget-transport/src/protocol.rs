@@ -1989,6 +1989,60 @@ pub struct DelegatedRuntimeEventFrame {
     pub project: Option<ProjectReference>,
 }
 
+pub const ARTIFACT_READ_VERSION: u8 = 1;
+pub const MAX_ARTIFACT_READ_BYTES: u32 = 16 * 1024;
+pub const MAX_ARTIFACT_REF_BYTES: usize = 256;
+
+/// Lecture de contenu seulement : aucune identité ni aucun chemin n'est accepté.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactReadRequest {
+    pub version: u8,
+    pub artifact_ref: String,
+    pub version_ref: String,
+    pub kind: ArtifactReadKind,
+    pub offset: u64,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ArtifactReadKind {
+    Manifest,
+    Blob { digest: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ArtifactReadOutcome {
+    Chunk {
+        bytes: Vec<u8>,
+        total_len: u64,
+        /// SHA-256 du contenu entier, jamais du seul fragment.
+        digest: String,
+        offset: u64,
+        next_offset: Option<u64>,
+    },
+    Rejected {
+        reason: ArtifactReadRefusal,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactReadRefusal {
+    UnsupportedVersion,
+    InvalidRequest,
+    IdentityUnavailable,
+    ScopeUnavailable,
+    NotFound,
+    BlobNotLinked,
+    OffsetOutOfRange,
+    CorruptContent,
+    ContentUnavailable,
+    StorageUnavailable,
+}
+
 /// Messages envoyés par le wrapper vers le daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -2003,6 +2057,10 @@ pub enum WrapperToDaemon {
         contract_version: u16,
         issuer_scope: String,
         capabilities: Vec<ClientCapability>,
+    },
+    #[serde(rename = "artifact_read")]
+    ArtifactRead {
+        request: ArtifactReadRequest,
     },
     /// Publication d'un artefact déjà sérialisé canoniquement. Le daemon
     /// déduit le principal, le projet et le contexte de conversation de la
@@ -2822,6 +2880,13 @@ pub enum DaemonToWrapper {
     RuntimeIngressRejected { reason: RuntimeIngressRefusal },
     /// Le rôle demandé est accepté pour cette connexion.
     RoleAccepted { role: ConnectionRole },
+    #[serde(rename = "artifact_read_result")]
+    ArtifactReadResult {
+        version: u8,
+        artifact_ref: String,
+        version_ref: String,
+        outcome: ArtifactReadOutcome,
+    },
     /// Issue terminale et attestée d'une publication d'artefact. Les détails
     /// techniques restent volontairement bornés : un appelant reçoit soit le
     /// reçu signé par Bridget, soit un code et un message sûrs à afficher.

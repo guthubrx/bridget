@@ -1,5 +1,3 @@
-use bridget_daemon::artifact_fetch::{ArtifactFetchError, ArtifactFetchPolicy, ArtifactFetcher};
-use bridget_daemon::artifact_policy::ArtifactPolicy;
 use bridget_daemon::artifact_service::{ArtifactService, ArtifactServiceError};
 use bridget_daemon::artifact_store::{ArtifactPersistResult, ArtifactPublicationContext};
 use bridget_daemon::artifact_types::{
@@ -24,26 +22,6 @@ fn context() -> ArtifactPublicationContext {
         created_by: "agent:lifecycle".to_string(),
         origin_instance: "instance:lifecycle".to_string(),
         observed_at: 1_800_000_000,
-    }
-}
-
-#[test]
-fn collecte_refuse_destinations_et_source_distante_non_autorisee() {
-    let fetcher = ArtifactFetcher::new(ArtifactFetchPolicy::from_artifact_policy(
-        ArtifactPolicy::default(),
-    ))
-    .unwrap();
-    assert!(matches!(
-        fetcher.fetch("https://example.com/"),
-        Err(ArtifactFetchError::Disabled)
-    ));
-    for unsafe_url in [
-        "file:///etc/passwd",
-        "http://example.com/",
-        "https://127.0.0.1/",
-        "https://localhost/",
-    ] {
-        assert!(ArtifactFetcher::validate_destination(unsafe_url).is_err());
     }
 }
 

@@ -1,5 +1,68 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T010 : sortie effective de l'interface, contenus préservés
+
+Retrait de ui.rs, apps/bridget-desktop, assets web et renderers, projection
+Maicie d'affichage et collecteur HTTP artifact_fetch. Reqwest et sa fermeture
+de dépendances disparaissent de Cargo.lock. Le CLI refuse ui AVANT namespace,
+socket, ancien endpoint ou repli sur un programme homonyme. Les suppressions
+et les 25 tests de ui_relay_test sont classés nommément dans test-map.md.
+Récupération possible par Git ; aucune modification du projet d'origine.
+
+Lecture des contenus sur le protocole Unix existant : ArtifactRead v1 fermé,
+pages16K, références exactes, identité/instance/projet attestés par le daemon.
+Blob relié à la version ET à la portée, SHA-256 vérifié sur un même descripteur,
+aucun chemin client. Manifestes stockés relus sans re-sérialisation.
+CLI artifact read et MCP bridget_read_artifact partagent le client Unix extrait
+de mcp.rs, sa résolution d'identité et son inscription auxiliaire. Catalogue
+MCP : ajout lecture, aucune approbation humaine ajoutée. Les outils publics
+de service restent des clients sans dépendance au métier Maicie.
+
+Le canon HTML historique reste intact (runtime_policy inclus), mais plus aucun
+rendu ni exécution n'est promis. Le pilote Codex ne préfixe plus une consigne
+UI aux tours ; corps exact reçu sur les deux tentatives de saturation/retry.
+La contre-revue a trouvé un manifeste HTML valide enrichi dépassant512K :
+borne corrigée à plafond d'entrée+256octets pour les trois métadonnées
+historiques, avec oracle d'entrée EXACTEMENT512K, stockage supérieur, lecture
+de tous les bytes/digest. Aucune valeur historique réécrite. Verdict final
+de lecture : APPROVE T010 après cet amendement, pas audit global achevé.
+
+Validations ciblées, sans fournisseur ni daemon de flotte :
+
+- Construction `cargo test --offline --workspace --no-run` : vert8,77s ;
+  `cargo test --offline --workspace --features test-support --no-run` : vert16,42s.
+  Compilation de tous les tests, PAS exécution de tous les anciens harnais.
+- Auteur contenu :24/24 (15 historiques,7 daemon/CLI/MCP réels,2 dispatcher
+  liaison/génération projet). Les deux derniers traversent Register/socketpair,
+  pas un binaire fournisseur. Les coutures binaires portent sur la portée privée.
+- Contre-passe root finale :57/57. Lib `mcp::tests:: cli::artifact_read_tests::
+  communication::tests:: --test-threads=4` :44/44,1,02s ;
+  core_089_content_test :7/7,5,21s ; channel_observation_test :4/4,0,23s ;
+  core_089_removed_surface_test :2/2,0,02s. Aucun ignore de ces sélections.
+- Autres contre-runs root : artifact_lifecycle3, policy2, publication3,
+  service3, store4, execution_observability1, mission_boundary2,
+  project_profile_surface1 :19/19. Résultats chevauchant ceux de l'auteur,
+  ne pas additionner les passes en prétendant de nouveaux scénarios.
+- Adaptateur Codex sans compte réel :7/7,0,04s, faux fournisseur documenté ;
+  corps HTML intact, handler de lecture partagé, outil inconnu/refus fermé.
+  Clippy transport/lib vert4,08s. Aucun modèle fournisseur réellement appelé.
+- Fmt workspace et diff-check verts ; vérificateur17fixtures/six mutants vert.
+  Clippy workspace/all-targets reste rouge sur CINQ lints préexistants :
+  daemon (doc mal placée, helper Docker9arguments), artifact_service
+  (if/else obscur), artifact_store (if imbriqué), execution_store (booléen).
+  Les trois lints UI ont disparu avec le code, aucun allow ajouté. Les cinq
+  restants restent à fermer avant T034, pas de dérogation au gate final.
+
+Racine root de contre-test /private/tmp/b9t010.KTJro3, umask077 ; env -i
+HOME=.../home, BRIDGET_HOME=.../state, BRIDGET_SOCKET=.../state/s,
+TMPDIR=.../tmp, PATH=/usr/bin:/bin:/usr/sbin:/sbin ; exécutables de test
+construits ci-dessus sous watchdog Perl alarm90s(lib)/60s(intégrations),
+les tests créent leurs sous-namespaces privés. Aucun enfant de recette restant.
+La mutation du plafond est discriminée par l'oracle, pas exécutée dans le
+produit dans cette passe. Les dettes historiques client read_line/échéance
+restent T029/T030 ; le découplage ne les déclare pas réparées. SSH et les
+fournisseurs réels restent à prouver, la suite complète n'est pas dite verte.
+
 ## 2026-09-05 — T009 : Maicie réellement hors du graphe de construction
 
 Retrait de Maicie du workspace, du manifeste daemon et de Cargo.lock, sans

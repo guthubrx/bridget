@@ -140,6 +140,8 @@ pub struct ArtifactVersionDetail {
     /// réellement publiée dans le tour.
     pub is_current: bool,
     pub publication: ArtifactPublicationV1,
+    /// Octets persistés et vérifiés : jamais une reconstruction pour le lecteur.
+    pub manifest_bytes: Vec<u8>,
     pub content_digest: String,
     pub payload_digest: String,
     pub provenance_digest: String,
@@ -551,22 +553,28 @@ impl ArtifactStore {
         project_id: &str,
         version_ref: &str,
     ) -> Result<Option<ArtifactVersionDetail>, ArtifactStoreError> {
+        // Le plafond d'entrée précède l'enrichissement HTML historique :
+        // trois clés fixes et un digest SHA-256 de 64 octets, < 160 octets JSON.
+        // La réserve bornée ne modifie aucun canon déjà persisté.
+        let persisted_limit =
+            crate::artifact_policy::ArtifactPolicy::default().manifest_max_bytes + 256;
         let raw = self
             .conn
             .query_row(
                 "SELECT a.artifact_ref, v.version_ref, a.project_id, v.conversation_reference,
                         v.turn_reference, a.kind, a.title, v.state, a.pinned, a.created_at,
-                        v.created_at, v.manifest_json, v.content_digest, v.payload_digest,
+                        v.created_at, CASE WHEN length(v.manifest_json) <= ?3 THEN v.manifest_json END,
+                        v.content_digest, v.payload_digest,
                         v.provenance_digest, v.parent_version_ref, v.quality_notices_json,
                         v.publication_reason, a.current_version_ref = v.version_ref
                  FROM artifact_versions v
                  JOIN artifacts a ON a.artifact_ref = v.artifact_ref
                  WHERE a.project_id = ?1 AND v.version_ref = ?2 AND a.deleted_at IS NULL",
-                params![project_id, version_ref],
+                params![project_id, version_ref, persisted_limit],
                 |row| {
                     Ok((
                         artifact_list_item(row)?,
-                        row.get::<_, Vec<u8>>(11)?,
+                        row.get::<_, Option<Vec<u8>>>(11)?,
                         row.get::<_, String>(12)?,
                         row.get::<_, String>(13)?,
                         row.get::<_, String>(14)?,
@@ -592,6 +600,10 @@ impl ArtifactStore {
         else {
             return Ok(None);
         };
+        let manifest_json = manifest_json.ok_or(ArtifactStoreError::CorruptManifest)?;
+        if sha256_hex(&manifest_json) != content_digest {
+            return Err(ArtifactStoreError::CorruptManifest);
+        }
         let publication = serde_json::from_slice(&manifest_json)
             .map_err(|_| ArtifactStoreError::CorruptManifest)?;
         let quality_notices = serde_json::from_slice(&quality_notices_json)
@@ -600,6 +612,7 @@ impl ArtifactStore {
             item,
             is_current,
             publication,
+            manifest_bytes: manifest_json,
             content_digest,
             payload_digest,
             provenance_digest,

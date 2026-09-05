@@ -1,29 +1,35 @@
 //! Façade MCP stdio. Le protocole daemon reste le seul transport métier.
 
 use crate::artifact_types::{ARTIFACT_CONTRACT_VERSION, ArtifactPublicationV1, ArtifactReceiptV1};
+#[cfg(test)]
+use crate::communication::client::connect_nonblocking;
+use crate::communication::client::{
+    ClientError as ToolError, DaemonConnection, registered_connection, unexpected_response,
+};
 use crate::communication::issuer_scope;
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
     CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, GuichetDelegateMutationStatus,
     GuichetDurationClass, GuichetRegistreAddStatus, GuichetReplyPayload, IdempotencyIssue,
-    LedgerScope, PresenceMode, ReviewTarget, SERVICE_CONTRACT_VERSION, ServiceCapability,
-    ServiceRefusal, ServiceRequestOperation, ServiceRequestPayload, ServiceSuiteDeclaration,
-    decode, encode,
+    LedgerScope, ReviewTarget, SERVICE_CONTRACT_VERSION, ServiceCapability, ServiceRefusal,
+    ServiceRequestOperation, ServiceRequestPayload, ServiceSuiteDeclaration,
 };
+#[cfg(test)]
+use bridget_transport::protocol::{decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::io::FromRawFd;
+#[cfg(test)]
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
-const DAEMON_BUDGET: Duration = Duration::from_secs(10);
 const MAX_IN_FLIGHT_TOOL_CALLS: usize = 8;
 
 /// Consigne de rejeu, point de vérité unique des sept ancrages.
@@ -400,205 +406,6 @@ fn identity_error_result(id: Value, identity_error: &crate::mcp_identity::Identi
     )
 }
 
-#[derive(Debug)]
-enum ToolError {
-    InvalidParams(String),
-    Technical { code: &'static str, message: String },
-}
-
-struct DaemonConnection {
-    writer: BufWriter<UnixStream>,
-    reader: BufReader<UnixStream>,
-    deadline: Instant,
-}
-
-impl DaemonConnection {
-    fn connect(socket: &Path) -> Result<Self, ToolError> {
-        let deadline = Instant::now() + DAEMON_BUDGET;
-        let stream =
-            connect_nonblocking(socket, deadline).map_err(|error| ToolError::Technical {
-                code: "daemon_unreachable",
-                message: format!("daemon Bridget injoignable : {error}"),
-            })?;
-        let reader_stream = stream.try_clone().map_err(|error| ToolError::Technical {
-            code: "daemon_unreachable",
-            message: format!("impossible de dupliquer le socket daemon : {error}"),
-        })?;
-        Ok(Self {
-            writer: BufWriter::new(stream),
-            reader: BufReader::new(reader_stream),
-            deadline,
-        })
-    }
-
-    fn exchange(&mut self, command: &WrapperToDaemon) -> Result<DaemonToWrapper, ToolError> {
-        self.apply_remaining_timeout("daemon_unreachable")?;
-        let json = encode(command).map_err(|error| ToolError::Technical {
-            code: "daemon_protocol",
-            message: format!("encodage daemon impossible : {error}"),
-        })?;
-        writeln!(self.writer, "{json}").map_err(|error| ToolError::Technical {
-            code: "daemon_unreachable",
-            message: format!("écriture daemon impossible : {error}"),
-        })?;
-        self.writer.flush().map_err(|error| ToolError::Technical {
-            code: "daemon_unreachable",
-            message: format!("flush daemon impossible : {error}"),
-        })?;
-        self.read_response("daemon_unreachable")
-    }
-
-    fn send_then_wait(&mut self, command: &WrapperToDaemon) -> Result<DaemonToWrapper, ToolError> {
-        self.apply_remaining_timeout("daemon_unreachable")?;
-        let json = encode(command).map_err(|error| ToolError::Technical {
-            code: "daemon_protocol",
-            message: format!("encodage daemon impossible : {error}"),
-        })?;
-        writeln!(self.writer, "{json}").map_err(|error| ToolError::Technical {
-            code: "outcome_unknown",
-            message: format!("écriture daemon impossible : {error}"),
-        })?;
-        self.writer.flush().map_err(|error| ToolError::Technical {
-            code: "outcome_unknown",
-            message: format!("flush daemon impossible : {error}"),
-        })?;
-        self.read_response("outcome_unknown")
-    }
-
-    fn read_response(&mut self, failure_code: &'static str) -> Result<DaemonToWrapper, ToolError> {
-        self.apply_remaining_timeout(failure_code)?;
-        let mut line = String::new();
-        self.reader
-            .read_line(&mut line)
-            .map_err(|error| ToolError::Technical {
-                code: failure_code,
-                message: format!("réponse daemon indisponible : {error}"),
-            })?;
-        if line.is_empty() {
-            return Err(ToolError::Technical {
-                code: failure_code,
-                message: "daemon Bridget a fermé la connexion sans réponse".to_string(),
-            });
-        }
-        decode(line.trim_end()).map_err(|error| ToolError::Technical {
-            code: failure_code,
-            message: format!("réponse daemon invalide : {error}"),
-        })
-    }
-
-    fn apply_remaining_timeout(&self, code: &'static str) -> Result<(), ToolError> {
-        let remaining = self
-            .deadline
-            .checked_duration_since(Instant::now())
-            .ok_or_else(|| ToolError::Technical {
-                code,
-                message: "budget total de 10 s dépassé".to_string(),
-            })?;
-        self.writer
-            .get_ref()
-            .set_write_timeout(Some(remaining))
-            .map_err(|error| ToolError::Technical {
-                code,
-                message: format!("impossible de borner l'écriture daemon : {error}"),
-            })?;
-        self.reader
-            .get_ref()
-            .set_read_timeout(Some(remaining))
-            .map_err(|error| ToolError::Technical {
-                code,
-                message: format!("impossible de borner la lecture daemon : {error}"),
-            })
-    }
-}
-
-fn connect_nonblocking(socket: &Path, deadline: Instant) -> io::Result<UnixStream> {
-    if deadline <= Instant::now() {
-        return Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "budget connexion dépassé",
-        ));
-    }
-    let path = socket.as_os_str().as_bytes();
-    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
-    if path.len() >= address.sun_path.len() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "socket Unix trop long",
-        ));
-    }
-    address.sun_family = libc::AF_UNIX as libc::sa_family_t;
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    {
-        address.sun_len = (std::mem::size_of::<libc::sa_family_t>() + path.len() + 1) as u8;
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            path.as_ptr().cast(),
-            address.sun_path.as_mut_ptr(),
-            path.len(),
-        );
-    }
-    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let close = |fd: libc::c_int| unsafe { libc::close(fd) };
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-        close(fd);
-        return Err(io::Error::last_os_error());
-    }
-    let result = unsafe {
-        libc::connect(
-            fd,
-            (&address as *const libc::sockaddr_un).cast(),
-            std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t,
-        )
-    };
-    if result < 0 {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::EINPROGRESS) {
-            close(fd);
-            return Err(error);
-        }
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "budget connexion dépassé"))?;
-        let timeout = remaining.as_millis().min(i32::MAX as u128) as libc::c_int;
-        let mut pollfd = libc::pollfd {
-            fd,
-            events: libc::POLLOUT,
-            revents: 0,
-        };
-        if unsafe { libc::poll(&mut pollfd, 1, timeout) } <= 0 {
-            close(fd);
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "connexion daemon expirée",
-            ));
-        }
-        let mut so_error: libc::c_int = 0;
-        let mut length = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
-        if unsafe {
-            libc::getsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_ERROR,
-                (&mut so_error as *mut libc::c_int).cast(),
-                &mut length,
-            )
-        } < 0
-            || so_error != 0
-        {
-            close(fd);
-            return Err(io::Error::from_raw_os_error(so_error));
-        }
-    }
-    let stream = unsafe { UnixStream::from_raw_fd(fd) };
-    stream.set_nonblocking(false)?;
-    Ok(stream)
-}
-
 fn execute_tool(
     identity: &crate::mcp_identity::ResolvedIdentity,
     name: &str,
@@ -638,6 +445,22 @@ fn execute_tool_at_with_scope(
         "bridget_send" => execute_send(identity, instance_id, arguments, socket),
         "bridget_publish_artifact" => {
             execute_publish_artifact(identity, instance_id, arguments, socket)
+        }
+        "bridget_read_artifact" => {
+            let request =
+                serde_json::from_value(Value::Object(arguments.clone())).map_err(|error| {
+                    ToolError::InvalidParams(format!("contrat de lecture invalide : {error}"))
+                })?;
+            let response = crate::communication::client::read_artifact(
+                identity,
+                instance_id,
+                socket,
+                request,
+            )?;
+            serde_json::to_value(response).map_err(|error| ToolError::Technical {
+                code: "daemon_protocol",
+                message: error.to_string(),
+            })
         }
         "bridget_who" => execute_who(identity, instance_id, arguments, socket),
         "bridget_ledger" => execute_ledger(identity, instance_id, arguments, socket),
@@ -1354,33 +1177,6 @@ fn fetch_ledger_requests(
     }
 }
 
-fn registered_connection(
-    identity: &str,
-    instance_id: &str,
-    socket: &Path,
-) -> Result<DaemonConnection, ToolError> {
-    let mut connection = DaemonConnection::connect(socket)?;
-    let registration = WrapperToDaemon::Register {
-        agent_type: "mcp".to_string(),
-        identity_version: 2,
-        agent_id: identity.to_string(),
-        host: None,
-        transport: None,
-        channel: bridget_transport::ChannelReport::Unknown,
-        mode: Some(PresenceMode::Cli),
-        location: None,
-        os: None,
-        instance_id: Some(instance_id.to_string()),
-        domain: None,
-        turn_in_progress: false,
-        journal_available: None,
-    };
-    match connection.exchange(&registration)? {
-        DaemonToWrapper::Registered { .. } => Ok(connection),
-        other => unexpected_response(other),
-    }
-}
-
 fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value {
     match issue {
         IdempotencyIssue::Accepted { .. } => {
@@ -1473,13 +1269,6 @@ fn technical_result(code: &str, message: &str) -> Value {
         "content": [{ "type": "text", "text": message }],
         "isError": true,
         "code": code
-    })
-}
-
-fn unexpected_response<T>(response: DaemonToWrapper) -> Result<T, ToolError> {
-    Err(ToolError::Technical {
-        code: "daemon_protocol",
-        message: format!("réponse daemon inattendue : {response:?}"),
     })
 }
 
@@ -1630,8 +1419,28 @@ fn initialize_result() -> Value {
 fn tools() -> Vec<Value> {
     vec![
         json!({
+            "name": "bridget_read_artifact",
+            "description": "Lire par fragments bornés le manifeste exact ou un blob lié à une version publiée. Portée de l'agent connecté, sans rendu ni exécution. next_offset fournit le curseur suivant ; digest désigne le contenu complet.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "version": { "const": 1 },
+                    "artifact_ref": { "type": "string", "minLength": 1, "maxLength": bridget_transport::protocol::MAX_ARTIFACT_REF_BYTES },
+                    "version_ref": { "type": "string", "minLength": 1, "maxLength": bridget_transport::protocol::MAX_ARTIFACT_REF_BYTES },
+                    "kind": { "oneOf": [
+                        { "type": "object", "properties": { "kind": { "const": "manifest" } }, "required": ["kind"], "additionalProperties": false },
+                        { "type": "object", "properties": { "kind": { "const": "blob" }, "digest": { "type": "string" } }, "required": ["kind", "digest"], "additionalProperties": false }
+                    ] },
+                    "offset": { "type": "integer", "minimum": 0 },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 16384 }
+                },
+                "required": ["version", "artifact_ref", "version_ref", "kind", "offset", "limit"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
             "name": "bridget_publish_artifact",
-            "description": "Publier un unique artefact structuré et sourcé. Bridget atteste le projet, la conversation et le tour depuis l'identité connectée. Utiliser kind=html pour une visualisation HTML/JavaScript interactive : payload.html contient le document complet, payload.data les seules données déclarées et payload.inline_height_hint une hauteur souhaitée entre 0 et 1200. Bridget stocke le HTML comme blob canonique et le rend inline dans une sandbox sans réseau, fichiers, cookies, Tauri ni accès à la conversation. Après une publication HTML réussie, répondre brièvement que l’artefact est publié : ne jamais recopier le HTML dans Markdown.",
+            "description": "Publier un unique contenu structuré et sourcé. Bridget atteste sa portée depuis l'identité connectée. kind=html stocke un contenu inerte : aucun rendu, JavaScript, réseau ni exécution. Les métadonnées historiques du manifeste sont conservées sans leur prêter une exécution. Après publication, transmettre le reçu et les références : ne jamais recopier le HTML dans Markdown. bridget_read_artifact relit les octets autorisés sans interface graphique.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1857,7 +1666,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    8
+                    9
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -1884,6 +1693,7 @@ mod tests {
         let expected = [
             "bridget_ledger",
             "bridget_publish_artifact",
+            "bridget_read_artifact",
             "bridget_send",
             "bridget_who",
             "maicie_delegate",
@@ -1904,7 +1714,7 @@ mod tests {
     }
 
     #[test]
-    fn publication_html_est_annoncee_au_moteur_comme_un_artefact_sandboxe() {
+    fn publication_html_est_annoncee_comme_un_contenu_inerte() {
         let publication = tools()
             .into_iter()
             .find(|tool| tool["name"] == "bridget_publish_artifact")
@@ -1918,6 +1728,8 @@ mod tests {
             .expect("description présente");
         assert!(description.contains("kind=html"));
         assert!(description.contains("ne jamais recopier le HTML dans Markdown"));
+        assert!(description.contains("contenu inerte"));
+        assert!(!description.contains("rend inline"));
     }
 
     #[test]
@@ -2014,6 +1826,48 @@ mod tests {
                 "bridget_publish_artifact",
                 arguments.as_object().unwrap(),
                 &socket,
+            ),
+            Err(ToolError::InvalidParams(_))
+        ));
+    }
+
+    #[test]
+    fn lecture_de_contenu_refuse_l_elargissement_de_portee_avant_connexion() {
+        let base = json!({"version":1,"artifact_ref":"artifact:1","version_ref":"artifact-version:1","kind":{"kind":"manifest"},"offset":0,"limit":1024});
+        for field in ["project_id", "agent_id", "path", "source"] {
+            let mut invalid = base.clone();
+            invalid[field] = json!("autre");
+            assert!(matches!(
+                execute_tool_at(
+                    "89000000-0000-4000-8000-000000000001",
+                    "bridget_read_artifact",
+                    invalid.as_object().unwrap(),
+                    Path::new("/socket-inexistant-089")
+                ),
+                Err(ToolError::InvalidParams(_))
+            ));
+        }
+        for limit in [0, 16385] {
+            let mut invalid = base.clone();
+            invalid["limit"] = json!(limit);
+            assert!(matches!(
+                execute_tool_at(
+                    "89000000-0000-4000-8000-000000000001",
+                    "bridget_read_artifact",
+                    invalid.as_object().unwrap(),
+                    Path::new("/socket-inexistant-089")
+                ),
+                Err(ToolError::InvalidParams(_))
+            ));
+        }
+        let mut unknown_kind = base;
+        unknown_kind["kind"] = json!({"kind":"execute"});
+        assert!(matches!(
+            execute_tool_at(
+                "89000000-0000-4000-8000-000000000001",
+                "bridget_read_artifact",
+                unknown_kind.as_object().unwrap(),
+                Path::new("/socket-inexistant-089")
             ),
             Err(ToolError::InvalidParams(_))
         ));

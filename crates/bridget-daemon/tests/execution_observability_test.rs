@@ -1,7 +1,4 @@
-use bridget_daemon::{
-    daemon::Metrics,
-    ui::{UiAlertThresholdsV1, execution_alerts},
-};
+use bridget_daemon::daemon::Metrics;
 use std::sync::atomic::Ordering;
 
 #[test]
@@ -48,30 +45,4 @@ fn metriques_execution_sont_compteurs_bornes_et_sans_corpus() {
         .expect("definition Metrics");
     assert!(!definition.contains("HashMap"));
     assert!(!definition.contains("String"));
-}
-
-#[test]
-fn alertes_couvrent_vieillissement_sans_progres_autorisation_et_saturation() {
-    let thresholds = UiAlertThresholdsV1::default();
-    assert_eq!(thresholds.stale_message_secs, 15 * 60);
-    assert_eq!(thresholds.stalled_turn_secs, 5 * 60);
-    assert_eq!(thresholds.stalled_approval_secs, 5 * 60);
-    assert_eq!(thresholds.saturated_queue_depth, 10);
-
-    let alerts = execution_alerts(
-        Some("running"),
-        Some("waiting_approval"),
-        Some(thresholds.stalled_turn_secs),
-        thresholds.saturated_queue_depth,
-        Some(thresholds.stale_message_secs),
-    );
-    assert_eq!(
-        alerts,
-        vec![
-            "stale_message",
-            "stalled_turn",
-            "stalled_approval",
-            "queue_saturated",
-        ]
-    );
 }

@@ -1,6 +1,5 @@
 pub mod agent_profile;
 pub mod artifact_blob_store;
-pub mod artifact_fetch;
 pub mod artifact_policy;
 pub mod artifact_service;
 pub mod artifact_store;
@@ -36,7 +35,6 @@ pub use managed_supervisor::{
 };
 pub mod mcp;
 pub mod mcp_identity;
-pub mod mission_projection;
 pub mod project_policy;
 pub mod project_runtime;
 pub mod project_workspace;
@@ -50,5 +48,4 @@ pub mod runtime;
 pub mod store;
 #[cfg(feature = "test-support")]
 pub mod test_sync;
-pub mod ui;
 pub mod wrapper;
