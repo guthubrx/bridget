@@ -1,7 +1,7 @@
 # Tâches 089 — extraction progressive du noyau
 
 **Entrées :** spec.md, plan.md, research.md, data-model.md, contracts/communication.md.
-**36 tâches de réalisation, 20 terminées.** P0 : référence mesurée et exclusions de sécurité consignées ; T005 ne signifie pas suite globale verte. Maicie/UI/runtime sont découplés ; stockage modularisé sans scinder les transactions, vérifié par fautes et crashs réels. Paquet indépendant T013 et garanties locales T014–T019 exécutés, clôture du service à UUID et lacune de curseur attach corrigées. Ledger maître vérifié à T022. Fournisseurs, SSH et gates finaux restent ouverts ; pas de livraison globale déclarée.
+**36 tâches de réalisation, 27 terminées.** P0 : référence mesurée et exclusions de sécurité consignées ; T005 ne signifie pas suite globale verte. Maicie/UI/runtime sont découplés ; stockage modularisé sans scinder les transactions, vérifié par fautes et crashs réels. Garanties locales, ledger maître, skill, SSH entre deux machines et charge 600 événements exécutés. Sécurité T029 éprouvée ; concurrence/migrations/audit/gates finaux restent ouverts. Codex réel validé mais T020 reste partielle (authentification Claude indisponible) ; T021 reste ouverte. Pas de livraison globale déclarée.
 
 Exécution séquentielle par tranches ; aucun lancement automatique de sous-agents. Un commit cohérent après tests, aucune capture d'un WIP tiers. Écrire l'oracle avant la modification qu'il doit protéger, vérifier son échec sur un mutant ciblé lorsqu'exigé, puis restaurer le vrai code. Les tests réels n'utilisent jamais les processus de production.
 
@@ -47,7 +47,7 @@ Exécution séquentielle par tranches ; aucun lancement automatique de sous-agen
 
 ## P4 — Qualité, sécurité et adoption contrôlée (US4)
 
-- [ ] T029 [US4] Ajouter tests/core_089_security_test.rs : permissions à la création, mauvais propriétaire, symlink, trame à la limite LF inclus, absence de capacité, scope usurpé et purge après BrokenPipe ; vérifier zéro effet interdit. SC-08908.
+- [x] T029 [US4] Ajouter tests/core_089_security_test.rs : permissions à la création, mauvais propriétaire, symlink, trame à la limite LF inclus, absence de capacité, scope usurpé et purge après BrokenPipe ; vérifier zéro effet interdit. SC-08908. Propriétaire : vrai fichier + UID attendu injecté dans le prédicat partagé, aucun chown privilégié ; portée/émetteur et capacités éprouvés sur sockets réelles. Détails et limites dans implementation.md.
 - [ ] T030 [US4] Ajouter tests/core_089_concurrency_test.rs : connexions réelles simultanées, saturation, budget avant connect, lenteur multi-phases, ouverture SQLite concurrente et retry même clé ; barrières bornées. SC-08903/08.
 - [ ] T031 [US4] Ajouter tests/core_089_migration_test.rs : copies de schémas historiques, migration répétée et inconnue, IDs/bytes/terminaux inchangés, aucune écriture dans la source ; documenter import opt-in, sans l'exécuter sur données utilisateur. SC-08907.
 - [ ] T032 [US4] Auditer Cargo.lock et scripts livrés : vulnérabilités, licences et dépendances réellement utilisées ; retirer les dépendances hors périmètre, documenter les alertes restantes dans implementation.md, aucune installation d'outil globale implicite. SC-08911.

@@ -1,5 +1,6 @@
 //! CLI — point d'entrée unifié pour toutes les sous-commandes bridget.
 
+use crate::communication::client::DaemonConnection;
 use crate::daemon::{self, DaemonConfig};
 use bridget_core::{
     BridgetMessage,
@@ -14,7 +15,10 @@ use bridget_transport::protocol::{
 };
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::fmt::Write as _;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::Write;
+#[cfg(test)]
+use std::io::{BufRead, BufReader, BufWriter};
+#[cfg(test)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -2271,33 +2275,27 @@ fn send_idempotent_to_daemon_at(
     message: &BridgetMessage,
     options: &IdempotentSendOptions,
 ) -> Result<DaemonToWrapper, String> {
-    let stream = UnixStream::connect(path).map_err(|error| error.to_string())?;
-    let read_stream = stream.try_clone().map_err(|error| error.to_string())?;
-    let mut writer = BufWriter::new(stream);
-    let mut reader = BufReader::new(read_stream);
-
-    write_control_message(
-        &mut writer,
-        &WrapperToDaemon::RoleHandshake {
+    let mut connection = DaemonConnection::connect(path).map_err(|error| error.to_string())?;
+    match connection
+        .exchange(&WrapperToDaemon::RoleHandshake {
             role: ConnectionRole::Client,
-        },
-    )?;
-    match read_control_message(&mut reader)? {
+        })
+        .map_err(|error| error.to_string())?
+    {
         DaemonToWrapper::RoleAccepted {
             role: ConnectionRole::Client,
         } => {}
         response => return Err(format!("handshake client refusé: {response:?}")),
     }
 
-    write_control_message(
-        &mut writer,
-        &WrapperToDaemon::ClientHello {
+    match connection
+        .exchange(&WrapperToDaemon::ClientHello {
             contract_version: CLIENT_CONTRACT_VERSION,
             issuer_scope: options.issuer_scope.clone(),
             capabilities: vec![ClientCapability::SendIdempotent],
-        },
-    )?;
-    match read_control_message(&mut reader)? {
+        })
+        .map_err(|error| error.to_string())?
+    {
         DaemonToWrapper::ClientWelcome {
             capabilities,
             build_id,
@@ -2313,17 +2311,16 @@ fn send_idempotent_to_daemon_at(
         response => return Err(format!("négociation client refusée: {response:?}")),
     }
 
-    write_control_message(
-        &mut writer,
-        &WrapperToDaemon::SendIdempotent {
+    connection
+        .send_then_wait(&WrapperToDaemon::SendIdempotent {
             message: message.clone(),
             message_id: options.id.clone(),
             issued_at: options.issued_at,
-        },
-    )?;
-    read_control_message(&mut reader)
+        })
+        .map_err(|error| error.to_string())
 }
 
+#[cfg(test)]
 fn write_control_message(
     writer: &mut BufWriter<UnixStream>,
     message: &WrapperToDaemon,
@@ -2337,6 +2334,7 @@ fn write_control_message(
     writer.flush().map_err(|error| error.to_string())
 }
 
+#[cfg(test)]
 fn read_control_message(reader: &mut BufReader<UnixStream>) -> Result<DaemonToWrapper, String> {
     let mut line = String::new();
     let bytes = reader
@@ -2381,31 +2379,17 @@ fn send_control_to_daemon_at(
     socket: &std::path::Path,
     command: WrapperToDaemon,
 ) -> Result<DaemonToWrapper, String> {
-    let stream = UnixStream::connect(socket).map_err(|e| e.to_string())?;
-    let mut writer = BufWriter::new(stream);
-
+    let mut connection = DaemonConnection::connect(socket).map_err(|e| e.to_string())?;
     let reg = cli_register("send");
-    let reg_json = encode(&reg).map_err(|e| e.to_string())?;
-    writeln!(writer, "{}", reg_json).map_err(|e| e.to_string())?;
-    writer.flush().map_err(|e| e.to_string())?;
-
-    let read_stream = writer.get_ref().try_clone().map_err(|e| e.to_string())?;
-    let mut reader = BufReader::new(read_stream);
-    let mut reg_line = String::new();
-    reader.read_line(&mut reg_line).map_err(|e| e.to_string())?;
-    let _reg_resp: DaemonToWrapper = decode(&reg_line).map_err(|e| e.to_string())?;
-
-    let send_json = encode(&command).map_err(|e| e.to_string())?;
-    writeln!(writer, "{}", send_json).map_err(|e| e.to_string())?;
-    writer.flush().map_err(|e| e.to_string())?;
-
-    let mut resp_line = String::new();
-    reader
-        .read_line(&mut resp_line)
-        .map_err(|e| e.to_string())?;
-    let resp: DaemonToWrapper = decode(&resp_line).map_err(|e| e.to_string())?;
-
-    Ok(resp)
+    if !matches!(
+        connection.exchange(&reg).map_err(|e| e.to_string())?,
+        DaemonToWrapper::Registered { .. }
+    ) {
+        return Err("enregistrement CLI refusé ; aucune commande envoyée".into());
+    }
+    connection
+        .send_then_wait(&command)
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2639,25 +2623,21 @@ fn send_runtime_to_daemon(
     effort: Option<&str>,
     source: RuntimeSource,
 ) -> Result<DaemonToWrapper, String> {
-    let stream = UnixStream::connect(socket_path()).map_err(|e| e.to_string())?;
-    let read_stream = stream.try_clone().map_err(|e| e.to_string())?;
     // Sans délai borné, un daemon qui ne répond pas — par exemple un daemon
     // d'une version antérieure qui ignore ce message — bloquerait le hook, donc
     // la fin de tour de l'agent observé. Constaté en test réel.
-    read_stream
-        .set_read_timeout(Some(std::time::Duration::from_secs(
-            RUNTIME_REPLY_TIMEOUT_SECS,
-        )))
-        .map_err(|e| e.to_string())?;
-    let mut writer = BufWriter::new(stream);
-    let mut reader = BufReader::new(read_stream);
+    let mut connection = DaemonConnection::connect_until(
+        &socket_path(),
+        std::time::Instant::now() + Duration::from_secs(RUNTIME_REPLY_TIMEOUT_SECS),
+    )
+    .map_err(|e| e.to_string())?;
     let register = cli_register("runtime");
-    writeln!(writer, "{}", encode(&register).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    writer.flush().map_err(|e| e.to_string())?;
-    let mut line = String::new();
-    reader.read_line(&mut line).map_err(|e| e.to_string())?;
-    let _: DaemonToWrapper = decode(line.trim()).map_err(|e| e.to_string())?;
+    if !matches!(
+        connection.exchange(&register).map_err(|e| e.to_string())?,
+        DaemonToWrapper::Registered { .. }
+    ) {
+        return Err("enregistrement runtime refusé".into());
+    }
 
     let runtime = WrapperToDaemon::Runtime {
         agent: agent.to_string(),
@@ -2665,12 +2645,7 @@ fn send_runtime_to_daemon(
         effort: effort.map(str::to_owned),
         source,
     };
-    writeln!(writer, "{}", encode(&runtime).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    writer.flush().map_err(|e| e.to_string())?;
-    line.clear();
-    reader.read_line(&mut line).map_err(|e| e.to_string())?;
-    decode(line.trim()).map_err(|e| e.to_string())
+    connection.exchange(&runtime).map_err(|e| e.to_string())
 }
 
 fn cmd_runtime(args: &[String]) {
@@ -2972,19 +2947,14 @@ fn send_rate_limits_to_daemon(
     agent: &str,
     facts: &[StatusLineLimit],
 ) -> Result<(), String> {
-    let stream = UnixStream::connect(socket).map_err(|e| e.to_string())?;
-    let read_stream = stream.try_clone().map_err(|e| e.to_string())?;
     // Même garde que la sonde de runtime : un daemon d'une version antérieure
     // ignore ce message, et sans délai borné le hook bloquerait le
     // rafraîchissement de la ligne d'état de l'agent observé.
-    read_stream
-        .set_read_timeout(Some(std::time::Duration::from_secs(
-            RUNTIME_REPLY_TIMEOUT_SECS,
-        )))
-        .map_err(|e| e.to_string())?;
-    let mut writer = BufWriter::new(stream);
-    let mut reader = BufReader::new(read_stream);
-    let mut line = String::new();
+    let mut connection = DaemonConnection::connect_until(
+        socket,
+        std::time::Instant::now() + Duration::from_secs(RUNTIME_REPLY_TIMEOUT_SECS),
+    )
+    .map_err(|e| e.to_string())?;
 
     for fact in facts {
         let message = WrapperToDaemon::RateLimit {
@@ -2995,12 +2965,7 @@ fn send_rate_limits_to_daemon(
             used_percent: fact.used_percent,
             source: bridget_transport::protocol::RateLimitSource::ClaudeStatusLine,
         };
-        writeln!(writer, "{}", encode(&message).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-        writer.flush().map_err(|e| e.to_string())?;
-        line.clear();
-        reader.read_line(&mut line).map_err(|e| e.to_string())?;
-        match decode(line.trim()).map_err(|e| e.to_string())? {
+        match connection.exchange(&message).map_err(|e| e.to_string())? {
             DaemonToWrapper::Ack { .. } => {}
             DaemonToWrapper::Nack { reason, .. } => {
                 return Err(format!("limite {} refusée: {}", fact.window, reason));
@@ -3661,31 +3626,26 @@ fn cmd_agents(args: &[String]) {
 // ---------------------------------------------------------------------------
 
 fn send_control_request(request: WrapperToDaemon) -> Result<DaemonToWrapper, String> {
-    let stream = UnixStream::connect(socket_path()).map_err(|error| error.to_string())?;
-    let read_stream = stream.try_clone().map_err(|error| error.to_string())?;
-    let mut writer = BufWriter::new(stream);
-    let mut reader = BufReader::new(read_stream);
-    write_control_message(
-        &mut writer,
-        &WrapperToDaemon::RoleHandshake {
+    let mut connection = DaemonConnection::connect(&socket_path()).map_err(|e| e.to_string())?;
+    match connection
+        .exchange(&WrapperToDaemon::RoleHandshake {
             role: ConnectionRole::Client,
-        },
-    )?;
-    match read_control_message(&mut reader)? {
+        })
+        .map_err(|e| e.to_string())?
+    {
         DaemonToWrapper::RoleAccepted {
             role: ConnectionRole::Client,
         } => {}
         response => return Err(format!("handshake control refusé: {response:?}")),
     }
-    write_control_message(
-        &mut writer,
-        &WrapperToDaemon::ClientHello {
+    match connection
+        .exchange(&WrapperToDaemon::ClientHello {
             contract_version: CLIENT_CONTRACT_VERSION,
             issuer_scope: crate::communication::issuer_scope("bridget-control-cli"),
             capabilities: vec![ClientCapability::ControlStateV1],
-        },
-    )?;
-    match read_control_message(&mut reader)? {
+        })
+        .map_err(|e| e.to_string())?
+    {
         DaemonToWrapper::ClientWelcome { capabilities, .. }
             if capabilities.contains(&ClientCapability::ControlStateV1) => {}
         DaemonToWrapper::ClientRejected { reason } => {
@@ -3693,8 +3653,9 @@ fn send_control_request(request: WrapperToDaemon) -> Result<DaemonToWrapper, Str
         }
         response => return Err(format!("négociation control refusée: {response:?}")),
     }
-    write_control_message(&mut writer, &request)?;
-    read_control_message(&mut reader)
+    connection
+        .send_then_wait(&request)
+        .map_err(|e| e.to_string())
 }
 
 fn require_interactive_terminal(command: &str) -> bool {

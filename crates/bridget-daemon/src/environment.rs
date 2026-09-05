@@ -203,14 +203,15 @@ pub fn validate_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn is_private_owned(metadata: &fs::Metadata, expected_uid: u32) -> bool {
+    metadata.uid() == expected_uid && metadata.permissions().mode() & 0o077 == 0
+}
+
 pub fn validate_private_directory_if_present(path: &Path) -> Result<(), String> {
     validate_path(path)?;
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
-            if !metadata.is_dir()
-                || metadata.uid() != unsafe { libc::geteuid() }
-                || metadata.permissions().mode() & 0o077 != 0
-            {
+            if !metadata.is_dir() || !is_private_owned(&metadata, unsafe { libc::geteuid() }) {
                 return Err(format!(
                     "répertoire privé 0700 appartenant à l'utilisateur requis : {}",
                     path.display()
@@ -269,9 +270,7 @@ pub fn validate_existing_tree(root: &Path) -> Result<(), String> {
             if metadata.file_type().is_symlink() {
                 return Err(format!("symlink d'état interdit : {}", path.display()));
             }
-            if metadata.uid() != unsafe { libc::geteuid() }
-                || metadata.permissions().mode() & 0o077 != 0
-            {
+            if !is_private_owned(&metadata, unsafe { libc::geteuid() }) {
                 return Err(format!(
                     "état non privé dans le namespace : {}",
                     path.display()
@@ -296,10 +295,7 @@ pub fn validate_state_file(path: &Path, socket: bool) -> Result<(), String> {
             } else {
                 metadata.is_file()
             };
-            if !valid_type
-                || metadata.uid() != unsafe { libc::geteuid() }
-                || metadata.permissions().mode() & 0o077 != 0
-            {
+            if !valid_type || !is_private_owned(&metadata, unsafe { libc::geteuid() }) {
                 return Err(format!(
                     "état privé de type/propriétaire valide requis : {}",
                     path.display()
@@ -317,6 +313,28 @@ mod tests {
     use super::reject_removed_runtime_environment;
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
+
+    #[test]
+    fn fichier_prive_ne_suffit_pas_si_le_proprietaire_attendu_differe() {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        let path = std::env::temp_dir().join(format!("owner-{}.test", uuid::Uuid::new_v4()));
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        let metadata = file.metadata().unwrap();
+        let actual = unsafe { libc::geteuid() };
+        assert_eq!(metadata.uid(), actual);
+        assert!(super::is_private_owned(&metadata, actual));
+        // Métadonnées d'un VRAI fichier 0600 ; identité attendue injectée,
+        // aucun chown privilégié ni altération d'un fichier d'un autre compte.
+        // Retirer la comparaison UID rend cette assertion rouge.
+        assert!(!super::is_private_owned(&metadata, actual ^ 1));
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn environnement_sans_prefixe_runtime_reste_accepte() {

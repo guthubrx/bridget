@@ -11,6 +11,7 @@ pub mod fsutil;
 pub mod greffe_authorization;
 pub mod greffe_policy_refresh;
 pub mod journal;
+pub mod jsonl;
 pub mod managed_session;
 pub mod protocol;
 pub mod refusals;

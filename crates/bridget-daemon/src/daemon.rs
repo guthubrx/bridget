@@ -4243,7 +4243,7 @@ fn handle_connection(
         .next_conn_id();
     log::debug!("handle_connection: nouvelle connexion {}", conn_id);
     let reader_stream = stream.try_clone()?;
-    let reader = BufReader::new(reader_stream);
+    let mut reader = BufReader::new(reader_stream);
 
     // Enregistrer le writer dans la map pour les push
     let push_stream = stream.try_clone()?;
@@ -4265,15 +4265,27 @@ fn handle_connection(
     // nettoyage commun ci-dessous. Une capacité de service est strictement
     // attachée à la connexion : elle ne doit jamais survivre à son socket.
     let connection_result = (|| -> Result<(), Box<dyn std::error::Error>> {
-        for line_result in reader.lines() {
-            let line = match line_result {
-                Ok(l) => l,
-                Err(_) => break,
+        loop {
+            let frame = match bridget_transport::jsonl::read_unix_line(
+                &mut reader,
+                bridget_transport::jsonl::MAX_DAEMON_FRAME_BYTES,
+                bridget_transport::jsonl::LineDeadline::AfterFirstByte(Duration::from_secs(10)),
+            ) {
+                Ok(Some(frame)) => frame,
+                Ok(None) => break,
+                Err(error) => return Err(error.into()),
             };
+            let wire_len = frame.len();
+            let raw = std::str::from_utf8(&frame)?;
+            let line = raw
+                .strip_suffix('\n')
+                .unwrap()
+                .strip_suffix('\r')
+                .unwrap_or_else(|| raw.strip_suffix('\n').unwrap());
             if line.is_empty() {
                 continue;
             }
-            if guichet_frame_exceeds_wire_limit(&line) {
+            if guichet_frame_exceeds_wire_limit(line, wire_len) {
                 let json = encode(&DaemonToWrapper::ServiceRejected {
                     reason: ServiceRefusal::FrameTooLarge,
                 })?;
@@ -4284,16 +4296,14 @@ fn handle_connection(
 
             // Contrat fermé de lecture : une extension inconnue ne disparaît
             // pas silencieusement dans les defaults Serde de l'enveloppe commune.
-            if serde_json::from_str::<serde_json::Value>(&line)
+            if serde_json::from_str::<serde_json::Value>(line)
                 .ok()
                 .is_some_and(|value| {
                     value.get("type").and_then(|kind| kind.as_str()) == Some("display_name_set")
                 })
-                && !decode::<WrapperToDaemon>(&line)
-                    .ok()
-                    .is_some_and(|message| {
-                        encode(&message).is_ok_and(|canonical| canonical == line)
-                    })
+                && !decode::<WrapperToDaemon>(line).ok().is_some_and(|message| {
+                    encode(&message).is_ok_and(|canonical| canonical == line)
+                })
             {
                 writeln!(
                     my_writer,
@@ -4307,17 +4317,15 @@ fn handle_connection(
                 my_writer.flush()?;
                 continue;
             }
-            if serde_json::from_str::<serde_json::Value>(&line)
+            if serde_json::from_str::<serde_json::Value>(line)
                 .ok()
                 .is_some_and(|value| {
                     value.get("type").and_then(|kind| kind.as_str()) == Some("artifact_read")
                 })
-                && !decode::<WrapperToDaemon>(&line)
-                    .ok()
-                    .is_some_and(|message| {
-                        matches!(message, WrapperToDaemon::ArtifactRead { .. })
-                            && encode(&message).is_ok_and(|canonical| canonical == line)
-                    })
+                && !decode::<WrapperToDaemon>(line).ok().is_some_and(|message| {
+                    matches!(message, WrapperToDaemon::ArtifactRead { .. })
+                        && encode(&message).is_ok_and(|canonical| canonical == line)
+                })
             {
                 writeln!(
                     my_writer,
@@ -4333,11 +4341,11 @@ fn handle_connection(
                 continue;
             }
 
-            let msg: WrapperToDaemon = match decode(&line) {
+            let msg: WrapperToDaemon = match decode(line) {
                 Ok(m) => m,
                 Err(e) => {
                     warn!("message illisible de {}: {}", conn_id, e);
-                    if raw_guichet_frame(&line) {
+                    if raw_guichet_frame(line) {
                         let json = encode(&DaemonToWrapper::ServiceRejected {
                             reason: ServiceRefusal::InvalidEnvelope,
                         })?;
@@ -4617,8 +4625,8 @@ fn is_guichet_frame(message: &WrapperToDaemon) -> bool {
 
 /// `BufRead::lines` enlève le séparateur : la borne du contrat porte bien sur
 /// la trame JSONL entière, donc sur la ligne plus son LF filaire.
-fn guichet_frame_exceeds_wire_limit(line: &str) -> bool {
-    line.len().saturating_add(1) > MAX_GUICHET_FRAME_BYTES && raw_guichet_frame(line)
+fn guichet_frame_exceeds_wire_limit(line: &str, wire_len: usize) -> bool {
+    wire_len > MAX_GUICHET_FRAME_BYTES && raw_guichet_frame(line)
 }
 
 /// Classe la famille du message à partir du JSON, jamais d'une sous-chaîne :
@@ -12815,8 +12823,12 @@ mod presence_tests {
         // Mutation discriminante : passer de `>` à `>=`, ou retomber sur une
         // sous-chaîne compacte, rejetterait la première trame à tort ou
         // laisserait passer la seconde malgré ses espaces JSON valides.
-        assert!(!guichet_frame_exceeds_wire_limit(&exact));
-        assert!(guichet_frame_exceeds_wire_limit(&oversized));
+        assert!(!guichet_frame_exceeds_wire_limit(&exact, exact.len() + 1));
+        assert!(guichet_frame_exceeds_wire_limit(&exact, exact.len() + 2)); // CRLF compte aussi.
+        assert!(guichet_frame_exceeds_wire_limit(
+            &oversized,
+            oversized.len() + 1
+        ));
     }
 
     #[test]
@@ -15019,7 +15031,23 @@ mod presence_tests {
 
     #[test]
     fn service_capability_is_cleaned_after_a_broken_response_socket() {
-        let (state, config) = state_with_registered_agent("service-cleanup-real-socket");
+        // Aucun faux agent à ancien nom court ni mutation globale de HOME :
+        // ce scénario porte seulement la négociation d'une connexion service.
+        let root = PathBuf::from("/tmp").join(format!("b89bp-{}", Uuid::new_v4().simple()));
+        crate::environment::ensure_private_directory(&root).unwrap();
+        let config = DaemonConfig {
+            socket_path: root.join("daemon.sock"),
+            db_path: root.join("daemon.db"),
+            log_path: root.join("daemon.log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+        };
+        let (managed_tx, _managed_rx) = mpsc::channel();
+        let mut state = DaemonState::new(&config, managed_tx).unwrap();
+        state.fixture_root = Some(FixtureRoot(root));
         let shared = Arc::new(Mutex::new(state));
         let listener = UnixListener::bind(&config.socket_path).unwrap();
         let (first_closed_tx, first_closed_rx) = mpsc::channel();
