@@ -1,6 +1,6 @@
 # Recette du noyau — installation isolée, bascule non automatique
 
-**État actuel :** extraction et validations en cours. T007 isole le namespace ; T014–T019 exécutent les coutures daemon/CLI/MCP, T020 a exécuté Codex réel. T025–T028 ont exercé SSH local, macOS↔Linux, coupure/reprise et charge. Claude reste en attente d'une authentification valide ; GLM et la non-régression finale restent à exécuter. Voir implementation.md pour les preuves, pas les résultats d'anciens chantiers.
+**État actuel :** paquet autonome validé (1 199 tests automatiques, matrice 50 crashs, fmt/clippy, installation privée et revue). T007 isole le namespace ; T014–T019 exécutent les coutures daemon/CLI/MCP, T020 a exécuté Codex réel. T025–T028 ont exercé SSH local, macOS↔Linux, coupure/reprise et charge. Claude reste en attente d'une authentification valide et GLM réel sur forfait reste non validé. Voir implementation.md pour les preuves et leurs limites, pas les résultats d'anciens chantiers.
 
 Répertoire de travail : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core`.
 

@@ -11,12 +11,13 @@ primary session path; tmux is not required.
 
 ## Branch status
 
-Session 089 is being validated. Physical extraction and local guarantees are
-implemented progressively. A real native Codex exchange and journal attachment
+Session 089 has a validated standalone package: 1,199 automated tests passed,
+50 real crash cycles were replayed, fmt/clippy passed and independent review
+findings were fixed and checked. A real native Codex exchange and journal attachment
 have passed. The real Claude gate remains open on local authentication; GLM has
 not been validated. Cross-server SSH, reconnect and the isolated 600-event,
 60-second load gates have passed. Copy-only migrations and targeted security
-gates have been exercised; full regression and final review remain open.
+gates have been exercised. Unverified provider accounts remain outside this verdict.
 Nothing has been deployed to the existing fleet.
 
 See the [evidence log](specs/089-communication-core/implementation.md),
@@ -26,6 +27,10 @@ See the [evidence log](specs/089-communication-core/implementation.md),
 ## Send, reply, inspect
 
 From an agent already registered in the current Bridget namespace:
+
+These examples assume the **extracted binary**, not the `bridget` installed by
+the old product. Follow the independent installation guide first; no global
+alias, service or PATH is replaced automatically.
 
 ```sh
 bridget who

@@ -1,5 +1,116 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — Résultat final T034/T036 : noyau et paquet validés
+
+Cette synthèse remplace les états intermédiaires ci-dessous, conservés comme
+historique. Source testée : `42029fcc3c0f4d05039c468a712c1c6797096a56`.
+Les changements suivants ne portent que sur la documentation et l'exclusion
+Git du répertoire de worktrees. 34/36 tâches terminées ; T020/T021 restent
+ouvertes pour les comptes fournisseurs, pas pour l'extraction physique.
+
+Toutes les commandes finales sont exécutées depuis le paquet sans Git
+`/private/tmp/b89final.q4cT33/source-final`, sans apps/plugins/infra ni
+node_modules. Environnement vidé avec `env -i`, puis HOME privé
+`/private/tmp/b89final.q4cT33/h2`, BRIDGET_HOME privé
+`/private/tmp/b89final.q4cT33/s2`, BRIDGET_SOCKET dans ce dernier (`s`),
+TMPDIR privé `/private/tmp/b89final.q4cT33/t2`, CARGO_HOME=/Users/moi/.cargo,
+RUSTUP_HOME=/Users/moi/.rustup,
+PATH=/Users/moi/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin ; umask 077,
+BRIDGET_BUILD_ID lu dans BUILD_ID. Rust 1.92.0 ; aucun compte fournisseur
+hérité ni état de production utilisé.
+
+| Commande | Résultat réel |
+|---|---|
+| `perl -e 'alarm 900; exec @ARGV' cargo test --offline --locked --workspace --features test-support --no-fail-fast -- --test-threads=4` | Exit 0 ; **1 199 réussites, 0 échec, 35 entrées ignorées**, 68 résumés. 16:25:14–16:29:15 UTC, 4 min 01 s mur, attentes Cargo/build incluses. |
+| `cargo fmt --all --check` | Exit 0. |
+| `cargo clippy --offline --locked --workspace --all-targets --features test-support -- -D warnings` | Exit 0, 13,54 s. |
+| `cargo metadata --offline --locked --format-version 1` | 94 packages transitifs, exactement trois membres locaux : bridget-core, bridget-daemon, bridget-transport. |
+| `cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_dependency_test paquet_sans_sources_metier_ni_interface_et_graphe_transitif_verifie -- --ignored --exact` | 1/1, 0,01 s ; BRIDGET_CORE_PACKAGE_ROOT désigne le paquet, BRIDGET_CORE_PACKAGE_METADATA=/private/tmp/b89final.q4cT33/final-metadata.json. |
+| `perl -e 'alarm 420; exec @ARGV' cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_crash_test matrice_crash_sc001_redelivre_cinquante_prompts_uniques -- --ignored --exact --nocapture` | 1/1, **50/50 cycles de crash réel**, 174,48 s de test, 16:30:01–16:32:56 UTC. Quatre frontières, mêmes octets/issues au retry et prompts uniques dans le domaine de garantie documenté. |
+
+Les 35 entrées ignorées ne sont pas 35 succès implicites : 23 sont des points
+d'entrée privés de sous-processus exécutés par leurs parents ; la matrice N=50
+et le contrôle du paquet sont rejoués explicitement ci-dessus ; quatre recettes
+SSH/charge conservent leurs preuves T025–T028, non réexécutées pour cette
+compilation ; trois recettes fournisseur/authentification conservent leurs
+limites T020/T021 ; un banc local historique reste opt-in (mesure T028 distincte),
+un ancien micro-banc ACP est remplacé par SC-005 réel, et un générateur de
+corpus n'est pas un test d'acceptation. Aucun ignore ajouté pour masquer un rouge.
+
+Contrôles complémentaires : `bash scripts/verify-089-contracts.sh --self-test
+--require-complete` : 17 fixtures et six mutants, succès ;
+`bash scripts/tests/package_089_test.sh` : succès, y compris ancêtre symlink,
+destination occupée et mutation de checksum ;
+`bash scripts/tests/federation_089_test.sh` : 23/23 en 3,545 s.
+La construction release et son installation réelle sont détaillées dans T035.
+
+Logs temporaires sous `/private/tmp/b89final.q4cT33` (les empreintes permettent
+d'identifier les preuves, pas de promettre leur conservation après nettoyage) :
+
+| Fichier | SHA-256 |
+|---|---|
+| final-workspace.log | f3ab50a2a21af2bb470f668f9422a8ce7fbde5543cc6f292a78af7411033e33b |
+| final-clippy.log | 467b04c2dfc8fd6a6a97f02c53eb456dcca6efdffd4d0acd1bcfa973b268d3a6 |
+| final-package-gate.log | 3d202d062368a13e2827d5073ab8953084eec031808c4391e8303af8b57e81ff |
+| final-crash.log | 841dd7fc736e535d2c09c01c7ed454afafed376752e699b8f02b5adea32d36f8 |
+
+### Couverture finale des critères
+
+| Critère | Preuve et limite |
+|---|---|
+| SC-08901 | Identité, réponse liée, ledger et absence de rappel : T015/T016. **Partiel** pour deux pilotes réels distincts : Codex éprouvé, Claude authentifié encore ouvert. |
+| SC-08902 | CLI/MCP réels et canon SQL : T014 ; service externe T018 ; ledger T022. Suites reprises dans le gate final. |
+| SC-08903 | Crashs courts et concurrence T017/T030 ; matrice finale SIGKILL 50/50, sans élargir la garantie au succès métier du fournisseur. |
+| SC-08904 | Deux machines, SSH coupé/repris, IDs/ledger : preuves réelles T025–T027. Aucun tunnel de production modifié. |
+| SC-08905 | T019, mutants Gap/Fresh/Unavailable ; SC-002 final traverse SnapshotCaughtUp avant le suivi, sans perte/doublon. |
+| SC-08906 | Paquet physique sans sources métier/UI et graphe transitif contrôlé ; installation T035. |
+| SC-08907 | T031 : migrations historiques sur copies, futur refusé et source inchangée ; suite finale. |
+| SC-08908 | T029/T030, revue hostile et trois correctifs relus : notification bornée, symlinks, sonde sans profil durable. Limites explicites dans checklists/final-review.md. |
+| SC-08909 | Pilotes, EOF/stop/reconnexion/attach automatisés ; Codex réel T020. **Partiel** : Claude authentifié et GLM sur forfait non validés, aucun repli payant. |
+| SC-08910 | T022/T023 : projections et skill communes, in_flight distinct d'outcome_unknown, scénario sans Maicie ; suite finale. |
+| SC-08911 | 264 dispositions documentées ; gate final ci-dessus ; audit RustSec épinglé T032 : zéro vulnérabilité/alerte, dette serde_yaml documentée. |
+| SC-08912 | T028/T033 : 187→94 packages ; mesures réelles locales/SSH ; RSS de compilation +14,16 % annoncé, pas dissimulé derrière la réduction du code. |
+
+Revue indépendante : voir checklists/final-review.md. Verdict initial AMENDER,
+trois constats corrigés et relus PASS ciblé ; cela ne transforme pas les deux
+recettes de comptes manquantes en critères satisfaits. Le nouveau dépôt peut
+être utilisé côte à côte ; aucune flotte, base utilisateur, skill globale ou
+configuration de fournisseur n'est basculée automatiquement.
+
+## 2026-09-05 — T035 : installation indépendante exécutée
+
+Source de production `42029fcc3c0f`, paquet autonome vérifié par
+`shasum -a 256 -c SOURCE-MANIFEST.sha256` dans
+`/private/tmp/b89final.q4cT33/source-final`. Construction exécutée :
+`cargo build --offline --locked --release -p bridget-daemon -j 2`, 1 min 15 s,
+Rust 1.92.0. BUILD_ID transmis depuis le fichier du paquet. Binaire optimisé :
+12 353 184 octets, SHA-256
+`e6b61cd301f476841c943a3f4df80818434e3aa5a11dcd61e871095b6f9ce09c`.
+Ce poids release n'est pas comparé au poids debug du benchmark T033.
+
+Recette sans compte fournisseur : `env -i` avec
+HOME=/private/tmp/b89-run.1c4AL6/provider,
+BRIDGET_HOME=/private/tmp/b89-run.1c4AL6/state,
+BRIDGET_SOCKET=/private/tmp/b89-run.1c4AL6/state/s,
+TMPDIR=/private/tmp/b89-run.1c4AL6/tmp,
+PATH=/usr/bin:/bin:/usr/sbin:/sbin et HOSTNAME=b89-install.
+Toutes les commandes utilisent
+`/private/tmp/b89final.q4cT33/source-final/target/release/bridget` :
+
+1. `daemon`, enfant possédé PID 35405, logs privés ; attente du statut attesté,
+   pas une durée supposée de démarrage.
+2. `status` : en ligne, machine b89-install, chemins du namespace neuf,
+   build-id 42029fcc3c0f, zéro agent, total messages explicitement non publié.
+3. `agents --json` : exactement `[]` ; `ledger --limit 20` : succès.
+   Stderr vide pour les trois commandes : égalité des binaires silencieuse.
+4. PID/commande vérifiés puis `kill -TERM 35405`, wait du seul enfant et contrôle
+   après trois secondes : processus absent, socket et PID file retirés.
+
+Preuves conservées dans `/private/tmp/b89-run.1c4AL6` ; pas de suppression
+automatique de l'état utile au diagnostic. Ancien dépôt encore identique à son
+WIP initial : Cargo.toml desktop modifié, .claude/.gstack/watch non suivis.
+Aucun alias, profil global, service ou registre de production n'a été remplacé.
+
 ## 2026-09-05 — T034/T035 : paquet autonome et fermeture des dernières coutures
 
 Base `1559f36b`, puis correctifs ci-dessous. Le paquet dans

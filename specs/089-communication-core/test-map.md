@@ -1,5 +1,13 @@
 # Carte des tests 089 — dispositions avant extraction
 
+État final au 2026-09-05 : le paquet autonome issu de `42029fcc` passe
+1 199 tests, zéro échec, 35 entrées ignorées motivées ; la matrice de 50 crashs
+réels et le contrôle du paquet physique passent séparément. Fmt et Clippy
+workspace/all-targets sont verts. Voir la synthèse finale d'implementation.md.
+Les mentions de gate ouvert ou de remédiation restante ci-dessous sont
+l'historique daté du port, pas le statut actuel. Seules les recettes de comptes
+Claude et GLM (T020/T021) restent ouvertes.
+
 ## T034 — unités historiques du daemon portées, gate global encore ouvert
 
 Port des huit coutures restantes d'identité/arguments/permissions/attache/arrêt :

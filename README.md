@@ -11,13 +11,15 @@ utilise les pilotes natifs Codex/Claude ou ACP ; tmux n'est pas requis.
 
 ## État de cette branche
 
-Extraction physique et garanties locales en cours de validation dans la session
-089. Codex natif a répondu réellement avec journal attachable. La recette Claude
+Extraction physique et paquet autonome validés dans la session
+089 : 1 199 tests automatiques réussis, 50 crashs réels rejoués, fmt/clippy verts
+et revue indépendante avec correctifs vérifiés. Codex natif a répondu réellement
+avec journal attachable. La recette Claude
 réelle reste ouverte sur l'authentification locale ; GLM n'est pas encore validé.
 L'échange SSH interserveur, la coupure/reprise et la charge de 600 événements
 sur 60 secondes ont passé leurs recettes isolées. Les migrations sur copies et
-les gates de sécurité ciblés sont exécutés ; la non-régression globale et la
-revue finale restent ouvertes. Rien n'a été déployé dans la flotte.
+les gates de sécurité ciblés sont exécutés. Les comptes fournisseurs non validés
+restent explicitement hors du verdict. Rien n'a été déployé dans la flotte.
 
 Preuves, refus observés et tâches ouvertes :
 [réalisation](specs/089-communication-core/implementation.md),
@@ -27,6 +29,10 @@ Preuves, refus observés et tâches ouvertes :
 ## Se servir de la communication
 
 Depuis une session Bridget enregistrée, dans le namespace de cette session :
+
+Ces exemples supposent le **binaire extrait**, pas le `bridget` déjà installé
+par l'ancien produit. Suivre d'abord le guide d'installation indépendante ;
+aucun alias, service ou PATH global n'est remplacé automatiquement.
 
 ```sh
 bridget who
