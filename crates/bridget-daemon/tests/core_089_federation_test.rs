@@ -269,19 +269,68 @@ fn ack(peer: &mut Client, expected: &str) {
     }
 }
 
+fn child_pids(parent: u32) -> Vec<u32> {
+    let output = Command::new("/bin/ps")
+        .args(["-axo", "pid=,ppid="])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let mut pids = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse::<u32>().ok()?;
+            (fields.next()?.parse::<u32>().ok()? == parent).then_some(pid)
+        })
+        .collect::<Vec<_>>();
+    pids.sort_unstable();
+    pids
+}
+
 #[test]
 #[ignore = "deux machines autorisées requises ; paramètres BRIDGET_SSH_REMOTE_* explicites"]
 fn deux_machines_cli_reel_demande_reponse_ledger_journal() {
+    remote_exchange(false);
+}
+
+#[test]
+#[ignore = "recette SSH distante : coupe/reprise du seul tunnel de test"]
+fn deux_machines_coupure_reprise_curseur_et_lacune() {
+    remote_exchange(true);
+}
+
+fn remote_exchange(reconnect: bool) {
     assert_eq!(std::env::var("BRIDGET_SSH_REMOTE_GATE").as_deref(), Ok("1"));
     let root = fs::canonicalize(test_root("089-ssh-remote")).unwrap();
     let remote = Remote::configured(&root);
+    let historical = if reconnect {
+        let mut date = Command::new("/bin/date");
+        #[cfg(target_os = "macos")]
+        date.args(["-v-1d", "+%F"]);
+        #[cfg(not(target_os = "macos"))]
+        date.args(["-d", "yesterday", "+%F"]);
+        let date = date.output().unwrap();
+        assert!(date.status.success());
+        let directory = root.join("state/sessions").join(ACP_AGENT);
+        private_dir(&directory).unwrap();
+        let file = directory.join(format!(
+            "{}.jsonl",
+            String::from_utf8(date.stdout).unwrap().trim()
+        ));
+        private_write(&file, include_bytes!("../../../specs/089-communication-core/contracts/fixtures/journal-source-unusual-v1.jsonl")).unwrap();
+        Some(file)
+    } else {
+        None
+    };
+    let through_seq = if reconnect { 8 } else { 3 };
     let daemon = spawn_daemon(&root, None);
     let mut actor = register_agent_as(&socket(&root), ACTOR, "shared-cli-mcp-instance");
     let mut recipient = register_recipient_as(&socket(&root), "089-remote-recipient");
     let (registry, registry_root, counter) = registry_with_counting_acp_agent(2);
     let wrapper = WrapperProcess::start(&root, &registry, ACP_AGENT);
     wait_for_registered_agent(&socket(&root), ACP_AGENT);
-    let tunnel = remote.tunnel(&root, "remote-tunnel");
+    let mut tunnel = Some(remote.tunnel(&root, "remote-tunnel"));
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut attempt = 0;
     loop {
@@ -315,6 +364,11 @@ fn deux_machines_cli_reel_demande_reponse_ledger_journal() {
     assert!(
         directory.to_string().contains(ACTOR),
         "identité UUID absente de la projection machine"
+    );
+    let provider_pids = child_pids(wrapper.0.id());
+    assert!(
+        !provider_pids.is_empty(),
+        "fournisseur réel absent derrière le wrapper"
     );
     let timestamp = issued_at().to_string();
     let question = [
@@ -431,15 +485,6 @@ fn deux_machines_cli_reel_demande_reponse_ledger_journal() {
     );
     assert!(prompt.status.success(), "{}", output_text(&prompt));
     // Client public indépendant côté Linux : pas de fichier/base locale lu.
-    let frames = serde_json::json!([
-        WrapperToDaemon::RoleHandshake {
-            role: bridget_transport::protocol::ConnectionRole::Attach
-        },
-        WrapperToDaemon::Subscribe {
-            agent: ACP_AGENT.into(),
-            window: bridget_transport::protocol::AttachWindow::Seq(0)
-        }
-    ]);
     let script = r#"import socket,sys,json,time
 deadline=time.monotonic()+10
 s=socket.socket(socket.AF_UNIX); s.settimeout(10); s.connect(sys.argv[1]); f=s.makefile('rb')
@@ -452,20 +497,32 @@ for request in json.loads(sys.argv[2]):
  s.sendall((json.dumps(request,separators=(',',':'))+'\n').encode())
  raw,event=receive(); assert event['type'] in ('RoleAccepted','Subscribed'), event
 caught=False; seq=0
-while not (caught and seq>=3):
+while not (caught and seq>=int(sys.argv[3])):
  raw,event=receive(); sys.stdout.buffer.write(raw); sys.stdout.buffer.flush()
  if event['type']=='SnapshotCaughtUp': caught=True
  elif event['type']=='JournalFragment':
   if event['final']: seq=event['seq']
- else: raise AssertionError(event)
+ elif event['type']!='Gap': raise AssertionError(event)
 "#;
-    let program = format!(
-        "python3 -c {} {} {}",
-        shell_quote(script),
-        shell_quote(remote.socket().to_str().unwrap()),
-        shell_quote(&frames.to_string())
-    );
-    let capture = ssh_output(remote.command(&program), &root, "journal");
+    let capture_from = |label: &str, from| {
+        let frames = serde_json::json!([
+            WrapperToDaemon::RoleHandshake {
+                role: bridget_transport::protocol::ConnectionRole::Attach
+            },
+            WrapperToDaemon::Subscribe {
+                agent: ACP_AGENT.into(),
+                window: bridget_transport::protocol::AttachWindow::Seq(from)
+            }
+        ]);
+        let program = format!(
+            "python3 -c {} {} {} {through_seq}",
+            shell_quote(script),
+            shell_quote(remote.socket().to_str().unwrap()),
+            shell_quote(&frames.to_string())
+        );
+        ssh_output(remote.command(&program), &root, label)
+    };
+    let capture = capture_from("journal", 0);
     assert!(capture.status.success(), "{}", output_text(&capture));
     let mut lines = std::collections::BTreeMap::<u64, Vec<u8>>::new();
     for raw in capture
@@ -489,7 +546,12 @@ while not (caught and seq>=3):
             other => panic!("fait inattendu : {other:?}"),
         }
     }
-    assert_eq!(lines.keys().copied().collect::<Vec<_>>(), [1, 2, 3]);
+    let expected = if reconnect {
+        vec![5, 6, 7, 8]
+    } else {
+        vec![1, 2, 3]
+    };
+    assert_eq!(lines.keys().copied().collect::<Vec<_>>(), expected);
     let journal = root.join("state/sessions").join(ACP_AGENT).join(format!(
         "{}.jsonl",
         bridget_transport::journal::current_host_date()
@@ -503,13 +565,183 @@ while not (caught and seq>=3):
         assert_eq!(lines[&parsed["seq"].as_u64().unwrap()], raw);
     }
     assert_eq!(fs::read(&counter).unwrap(), b"x");
+    if let Some(historical) = historical {
+        // Identité de la socket AVANT coupure ; une autre socket du même compte
+        // ne serait pas une preuve suffisante pour permettre son effacement.
+        let metadata_program = format!(
+            "python3 -c {} {}",
+            shell_quote(
+                "import os,sys,json; s=os.lstat(sys.argv[1]); print(json.dumps([s.st_dev,s.st_ino]))"
+            ),
+            shell_quote(remote.socket().to_str().unwrap())
+        );
+        let metadata = ssh_output(remote.command(&metadata_program), &root, "socket-before");
+        assert!(metadata.status.success(), "{}", output_text(&metadata));
+        let identity: Vec<u64> = serde_json::from_slice(&metadata.stdout).unwrap();
+        tunnel.take().unwrap().stop();
+        let offline = remote.cli(
+            &root,
+            "offline",
+            ACTOR,
+            "shared-cli-mcp-instance",
+            &["ledger"],
+        );
+        assert!(!offline.status.success());
+        assert!(offline.stdout.is_empty());
+        let disconnected = capture_from("journal-offline", through_seq);
+        assert!(!disconnected.status.success());
+        assert!(
+            disconnected.stdout.is_empty(),
+            "aucun fragment/fraîcheur fabriqué hors connexion"
+        );
+        // Le nettoyage est une opération de recette explicitement autorisée,
+        // pas un StreamLocalBindUnlink automatique dans le produit.
+        let unlink = r#"import os,sys,socket,stat,json
+p=sys.argv[1]; wanted=json.loads(sys.argv[2]); m=os.lstat(p)
+assert [m.st_dev,m.st_ino]==wanted and m.st_uid==os.getuid() and stat.S_ISSOCK(m.st_mode)
+s=socket.socket(socket.AF_UNIX); s.settimeout(2)
+try: s.connect(p)
+except ConnectionRefusedError: pass
+else: raise AssertionError('socket encore vivante')
+s.close(); m=os.lstat(p); assert [m.st_dev,m.st_ino]==wanted; os.unlink(p)
+"#;
+        let removed = ssh_output(
+            remote.command(&format!(
+                "python3 -c {} {} {}",
+                shell_quote(unlink),
+                shell_quote(remote.socket().to_str().unwrap()),
+                shell_quote(&serde_json::to_string(&identity).unwrap())
+            )),
+            &root,
+            "stale-cleanup",
+        );
+        assert!(removed.status.success(), "{}", output_text(&removed));
+        tunnel = Some(remote.tunnel(&root, "resumed-tunnel"));
+        let deadline = Instant::now() + Duration::from_secs(15);
+        for attempt in 0.. {
+            let probe = remote.cli(
+                &root,
+                &format!("resumed-who-{attempt}"),
+                ACTOR,
+                "shared-cli-mcp-instance",
+                &["who"],
+            );
+            if probe.status.success() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "{}", output_text(&probe));
+        }
+        // Même commande, même canon : le fournisseur ne reçoit PAS un tour neuf.
+        let replay = remote.cli(
+            &root,
+            "prompt-replay",
+            ACTOR,
+            "shared-cli-mcp-instance",
+            &[
+                "send",
+                "--to",
+                ACP_AGENT,
+                "--id",
+                "089-ssh-journal",
+                "--issued-at",
+                &timestamp,
+                "--issuer-scope",
+                SCOPE,
+                "--",
+                "Tour au vrai wrapper depuis Linux",
+            ],
+        );
+        assert!(replay.status.success());
+        assert!(String::from_utf8_lossy(&replay.stdout).starts_with("OK: accepted "));
+        let resumed = capture_from("journal-resumed", through_seq);
+        assert!(resumed.status.success(), "{}", output_text(&resumed));
+        let mut resumed_bytes = Vec::new();
+        let mut caught_up = 0;
+        for raw in resumed
+            .stdout
+            .split(|b| *b == b'\n')
+            .filter(|s| !s.is_empty())
+        {
+            match bridget_transport::protocol::decode::<bridget_transport::DaemonToWrapper>(
+                std::str::from_utf8(raw).unwrap(),
+            )
+            .unwrap()
+            {
+                bridget_transport::DaemonToWrapper::JournalFragment {
+                    seq, offset, bytes, ..
+                } => {
+                    assert_eq!(seq, through_seq);
+                    assert_eq!(offset, resumed_bytes.len() as u64);
+                    resumed_bytes.extend(bytes);
+                }
+                bridget_transport::DaemonToWrapper::SnapshotCaughtUp {
+                    through_seq: seq, ..
+                } => {
+                    assert_eq!(seq, Some(through_seq));
+                    caught_up += 1;
+                }
+                other => panic!("reprise sans trou attendu : {other:?}"),
+            }
+        }
+        assert_eq!(caught_up, 1);
+        assert_eq!(resumed_bytes, lines[&through_seq]);
+        fs::remove_file(historical).unwrap(); // rétention simulée d'UNE fixture
+        let gap = capture_from("journal-gap", 5);
+        assert!(gap.status.success(), "{}", output_text(&gap));
+        let first = std::str::from_utf8(&gap.stdout)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap();
+        // Mutant : Gap→Unavailable ou absence de Gap => cet oracle distant casse.
+        assert!(matches!(
+            bridget_transport::protocol::decode::<bridget_transport::DaemonToWrapper>(first)
+                .unwrap(),
+            bridget_transport::DaemonToWrapper::Gap {
+                from_seq: 5,
+                to_seq: 5,
+                ..
+            }
+        ));
+        assert_eq!(fs::read(&counter).unwrap(), b"x");
+        assert_eq!(
+            store
+                .recent_messages(100)
+                .unwrap()
+                .iter()
+                .filter(|m| m.id == "089-ssh-journal")
+                .count(),
+            1
+        );
+        observer.send(WrapperToDaemon::ListAgents);
+        match observer.receive() {
+            bridget_transport::DaemonToWrapper::AgentList { agents } => {
+                for agent_id in [ACTOR, ACP_AGENT] {
+                    let active = agents.iter().find(|a| a.agent_id == agent_id).unwrap();
+                    let before = directory
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|a| a["agent_id"] == agent_id)
+                        .unwrap();
+                    assert_eq!(active.connection_id, before["connection_id"]);
+                }
+                assert_eq!(
+                    child_pids(wrapper.0.id()),
+                    provider_pids,
+                    "pas de remplacement fournisseur indu par la coupure"
+                );
+            }
+            other => panic!("annuaire absent : {other:?}"),
+        }
+    }
     assert_no_delivery(&mut actor);
     assert_no_delivery(&mut recipient);
     drop(store);
     drop(actor);
     drop(recipient);
     drop(observer);
-    tunnel.stop();
+    tunnel.take().unwrap().stop();
     daemon.stop();
     assert_eq!(wrapper.join(), Ok(()));
     // Pas de rm -rf distant : suppression de la seule socket créée, après

@@ -1,5 +1,13 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T027 : coupure SSH et reprise sans réinjection
+
+La recette distante étend T026 sans remplacer son scénario : journal historique de fixture seq=5 puis vrai tour seq=6..8 ; arrêt/récolte du SEUL SSH, ledger et relève en erreur explicite sans donnée/fraîcheur inventée. La socket stale est nettoyée dans le harnais seulement, après refus de connexion et vérification du couple device/inode relevé AVANT coupure, type et propriétaire ; le script livré conserve StreamLocalBindUnlink=no. Nouveau tunnel au même chemin, retry CLI avec les mêmes id/issued_at/cible/corps : accepted, un seul prompt et une ligne de ledger. Relève Seq(8) inclusive : exactement les mêmes bytes de l'événement 8 puis UN SnapshotCaughtUp. Connexions ACTOR/ACP_AGENT et PID enfant fournisseur du wrapper inchangés : le tunnel ne redémarre pas les agents.
+
+Puis retrait de l'UNIQUE fixture historique (rétention simulée) : la relève distante Seq(5) commence par Gap(5,5), pas une indisponibilité ni une fraîcheur. Mutation réellement compilée/exécutée du daemon local : remplacer ce Gap par AttachRejected/JournalUnavailable fait échouer le client distant en 6,15 s. Source daemon restaurée, `git diff -- daemon.rs` vide AVANT validation finale. Aucun changement produit dans ce lot, seulement le harnais.
+
+Commande T026 avec les MÊMES paramètres distants, ajouter BRIDGET_SSH_LOCAL_GATE=1 et sélectionner l'intégralité du binaire avec `-- --include-ignored --test-threads=1 --nocapture` : 3/3 en 11,50 s (compilation 2,40 s). Reconnexion seule auparavant 1/1 en 7,24 s. Clippy workspace/all-targets/test-support -D warnings vert ; fmt contrôlé. Les trois gates SSH ignorés par défaut ont donc été exécutés, pas comptés à partir d'un skip. La coupure est un arrêt du tunnel, pas un crash daemon ; les crashs SIGKILL restent les preuves T017/T018/T019.
+
 ## 2026-09-05 — T026 : macOS ↔ Linux exécuté, sans flotte historique
 
 Déploiement exécuté depuis le worktree 089 propre à cb62fdf :
