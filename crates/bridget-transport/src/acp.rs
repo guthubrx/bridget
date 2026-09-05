@@ -55,7 +55,7 @@ pub enum AcpEvent {
         message_id: String,
     },
     TurnFinished {
-        message: BridgetMessage,
+        message: Box<BridgetMessage>,
         response: String,
         stop_reason: String,
     },
@@ -754,7 +754,7 @@ fn managed_kind(event: AcpEvent) -> ManagedEventKind {
             response,
             stop_reason,
         } => ManagedEventKind::TurnFinished {
-            message,
+            message: *message,
             response,
             terminal: terminal_from_acp_stop_reason(&stop_reason),
         },
@@ -1090,7 +1090,7 @@ fn finish_turn(
 ) -> AcpEvent {
     match result {
         Ok(value) => AcpEvent::TurnFinished {
-            message,
+            message: Box::new(message),
             response,
             stop_reason: value
                 .get("stopReason")
@@ -2640,6 +2640,31 @@ while read line; do :; done
                 .collect::<Vec<_>>(),
             vec!["first", "last"]
         );
+    }
+
+    #[test]
+    fn taille_evenement_bornee_et_message_terminal_preserve() {
+        // La file ne réserve pas un BridgetMessage complet pour chaque delta.
+        // Remettre le message inline fait dépasser cette borne structurelle.
+        assert!(std::mem::size_of::<AcpEvent>() <= 8 * std::mem::size_of::<usize>());
+        let original = message("terminal-boxed");
+        let expected = serde_json::to_vec(&original).unwrap();
+        let event = finish_turn(
+            original,
+            "réponse".to_string(),
+            Ok(json!({"stopReason":"end_turn"})),
+        );
+        let ManagedEventKind::TurnFinished {
+            message,
+            response,
+            terminal,
+        } = managed_kind(event)
+        else {
+            panic!("fin de tour attendue");
+        };
+        assert_eq!(serde_json::to_vec(&message).unwrap(), expected);
+        assert_eq!(response, "réponse");
+        assert!(matches!(terminal, ManagedTerminal::Completed));
     }
 
     #[test]

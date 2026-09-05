@@ -505,17 +505,12 @@ pub struct ProjectAuditProjection {
 
 /// Rôle fermé d'un projet dans un daemon Bridget. Seul le rôle système peut
 /// participer au dogfooding expert ; aucun chemin ni libellé ne l'infère.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectRole {
+    #[default]
     Standard,
     BridgetSystem,
-}
-
-impl Default for ProjectRole {
-    fn default() -> Self {
-        Self::Standard
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -5633,9 +5628,9 @@ mod tests {
         assert!(wire.contains("\"operation\":\"activate_docker\""));
         assert!(wire.contains("\"expected_binding_generation\":7"));
         assert!(wire.contains("\"policy_id\":\"production-linux-amd64\""));
-        assert!(serde_json::from_str::<ProjectRuntimeRequest>(&format!(
-            "{{\"contract_version\":1,\"command_id\":\"x\",\"issued_at\":1,\"deadline_at\":2,\"operation\":\"activate_docker\",\"project_id\":\"p\",\"image\":\"latest\"}}"
-        )).is_err());
+        assert!(serde_json::from_str::<ProjectRuntimeRequest>(
+            r#"{"contract_version":1,"command_id":"x","issued_at":1,"deadline_at":2,"operation":"activate_docker","project_id":"p","image":"latest"}"#
+        ).is_err());
     }
     #[test]
     fn spec_066_handshake_ingress_est_ferme_et_versionne() {

@@ -5207,9 +5207,16 @@ mod tests {
         let raw = raw.expect("notification native source");
         assert_eq!(raw.origin, ManagedEventOrigin::SourceLine);
         assert_eq!(raw.source, ManagedEventSource::CodexAppServer);
+        // Oracle externe, extrait du faux fournisseur historique (dfa2134).
+        // Le lecteur retire seulement le LF JSONL : aucun parse/réencodage
+        // ne peut remplacer les espaces ni les octets UTF-8 du fournisseur.
         assert_eq!(
-            raw.raw,
-            b"{  \"method\" : \"item/agentMessage/delta\" , \"params\" : { \"threadId\" : \"thread-native\" , \"turnId\" : \"turn-native\" , \"itemId\":\"i\", \"delta\" : \"r\xC3\xA9ponse native\" } }"
+            raw.raw.as_slice(),
+            include_bytes!(
+                "../../../specs/089-communication-core/contracts/fixtures/native-codex-delta.jsonl"
+            )
+            .strip_suffix(b"\n")
+            .expect("fixture JSONL terminée par LF")
         );
 
         let trace = fs::read_to_string(&trace).expect("trace fournisseur");

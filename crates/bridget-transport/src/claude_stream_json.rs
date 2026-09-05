@@ -1757,11 +1757,22 @@ mod tests {
         assert!(events.iter().any(|event| {
             matches!(event.kind, ManagedEventKind::PromptDispatched { ref message_id } if message_id == "claude-1")
         }));
-        assert!(events.iter().any(|event| {
-            event.source == ManagedEventSource::ClaudeStreamJson
-                && event.origin == ManagedEventOrigin::SourceLine
-                && event.raw.starts_with(br#"{"type":"stream_event""#)
-        }));
+        let raw = events
+            .iter()
+            .find(|event| event.raw.starts_with(br#"{"type":"stream_event""#))
+            .expect("notification stream-event source");
+        assert_eq!(raw.source, ManagedEventSource::ClaudeStreamJson);
+        assert_eq!(raw.origin, ManagedEventOrigin::SourceLine);
+        // Même ligne que le fournisseur historique dfa2134, sans sa seule
+        // terminaison LF. Une reconstruction sémantique ne suffit pas.
+        assert_eq!(
+            raw.raw.as_slice(),
+            include_bytes!(
+                "../../../specs/089-communication-core/contracts/fixtures/native-claude-delta.jsonl"
+            )
+            .strip_suffix(b"\n")
+            .expect("fixture JSONL terminée par LF")
+        );
         transport.stop();
         let _ = fs::remove_dir_all(root);
     }

@@ -1,5 +1,45 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — Matérialisation du codec de référence (suite T002)
+
+42 trames de cinq familles passent dans le codec de production inchangé de
+dfa2134 : envoi/reply/idempotence (sept issues), annuaire/ledger non vide,
+spawn/stop (cinq issues), attach et claim/lease/réponse guichet. Les entrées
+sont des scénarios de caractérisation ; les sorties sont une capture du codec,
+pas des chaînes devinées. `core_089_wire_test` relit ces sorties indépendantes
+et compare leur émission octet pour octet. Le générateur est ignoré par défaut
+et ne réécrit jamais les attentes. Cela protège le fil, pas encore le canon SQL
+ni la livraison réelle, réservés aux gates T014/T018.
+
+Deux lignes natives sont extraites des faux fournisseurs historiques :
+codex_app_server.rs:3303 et claude_stream_json.rs:1467 au commit source.
+Les tests de session consomment les vrais flux de ces sous-processus et
+comparent raw/source/origine aux fixtures, sans normalisation des espaces.
+Ce n'est pas une recette auprès des comptes fournisseurs réels.
+
+Commandes : `cargo test --offline -p bridget-transport --test core_089_wire_test`
+(1 réussi, 1 générateur ignoré, 0,00 s) et `cargo test --offline -p
+bridget-transport --lib session_native_ -- --test-threads=2` (2 réussis,
+0,04 s ; faux fournisseurs, TMPDIR=/tmp/bg089-native.QwxMC2).
+Le codec protocol.rs et le modèle core/message.rs sont identiques à dfa2134
+(`git diff dfa2134 --` sur ces deux sources : vide).
+
+Self-review : aucune dépendance ni DTO produit ajouté ; golden externe nécessaire
+car les anciens round-trip se comparaient principalement à eux-mêmes. Les
+attentes incluent corps UTF-8, espaces, corrélation et limites déclarées. La
+preuve runtime du daemon reste distincte. Seuls les deux oracles de tests
+natifs changent dans les sources, pas les pilotes.
+
+Baseline qualité : Clippy a aussi révélé trois erreurs préexistantes côté
+transport (variante ACP trop volumineuse, Default dérivable, format constant).
+Corrections ciblées : message terminal dans Box, restitué intact à l'adaptateur ;
+Default dérivé identique et literal JSON de test. Le test structurel borne la
+taille de l'événement et vérifie le message restitué. `cargo clippy --offline
+-p bridget-transport --all-targets -- -D warnings` passe ; `acp::tests::`
+passe 41 tests, 1 ancien micro-banc ignoré, 4,09 s. Ces corrections suivent la
+capture initiale ; elles ne modifient aucun octet filaire. Le contrôle global
+fmt ne signalait que les deux include_bytes nouveaux, désormais formatés.
+
 ## 2026-09-05 — Préparation uniquement
 
 Base : dfa2134dcfe2a2522e3ae77d93561e6ae72556b3, main de l'ancien dépôt. Clone indépendant créé par :
