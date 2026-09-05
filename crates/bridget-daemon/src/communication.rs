@@ -123,6 +123,8 @@ mod tests {
         // Oracle d'architecture : remettre un appel via MCP recrée le cycle.
         for source in [
             include_str!("daemon.rs"),
+            include_str!("store.rs"),
+            include_str!("idempotency.rs"),
             include_str!("referent_control.rs"),
             include_str!("cli.rs"),
         ] {
