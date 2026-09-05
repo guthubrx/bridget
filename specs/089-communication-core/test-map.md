@@ -1,5 +1,9 @@
 # Carte des tests 089 — dispositions avant extraction
 
+## T017 — matrice de crash portée
+
+Les douze scénarios historiques sont maintenant dans core_089_crash_test.rs, sans double exécution de l'ancien fichier. La matrice N=50 et ses quatre barrières sont inchangées. Le scénario terminal avec wrapper réel est renforcé : fournisseur témoin gardé vivant après le premier prompt, attente de sa reconnexion et compteur FINAL après join, au lieu d'un sleep 250 ms. La garantie est bornée au daemon tué tandis que wrapper/fournisseur survivent ; elle ne promet pas une transaction atomique avec un fournisseur externe. Les noms de fichiers de référence ci-dessous désignent toujours le commit source épinglé.
+
 ## T016 — cycle de réponse sans horloge de complaisance
 
 core_089_reply_test remplace la simple attente du harnais historique par une demande sentinelle réellement rappelée puis expirée. CLI → demande open ; réponse MCP → ACK → answered ; annulation → cancelled ; échéance → timed_out ; ledger sans doublon aux trois lectures. Le mutant qui conserve le pending répondu est refusé sur ses événements ReminderSent, pas sur une formulation humaine du rappel. Aucun fournisseur réel impliqué ; son gate reste T020/T021.
@@ -418,7 +422,7 @@ trop étroite trouvée par contre-revue. Aucun retrait n'est motivé par un roug
 | `crates/bridget-daemon/tests/execution_store_test.rs` | M | Migrations et bytes de reprise obligatoires ; sortir seulement politiques/projections liées au projet (T012/T031). |
 | `crates/bridget-daemon/tests/greffe_policy_refresh_test.rs` | M | Garder capacité/permissions de service ; retirer contenu et renouvellement de politique métier Maicie (T018). |
 | `crates/bridget-daemon/tests/guichet_integration_test.rs` | C | Communication, observation ou cycle de vie fournisseur dans le périmètre ; conserver sans ignorer de rouge. |
-| `crates/bridget-daemon/tests/idempotency_crash_test.rs` | C | Communication, observation ou cycle de vie fournisseur dans le périmètre ; conserver sans ignorer de rouge. |
+| `crates/bridget-daemon/tests/idempotency_crash_test.rs` | M | Douze scénarios portés dans core_089_crash_test.rs à T017 ; N=50 exécuté, fin de vie du témoin rendue observable. |
 | `crates/bridget-daemon/tests/idempotency_test.rs` | C | Communication, observation ou cycle de vie fournisseur dans le périmètre ; conserver sans ignorer de rouge. |
 | `crates/bridget-daemon/tests/identity_migration_test.rs` | C | Communication, observation ou cycle de vie fournisseur dans le périmètre ; conserver sans ignorer de rouge. |
 | `crates/bridget-daemon/tests/identity_probe_timeout_test.rs` | C | Communication, observation ou cycle de vie fournisseur dans le périmètre ; conserver sans ignorer de rouge. |

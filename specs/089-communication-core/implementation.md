@@ -1,5 +1,14 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T017 : cinquante crashs et douze scénarios portés
+
+idempotency_crash_test.rs devient core_089_crash_test.rs (les douze scénarios restent présents). Environnement privé T014, watchdog 420 s et watchdog interne 360 s : `cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_crash_test -- --include-ignored --test-threads=1` termine en 182,59 s, compilation 2,35 s. **La matrice N=50 réussit, un scénario séparé de reconnexion échoue** : le fournisseur synthétique sortait après son premier prompt. Le journal /private/tmp/bid-b120b3ff371a/wrapper.log et le script de fixture confirment la sortie/BrokenPipe ; ce n'est pas un blocage du daemon.
+
+Correction TEST uniquement : ce témoin attend désormais un deuxième prompt éventuel (il ne le reçoit pas au nominal), la reconnexion est observée, puis le compteur final est lu APRÈS arrêt/join du vrai wrapper. L'ancien sleep 250 ms disparaît. Ce scénario passe seul en 2,82 s. Nouvelle passe des onze scénarios courts : même commande sans --include-ignored, 11/11, 7,16 s ; compilation 1,82 s. La matrice N=50 déjà exécutée n'a aucun changement de logique, de fixture ni de délai dans cette correction ; son succès est une preuve séparée, pas attribué au skip de la passe courte.
+
+Clippy workspace/all-targets/test-support -D warnings vert (4,77 s), fmt --check et vérificateur 17 fixtures/six mutants verts. Aucun changement de code produit. Les quatre barrières SIGKILL, les cinquante prompts uniques, les canons et issues terminales identiques ne prouvent pas un exactly-once universel : un crash fournisseur après effet et avant son propre accusé reste potentiellement ambigu. Le skip Linux/kqueue demeure explicite, pas une recette Linux déclarée verte.
+
+
 ## 2026-09-05 — T016 : réponse liée et arrêt des rappels exécutés
 
 core_089_reply_test utilise les vrais CLI/MCP/daemon et deux pairs du protocole public. La demande naît par CLI, pas par INSERT de fixture. Réponse MCP in_flight : demande encore open avant ACK ; ACK réel : answered ; retry exact : même issue, une entrée ledger visible par SQL, CLI et MCP. Une seconde demande est annulée via le protocole et sa cible reçoit CancelDelivery. Une troisième demande témoin traverse les vrais rappels puis expire ; la réception sur socket et la lecture RequestList constituent la barrière, sans sleep de synchronisation. Les événements de rappel ne concernent QUE cette sentinelle : aucune relance de la demande answered ou cancelled. Le délai stocké est comparé à issued_at + timeout (canon), pas à l'heure d'insertion qui peut franchir une seconde.

@@ -1,13 +1,12 @@
 #![cfg(feature = "test-support")]
 
-//! Matrice historique : mêmes scénarios, harnais partagé avec le contrat 089.
+//! Matrice 012 portée dans le paquet 089 : SIGKILL aux barrières, mêmes octets.
 
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{IdempotencyIssue, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::fs;
-use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[path = "support/idempotent.rs"]
 pub mod fixture;
@@ -52,7 +51,7 @@ fn run_amont_cycle(point: &str, serial: usize) {
 )]
 #[cfg_attr(
     not(target_os = "linux"),
-    ignore = "banc de gate SC-001 : cargo test --features test-support --test idempotency_crash_test -- --ignored --test-threads=1"
+    ignore = "banc de gate SC-001 : cargo test --features test-support --test core_089_crash_test -- --ignored --test-threads=1"
 )]
 fn matrice_crash_sc001_redelivre_cinquante_prompts_uniques() {
     let root = test_root("sc001-matrix");
@@ -869,7 +868,9 @@ fn recovery_terminal_acked_vrai_wrapper_rejoue_sans_second_prompt() {
     let (sync, marker) = checkpoint_root(&root, "after_delivery_acked");
     let daemon = spawn_daemon(&root, Some(&sync));
     let socket_path = socket(&root);
-    let (registry, registry_root, counter) = registry_with_counting_acp_agent(1);
+    // Le fournisseur témoin reste en lecture après son premier prompt : sa
+    // disparition volontaire ne doit pas remplacer la preuve de reconnexion.
+    let (registry, registry_root, counter) = registry_with_counting_acp_agent(2);
     let wrapper = WrapperProcess::start(&root, &registry, ACP_AGENT);
     wait_for_registered_agent(&socket_path, ACP_AGENT);
     let issued_at = issued_at();
@@ -898,11 +899,13 @@ fn recovery_terminal_acked_vrai_wrapper_rejoue_sans_second_prompt() {
     daemon.crash();
     let restarted = spawn_daemon(&root, None);
     let socket_path = socket(&root);
+    wait_for_registered_agent(&socket_path, ACP_AGENT);
     wait_for_accepted(&socket_path, &command);
-    thread::sleep(Duration::from_millis(250));
-    assert_eq!(fs::read(&counter).expect("compteur ACP"), b"x");
     restarted.stop();
     assert_eq!(wrapper.join(), Ok(()));
+    // Compteur final après fermeture et attente du VRAI wrapper : aucun prompt
+    // tardif ne peut être caché par une fenêtre arbitraire de 250 ms.
+    assert_eq!(fs::read(&counter).expect("compteur ACP final"), b"x");
     fs::remove_dir_all(root).expect("nettoyage daemon ACP");
     fs::remove_dir_all(registry_root).expect("nettoyage registre ACP");
 }
