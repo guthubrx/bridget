@@ -1,40 +1,202 @@
-//! Couture réelle wrapper/daemon/attach du pilote Codex natif.
+//! Couture réelle wrapper/daemon/attach des pilotes natifs.
+//! Les gates fournisseur sont explicites ; les deux fixtures ne les remplacent pas.
 
+#[path = "support/idempotent.rs"]
+pub mod fixture;
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{ConnectionRole, decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 struct ChildGuard(Child);
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        if self.0.try_wait().ok().flatten().is_none() {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
+        fixture::cleanup_child(&mut self.0);
+    }
+}
+
+fn stop_session(mut daemon: ChildGuard, mut wrapper: ChildGuard) {
+    // Observer les enfants DIRECTS de notre wrapper vivant, pas une recherche
+    // par nom de fournisseur qui pourrait toucher les sessions de l'utilisateur.
+    let observed = std::process::Command::new("/bin/ps")
+        .args(["-axo", "pid=,ppid="])
+        .output()
+        .unwrap();
+    let children: Vec<i32> = String::from_utf8(observed.stdout)
+        .unwrap()
+        .lines()
+        .filter_map(|line| {
+            let pair: Vec<_> = line.split_whitespace().collect();
+            (pair.len() == 2 && pair[1].parse::<u32>().ok() == Some(wrapper.0.id()))
+                .then(|| pair[0].parse().unwrap())
+        })
+        .collect();
+    assert!(
+        !children.is_empty(),
+        "aucun processus fournisseur réel observé"
+    );
+    fixture::signal_test_group(&mut daemon.0, libc::SIGTERM);
+    fixture::wait_child(&mut daemon.0, Duration::from_secs(10));
+    fixture::wait_child(&mut wrapper.0, Duration::from_secs(10));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    for child in children {
+        while unsafe { libc::kill(child, 0) } == 0 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5)); // récolte, pas synchronisation métier
         }
+        assert_eq!(
+            unsafe { libc::kill(child, 0) },
+            -1,
+            "fournisseur orphelin après arrêt du wrapper"
+        );
+        assert_eq!(
+            unsafe { libc::kill(-child, 0) },
+            -1,
+            "groupe fournisseur orphelin"
+        );
     }
 }
 
 fn root() -> PathBuf {
-    // `sun_path` est limité : le HOME isolé doit lui-même être court.
-    let root = PathBuf::from("/tmp").join(format!(
-        "bcn-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("horloge")
-            .as_nanos()
-    ));
-    fs::create_dir_all(root.join(".config/bridget")).expect("configuration temporaire");
-    root
+    fixture::test_root("089-codex")
+}
+
+fn private_log(root: &Path, name: &str) -> fs::File {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(root.join(name))
+        .unwrap()
+}
+
+struct PrivateCredentials(PathBuf);
+impl Drop for PrivateCredentials {
+    fn drop(&mut self) {
+        // Copie créée par CE test seulement, même après panique. Jamais la source.
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requiert l'autorisation d'utiliser le compte Claude Max local"]
+fn gate_reel_claude_stream_json_reponse_liee_et_attach() {
+    let service = std::env::var("BRIDGET_TEST_CLAUDE_KEYCHAIN_SERVICE")
+        .expect("service Keychain explicitement autorisé requis");
+    let executable = std::env::var("BRIDGET_TEST_CLAUDE_BIN").expect("CLI Claude local requis");
+    let keychain = std::env::var("BRIDGET_TEST_CLAUDE_KEYCHAIN_FILE")
+        .expect("trousseau local explicite requis sous HOME isolé");
+    // Lecture locale uniquement : aucun changement du trousseau, aucune clé API,
+    // aucun token dans argv, logs ou fichiers du test. Le CLI officiel consomme
+    // la session d'abonnement dans un HOME neuf sans config/plugins de l'utilisateur.
+    let secret = std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", &service, "-w", &keychain])
+        .output()
+        .expect("lecture du trousseau");
+    assert!(
+        secret.status.success(),
+        "session Claude locale indisponible"
+    );
+    let credentials: serde_json::Value =
+        serde_json::from_slice(&secret.stdout).expect("format de session Claude");
+    let token = credentials["claudeAiOauth"]["accessToken"]
+        .as_str()
+        .expect("jeton d'abonnement absent")
+        .to_owned();
+    let root = root();
+    fixture::private_write(&root.join("state/agents.json"), serde_json::to_vec(&serde_json::json!({
+        "agents": {"claude": {
+            "command": executable,
+            "args": ["--model", "claude-opus-5", "--effort", "low", "--tools", "", "--strict-mcp-config", "--setting-sources", ""],
+            "protocol": "claude_stream_json", "permissions": "deny", "notify_timeout_secs": 60,
+            "forbidden_env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+            "pass_env": ["CLAUDE_CODE_OAUTH_TOKEN"],
+            "mcp": {"interactive":"none", "acp_session":false},
+            "capabilities": {"execution_paths":["claude_stream_json"], "models":{"claude-opus-5":{"efforts":["low"]}}}
+        }}
+    })).unwrap()).unwrap();
+    let daemon = start_daemon(&root);
+    let wrapper = start_wrapper(
+        &root,
+        "claude",
+        &[("CLAUDE_CODE_OAUTH_TOKEN".into(), token)],
+    );
+    fixture::wait_for_registered_agent(&fixture::socket(&root), fixture::ACP_AGENT);
+    let (mut reader, mut writer) = sender(&fixture::socket(&root));
+    let (mut journal, mut journal_writer) = attach(&fixture::socket(&root));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let subscription = loop {
+        write_frame(
+            &mut journal_writer,
+            &WrapperToDaemon::Subscribe {
+                agent: fixture::ACP_AGENT.into(),
+                window: bridget_transport::AttachWindow::Seq(0),
+            },
+        );
+        match read_frame(&mut journal) {
+            DaemonToWrapper::Subscribed { subscription_id } => break subscription_id,
+            DaemonToWrapper::AttachRejected {
+                reason: bridget_transport::protocol::AttachRefusal::JournalUnavailable,
+                ..
+            } => {
+                assert!(Instant::now() < deadline, "journal Claude non attesté");
+            }
+            other => panic!("attache Claude refusée : {other:?}"),
+        }
+    };
+    let mut message = BridgetMessage::new(
+        fixture::ACTOR,
+        fixture::ACP_AGENT,
+        "Test de communication isolé. Réponds seulement : BRIDGET-089-CLAUDE-OK. Aucun outil, aucune autre action.",
+    );
+    message.reply = true;
+    write_frame(&mut writer, &WrapperToDaemon::Send(message.clone()));
+    let ack = read_frame(&mut reader);
+    assert!(
+        matches!(ack, DaemonToWrapper::Ack { .. }),
+        "envoi refusé : {ack:?}"
+    );
+    let answer = read_frame(&mut reader);
+    assert!(
+        matches!(answer, DaemonToWrapper::Deliver(ref reply)
+        if reply.in_reply_to.as_deref() == Some(message.id.as_str()) && reply.body.contains("BRIDGET-089-CLAUDE-OK")),
+        "pas de réponse fournisseur corrélée : {answer:?}"
+    );
+    loop {
+        match read_frame(&mut journal) {
+            DaemonToWrapper::JournalFragment {
+                subscription_id,
+                bytes,
+                ..
+            } => {
+                assert_eq!(subscription_id, subscription);
+                assert!(!bytes.is_empty());
+                break;
+            }
+            DaemonToWrapper::SnapshotCaughtUp { .. } => {}
+            other => panic!("journal Claude : {other:?}"),
+        }
+    }
+    write_frame(&mut writer, &WrapperToDaemon::ListAgents);
+    let info = read_frame(&mut reader);
+    assert!(
+        matches!(info, DaemonToWrapper::AgentList { ref agents }
+        if agents.iter().any(|agent| agent.agent_id == fixture::ACP_AGENT && agent.model.as_deref() == Some("claude-opus-5"))),
+        "modèle réel non attesté : {info:?}"
+    );
+    let who = fixture::run_isolated(&root, &["who"], false);
+    assert!(who.status.success());
+    assert!(String::from_utf8_lossy(&who.stdout).contains("claude-opus-5"));
+    stop_session(daemon, wrapper);
+    fs::remove_dir_all(root).unwrap();
 }
 
 fn write_frame(writer: &mut BufWriter<UnixStream>, frame: &WrapperToDaemon) {
@@ -50,18 +212,16 @@ fn read_frame(reader: &mut BufReader<UnixStream>) -> DaemonToWrapper {
 }
 
 fn start_daemon(root: &Path) -> ChildGuard {
-    let child = Command::new(env!("CARGO_BIN_EXE_bridget"))
+    let child = fixture::isolated_command(root)
         .arg("daemon")
-        .env_clear()
-        .env("HOME", root)
-        .env("PATH", "/usr/bin:/bin")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(private_log(root, "daemon.log")))
         .spawn()
         .expect("daemon réel");
+    fixture::track(&child);
     let daemon = ChildGuard(child);
-    let socket = root.join(".cache/bridget/bridget.sock");
+    let socket = fixture::socket(root);
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         if UnixStream::connect(&socket).is_ok() {
@@ -73,18 +233,26 @@ fn start_daemon(root: &Path) -> ChildGuard {
 }
 
 fn start_native_wrapper(root: &Path, extra_environment: &[(String, String)]) -> ChildGuard {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
+    start_wrapper(root, "codex", extra_environment)
+}
+
+fn start_wrapper(root: &Path, kind: &str, extra_environment: &[(String, String)]) -> ChildGuard {
+    let mut command = fixture::isolated_command(root);
     let child = command
-        .args(["codex", "--equipier", "--name", "codex-native"])
-        .env_clear()
-        .env("HOME", root)
-        .env("PATH", "/usr/bin:/bin")
+        .args([
+            kind,
+            "--equipier",
+            "--agent-id",
+            "5da585af-5bc7-4808-985f-c73670633990",
+        ])
+        .current_dir(root.join("provider"))
         .envs(extra_environment.iter().cloned())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(private_log(root, "wrapper.log")))
         .spawn()
         .expect("wrapper Codex natif");
+    fixture::track(&child);
     ChildGuard(child)
 }
 
@@ -92,7 +260,7 @@ fn write_native_registry(root: &Path, script: &str) {
     let registry = serde_json::json!({
         "agents": {
             "codex": {
-                "command": "sh",
+                "command": "/bin/sh",
                 "args": ["-c", script],
                 "protocol": "codex_app_server",
                 "permissions": "deny",
@@ -103,7 +271,7 @@ fn write_native_registry(root: &Path, script: &str) {
             }
         }
     });
-    let registry_path = root.join(".config/bridget/agents.json");
+    let registry_path = root.join("state/agents.json");
     fs::write(
         &registry_path,
         serde_json::to_vec(&registry).expect("registre JSON"),
@@ -123,16 +291,16 @@ fn sender(socket: &Path) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
     write_frame(
         &mut writer,
         &WrapperToDaemon::Register {
-            agent_type: "cli".to_string(),
+            agent_type: "fixture".to_string(),
             identity_version: 2,
-            agent_id: "sender-native".to_string(),
+            agent_id: "da78fd70-41e8-424c-a88d-e29e2c5babcd".to_string(),
             host: None,
             transport: Some("unix".to_string()),
             channel: None.into(),
-            mode: Some(bridget_transport::protocol::PresenceMode::Cli),
+            mode: Some(bridget_transport::protocol::PresenceMode::Acp),
             location: None,
             os: None,
-            instance_id: None,
+            instance_id: Some("089-native-sender".to_string()),
             domain: None,
             turn_in_progress: false,
             journal_available: None,
@@ -187,7 +355,7 @@ fn wrapper_codex_natif_repond_et_reste_attachable() {
 
     let daemon = start_daemon(&root);
     let wrapper = start_native_wrapper(&root, &[]);
-    let socket = root.join(".cache/bridget/bridget.sock");
+    let socket = fixture::socket(&root);
     let (mut sender_reader, mut sender_writer) = sender(&socket);
     let (mut attach_reader, mut attach_writer) = attach(&socket);
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -195,7 +363,7 @@ fn wrapper_codex_natif_repond_et_reste_attachable() {
         write_frame(
             &mut attach_writer,
             &WrapperToDaemon::Subscribe {
-                agent: "codex-native".to_string(),
+                agent: "5da585af-5bc7-4808-985f-c73670633990".to_string(),
                 window: bridget_transport::AttachWindow::Seq(0),
             },
         );
@@ -214,7 +382,7 @@ fn wrapper_codex_natif_repond_et_reste_attachable() {
     };
     let codex = agents
         .iter()
-        .find(|agent| agent.agent_id == "codex-native")
+        .find(|agent| agent.agent_id == "5da585af-5bc7-4808-985f-c73670633990")
         .expect("agent Codex natif absent de l'annuaire");
     assert_eq!(codex.model.as_deref(), Some("gpt-5.6-terra"));
     assert_eq!(codex.effort.as_deref(), Some("high"));
@@ -226,11 +394,8 @@ fn wrapper_codex_natif_repond_et_reste_attachable() {
                 && limit.resets_at == Some(1_787_572_200)
                 && limit.used_percent == Some(42)
     ));
-    let who = Command::new(env!("CARGO_BIN_EXE_bridget"))
+    let who = fixture::isolated_command(&root)
         .arg("who")
-        .env_clear()
-        .env("HOME", &root)
-        .env("PATH", "/usr/bin:/bin")
         .output()
         .expect("exécution who réelle");
     assert!(
@@ -242,13 +407,18 @@ fn wrapper_codex_natif_repond_et_reste_attachable() {
     assert!(who.contains("EFFORT") && who.contains("LIMITE"));
     assert!(who.contains("high"));
     assert!(who.contains("5h 42% rst "), "format compact LIMITE: {who}");
-    let mut request = BridgetMessage::new("sender-native", "codex-native", "mission réelle");
+    let mut request = BridgetMessage::new(
+        "da78fd70-41e8-424c-a88d-e29e2c5babcd",
+        "5da585af-5bc7-4808-985f-c73670633990",
+        "mission réelle",
+    );
     request.reply = true;
     write_frame(&mut sender_writer, &WrapperToDaemon::Send(request.clone()));
-    assert!(matches!(
-        read_frame(&mut sender_reader),
-        DaemonToWrapper::Ack { .. }
-    ));
+    let ack = read_frame(&mut sender_reader);
+    assert!(
+        matches!(ack, DaemonToWrapper::Ack { .. }),
+        "accusé du tour : {ack:?}"
+    );
     let reply = loop {
         match read_frame(&mut sender_reader) {
             DaemonToWrapper::Deliver(message) => break message,
@@ -279,8 +449,7 @@ fn wrapper_codex_natif_repond_et_reste_attachable() {
         }
     }
     assert!(saw_journal, "attach ne reçoit aucun journal natif");
-    drop(wrapper);
-    drop(daemon);
+    stop_session(daemon, wrapper);
     fs::remove_dir_all(root).expect("nettoyage HOME isolé");
 }
 
@@ -298,18 +467,20 @@ fn wrapper_codex_sans_signal_laisse_effort_et_limite_inconnus() {
 
     let daemon = start_daemon(&root);
     let wrapper = start_native_wrapper(&root, &[]);
-    let socket = root.join(".cache/bridget/bridget.sock");
+    let socket = fixture::socket(&root);
     let (mut sender_reader, mut sender_writer) = sender(&socket);
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         write_frame(&mut sender_writer, &WrapperToDaemon::ListAgents);
         match read_frame(&mut sender_reader) {
             DaemonToWrapper::AgentList { agents }
-                if agents.iter().any(|agent| agent.agent_id == "codex-native") =>
+                if agents
+                    .iter()
+                    .any(|agent| agent.agent_id == "5da585af-5bc7-4808-985f-c73670633990") =>
             {
                 let codex = agents
                     .iter()
-                    .find(|agent| agent.agent_id == "codex-native")
+                    .find(|agent| agent.agent_id == "5da585af-5bc7-4808-985f-c73670633990")
                     .expect("agent Codex natif absent");
                 assert!(codex.effort.is_none(), "effort inventé: {codex:?}");
                 assert!(codex.rate_limits.is_empty(), "limite inventée: {codex:?}");
@@ -321,8 +492,7 @@ fn wrapper_codex_sans_signal_laisse_effort_et_limite_inconnus() {
             other => panic!("annuaire sans signal inattendu: {other:?}"),
         }
     }
-    drop(wrapper);
-    drop(daemon);
+    stop_session(daemon, wrapper);
     fs::remove_dir_all(root).expect("nettoyage HOME isolé");
 }
 
@@ -340,27 +510,39 @@ fn gate_reel_codex_app_server_gpt_5_6_terra_et_attach() {
     let codex = std::env::var("BRIDGET_CODEX_APP_SERVER_BIN")
         .unwrap_or_else(|_| "/opt/homebrew/bin/codex".to_string());
     assert!(Path::new(&codex).is_file(), "binaire Codex absent: {codex}");
-    let codex_home = std::env::var("CODEX_HOME").unwrap_or_else(|_| {
-        PathBuf::from(std::env::var("HOME").expect("CODEX_HOME ou HOME requis pour la gate réelle"))
-            .join(".codex")
-            .to_string_lossy()
-            .into_owned()
-    });
+    let auth_source = std::env::var("BRIDGET_TEST_CODEX_AUTH_FILE")
+        .expect("chemin explicite d'authentification ChatGPT requis");
+    let credentials = fs::read(auth_source).expect("authentification locale lisible");
+    let auth: serde_json::Value = serde_json::from_slice(&credentials).unwrap();
+    assert!(
+        auth["OPENAI_API_KEY"].is_null(),
+        "une clé API ne valide pas l'abonnement"
+    );
+    assert!(
+        auth["tokens"]["access_token"].is_string(),
+        "session ChatGPT absente"
+    );
+    let codex_home = root.join("provider/codex-private");
+    fixture::private_dir(&codex_home).unwrap();
+    let _credentials_guard = PrivateCredentials(codex_home.clone());
+    fixture::private_write(&codex_home.join("auth.json"), credentials).unwrap();
     let registry = serde_json::json!({
         "agents": {
             "codex": {
                 "command": codex,
-                "args": ["-c", "model=\"gpt-5.6-terra\"", "app-server"],
+                "args": ["-c", "model=\"gpt-5.6-terra\"", "-c", "model_reasoning_effort=\"low\"", "app-server"],
                 "protocol": "codex_app_server",
-                "permissions": "allow",
+                "permissions": "deny",
                 "queue_capacity": 4,
                 "notify_timeout_secs": 30,
                 "forbidden_env": ["OPENAI_API_KEY", "CODEX_API_KEY"],
-                "pass_env": ["CODEX_HOME"]
+                "pass_env": ["CODEX_HOME"],
+                "mcp": {"interactive":"none","acp_session":false},
+                "capabilities": {"execution_paths":["codex_app_server"],"models":{"gpt-5.6-terra":{"efforts":["low"]}}}
             }
         }
     });
-    let registry_path = root.join(".config/bridget/agents.json");
+    let registry_path = root.join("state/agents.json");
     fs::write(
         &registry_path,
         serde_json::to_vec(&registry).expect("registre JSON"),
@@ -370,8 +552,14 @@ fn gate_reel_codex_app_server_gpt_5_6_terra_et_attach() {
         .expect("permissions registre");
 
     let daemon = start_daemon(&root);
-    let wrapper = start_native_wrapper(&root, &[("CODEX_HOME".to_string(), codex_home)]);
-    let socket = root.join(".cache/bridget/bridget.sock");
+    let wrapper = start_native_wrapper(
+        &root,
+        &[(
+            "CODEX_HOME".to_string(),
+            codex_home.to_string_lossy().into_owned(),
+        )],
+    );
+    let socket = fixture::socket(&root);
     let (mut sender_reader, mut sender_writer) = sender(&socket);
     let (mut attach_reader, mut attach_writer) = attach(&socket);
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -379,7 +567,7 @@ fn gate_reel_codex_app_server_gpt_5_6_terra_et_attach() {
         write_frame(
             &mut attach_writer,
             &WrapperToDaemon::Subscribe {
-                agent: "codex-native".to_string(),
+                agent: "5da585af-5bc7-4808-985f-c73670633990".to_string(),
                 window: bridget_transport::AttachWindow::Seq(0),
             },
         );
@@ -398,7 +586,7 @@ fn gate_reel_codex_app_server_gpt_5_6_terra_et_attach() {
     };
     let codex = agents
         .iter()
-        .find(|agent| agent.agent_id == "codex-native")
+        .find(|agent| agent.agent_id == "5da585af-5bc7-4808-985f-c73670633990")
         .expect("agent Codex réel absent de l'annuaire");
     assert_eq!(codex.model.as_deref(), Some("gpt-5.6-terra"));
     assert!(
@@ -409,11 +597,8 @@ fn gate_reel_codex_app_server_gpt_5_6_terra_et_attach() {
         !codex.rate_limits.is_empty(),
         "limite Codex non attestée: {codex:?}"
     );
-    let who = Command::new(env!("CARGO_BIN_EXE_bridget"))
+    let who = fixture::isolated_command(&root)
         .arg("who")
-        .env_clear()
-        .env("HOME", &root)
-        .env("PATH", "/usr/bin:/bin")
         .output()
         .expect("exécution who Codex réelle");
     assert!(
@@ -430,8 +615,8 @@ fn gate_reel_codex_app_server_gpt_5_6_terra_et_attach() {
         codex.rate_limits
     );
     let mut request = BridgetMessage::new(
-        "sender-native",
-        "codex-native",
+        "da78fd70-41e8-424c-a88d-e29e2c5babcd",
+        "5da585af-5bc7-4808-985f-c73670633990",
         "Réponds avec une phrase courte confirmant la réception de cette mission Bridget.",
     );
     request.reply = true;
@@ -470,7 +655,6 @@ fn gate_reel_codex_app_server_gpt_5_6_terra_et_attach() {
         }
     }
     assert!(saw_journal, "attach ne reçoit aucun journal Codex réel");
-    drop(wrapper);
-    drop(daemon);
+    stop_session(daemon, wrapper);
     fs::remove_dir_all(root).expect("nettoyage HOME isolé");
 }
