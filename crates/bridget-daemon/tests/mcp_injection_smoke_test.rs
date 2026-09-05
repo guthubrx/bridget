@@ -217,21 +217,22 @@ fn voie_acp_lance_la_session_wrapper_avec_probe_ephemere() {
         let mut writer = BufWriter::new(stream);
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
-        assert!(matches!(
-            decode::<WrapperToDaemon>(line.trim()).unwrap(),
-            WrapperToDaemon::Register { .. }
-        ));
+        let WrapperToDaemon::Register { agent_id, .. } =
+            decode::<WrapperToDaemon>(line.trim()).unwrap()
+        else {
+            panic!("enregistrement du wrapper attendu");
+        };
         writeln!(
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                name: "probe-acp".to_string()
+                agent_id: agent_id.clone()
             })
             .unwrap()
         )
         .unwrap();
         writer.flush().unwrap();
-        let message = BridgetMessage::new("human", "probe-acp", PROBE_PROMPT);
+        let message = BridgetMessage::new("human", &agent_id, PROBE_PROMPT);
         writeln!(
             writer,
             "{}",
