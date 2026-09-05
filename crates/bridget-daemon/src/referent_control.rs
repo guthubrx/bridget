@@ -134,6 +134,12 @@ pub fn admit_autonomous_effect(effect: AutonomousEffect, state: &ControlStateFra
 }
 
 pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
+    // Acquérir le droit d'écriture AVANT la première lecture de schéma.
+    // Une transaction deferred lecture→ALTER peut échouer immédiatement par
+    // SQLITE_BUSY malgré busy_timeout lorsque deux ouvertures se croisent.
+    // L'observation neuf/existant et les droits migrés forment un seul fait.
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+    let conn = &tx;
     // SPEC-088 : « base existante » = la ligne de contrôle existait déjà
     // avant cette passe, quelle que soit sa génération.
     let pre_existing_row: bool = conn
@@ -177,14 +183,17 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
         cap = DEFAULT_AUTO_OBJECTIVES_CAP,
     ))?;
     migrate_rights_columns(conn, pre_existing_row)?;
-    Ok(())
+    tx.commit()
 }
 
 /// SPEC-088 : colonnes de droits. Base neuve (aucune génération encore
 /// écrite) ⇒ Prudent (découverte, réassignation différée). Base existante ⇒
 /// le comportement observable d'avant la migration (complète, réassignation
 /// active), pour ne pas changer un serveur en production à son redémarrage.
-fn migrate_rights_columns(conn: &Connection, pre_existing_row: bool) -> rusqlite::Result<()> {
+fn migrate_rights_columns(
+    conn: &rusqlite::Transaction<'_>,
+    pre_existing_row: bool,
+) -> rusqlite::Result<()> {
     let has_column = |name: &str| -> rusqlite::Result<bool> {
         conn.prepare("SELECT 1 FROM pragma_table_info('control_state') WHERE name = ?1")?
             .exists([name])
@@ -207,16 +216,15 @@ fn migrate_rights_columns(conn: &Connection, pre_existing_row: bool) -> rusqlite
     };
     // Une seule transaction : les deux colonnes ET la contrainte du journal,
     // sinon une interruption laisse une base que personne ne répare.
-    let tx = conn.unchecked_transaction()?;
     if !has_column("agent_posture")? {
-        tx.execute_batch(&format!(
+        conn.execute_batch(&format!(
             "ALTER TABLE control_state ADD COLUMN agent_posture TEXT NOT NULL DEFAULT '{posture}'
                 CHECK (agent_posture IN ('discovery', 'complete'));",
             posture = posture.as_sql(),
         ))?;
     }
     if !has_column("auto_reassignment")? {
-        tx.execute_batch(&format!(
+        conn.execute_batch(&format!(
             "ALTER TABLE control_state ADD COLUMN auto_reassignment INTEGER NOT NULL DEFAULT {reassignment}
                 CHECK (auto_reassignment IN (0, 1));"
         ))?;
@@ -225,7 +233,7 @@ fn migrate_rights_columns(conn: &Connection, pre_existing_row: bool) -> rusqlite
         // SQLite ne modifie pas une contrainte CHECK : la table est
         // reconstruite avec la clause dérivée de `ControlEventKind::ALL`, et
         // ses lignes recopiées à l'identique.
-        tx.execute_batch(&format!(
+        conn.execute_batch(&format!(
             "CREATE TABLE control_events_v088 (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 at INTEGER NOT NULL,
@@ -242,7 +250,7 @@ fn migrate_rights_columns(conn: &Connection, pre_existing_row: bool) -> rusqlite
             kinds = ControlEventKind::sql_in_clause(),
         ))?;
     }
-    tx.commit()
+    Ok(())
 }
 
 pub fn read_focus(conn: &Connection) -> rusqlite::Result<Option<ControlFocusFrame>> {

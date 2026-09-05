@@ -550,4 +550,129 @@ mod security_tests {
         assert!(connection.read_response("outcome_unknown").is_err());
         assert!(connection.exchange(&WrapperToDaemon::ListAgents).is_err());
     }
+
+    #[test]
+    fn trois_phases_lentes_consument_une_seule_echeance() {
+        use std::io::BufRead;
+        let (mut connection, mut peer) = pair(Duration::from_millis(1000));
+        let peer_reader = peer.try_clone().unwrap();
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+        let writer = thread::spawn(move || {
+            peer_reader
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(peer_reader);
+            for _ in 0..3 {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                seen_tx.send(()).unwrap();
+                thread::sleep(Duration::from_millis(400)); // lenteur du pair, pas synchronisation du test
+                if peer
+                    .write_all(b"{\"type\":\"Ack\",\"id\":\"phase\"}\n")
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        let started = Instant::now();
+        let results = (0..3)
+            .map(|_| connection.exchange(&WrapperToDaemon::ListAgents))
+            .collect::<Vec<_>>();
+        let elapsed = started.elapsed();
+        drop(connection);
+        writer.join().unwrap();
+        assert_eq!(
+            seen_rx.try_iter().count(),
+            3,
+            "les trois phases doivent être réellement tentées"
+        );
+        assert!(results[0].is_ok() && results[1].is_ok(), "{results:?}");
+        assert!(
+            results[2].is_err(),
+            "renouveler le budget à chaque échange accepterait les trois réponses"
+        );
+        assert!(elapsed < Duration::from_millis(2000), "{elapsed:?}");
+    }
+
+    #[test]
+    fn backlog_reel_plein_est_refuse_sans_attendre_un_accept() {
+        use std::os::unix::net::UnixListener;
+        let path = std::path::PathBuf::from("/tmp")
+            .join(format!("b89-connect-{}", uuid::Uuid::new_v4().simple()));
+        let listener = UnixListener::bind(&path).unwrap();
+        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 1) }, 0);
+        // Une connexion dans la file, personne n'appelle accept pendant la sonde.
+        let mut fillers = Vec::new();
+        let mut refusal = None;
+        for _ in 0..64 {
+            let started = Instant::now();
+            match connect_nonblocking(&path, started + Duration::from_millis(150)) {
+                Ok(stream) => fillers.push(stream),
+                Err(error) => {
+                    refusal = Some((error, started.elapsed()));
+                    break;
+                }
+            }
+        }
+        assert!(!fillers.is_empty());
+        let (error, elapsed) = refusal.expect("borne réelle de la file atteinte sans accept");
+        // Observé macOS : ECONNREFUSED sur file AF_UNIX pleine ; Linux peut
+        // rendre EAGAIN. Ne pas prétendre avoir traversé EINPROGRESS/poll
+        // lorsque le noyau a refusé immédiatement la connexion.
+        assert!(
+            matches!(
+                error.kind(),
+                io::ErrorKind::TimedOut
+                    | io::ErrorKind::WouldBlock
+                    | io::ErrorKind::ConnectionRefused
+            ),
+            "{error}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "connect a ignoré la deadline : {elapsed:?}"
+        );
+        assert_eq!(
+            unsafe { libc::fcntl(fillers[0].as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+            libc::FD_CLOEXEC
+        );
+        drop(fillers);
+        drop(listener);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn budget_expire_et_chemin_nul_refuses_avant_toute_connexion() {
+        use std::os::unix::ffi::OsStringExt;
+        use std::os::unix::net::UnixListener;
+        let path = std::path::PathBuf::from("/tmp")
+            .join(format!("b89-no-connect-{}", uuid::Uuid::new_v4().simple()));
+        let listener = UnixListener::bind(&path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(
+            connect_nonblocking(&path, Instant::now() - Duration::from_millis(1))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+        let mut nul = path.as_os_str().as_bytes().to_vec();
+        nul.extend_from_slice(b"\0suffixe");
+        assert_eq!(
+            connect_nonblocking(
+                Path::new(&std::ffi::OsString::from_vec(nul)),
+                Instant::now() + Duration::from_secs(1)
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
+        );
+        drop(listener);
+        std::fs::remove_file(path).unwrap();
+    }
 }
