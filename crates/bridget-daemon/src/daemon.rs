@@ -5611,25 +5611,6 @@ fn handle_register(
     )
 }
 
-#[cfg(test)]
-trait LegacyRouterTestRename {
-    fn rename(&mut self, connection_id: &str, _legacy_name: &str) -> Result<(), String>;
-}
-
-#[cfg(test)]
-impl LegacyRouterTestRename for Router {
-    fn rename(&mut self, connection_id: &str, _legacy_name: &str) -> Result<(), String> {
-        self.unregister_by_conn(connection_id);
-        self.register(
-            &Uuid::new_v4().to_string(),
-            &bridget_core::AgentType::Codex,
-            connection_id,
-        )
-        .map(|_| ())
-        .map_err(|error| error.to_string())
-    }
-}
-
 /// Longueur maximale acceptée pour un identifiant de modèle ou un niveau
 /// d'effort, alignée sur la validation des noms d'agent côté CLI.
 const MAX_RUNTIME_VALUE_LENGTH: usize = 100;
@@ -12751,6 +12732,10 @@ mod presence_tests {
     }
 
     pub(super) fn read_control(reader: &mut BufReader<UnixStream>) -> DaemonToWrapper {
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
         decode(line.trim()).unwrap()
@@ -12801,7 +12786,7 @@ mod presence_tests {
         state.attach_subscriptions.insert(
             subscription_id.to_string(),
             AttachSubscription {
-                agent: "agent-2".to_string(),
+                agent: "89000000-0000-4000-8000-000000000102".to_string(),
                 attach_conn: attach_conn.to_string(),
                 wrapper_conn: "conn-1".to_string(),
                 caught_up: false,
@@ -12849,7 +12834,11 @@ mod presence_tests {
         let mut state = DaemonState::new(&config, managed_tx).unwrap();
         state
             .router
-            .register("agent-distant-1", &bridget_core::AgentType::Codex, "conn-1")
+            .register(
+                "89000000-0000-4000-8000-000000000107",
+                &bridget_core::AgentType::Codex,
+                "conn-1",
+            )
             .unwrap();
         state
             .conn_instances
@@ -12857,7 +12846,7 @@ mod presence_tests {
         state.presences.insert(
             "instance-1".to_string(),
             Presence {
-                name: "agent-distant-1".to_string(),
+                name: "89000000-0000-4000-8000-000000000107".to_string(),
                 agent_type: "codex".to_string(),
                 host: "projet-a".to_string(),
                 transport: "tmux".to_string(),
@@ -12889,9 +12878,9 @@ mod presence_tests {
         assert_eq!(
             agents
                 .iter()
-                .map(|agent| agent.display_name.as_str())
+                .map(|agent| agent.agent_id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["agent-distant-1"]
+            vec!["89000000-0000-4000-8000-000000000107"]
         );
         assert_eq!(agents[0].host, "projet-a");
         assert_eq!(agents[0].os, "Linux");
@@ -12968,7 +12957,11 @@ mod presence_tests {
         state.fixture_root = Some(fixture_root);
         state
             .router
-            .register("agent-2", &bridget_core::AgentType::Claude, "conn-1")
+            .register(
+                "89000000-0000-4000-8000-000000000102",
+                &bridget_core::AgentType::Claude,
+                "conn-1",
+            )
             .unwrap();
         state
             .conn_instances
@@ -12976,7 +12969,7 @@ mod presence_tests {
         state.presences.insert(
             "instance-1".to_string(),
             Presence {
-                name: "agent-2".to_string(),
+                name: "89000000-0000-4000-8000-000000000102".to_string(),
                 agent_type: "claude".to_string(),
                 host: "macbook".to_string(),
                 transport: "acp".to_string(),
@@ -13032,7 +13025,7 @@ mod presence_tests {
                 "conn-sender",
                 2,
                 "codex".to_string(),
-                "agent-sender".to_string(),
+                "89000000-0000-4000-8000-000000000103".to_string(),
                 Some("cartae".to_string()),
                 Some("tmux".to_string()),
                 ChannelReport::Known("unix".to_string()),
@@ -13045,7 +13038,7 @@ mod presence_tests {
                 Some(false),
                 &mut state,
             ),
-            DaemonToWrapper::Registered { agent_id: name } if name == "agent-sender"
+            DaemonToWrapper::Registered { agent_id: name } if name == "89000000-0000-4000-8000-000000000103"
         ));
         let stale = Instant::now()
             .checked_sub(Duration::from_secs(1900))
@@ -13072,7 +13065,7 @@ mod presence_tests {
         let sender = state
             .agent_infos()
             .into_iter()
-            .find(|agent| agent.display_name == "agent-sender")
+            .find(|agent| agent.agent_id == "89000000-0000-4000-8000-000000000103")
             .expect("expéditeur enregistré visible dans l'annuaire");
         if expected_fresh {
             assert!(
@@ -13094,7 +13087,11 @@ mod presence_tests {
         let (state, config) = state_with_aged_sender("last-seen-idempotent");
         let shared = Arc::new(Mutex::new(state));
         negotiate_idempotent_client(&shared, "client-activity", "046_scope_aaaaaaaaaaaa");
-        let mut message = BridgetMessage::new("agent-sender", "agent-2", "activité réelle");
+        let mut message = BridgetMessage::new(
+            "89000000-0000-4000-8000-000000000103",
+            "89000000-0000-4000-8000-000000000102",
+            "activité réelle",
+        );
         message.hops = 4;
         let result = handle_wrapper_message(
             "client-activity",
@@ -13128,7 +13125,7 @@ mod presence_tests {
             "conn-sender",
             WrapperToDaemon::Send(BridgetMessage::new(
                 "identité-écrasée-par-le-wrapper",
-                "agent-2",
+                "89000000-0000-4000-8000-000000000102",
                 "activité historique réelle",
             )),
             &shared,
@@ -13137,7 +13134,7 @@ mod presence_tests {
         assert!(matches!(
             read_control(&mut target_reader),
             DaemonToWrapper::Deliver(message)
-                if message.from == "agent-sender" && message.to == "agent-2"
+                if message.from == "89000000-0000-4000-8000-000000000103" && message.to == "89000000-0000-4000-8000-000000000102"
         ));
         assert_sender_last_seen(&mut shared.lock().unwrap(), true);
         let _ = std::fs::remove_file(config.db_path);
@@ -13148,7 +13145,11 @@ mod presence_tests {
         let (state, config) = state_with_aged_sender("last-seen-refus");
         let shared = Arc::new(Mutex::new(state));
         negotiate_idempotent_client(&shared, "client-refused", "046_scope_bbbbbbbbbbbb");
-        let mut message = BridgetMessage::new("agent-sender", "agent-inconnu", "à refuser");
+        let mut message = BridgetMessage::new(
+            "89000000-0000-4000-8000-000000000103",
+            "agent-inconnu",
+            "à refuser",
+        );
         message.hops = 4;
         let result = handle_wrapper_message(
             "client-refused",
@@ -13174,9 +13175,10 @@ mod presence_tests {
     fn session_046_reception_seule_ne_rajeunit_pas_last_seen() {
         let (mut state, config) = state_with_aged_sender("last-seen-reception");
         let (target_writer, mut target_reader) = control_socket("last-seen-reception");
-        state
-            .conn_names
-            .insert("conn-1".to_string(), "agent-2".to_string());
+        state.conn_names.insert(
+            "conn-1".to_string(),
+            "89000000-0000-4000-8000-000000000102".to_string(),
+        );
         state
             .connections
             .insert("conn-sender".to_string(), target_writer);
@@ -13185,7 +13187,7 @@ mod presence_tests {
             "conn-1",
             WrapperToDaemon::Send(BridgetMessage::new(
                 "identité-écrasée-par-le-wrapper",
-                "agent-sender",
+                "89000000-0000-4000-8000-000000000103",
                 "mandat reçu sans activité émise",
             )),
             &shared,
@@ -13196,7 +13198,7 @@ mod presence_tests {
             matches!(
                 delivered,
                 DaemonToWrapper::Deliver(ref message)
-                    if message.from == "agent-2" && message.to == "agent-sender"
+                    if message.from == "89000000-0000-4000-8000-000000000102" && message.to == "89000000-0000-4000-8000-000000000103"
             ),
             "trame reçue par la cible: {delivered:?}"
         );
@@ -13248,7 +13250,7 @@ mod presence_tests {
             "conn-lab",
             2,
             "codex".to_string(),
-            "lab-agent".to_string(),
+            "89000000-0000-4000-8000-000000000108".to_string(),
             Some("lab-host".to_string()),
             Some("ssh-unix".to_string()),
             ChannelReport::Omitted,
@@ -13283,7 +13285,7 @@ mod presence_tests {
             "conn-natif",
             2,
             "fixture".to_string(),
-            "natif-distant".to_string(),
+            "89000000-0000-4000-8000-000000000109".to_string(),
             Some("lab-host".to_string()),
             Some("codex_app_server".to_string()),
             ChannelReport::Known("ssh-unix".to_string()),
@@ -13607,7 +13609,7 @@ mod presence_tests {
     }
 
     fn recovery_daemon_config(root: &std::path::Path) -> DaemonConfig {
-        let cache = root.join(".cache/bridget");
+        let cache = root.join(".state");
         DaemonConfig {
             socket_path: cache.join("bridget.sock"),
             db_path: cache.join("bridget.db"),
@@ -13620,21 +13622,62 @@ mod presence_tests {
         }
     }
 
-    fn spawn_recovery_daemon(root: &std::path::Path) -> Child {
-        Command::new(std::env::current_exe().unwrap())
-            .arg("--exact")
-            .arg("daemon::presence_tests::recovery_daemon_child")
-            .arg("--ignored")
-            .arg("--nocapture")
-            .env(T908_DAEMON_CHILD_ENV, "1")
-            .env(T908_ROOT_ENV, root)
-            .env("HOME", root)
-            .env("BRIDGET_T908_MANAGED_EXECUTABLE", managed_test_binary())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap()
+    struct RecoveryDaemon(Child);
+
+    impl std::ops::Deref for RecoveryDaemon {
+        type Target = Child;
+        fn deref(&self) -> &Child {
+            &self.0
+        }
+    }
+
+    impl std::ops::DerefMut for RecoveryDaemon {
+        fn deref_mut(&mut self) -> &mut Child {
+            &mut self.0
+        }
+    }
+
+    impl Drop for RecoveryDaemon {
+        fn drop(&mut self) {
+            if matches!(self.0.try_wait(), Ok(None)) {
+                // Exclusivement l'enfant créé ci-dessous, jamais le daemon
+                // de travail. Le crash de l'oracle reste explicite dans le test.
+                unsafe {
+                    libc::kill(self.0.id() as libc::pid_t, libc::SIGTERM);
+                }
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while matches!(self.0.try_wait(), Ok(None)) && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                if matches!(self.0.try_wait(), Ok(None)) {
+                    let _ = self.0.kill();
+                }
+            }
+            let _ = self.0.wait();
+        }
+    }
+
+    fn spawn_recovery_daemon(root: &std::path::Path) -> RecoveryDaemon {
+        RecoveryDaemon(
+            Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg("daemon::presence_tests::recovery_daemon_child")
+                .arg("--ignored")
+                .arg("--nocapture")
+                .env_clear()
+                .env(T908_DAEMON_CHILD_ENV, "1")
+                .env(T908_ROOT_ENV, root)
+                .env("HOME", root)
+                .env("BRIDGET_HOME", root.join(".state"))
+                .env("BRIDGET_SOCKET", root.join(".state/bridget.sock"))
+                .env("PATH", "/usr/bin:/bin")
+                .env("BRIDGET_T908_MANAGED_EXECUTABLE", managed_test_binary())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .unwrap(),
+        )
     }
 
     fn wait_daemon_socket(socket: &std::path::Path) {
@@ -13699,13 +13742,21 @@ mod presence_tests {
         ));
         let (state, config) = recovery_fixture_state(&root);
         let now = unix_timestamp();
-        let previous = persist_connected_fixture(&state, "alpha", "initial-alpha", now);
+        let previous = persist_connected_fixture(
+            &state,
+            "89000000-0000-4000-8000-000000000116",
+            "initial-alpha",
+            now,
+        );
         drop(state);
 
         let (mut reopened, _) = recovery_fixture_state(&root);
         let recoveries = reserve_managed_recoveries(&mut reopened, now + 2).unwrap();
         assert_eq!(recoveries.len(), 1);
-        assert_eq!(recoveries[0].0.lease.name, "alpha");
+        assert_eq!(
+            recoveries[0].0.lease.name,
+            "89000000-0000-4000-8000-000000000116"
+        );
         assert!(recoveries[0].0.lease.generation > previous.generation);
         assert!(reopened.recovering);
         assert_eq!(reopened.recovery_commands.len(), 1);
@@ -13729,7 +13780,7 @@ mod presence_tests {
         let now = unix_timestamp();
         persist_connected_fixture_with_definition(
             &state,
-            "coder-natif",
+            "89000000-0000-4000-8000-000000000118",
             "initial-coder-natif",
             now,
             &recovery_native_codex_definition(),
@@ -14121,7 +14172,7 @@ mod presence_tests {
         let desired = DesiredStateStore::at_path(desired_state_path(&config));
         let mut fleet = crate::desired_state::DesiredFleet::default();
         fleet.equipiers.insert(
-            "alpha".to_string(),
+            "89000000-0000-4000-8000-000000000116".to_string(),
             crate::desired_state::DesiredEquipier {
                 agent_type: "fixture".to_string(),
                 cwd: PathBuf::from("/tmp"),
@@ -14151,7 +14202,7 @@ mod presence_tests {
                 WrapperToDaemon::Register {
                     agent_type: "fixture".to_string(),
                     identity_version: 2,
-                    agent_id: "alpha".to_string(),
+                    agent_id: "89000000-0000-4000-8000-000000000116".to_string(),
                     host: Some("local".to_string()),
                     transport: Some("tmux".to_string()),
                     channel: Some("unix".to_string()).into(),
@@ -14165,7 +14216,7 @@ mod presence_tests {
                 },
                 &shared,
             ),
-            Some(DaemonToWrapper::Registered { agent_id: ref name }) if name == "alpha"
+            Some(DaemonToWrapper::Registered { agent_id: ref name }) if name == "89000000-0000-4000-8000-000000000116"
         ));
         assert!(matches!(
             handle_wrapper_message(
@@ -14173,7 +14224,7 @@ mod presence_tests {
                 WrapperToDaemon::Register {
                     agent_type: "fixture".to_string(),
                     identity_version: 2,
-                    agent_id: "alpha".to_string(),
+                    agent_id: "89000000-0000-4000-8000-000000000116".to_string(),
                     host: Some("local".to_string()),
                     transport: Some("acp".to_string()),
                     channel: Some("unix".to_string()).into(),
@@ -14212,7 +14263,7 @@ mod presence_tests {
         assert_eq!(
             state
                 .fleet
-                .desired_entry("alpha")
+                .desired_entry("89000000-0000-4000-8000-000000000116")
                 .unwrap()
                 .expect("la reprise échouée reste gérée")
                 .lifecycle_state,
@@ -14220,7 +14271,11 @@ mod presence_tests {
         );
         assert!(!state.recovering);
         assert_eq!(
-            state.router.get_agent("alpha").unwrap().connection_id,
+            state
+                .router
+                .get_agent("89000000-0000-4000-8000-000000000116")
+                .unwrap()
+                .connection_id,
             "terminal-alpha"
         );
         drop(state);
@@ -14237,7 +14292,10 @@ mod presence_tests {
         let (_, config) = recovery_fixture_state(&root);
         let desired = DesiredStateStore::at_path(desired_state_path(&config));
         let mut fleet = crate::desired_state::DesiredFleet::default();
-        for name in ["alpha", "beta"] {
+        for name in [
+            "89000000-0000-4000-8000-000000000116",
+            "89000000-0000-4000-8000-000000000117",
+        ] {
             fleet.equipiers.insert(
                 name.to_string(),
                 crate::desired_state::DesiredEquipier {
@@ -14265,14 +14323,14 @@ mod presence_tests {
         let beta = state
             .managed_spawns
             .values()
-            .find(|record| record.lease.name == "beta")
+            .find(|record| record.lease.name == "89000000-0000-4000-8000-000000000117")
             .unwrap();
         let completion = Arc::clone(&beta.stop);
         let beta_command = beta.lease.command_id.clone();
         let alpha_command = state
             .managed_spawns
             .values()
-            .find(|record| record.lease.name == "alpha")
+            .find(|record| record.lease.name == "89000000-0000-4000-8000-000000000116")
             .unwrap()
             .lease
             .command_id
@@ -14329,7 +14387,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "control",
                 WrapperToDaemon::StopOrder {
-                    agent_id: "beta".to_string(),
+                    agent_id: "89000000-0000-4000-8000-000000000117".to_string(),
                     command_id: "stop-beta-recovery".to_string(),
                 },
                 &caller_state,
@@ -14373,7 +14431,7 @@ mod presence_tests {
         assert_eq!(
             state
                 .fleet
-                .desired_entry("beta")
+                .desired_entry("89000000-0000-4000-8000-000000000117")
                 .unwrap()
                 .expect("beta reste géré après son arrêt")
                 .lifecycle_state,
@@ -14454,7 +14512,7 @@ mod presence_tests {
                 .success()
         );
         std::fs::write(root.join("wip.txt"), "non commité\n").unwrap();
-        let registry_path = root.join(".config/bridget/agents.json");
+        let registry_path = root.join(".state/agents.json");
         std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         let adapter = root.join("adapter.sh");
         let changed_adapter = root.join("adapter-changed.sh");
@@ -14499,6 +14557,30 @@ mod presence_tests {
         .unwrap();
         std::fs::set_permissions(&registry_path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
+        // Précondition durable du scénario de reprise, pas contournement
+        // d'une garde au lancement : le shell témoin n'offre pas le mode
+        // découverte. La mutation humaine via CLI est éprouvée séparément
+        // par core_089_host_session_test ; ici on prépare l'état historique.
+        {
+            let store = Store::open(&config.db_path).unwrap();
+            let initial = crate::referent_control::read(store.connection()).unwrap();
+            crate::referent_control::set(
+                store.connection(),
+                crate::referent_control::ControlMutation {
+                    command_id: "recovery-fixture-complete",
+                    expected_generation: initial.generation,
+                    paused: None,
+                    auto_objectives_cap: None,
+                    reason: None,
+                    actor: "test",
+                    now: unix_timestamp(),
+                    agent_posture: Some(bridget_transport::protocol::AgentPosture::Complete),
+                    auto_reassignment: None,
+                },
+            )
+            .unwrap()
+            .unwrap();
+        }
         let mut first_daemon = spawn_recovery_daemon(&root);
         wait_daemon_socket(&config.socket_path);
         let now = unix_timestamp();
@@ -14506,7 +14588,7 @@ mod presence_tests {
             &config.socket_path,
             WrapperToDaemon::SpawnOrder {
                 agent_type: "fixture".to_string(),
-                agent_id: Some("persistent-one".to_string()),
+                agent_id: Some("89000000-0000-4000-8000-000000000129".to_string()),
                 cwd: root.to_string_lossy().to_string(),
                 persistent: true,
                 command_id: "initial-persistent".to_string(),
@@ -14516,15 +14598,18 @@ mod presence_tests {
                 ownership: None,
             },
         );
-        assert!(matches!(
-            accepted,
-            DaemonToWrapper::SpawnAccepted { agent_id: ref name, definition: Some(ref definition), .. }
-                if name == "persistent-one"
-                    && definition.command == adapter.to_string_lossy()
-                    && definition.args.is_empty()
-                    && definition.forbidden_env.is_empty()
-                    && definition.digest.len() == 64
-        ));
+        assert!(
+            matches!(
+                &accepted,
+                DaemonToWrapper::SpawnAccepted { agent_id: name, definition: Some(definition), .. }
+                    if name == "89000000-0000-4000-8000-000000000129"
+                        && definition.command == adapter.to_string_lossy()
+                        && definition.args.is_empty()
+                        && definition.forbidden_env.is_empty()
+                        && definition.digest.len() == 64
+            ),
+            "spawn réel refusé : {accepted:?}"
+        );
         let marker_store =
             ManagedMarkerStore::at_directory(config.db_path.parent().unwrap().join("managed"));
         let prompt_deadline = Instant::now() + Duration::from_secs(4);
@@ -14540,7 +14625,9 @@ mod presence_tests {
             );
             thread::sleep(Duration::from_millis(10));
         }
-        let first_marker = marker_store.load("persistent-one").unwrap();
+        let first_marker = marker_store
+            .load("89000000-0000-4000-8000-000000000129")
+            .unwrap();
         assert!(crate::managed_process::group_exists(first_marker.pgid).unwrap());
 
         assert_ne!(first_daemon.id(), 0);
@@ -14581,7 +14668,7 @@ mod presence_tests {
             if let DaemonToWrapper::AgentList { agents } =
                 daemon_request(&config.socket_path, WrapperToDaemon::ListAgents)
                 && agents.len() == 1
-                && agents[0].display_name == "persistent-one"
+                && agents[0].agent_id == "89000000-0000-4000-8000-000000000129"
                 && agents[0].state == "connected"
             {
                 break agents;
@@ -14594,7 +14681,9 @@ mod presence_tests {
         };
         assert_eq!(agents.len(), 1, "une seule génération doit être visible");
         assert!(!crate::managed_process::group_exists(first_marker.pgid).unwrap());
-        let second_marker = marker_store.load("persistent-one").unwrap();
+        let second_marker = marker_store
+            .load("89000000-0000-4000-8000-000000000129")
+            .unwrap();
         assert_ne!(second_marker.instance_id, first_marker.instance_id);
         assert_ne!(second_marker.pgid, first_marker.pgid);
         let execution_deadline = Instant::now() + Duration::from_secs(2);
@@ -14634,7 +14723,7 @@ mod presence_tests {
                 &config.socket_path,
                 WrapperToDaemon::SpawnOrder {
                     agent_type: "fixture".to_string(),
-                    agent_id: Some("persistent-one".to_string()),
+                    agent_id: Some("89000000-0000-4000-8000-000000000129".to_string()),
                     cwd: root.to_string_lossy().to_string(),
                     persistent: true,
                     command_id: "initial-persistent".to_string(),
@@ -14655,7 +14744,7 @@ mod presence_tests {
             daemon_request(
                 &config.socket_path,
                 WrapperToDaemon::StopOrder {
-                    agent_id: "persistent-one".to_string(),
+                    agent_id: "89000000-0000-4000-8000-000000000129".to_string(),
                     command_id: "stop-after-recovery".to_string(),
                 }
             ),
@@ -14698,7 +14787,7 @@ mod presence_tests {
         let refusal = handle_wrapper_message(
             "attach-1",
             WrapperToDaemon::Runtime {
-                agent: "agent-2".to_string(),
+                agent: "89000000-0000-4000-8000-000000000102".to_string(),
                 model: "gpt-5.5".to_string(),
                 effort: None,
                 source: bridget_transport::protocol::RuntimeSource::Declared,
@@ -14906,7 +14995,7 @@ mod presence_tests {
                 WrapperToDaemon::Register {
                     agent_type: "codex".to_string(),
                     identity_version: 2,
-                    agent_id: "maicie".to_string(),
+                    agent_id: "89000000-0000-4000-8000-000000000122".to_string(),
                     host: None,
                     transport: None,
                     channel: None.into(),
@@ -15243,7 +15332,11 @@ mod presence_tests {
             },
             &shared,
         );
-        let message = BridgetMessage::new("client", "agent-2", "sans welcome");
+        let message = BridgetMessage::new(
+            "client",
+            "89000000-0000-4000-8000-000000000102",
+            "sans welcome",
+        );
         assert!(matches!(
             handle_wrapper_message(
                 "client-before-welcome",
@@ -15329,7 +15422,11 @@ mod presence_tests {
             handle_wrapper_message(
                 "client-capability",
                 WrapperToDaemon::SendIdempotent {
-                    message: BridgetMessage::new("client", "agent-2", "hors capacite"),
+                    message: BridgetMessage::new(
+                        "client",
+                        "89000000-0000-4000-8000-000000000102",
+                        "hors capacite"
+                    ),
                     message_id: "message-2".to_string(),
                     issued_at: 1,
                 },
@@ -15461,7 +15558,7 @@ mod presence_tests {
                 WrapperToDaemon::Register {
                     agent_type: "codex".to_string(),
                     identity_version: 2,
-                    agent_id: "historique-012".to_string(),
+                    agent_id: "89000000-0000-4000-8000-000000000113".to_string(),
                     host: None,
                     transport: None,
                     channel: None.into(),
@@ -15524,7 +15621,8 @@ mod presence_tests {
     }
 
     fn idempotent_message(body: &str) -> BridgetMessage {
-        let mut message = BridgetMessage::new("maicie", "agent-2", body);
+        let mut message =
+            BridgetMessage::new("maicie", "89000000-0000-4000-8000-000000000102", body);
         message.hops = 4;
         message
     }
@@ -15740,11 +15838,11 @@ mod presence_tests {
                 .delivery_generation
         );
         drop(state);
-        // Un rejeu est jugé avant tout routage : retirer ou renommer la cible
+        // Un rejeu est jugé avant tout routage : retirer la cible
         // n'autorise jamais une nouvelle résolution pour cette clé connue.
         {
             let mut state = shared.lock().unwrap();
-            state.router.rename("conn-1", "agent-renomme").unwrap();
+            assert!(state.router.unregister_by_conn("conn-1").is_some());
         }
         let replay = handle_wrapper_message(
             "client-a",
@@ -15832,10 +15930,10 @@ mod presence_tests {
         assert_eq!(replay_expiry, rejection_expiry);
 
         let historic = handle_wrapper_message(
-            "historique-012",
+            "89000000-0000-4000-8000-000000000113",
             WrapperToDaemon::Send(BridgetMessage::new(
                 "historique",
-                "agent-2",
+                "89000000-0000-4000-8000-000000000102",
                 "ancienne voie",
             )),
             &shared,
@@ -15853,18 +15951,27 @@ mod presence_tests {
         let (mut state, config) = state_with_registered_agent("idempotent-reply");
         state
             .router
-            .register("maicie", &bridget_core::AgentType::Codex, "sender-wrapper")
+            .register(
+                "89000000-0000-4000-8000-000000000122",
+                &bridget_core::AgentType::Codex,
+                "sender-wrapper",
+            )
             .unwrap();
         state
             .store
-            .create_request("request-open", "agent-2", "maicie", 60)
+            .create_request(
+                "request-open",
+                "89000000-0000-4000-8000-000000000102",
+                "89000000-0000-4000-8000-000000000122",
+                60,
+            )
             .unwrap();
         state.presences.get_mut("instance-1").unwrap().dnd_until =
             Some(Instant::now() + Duration::from_secs(60));
         let shared = Arc::new(Mutex::new(state));
         negotiate_idempotent_client(&shared, "client-reply", "012_scope_replyyyyyyyyy");
         let mut reply = idempotent_message("réponse suivie");
-        reply.from = "maicie".to_string();
+        reply.from = "89000000-0000-4000-8000-000000000122".to_string();
         reply.reply = true;
         reply.in_reply_to = Some("request-open".to_string());
         let issued_at = unix_now_secs();
@@ -15915,21 +16022,24 @@ mod presence_tests {
     #[test]
     fn accuse_idempotent_d_une_reponse_liee_resout_la_demande_sans_relance() {
         let (mut state, config) = state_with_registered_agent("idempotent-linked-reply");
-        state.router.rename("conn-1", "bridget").unwrap();
-        state.presences.get_mut("instance-1").unwrap().name = "bridget".to_string();
         let (target_writer, mut target_reader) = control_socket("idempotent-linked-reply");
         state
             .connections
             .insert("conn-1".to_string(), target_writer);
         state
             .store
-            .create_request("request-open", "bridget", "coderBridget", 60)
+            .create_request(
+                "request-open",
+                "89000000-0000-4000-8000-000000000102",
+                "89000000-0000-4000-8000-000000000124",
+                60,
+            )
             .unwrap();
         state.pending_replies.push(PendingReply {
             msg_id: "request-open".to_string(),
-            from: "bridget".to_string(),
+            from: "89000000-0000-4000-8000-000000000102".to_string(),
             from_conn: "conn-1".to_string(),
-            to: "coderBridget".to_string(),
+            to: "89000000-0000-4000-8000-000000000124".to_string(),
             target_conn: "client-reply".to_string(),
             timeout_secs: 60,
             created_at: Instant::now(),
@@ -15939,7 +16049,11 @@ mod presence_tests {
         let shared = Arc::new(Mutex::new(state));
         negotiate_idempotent_client(&shared, "client-reply", "012_scope_replyyyyyyyyy");
 
-        let mut response = BridgetMessage::new("coderBridget", "bridget", "réponse MCP");
+        let mut response = BridgetMessage::new(
+            "89000000-0000-4000-8000-000000000124",
+            "89000000-0000-4000-8000-000000000102",
+            "réponse MCP",
+        );
         response.in_reply_to = Some("request-open".to_string());
         let issued_at = unix_now_secs();
         assert!(matches!(
@@ -16000,17 +16114,31 @@ mod presence_tests {
         let (state, config) = state_with_registered_agent("idempotent-linked-mismatch");
         state
             .store
-            .create_request("request-a", "agent-2", "coderBridget", 60)
+            .create_request(
+                "request-a",
+                "89000000-0000-4000-8000-000000000102",
+                "coderBridget",
+                60,
+            )
             .unwrap();
         state
             .store
-            .create_request("request-b", "agent-2", "coderBridget", 60)
+            .create_request(
+                "request-b",
+                "89000000-0000-4000-8000-000000000102",
+                "coderBridget",
+                60,
+            )
             .unwrap();
         let shared = Arc::new(Mutex::new(state));
         negotiate_idempotent_client(&shared, "client-reply", "012_scope_replyyyyyyyyy");
         let issued_at = unix_now_secs();
         for request_id in ["request-a", "request-b"] {
-            let mut response = BridgetMessage::new("coderBridget", "agent-2", "réponse MCP");
+            let mut response = BridgetMessage::new(
+                "coderBridget",
+                "89000000-0000-4000-8000-000000000102",
+                "réponse MCP",
+            );
             response.in_reply_to = Some(request_id.to_string());
             let result = handle_wrapper_message(
                 "client-reply",
@@ -16065,7 +16193,12 @@ mod presence_tests {
         );
         state
             .store
-            .create_request("request-1", "agent-2", "codex-1", 60)
+            .create_request(
+                "request-1",
+                "89000000-0000-4000-8000-000000000102",
+                "codex-1",
+                60,
+            )
             .unwrap();
         let shared = Arc::new(Mutex::new(state));
         handle_wrapper_message(
@@ -16076,7 +16209,11 @@ mod presence_tests {
             &shared,
         );
 
-        let mut forged = bridget_core::BridgetMessage::new("codex-1", "agent-2", "réponse forgée");
+        let mut forged = bridget_core::BridgetMessage::new(
+            "codex-1",
+            "89000000-0000-4000-8000-000000000102",
+            "réponse forgée",
+        );
         forged.in_reply_to = Some("request-1".to_string());
         let response = handle_wrapper_message("attach-1", WrapperToDaemon::Send(forged), &shared);
         assert!(matches!(response, Some(DaemonToWrapper::Ack { .. })));
@@ -16120,7 +16257,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "attach-1",
                 WrapperToDaemon::Subscribe {
-                    agent: "agent-2".to_string(),
+                    agent: "89000000-0000-4000-8000-000000000102".to_string(),
                     window: bridget_transport::AttachWindow::Today,
                 },
                 &shared,
@@ -16182,7 +16319,7 @@ mod presence_tests {
         handle_wrapper_message(
             "attach-1",
             WrapperToDaemon::Subscribe {
-                agent: "agent-2".to_string(),
+                agent: "89000000-0000-4000-8000-000000000102".to_string(),
                 window: bridget_transport::AttachWindow::Seq(8),
             },
             &shared,
@@ -16267,7 +16404,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "attach-1",
                 WrapperToDaemon::Subscribe {
-                    agent: "agent-2".to_string(),
+                    agent: "89000000-0000-4000-8000-000000000102".to_string(),
                     window: bridget_transport::AttachWindow::Today,
                 },
                 &shared,
@@ -16290,21 +16427,21 @@ mod presence_tests {
         let registrations = [
             (
                 "acp-conn",
-                "acp-agent",
+                "89000000-0000-4000-8000-000000000119",
                 "acp-instance",
                 PresenceMode::Acp,
                 None,
             ),
             (
                 "tmux-conn",
-                "tmux-agent",
+                "89000000-0000-4000-8000-000000000120",
                 "tmux-instance",
                 PresenceMode::Tmux,
                 Some("bridget:3.1"),
             ),
             (
                 "cli-conn",
-                "cli-agent",
+                "89000000-0000-4000-8000-000000000121",
                 "cli-instance",
                 PresenceMode::Cli,
                 None,
@@ -16334,23 +16471,40 @@ mod presence_tests {
         }
 
         let infos = state.agent_infos();
-        let info = |name: &str| {
-            infos
-                .iter()
-                .find(|agent| agent.display_name == name)
-                .unwrap()
-        };
-        assert_eq!(info("acp-agent").mode, Some(PresenceMode::Acp));
-        assert_eq!(info("tmux-agent").mode, Some(PresenceMode::Tmux));
-        assert_eq!(info("tmux-agent").location.as_deref(), Some("bridget:3.1"));
-        assert_eq!(info("cli-agent").mode, Some(PresenceMode::Cli));
-        assert!(info("cli-agent").location.is_none());
+        let info = |name: &str| infos.iter().find(|agent| agent.agent_id == name).unwrap();
+        assert_eq!(
+            info("89000000-0000-4000-8000-000000000119").mode,
+            Some(PresenceMode::Acp)
+        );
+        assert_eq!(
+            info("89000000-0000-4000-8000-000000000120").mode,
+            Some(PresenceMode::Tmux)
+        );
+        assert_eq!(
+            info("89000000-0000-4000-8000-000000000120")
+                .location
+                .as_deref(),
+            Some("bridget:3.1")
+        );
+        assert_eq!(
+            info("89000000-0000-4000-8000-000000000121").mode,
+            Some(PresenceMode::Cli)
+        );
+        assert!(
+            info("89000000-0000-4000-8000-000000000121")
+                .location
+                .is_none()
+        );
 
-        let tmux_refusal = attach_refusal_for_subscription(&state, "tmux-agent").unwrap_err();
+        let tmux_refusal =
+            attach_refusal_for_subscription(&state, "89000000-0000-4000-8000-000000000120")
+                .unwrap_err();
         assert_eq!(tmux_refusal.reason, AttachRefusal::JournalUnavailable);
         assert_eq!(tmux_refusal.mode, Some(PresenceMode::Tmux));
         assert_eq!(tmux_refusal.location.as_deref(), Some("bridget:3.1"));
-        let cli_refusal = attach_refusal_for_subscription(&state, "cli-agent").unwrap_err();
+        let cli_refusal =
+            attach_refusal_for_subscription(&state, "89000000-0000-4000-8000-000000000121")
+                .unwrap_err();
         assert_eq!(cli_refusal.reason, AttachRefusal::JournalUnavailable);
         assert_eq!(cli_refusal.mode, Some(PresenceMode::Cli));
         assert!(cli_refusal.location.is_none());
@@ -16363,7 +16517,7 @@ mod presence_tests {
             handle_register(
                 "legacy-conn",
                 "fixture".to_string(),
-                Some("legacy-agent".to_string()),
+                Some("89000000-0000-4000-8000-000000000127".to_string()),
                 Some("local".to_string()),
                 Some("acp".to_string()),
                 None,
@@ -16377,7 +16531,9 @@ mod presence_tests {
             ),
             DaemonToWrapper::Registered { .. }
         ));
-        let legacy_refusal = attach_refusal_for_subscription(&state, "legacy-agent").unwrap_err();
+        let legacy_refusal =
+            attach_refusal_for_subscription(&state, "89000000-0000-4000-8000-000000000127")
+                .unwrap_err();
         assert_eq!(legacy_refusal.reason, AttachRefusal::WrapperUnavailable);
         assert!(legacy_refusal.mode.is_none());
         assert!(legacy_refusal.location.is_none());
@@ -16388,7 +16544,7 @@ mod presence_tests {
             handle_register(
                 "modern-conn",
                 "fixture".to_string(),
-                Some("modern-agent".to_string()),
+                Some("89000000-0000-4000-8000-000000000128".to_string()),
                 Some("local".to_string()),
                 Some("acp".to_string()),
                 Some(PresenceMode::Acp),
@@ -16403,7 +16559,7 @@ mod presence_tests {
             DaemonToWrapper::Registered { .. }
         ));
         assert_eq!(
-            attach_refusal_for_subscription(&state, "modern-agent")
+            attach_refusal_for_subscription(&state, "89000000-0000-4000-8000-000000000128")
                 .unwrap_err()
                 .reason,
             AttachRefusal::JournalUnavailable
@@ -16419,7 +16575,7 @@ mod presence_tests {
             .unwrap()
             .journal_available = true;
         assert_eq!(
-            attach_refusal_for_subscription(&state, "tmux-agent")
+            attach_refusal_for_subscription(&state, "89000000-0000-4000-8000-000000000120")
                 .unwrap_err()
                 .reason,
             AttachRefusal::WrapperUnavailable
@@ -16430,7 +16586,7 @@ mod presence_tests {
             .unwrap()
             .journal_available = true;
         assert_eq!(
-            attach_refusal_for_subscription(&state, "cli-agent")
+            attach_refusal_for_subscription(&state, "89000000-0000-4000-8000-000000000121")
                 .unwrap_err()
                 .reason,
             AttachRefusal::WrapperUnavailable
@@ -16456,11 +16612,16 @@ mod presence_tests {
 
         let infos = state.agent_infos();
         assert!(
-            infos.iter().all(|agent| agent.display_name != "agent-2"),
+            infos
+                .iter()
+                .all(|agent| agent.agent_id != "89000000-0000-4000-8000-000000000102"),
             "le fantôme ne doit plus figurer dans l'annuaire: {infos:?}"
         );
         assert!(
-            state.router.get_agent("agent-2").is_none(),
+            state
+                .router
+                .get_agent("89000000-0000-4000-8000-000000000102")
+                .is_none(),
             "le nom doit être libéré du routeur après expiration de la présence"
         );
         assert!(!infos.iter().any(|agent| {
@@ -16500,7 +16661,11 @@ mod presence_tests {
                 .reserve(&key, b"canon-jury", 1_000_000, 3600, 1_000_000, 30),
             Ok(Reservation::Prepared { .. })
         ));
-        let mut message = BridgetMessage::new("bridget", "agent-2", "mandat de jury");
+        let mut message = BridgetMessage::new(
+            "bridget",
+            "89000000-0000-4000-8000-000000000102",
+            "mandat de jury",
+        );
         message.id = "msg-jury-perdu".to_string();
         let message_bytes = serde_json::to_vec(&message).unwrap();
         state
@@ -16561,7 +16726,11 @@ mod presence_tests {
         // Émetteur « bridget » avec une vraie connexion lisible.
         state
             .router
-            .register("bridget", &bridget_core::AgentType::Claude, "conn-emitter")
+            .register(
+                "89000000-0000-4000-8000-000000000123",
+                &bridget_core::AgentType::Claude,
+                "conn-emitter",
+            )
             .unwrap();
         state
             .conn_instances
@@ -16569,7 +16738,7 @@ mod presence_tests {
         state.presences.insert(
             "instance-emitter".to_string(),
             Presence {
-                name: "bridget".to_string(),
+                name: "89000000-0000-4000-8000-000000000123".to_string(),
                 agent_type: "claude".to_string(),
                 host: "macbook".to_string(),
                 transport: "acp".to_string(),
@@ -16620,7 +16789,11 @@ mod presence_tests {
                 .reserve(&key, b"canon-notify", 1_000_000, 3600, 1_000_000, 30),
             Ok(Reservation::Prepared { .. })
         ));
-        let mut message = BridgetMessage::new("bridget", "agent-2", "corps");
+        let mut message = BridgetMessage::new(
+            "89000000-0000-4000-8000-000000000123",
+            "89000000-0000-4000-8000-000000000102",
+            "corps",
+        );
         message.id = "msg-a-notifier".to_string();
         state
             .idempotency
@@ -16690,7 +16863,11 @@ mod presence_tests {
                 .reserve(&key, b"canon-reg", 1_000_000, 3600, 1_000_000, 30),
             Ok(Reservation::Prepared { .. })
         ));
-        let mut message = BridgetMessage::new("bridget", "agent-2", "corps");
+        let mut message = BridgetMessage::new(
+            "89000000-0000-4000-8000-000000000123",
+            "89000000-0000-4000-8000-000000000102",
+            "corps",
+        );
         message.id = "msg-register-replay".to_string();
         state
             .idempotency
@@ -16730,7 +16907,11 @@ mod presence_tests {
         // (voir doc de l'oracle : trou déclaré).
         state
             .router
-            .register("bridget", &bridget_core::AgentType::Claude, "conn-emitter")
+            .register(
+                "89000000-0000-4000-8000-000000000123",
+                &bridget_core::AgentType::Claude,
+                "conn-emitter",
+            )
             .unwrap();
         state
             .conn_instances
@@ -16738,7 +16919,7 @@ mod presence_tests {
         state.presences.insert(
             "instance-emitter".to_string(),
             Presence {
-                name: "bridget".to_string(),
+                name: "89000000-0000-4000-8000-000000000123".to_string(),
                 agent_type: "claude".to_string(),
                 host: "macbook".to_string(),
                 transport: "acp".to_string(),
@@ -16798,21 +16979,32 @@ mod presence_tests {
     #[test]
     fn mort_du_wrapper_emporte_la_presence_du_routeur() {
         let (mut state, config) = state_with_registered_agent("mort-wrapper");
-        assert!(state.router.get_agent("agent-2").is_some());
+        assert!(
+            state
+                .router
+                .get_agent("89000000-0000-4000-8000-000000000102")
+                .is_some()
+        );
         state.router.unregister_by_conn("conn-1");
         state.mark_unreachable("conn-1");
 
         let infos = state.agent_infos();
-        assert!(state.router.get_agent("agent-2").is_none());
         assert!(
-            !infos
-                .iter()
-                .any(|agent| agent.display_name == "agent-2" && agent.state == "connected"),
+            state
+                .router
+                .get_agent("89000000-0000-4000-8000-000000000102")
+                .is_none()
+        );
+        assert!(
+            !infos.iter().any(
+                |agent| agent.agent_id == "89000000-0000-4000-8000-000000000102"
+                    && agent.state == "connected"
+            ),
             "pas de connected résiduel: {infos:?}"
         );
         let unreachable = infos
             .iter()
-            .find(|agent| agent.display_name == "agent-2")
+            .find(|agent| agent.agent_id == "89000000-0000-4000-8000-000000000102")
             .expect("l'état unreachable reste listé distinctement");
         assert_eq!(unreachable.state, "unreachable");
         let _ = std::fs::remove_file(config.db_path);
@@ -16826,12 +17018,17 @@ mod presence_tests {
         // le premier agent_infos (ou un résidu après crash de retain).
         state.presences.clear();
         // conn_instances pointe vers une instance absente → dangling.
-        assert!(state.router.get_agent("agent-2").is_some());
+        assert!(
+            state
+                .router
+                .get_agent("89000000-0000-4000-8000-000000000102")
+                .is_some()
+        );
 
         let registered = handle_register(
             "conn-takeover",
             "cursor".to_string(),
-            Some("agent-2".to_string()),
+            Some("89000000-0000-4000-8000-000000000102".to_string()),
             Some("local".to_string()),
             Some("acp".to_string()),
             Some(PresenceMode::Acp),
@@ -16846,14 +17043,14 @@ mod presence_tests {
         assert!(
             matches!(
                 registered,
-                DaemonToWrapper::Registered { agent_id: ref name } if name == "agent-2"
+                DaemonToWrapper::Registered { agent_id: ref name } if name == "89000000-0000-4000-8000-000000000102"
             ),
             "takeover refusé: {registered:?}"
         );
         let infos = state.agent_infos();
         let info = infos
             .iter()
-            .find(|agent| agent.display_name == "agent-2")
+            .find(|agent| agent.agent_id == "89000000-0000-4000-8000-000000000102")
             .expect("agent repris");
         assert_eq!(info.state, "connected");
         assert_eq!(info.transport, "acp");
@@ -16868,7 +17065,7 @@ mod presence_tests {
         let refused = handle_register(
             "conn-intrus",
             "cursor".to_string(),
-            Some("agent-2".to_string()),
+            Some("89000000-0000-4000-8000-000000000102".to_string()),
             Some("local".to_string()),
             Some("acp".to_string()),
             Some(PresenceMode::Acp),
@@ -16955,7 +17152,7 @@ mod presence_tests {
         let infos = st.agent_infos();
         let agent = infos
             .iter()
-            .find(|agent| agent.display_name == "agent-2")
+            .find(|agent| agent.agent_id == "89000000-0000-4000-8000-000000000102")
             .expect("contrôle positif : présence légitime (lien frais) reste à l'annuaire");
         assert!(
             agent.last_seen_secs >= 1800,
@@ -16988,7 +17185,7 @@ mod presence_tests {
         let infos = state.agent_infos();
         let agent = infos
             .iter()
-            .find(|agent| agent.display_name == "agent-2")
+            .find(|agent| agent.agent_id == "89000000-0000-4000-8000-000000000102")
             .expect("présence légitime visible");
         assert!(
             agent.last_seen_secs < 2,
@@ -17028,7 +17225,7 @@ mod presence_tests {
         assert!(
             infos
                 .iter()
-                .any(|a| a.display_name == "agent-2" && a.state == "busy"),
+                .any(|a| a.agent_id == "89000000-0000-4000-8000-000000000102" && a.state == "busy"),
             "busy jury ne doit pas être purgé: {infos:?}"
         );
         let _ = std::fs::remove_file(&config.db_path);
@@ -17308,7 +17505,9 @@ mod presence_tests {
         }
         let infos = state.agent_infos();
         assert!(
-            infos.iter().any(|a| a.display_name == "agent-2"),
+            infos
+                .iter()
+                .any(|a| a.agent_id == "89000000-0000-4000-8000-000000000102"),
             "présence fraîche doit survivre: {infos:?}"
         );
         let _ = std::fs::remove_file(config.db_path);
@@ -17338,11 +17537,18 @@ mod presence_tests {
         }
         let infos = state.agent_infos();
         assert!(
-            infos.iter().all(|a| a.display_name != "agent-2"),
+            infos
+                .iter()
+                .all(|a| a.agent_id != "89000000-0000-4000-8000-000000000102"),
             "connected mort doit disparaître sans redémarrage: {infos:?}"
         );
         assert!(!state.presences.contains_key("instance-1"));
-        assert!(state.router.get_agent("agent-2").is_none());
+        assert!(
+            state
+                .router
+                .get_agent("89000000-0000-4000-8000-000000000102")
+                .is_none()
+        );
         let _ = std::fs::remove_file(config.db_path);
     }
 
@@ -17357,9 +17563,12 @@ mod presence_tests {
         let shared = Arc::new(Mutex::new(state));
 
         assert_eq!(
-            attach_refusal_for_subscription(&shared.lock().unwrap(), "agent-2")
-                .unwrap_err()
-                .reason,
+            attach_refusal_for_subscription(
+                &shared.lock().unwrap(),
+                "89000000-0000-4000-8000-000000000102"
+            )
+            .unwrap_err()
+            .reason,
             AttachRefusal::JournalUnavailable
         );
         assert!(handle_wrapper_message("conn-1", WrapperToDaemon::JournalReady, &shared).is_none());
@@ -17382,7 +17591,7 @@ mod presence_tests {
             handle_register(
                 "legacy-wrapper",
                 "codex".to_string(),
-                Some("legacy-journal".to_string()),
+                Some("89000000-0000-4000-8000-000000000114".to_string()),
                 Some("local".to_string()),
                 Some("acp".to_string()),
                 None,
@@ -17405,7 +17614,7 @@ mod presence_tests {
             "mutation discriminante : sans la compatibilité de version, le gate retombe à faux"
         );
         assert_eq!(
-            attach_refusal_for_subscription(&state, "legacy-journal")
+            attach_refusal_for_subscription(&state, "89000000-0000-4000-8000-000000000114")
                 .unwrap_err()
                 .reason,
             AttachRefusal::WrapperUnavailable
@@ -17420,7 +17629,7 @@ mod presence_tests {
             handle_register(
                 "modern-wrapper",
                 "codex".to_string(),
-                Some("modern-journal".to_string()),
+                Some("89000000-0000-4000-8000-000000000115".to_string()),
                 Some("local".to_string()),
                 Some("acp".to_string()),
                 Some(PresenceMode::Acp),
@@ -17435,7 +17644,7 @@ mod presence_tests {
             DaemonToWrapper::Registered { .. }
         ));
         assert_eq!(
-            attach_refusal_for_subscription(&state, "modern-journal")
+            attach_refusal_for_subscription(&state, "89000000-0000-4000-8000-000000000115")
                 .unwrap_err()
                 .reason,
             AttachRefusal::JournalUnavailable,
@@ -17457,7 +17666,7 @@ mod presence_tests {
             handle_register(
                 "mcp-child",
                 "mcp".to_string(),
-                Some("agent-2".to_string()),
+                Some("89000000-0000-4000-8000-000000000102".to_string()),
                 None,
                 None,
                 Some(PresenceMode::Cli),
@@ -17473,7 +17682,7 @@ mod presence_tests {
         ));
         assert_eq!(
             state.conn_names.get("mcp-child").map(String::as_str),
-            Some("agent-2")
+            Some("89000000-0000-4000-8000-000000000102")
         );
         assert_eq!(
             state.conn_instances.get("mcp-child").map(String::as_str),
@@ -17487,7 +17696,7 @@ mod presence_tests {
         state.mark_unreachable("mcp-child");
         let agents = state.agent_infos();
         assert_eq!(agents.len(), 1);
-        assert_eq!(agents[0].display_name, "agent-2");
+        assert_eq!(agents[0].agent_id, "89000000-0000-4000-8000-000000000102");
         assert_eq!(agents[0].transport, "acp");
         assert_eq!(agents[0].mode, Some(PresenceMode::Acp));
         assert_eq!(agents[0].domain.as_deref(), Some("coordination"));
@@ -17499,7 +17708,7 @@ mod presence_tests {
             handle_register(
                 "mcp-child-2",
                 "mcp".to_string(),
-                Some("agent-2".to_string()),
+                Some("89000000-0000-4000-8000-000000000102".to_string()),
                 None,
                 None,
                 Some(PresenceMode::Cli),
@@ -17543,7 +17752,7 @@ mod presence_tests {
         let now = unix_timestamp();
         let order = FleetSpawnOrder {
             agent_type: "codex-terra".to_string(),
-            requested_name: Some("coder-terra".to_string()),
+            requested_name: Some("89000000-0000-4000-8000-000000000110".to_string()),
             cwd: PathBuf::from("/tmp"),
             persistent: false,
             command_id: "managed-runtime-definition".to_string(),
@@ -17570,7 +17779,7 @@ mod presence_tests {
             handle_register(
                 "managed-terra",
                 "codex-terra".to_string(),
-                Some("coder-terra".to_string()),
+                Some("89000000-0000-4000-8000-000000000110".to_string()),
                 Some("local".to_string()),
                 // Mutation discriminante : un wrapper historique ne connaît
                 // pas PresenceMode et annonce seulement son canal Unix. La
@@ -17592,14 +17801,15 @@ mod presence_tests {
             .register_connected(&lease, &instance_id, now + 1)
             .unwrap();
         let agent = state.agent_infos().pop().expect("géré visible");
-        assert_eq!(agent.display_name, "coder-terra");
+        assert_eq!(agent.agent_id, "89000000-0000-4000-8000-000000000110");
         assert_eq!(agent.transport, "acp");
         assert_eq!(agent.channel.as_deref(), Some("unix"));
         assert_eq!(agent.mode, Some(PresenceMode::Acp));
         assert_eq!(agent.model.as_deref(), Some("gpt-5.6-terra"));
         assert_eq!(agent.effort.as_deref(), Some("high"));
         assert_eq!(
-            attach_refusal_for_subscription(&state, "coder-terra").unwrap(),
+            attach_refusal_for_subscription(&state, "89000000-0000-4000-8000-000000000110")
+                .unwrap(),
             "managed-terra"
         );
 
@@ -17616,7 +17826,7 @@ mod presence_tests {
         let now = unix_timestamp();
         let order = FleetSpawnOrder {
             agent_type: "cursor".to_string(),
-            requested_name: Some("cursor5".to_string()),
+            requested_name: Some("89000000-0000-4000-8000-000000000111".to_string()),
             cwd: PathBuf::from("/tmp"),
             persistent: false,
             command_id: label.to_string(),
@@ -17659,7 +17869,7 @@ mod presence_tests {
         let agent = state
             .agent_infos()
             .into_iter()
-            .find(|agent| agent.display_name == lease.name)
+            .find(|agent| agent.agent_id == lease.name)
             .expect("la relance en cours doit rester visible");
         assert_eq!(agent.state, "relaunching");
 
@@ -17680,7 +17890,7 @@ mod presence_tests {
             handle_register(
                 "managed-reconnect-hostile",
                 "cursor".to_string(),
-                Some("cursor5".to_string()),
+                Some("89000000-0000-4000-8000-000000000111".to_string()),
                 Some("local".to_string()),
                 Some("unix".to_string()),
                 None,
@@ -17714,7 +17924,7 @@ mod presence_tests {
             handle_register(
                 "managed-reconnect-hostile-2",
                 "cursor".to_string(),
-                Some("cursor5".to_string()),
+                Some("89000000-0000-4000-8000-000000000111".to_string()),
                 Some("local".to_string()),
                 Some("unix".to_string()),
                 None,
@@ -17729,7 +17939,7 @@ mod presence_tests {
             DaemonToWrapper::Registered { .. }
         ));
         let reconnected = state.agent_infos().pop().expect("réinscrit");
-        assert_eq!(reconnected.display_name, "cursor5");
+        assert_eq!(reconnected.agent_id, "89000000-0000-4000-8000-000000000111");
         assert_eq!(reconnected.transport, "acp");
         assert_eq!(reconnected.mode, Some(PresenceMode::Acp));
         assert_eq!(reconnected.domain.as_deref(), Some("bridget"));
@@ -17755,7 +17965,7 @@ mod presence_tests {
             handle_register(
                 "managed-rebind-instance",
                 "cursor".to_string(),
-                Some("cursor5".to_string()),
+                Some("89000000-0000-4000-8000-000000000111".to_string()),
                 Some("local".to_string()),
                 Some("unix".to_string()),
                 None,
@@ -17782,7 +17992,7 @@ mod presence_tests {
             handle_register(
                 "managed-rebind-instance-2",
                 "cursor".to_string(),
-                Some("cursor5".to_string()),
+                Some("89000000-0000-4000-8000-000000000111".to_string()),
                 Some("local".to_string()),
                 Some("unix".to_string()),
                 None,
@@ -17799,7 +18009,10 @@ mod presence_tests {
         let reconnected = state
             .agent_infos()
             .into_iter()
-            .find(|agent| agent.display_name == "cursor5" && agent.state != "unreachable")
+            .find(|agent| {
+                agent.agent_id == "89000000-0000-4000-8000-000000000111"
+                    && agent.state != "unreachable"
+            })
             .expect("réinscrit visible");
         assert_eq!(reconnected.transport, "acp");
         assert_eq!(reconnected.mode, Some(PresenceMode::Acp));
@@ -17831,7 +18044,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "attach-1",
                 WrapperToDaemon::Subscribe {
-                    agent: "agent-2".to_string(),
+                    agent: "89000000-0000-4000-8000-000000000102".to_string(),
                     window: bridget_transport::AttachWindow::Today,
                 },
                 &shared,
@@ -17853,18 +18066,19 @@ mod presence_tests {
 
         let (wrapper_writer, mut wrapper_reader) = control_socket("claude-managed-wrapper");
         let (attach_writer, _attach_reader) = control_socket("claude-managed-attach");
-        state
-            .connections
-            .insert("claude-managed".to_string(), wrapper_writer);
+        state.connections.insert(
+            "89000000-0000-4000-8000-000000000112".to_string(),
+            wrapper_writer,
+        );
         state
             .connections
             .insert("attach-claude-managed".to_string(), attach_writer);
 
         assert!(matches!(
             handle_register(
-                "claude-managed",
+                "89000000-0000-4000-8000-000000000112",
                 "claude".to_string(),
-                Some("claude-managed".to_string()),
+                Some("89000000-0000-4000-8000-000000000112".to_string()),
                 Some("local".to_string()),
                 Some("unix".to_string()),
                 Some(PresenceMode::Acp),
@@ -17876,7 +18090,7 @@ mod presence_tests {
                 None,
                 &mut state,
             ),
-            DaemonToWrapper::Registered { agent_id: ref name } if name == "claude-managed"
+            DaemonToWrapper::Registered { agent_id: ref name } if name == "89000000-0000-4000-8000-000000000112"
         ));
 
         let agent = state.agent_infos().pop().expect("Claude inscrit");
@@ -17887,8 +18101,12 @@ mod presence_tests {
 
         let shared = Arc::new(Mutex::new(state));
         assert!(
-            handle_wrapper_message("claude-managed", WrapperToDaemon::JournalReady, &shared,)
-                .is_none()
+            handle_wrapper_message(
+                "89000000-0000-4000-8000-000000000112",
+                WrapperToDaemon::JournalReady,
+                &shared,
+            )
+            .is_none()
         );
         assert!(matches!(
             handle_wrapper_message(
@@ -17906,7 +18124,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "attach-claude-managed",
                 WrapperToDaemon::Subscribe {
-                    agent: "claude-managed".to_string(),
+                    agent: "89000000-0000-4000-8000-000000000112".to_string(),
                     window: bridget_transport::AttachWindow::Today,
                 },
                 &shared,
@@ -17952,7 +18170,7 @@ mod presence_tests {
         handle_wrapper_message(
             "attach-1",
             WrapperToDaemon::Subscribe {
-                agent: "agent-2".to_string(),
+                agent: "89000000-0000-4000-8000-000000000102".to_string(),
                 window: bridget_transport::AttachWindow::Today,
             },
             &shared,
@@ -18074,7 +18292,7 @@ mod presence_tests {
         state.attach_subscriptions.insert(
             "sub-non-seq".to_string(),
             AttachSubscription {
-                agent: "agent-2".to_string(),
+                agent: "89000000-0000-4000-8000-000000000102".to_string(),
                 attach_conn: "attach-1".to_string(),
                 wrapper_conn: "conn-1".to_string(),
                 caught_up: false,
@@ -18483,7 +18701,7 @@ mod presence_tests {
 
         // Observation initiale : un modèle qui expose son niveau d'effort.
         let ack = handle_runtime(
-            "agent-2",
+            "89000000-0000-4000-8000-000000000102",
             "claude-opus-5".to_string(),
             Some("high".to_string()),
             RuntimeSource::ClaudeHook,
@@ -18498,7 +18716,7 @@ mod presence_tests {
         // disparaître. Le conserver afficherait « haiku + high », capacité qui
         // n'a jamais existé. Défaut soulevé par la contre-revue « agent-1 ».
         handle_runtime(
-            "agent-2",
+            "89000000-0000-4000-8000-000000000102",
             "claude-haiku-4-5-20251001".to_string(),
             None,
             RuntimeSource::ClaudeHook,
@@ -18520,7 +18738,7 @@ mod presence_tests {
         let (mut state, config) = state_with_registered_agent("limite-attestee");
 
         let ack = handle_rate_limit(
-            "agent-2",
+            "89000000-0000-4000-8000-000000000102",
             "five_hour".to_string(),
             "rejected".to_string(),
             Some(1_787_572_200),
@@ -18545,7 +18763,7 @@ mod presence_tests {
         let (mut state, config) = state_with_registered_agent("limite-deux-fenetres");
 
         let first = handle_rate_limit(
-            "agent-2",
+            "89000000-0000-4000-8000-000000000102",
             "seven_day".to_string(),
             "allowed".to_string(),
             Some(1_787_700_000),
@@ -18555,7 +18773,7 @@ mod presence_tests {
         );
         assert!(matches!(first, DaemonToWrapper::Ack { .. }));
         let second = handle_rate_limit(
-            "agent-2",
+            "89000000-0000-4000-8000-000000000102",
             "five_hour".to_string(),
             "allowed".to_string(),
             Some(1_787_572_200),
@@ -18597,7 +18815,11 @@ mod presence_tests {
             "flux muet = pas de verdict"
         );
 
-        let ack = handle_served_model("agent-2", "claude-opus-4-6".to_string(), &mut state);
+        let ack = handle_served_model(
+            "89000000-0000-4000-8000-000000000102",
+            "claude-opus-4-6".to_string(),
+            &mut state,
+        );
         assert!(matches!(ack, DaemonToWrapper::Ack { .. }));
         let agent = state.agent_infos().pop().unwrap();
         assert_eq!(agent.state, "connected", "l'écart ne change pas l'état");
@@ -18606,7 +18828,11 @@ mod presence_tests {
         assert_eq!(gap.pinned, "claude-opus-5");
         assert_eq!(gap.served, "claude-opus-4-6");
 
-        let match_ack = handle_served_model("agent-2", "claude-opus-5".to_string(), &mut state);
+        let match_ack = handle_served_model(
+            "89000000-0000-4000-8000-000000000102",
+            "claude-opus-5".to_string(),
+            &mut state,
+        );
         assert!(matches!(match_ack, DaemonToWrapper::Ack { .. }));
         let aligned = state.agent_infos().pop().unwrap();
         assert!(aligned.model_mismatch.is_none());
@@ -18620,7 +18846,7 @@ mod presence_tests {
         let (mut state, config) = state_with_registered_agent("usage-atteste");
 
         let ack = handle_usage(
-            "agent-2",
+            "89000000-0000-4000-8000-000000000102",
             UsageTokens {
                 input_tokens: 2,
                 output_tokens: 175,
@@ -18634,7 +18860,8 @@ mod presence_tests {
             &mut state,
         );
         assert!(matches!(ack, DaemonToWrapper::Ack { .. }));
-        let window = handle_usage_window("agent-2", 1, i64::MAX, &state);
+        let window =
+            handle_usage_window("89000000-0000-4000-8000-000000000102", 1, i64::MAX, &state);
         match window {
             DaemonToWrapper::UsageWindowResult {
                 aggregate: Some(aggregate),
@@ -18684,7 +18911,11 @@ mod presence_tests {
         }
         assert_eq!(state.agent_infos()[0].domain.as_deref(), Some("bridget"));
 
-        let ack = handle_domain("agent-2", Some("revue-croisee".to_string()), &mut state);
+        let ack = handle_domain(
+            "89000000-0000-4000-8000-000000000102",
+            Some("revue-croisee".to_string()),
+            &mut state,
+        );
         assert!(matches!(ack, DaemonToWrapper::Ack { .. }));
         assert_eq!(
             state.agent_infos()[0].domain.as_deref(),
@@ -18692,7 +18923,7 @@ mod presence_tests {
         );
 
         // La réinitialisation revient sur le domaine dérivé, pas sur rien.
-        handle_domain("agent-2", None, &mut state);
+        handle_domain("89000000-0000-4000-8000-000000000102", None, &mut state);
         assert_eq!(state.agent_infos()[0].domain.as_deref(), Some("bridget"));
 
         let nack = handle_domain("inconnu", None, &mut state);
@@ -18710,7 +18941,11 @@ mod presence_tests {
             .as_secs();
 
         // Statut actif : l'état devient « dnd » et le temps restant est annoncé.
-        handle_availability("agent-2", Some(now + 1800), &mut state);
+        handle_availability(
+            "89000000-0000-4000-8000-000000000102",
+            Some(now + 1800),
+            &mut state,
+        );
         assert_eq!(state.agent_infos()[0].state, "dnd");
         let presence = state.presences.get("instance-1").unwrap();
         assert!(presence.is_dnd());
@@ -18718,12 +18953,20 @@ mod presence_tests {
 
         // Une échéance déjà passée équivaut à une absence de statut : c'est ce
         // qui rend l'expiration automatique, sans tâche de fond.
-        handle_availability("agent-2", Some(now - 10), &mut state);
+        handle_availability(
+            "89000000-0000-4000-8000-000000000102",
+            Some(now - 10),
+            &mut state,
+        );
         assert_eq!(state.agent_infos()[0].state, "connected");
 
-        handle_availability("agent-2", Some(now + 600), &mut state);
+        handle_availability(
+            "89000000-0000-4000-8000-000000000102",
+            Some(now + 600),
+            &mut state,
+        );
         assert_eq!(state.agent_infos()[0].state, "dnd");
-        handle_availability("agent-2", None, &mut state);
+        handle_availability("89000000-0000-4000-8000-000000000102", None, &mut state);
         assert_eq!(state.agent_infos()[0].state, "connected");
         assert!(!state.presences.get("instance-1").unwrap().is_dnd());
 
@@ -18749,7 +18992,7 @@ mod presence_tests {
 
         // Caractère de contrôle : casserait l'alignement de l'annuaire.
         let nack = handle_runtime(
-            "agent-2",
+            "89000000-0000-4000-8000-000000000102",
             "mod\u{1b}[31mele".to_string(),
             None,
             RuntimeSource::Declared,
@@ -18759,7 +19002,7 @@ mod presence_tests {
 
         // Valeur trop longue.
         let nack = handle_runtime(
-            "agent-2",
+            "89000000-0000-4000-8000-000000000102",
             "m".repeat(101),
             None,
             RuntimeSource::Declared,
@@ -18778,7 +19021,7 @@ mod presence_tests {
         use bridget_transport::protocol::RuntimeSource;
         let (mut state, config) = state_with_registered_agent("runtime-reconnexion");
         handle_runtime(
-            "agent-2",
+            "89000000-0000-4000-8000-000000000102",
             "gpt-5.3-codex".to_string(),
             Some("xhigh".to_string()),
             RuntimeSource::CodexRollout,
@@ -18791,7 +19034,7 @@ mod presence_tests {
         let response = handle_register(
             "conn-2",
             "codex".to_string(),
-            Some("agent-2".to_string()),
+            Some("89000000-0000-4000-8000-000000000102".to_string()),
             Some("macbook".to_string()),
             Some("unix".to_string()),
             Some(PresenceMode::Acp),
@@ -18810,9 +19053,9 @@ mod presence_tests {
         assert_eq!(
             agents
                 .iter()
-                .map(|agent| agent.display_name.as_str())
+                .map(|agent| agent.agent_id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["agent-2"]
+            vec!["89000000-0000-4000-8000-000000000102"]
         );
         assert_eq!(agents[0].state, "connected");
         assert_eq!(agents[0].model.as_deref(), Some("gpt-5.3-codex"));
@@ -18932,14 +19175,19 @@ mod presence_tests {
         let (mut state, config) = spec_087_state("pause-relances");
         state
             .store
-            .create_request("request-pause", "sender", "agent-2", 60)
+            .create_request(
+                "request-pause",
+                "sender",
+                "89000000-0000-4000-8000-000000000102",
+                60,
+            )
             .unwrap();
         let started = Instant::now();
         state.pending_replies.push(PendingReply {
             msg_id: "request-pause".to_string(),
             from: "sender".to_string(),
             from_conn: "conn-sender".to_string(),
-            to: "agent-2".to_string(),
+            to: "89000000-0000-4000-8000-000000000102".to_string(),
             target_conn: "conn-1".to_string(),
             timeout_secs: 60,
             created_at: started,
@@ -19016,13 +19264,18 @@ mod presence_tests {
         // Palier 3 : l'échéance reste notifiée à l'émetteur, même en pause.
         state
             .store
-            .create_request("request-pause-3", "sender", "agent-2", 60)
+            .create_request(
+                "request-pause-3",
+                "sender",
+                "89000000-0000-4000-8000-000000000102",
+                60,
+            )
             .unwrap();
         state.pending_replies.push(PendingReply {
             msg_id: "request-pause-3".to_string(),
             from: "sender".to_string(),
             from_conn: "conn-sender".to_string(),
-            to: "agent-2".to_string(),
+            to: "89000000-0000-4000-8000-000000000102".to_string(),
             target_conn: "conn-1".to_string(),
             timeout_secs: 60,
             created_at: started,
@@ -19062,14 +19315,19 @@ mod presence_tests {
         state.set_turn_state("conn-1", true).unwrap();
         state
             .store
-            .create_request("request-busy", "sender", "agent-2", 60)
+            .create_request(
+                "request-busy",
+                "sender",
+                "89000000-0000-4000-8000-000000000102",
+                60,
+            )
             .unwrap();
         let started = Instant::now();
         state.pending_replies.push(PendingReply {
             msg_id: "request-busy".to_string(),
             from: "sender".to_string(),
             from_conn: "conn-sender".to_string(),
-            to: "agent-2".to_string(),
+            to: "89000000-0000-4000-8000-000000000102".to_string(),
             target_conn: "conn-1".to_string(),
             timeout_secs: 60,
             created_at: started,
@@ -19151,14 +19409,14 @@ mod presence_tests {
         state.set_turn_state("conn-1", true).unwrap();
         let agents = state.agent_infos();
         assert_eq!(agents.len(), 1);
-        assert_eq!(agents[0].display_name, "agent-2");
+        assert_eq!(agents[0].agent_id, "89000000-0000-4000-8000-000000000102");
         assert_eq!(agents[0].state, "busy");
         state.router.unregister_by_conn("conn-1");
         state.mark_unreachable("conn-1");
         let response = handle_register(
             "conn-2",
             "claude".to_string(),
-            Some("agent-2".to_string()),
+            Some("89000000-0000-4000-8000-000000000102".to_string()),
             Some("macbook".to_string()),
             Some("unix".to_string()),
             Some(PresenceMode::Acp),
@@ -19190,7 +19448,11 @@ mod presence_tests {
         )
         .unwrap();
         let now = unix_now_secs();
-        let mut message = bridget_core::BridgetMessage::new("peer-a", "agent-2", "collège en vol");
+        let mut message = bridget_core::BridgetMessage::new(
+            "peer-a",
+            "89000000-0000-4000-8000-000000000102",
+            "collège en vol",
+        );
         message.id = "msg-orphan-register".to_string();
         state
             .idempotency
@@ -19241,7 +19503,7 @@ mod presence_tests {
         let response = handle_register(
             "conn-new",
             "claude".to_string(),
-            Some("agent-2".to_string()),
+            Some("89000000-0000-4000-8000-000000000102".to_string()),
             Some("macbook".to_string()),
             Some("acp".to_string()),
             Some(PresenceMode::Acp),
@@ -19282,8 +19544,11 @@ mod presence_tests {
         let (mut state, config) = state_with_registered_agent("spec-079-recovery-register");
         let (writer, _reader) = control_socket("spec-079-recovery-register");
         state.connections.insert("conn-1".to_string(), writer);
-        let mut message =
-            bridget_core::BridgetMessage::new("humain", "agent-2", "reprends exactement ceci");
+        let mut message = bridget_core::BridgetMessage::new(
+            "humain",
+            "89000000-0000-4000-8000-000000000102",
+            "reprends exactement ceci",
+        );
         message.id = "message-recovery-079".to_string();
         message.origin = Some(bridget_core::MessageOrigin::Human);
         message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
@@ -19292,7 +19557,13 @@ mod presence_tests {
             .admit_starting_message(&message, "execution-parent-079", unix_now_secs())
             .unwrap();
 
-        schedule_execution_recovery(&mut state, "conn-1", "instance-1", "agent-2", false);
+        schedule_execution_recovery(
+            &mut state,
+            "conn-1",
+            "instance-1",
+            "89000000-0000-4000-8000-000000000102",
+            false,
+        );
 
         let controls = state
             .pending_post_response_controls
@@ -19332,7 +19603,13 @@ mod presence_tests {
                         == crate::execution_store::ContinuationMode::Reconstructed
         ));
 
-        schedule_execution_recovery(&mut state, "conn-1", "instance-1", "agent-2", false);
+        schedule_execution_recovery(
+            &mut state,
+            "conn-1",
+            "instance-1",
+            "89000000-0000-4000-8000-000000000102",
+            false,
+        );
         assert_eq!(
             state.pending_post_response_controls["conn-1"].len(),
             1,
@@ -19395,7 +19672,7 @@ mod presence_tests {
         let now = unix_now_secs();
         let mut message = bridget_core::BridgetMessage::new(
             "human",
-            "agent-2",
+            "89000000-0000-4000-8000-000000000102",
             "message exact après acquittement",
         );
         message.id = "message-real-restart-079".to_string();
@@ -19455,7 +19732,7 @@ mod presence_tests {
             handle_register(
                 "conn-restart-1",
                 "claude".to_string(),
-                Some("agent-2".to_string()),
+                Some("89000000-0000-4000-8000-000000000102".to_string()),
                 Some("macbook".to_string()),
                 Some("acp".to_string()),
                 Some(PresenceMode::Acp),
@@ -19505,7 +19782,7 @@ mod presence_tests {
         restarted_again.fixture_root = Some(fixture_root);
         let recoverable = restarted_again
             .execution_store
-            .recoverable_execution_ids_for_agent("agent-2")
+            .recoverable_execution_ids_for_agent("89000000-0000-4000-8000-000000000102")
             .unwrap();
         assert_eq!(
             recoverable.as_slice(),
@@ -19538,7 +19815,7 @@ mod presence_tests {
             handle_register(
                 "conn-restart-2",
                 "claude".to_string(),
-                Some("agent-2".to_string()),
+                Some("89000000-0000-4000-8000-000000000102".to_string()),
                 Some("macbook".to_string()),
                 Some("acp".to_string()),
                 Some(PresenceMode::Acp),
@@ -19580,7 +19857,11 @@ mod presence_tests {
     #[test]
     fn spec_079_tour_vivant_interdit_la_reconstruction() {
         let (mut state, config) = state_with_registered_agent("spec-079-recovery-busy");
-        let mut message = bridget_core::BridgetMessage::new("humain", "agent-2", "tour vivant");
+        let mut message = bridget_core::BridgetMessage::new(
+            "humain",
+            "89000000-0000-4000-8000-000000000102",
+            "tour vivant",
+        );
         message.id = "message-busy-079".to_string();
         message.origin = Some(bridget_core::MessageOrigin::Human);
         message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
@@ -19589,7 +19870,13 @@ mod presence_tests {
             .admit_starting_message(&message, "execution-busy-079", unix_now_secs())
             .unwrap();
 
-        schedule_execution_recovery(&mut state, "conn-1", "instance-1", "agent-2", true);
+        schedule_execution_recovery(
+            &mut state,
+            "conn-1",
+            "instance-1",
+            "89000000-0000-4000-8000-000000000102",
+            true,
+        );
 
         assert!(state.pending_post_response_controls.is_empty());
         assert!(matches!(
@@ -20863,7 +21150,7 @@ mod presence_tests {
         let response = handle_register(
             "conn-fresh",
             "codex".to_string(),
-            Some("coder-natif".to_string()),
+            Some("89000000-0000-4000-8000-000000000118".to_string()),
             Some("local".to_string()),
             Some("unix".to_string()),
             None,
@@ -20877,7 +21164,7 @@ mod presence_tests {
         );
         assert!(matches!(response, DaemonToWrapper::Registered { .. }));
         let agent = state.agent_infos().pop().expect("agent réinscrit");
-        assert_eq!(agent.display_name, "coder-natif");
+        assert_eq!(agent.agent_id, "89000000-0000-4000-8000-000000000118");
         assert_eq!(
             agent.state, "busy",
             "who doit restaurer busy depuis Register.turn_in_progress, pas attendre un prochain tour"
@@ -20890,7 +21177,7 @@ mod presence_tests {
         let idle = handle_register(
             "conn-idle",
             "codex".to_string(),
-            Some("coder-natif".to_string()),
+            Some("89000000-0000-4000-8000-000000000118".to_string()),
             Some("local".to_string()),
             Some("unix".to_string()),
             None,
@@ -20925,7 +21212,7 @@ mod presence_tests {
         let response = handle_register(
             "conn-2",
             "claude".to_string(),
-            Some("agent-2".to_string()),
+            Some("89000000-0000-4000-8000-000000000102".to_string()),
             Some("macbook".to_string()),
             Some("unix".to_string()),
             Some(PresenceMode::Acp),
@@ -20997,13 +21284,18 @@ mod presence_tests {
         let (mut state, config) = state_with_registered_agent("expiration-unique");
         state
             .store
-            .create_request("request-timeout", "sender", "agent-2", 60)
+            .create_request(
+                "request-timeout",
+                "sender",
+                "89000000-0000-4000-8000-000000000102",
+                60,
+            )
             .unwrap();
         state.pending_replies.push(PendingReply {
             msg_id: "request-timeout".to_string(),
             from: "sender".to_string(),
             from_conn: "conn-sender".to_string(),
-            to: "agent-2".to_string(),
+            to: "89000000-0000-4000-8000-000000000102".to_string(),
             target_conn: "conn-1".to_string(),
             timeout_secs: 60,
             created_at: Instant::now(),
@@ -21038,7 +21330,12 @@ mod presence_tests {
         let (mut state, config) = state_with_registered_agent("timeout-concurrent");
         state
             .store
-            .create_request("request-timeout", "sender", "agent-2", 60)
+            .create_request(
+                "request-timeout",
+                "sender",
+                "89000000-0000-4000-8000-000000000102",
+                60,
+            )
             .unwrap();
         assert!(claim_timeout(&mut state.store, "request-timeout"));
         assert!(!claim_timeout(&mut state.store, "request-timeout"));
@@ -21050,7 +21347,12 @@ mod presence_tests {
         let (state, config) = state_with_registered_agent("vue-report");
         state
             .store
-            .create_request("request-report", "agent-2", "cible", 60)
+            .create_request(
+                "request-report",
+                "89000000-0000-4000-8000-000000000102",
+                "cible",
+                60,
+            )
             .unwrap();
         state
             .store
@@ -21060,7 +21362,7 @@ mod presence_tests {
         let response = handle_wrapper_message(
             "conn-1",
             WrapperToDaemon::ListRequests {
-                sender: "agent-2".to_string(),
+                sender: "89000000-0000-4000-8000-000000000102".to_string(),
                 limit: 200,
             },
             &shared,
@@ -21093,17 +21395,30 @@ mod presence_tests {
         let mut state = DaemonState::new(&config, managed_tx).unwrap();
         state
             .store
-            .create_request("request-1", "sender", "target", 60)
+            .create_request(
+                "request-1",
+                "89000000-0000-4000-8000-000000000125",
+                "89000000-0000-4000-8000-000000000126",
+                60,
+            )
             .unwrap();
         state
             .router
-            .register("sender", &bridget_core::AgentType::Codex, "conn-s")
+            .register(
+                "89000000-0000-4000-8000-000000000125",
+                &bridget_core::AgentType::Codex,
+                "conn-s",
+            )
             .unwrap();
         state
             .router
-            .register("target", &bridget_core::AgentType::Claude, "conn-t")
+            .register(
+                "89000000-0000-4000-8000-000000000126",
+                &bridget_core::AgentType::Claude,
+                "conn-t",
+            )
             .unwrap();
-        state.restore_pending_for_agent("target", "conn-t");
+        state.restore_pending_for_agent("89000000-0000-4000-8000-000000000126", "conn-t");
         assert_eq!(state.pending_replies.len(), 1);
         assert_eq!(state.pending_replies[0].msg_id, "request-1");
         if let Err(e) = std::fs::remove_file(&config.db_path) {
@@ -21118,7 +21433,7 @@ mod presence_tests {
     fn managed_test_lease(command_id: &str) -> SpawnLease {
         SpawnLease {
             command_id: command_id.to_string(),
-            name: "agent-2".to_string(),
+            name: "89000000-0000-4000-8000-000000000102".to_string(),
             instance_id: "instance-1".to_string(),
             generation: 1,
             deadline_at: unix_timestamp() + 60,
@@ -21138,7 +21453,7 @@ mod presence_tests {
         let now = unix_timestamp();
         let order = FleetSpawnOrder {
             agent_type: "fixture".to_string(),
-            requested_name: Some("agent-2".to_string()),
+            requested_name: Some("89000000-0000-4000-8000-000000000102".to_string()),
             cwd: PathBuf::from("/tmp"),
             persistent: false,
             command_id: command_id.to_string(),
@@ -21202,6 +21517,14 @@ mod presence_tests {
             cwd: root.to_path_buf(),
             env: BTreeMap::from([
                 ("HOME".to_string(), root.as_os_str().to_owned()),
+                (
+                    "BRIDGET_HOME".to_string(),
+                    root.join(".state").into_os_string(),
+                ),
+                (
+                    "BRIDGET_SOCKET".to_string(),
+                    root.join(".state/bridget.sock").into_os_string(),
+                ),
                 ("PATH".to_string(), OsString::from("/bin:/usr/bin")),
                 ("USER".to_string(), OsString::from("tester")),
                 ("LANG".to_string(), OsString::from("C")),
@@ -21249,7 +21572,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "control",
                 WrapperToDaemon::StopOrder {
-                    agent_id: "agent-2".to_string(),
+                    agent_id: "89000000-0000-4000-8000-000000000102".to_string(),
                     command_id: "stop-terminal".to_string(),
                 },
                 &shared,
@@ -21318,7 +21641,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "control",
                 WrapperToDaemon::StopOrder {
-                    agent_id: "agent-2".to_string(),
+                    agent_id: "89000000-0000-4000-8000-000000000102".to_string(),
                     command_id: "stop-before-marker".to_string(),
                 },
                 &caller_state,
@@ -21354,7 +21677,11 @@ mod presence_tests {
             Some(&managed_test_binary()),
         );
         assert!(active.is_empty());
-        assert!(marker_store.load("agent-2").is_err());
+        assert!(
+            marker_store
+                .load("89000000-0000-4000-8000-000000000102")
+                .is_err()
+        );
         drain_managed_events(&shared, &event_rx);
 
         assert!(matches!(
@@ -21429,7 +21756,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "control",
                 WrapperToDaemon::StopOrder {
-                    agent_id: "agent-2".to_string(),
+                    agent_id: "89000000-0000-4000-8000-000000000102".to_string(),
                     command_id: "stop-bootstrap-blocked".to_string(),
                 },
                 &caller_state,
@@ -21444,7 +21771,11 @@ mod presence_tests {
                 ..
             })
         ));
-        assert!(marker_store.load("agent-2").is_err());
+        assert!(
+            marker_store
+                .load("89000000-0000-4000-8000-000000000102")
+                .is_err()
+        );
         assert!(shared.lock().unwrap().managed_spawns.is_empty());
         std::fs::remove_dir_all(process_root).unwrap();
         let _ = std::fs::remove_file(config.db_path);
@@ -21477,7 +21808,10 @@ mod presence_tests {
             SupervisedProcess {
                 prepared: managed_test_prepared(&lease, &process_root),
                 child: SupervisedChild(child),
-                registered: Some(("conn-1".to_string(), "agent-2".to_string())),
+                registered: Some((
+                    "conn-1".to_string(),
+                    "89000000-0000-4000-8000-000000000102".to_string(),
+                )),
                 connected: true,
                 failure_sent: false,
                 stop: Arc::clone(&stop),
@@ -21490,7 +21824,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "control",
                 WrapperToDaemon::StopOrder {
-                    agent_id: "agent-2".to_string(),
+                    agent_id: "89000000-0000-4000-8000-000000000102".to_string(),
                     command_id: "stop-connected".to_string(),
                 },
                 &caller_state,
@@ -21525,7 +21859,12 @@ mod presence_tests {
             }) if command_id == "stop-connected"
         ));
         let state = shared.lock().unwrap();
-        assert!(state.router.get_agent("agent-2").is_none());
+        assert!(
+            state
+                .router
+                .get_agent("89000000-0000-4000-8000-000000000102")
+                .is_none()
+        );
         assert_eq!(state.presences["instance-1"].state, "stopped");
         drop(state);
         assert!(!marker_path.exists());
@@ -21561,7 +21900,10 @@ mod presence_tests {
             SupervisedProcess {
                 prepared: managed_test_prepared(&lease, &process_root),
                 child: SupervisedChild(child),
-                registered: Some(("conn-1".to_string(), "agent-2".to_string())),
+                registered: Some((
+                    "conn-1".to_string(),
+                    "89000000-0000-4000-8000-000000000102".to_string(),
+                )),
                 connected: true,
                 failure_sent: false,
                 stop: Arc::clone(&stop),
@@ -21574,7 +21916,7 @@ mod presence_tests {
             handle_wrapper_message(
                 "control",
                 WrapperToDaemon::StopOrder {
-                    agent_id: "agent-2".to_string(),
+                    agent_id: "89000000-0000-4000-8000-000000000102".to_string(),
                     command_id: "stop-timeout".to_string(),
                 },
                 &caller_state,
@@ -21611,7 +21953,12 @@ mod presence_tests {
                 state.managed_by_instance.get(&lease.instance_id),
                 Some(&lease.command_id)
             );
-            assert!(state.router.get_agent("agent-2").is_some());
+            assert!(
+                state
+                    .router
+                    .get_agent("89000000-0000-4000-8000-000000000102")
+                    .is_some()
+            );
             assert_eq!(state.presences["instance-1"].state, "connected");
         }
         assert!(marker_path.exists());
@@ -21716,8 +22063,8 @@ mod presence_tests {
             std::process::id(),
             &Uuid::new_v4().simple().to_string()[..8]
         ));
-        let cache = root.join(".cache/bridget");
-        let registry_path = root.join(".config/bridget/agents.json");
+        let cache = root.join(".state");
+        let registry_path = root.join(".state/agents.json");
         let adapter = root.join("adapter.sh");
         std::fs::create_dir_all(&cache).unwrap();
         std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -21827,7 +22174,9 @@ mod presence_tests {
             thread::sleep(Duration::from_millis(10));
         }
         let marker_store = ManagedMarkerStore::at_directory(cache.join("managed"));
-        let marker = marker_store.load("agent-2").unwrap();
+        let marker = marker_store
+            .load("89000000-0000-4000-8000-000000000102")
+            .unwrap();
         assert!(crate::managed_process::group_exists(marker.pgid).unwrap());
 
         let stop_state = Arc::clone(&shared);
@@ -21836,7 +22185,7 @@ mod presence_tests {
             let result = handle_wrapper_message(
                 "control",
                 WrapperToDaemon::StopOrder {
-                    agent_id: "agent-2".to_string(),
+                    agent_id: "89000000-0000-4000-8000-000000000102".to_string(),
                     command_id: "stop-e2e".to_string(),
                 },
                 &stop_state,
@@ -21875,11 +22224,20 @@ mod presence_tests {
             })
         ));
         assert!(!crate::managed_process::group_exists(marker.pgid).unwrap());
-        assert!(marker_store.load("agent-2").is_err());
+        assert!(
+            marker_store
+                .load("89000000-0000-4000-8000-000000000102")
+                .is_err()
+        );
         {
             let state = shared.lock().unwrap();
             assert!(state.managed_spawns.is_empty());
-            assert!(state.router.get_agent("agent-2").is_none());
+            assert!(
+                state
+                    .router
+                    .get_agent("89000000-0000-4000-8000-000000000102")
+                    .is_none()
+            );
             assert_eq!(state.presences[&lease.instance_id].state, "stopped");
         }
         connection.join().unwrap();
@@ -21890,13 +22248,20 @@ mod presence_tests {
     #[test]
     fn stop_marqueur_perime_retombe_sur_not_managed_sans_tuer_le_wrapper_terminal() {
         let (state, config) = state_with_registered_agent("stop-stale-fallback");
+        let child = crate::managed_process::tests::spawn_test_bootstrap()
+            .wait_ready()
+            .unwrap();
+        let owned_pid = child.ready().pid;
+        let owned_pgid = child.ready().pgid;
+        assert_eq!(owned_pid, owned_pgid);
+        assert_ne!(owned_pgid, unsafe { libc::getpgrp() } as u32);
         state
             .marker_store
             .persist(
-                "agent-2",
+                "89000000-0000-4000-8000-000000000102",
                 &crate::managed_process::BootstrapReady {
-                    pid: std::process::id(),
-                    pgid: unsafe { libc::getpgrp() } as u32,
+                    pid: owned_pid,
+                    pgid: owned_pgid,
                     birth: u64::MAX,
                     instance_id: "ancienne-instance".to_string(),
                     command_id: "ancienne-commande".to_string(),
@@ -21906,23 +22271,40 @@ mod presence_tests {
             .unwrap();
         let marker_store = state.marker_store.clone();
         let shared = Arc::new(Mutex::new(state));
-
+        let response = handle_wrapper_message(
+            "control",
+            WrapperToDaemon::StopOrder {
+                agent_id: "89000000-0000-4000-8000-000000000102".to_string(),
+                command_id: "stop-stale-fallback".to_string(),
+            },
+            &shared,
+        );
+        let status = child.abandon().wait().unwrap();
+        assert_eq!(
+            status.code(),
+            Some(125),
+            "abandon du bootstrap par EOF, jamais terminaison par signal"
+        );
         assert!(matches!(
-            handle_wrapper_message(
-                "control",
-                WrapperToDaemon::StopOrder {
-                    agent_id: "agent-2".to_string(),
-                    command_id: "stop-stale-fallback".to_string(),
-                },
-                &shared,
-            ),
+            response,
             Some(DaemonToWrapper::StopResult {
                 outcome: StopOutcome::NotManaged,
                 ..
             })
         ));
-        assert!(marker_store.load("agent-2").is_err());
-        assert!(shared.lock().unwrap().router.get_agent("agent-2").is_some());
+        assert!(
+            marker_store
+                .load("89000000-0000-4000-8000-000000000102")
+                .is_err()
+        );
+        assert!(
+            shared
+                .lock()
+                .unwrap()
+                .router
+                .get_agent("89000000-0000-4000-8000-000000000102")
+                .is_some()
+        );
         let marker_directory = config.db_path.parent().unwrap().join("managed");
         let _ = std::fs::remove_file(config.db_path);
         let _ = std::fs::remove_dir_all(marker_directory);
@@ -21994,7 +22376,7 @@ mod presence_tests {
             msg_id: "managed-request".to_string(),
             from: "sender".to_string(),
             from_conn: "sender-conn".to_string(),
-            to: "agent-2".to_string(),
+            to: "89000000-0000-4000-8000-000000000102".to_string(),
             target_conn: "conn-1".to_string(),
             timeout_secs: 60,
             created_at: Instant::now(),
@@ -22035,14 +22417,14 @@ mod presence_tests {
             wrapper_executable: PathBuf::from("/bin/sh"),
             wrapper_args: vec!["-c".to_string(), "exit 7".to_string()],
             cwd: process_root.clone(),
-            env: std::collections::BTreeMap::new(),
+            env: managed_test_prepared(&lease, &process_root).env,
         };
         let marker_store = ManagedMarkerStore::at_directory(process_root.join("managed"));
         let child = crate::managed_process::spawn_managed_bootstrap(&launch)
             .unwrap()
             .wait_ready()
             .unwrap()
-            .persist_marker(&marker_store, "agent-2")
+            .persist_marker(&marker_store, "89000000-0000-4000-8000-000000000102")
             .unwrap()
             .release()
             .unwrap();
@@ -22069,14 +22451,17 @@ mod presence_tests {
                 digest: "fixture-digest".to_string(),
             }),
             cwd: process_root.clone(),
-            env: std::collections::BTreeMap::new(),
+            env: managed_test_prepared(&lease, &process_root).env,
         };
         let mut active = HashMap::from([(
             lease.instance_id.clone(),
             SupervisedProcess {
                 prepared,
                 child: SupervisedChild(child),
-                registered: Some(("conn-1".to_string(), "agent-2".to_string())),
+                registered: Some((
+                    "conn-1".to_string(),
+                    "89000000-0000-4000-8000-000000000102".to_string(),
+                )),
                 connected: true,
                 failure_sent: false,
                 stop: Arc::new(ManagedStopControl::new()),
@@ -22114,7 +22499,12 @@ mod presence_tests {
         assert_eq!(state.presences["instance-1"].state, "stopped");
         assert!(state.pending_replies.is_empty());
         assert!(state.attach_subscriptions.is_empty());
-        assert!(state.router.get_agent("agent-2").is_none());
+        assert!(
+            state
+                .router
+                .get_agent("89000000-0000-4000-8000-000000000102")
+                .is_none()
+        );
         drop(state);
         let _ = std::fs::remove_dir_all(process_root);
         let _ = std::fs::remove_file(config.db_path);
@@ -22205,7 +22595,12 @@ mod presence_tests {
             .expect("demande suivie vers l'humain");
         state
             .store
-            .create_request("vers-agent", "bridget", "agent-2", 60)
+            .create_request(
+                "vers-agent",
+                "bridget",
+                "89000000-0000-4000-8000-000000000102",
+                60,
+            )
             .expect("demande suivie vers l'agent");
         let il_y_a_61s = Instant::now()
             .checked_sub(std::time::Duration::from_secs(61))
@@ -22225,7 +22620,7 @@ mod presence_tests {
             msg_id: "vers-agent".to_string(),
             from: "bridget".to_string(),
             from_conn: "conn-1".to_string(),
-            to: "agent-2".to_string(),
+            to: "89000000-0000-4000-8000-000000000102".to_string(),
             target_conn: "conn-1".to_string(),
             timeout_secs: 60,
             created_at: il_y_a_61s,
@@ -22272,7 +22667,12 @@ fn temoin_commande_controle_est_recue_puis_resolue_par_le_wrapper_cible() {
         .insert("client-control".to_string(), client_writer);
     state
         .execution_store
-        .record_starting("submission-control", "execution-control", "agent-2", 10)
+        .record_starting(
+            "submission-control",
+            "execution-control",
+            "89000000-0000-4000-8000-000000000102",
+            10,
+        )
         .unwrap();
     assert!(matches!(
         state.execution_store.transition_if_current(
@@ -22314,8 +22714,11 @@ fn temoin_commande_controle_est_recue_puis_resolue_par_le_wrapper_cible() {
         ),
         Some(DaemonToWrapper::ClientWelcome { .. })
     ));
-    let mut correction =
-        bridget_core::BridgetMessage::new("operateur", "agent-2", "corrige le point");
+    let mut correction = bridget_core::BridgetMessage::new(
+        "operateur",
+        "89000000-0000-4000-8000-000000000102",
+        "corrige le point",
+    );
     correction.intent = Some(bridget_core::MessageIntent::SteerCurrent);
     let command = ExecutionControlCommand {
         version: 1,
@@ -22415,11 +22818,16 @@ fn intentions_de_soumission_restent_distinctes_et_persistantes() {
     .unwrap();
     state
         .router
-        .register("agent-1", &bridget_core::AgentType::Codex, "conn-sender")
+        .register(
+            "89000000-0000-4000-8000-000000000101",
+            &bridget_core::AgentType::Codex,
+            "conn-sender",
+        )
         .unwrap();
-    state
-        .conn_names
-        .insert("conn-sender".to_string(), "agent-1".to_string());
+    state.conn_names.insert(
+        "conn-sender".to_string(),
+        "89000000-0000-4000-8000-000000000101".to_string(),
+    );
     let (target_writer, mut target_reader) =
         presence_tests::control_socket("intentions-us1-target");
     state
@@ -22427,7 +22835,11 @@ fn intentions_de_soumission_restent_distinctes_et_persistantes() {
         .insert("conn-1".to_string(), target_writer);
     let shared = Arc::new(Mutex::new(state));
 
-    let mut queue = bridget_core::BridgetMessage::new("agent-1", "agent-2", "conserver");
+    let mut queue = bridget_core::BridgetMessage::new(
+        "89000000-0000-4000-8000-000000000101",
+        "89000000-0000-4000-8000-000000000102",
+        "conserver",
+    );
     queue.id = "queue-us1".to_string();
     queue.intent = Some(bridget_core::MessageIntent::QueueOnly);
     let mut queued_expected = queue.clone();
@@ -22441,14 +22853,18 @@ fn intentions_de_soumission_restent_distinctes_et_persistantes() {
             .lock()
             .unwrap()
             .execution_store
-            .take_next_submission("agent-2")
+            .take_next_submission("89000000-0000-4000-8000-000000000102")
             .unwrap()
             .unwrap()
             .message,
         Some(queued_expected)
     );
 
-    let mut trigger = bridget_core::BridgetMessage::new("agent-1", "agent-2", "démarrer");
+    let mut trigger = bridget_core::BridgetMessage::new(
+        "89000000-0000-4000-8000-000000000101",
+        "89000000-0000-4000-8000-000000000102",
+        "démarrer",
+    );
     trigger.id = "trigger-us1".to_string();
     trigger.intent = Some(bridget_core::MessageIntent::TriggerTurn);
     let mut trigger_expected = trigger.clone();
@@ -22474,7 +22890,11 @@ fn intentions_de_soumission_restent_distinctes_et_persistantes() {
         Some(trigger_expected)
     );
 
-    let mut steer = bridget_core::BridgetMessage::new("agent-1", "agent-2", "corriger");
+    let mut steer = bridget_core::BridgetMessage::new(
+        "89000000-0000-4000-8000-000000000101",
+        "89000000-0000-4000-8000-000000000102",
+        "corriger",
+    );
     steer.id = "steer-us1".to_string();
     steer.intent = Some(bridget_core::MessageIntent::SteerCurrent);
     assert!(matches!(
@@ -22488,8 +22908,11 @@ fn intentions_de_soumission_restent_distinctes_et_persistantes() {
                 && message.intent == Some(bridget_core::MessageIntent::SteerCurrent)
     ));
 
-    let mut interrupt =
-        bridget_core::BridgetMessage::new("agent-1", "agent-2", "interrompre et démarrer");
+    let mut interrupt = bridget_core::BridgetMessage::new(
+        "89000000-0000-4000-8000-000000000101",
+        "89000000-0000-4000-8000-000000000102",
+        "interrompre et démarrer",
+    );
     interrupt.id = "interrupt-us1".to_string();
     interrupt.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
     assert!(matches!(
@@ -22504,8 +22927,11 @@ fn intentions_de_soumission_restent_distinctes_et_persistantes() {
                 && execution_id == "execution-interrupt-us1"
     ));
 
-    let mut control =
-        bridget_core::BridgetMessage::new("agent-1", "agent-2", "ne devient pas un prompt");
+    let mut control = bridget_core::BridgetMessage::new(
+        "89000000-0000-4000-8000-000000000101",
+        "89000000-0000-4000-8000-000000000102",
+        "ne devient pas un prompt",
+    );
     control.id = "control-us1".to_string();
     control.intent = Some(bridget_core::MessageIntent::ControlOnly);
     assert!(matches!(
@@ -22524,15 +22950,25 @@ fn transition_execution_refusee_si_wrapper_non_proprietaire() {
     let (mut state, config) = presence_tests::state_with_registered_agent("transition-owner");
     state
         .execution_store
-        .record_starting("submission-owner", "execution-owner", "agent-2", 10)
+        .record_starting(
+            "submission-owner",
+            "execution-owner",
+            "89000000-0000-4000-8000-000000000102",
+            10,
+        )
         .unwrap();
     state
         .router
-        .register("agent-3", &bridget_core::AgentType::Codex, "conn-attacker")
+        .register(
+            "89000000-0000-4000-8000-000000000104",
+            &bridget_core::AgentType::Codex,
+            "conn-attacker",
+        )
         .unwrap();
-    state
-        .conn_names
-        .insert("conn-attacker".to_string(), "agent-3".to_string());
+    state.conn_names.insert(
+        "conn-attacker".to_string(),
+        "89000000-0000-4000-8000-000000000104".to_string(),
+    );
     state
         .conn_instances
         .insert("conn-attacker".to_string(), "instance-attacker".to_string());
@@ -22728,7 +23164,7 @@ fn spec_068_register_rejoue_apres_registered_les_incidents_delegues_en_ordre() {
     let register = WrapperToDaemon::Register {
         agent_type: "claude".to_string(),
         identity_version: 2,
-        agent_id: "parent-068".to_string(),
+        agent_id: "89000000-0000-4000-8000-000000000168".to_string(),
         host: Some("test".to_string()),
         transport: Some("acp".to_string()),
         channel: ChannelReport::Known("unix".to_string()),

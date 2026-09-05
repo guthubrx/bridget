@@ -1,5 +1,30 @@
 # Carte des tests 089 — dispositions avant extraction
 
+## T034 — unités historiques du daemon portées, gate global encore ouvert
+
+Les identifiants des fixtures de présence/routage sont des UUID v2 ; les
+assertions de présence comparent `agent_id`, pas le nom affiché. Les contrôles
+de mode, transport, domaine, modèle, DND, demande liée et refus restent présents.
+Le faux helper `LegacyRouterTestRename` est supprimé : la réponse liée conserve
+l'identité enregistrée, le scénario de rejeu retire réellement la route avant
+retry. Aucune production n'est assouplie pour faire accepter un ancien alias.
+
+Les marqueurs périmés utilisent un bootstrap enfant, jamais le PID/PGID du
+runner. Le harnais de reprise conserve son SIGKILL réel, son registre modifié et
+ses assertions de génération/commande d'origine ; le namespace et la posture
+complète sont des préconditions privées explicites. Une garde attend/nettoie
+l'enfant daemon aussi en cas de panique. Le test Zed s'exécute dans un processus
+au namespace privé ; le hook volontairement bloqué est relâché après l'oracle
+de shutdown. Les sockets absentes sont uniques ; le chemin de politique est
+canonique. Aucun test ajouté à la liste des ignorés.
+
+Passe intégrale `cargo test --offline --locked -p bridget-daemon --features
+test-support --lib -- --test-threads=4 --quiet` : 707 réussis, 0 échec, 7 helpers
+ignorés, 14,84 s (compilation 3,12 s). Namespace neuf sous /tmp, `env -i`,
+`umask 077`, watchdog 180 s. Clippy workspace/all-targets/test-support sans
+warning (7,21 s), fmt check et diff check verts. Les intégrations et gates
+explicites ne sont pas couverts par cette seule passe ; T034 reste ouverte.
+
 ## T018 — service externe et clôture sous identité opaque
 
 Les six scénarios guichet_integration_test.rs sont portés dans core_089_service_test.rs, sans import de Maicie. Le scénario de clôture ajoute un SIGKILL puis compare la ligne lifecycle complète (LF compris) reçue après redémarrage. Un septième scénario refuse claim/lookup/reply sur la connexion suivante sans capacité, même portée négociée. core_089_storage_test étend la faute transactionnelle à l'émetteur UUID et protège demande d'autrui/terminal. L'ancien nom de fichier ci-dessous reste une référence au commit source.

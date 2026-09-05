@@ -7130,19 +7130,63 @@ mod reconnect_tests {
 
     #[test]
     fn equipier_refuse_le_pont_zed_avant_tout_processus() {
+        use std::os::unix::fs::PermissionsExt;
         // C2 revue G10 : launch_acp_with_status (--equipier) partage la garde.
+        const CHILD: &str = "BRIDGET_089_ZED_REFUSAL_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let root = PathBuf::from(format!(
+                "/tmp/b89zed-{}",
+                &uuid::Uuid::new_v4().simple().to_string()[..12]
+            ));
+            std::fs::create_dir(&root).unwrap();
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let root = root.canonicalize().unwrap();
+            for name in ["home", "state", "tmp"] {
+                std::fs::create_dir(root.join(name)).unwrap();
+                std::fs::set_permissions(root.join(name), std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
+            }
+            // Même test dans son processus privé : aucune mutation HOME ou
+            // BRIDGET_HOME globale pendant les autres tests parallèles.
+            let output = Command::new("/usr/bin/perl")
+                .args(["-e", "alarm 20; exec @ARGV"])
+                .arg(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "wrapper::reconnect_tests::equipier_refuse_le_pont_zed_avant_tout_processus",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .env(CHILD, "1")
+                .env("HOME", root.join("home"))
+                .env("BRIDGET_HOME", root.join("state"))
+                .env("BRIDGET_SOCKET", root.join("state/s"))
+                .env("TMPDIR", root.join("tmp"))
+                .env("PATH", "/usr/bin:/bin")
+                .output()
+                .unwrap();
+            std::fs::remove_dir_all(&root).unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        let root = PathBuf::from(std::env::var_os("BRIDGET_HOME").unwrap());
         let registry = crate::registry::AgentRegistry::from_json(
-            r#"{"agents":{"legacy":{"command":"/opt/homebrew/bin/codex-acp","protocol":"acp"}}}"#,
-            "/tmp/agents.json",
+            &serde_json::json!({"agents":{"legacy":{"command":home.join("codex-acp"),"protocol":"acp"}}}).to_string(),
+            root.join("agents.json").display().to_string(),
         )
         .unwrap();
         let error = launch_acp_with(
             "legacy",
             &[],
-            Some("legacy-zed"),
+            Some("89000000-0000-4000-8000-000000000106"),
             &registry,
-            std::path::Path::new("/tmp/bridget-g10-absent.sock"),
-            std::path::Path::new("/tmp"),
+            &root.join("s"),
+            &home,
         )
         .expect_err("le pont Zed doit être refusé avant connexion daemon");
         let message = error.to_string();
@@ -7676,14 +7720,20 @@ mod reconnect_tests {
     fn shutdown_rend_la_main_dans_sa_borne_si_le_hook_commande_bloque() {
         let root = relay_root("stop-borne-hook");
         std::fs::create_dir_all(&root).unwrap();
-        let entered = Arc::new(AtomicBool::new(false));
-        let flag = entered.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
+        let release_rx = Mutex::new(release_rx);
         let hooks = AttachRelayHooks {
             before_command: Arc::new(move || {
-                flag.store(true, Ordering::SeqCst);
-                loop {
-                    thread::park();
-                }
+                let _ = entered_tx.try_send(());
+                // Bloqué DURANT shutdown, libérable ensuite : l'oracle ne
+                // laisse plus de thread volontairement orphelin dans la suite.
+                let _ = release_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(10));
+                let _ = finished_tx.try_send(());
             }),
             ..AttachRelayHooks::default()
         };
@@ -7695,18 +7745,18 @@ mod reconnect_tests {
             emitter,
             hooks,
         );
-        let enter_deadline = Instant::now() + Duration::from_secs(2);
-        while !entered.load(Ordering::SeqCst) {
-            assert!(
-                Instant::now() < enter_deadline,
-                "le hook before_command n'a jamais été atteint — projection vide"
-            );
-            thread::sleep(Duration::from_millis(5));
-        }
+        entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("hook effectivement atteint");
         let started = Instant::now();
         worker.shutdown();
+        let elapsed = started.elapsed();
+        release_tx.send(()).unwrap();
+        finished_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("hook libéré après shutdown");
         assert!(
-            started.elapsed() <= ATTACH_RELAY_SHUTDOWN_BOUND + Duration::from_millis(250),
+            elapsed <= ATTACH_RELAY_SHUTDOWN_BOUND + Duration::from_millis(250),
             "shutdown n'a pas rendu la main dans sa borne ({:?})",
             ATTACH_RELAY_SHUTDOWN_BOUND
         );

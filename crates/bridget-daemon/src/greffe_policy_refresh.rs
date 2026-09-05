@@ -272,6 +272,7 @@ mod tests {
         ));
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let root = root.canonicalize().unwrap();
         let policy_path = root.join("policy.json");
         let inventory_path = root.join("inventory.json");
         let Ok(now) = unix_now() else {
@@ -338,7 +339,12 @@ mod tests {
         fs::set_permissions(&inventory_path, fs::Permissions::from_mode(0o600)).unwrap();
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        assert_eq!(run(arguments, &mut stdout, &mut stderr), 0);
+        assert_eq!(
+            run(arguments, &mut stdout, &mut stderr),
+            0,
+            "{}",
+            String::from_utf8_lossy(&stderr)
+        );
         assert!(stderr.is_empty());
         assert_eq!(fs::read(&policy_path).unwrap(), original);
         fs::remove_dir_all(root).unwrap();

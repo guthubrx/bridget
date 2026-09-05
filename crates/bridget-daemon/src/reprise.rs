@@ -1079,7 +1079,8 @@ mod tests {
     #[test]
     fn la_trace_de_reprise_n_est_pas_lue_quand_la_base_est_ailleurs() {
         let config = DaemonConfig {
-            socket_path: PathBuf::from("/tmp/bridget-absent-reprise-oracle.sock"),
+            socket_path: std::env::temp_dir()
+                .join(format!("b89-reprise-{}.sock", uuid::Uuid::new_v4())),
             ..DaemonConfig::default()
         };
         let snapshot = collect_snapshot(

@@ -1323,7 +1323,7 @@ impl ManagedMarkerStore {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serde_json::json;
     use std::os::unix::fs::PermissionsExt;
@@ -1374,7 +1374,7 @@ mod tests {
         command
     }
 
-    fn spawn_test_bootstrap() -> ManagedChild {
+    pub(crate) fn spawn_test_bootstrap() -> ManagedChild {
         spawn_test_bootstrap_with_wrapper(
             current_test_executable(),
             vec![
@@ -1568,26 +1568,25 @@ mod tests {
     fn marqueur_perime_est_retire_sans_signaler_le_pid_recycle() {
         let root = test_root("stale-marker");
         let store = ManagedMarkerStore::at_directory(root.join("managed"));
-        let pid = std::process::id();
-        let ready = BootstrapReady {
-            pid,
-            pgid: unsafe { libc::getpgrp() } as u32,
-            birth: process_birth(pid).unwrap().saturating_add(1),
-            instance_id: identity().instance_id,
-            command_id: identity().command_id,
-            generation: identity().generation,
-        };
+        // Même avec le mutant qui ignore la naissance, le seul groupe
+        // signalable est cet enfant possédé, JAMAIS le groupe du runner.
+        let child = spawn_test_bootstrap().wait_ready().unwrap();
+        let mut ready = child.ready().clone();
+        assert_eq!(ready.pid, ready.pgid);
+        assert_ne!(ready.pgid, unsafe { libc::getpgrp() } as u32);
+        ready.birth = ready.birth.saturating_add(1);
         store.persist("codex-1", &ready).unwrap();
-
+        let result = store.stop_current_group(
+            "codex-1",
+            Duration::from_millis(50),
+            Duration::from_millis(5),
+        );
+        let status = child.abandon().wait().unwrap();
+        assert_eq!(result.unwrap(), None);
         assert_eq!(
-            store
-                .stop_current_group(
-                    "codex-1",
-                    Duration::from_millis(50),
-                    Duration::from_millis(5),
-                )
-                .unwrap(),
-            None
+            status.code(),
+            Some(ABANDONED_EXIT_CODE),
+            "aucun signal au PID périmé"
         );
         assert!(matches!(
             store.load("codex-1"),

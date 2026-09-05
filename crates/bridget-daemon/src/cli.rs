@@ -5724,7 +5724,8 @@ mod hook_tests {
         });
 
         let facts = rate_limit_facts_from_statusline(&statusline_payload_complet());
-        send_rate_limits_to_daemon(&socket, "referent-oracle", &facts).unwrap();
+        send_rate_limits_to_daemon(&socket, "89000000-0000-4000-8000-000000000105", &facts)
+            .unwrap();
         serveur.join().unwrap();
         std::fs::remove_file(&socket).ok();
 
@@ -5755,8 +5756,14 @@ mod hook_tests {
         assert_eq!(
             fenetres,
             vec![
-                ("referent-oracle".to_string(), "five_hour".to_string()),
-                ("referent-oracle".to_string(), "seven_day".to_string()),
+                (
+                    "89000000-0000-4000-8000-000000000105".to_string(),
+                    "five_hour".to_string()
+                ),
+                (
+                    "89000000-0000-4000-8000-000000000105".to_string(),
+                    "seven_day".to_string()
+                ),
             ],
             "le hook doit émettre ses deux faits, et rien de plus"
         );
@@ -5803,7 +5810,7 @@ mod hook_tests {
         let register = WrapperToDaemon::Register {
             agent_type: "claude".to_string(),
             identity_version: 2,
-            agent_id: "referent-oracle".to_string(),
+            agent_id: "89000000-0000-4000-8000-000000000105".to_string(),
             host: None,
             transport: None,
             channel: None.into(),
@@ -5835,7 +5842,7 @@ mod hook_tests {
         // LA POUSSÉE, par le chemin de production exact.
         let facts = rate_limit_facts_from_statusline(&statusline_payload_complet());
         assert_eq!(facts.len(), 2, "le payload d'essai porte deux fenêtres");
-        send_rate_limits_to_daemon(&socket, "referent-oracle", &facts)
+        send_rate_limits_to_daemon(&socket, "89000000-0000-4000-8000-000000000105", &facts)
             .expect("la poussée doit aboutir sans se déclarer");
 
         let agents = match ask_agent_list(&socket) {
@@ -5849,7 +5856,7 @@ mod hook_tests {
         // propriété-là se prouve à la source, dans l'oracle précédent.
         let referent_info = agents
             .iter()
-            .find(|agent| agent.display_name == "referent-oracle")
+            .find(|agent| agent.agent_id == "89000000-0000-4000-8000-000000000105")
             .expect("le référent doit rester à l'annuaire");
         let mut windows: Vec<_> = referent_info
             .rate_limits
@@ -6772,7 +6779,8 @@ mod idempotency_projection_tests {
     #[test]
     fn status_ne_compte_pas_les_messages_d_une_base_qui_n_est_pas_celle_du_daemon() {
         let config = DaemonConfig {
-            socket_path: std::path::PathBuf::from("/tmp/bridget-absent-oracle.sock"),
+            socket_path: std::env::temp_dir()
+                .join(format!("b89-status-{}.sock", uuid::Uuid::new_v4())),
             ..DaemonConfig::default()
         };
         // Daemon injoignable → aucune attestation, donc aucun compte.
