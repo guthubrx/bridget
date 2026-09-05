@@ -112,7 +112,6 @@ dependencies = [
  "env_logger",
  "libc",
  "log",
- "maicie",
  "reqwest",
  "rusqlite",
  "serde",
@@ -760,21 +759,6 @@ name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
-
-[[package]]
-name = "maicie"
-version = "0.1.0"
-dependencies = [
- "base64",
- "bridget-core",
- "bridget-transport",
- "libc",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "uuid",
-]
 
 [[package]]
 name = "memchr"

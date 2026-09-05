@@ -1,33 +1,48 @@
-//! Garde de frontière : Bridget consomme uniquement le contrat JSON public.
+//! Le noyau compile sans le composant métier et sans ses types, même en test.
 
 #[test]
-fn le_daemon_n_a_pas_de_dependance_maicie_en_production() {
-    let manifest = include_str!("../Cargo.toml");
-    let production_dependencies = manifest
-        .split("[dev-dependencies]")
-        .next()
-        .expect("manifest sans section dev");
-    assert!(
-        !production_dependencies
-            .lines()
-            .any(|line| line.trim_start().starts_with("maicie =")),
-        "Maicie ne doit être disponible que pour les fixtures de test"
-    );
-
+fn le_noyau_n_a_aucune_dependance_maicie_meme_en_test() {
+    for manifest in [
+        include_str!("../Cargo.toml"),
+        include_str!("../../../Cargo.toml"),
+    ] {
+        assert!(
+            !manifest
+                .lines()
+                .any(|line| line.trim_start().starts_with("maicie ="))
+        );
+        assert!(!manifest.contains("\"plugins/maicie\""));
+    }
+    // Examiner aussi les fixtures : retirer seulement la dépendance production
+    // ne ferme pas la frontière si un test importe encore le magasin métier.
     for (name, source) in [
-        ("ui", include_str!("../src/ui.rs")),
         ("wrapper", include_str!("../src/wrapper.rs")),
         ("daemon", include_str!("../src/daemon.rs")),
-        ("projection", include_str!("../src/mission_projection.rs")),
+        ("migration", include_str!("../src/identity_migration.rs")),
+        ("reprise", include_str!("../src/reprise.rs")),
+        (
+            "projection publique",
+            include_str!("../src/mission_projection.rs"),
+        ),
+        ("migration test", include_str!("identity_migration_test.rs")),
     ] {
-        let productive = source.split("\n#[cfg(test)]").next().unwrap_or(source);
-        assert!(
-            !productive.contains("maicie::"),
-            "{name} ne doit pas importer les types privés Maicie"
-        );
-        assert!(
-            !productive.contains("MaicieStore"),
-            "{name} ne doit pas ouvrir le magasin privé Maicie"
-        );
+        assert!(!source.contains("maicie::"), "{name}: import privé");
+        assert!(!source.contains("MaicieStore"), "{name}: magasin privé");
+    }
+}
+
+#[test]
+fn la_reprise_ne_consulte_ni_ne_lance_la_coordination() {
+    let wrapper = include_str!("../src/wrapper.rs");
+    let reprise = include_str!("../src/reprise.rs");
+    for source in [wrapper, reprise] {
+        for seam in [
+            "managed_resume_mission",
+            "collect_maicie",
+            ".config/maicie",
+            "ResumeStance",
+        ] {
+            assert!(!source.contains(seam), "couture métier implicite: {seam}");
+        }
     }
 }

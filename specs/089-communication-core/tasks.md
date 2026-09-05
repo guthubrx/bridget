@@ -1,7 +1,7 @@
 # Tâches 089 — extraction progressive du noyau
 
 **Entrées :** spec.md, plan.md, research.md, data-model.md, contracts/communication.md.
-**36 tâches de réalisation, 8 terminées.** P0 : référence mesurée et exclusions de sécurité consignées ; T005 ne signifie pas suite globale verte. T009 ouvre la coupe. Aucun SC fonctionnel complet n'est déclaré validé.
+**36 tâches de réalisation, 9 terminées.** P0 : référence mesurée et exclusions de sécurité consignées ; T005 ne signifie pas suite globale verte. T009 découple Maicie ; UI et runtime restent à retirer. Aucun SC fonctionnel complet n'est déclaré validé.
 
 Exécution séquentielle par tranches ; aucun lancement automatique de sous-agents. Un commit cohérent après tests, aucune capture d'un WIP tiers. Écrire l'oracle avant la modification qu'il doit protéger, vérifier son échec sur un mutant ciblé lorsqu'exigé, puis restaurer le vrai code. Les tests réels n'utilisent jamais les processus de production.
 
@@ -18,7 +18,7 @@ Exécution séquentielle par tranches ; aucun lancement automatique de sous-agen
 
 - [x] T007 [US4] Poser configuration indépendante de home/socket/instance dans crates/bridget-daemon/src/daemon.rs (DaemonConfig, dirs_cache, dirs_data), cli.rs et mcp_identity.rs, en réutilisant la résolution existante ; ajouter tests/core_089_isolation_test.rs. Oracle : défaut historique et namespace occupé refusés ; aucune connexion/écriture vers la flotte. runtime.rs représente les faits fournisseur et n'est pas le propriétaire de cette configuration.
 - [x] T008 [US4] Sortir les helpers partagés de scope/canon/résolution des façades cli.rs/mcp.rs vers un module neutre crates/bridget-daemon/src/communication.rs, sans changer les octets ; garder un seul producteur. Oracle : tests du corpus et absence d'import de présentation par le store/daemon.
-- [ ] T009 [US4] Découpler maicie dans crates/bridget-daemon/Cargo.toml, src/lib.rs, mission_projection.rs et ses appelants ; conserver la frontière service publique sans import métier. Oracle : compilation sans plugins/maicie accessible et couture d'un consommateur externe.
+- [x] T009 [US4] Découpler maicie dans crates/bridget-daemon/Cargo.toml, src/lib.rs, mission_projection.rs et ses appelants ; conserver la frontière service publique sans import métier. Oracle : compilation sans plugins/maicie accessible et couture d'un consommateur externe.
 - [ ] T010 [US4] Retirer UI/desktop/rendering HTML du produit extrait via src/cli.rs, mcp.rs, lib.rs, ui.rs, artifact_* et apps/, uniquement après disposition T001/T003 ; préserver la publication/référence de contenu communicable, son contrôle d'accès et ses bytes sans renderer. Oracle : commandes retirées refusées, références utiles résolubles sans HTTP/UI, communication verte.
 - [ ] T011 [US4] Découpler runtime Docker/projet de src/daemon.rs, wrapper.rs, registry.rs et project_* ; retirer les implémentations hors périmètre, conserver droits/registre/capacités de session. Oracle : spawn/refus/stop sans Docker ; une permission absente reste refusée.
 - [ ] T012 [US4] Modulariser le stockage conservé dans src/store.rs et idempotency.rs sans scinder les transactions ACK/ledger/answered/événement ; isoler SQL hors périmètre selon T001. Oracle : atomicité par faute injectée et données historiques sur copies.

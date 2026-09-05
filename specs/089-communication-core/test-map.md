@@ -44,6 +44,41 @@ Les symboles ci-dessous existent dans la référence ; leur lecture n'est pas un
 
 Pour les symboles sans préfixe de crate dans ce tableau, `*_test.rs` est sous `crates/bridget-daemon/tests/` et `src/` sous `crates/bridget-daemon/`. Les coordonnées sont celles du commit épinglé, pas des lignes promises après refactor.
 
+## Dispositions exécutées T009 — retrait du métier, maintien des garanties
+
+Dans wrapper.rs, quatre anciens témoins mixtes ont des remplaçants sans greffe :
+`carte_de_reprise_reconstruit_mission_et_worktree_durables` →
+`carte_de_reprise_reconstruit_identite_et_worktree_durables` ;
+`carte_de_reprise_compte_sept_lignes_apres_refus_d_un_nom_avec_lf` →
+`carte_de_reprise_refuse_l_identite_injectant_une_ligne` ;
+`TEMOIN_carte_de_reprise_instruction_lf_ne_cree_pas_de_ligne_de_consigne` →
+`carte_de_reprise_ne_transforme_pas_un_champ_externe_en_consigne` ;
+`carte_de_reprise_signale_chaque_source_indisponible` →
+`carte_de_reprise_signale_git_indisponible_sans_inventer`.
+
+Six témoins purement Maicie sortent du wrapper :
+`carte_de_reprise_nomme_la_reecriture_du_sha_juge`,
+`carte_de_reprise_sans_mission_ne_l_invente_pas`,
+`carte_de_reprise_mission_close_prescrit_attente`,
+`carte_de_reprise_en_attente_prerequis_ne_relance_pas`,
+`carte_de_reprise_annulee_hors_clos_ne_promet_pas_de_suite`,
+`carte_de_reprise_a_evaluer_avec_levier_affiche_suite_du_greffe`.
+La borne de carte, la protection checkout principal vs clone, le prompt
+versionné et les tests ManagedSession/raw/reconnexion restent conservés.
+
+Dans daemon.rs, le crash de reprise conserve générations/groupe/commande
+figée/compte d'exécutions/Git ; seules la fixture et les assertions de mission
+Maicie sortent. Le test busy remplace le binaire Maicie par ListAgents puis
+SendIdempotent sur le chemin socket public, avec corps exact reçu.
+identity_migration_test garde deux tests ledger/flotte/sauvegardes et retire
+la migration de la configuration privée Maicie. mission_boundary_test gagne
+la garde des dépendances de test et des lectures implicites de coordination.
+project_registration_e2e.rs (un test) est retiré selon sa disposition R.
+
+Comptage statique de ces six fichiers : 282→276 tests (−6), pas un résultat
+d'exécution. Le détail des validations et des exclusions demeure dans
+implementation.md ; aucun retrait n'est motivé par un rouge.
+
 ## Points de vigilance avant exécution ou retrait
 
 1. **Faux fournisseur vs fournisseur réel.** Un vrai daemon et une fausse commande shell sont une couture réelle de Bridget, pas une preuve de compatibilité de l'abonnement Codex/Claude/GLM. Les deux niveaux ont leur utilité et doivent rester étiquetés.

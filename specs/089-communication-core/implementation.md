@@ -1,5 +1,63 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T009 : Maicie réellement hors du graphe de construction
+
+Retrait de Maicie du workspace, du manifeste daemon et de Cargo.lock, sans
+dépendance de remplacement en tests. La migration d'identité ne lit ni ne
+modifie plus son magasin/configuration ; migration ledger/flotte/profils,
+sauvegardes et journal Bridget conservés. La carte du wrapper conserve les
+faits identité/Git, les contrôles de texte et les bornes ; elle ne choisit
+plus une mission à partir du greffe. `reprise` ne lance plus le binaire
+Maicie. La projection JSON publique reste provisoirement pour le lecteur UI,
+qui sortira en T010 ; aucun import de types privés n'est réintroduit.
+
+Contrats ServiceHello/guichet/capacités/claims/événements/curseurs inchangés.
+La couture busy→annuaire→envoi est maintenant un client de socket publique,
+sans bibliothèque Maicie : corps exact reçu par le pair wrapper. Son serveur
+de test est arrêté et joint même en unwind, lectures bornées à trois secondes.
+Deux erreurs initiales de portage du HARNAIS ont été corrigées sur observations :
+socket acceptée non bloquante sous Darwin et ListAgents envoyé sur le rôle
+Client 012 qui ne le négocie pas. Aucun correctif produit pour les contourner.
+
+Première passe ciblée : **32/32** (migration 2, frontière 2, cartes/prompt 14,
+reprise 9, couture publique 1, contrats service 2 et coordination 2).
+Contre-passe root : **30/30**, en trois sélections daemon/identité/frontière
+plus trois fixtures transport ; résultats chevauchants, ne pas les additionner.
+Environnement nettoyé : HOME=/private/tmp/b9v.4WFP7M/home,
+TMPDIR=/private/tmp/b9v.4WFP7M/tmp, BRIDGET_HOME=/private/tmp/b9v.4WFP7M/ns,
+BRIDGET_SOCKET=/private/tmp/b9v.4WFP7M/ns/s, umask077, watchdogs60/90s.
+Filtres daemon : `wrapper::prompt_tests:: reprise::tests:: daemon::presence_tests::tour_non_abouti_redevient_mandatable_et_le_mandat_parvient --test-threads=4 --skip reprise::tests::la_trace_de_reprise_n_est_pas_lue_quand_la_base_est_ailleurs` : **23/23, 0,49s**.
+Exécutables identity_migration_test **2/2, 0,14s** et mission_boundary_test
+**2/2**. Fixtures service_negotiation_v1/coordination_events_v1/coordination_stream_v2
+**3/3**. Le test de reprise au chemin fixe est exclu de cette contre-passe,
+pas promu en preuve d'isolation. Vérificateur des 17 fixtures et six mutants vert.
+
+`cargo test --offline --workspace --no-run` : vert **17,99s**.
+Copie indépendante /private/tmp/b9pkg.HAZ5po SANS dossier plugins :
+`cargo metadata --offline --format-version 1 --filter-platform aarch64-apple-darwin`
+ne contient aucun package Maicie ; `cargo test --offline --workspace --no-run`
+y construit les tests en **19,17s**. Le filtre de plateforme évite une
+dépendance Windows absente du cache offline ; ce n'est pas une validation Windows.
+Le paquet final sans UI/runtime reste à prouver en T013.
+
+Le no-run avec test-support a exposé E0559 dans mcp_injection_smoke_test :
+ancien Registered.name. Correctif test séparé f6017a1 : agent_id repris du
+Register réel, même destinataire pour Deliver. Contre-run
+`cargo test --offline --workspace --features test-support --no-run` :
+**vert, 7,28s**. AUCUN smoke fournisseur de ce fichier n'a été exécuté :
+ancien namespace et environnement partagé restent à porter en T020/T021.
+
+Formatage et diff-check verts. Clippy reste rouge sur huit lints préexistants
+(daemon 2, artifact_service 1, artifact_store 1, execution_store 1, UI 3),
+aucun allow ajouté. Le crash historique de supervision est conservé mais non
+exécuté avant son portage d'isolation. Le défaut CLI/guichet DeclaredSenderMismatch
+et le dry-run de migration mutateur restent explicitement T014/T018 et T031.
+
+Revue indépendante : **APPROVE T009**, lecture du diff et du nettoyage du
+harnais ; résultats de tests contre-lus, pas un troisième run. Dispositions
+test par test consignées dans test-map.md. Le code Maicie reste consultable
+dans le clone/historique mais n'est plus requis pour construire Bridget.
+
 ## 2026-09-05 — Référence avant coupe : clôture T005, pas de gate fonctionnel global
 
 La référence mesurée et reproductible est maintenant disponible : suites

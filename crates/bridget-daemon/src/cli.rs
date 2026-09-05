@@ -212,18 +212,19 @@ enum IdentityCommand {
         apply: bool,
         db_path: PathBuf,
         fleet_path: Option<PathBuf>,
-        maicie_config: Option<PathBuf>,
     },
 }
 
 fn parse_identity_command(args: &[String]) -> Result<IdentityCommand, String> {
     if args.first().map(String::as_str) != Some("migrate") {
-        return Err("usage: bridget identity migrate --dry-run|--apply [--db <chemin>] [--fleet <chemin>] [--maicie-config <chemin>]".to_string());
+        return Err(
+            "usage: bridget identity migrate --dry-run|--apply [--db <chemin>] [--fleet <chemin>]"
+                .to_string(),
+        );
     }
     let mut apply = None;
     let mut db_path = None;
     let mut fleet_path = None;
-    let maicie_config: Option<PathBuf> = None;
     let mut index = 1;
     while index < args.len() {
         match args[index].as_str() {
@@ -267,10 +268,7 @@ fn parse_identity_command(args: &[String]) -> Result<IdentityCommand, String> {
     let db_path = db_path.unwrap_or_else(|| DaemonConfig::default().db_path);
     // La migration explicite n'est pas une échappatoire au namespace :
     // valider avant toute lecture de plan et avant tout --apply.
-    for path in std::iter::once(&db_path)
-        .chain(fleet_path.iter())
-        .chain(maicie_config.iter())
-    {
+    for path in std::iter::once(&db_path).chain(fleet_path.iter()) {
         crate::environment::validate_path(path)?;
     }
     for path in [&db_path, fleet_path.as_ref().unwrap_or(&PathBuf::new())] {
@@ -278,19 +276,12 @@ fn parse_identity_command(args: &[String]) -> Result<IdentityCommand, String> {
             return Err("bridget identity migrate: les chemins doivent être absolus".to_string());
         }
     }
-    if maicie_config
-        .as_ref()
-        .is_some_and(|path| !path.is_absolute())
-    {
-        return Err("bridget identity migrate: --maicie-config doit être absolu".to_string());
-    }
     Ok(IdentityCommand::Migrate {
         apply: apply.ok_or_else(|| {
             "bridget identity migrate: --dry-run ou --apply est obligatoire".to_string()
         })?,
         db_path,
         fleet_path,
-        maicie_config,
     })
 }
 
@@ -300,10 +291,8 @@ fn cmd_identity(args: &[String]) {
         apply,
         db_path,
         fleet_path,
-        maicie_config,
     } = command;
-    let mut paths =
-        crate::identity_migration::IdentityMigrationPaths::for_bridget_db(db_path, maicie_config);
+    let mut paths = crate::identity_migration::IdentityMigrationPaths::for_bridget_db(db_path);
     if let Some(fleet_path) = fleet_path {
         paths.fleet_path = fleet_path;
     }
@@ -322,11 +311,8 @@ fn cmd_identity(args: &[String]) {
             "mode": "dry_run",
             "agents_a_migrer": plan.mapping.len(),
             "references_legacy": plan.mapping.keys().collect::<Vec<_>>(),
-            "agent_ids_a_retargeter": plan.requires_retarget.iter().collect::<Vec<_>>(),
             "bridget_db": plan.paths.bridget_db,
             "fleet_path": plan.paths.fleet_path,
-            "maicie_config": plan.paths.maicie_config,
-            "maicie_db": plan.maicie_db,
         });
         println!(
             "{}",
@@ -597,7 +583,7 @@ fn print_usage() {
            version                Version\n  \
            help                   Cette aide\n\n\
          Options de send :\n  \
-           identity migrate --dry-run|--apply [--db <P>] [--fleet <P>] [--maicie-config <P>]\n  \
+           identity migrate --dry-run|--apply [--db <P>] [--fleet <P>]\n  \
            --to <nom>             Destinataire (requis)\n  \
            --from <nom>           Se nommer ; le nom doit être adressable en\n  \
            \x20                      retour, sinon l'envoi est refusé\n  \
@@ -4830,13 +4816,8 @@ fn cmd_reprise(args: &[String]) {
     let pin_ref = pin.exists().then_some(pin.as_path());
 
     let config = DaemonConfig::default();
-    let snapshot = crate::reprise::collect_snapshot(
-        &config,
-        &repo,
-        pin_ref,
-        None,
-        std::time::SystemTime::now(),
-    );
+    let snapshot =
+        crate::reprise::collect_snapshot(&config, &repo, pin_ref, std::time::SystemTime::now());
     let card = crate::reprise::render_card(&snapshot);
 
     match write_path {

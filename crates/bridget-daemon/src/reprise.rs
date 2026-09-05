@@ -34,8 +34,6 @@ pub struct PinFile {
     pub prochain: Option<PinProchain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pieges: Option<PinPieges>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maicie_config: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,7 +80,6 @@ pub struct RepriseSnapshot {
     pub open_requests: Result<Vec<RequestInfo>, String>,
     pub recent_messages: Result<Vec<LedgerMessage>, String>,
     pub git: Result<GitSnapshot, String>,
-    pub maicie: Result<MaicieSummary, String>,
     pub pin: Option<Result<LoadedPin, String>>,
     /// Trace durable des équipiers absents au dernier redémarrage.
     pub recovery_losses: Result<Option<crate::recovery_trace::RecoveryLossReport>, String>,
@@ -103,20 +100,12 @@ pub struct GitWorktree {
     pub dirty: Option<bool>,
 }
 
-#[derive(Debug, Clone)]
-pub struct MaicieSummary {
-    pub config_path: String,
-    pub database_path: Option<String>,
-    pub resume_1l: String,
-}
-
 /// Collecte les sources vivantes. N'échoue jamais en bloc : chaque source
 /// porte son propre `Result`.
 pub fn collect_snapshot(
     config: &DaemonConfig,
     repo: &Path,
     pin_path: Option<&Path>,
-    maicie_config_override: Option<&Path>,
     now: SystemTime,
 ) -> RepriseSnapshot {
     let socket_path = absolutize(&config.socket_path);
@@ -144,14 +133,6 @@ pub fn collect_snapshot(
 
     let git = collect_git(repo);
     let pin = pin_path.map(load_pin);
-    let maicie_config = resolve_maicie_config(
-        maicie_config_override,
-        pin.as_ref()
-            .and_then(|result| result.as_ref().ok())
-            .and_then(|loaded| loaded.pin.maicie_config.as_deref()),
-    );
-    let maicie = collect_maicie(maicie_config.as_deref());
-
     RepriseSnapshot {
         now,
         repo: absolutize(repo),
@@ -162,7 +143,6 @@ pub fn collect_snapshot(
         open_requests,
         recent_messages,
         git,
-        maicie,
         pin,
         recovery_losses,
     }
@@ -383,107 +363,6 @@ fn git_output(repo: &Path, args: &[&str]) -> Result<String, String> {
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn resolve_maicie_config(override_path: Option<&Path>, pin_path: Option<&str>) -> Option<PathBuf> {
-    if let Some(path) = override_path {
-        return Some(path.to_path_buf());
-    }
-    if let Some(path) = pin_path {
-        return Some(PathBuf::from(path));
-    }
-    let home = std::env::var_os("HOME")?;
-    let candidate = PathBuf::from(home).join(".config/maicie/config.json");
-    candidate.exists().then_some(candidate)
-}
-
-fn collect_maicie(config_path: Option<&Path>) -> Result<MaicieSummary, String> {
-    let Some(config_path) = config_path else {
-        return Err(
-            "config Maicie introuvable (ni pin.maicie_config ni ~/.config/maicie/config.json)"
-                .to_string(),
-        );
-    };
-    let config_path = absolutize(config_path);
-    let raw = fs::read_to_string(&config_path).map_err(|error| {
-        format!(
-            "config Maicie illisible ({}): {error}",
-            config_path.display()
-        )
-    })?;
-    let value: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|error| format!("config Maicie JSON invalide: {error}"))?;
-    let database_path = value
-        .get("database_path")
-        .and_then(|value| value.as_str())
-        .map(str::to_string);
-
-    let maicie_bin = which_bin("maicie");
-    let Some(maicie_bin) = maicie_bin else {
-        return Ok(MaicieSummary {
-            config_path: config_path.display().to_string(),
-            database_path,
-            resume_1l: "binaire maicie introuvable dans PATH — lire la config seulement"
-                .to_string(),
-        });
-    };
-
-    let output = Command::new(&maicie_bin)
-        .args([
-            "status",
-            "--config",
-            &config_path.display().to_string(),
-            "--json",
-        ])
-        .output()
-        .map_err(|error| format!("maicie status: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "maicie status a échoué: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let status: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("maicie status JSON invalide: {error}"))?;
-    let resume_1l = summarize_maicie_status(&status);
-    Ok(MaicieSummary {
-        config_path: config_path.display().to_string(),
-        database_path,
-        resume_1l,
-    })
-}
-
-fn summarize_maicie_status(status: &serde_json::Value) -> String {
-    let coordination = status
-        .get("coordination")
-        .and_then(|value| value.as_array());
-    let Some(items) = coordination else {
-        return "greffe: structure status inattendue".to_string();
-    };
-    let ouverts = items
-        .iter()
-        .filter(|item| {
-            item.pointer("/objective/etat")
-                .and_then(|value| value.as_str())
-                .is_some_and(|etat| etat != "clos")
-        })
-        .count();
-    format!(
-        "{} objectif(s) dans le greffe, {} non clos",
-        items.len(),
-        ouverts
-    )
-}
-
-fn which_bin(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
 }
 
 pub fn load_pin(path: &Path) -> Result<LoadedPin, String> {
@@ -803,30 +682,6 @@ fn render_attentes(out: &mut String, snapshot: &RepriseSnapshot) {
             ));
         }
     }
-
-    out.push_str("  coordination:\n");
-    match &snapshot.maicie {
-        Ok(summary) => {
-            out.push_str(&format!(
-                "    lire: {}\n",
-                yaml_string(&format!(
-                    "maicie status --config {} --json",
-                    summary.config_path
-                ))
-            ));
-            out.push_str(&format!(
-                "    resume_1l: {}\n",
-                yaml_string(&summary.resume_1l)
-            ));
-        }
-        Err(error) => {
-            out.push_str(&format!(
-                "    lire: {}\n",
-                yaml_string(&format!("indisponible: {error}"))
-            ));
-            out.push_str("    resume_1l: indisponible\n");
-        }
-    }
 }
 
 fn render_prochain(out: &mut String, snapshot: &RepriseSnapshot) {
@@ -931,30 +786,10 @@ fn render_pieges(out: &mut String, snapshot: &RepriseSnapshot) {
 
 fn render_acces(out: &mut String, snapshot: &RepriseSnapshot) {
     out.push_str("acces:\n");
-    match &snapshot.maicie {
-        Ok(summary) => {
-            out.push_str(&format!(
-                "  maicie_config: {}\n",
-                yaml_string(&summary.config_path)
-            ));
-            match &summary.database_path {
-                Some(path) => out.push_str(&format!("  maicie_db: {}\n", yaml_string(path))),
-                None => out.push_str("  maicie_db: indisponible\n"),
-            }
-        }
-        Err(error) => {
-            out.push_str(&format!(
-                "  maicie_config: {}\n",
-                yaml_string(&format!("indisponible: {error}"))
-            ));
-            out.push_str("  maicie_db: indisponible\n");
-        }
-    }
     out.push_str(&format!(
         "  repo: {}\n",
         yaml_string(&snapshot.repo.display().to_string())
     ));
-    out.push_str("  specs_index: specs/011-maicie-orchestration/exigences-coordination-v2.md\n");
     out.push_str(&format!(
         "  socket: {}\n",
         yaml_string(&snapshot.socket_path.display().to_string())
@@ -1177,7 +1012,6 @@ mod tests {
                 head_message: "test".to_string(),
                 worktrees: vec![],
             }),
-            maicie: Err("greffe volontairement absente".to_string()),
             pin: None,
             recovery_losses: Ok(None),
         }
@@ -1252,7 +1086,6 @@ mod tests {
             &config,
             Path::new("/repo"),
             None,
-            None,
             SystemTime::UNIX_EPOCH + Duration::from_secs(10),
         );
         let error = snapshot
@@ -1286,15 +1119,12 @@ mod tests {
         snapshot.open_requests = Err("daemon hors ligne (socket absente)".to_string());
         snapshot.recent_messages = Err("daemon hors ligne (socket absente)".to_string());
         snapshot.git = Err("git indisponible: ENOENT".to_string());
-        snapshot.maicie = Err("config Maicie introuvable".to_string());
 
         let card = render_card(&snapshot);
         assert!(card.contains("daemon_en_ligne: false"));
         assert!(card.contains("socket: /resolved/cache/bridget.sock"));
         assert!(card.contains("indisponible: daemon hors ligne"));
         assert!(card.contains("indisponible: git indisponible"));
-        assert!(card.contains("indisponible: config Maicie introuvable"));
-        assert!(card.contains("resume_1l: indisponible"));
         assert!(
             !card.contains("inventé") && !card.contains("/tmp/bridget.sock"),
             "pas de valeur inventée: {card}"
@@ -1359,7 +1189,6 @@ mod tests {
                 pieges: Some(PinPieges {
                     actifs_session: vec!["piège périmé".to_string()],
                 }),
-                maicie_config: None,
             },
             path: PathBuf::from("/repo/docs/carte-reprise.pin.yaml"),
             modified_at: now - PIN_STALE_AFTER - Duration::from_secs(1),

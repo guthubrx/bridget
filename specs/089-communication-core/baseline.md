@@ -152,3 +152,17 @@ Les tables transitoires de migration (suffixes _v2, _v4, _v088, _next) et copies
 Les 45 déclarations mod du daemon et les 22 de core/transport ont chacune une disposition dans les tables. La liste est comparée aux trois lib.rs ; ajout inconnu = inventaire à compléter. Ceci ne prouve pas l'absence de toutes les dépendances transitives : le graphe du paquet extrait sera testé en T013.
 
 Première caractérisation sûre : cargo test --offline -p bridget-transport --lib protocol:: -- --test-threads=4 → **65/65**, compilation 9,73 s, tests 0,03 s. Aucun daemon ni fournisseur lancé. La suite complète et les scénarios interserveurs restent à exécuter.
+
+## Taille des sources épinglées — référence pour T033
+
+Mesure par `git ls-tree -r -l dfa2134dcfe2a2522e3ae77d93561e6ae72556b3 -- crates plugins apps`, somme des tailles de blobs Git (pas taille disque, binaire, mémoire ou graphe de dépendances).
+
+| Périmètre | Fichiers | Dont Rust | Octets |
+|---|---:|---:|---:|
+| crates/bridget-core | 10 | 9 | 50 339 |
+| crates/bridget-transport | 33 | 18 | 952 560 |
+| crates/bridget-daemon | 149 | 94 | 7 569 641 |
+| plugins | 129 | 111 | 3 126 632 |
+| apps | 50 | 25 | 586 998 |
+
+Ces comptes incluent tests et assets suivis. Une suppression de fichiers ne prouve ni une accélération ni le découplage : T013 contrôle le paquet, T033 comparera les mêmes scénarios exécutés.

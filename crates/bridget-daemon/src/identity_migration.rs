@@ -11,7 +11,6 @@ use crate::store::Store;
 use bridget_core::router::validate_agent_id;
 use bridget_transport::fsutil::write_private_file_atomic;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
@@ -23,16 +22,14 @@ const RESERVED_PRINCIPALS: &[&str] = &["human", "humain", "maicie"];
 pub struct IdentityMigrationPaths {
     pub bridget_db: PathBuf,
     pub fleet_path: PathBuf,
-    pub maicie_config: Option<PathBuf>,
 }
 
 impl IdentityMigrationPaths {
-    pub fn for_bridget_db(bridget_db: PathBuf, maicie_config: Option<PathBuf>) -> Self {
+    pub fn for_bridget_db(bridget_db: PathBuf) -> Self {
         let fleet_path = path_for_daemon_db(&bridget_db);
         Self {
             bridget_db,
             fleet_path,
-            maicie_config,
         }
     }
 }
@@ -41,8 +38,6 @@ impl IdentityMigrationPaths {
 pub struct IdentityMigrationPlan {
     pub paths: IdentityMigrationPaths,
     pub mapping: BTreeMap<String, String>,
-    pub requires_retarget: BTreeSet<String>,
-    pub maicie_db: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,8 +60,6 @@ pub enum IdentityMigrationError {
     Profile(String),
     BridgetStore(String),
     Fleet(String),
-    MaicieConfig(String),
-    MaicieStore(String),
     Invalid(&'static str),
 }
 
@@ -78,8 +71,6 @@ impl fmt::Display for IdentityMigrationError {
             Self::Profile(reason) => write!(formatter, "profils Bridget: {reason}"),
             Self::BridgetStore(reason) => write!(formatter, "registre Bridget: {reason}"),
             Self::Fleet(reason) => write!(formatter, "flotte Bridget: {reason}"),
-            Self::MaicieConfig(reason) => write!(formatter, "configuration Maicie: {reason}"),
-            Self::MaicieStore(reason) => write!(formatter, "registre Maicie: {reason}"),
             Self::Invalid(reason) => formatter.write_str(reason),
         }
     }
@@ -113,40 +104,6 @@ pub fn plan(
         historical_references.extend(fleet.equipiers.into_keys());
     }
 
-    // Une référence déclarée par la configuration Maicie correspond encore à
-    // un agent connu, même si cet agent n'est pas dans la flotte courante.
-    // Seules les références uniquement historisées dans SQLite doivent être
-    // mises en attente de retarget.
-    let mut known_references = historical_references.clone();
-    let (maicie_db, maicie_references) = match paths.maicie_config.as_ref() {
-        Some(path) => {
-            ensure_existing_file(path)?;
-            let value = read_json(path)?;
-            let references = config_agent_references(&value);
-            known_references.extend(references.iter().cloned());
-            let db = value
-                .get("database_path")
-                .and_then(Value::as_str)
-                .map(PathBuf::from)
-                .ok_or(IdentityMigrationError::Invalid(
-                    "database_path Maicie absent de la configuration",
-                ))?;
-            if !db.is_absolute() {
-                return Err(IdentityMigrationError::Invalid(
-                    "database_path Maicie doit être absolu",
-                ));
-            }
-            ensure_existing_file(&db)?;
-            let persisted = maicie::store::MaicieStore::open(&db)
-                .map_err(|error| IdentityMigrationError::MaicieStore(error.to_string()))?
-                .agent_references_for_identity_migration()
-                .map_err(|error| IdentityMigrationError::MaicieStore(error.to_string()))?;
-            (Some(db), references.into_iter().chain(persisted).collect())
-        }
-        None => (None, BTreeSet::new()),
-    };
-    historical_references.extend(maicie_references.clone());
-
     let mut profiles = AgentProfileStore::open(&paths.bridget_db)
         .map_err(|error| IdentityMigrationError::Profile(error.to_string()))?;
     profiles
@@ -175,18 +132,7 @@ pub fn plan(
         .legacy_routing_map()
         .map_err(|error| IdentityMigrationError::Profile(error.to_string()))?;
     mapping.retain(|legacy, _| !is_reserved_principal(legacy));
-    let requires_retarget = maicie_references
-        .iter()
-        .filter(|reference| !known_references.contains(*reference))
-        .filter_map(|reference| mapping.get(reference).cloned())
-        .collect();
-
-    Ok(IdentityMigrationPlan {
-        paths,
-        mapping,
-        requires_retarget,
-        maicie_db,
-    })
+    Ok(IdentityMigrationPlan { paths, mapping })
 }
 
 pub fn apply(
@@ -196,13 +142,6 @@ pub fn apply(
     if plan.paths.fleet_path.exists() {
         backup_sources.push(plan.paths.fleet_path.clone());
     }
-    if let Some(config) = &plan.paths.maicie_config {
-        backup_sources.push(config.clone());
-    }
-    if let Some(database) = &plan.maicie_db {
-        backup_sources.push(database.clone());
-    }
-
     let migration_id = uuid::Uuid::new_v4();
     let journal_path = plan
         .paths
@@ -238,47 +177,6 @@ pub fn apply(
                 .migrate_agent_ids(&plan.mapping)
                 .map_err(|error| IdentityMigrationError::Fleet(error.to_string()))?;
             journal.completed.push("fleet".to_string());
-            write_journal(&journal_path, &journal)?;
-        }
-
-        if let (Some(config_path), Some(database_path)) =
-            (plan.paths.maicie_config.as_ref(), plan.maicie_db.as_ref())
-        {
-            let value = read_json(config_path)?;
-            let migrated = migrate_config_value(value, &plan.mapping)?;
-            let typed: maicie::config::MaicieConfig = serde_json::from_value(migrated.clone())
-                .map_err(|source| IdentityMigrationError::Json {
-                    path: config_path.clone(),
-                    source,
-                })?;
-            typed
-                .validate()
-                .map_err(|error| IdentityMigrationError::MaicieConfig(error.to_string()))?;
-
-            let mut maicie = maicie::store::MaicieStore::open(database_path)
-                .map_err(|error| IdentityMigrationError::MaicieStore(error.to_string()))?;
-            maicie
-                .migrate_agent_participants(&plan.mapping)
-                .map_err(|error| IdentityMigrationError::MaicieStore(error.to_string()))?;
-            maicie
-                .mark_agents_requires_retarget(&plan.requires_retarget)
-                .map_err(|error| IdentityMigrationError::MaicieStore(error.to_string()))?;
-            journal.completed.push("maicie_store".to_string());
-            write_journal(&journal_path, &journal)?;
-
-            let bytes = serde_json::to_vec_pretty(&migrated).map_err(|source| {
-                IdentityMigrationError::Json {
-                    path: config_path.clone(),
-                    source,
-                }
-            })?;
-            write_private_file_atomic(config_path, &bytes).map_err(|source| {
-                IdentityMigrationError::Io {
-                    path: config_path.clone(),
-                    source,
-                }
-            })?;
-            journal.completed.push("maicie_config".to_string());
             write_journal(&journal_path, &journal)?;
         }
 
@@ -324,85 +222,6 @@ fn ensure_existing_file(path: &Path) -> Result<(), IdentityMigrationError> {
             path: path.to_path_buf(),
             source,
         }),
-    }
-}
-
-fn read_json(path: &Path) -> Result<Value, IdentityMigrationError> {
-    let bytes = fs::read(path).map_err(|source| IdentityMigrationError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    serde_json::from_slice(&bytes).map_err(|source| IdentityMigrationError::Json {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
-fn config_agent_references(value: &Value) -> BTreeSet<String> {
-    let mut references = BTreeSet::new();
-    collect_config_references(value, &mut references);
-    references
-}
-
-fn collect_config_references(value: &Value, references: &mut BTreeSet<String>) {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                collect_config_references(value, references);
-            }
-        }
-        Value::Object(object) => {
-            for (key, value) in object {
-                if matches!(
-                    key.as_str(),
-                    "agent_name" | "agent_id" | "participant_id" | "referent_id"
-                ) && let Some(value) = value.as_str()
-                {
-                    references.insert(value.to_string());
-                }
-                collect_config_references(value, references);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn migrate_config_value(
-    mut value: Value,
-    mapping: &BTreeMap<String, String>,
-) -> Result<Value, IdentityMigrationError> {
-    migrate_value(&mut value, mapping);
-    Ok(value)
-}
-
-fn migrate_value(value: &mut Value, mapping: &BTreeMap<String, String>) {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                migrate_value(value, mapping);
-            }
-        }
-        Value::Object(object) => {
-            if let Some(agent_name) = object.remove("agent_name") {
-                if let Some(legacy) = agent_name.as_str() {
-                    let agent_id = mapping
-                        .get(legacy)
-                        .cloned()
-                        .unwrap_or_else(|| legacy.to_string());
-                    object.insert("agent_id".to_string(), Value::String(agent_id));
-                }
-            }
-            for (key, value) in object.iter_mut() {
-                if matches!(key.as_str(), "agent_id" | "participant_id" | "referent_id")
-                    && let Some(legacy) = value.as_str()
-                    && let Some(agent_id) = mapping.get(legacy)
-                {
-                    *value = Value::String(agent_id.clone());
-                }
-                migrate_value(value, mapping);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -474,7 +293,6 @@ mod tests {
         let paths = IdentityMigrationPaths {
             bridget_db: db.clone(),
             fleet_path: fleet,
-            maicie_config: None,
         };
         let migration = plan(paths).unwrap();
         assert_eq!(migration.mapping.len(), 1);

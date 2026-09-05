@@ -18089,58 +18089,6 @@ mod presence_tests {
                 .success()
         );
         std::fs::write(root.join("wip.txt"), "non commité\n").unwrap();
-        let maicie_config = root.join(".config/maicie/config.json");
-        std::fs::create_dir_all(maicie_config.parent().unwrap()).unwrap();
-        let maicie_db = root.join("maicie.sqlite3");
-        std::fs::write(
-            &maicie_config,
-            serde_json::to_vec(&serde_json::json!({
-                "version": 1, "bridget_socket": config.socket_path, "database_path": maicie_db,
-                "durations": {"short_secs":30,"normal_secs":60,"long_secs":90}, "profiles": []
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let mut maicie = maicie::store::MaicieStore::open(&maicie_db).unwrap();
-        let mission = maicie::app::delegate(
-            &mut maicie,
-            maicie::config::DurationClasses {
-                short_secs: 30,
-                normal_secs: 60,
-                long_secs: 90,
-            },
-            "maicie",
-            &[maicie::app::DelegationCandidate {
-                name: "persistent-one".to_string(),
-                tags: vec![],
-                available: true,
-                dnd: false,
-            }],
-            &maicie::app::DelegateRequest {
-                goal: "reprendre la bissection",
-                opening_permit: maicie::domain::ObjectiveOpeningPermit::auto_generated(),
-                explicit_target: Some("persistent-one"),
-                required_tags: &[],
-                duration: maicie::domain::ClasseDuree::Normale,
-                reply: false,
-                constat_id: None,
-                review_target: None,
-                suite: maicie::domain::SuiteObjective::Aucune,
-                depends_on: &[],
-                references: &[],
-                idempotency_key: "resume-daemon-crash",
-                now: 100,
-                retry_until: 150,
-                dedup_retained_until: 200,
-                max_frame_bytes: 256 * 1024,
-            },
-        )
-        .unwrap();
-        let maicie::app::DelegateResult::Created(mission) = mission else {
-            panic!("mission attendue")
-        };
-        maicie::ui_projection::publish_ui_mission_projection_v1(&maicie_config)
-            .expect("publier la projection publique de mission");
         let registry_path = root.join(".config/bridget/agents.json");
         std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         let adapter = root.join("adapter.sh");
@@ -18308,17 +18256,9 @@ mod presence_tests {
             );
             thread::sleep(Duration::from_millis(10));
         };
-        assert!(prompts.contains(&mission.objective_id.to_string()));
-        assert!(prompts.contains(&mission.delegation_id.to_string()));
-        assert!(
-            prompts.contains(
-                &mission
-                    .message_id
-                    .expect("délégation créée sans prérequis porte un message_id")
-                    .to_string()
-            )
-        );
-        assert!(prompts.contains("reprendre la bissection"));
+        assert!(prompts.contains("Carte de reprise Bridget"));
+        assert!(prompts.contains("Identité figée"));
+        assert!(prompts.contains("definition_digest="));
         assert!(prompts.contains("wip.txt"));
         assert!(
             !changed_runs.exists(),
@@ -20713,11 +20653,60 @@ mod presence_tests {
         let _ = std::fs::remove_file(&config.db_path);
     }
 
-    /// ORACLE — le vrai CLI Maicie sélectionne le busy libéré via ListAgents,
-    /// délègue, envoie idempotemment, puis le mandat arrive au wrapper.
+    /// ORACLE — client du protocole public : ListAgents atteste le busy libéré,
+    /// puis SendIdempotent livre le corps exact au wrapper (aucun métier Maicie).
     #[test]
     fn tour_non_abouti_redevient_mandatable_et_le_mandat_parvient() {
-        let (mut state, config) = state_with_registered_agent("busy-tour-non-abouti");
+        use std::os::unix::fs::DirBuilderExt;
+        let root = std::env::temp_dir().join(format!("bc-busy-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
+        let config = DaemonConfig {
+            socket_path: root.join("s"),
+            db_path: root.join("bridget.db"),
+            log_path: root.join("log"),
+            ..DaemonConfig::default()
+        };
+        let (managed_tx, _managed_rx) = mpsc::channel();
+        let mut state = DaemonState::new(&config, managed_tx).unwrap();
+        let target = "26b9ed92-9a62-4b1f-bd14-e3bce3a01111";
+        state
+            .router
+            .register(target, &bridget_core::AgentType::Claude, "conn-1")
+            .unwrap();
+        state
+            .conn_instances
+            .insert("conn-1".into(), "instance-1".into());
+        state.presences.insert(
+            "instance-1".into(),
+            Presence {
+                name: target.to_string(),
+                agent_type: "claude".to_string(),
+                host: "macbook".to_string(),
+                transport: "acp".to_string(),
+                channel: Some("unix".to_string()),
+                mode: Some(PresenceMode::Acp),
+                location: None,
+                journal_available: true,
+                os: "macOS".to_string(),
+                state: "connected".to_string(),
+                busy_since: None,
+                capacity_seen: Instant::now(),
+                link_seen: Instant::now(),
+                reconnect_count: 0,
+                model: None,
+                effort: None,
+                rate_limits: Default::default(),
+                served_model: None,
+                derived_domain: None,
+                domain: None,
+                dnd_until: None,
+                disk_space: None,
+            },
+        );
+
         state.set_turn_state("conn-1", true).unwrap();
         let ttl = live_notify_timeout_secs(&state.registry, "claude")
             .saturating_add(TIMEOUT_GRACE_PERIOD);
@@ -20744,15 +20733,23 @@ mod presence_tests {
             while !server_stop.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        // Darwin hérite ici du listener non bloquant de la fixture.
+                        // Le listener produit est bloquant : conserver ce contrat.
+                        stream.set_nonblocking(false).unwrap();
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(3)))
+                            .unwrap();
                         let connection_state = Arc::clone(&server_state);
                         connections.push(thread::spawn(move || {
-                            let _ = handle_connection(stream, connection_state);
+                            if let Err(error) = handle_connection(stream, connection_state) {
+                                eprintln!("connexion publique: {error}");
+                            }
                         }));
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
                     }
-                    Err(error) => panic!("accept Maicie: {error}"),
+                    Err(error) => panic!("accept client public: {error}"),
                 }
             }
             for connection in connections {
@@ -20760,73 +20757,97 @@ mod presence_tests {
             }
         });
 
-        let root = std::env::temp_dir().join(format!(
-            "maicie-busy-oracle-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let maicie_config = root.join("maicie.json");
-        std::fs::write(
-            &maicie_config,
-            serde_json::to_vec(&serde_json::json!({
-                "version": 1,
-                "bridget_socket": config.socket_path,
-                "database_path": root.join("maicie.sqlite3"),
-                "durations": {"short_secs": 30, "normal_secs": 60, "long_secs": 90},
-                "profiles": [{
-                    "id": "agent-2",
-                    "display_name": "Agent 2",
-                    "tags": [],
-                    "personality_ref": "profiles/agent-2.md",
-                    "tools": ["bridget_send"],
-                    "spawn_order_ref": "agents/agent-2"
-                }]
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
+        struct ServerGuard {
+            stop: Arc<AtomicBool>,
+            thread: Option<thread::JoinHandle<()>>,
+        }
+        impl Drop for ServerGuard {
+            fn drop(&mut self) {
+                self.stop.store(true, Ordering::SeqCst);
+                if let Some(thread) = self.thread.take() {
+                    // Les clients sont déclarés APRÈS cette garde, donc fermés
+                    // avant elle pendant unwind. Le timeout serveur borne
+                    // également un client accepté qui ne fermerait pas.
+                    let _ = thread.join();
+                }
+            }
+        }
+        let server_guard = ServerGuard {
+            stop,
+            thread: Some(server),
+        };
         const MANDAT_BODY: &str = "MANDAT-BUSY-RECOVERY-ORACLE-98beefe0";
-        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let output = Command::new("cargo")
-            .current_dir(workspace)
-            .args([
-                "run", "--quiet", "-p", "maicie", "--", "delegate", "--config",
-            ])
-            .arg(&maicie_config)
-            .args([
-                "--goal",
-                MANDAT_BODY,
-                "--suite",
-                "aucune",
-                "--to",
-                "agent-2",
-                "--duration",
-                "courte",
-                "--idempotency-key",
-                "busy-recovery-integrated-oracle",
-                "--json",
-            ])
-            .output()
+        // ListAgents est la projection historique publique, sur sa connexion
+        // courte ; le rôle Client 012 est réservé aux opérations négociées.
+        let directory = daemon_request(&config.socket_path, WrapperToDaemon::ListAgents);
+        let DaemonToWrapper::AgentList { agents } = directory else {
+            panic!("annuaire: {directory:?}")
+        };
+        assert!(
+            agents
+                .iter()
+                .any(|agent| agent.agent_id == target && agent.state == "connected"),
+            "la capacité libérée doit être publiée: {agents:?}"
+        );
+        let stream = UnixStream::connect(&config.socket_path).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
-        stop.store(true, Ordering::SeqCst);
-        server.join().unwrap();
+        let mut writer = BufWriter::new(stream.try_clone().unwrap());
+        let mut reader = BufReader::new(stream);
+        let mut exchange = |command: WrapperToDaemon| {
+            writeln!(writer, "{}", encode(&command).unwrap()).unwrap();
+            writer.flush().unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            decode::<DaemonToWrapper>(line.trim())
+                .unwrap_or_else(|error| panic!("réponse à {command:?}: {line:?}: {error}"))
+        };
+        assert!(matches!(
+            exchange(WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Client
+            }),
+            DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            }
+        ));
+        assert!(matches!(
+            exchange(WrapperToDaemon::ClientHello {
+                contract_version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: crate::communication::issuer_scope("busy-public-client"),
+                capabilities: vec![ClientCapability::SendIdempotent],
+            }),
+            DaemonToWrapper::ClientWelcome { .. }
+        ));
+        let message = bridget_core::BridgetMessage::new("human", target, MANDAT_BODY);
+        let message_id = message.id.clone();
+        let issue = exchange(WrapperToDaemon::SendIdempotent {
+            message,
+            message_id,
+            issued_at: unix_now_secs(),
+        });
+        assert!(
+            matches!(
+                issue,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "{issue:?}"
+        );
+        drop(writer);
+        drop(reader);
+        drop(server_guard);
 
         let mut line = String::new();
-        let arrival = BufReader::new(peer).read_line(&mut line);
+        BufReader::new(peer).read_line(&mut line).unwrap();
+        let delivered: DaemonToWrapper = decode(line.trim()).unwrap();
         assert!(
-            arrival.is_ok() && line.contains(MANDAT_BODY),
-            "mandat absent après sélection Maicie réelle; lecture={arrival:?}; stdout={}; stderr={}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+            matches!(delivered, DaemonToWrapper::DeliverIdempotent { message, .. }
+            if message.body == MANDAT_BODY && message.to == target),
+            "le message filaire doit parvenir intact au wrapper"
         );
-        assert!(
-            output.status.success(),
-            "Maicie a échoué après livraison: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-
         let _ = std::fs::remove_file(&config.socket_path);
         let _ = std::fs::remove_file(&config.db_path);
         let _ = std::fs::remove_dir_all(root);
