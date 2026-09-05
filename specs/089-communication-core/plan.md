@@ -92,6 +92,13 @@ Refus hostiles, concurrence, compétences déclarées, métriques avant/après, 
 
 ## Stratégie de preuve
 
+Arbitrage utilisateur du 2026-09-05 : pendant une tranche, exécuter les tests
+touchés et leurs dépendants directs. À son jalon, élargir aux coutures concernées
+et à l'analyse statique ; garder la suite globale et les recettes réelles comme
+gates de livraison. Une modification transversale d'identité, protocole ou
+transaction élargit immédiatement la sélection. Aucun test non rejoué n'est
+compté vert ; cette cadence évite de répéter la suite entière à chaque édition.
+
 Chaque critère SC a une commande, un résultat, une durée et un oracle dans implementation.md. Au moins un mutant pertinent pour corrélation, idempotence, source brute, Gap/fraîcheur, refus avant processus, deadline globale et namespace isolé doit échouer. Aucune fermeture de critère par la seule inspection d'un test non exécuté.
 
 Les tests unitaires utilisent uniquement des dépendances contrôlées ; les gates de couture traversent les binaires réels, sockets, SQLite et processus. Les gates fournisseur utilisent un compte autorisé, sans migration silencieuse vers une facturation API. Des octets bruts de sortie réels ne sont versionnés qu'après vérification d'absence de secrets.

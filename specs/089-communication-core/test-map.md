@@ -2,6 +2,22 @@
 
 ## T034 — unités historiques du daemon portées, gate global encore ouvert
 
+Parité gérée : les dix tests de `managed_parity_test.rs` sont conservés et
+passent ensemble, sans ignoré (91,20 s, quatre threads, watchdog 240 s). La
+matrice compare toujours les mêmes réponses, états et fragments attach. Le
+proxy déplace uniquement sa socket privée après disponibilité du ledger :
+aucun symlink de namespace, aucune bascule de base. Les fournisseurs sont
+synthétiques ; le npx réel utilise uniquement le paquet local, hors réseau.
+La posture complète est une précondition privée explicite ; le prompt compare
+le nom affiché, tandis que MCP et les marqueurs vérifient l'UUID de routage.
+Les enfants wrapper sont possédés jusqu'au nettoyage, même en cas de panique.
+
+SC-001 historique : 20/20 spawns et échanges, p95 369,532 ms, max 534,766 ms,
+27,51 s pour ce scénario. SC-005/006 : trois reprises coopératives avec trois
+persistants et trois éphémères, descendants npx vérifiés ; SIGKILL réel suivi
+de nouvelles générations et disparition des anciens groupes ; stop exclut les
+reprises suivantes. Clippy ciblé sur ce harnais sans warning (2,54 s).
+
 `integration_test.rs` est désormais isolé via le harnais commun `test-support` :
 sept scénarios conservés, daemon/processus privés et identités opaques. Les trois
 anciens scénarios de renommage de ce fichier sont remplacés par les trois

@@ -58,16 +58,25 @@ fn agent_id_for(label: &str) -> String {
 }
 
 fn test_root(label: &str) -> PathBuf {
-    PathBuf::from(format!(
+    let root = PathBuf::from(format!(
         "/tmp/bg909-{label}-{}-{}",
         std::process::id(),
         uuid::Uuid::new_v4()
-    ))
+    ));
+    bridget_daemon::environment::Namespace::resolve(
+        Some(root.join("state")),
+        None,
+        Some(root.clone()),
+    )
+    .unwrap()
+    .prepare()
+    .unwrap();
+    root
 }
 
 fn write_fixture(root: &Path) -> PathBuf {
     let adapter = root.join("parity-acp.py");
-    fs::create_dir_all(root.join(".config/bridget")).unwrap();
+    fs::create_dir_all(root.join("state")).unwrap();
     fs::write(
         &adapter,
         r#"#!/usr/bin/python3
@@ -125,24 +134,77 @@ for line in sys.stdin:
         }
     });
     fs::write(
-        root.join(".config/bridget/agents.json"),
+        root.join("state/agents.json"),
         serde_json::to_vec_pretty(&registry).unwrap(),
     )
     .unwrap();
     fs::set_permissions(
-        root.join(".config/bridget/agents.json"),
+        root.join("state/agents.json"),
         fs::Permissions::from_mode(0o600),
     )
+    .unwrap();
+    // Précondition privée du scénario : ce fournisseur synthétique n'offre
+    // pas de mode découverte. La garde humaine reste testée par le gate 089.
+    let database = root.join("state/bridget.db");
+    drop(bridget_daemon::store::Store::open(&database).unwrap());
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let initial = bridget_daemon::referent_control::read(&connection).unwrap();
+    bridget_daemon::referent_control::set(
+        &connection,
+        bridget_daemon::referent_control::ControlMutation {
+            command_id: "parity-fixture-complete",
+            expected_generation: initial.generation,
+            paused: None,
+            auto_objectives_cap: None,
+            reason: None,
+            actor: "test",
+            now: unix_now(),
+            agent_posture: Some(bridget_transport::protocol::AgentPosture::Complete),
+            auto_reassignment: None,
+        },
+    )
+    .unwrap()
     .unwrap();
     adapter
 }
 
 struct InteractivePromptSession {
-    child: Child,
+    child: WrapperChild,
     release: PathBuf,
     done: PathBuf,
     slow_started: PathBuf,
     bootstrap_rejected: PathBuf,
+}
+
+/// Un échec d'oracle ne doit pas laisser le wrapper de test en reconnexion.
+struct WrapperChild(Option<Child>, Option<PathBuf>);
+
+impl WrapperChild {
+    fn wait_with_output(mut self) -> std::io::Result<std::process::Output> {
+        self.0.take().unwrap().wait_with_output()
+    }
+}
+
+impl std::ops::Deref for WrapperChild {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        self.0.as_ref().unwrap()
+    }
+}
+
+impl std::ops::DerefMut for WrapperChild {
+    fn deref_mut(&mut self) -> &mut Child {
+        self.0.as_mut().unwrap()
+    }
+}
+
+impl Drop for WrapperChild {
+    fn drop(&mut self) {
+        if let Some(release) = &self.1 {
+            let _ = fs::write(release, b"release");
+        }
+        stop_daemon_child_best_effort(self.0.as_mut());
+    }
 }
 
 impl InteractivePromptSession {
@@ -233,7 +295,7 @@ if os.environ["BRIDGET_REQUIRE_RESUME_BOOTSTRAP"] == "1":
             time.sleep(0.01)
         sys.exit(0)
 
-marker = os.path.join(os.environ["HOME"], ".cache", "bridget", "agent-pids", str(os.getpid()))
+marker = os.path.join(os.environ["BRIDGET_HOME"], "agent-pids", str(os.getpid()))
 deadline = time.monotonic() + 10
 while not os.path.exists(marker):
     if time.monotonic() >= deadline:
@@ -385,43 +447,49 @@ elif command == "delete-buffer":
     fs::set_permissions(&tmux, fs::Permissions::from_mode(0o700)).unwrap();
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
-    command.args(["codex", "--name", name]);
+    command.args(["codex", "--agent-id", &agent_id_for(name)]);
     if let Some(arguments) = resume_arguments {
         command.args(arguments);
     }
-    let mut child = command
-        .env_clear()
-        .env("HOME", root)
-        .env("PATH", format!("{}:{FROZEN_PATH}", bin.display()))
-        .env("USER", "parity-test")
-        .env("LANG", "C")
-        .env("TMPDIR", "/tmp")
-        .env("BRIDGET_CHANNEL", "unix")
-        .env("BRIDGET_PROMPT_CAPTURE", &capture)
-        .env("BRIDGET_PROMPT_RELEASE", &release)
-        .env("BRIDGET_PROMPT_DONE", &done)
-        .env("BRIDGET_PROMPT_WHO", &who)
-        .env("BRIDGET_PROMPT_INBOX", &inbox)
-        .env("BRIDGET_PROMPT_SLOW", &slow_started)
-        .env("BRIDGET_PROMPT_BOOTSTRAP_REJECTED", &bootstrap_rejected)
-        .env(
-            "BRIDGET_REQUIRE_RESUME_BOOTSTRAP",
-            if resume_arguments.is_some() { "1" } else { "0" },
-        )
-        .env(
-            "BRIDGET_MUTATE_RESUME_BOOTSTRAP",
-            if mutate_resume_bootstrap { "1" } else { "0" },
-        )
-        .env("BRIDGET_FAKE_TMUX_ROOT", &fake_tmux_root)
-        .env(
-            "BRIDGET_FAKE_LAST_SENDER",
-            root.join(".cache/bridget")
-                .join(format!("last-sender-{name}")),
-        )
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child = WrapperChild(
+        Some(
+            command
+                .env_clear()
+                .env("HOME", root)
+                .env("BRIDGET_HOME", root.join("state"))
+                .env("BRIDGET_SOCKET", root.join("state/bridget.sock"))
+                .env("PATH", format!("{}:{FROZEN_PATH}", bin.display()))
+                .env("USER", "parity-test")
+                .env("LANG", "C")
+                .env("TMPDIR", "/tmp")
+                .env("BRIDGET_CHANNEL", "unix")
+                .env("BRIDGET_PROMPT_CAPTURE", &capture)
+                .env("BRIDGET_PROMPT_RELEASE", &release)
+                .env("BRIDGET_PROMPT_DONE", &done)
+                .env("BRIDGET_PROMPT_WHO", &who)
+                .env("BRIDGET_PROMPT_INBOX", &inbox)
+                .env("BRIDGET_PROMPT_SLOW", &slow_started)
+                .env("BRIDGET_PROMPT_BOOTSTRAP_REJECTED", &bootstrap_rejected)
+                .env(
+                    "BRIDGET_REQUIRE_RESUME_BOOTSTRAP",
+                    if resume_arguments.is_some() { "1" } else { "0" },
+                )
+                .env(
+                    "BRIDGET_MUTATE_RESUME_BOOTSTRAP",
+                    if mutate_resume_bootstrap { "1" } else { "0" },
+                )
+                .env("BRIDGET_FAKE_TMUX_ROOT", &fake_tmux_root)
+                .env(
+                    "BRIDGET_FAKE_LAST_SENDER",
+                    root.join("state").join(format!("last-sender-{name}")),
+                )
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        ),
+        Some(release.clone()),
+    );
 
     let deadline = Instant::now() + MATRIX_TIMEOUT;
     while !capture.exists() && Instant::now() < deadline {
@@ -461,7 +529,9 @@ elif command == "delete-buffer":
             "l'amorçage doit être PROMPT"
         );
         let actual = &arguments[bootstrap];
-        assert!(actual.contains(name), "identité absente de l'amorçage");
+        // L'identité de routage est un UUID, le prompt porte le nom affiché.
+        // Son attribution effective est vérifiée séparément par bridget_who.
+        assert!(actual.starts_with("Tu reprends la session de l'agent Bridget \"Agent\"."));
         assert!(actual.contains("binaire `bridget`"));
         assert!(actual.contains("N'essaie pas de rechercher"));
     } else {
@@ -471,7 +541,7 @@ elif command == "delete-buffer":
             .expect("prompt Bridget absent des arguments du CLI MCP");
         let expected = REDUCED_PROMPT
             .trim_end_matches('\n')
-            .replace("agent-fixture", name);
+            .replace("agent-fixture", "Agent");
         assert_eq!(
             actual, &expected,
             "le lancement MCP n'utilise pas la fixture réduite"
@@ -501,7 +571,9 @@ elif command == "delete-buffer":
         assert!(
             observed["result"]["structuredContent"]["agents"]
                 .as_array()
-                .is_some_and(|agents| agents.iter().any(|agent| agent["name"] == name)),
+                .is_some_and(|agents| agents
+                    .iter()
+                    .any(|agent| agent["agent_id"] == agent_id_for(name))),
             "la session MCP capturée n'apparaît pas dans bridget_who: {observed}"
         );
     }
@@ -530,7 +602,7 @@ fn write_cached_npx_fixture(root: &Path) {
     )
     .unwrap();
     std::os::unix::fs::symlink("../parity-acp/index.py", binaries.join("parity-acp")).unwrap();
-    let registry_path = root.join(".config/bridget/agents.json");
+    let registry_path = root.join("state/agents.json");
     let mut registry: serde_json::Value =
         serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
     registry["agents"]["parity"]["command"] = serde_json::json!("npx");
@@ -557,7 +629,7 @@ impl DaemonProcess {
         // panique injectée) libère encore le processus via Drop.
         let mut process = Self {
             child: None,
-            socket: root.join(".cache/bridget/bridget.sock"),
+            socket: root.join("state/bridget.sock"),
         };
         let binary = env!("CARGO_BIN_EXE_bridget");
         let mut command = Command::new(binary);
@@ -565,6 +637,8 @@ impl DaemonProcess {
             .arg("daemon")
             .env_clear()
             .env("HOME", root)
+            .env("BRIDGET_HOME", root.join("state"))
+            .env("BRIDGET_SOCKET", root.join("state/bridget.sock"))
             .env("PATH", FROZEN_PATH)
             .env("USER", "parity-test")
             .env("LANG", "C")
@@ -844,31 +918,22 @@ fn connect_target_within_bound(target: &Path) -> UnixStream {
 }
 
 fn start_daemon_behind_proxy(root: &Path) -> (DaemonProcess, CutProxy) {
-    let cache_parent = root.join(".cache");
-    let daemon_cache = root.join("daemon-cache");
-    let proxy_cache = root.join("proxy-cache");
-    fs::create_dir_all(&cache_parent).unwrap();
-    fs::create_dir_all(&daemon_cache).unwrap();
-    fs::create_dir_all(&proxy_cache).unwrap();
-    let cache_link = cache_parent.join("bridget");
-    std::os::unix::fs::symlink(&daemon_cache, &cache_link).unwrap();
-    let mut daemon = DaemonProcess::start(root, false, false);
-    let target = daemon_cache.join("bridget.sock");
-    let database = daemon_cache.join("bridget.db");
+    let daemon = DaemonProcess::start(root, false, false);
+    let target = root.join("state/backend.sock");
+    let database = root.join("state/bridget.db");
     let deadline = Instant::now() + MATRIX_TIMEOUT;
     while !daemon_ledger_is_ready(&database) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));
     }
-    assert!(target.exists());
     assert!(
         daemon_ledger_is_ready(&database),
         "le daemon n'a pas achevé l'initialisation de son ledger"
     );
-    fs::remove_file(&cache_link).unwrap();
-    std::os::unix::fs::symlink(&proxy_cache, &cache_link).unwrap();
-    let proxy_socket = proxy_cache.join("bridget.sock");
-    let proxy = CutProxy::start(proxy_socket, target);
-    daemon.socket = cache_link.join("bridget.sock");
+    // Déplacer uniquement l'entrée de socket du listener prêt. Le namespace
+    // et sa base ne changent jamais ; aucun symlink ni HOME global. Les vrais
+    // wrappers héritent du socket public, désormais servi par le proxy.
+    fs::rename(&daemon.socket, &target).unwrap();
+    let proxy = CutProxy::start(daemon.socket.clone(), target);
     (daemon, proxy)
 }
 
@@ -1026,7 +1091,7 @@ fn send_tracked(peer: &mut Peer, to: &str, body: &str) -> String {
 }
 
 fn send_tracked_with_timeout(peer: &mut Peer, to: &str, body: &str, timeout: u64) -> String {
-    let mut message = BridgetMessage::new(&peer.name, to, body);
+    let mut message = BridgetMessage::new(&peer.name, agent_id_for(to), body);
     message.reply = true;
     message.reply_timeout = Some(timeout);
     let id = message.id.clone();
@@ -1223,7 +1288,7 @@ fn normalized_entry(bytes: &[u8]) -> String {
 fn collect_journal(socket: &Path, agent: &str) -> Vec<String> {
     let mut attach = Peer::attach(socket);
     attach.send(&WrapperToDaemon::Subscribe {
-        agent: agent.to_string(),
+        agent: agent_id_for(agent),
         window: AttachWindow::Seq(0),
     });
     let mut fragments: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
@@ -1542,10 +1607,10 @@ fn wait_groups_gone(pgids: &[u32]) {
 }
 
 fn marker_pgids(root: &Path, names: &[String]) -> Vec<u32> {
-    let store = ManagedMarkerStore::for_home(root);
+    let store = ManagedMarkerStore::at_directory(root.join("state/managed"));
     names
         .iter()
-        .map(|name| store.load(name).unwrap().pgid)
+        .map(|name| store.load(&agent_id_for(name)).unwrap().pgid)
         .collect()
 }
 
@@ -1652,25 +1717,32 @@ fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
         let (daemon, proxy) = start_daemon_behind_proxy(&root);
 
         let terminal_name = format!("parity-terminal-{run}");
-        let mut terminal = Command::new(env!("CARGO_BIN_EXE_bridget"))
-            .args([
-                "--",
-                adapter.to_str().unwrap(),
-                "--equipier",
-                "--name",
-                &terminal_name,
-            ])
-            .env_clear()
-            .env("HOME", &root)
-            .env("PATH", FROZEN_PATH)
-            .env("USER", "parity-test")
-            .env("LANG", "C")
-            .env("TMPDIR", "/tmp")
-            .env("BRIDGET_CHANNEL", "unix")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+        let mut terminal = WrapperChild(
+            Some(
+                Command::new(env!("CARGO_BIN_EXE_bridget"))
+                    .args([
+                        "--",
+                        adapter.to_str().unwrap(),
+                        "--equipier",
+                        "--agent-id",
+                        &agent_id_for(&terminal_name),
+                    ])
+                    .env_clear()
+                    .env("HOME", &root)
+                    .env("BRIDGET_HOME", root.join("state"))
+                    .env("BRIDGET_SOCKET", root.join("state/bridget.sock"))
+                    .env("PATH", FROZEN_PATH)
+                    .env("USER", "parity-test")
+                    .env("LANG", "C")
+                    .env("TMPDIR", "/tmp")
+                    .env("BRIDGET_CHANNEL", "unix")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap(),
+            ),
+            None,
+        );
         let terminal_observables = run_corpus(&daemon.socket, &terminal_name, run * 2, &proxy);
         unsafe {
             libc::kill(terminal.id() as i32, libc::SIGTERM);
@@ -1723,11 +1795,13 @@ fn matrice_fr008_compare_la_garde_de_facturation() {
             "--",
             adapter.to_str().unwrap(),
             "--equipier",
-            "--name",
-            "billing-terminal",
+            "--agent-id",
+            &agent_id_for("billing-terminal"),
         ])
         .env_clear()
         .env("HOME", &root)
+        .env("BRIDGET_HOME", root.join("state"))
+        .env("BRIDGET_SOCKET", root.join("state/bridget.sock"))
         .env("PATH", FROZEN_PATH)
         .env("USER", "parity-test")
         .env("LANG", "C")
@@ -1737,7 +1811,11 @@ fn matrice_fr008_compare_la_garde_de_facturation() {
         .output()
         .unwrap();
     assert!(!terminal.status.success());
-    assert!(String::from_utf8_lossy(&terminal.stderr).contains("OPENAI_API_KEY"));
+    assert!(
+        String::from_utf8_lossy(&terminal.stderr).contains("OPENAI_API_KEY"),
+        "{}",
+        String::from_utf8_lossy(&terminal.stderr)
+    );
 
     let mut control = Peer::register(&daemon.socket, "billing-client");
     let now = unix_now();
@@ -2064,13 +2142,15 @@ fn TEMOIN_persistant_tue_redevient_joignable_sans_redemarrer_le_daemon() {
         let binary = env!("CARGO_BIN_EXE_bridget");
         let mut process = DaemonProcess {
             child: None,
-            socket: root.join(".cache/bridget/bridget.sock"),
+            socket: root.join("state/bridget.sock"),
         };
         let mut command = Command::new(binary);
         command
             .arg("daemon")
             .env_clear()
             .env("HOME", &root)
+            .env("BRIDGET_HOME", root.join("state"))
+            .env("BRIDGET_SOCKET", root.join("state/bridget.sock"))
             .env("PATH", FROZEN_PATH)
             .env("USER", "parity-test")
             .env("LANG", "C")
@@ -2155,13 +2235,15 @@ fn TEMOIN_abandon_apres_N_tentatives_est_nomme() {
         let binary = env!("CARGO_BIN_EXE_bridget");
         let mut process = DaemonProcess {
             child: None,
-            socket: root.join(".cache/bridget/bridget.sock"),
+            socket: root.join("state/bridget.sock"),
         };
         let mut command = Command::new(binary);
         command
             .arg("daemon")
             .env_clear()
             .env("HOME", &root)
+            .env("BRIDGET_HOME", root.join("state"))
+            .env("BRIDGET_SOCKET", root.join("state/bridget.sock"))
             .env("PATH", FROZEN_PATH)
             .env("USER", "parity-test")
             .env("LANG", "C")
@@ -2222,7 +2304,7 @@ fn TEMOIN_abandon_apres_N_tentatives_est_nomme() {
     }
 
     // Cause nommée EN DUR dans stderr géré.
-    let stderr_root = root.join(".cache/bridget/managed-stderr");
+    let stderr_root = root.join("state/managed-stderr");
     let mut found = false;
     let scan_deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < scan_deadline && !found {
