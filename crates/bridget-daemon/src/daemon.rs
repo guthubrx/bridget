@@ -1353,6 +1353,18 @@ fn purge_expired_attach_sends(state: &mut DaemonState) {
         .retain(|_, pending| pending.expires_at > now);
 }
 
+/// Le rôle éphémère vient du Register typé et de la propriété de la route.
+/// Un UUID, un nom affiché ou le mode déclaré ne prouvent jamais ce rôle.
+fn is_ephemeral_cli_route(
+    conn_id: &str,
+    route: Option<&bridget_core::router::RegisteredAgent>,
+) -> bool {
+    route.is_some_and(|agent| {
+        agent.connection_id == conn_id
+            && matches!(&agent.agent_type, bridget_core::AgentType::Custom(kind) if kind == "cli")
+    })
+}
+
 /// Sort de l'attribution de l'expéditeur pour un envoi hors rôle attach.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SenderAttribution {
@@ -1385,11 +1397,10 @@ pub(crate) enum SenderAttribution {
 /// puisse être fermée sans casser un usage existant.
 /// Complexité : O(1).
 pub(crate) fn resolve_sender_attribution(
-    connection_name: &str,
+    ephemeral_cli: bool,
     from_declared: bool,
     from_is_addressable: bool,
 ) -> SenderAttribution {
-    let ephemeral_cli = connection_name.is_empty() || connection_name.starts_with("cli-send-");
     if !ephemeral_cli {
         return SenderAttribution::UseConnectionName;
     }
@@ -1407,7 +1418,26 @@ pub(crate) fn resolve_sender_attribution(
 
 #[cfg(test)]
 mod attribution_emetteur_cli_tests {
-    use super::{SenderAttribution, resolve_sender_attribution};
+    use super::{SenderAttribution, is_ephemeral_cli_route, resolve_sender_attribution};
+
+    #[test]
+    fn cli_identifie_par_type_et_propriete_de_connexion_jamais_par_identifiant() {
+        let mut route = bridget_core::router::RegisteredAgent {
+            agent_id: "89000000-0000-4000-8000-000000000091".into(),
+            agent_type: bridget_core::AgentType::Custom("cli".into()),
+            connection_id: "cli-connection".into(),
+        };
+        assert!(is_ephemeral_cli_route("cli-connection", Some(&route)));
+        assert!(!is_ephemeral_cli_route("other-connection", Some(&route)));
+        assert!(!is_ephemeral_cli_route("cli-connection", None));
+        for kind in [
+            bridget_core::AgentType::Codex,
+            bridget_core::AgentType::Custom("mcp".into()),
+        ] {
+            route.agent_type = kind;
+            assert!(!is_ephemeral_cli_route("cli-connection", Some(&route)));
+        }
+    }
 
     /// Témoin de l'assertion métier : un émetteur en ligne de commande qui se
     /// nomme sous une identité que personne ne porte est refusé, et non
@@ -1416,7 +1446,7 @@ mod attribution_emetteur_cli_tests {
     #[test]
     fn emetteur_cli_nomme_non_adressable_est_refuse() {
         assert_eq!(
-            resolve_sender_attribution("cli-send-3675366", true, false),
+            resolve_sender_attribution(true, true, false),
             SenderAttribution::RefuseUnaddressable
         );
     }
@@ -1425,13 +1455,13 @@ mod attribution_emetteur_cli_tests {
     /// agents connectés. Le nom déclaré reste visible dans le témoin, ce qui
     /// permet d'attester le cas « humain » nommément et pas par un booléen.
     fn attribution(
-        connexion: &str,
+        ephemeral_cli: bool,
         declare: Option<&str>,
         agents_connectes: &[&str],
     ) -> SenderAttribution {
         let nom_porte = declare.unwrap_or("human");
         resolve_sender_attribution(
-            connexion,
+            ephemeral_cli,
             declare.is_some(),
             agents_connectes.contains(&nom_porte),
         )
@@ -1445,11 +1475,7 @@ mod attribution_emetteur_cli_tests {
     #[test]
     fn un_cli_temporaire_ne_peut_pas_emettre_sous_le_nom_humain() {
         assert_eq!(
-            attribution(
-                "cli-send-3845685",
-                Some("humain"),
-                &["humain", "bridget", "rc7-flux"]
-            ),
+            attribution(true, Some("humain"), &["humain", "bridget", "rc7-flux"]),
             SenderAttribution::RefuseImpersonation
         );
     }
@@ -1461,7 +1487,7 @@ mod attribution_emetteur_cli_tests {
     #[test]
     fn emetteur_cli_ne_peut_pas_usurper_un_agent_connecte() {
         assert_eq!(
-            attribution("cli-send-3675366", Some("bridget"), &["humain", "bridget"]),
+            attribution(true, Some("bridget"), &["humain", "bridget"]),
             SenderAttribution::RefuseImpersonation
         );
     }
@@ -1473,7 +1499,7 @@ mod attribution_emetteur_cli_tests {
     #[test]
     fn nom_herite_de_l_environnement_reste_conserve() {
         assert_eq!(
-            resolve_sender_attribution("cli-send-3675366", false, true),
+            resolve_sender_attribution(true, false, true),
             SenderAttribution::Keep
         );
     }
@@ -1484,7 +1510,7 @@ mod attribution_emetteur_cli_tests {
     #[test]
     fn emetteur_cli_sans_nom_declare_garde_le_defaut() {
         assert_eq!(
-            resolve_sender_attribution("cli-send-3675366", false, false),
+            resolve_sender_attribution(true, false, false),
             SenderAttribution::UseConnectionName
         );
     }
@@ -1494,7 +1520,7 @@ mod attribution_emetteur_cli_tests {
     #[test]
     fn wrapper_ne_peut_pas_usurper_par_from() {
         assert_eq!(
-            resolve_sender_attribution("rc7-flux", true, false),
+            resolve_sender_attribution(false, true, false),
             SenderAttribution::UseConnectionName
         );
     }
@@ -9188,7 +9214,7 @@ fn handle_wrapper_message(
                 let instance_id = st.conn_instances.get(conn_id).cloned();
                 let matches = name.as_ref().is_some_and(|registered| {
                     registered == &from
-                        || (registered.starts_with("cli-send-")
+                        || (is_ephemeral_cli_route(conn_id, st.router.get_agent(registered))
                             && st.router.get_agent(&from).is_some())
                 });
                 (name, instance_id, matches)
@@ -10828,10 +10854,11 @@ fn handle_wrapper_message(
                 });
             }
             let sender_name = st.conn_names.get(conn_id).cloned().unwrap_or_default();
+            let ephemeral_cli = is_ephemeral_cli_route(conn_id, st.router.get_agent(&sender_name));
             // Résolution de l'expéditeur :
             // - Si la connexion est un wrapper (agent enregistré sous son vrai nom),
             //   utiliser ce nom.
-            // - Si la connexion est un CLI temporaire (cli-send-XXXXX), vérifier si
+            // - Si la route appartient à cette connexion CLI temporaire, vérifier si
             //   le from du message correspond à un agent enregistré (ex: codex-1).
             //   Si oui, utiliser ce from (le CLI a été lancé depuis l'intérieur du wrapper).
             //   Si non, garder le from tel quel (envoi depuis terminal externe).
@@ -10844,7 +10871,7 @@ fn handle_wrapper_message(
             } else {
                 let from_is_addressable = st.router.get_agent(&bridge_msg.from).is_some();
                 match resolve_sender_attribution(
-                    &sender_name,
+                    ephemeral_cli || sender_name.is_empty(),
                     bridge_msg.from_declared,
                     from_is_addressable,
                 ) {
@@ -10905,8 +10932,8 @@ fn handle_wrapper_message(
                     });
                 }
             };
-            let is_ephemeral_cli_sender = sender_name.starts_with("cli-send-")
-                && prepared.reply_sender_conn.as_deref() == Some(conn_id);
+            let is_ephemeral_cli_sender =
+                ephemeral_cli && prepared.reply_sender_conn.as_deref() == Some(conn_id);
             if bridge_msg.reply && is_ephemeral_cli_sender {
                 return Some(DaemonToWrapper::Nack {
                     id: bridge_msg.id.clone(),

@@ -1,5 +1,11 @@
 # Carte des tests 089 — dispositions avant extraction
 
+## Disposition exécutée T014 — harnais partagé
+
+Les douze scénarios de idempotency_crash_test.rs sont conservés byte-identiques ; leur seul préambule de fixture devient tests/support/idempotent.rs. Aucun test historique supprimé ni délai augmenté. core_089_contract_test.rs réutilise ces processus isolés pour le canon stocké CLI/MCP, les six formes partielles refusées avant connexion et l'attribution du CLI à UUID. Les sept unités d'attribution maintiennent les refus d'usurpation et ajoutent la propriété de route.
+
+Le guichet historique reste explicitement rouge sur la clôture UUID/ancien nom de service, traité par T018 ; un dépôt maintenant accepté n'est pas une preuve de parcours complet. Les tests de renommage de route historiques seront adaptés à l'identité opaque, pas relancés contre leur ancien HOME/socket.
+
 ## Disposition exécutée T013 — paquet physique
 
 Les 129 fichiers du plugin Maicie (dont sa fixture SQLite historique, pas une base utilisateur) sont retirés de l'extraction ; leur disposition métier/consommateur figure dans la table ci-dessous. Ils étaient déjà hors graphe depuis T009. Les retirer ne transforme aucun de leurs tests en succès du noyau ; les oracles du consommateur public restent dus à T018/T019/T029.

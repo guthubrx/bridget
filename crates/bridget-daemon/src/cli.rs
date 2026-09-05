@@ -1463,7 +1463,7 @@ fn current_agent_id() -> String {
 }
 
 /// Repli binaire : l'identifiant vient du fichier puis de l'env. Sans les deux, on
-/// n'invente pas d'identité d'équipier — le daemon conserve `cli-send-<pid>`.
+/// n'invente pas d'identité d'équipier — le daemon conserve l'UUID du CLI temporaire.
 fn resolve_cli_agent_id(file_agent_id: Option<&str>, env_agent_id: Option<&str>) -> String {
     if let Some(agent_id) = file_agent_id
         .map(str::trim)

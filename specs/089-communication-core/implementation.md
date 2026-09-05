@@ -1,5 +1,28 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T014 : couture CLI/MCP et canon durable
+
+Le nouveau core_089_contract_test traverse trois clients indépendants (socket de référence, CLI binaire, MCP stdio binaire) et un daemon réel isolé. Le scope attendu est une constante du corpus, pas le résultat du helper à tester. Le test relit les canonical_bytes réellement stockés et photographie TOUS les champs des quatre tables idempotency_records/send_deliveries/tracked_requests/ledger après ACK ; chaque refus de divergence doit laisser cette photographie inchangée. Corps riche UTF-8, cible, reply, deadline, in_reply_to et issued_at sont exercés ; CLI/MCP couvrent chacun leurs champs exposés. Le JSON structuré MCP est aussi comparé au TextContent.
+
+Défaut reproduit avant correction : un vrai dépôt CLI était refusé DeclaredSenderMismatch. Register utilise désormais un UUID et le type cli, alors que trois gardes reconnaissaient encore le préfixe cli-send-. Le helper commun vérifie maintenant le type de route ET sa propriété par la connexion. Les gardes d'usurpation explicite, d'émetteur adressable, de demande éphémère, de capacité et de portée restent en place. Aucun changement du protocole ni du canon.
+
+Mutations réellement exécutées puis restaurées :
+
+- Retour au préfixe cli-send- dans le helper : le test CLI réel échoue sur Deliver.from (UUID temporaire au lieu de l'identité active attendue).
+- Suppression de deadline_at dans canonical_send : le corpus échoue sur la divergence deadline, devenue indûment acceptable. communication.rs est redevenu identique à HEAD.
+
+Harnais 012 réutilisé dans tests/support/idempotent.rs, pas recopié : les douze scénarios historiques restent identiques octet pour octet depuis run_amont_cycle jusqu'à EOF (comparaison contre HEAD). Les enfants, barrières, watchdogs et durées ne changent pas. Les nouveaux tests refusent également les six ensembles partiels id/issued_at/issuer_scope AVANT la socket ; listener de test privé 0600, répertoire 0700.
+
+Commandes dans /Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core, préfixées par `env -i HOME=/private/tmp/b9t011.7nVSnj/home BRIDGET_HOME=/private/tmp/b9t011.7nVSnj/state TMPDIR=/private/tmp/b9t011.7nVSnj/tmp CARGO_HOME=/Users/moi/.cargo RUSTUP_HOME=/Users/moi/.rustup PATH=/Users/moi/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin`. Watchdog externe Perl alarm/exec 180 s (420 s pour la matrice), watchdog interne 360 s ; aucune compilation concurrente pendant les crashs.
+
+- `cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_contract_test -- --test-threads=3` : 3/3, 1,26 s (compilation 1,55 s).
+- `cargo test --offline --locked -p bridget-daemon --features test-support --lib attribution_emetteur_cli_tests` : 7/7, 0,00 s (compilation 7,92 s).
+- `cargo clippy --offline --locked --workspace --all-targets --features test-support -- -D warnings` : vert, 4,82 s.
+- `cargo test --offline --locked -p bridget-daemon --features test-support --test idempotency_crash_test -- --include-ignored --test-threads=1` : 12/12, aucun ignoré, 178,18 s. La matrice complète de cinquante cycles aux quatre frontières termine avec cinquante prompts uniques ; wrapper ACP réel, fournisseur synthétique. Ce n'est pas une recette de compte fournisseur.
+- `cargo fmt --all --check`, `git diff --check` et `bash scripts/verify-089-contracts.sh --self-test --require-complete` : verts ; 17 fixtures et six mutants.
+
+Dette distincte, NON masquée : le harnais guichet historique passe désormais son dépôt CLI, puis échoue sur la clôture (5/6 réussis, 3,76 s). service_events.rs appelle encore mark_answered_in_transaction avec le nom historique maicie alors que l'expéditeur suivi est un UUID. Cette jointure relève de T018 ; elle devra conserver l'autorité du claim et l'atomicité, pas être remplacée par une clôture inconditionnelle. T014 ne prétend donc pas fermer tout SC-08902, ni la suite globale.
+
 ## 2026-09-05 — T013 : paquet source indépendant exécuté
 
 Suppression physique du plugin Maicie (129 fichiers récupérables dans Git), de disk_trend et de l'inventaire des worktrees de l'hôte. Le nettoyage borné des ressources propres et les alertes d'espace restent en place. Le refus cleanup intervient avant le namespace ; aucune commande hôte de remplacement. Les trois manifests et Cargo.lock étaient déjà fermés à T009/T010 : aucun changement artificiel de dépendance. serde_yaml reste utilisé par reprise.rs pour lire une épingle, pas par Maicie.
