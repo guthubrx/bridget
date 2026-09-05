@@ -1,7 +1,7 @@
 # Tâches 089 — extraction progressive du noyau
 
 **Entrées :** spec.md, plan.md, research.md, data-model.md, contracts/communication.md.
-**36 tâches de réalisation, 3 terminées.** P0 : T005 reste partielle en attente d'isolation des harnais par T007. Aucun SC fonctionnel n'est déclaré validé.
+**36 tâches de réalisation, 4 terminées.** P0 : T005 reste partielle en attente d'isolation des harnais par T007. Aucun SC fonctionnel n'est déclaré validé.
 
 Exécution séquentielle par tranches ; aucun lancement automatique de sous-agents. Un commit cohérent après tests, aucune capture d'un WIP tiers. Écrire l'oracle avant la modification qu'il doit protéger, vérifier son échec sur un mutant ciblé lorsqu'exigé, puis restaurer le vrai code. Les tests réels n'utilisent jamais les processus de production.
 
@@ -10,7 +10,7 @@ Exécution séquentielle par tranches ; aucun lancement automatique de sous-agen
 - [x] T001 Inventorier les dépendances, tables, commandes, constantes de namespace et points d'appel à partir du commit source ; compléter specs/089-communication-core/baseline.md avec fichier:ligne et dispositions conserver/extraire/retirer. Inclure Cargo.toml, les trois manifests, daemon.rs/store.rs/wrapper.rs/cli.rs/mcp.rs et le protocole. Oracle : chaque module importé par lib.rs a une disposition, aucune entrée seulement supposée.
 - [x] T002 Épingler les fixtures de toutes les familles de contracts/communication.md dans specs/089-communication-core/contracts/fixtures/ avec source Git et SHA-256 ; ajouter scripts/verify-089-contracts.sh. Oracle : octet altéré/source absente/commit non ancêtre refusés ; tester aussi dépôts/replies/événements, pas seulement les handshakes.
 - [x] T003 Établir la liste des tests historiques retenus/retirés/déplacés dans specs/089-communication-core/test-map.md et les scénarios tests/features/089-communication-core.feature. Oracle : chaque SC-08901..12 a des tests nommés ; chaque retrait a une justification de périmètre, jamais « test rouge ».
-- [ ] T004 Compléter specs/089-communication-core/threat-model.md : UID/SSH/identité/capacités, limites, secrets, permissions fournisseur et sorties de connexion. Oracle : scénario hostile, autorité et refus attendu pour chaque frontière.
+- [x] T004 Compléter specs/089-communication-core/threat-model.md : UID/SSH/identité/capacités, limites, secrets, permissions fournisseur et sorties de connexion. Oracle : scénario hostile, autorité et refus attendu pour chaque frontière.
 - [ ] T005 Exécuter les tests retenus et mesurer la référence dans un environnement de test isolé, après audit des harnais ; consigner commandes/durées/échecs et ressources dans implementation.md. Aucun rouge préexistant caché, aucune exécution contre HOME/socket historiques.
 - [ ] T006 Relire spec/plan/contrats/test-map avant coupe ; proposer une revue indépendante et consigner le verdict dans checklists/extraction.md. Gate : absence de garantie perdue sans décision explicite.
 
