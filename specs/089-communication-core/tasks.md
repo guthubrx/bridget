@@ -35,7 +35,7 @@ Exécution séquentielle par tranches ; aucun lancement automatique de sous-agen
 - [ ] T020 [US1] Rejouer les pilotes Codex/Claude natifs via src/wrapper.rs et bridget-transport/src/{codex_app_server,claude_stream_json,managed_session}.rs : échange réel, EOF en plein tour, groupe arrêté, attach et modèle/effort attestés. SC-08909.
 - [ ] T021 [US1] Vérifier ACP et GLM via Claude Code sans tmux ni substitution vers API facturée ; tests/core_089_providers_test.rs et preuves expurgées dans implementation.md. Compte indisponible = gate non validé, jamais remplacement de fournisseur implicite. SC-08909.
 - [x] T022 [US3] Ajouter tests/core_089_ledger_test.rs : source unique src/ledger.rs et renderers CLI/MCP identiques au contrat ; golden binaire octet-pour-octet, données entrantes/sortantes et limites. SC-08902/10.
-- [ ] T023 [US1] Livrer skills/bridget/SKILL.md, README.md et README.en.md centrés sur envoyer/répondre/consulter/retry ; tests/core_089_skill_test.rs pour in_reply_to et statuts distincts. Exécuter le scénario court sans Maicie ; ne pas modifier les skills globales. SC-08910.
+- [x] T023 [US1] Livrer skills/bridget/SKILL.md, README.md et README.en.md centrés sur envoyer/répondre/consulter/retry ; tests/core_089_skill_test.rs pour in_reply_to et statuts distincts. Exécuter le scénario court sans Maicie ; ne pas modifier les skills globales. SC-08910.
 
 ## P3 — Fédération SSH obligatoire (US2)
 

@@ -1,5 +1,13 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T023 : skill exercée, documentation communication seule
+
+La skill du dépôt est courte et n'orchestre aucune tâche métier : annuaire UUID, envoi/réponse liée, reçu et retry identiques, lecture maître et signaux inconnus conservés. Aucun fichier de skill global n'est modifié. Les README FR/EN remplacent les surfaces du produit complet et distinguent les recettes réellement passées de Claude/GLM/SSH encore ouverts. Le quickstart est aligné sur l'isolation déjà livrée (BRIDGET_HOME/BRIDGET_SOCKET), sans installation implicite.
+
+Le nouveau core_089_skill_test lit et exécute les QUATRE blocs JSON de SKILL.md, sans copie locale des exemples : deux pairs publics, vrai daemon et vrais processus MCP. in_flight avant ACK, accepted après ACK, retry exact, deux lignes uniques de ledger, demande open puis answered et lecture CLI cohérente. La mutation réelle supprimant in_reply_to de l'exemple publié échoue en 0,63 s (open au lieu d'answered) ; exemple restauré avant passe verte. La commodité CLI reply cible le dernier expéditeur : les exemples privilégient send --to UUID --in-reply-to pour éviter cette ambiguïté, sans changer le protocole.
+
+Environnement privé T014, watchdog 180 s : `cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_skill_test --test core_089_ledger_test --test core_089_reply_test` : 4/4 ; skill 1,20 s, ledger 0,55 s, réponse 7,27 s, compilation 1,90 s. `quick_validate.py skills/bridget` valide la skill. Clippy workspace/all-targets/test-support -D warnings vert 5,45 s ; fmt contrôlé. Le scénario ne lance ni Maicie, ni fournisseur, ni tunnel : les paires simulent uniquement les extrémités publiques et accusent explicitement les remises.
+
 ## 2026-09-05 — T022 : ledger maître unique, golden exécuté
 
 Le test réel sans socket rendait `Ledger vide.` avec exit 0 et créait une base cliente (rouge en 0,16 s). Suppression de CE repli dans cmd_ledger conformément à FR-08905/US3 : erreur explicite sans données stdout ni nouvelle DB. Le renderer ne change pas. C'est notamment nécessaire pour ne pas masquer une coupure SSH par une base vide.

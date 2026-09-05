@@ -1,12 +1,23 @@
-# Recette future — ne pas confondre préparation et installation
+# Recette du noyau — installation isolée, bascule non automatique
 
-**État actuel :** dépôt et conception seulement. Le code copié utilise encore les valeurs par défaut du produit historique ; ne pas lancer son daemon, ses wrappers ou ses scripts de déploiement.
+**État actuel :** extraction et validations locales en cours. T007 isole le namespace ; T014–T019 exécutent les coutures daemon/CLI/MCP, T020 a exécuté Codex réel. Claude reste en attente d'une authentification valide ; GLM, SSH et la non-régression finale restent à exécuter. Voir implementation.md pour les preuves, pas les résultats d'anciens chantiers.
 
 Répertoire de travail : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core`.
 
 ## Avant tout essai de binaire
 
-T007 doit rendre explicites et vérifiables le home, la socket courte et l'identité d'instance du noyau extrait. Le test refuse de démarrer s'ils pointent vers l'installation historique. Les commandes exactes d'essai seront inscrites ici après cette couture, pas inventées avant son implémentation.
+Choisir une racine courte privée et utiliser le même binaire extrait partout :
+
+```sh
+cd /Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core
+PATH=/Users/moi/.cargo/bin:$PATH cargo build --locked -p bridget-daemon
+bridget_state=$(mktemp -d /tmp/bgcore.XXXXXX)
+export BRIDGET_HOME="$bridget_state"
+export BRIDGET_SOCKET="$bridget_state/bridget.sock"
+/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/target/debug/bridget daemon
+```
+
+Le daemon reste au premier plan. Dans les autres terminaux, reprendre EXACTEMENT ces deux chemins d'environnement, pas un nouvel appel à mktemp. L'instance d'agent est créée par sa session, jamais fabriquée depuis le nom affiché. Pour les tests de fournisseur, les harnais préparent un profil privé ; aucune configuration globale MCP/skill n'est importée. Cette recette n'installe ni service launchd ni profil agent.
 
 Ne pas modifier HOME global, les skills globales, launchd, le registre fournisseur ni le tunnel de la flotte. Utiliser des répertoires temporaires distincts par scénario et ne nettoyer que les processus/chemins créés par celui-ci.
 
