@@ -1,6 +1,6 @@
 # Recette du noyau — installation isolée, bascule non automatique
 
-**État actuel :** extraction et validations locales en cours. T007 isole le namespace ; T014–T019 exécutent les coutures daemon/CLI/MCP, T020 a exécuté Codex réel. Claude reste en attente d'une authentification valide ; GLM, SSH et la non-régression finale restent à exécuter. Voir implementation.md pour les preuves, pas les résultats d'anciens chantiers.
+**État actuel :** extraction et validations en cours. T007 isole le namespace ; T014–T019 exécutent les coutures daemon/CLI/MCP, T020 a exécuté Codex réel. T025–T028 ont exercé SSH local, macOS↔Linux, coupure/reprise et charge. Claude reste en attente d'une authentification valide ; GLM et la non-régression finale restent à exécuter. Voir implementation.md pour les preuves, pas les résultats d'anciens chantiers.
 
 Répertoire de travail : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core`.
 
@@ -31,7 +31,7 @@ Pour les outils SpecKit qui imposent un préfixe numérique malgré le nom de br
 4. Rejouer l'envoi à l'identique : même issue, un seul prompt et une seule ligne de ledger ; modifier un champ : refus sans mutation.
 5. Attacher le journal, comparer les bytes et séquences ; interrompre le flux puis reprendre sans fraîcheur inventée.
 
-## Scénario SSH à exécuter (SC-08904)
+## Scénario SSH reproductible (SC-08904)
 
 Deux machines réelles, sockets de test distinctes des sockets historiques. Préflight de possession et de disponibilité avant d'établir le transfert. Lire annuaire et ledger depuis le distant, livrer une demande et sa réponse, couper uniquement le tunnel de test, puis reconnecter. Vérifier mêmes identifiants, aucun prompt dupliqué et aucun redémarrage fournisseur indu. Consigner commande SSH exacte, durée, clock skew des mesures et nettoyage. Un gate distant non exécuté reste non validé.
 

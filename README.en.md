@@ -14,8 +14,8 @@ primary session path; tmux is not required.
 Session 089 is being validated. Physical extraction and local guarantees are
 implemented progressively. A real native Codex exchange and journal attachment
 have passed. The real Claude gate remains open on local authentication; GLM has
-not been validated. The first cross-server SSH exchange passed; reconnect and
-remote load gates are still pending. Migration, security and full
+not been validated. Cross-server SSH, reconnect and the isolated 600-event,
+60-second load gates have passed. Migration, security and full
 regression gates remain mandatory. Nothing has been deployed to the existing fleet.
 
 See the [evidence log](specs/089-communication-core/implementation.md),

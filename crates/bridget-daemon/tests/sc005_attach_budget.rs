@@ -1,5 +1,6 @@
 use bridget_core::BridgetMessage;
-use bridget_daemon::daemon::{self, DaemonConfig};
+#[path = "support/idempotent.rs"]
+pub mod fixture;
 use bridget_daemon::registry::AgentRegistry;
 use bridget_daemon::wrapper::launch_acp_with;
 use bridget_transport::journal::{AppendLatencyProbe, current_host_date};
@@ -7,9 +8,11 @@ use bridget_transport::protocol::{AgentInfo, AttachWindow, ConnectionRole, decod
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
@@ -27,6 +30,8 @@ const SC001_TURNS: usize = 600;
 const SC001_CADENCE: Duration = Duration::from_millis(100);
 const SC001_MEASURED_CAMPAIGNS: usize = 21;
 const SC005_INTERNAL_PAIRS: usize = 5;
+const SENDER: &str = "18000000-0000-4000-8000-000000000001";
+const AGENT: &str = "18000000-0000-4000-8000-000000000002";
 
 /// Les deux bancs de latence mesurent des délais de quelques microsecondes :
 /// ils doivent donc s'exclure mutuellement dans le même binaire de test.
@@ -37,31 +42,6 @@ fn lock_latency_bench() -> std::sync::MutexGuard<'static, ()> {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
-}
-
-fn unique_root(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "bridget-sc005-{label}-{}-{}",
-        std::process::id(),
-        uuid::Uuid::new_v4()
-    ))
-}
-
-fn daemon_config(root: &Path) -> DaemonConfig {
-    DaemonConfig {
-        socket_path: PathBuf::from(format!(
-            "/tmp/bg-sc5-{}-{}.sock",
-            std::process::id(),
-            uuid::Uuid::new_v4().simple()
-        )),
-        db_path: root.join("bridget.db"),
-        log_path: root.join("daemon.log"),
-        circuit_breaker_window: 180,
-        circuit_breaker_limit: 10_000,
-        dedup_window: 180,
-        quarantine_window: 3_600,
-        retention_days: 7,
-    }
 }
 
 fn wait_until(deadline: Instant, detail: &str, predicate: impl Fn() -> bool) {
@@ -252,7 +232,7 @@ fn connect_sender(socket: &Path) -> (BufWriter<UnixStream>, BufReader<UnixStream
         &WrapperToDaemon::Register {
             agent_type: "fixture".to_string(),
             identity_version: 2,
-            agent_id: "bench-sender".to_string(),
+            agent_id: SENDER.to_string(),
             host: Some("test-host".to_string()),
             transport: Some("unix".to_string()),
             channel: None.into(),
@@ -266,7 +246,7 @@ fn connect_sender(socket: &Path) -> (BufWriter<UnixStream>, BufReader<UnixStream
         },
     );
     match read_message(&mut reader) {
-        DaemonToWrapper::Registered { agent_id: name } if name == "bench-sender" => {}
+        DaemonToWrapper::Registered { agent_id: name } if name == SENDER => {}
         other => panic!("Register bench-sender inattendu: {other:?}"),
     }
     (writer, reader)
@@ -324,8 +304,7 @@ fn median_delta(samples: &mut [i128]) -> i128 {
     samples[samples.len() / 2]
 }
 
-struct BenchHarness {
-    root: PathBuf,
+struct LocalHarness {
     socket: PathBuf,
     probe: AppendLatencyProbe,
     planned_turns: usize,
@@ -335,37 +314,31 @@ struct BenchHarness {
     wrapper_done: mpsc::Receiver<Result<(), String>>,
     wrapper: thread::JoinHandle<()>,
     views: Vec<AttachViewConsumer>,
+    daemon: fixture::DaemonProcess,
 }
 
-impl BenchHarness {
+impl LocalHarness {
     fn start(
-        label: &str,
+        root: PathBuf,
         view_count: usize,
         planned_turns: usize,
         historical_events: usize,
         deadline: Instant,
-        prepare_journal: impl FnOnce(&Path),
     ) -> Self {
-        let root = unique_root(label);
-        std::fs::create_dir_all(&root).expect("racine campagne");
-        let config = daemon_config(&root);
-        let socket = config.socket_path.clone();
-        thread::spawn(move || daemon::run(config).expect("daemon SC-005"));
-        wait_until(deadline, "socket daemon absente", || socket.exists());
-
-        let journal_root = root.join("home/.cache/bridget/sessions");
+        let daemon = fixture::spawn_performance_daemon(&root);
+        let socket = fixture::socket(&root);
+        let journal_root = root.join("state/sessions");
         let probe = AppendLatencyProbe::install(&journal_root);
         let registry = fake_registry(&root, planned_turns + 1);
         let wrapper_socket = socket.clone();
-        let wrapper_home = root.join("home");
+        let wrapper_home = root.join("provider");
         std::fs::create_dir_all(&wrapper_home).expect("home wrapper");
-        prepare_journal(&journal_root.join("codex-bench"));
         let (wrapper_done_tx, wrapper_done) = mpsc::channel();
         let wrapper = thread::spawn(move || {
             let result = launch_acp_with(
                 "bench",
                 &[],
-                Some("codex-bench"),
+                Some(AGENT),
                 &registry,
                 &wrapper_socket,
                 &wrapper_home,
@@ -373,19 +346,18 @@ impl BenchHarness {
             .map_err(|error| error.to_string());
             let _ = wrapper_done_tx.send(result);
         });
-        wait_for_agent_ready_for_send(&socket, "codex-bench", deadline);
+        wait_for_agent_ready_for_send(&socket, AGENT, deadline);
         let (sender, sender_reader) = connect_sender(&socket);
         let views = (0..view_count)
-            .map(|_| connect_attach(&socket, "codex-bench"))
+            .map(|_| connect_attach(&socket, AGENT))
             .collect::<Vec<_>>();
         for view in &views {
             wait_until(deadline, "snapshot initial non terminé", || {
                 view.caught_up.load(Ordering::SeqCst) >= 1
             });
         }
-        wait_for_agent_ready_for_send(&socket, "codex-bench", deadline);
+        wait_for_agent_ready_for_send(&socket, AGENT, deadline);
         Self {
-            root,
             socket,
             probe,
             planned_turns,
@@ -395,20 +367,17 @@ impl BenchHarness {
             wrapper_done,
             wrapper,
             views,
+            daemon,
         }
     }
 
     fn send_turn(&mut self, turn: usize) {
-        let message = BridgetMessage::new(
-            "bench-sender",
-            "codex-bench",
-            format!("tour-déterministe-{turn}"),
-        );
+        let message = BridgetMessage::new(SENDER, AGENT, format!("tour-déterministe-{turn}"));
         write_message(&mut self.sender, &WrapperToDaemon::Send(message));
         expect_send_ack(
             &mut self.sender_reader,
             &self.socket,
-            "codex-bench",
+            AGENT,
             &format!("tour {turn}"),
         );
     }
@@ -419,12 +388,6 @@ impl BenchHarness {
         });
     }
 
-    fn take_samples(&self, expected: usize) -> Vec<Duration> {
-        let samples = self.probe.take();
-        assert_eq!(samples.len(), expected);
-        samples
-    }
-
     fn finish(mut self, deadline: Instant) {
         let expected_view = self.historical_events + self.planned_turns * JOURNAL_EVENTS_PER_TURN;
         for view in &self.views {
@@ -432,18 +395,10 @@ impl BenchHarness {
                 view.final_fragments.load(Ordering::SeqCst) >= expected_view
             });
         }
-        let final_message = BridgetMessage::new(
-            "bench-sender",
-            "codex-bench",
-            "tour-final-hors-mesure".to_string(),
-        );
+        let final_message =
+            BridgetMessage::new(SENDER, AGENT, "tour-final-hors-mesure".to_string());
         write_message(&mut self.sender, &WrapperToDaemon::Send(final_message));
-        expect_send_ack(
-            &mut self.sender_reader,
-            &self.socket,
-            "codex-bench",
-            "tour final",
-        );
+        expect_send_ack(&mut self.sender_reader, &self.socket, AGENT, "tour final");
         let result = self
             .wrapper_done
             .recv_timeout(Duration::from_secs(5))
@@ -454,8 +409,275 @@ impl BenchHarness {
             let diagnostics = view.handle.join().expect("thread vue attach");
             assert!(diagnostics.is_empty(), "{diagnostics:?}");
         }
-        let _ = std::fs::remove_file(&self.socket);
-        let _ = std::fs::remove_dir_all(&self.root);
+        self.daemon.stop();
+    }
+}
+
+/// Chaque banc possède un processus, donc un namespace immuable. Le parent
+/// conserve exactement l'alternance baseline/observed du banc historique ;
+/// déplacer les campagnes l'une après l'autre fausserait la comparaison.
+struct BenchHarness {
+    root: PathBuf,
+    process: fixture::WrapperProcess,
+    control: Mutex<(BufWriter<UnixStream>, BufReader<UnixStream>)>,
+}
+
+impl BenchHarness {
+    fn start(
+        _label: &str,
+        views: usize,
+        turns: usize,
+        history: usize,
+        deadline: Instant,
+        prepare: impl FnOnce(&Path),
+    ) -> Self {
+        let root = PathBuf::from("/tmp").join(format!(
+            "b89sc-{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..12]
+        ));
+        for part in ["", "provider", "state", "tmp"] {
+            fixture::private_dir(&root.join(part)).unwrap();
+        }
+        let root = std::fs::canonicalize(root).unwrap();
+        fixture::private_dir(&root.join("state/sessions")).unwrap();
+        fixture::private_dir(&root.join("state/sessions").join(AGENT)).unwrap();
+        prepare(&root.join("state/sessions").join(AGENT));
+        let listener = std::os::unix::net::UnixListener::bind(root.join("control.sock")).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let isolated = fixture::isolated_command(&root);
+        let log = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(root.join("worker.log"))
+            .unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .env_clear()
+            .envs(isolated.get_envs().filter_map(|(k, v)| v.map(|v| (k, v))))
+            .args(["--exact", "sc005_worker", "--ignored", "--nocapture"])
+            .env("SC005_WORKER", format!("{views},{turns},{history}"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log.try_clone().unwrap()))
+            .stderr(Stdio::from(log))
+            .process_group(0);
+        let mut process = fixture::WrapperProcess(command.spawn().unwrap());
+        fixture::track(&process.0);
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline && process.0.try_wait().unwrap().is_none(),
+                        "worker non prêt : {}",
+                        std::fs::read_to_string(root.join("worker.log")).unwrap()
+                    );
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("contrôle worker : {error}"),
+            }
+        };
+        stream.set_nonblocking(false).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(15)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(15)))
+            .unwrap();
+        let reader = BufReader::new(stream.try_clone().unwrap());
+        let harness = Self {
+            root,
+            process,
+            control: Mutex::new((BufWriter::new(stream), reader)),
+        };
+        let mut ready = String::new();
+        harness
+            .control
+            .lock()
+            .unwrap()
+            .1
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(
+            ready.trim(),
+            "ready",
+            "{}",
+            std::fs::read_to_string(harness.root.join("worker.log")).unwrap()
+        );
+        harness
+    }
+
+    fn request(&self, command: serde_json::Value) -> serde_json::Value {
+        let mut control = self.control.lock().unwrap();
+        writeln!(control.0, "{command}").unwrap();
+        control.0.flush().unwrap();
+        let mut line = String::new();
+        control.1.read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap_or_else(|error| {
+            panic!(
+                "worker {error}: {}",
+                std::fs::read_to_string(self.root.join("worker.log")).unwrap()
+            )
+        })
+    }
+
+    fn send_turn(&mut self, turn: usize) {
+        assert_eq!(
+            self.request(serde_json::json!({"op":"send","turn":turn})),
+            true
+        );
+    }
+    fn wait_for_appends(&self, expected: usize, deadline: Instant) {
+        assert!(Instant::now() < deadline);
+        assert_eq!(
+            self.request(serde_json::json!({"op":"wait","count":expected})),
+            true
+        );
+    }
+    fn take_samples(&self, expected: usize) -> Vec<Duration> {
+        let values: Vec<u64> =
+            serde_json::from_value(self.request(serde_json::json!({"op":"samples"}))).unwrap();
+        assert_eq!(values.len(), expected);
+        values.into_iter().map(Duration::from_nanos).collect()
+    }
+    fn latencies(&self, samples: usize, events: usize) -> Vec<Duration> {
+        let values: Vec<u64> = serde_json::from_value(
+            self.request(serde_json::json!({"op":"latencies","samples":samples,"events":events})),
+        )
+        .unwrap();
+        assert_eq!(values.len(), samples);
+        values.into_iter().map(Duration::from_nanos).collect()
+    }
+    fn view_state(&self) -> (usize, usize, Vec<u64>) {
+        serde_json::from_value(self.request(serde_json::json!({"op":"view"}))).unwrap()
+    }
+    fn finish(mut self, deadline: Instant) {
+        assert!(Instant::now() < deadline);
+        assert_eq!(self.request(serde_json::json!({"op":"finish"})), true);
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            if let Some(status) = self.process.0.try_wait().unwrap() {
+                assert!(
+                    status.success(),
+                    "{}",
+                    std::fs::read_to_string(self.root.join("worker.log")).unwrap()
+                );
+                break;
+            }
+            assert!(Instant::now() < deadline, "worker survivant");
+            thread::sleep(Duration::from_millis(1));
+        }
+        std::fs::remove_dir_all(&self.root).unwrap();
+    }
+}
+
+impl Drop for BenchHarness {
+    fn drop(&mut self) {
+        // EOF sur le canal privé laisse le worker dérouler ses gardes daemon
+        // avant que le filet de sécurité ne récolte un enfant récalcitrant.
+        if let Ok(control) = self.control.get_mut() {
+            let _ = control.0.get_ref().shutdown(std::net::Shutdown::Both);
+        }
+        let deadline = Instant::now() + Duration::from_secs(12);
+        while matches!(self.process.0.try_wait(), Ok(None)) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+#[test]
+#[ignore = "worker privé de SC-001/002/005 ; lancé uniquement par son parent"]
+fn sc005_worker() {
+    let input = std::env::var("SC005_WORKER").expect("pas de worker sans parent");
+    let args = input
+        .split(',')
+        .map(|v| v.parse::<usize>().unwrap())
+        .collect::<Vec<_>>();
+    bridget_daemon::environment::initialize_process().unwrap();
+    let namespace = bridget_daemon::environment::Namespace::from_environment().unwrap();
+    let root = namespace.root.parent().unwrap().to_path_buf();
+    let control = UnixStream::connect(root.join("control.sock")).unwrap();
+    control
+        .set_read_timeout(Some(Duration::from_secs(80)))
+        .unwrap();
+    control
+        .set_write_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut reader = BufReader::new(control.try_clone().unwrap());
+    let mut writer = BufWriter::new(control);
+    let mut harness = LocalHarness::start(
+        root,
+        args[0],
+        args[1],
+        args[2],
+        Instant::now() + GLOBAL_TIMEOUT,
+    );
+    writeln!(writer, "ready").unwrap();
+    writer.flush().unwrap();
+    loop {
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).unwrap() > 0,
+            "parent déconnecté"
+        );
+        let command: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let count = |key: &str| command[key].as_u64().unwrap() as usize;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let result = match command["op"].as_str().unwrap() {
+            "send" => {
+                harness.send_turn(count("turn"));
+                serde_json::json!(true)
+            }
+            "wait" => {
+                harness.wait_for_appends(count("count"), deadline);
+                serde_json::json!(true)
+            }
+            "samples" => serde_json::json!(
+                harness
+                    .probe
+                    .take()
+                    .iter()
+                    .map(|v| v.as_nanos() as u64)
+                    .collect::<Vec<_>>()
+            ),
+            "view" => {
+                let view = &harness.views[0];
+                serde_json::json!((
+                    view.final_fragments.load(Ordering::SeqCst),
+                    view.caught_up.load(Ordering::SeqCst),
+                    view.final_sequences.lock().unwrap().clone()
+                ))
+            }
+            "latencies" => {
+                harness.wait_for_appends(count("samples"), deadline);
+                for view in &harness.views {
+                    wait_until(deadline, "rendu absent", || {
+                        view.final_fragments.load(Ordering::SeqCst) >= count("events")
+                    });
+                }
+                let samples = harness.probe.take_samples();
+                assert_eq!(samples.len(), count("samples"));
+                let rendered = harness.views[0].rendered_at.lock().unwrap();
+                serde_json::json!(
+                    samples
+                        .iter()
+                        .map(|s| rendered[&s.seq]
+                            .checked_duration_since(s.completed_at)
+                            .expect("rendu avant append")
+                            .as_nanos() as u64)
+                        .collect::<Vec<_>>()
+                )
+            }
+            "finish" => {
+                harness.finish(deadline);
+                writeln!(writer, "true").unwrap();
+                writer.flush().unwrap();
+                break;
+            }
+            other => panic!("commande inconnue {other}"),
+        };
+        writeln!(writer, "{result}").unwrap();
+        writer.flush().unwrap();
     }
 }
 
@@ -619,33 +841,7 @@ fn run_sc001_campaign(index: usize) -> Sc001Campaign {
 
     let expected_samples = SC001_TURNS * SAMPLED_BOUNDARIES_PER_TURN;
     let expected_journal = SC001_TURNS * JOURNAL_EVENTS_PER_TURN;
-    harness.wait_for_appends(expected_samples, deadline);
-    for view in &harness.views {
-        wait_until(deadline, "rendu attach absent après append", || {
-            view.final_fragments.load(Ordering::SeqCst) >= expected_journal
-        });
-    }
-
-    let samples = harness.probe.take_samples();
-    assert_eq!(samples.len(), expected_samples, "append incomplet");
-    let first_view = &harness.views[0];
-    let rendered = first_view
-        .rendered_at
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    let latencies = samples
-        .iter()
-        .map(|sample| {
-            let rendered_at = rendered
-                .get(&sample.seq)
-                .copied()
-                .unwrap_or_else(|| panic!("seq {} non rendue", sample.seq));
-            rendered_at
-                .checked_duration_since(sample.completed_at)
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>();
-    drop(rendered);
+    let latencies = harness.latencies(expected_samples, expected_journal);
     assert_eq!(latencies.len(), expected_samples);
     let p95 = percentile_95(&latencies);
     let max = latencies.iter().copied().max().unwrap_or_default();
@@ -741,45 +937,35 @@ fn sc002_rejeu_vers_suivi_traverse_la_rotation_sans_perte_ni_doublon() {
         deadline,
         move |journal_directory| {
             std::fs::create_dir_all(journal_directory).expect("répertoire historique");
-            std::fs::write(
-                journal_directory.join(format!("{previous_date}.jsonl")),
+            fixture::private_write(
+                &journal_directory.join(format!("{previous_date}.jsonl")),
                 b"{\"v\":1,\"seq\":5}\n",
             )
             .expect("événement avant minuit");
         },
     );
-    let final_fragments = Arc::clone(&harness.views[0].final_fragments);
-    let final_sequences = Arc::clone(&harness.views[0].final_sequences);
-    let caught_up = Arc::clone(&harness.views[0].caught_up);
     wait_until(deadline, "rejeu historique absent", || {
-        final_fragments.load(Ordering::SeqCst) >= 1
+        harness.view_state().0 >= 1
     });
     wait_until(
         deadline,
         "SnapshotCaughtUp absent avant le suivi live",
-        || caught_up.load(Ordering::SeqCst) == 1,
+        || harness.view_state().1 == 1,
     );
     assert_eq!(
-        caught_up.load(Ordering::SeqCst),
+        harness.view_state().1,
         1,
         "SnapshotCaughtUp ne doit être émis qu'une fois"
     );
-    assert_eq!(
-        final_sequences
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .as_slice(),
-        [5]
-    );
+    assert_eq!(harness.view_state().2, [5]);
 
     harness.send_turn(0);
     wait_until(deadline, "suivi live absent après rotation", || {
-        final_fragments.load(Ordering::SeqCst) > JOURNAL_EVENTS_PER_TURN
+        harness.view_state().0 > JOURNAL_EVENTS_PER_TURN
     });
-    let seqs = final_sequences
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .clone();
+    let (count, caught_up, seqs) = harness.view_state();
+    assert_eq!(caught_up, 1, "un seul SnapshotCaughtUp après le tour live");
+    assert_eq!(count, JOURNAL_EVENTS_PER_TURN + 1);
     assert_eq!(
         seqs,
         vec![5, 6, 7, 8],
@@ -787,7 +973,8 @@ fn sc002_rejeu_vers_suivi_traverse_la_rotation_sans_perte_ni_doublon() {
     );
     let current_file = harness
         .root
-        .join("home/.cache/bridget/sessions/codex-bench")
+        .join("state/sessions")
+        .join(AGENT)
         .join(format!("{}.jsonl", current_host_date()));
     assert!(
         current_file.exists(),

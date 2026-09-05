@@ -64,7 +64,12 @@ pub fn is_owned_running_process(pid: i32) -> bool {
         .next()
         .and_then(|p| p.parse::<u32>().ok())
         == Some(std::process::id())
-        && command.contains(env!("CARGO_BIN_EXE_bridget"))
+        && (command.contains(env!("CARGO_BIN_EXE_bridget"))
+            || std::env::current_exe().ok().is_some_and(|path| {
+                command.contains(path.to_string_lossy().as_ref())
+                    && (command.contains("--exact fixture::performance_daemon_worker")
+                        || command.contains("--exact sc005_worker"))
+            }))
         && !command.to_ascii_lowercase().contains("firefox")
         && unsafe { libc::getpgid(pid) } == pid
 }
@@ -514,6 +519,50 @@ pub fn spawn_daemon(root: &Path, sync: Option<&Path>) -> DaemonProcess {
     } else {
         command.env_remove(DIRECTORY_ENV);
     }
+    spawn_daemon_command(command)
+}
+
+/// Même boucle daemon, en enfant isolé, avec le seul disjoncteur de charge
+/// explicitement dimensionné. Aucun réglage de production ni contournement
+/// du résultat d'un Send : la protection normale reste testée ailleurs.
+pub fn spawn_performance_daemon(root: &Path) -> DaemonProcess {
+    let isolated = isolated_command(root);
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .env_clear()
+        .envs(isolated.get_envs().filter_map(|(k, v)| v.map(|v| (k, v))));
+    command
+        .args([
+            "--exact",
+            "fixture::performance_daemon_worker",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("BRIDGET_PERFORMANCE_DAEMON", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    spawn_daemon_command(command)
+}
+
+#[test]
+#[ignore = "sous-processus privé des bancs, jamais un daemon de production"]
+fn performance_daemon_worker() {
+    assert_eq!(
+        std::env::var("BRIDGET_PERFORMANCE_DAEMON").as_deref(),
+        Ok("1")
+    );
+    bridget_daemon::environment::initialize_process().unwrap();
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Info)
+        .init();
+    let config = bridget_daemon::daemon::DaemonConfig {
+        circuit_breaker_limit: 10_000,
+        ..Default::default()
+    };
+    bridget_daemon::daemon::run(config).unwrap();
+}
+
+fn spawn_daemon_command(mut command: Command) -> DaemonProcess {
     unsafe {
         command.pre_exec(|| {
             if libc::setpgid(0, 0) == -1 {

@@ -43,7 +43,7 @@ Exécution séquentielle par tranches ; aucun lancement automatique de sous-agen
 - [x] T025 [US2] Ajouter tests/core_089_federation_test.rs avec serveur SSH de test isolé et transfert Unix réel : même protocole/annuaire/ledger, timeout et permissions ; ce test local ne remplace pas T026.
 - [x] T026 [US2] Exécuter la couture sur deux machines réelles et comptes autorisés, sockets indépendantes : demande/réponse/ledger/journal. Consigner commandes exactes et preuves dans implementation.md. SC-08904.
 - [x] T027 [US2] Couper/rétablir uniquement le tunnel de test : mêmes IDs et bytes, curseur préservé, Gap/Unavailable honnêtes, aucun double prompt ni redémarrage fournisseur. Compléter core_089_federation_test.rs et preuve distante. SC-08904/05.
-- [ ] T028 [US2] Mesurer local et distant 10 événements/s sur 60 s ; p95/max/pertes/clock skew, budget d'append historique inchangé. Consigner méthode et résultats, puis nettoyer les seuls objets de test. SC-08912.
+- [x] T028 [US2] Mesurer local et distant 10 événements/s sur 60 s ; p95/max/pertes/clock skew, budget d'append historique inchangé. Consigner méthode et résultats, puis nettoyer les seuls objets de test. SC-08912.
 
 ## P4 — Qualité, sécurité et adoption contrôlée (US4)
 

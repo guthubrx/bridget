@@ -24,7 +24,12 @@ use std::sync::{OnceLock, Weak};
 #[cfg(feature = "test-support")]
 type AppendSamples = Arc<Mutex<Vec<AppendLatencySample>>>;
 #[cfg(feature = "test-support")]
-type AppendProbeRegistry = Mutex<HashMap<PathBuf, Weak<Mutex<Vec<AppendLatencySample>>>>>;
+type AppendProbeRegistry = Mutex<HashMap<PathBuf, AppendProbeRegistration>>;
+#[cfg(feature = "test-support")]
+struct AppendProbeRegistration {
+    samples: Weak<Mutex<Vec<AppendLatencySample>>>,
+    all_events: bool,
+}
 
 /// Signal minimal vers un adaptateur lorsque le journal append-only devient
 /// non fiable. Le journal reste indépendant du protocole fournisseur.
@@ -222,12 +227,28 @@ pub struct AppendLatencyProbe {
 #[cfg(feature = "test-support")]
 impl AppendLatencyProbe {
     pub fn install(root: impl AsRef<Path>) -> Self {
+        Self::install_with_scope(root, false)
+    }
+
+    /// Recette 089 : chaque fragment complet a sa borne post-append, sans
+    /// modifier l'échantillonnage historique turn_start/turn_end de SC-005.
+    pub fn install_all_events(root: impl AsRef<Path>) -> Self {
+        Self::install_with_scope(root, true)
+    }
+
+    fn install_with_scope(root: impl AsRef<Path>, all_events: bool) -> Self {
         let root = root.as_ref().to_path_buf();
         let samples = Arc::new(Mutex::new(Vec::new()));
         append_probes()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .insert(root.clone(), Arc::downgrade(&samples));
+            .insert(
+                root.clone(),
+                AppendProbeRegistration {
+                    samples: Arc::downgrade(&samples),
+                    all_events,
+                },
+            );
         Self { root, samples }
     }
 
@@ -270,7 +291,7 @@ impl Drop for AppendLatencyProbe {
             .unwrap_or_else(|poison| poison.into_inner());
         if probes
             .get(&self.root)
-            .and_then(Weak::upgrade)
+            .and_then(|registration| registration.samples.upgrade())
             .is_some_and(|samples| Arc::ptr_eq(&samples, &self.samples))
         {
             probes.remove(&self.root);
@@ -332,7 +353,12 @@ impl JournalWriter {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .get(root)
-            .and_then(Weak::upgrade);
+            .and_then(|registration| {
+                registration
+                    .samples
+                    .upgrade()
+                    .map(|samples| (samples, registration.all_events))
+            });
         let handle = thread::spawn(move || {
             while let Ok(command) = receiver.recv() {
                 match command {
@@ -369,7 +395,9 @@ impl JournalWriter {
                             .unwrap_or_else(|poison| poison.into_inner())
                             .push(append_elapsed);
                         #[cfg(feature = "test-support")]
-                        if is_turn_boundary && let Some(samples) = &thread_probe {
+                        if let Some((samples, all_events)) = &thread_probe
+                            && (is_turn_boundary || *all_events)
+                        {
                             samples
                                 .lock()
                                 .unwrap_or_else(|poison| poison.into_inner())
@@ -986,6 +1014,44 @@ mod tests {
 
     fn root(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("bridget-journal-{name}-{}", std::process::id()))
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn sonde_complete_ne_modifie_pas_les_deux_bornes_historiques() {
+        for (all, suffix, expected) in [
+            (false, "probe-boundaries", vec![1, 3]),
+            (true, "probe-all", vec![1, 2, 3]),
+        ] {
+            let root = root(suffix);
+            let probe = if all {
+                AppendLatencyProbe::install_all_events(&root)
+            } else {
+                AppendLatencyProbe::install(&root)
+            };
+            let writer = JournalWriter::start(
+                &root,
+                "probe",
+                "session",
+                Arc::new(Mutex::new(AcpEventQueue::default())),
+            )
+            .unwrap();
+            for event in ["turn_start", "reasoning", "turn_end"] {
+                writer.enqueue(event, Some("message"), json!({})).unwrap();
+            }
+            writer.stop();
+            // Mutation all_events toujours vrai : le premier oracle reçoit
+            // [1,2,3] ; toujours faux : le second perd la séquence 2.
+            assert_eq!(
+                probe
+                    .take_samples()
+                    .iter()
+                    .map(|s| s.seq)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

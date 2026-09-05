@@ -1,5 +1,36 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T028 : charge locale/SSH et budget historique
+
+Source : 61da1b7 + présent lot test-support/harnais (aucun changement de comportement release). Daemon réel en enfant séparé, wrapper ACP réel dans le processus instrumenté, fournisseur synthétique compté, une connexion attach locale et une connexion attach distante via le transfert SSH livré. Émission de 200 tours idempotents pendant 60 s : trois événements par tour, un tour toutes les 300 ms, soit **10 événements/s en moyenne, en petits groupes de trois**, pas un flux prétendument uniforme à 100 ms. Les remises différées ne bloquent pas la cadence : chaque issue est ensuite vérifiée Accepted par rejeu des bytes d'origine, sans nouvelle injection. Les séquences attendues sont exactement 1..600 sur les deux vues et les bytes rendus sont identiques.
+
+Le rendu mesuré est celui du consommateur public attach : décodage, assemblage, écriture de la ligne JSONL puis flush. Ce n'est ni une mesure GUI, ni la latence d'un modèle externe. Origine locale = Instant post-flush du journal, avant publication au relais. Sonde test-support nouvelle « tous événements », distincte de l'échantillonnage historique start/end de SC-005 ; test dédié vérifiant respectivement les séquences [1,3] et [1,2,3]. La durabilité électrique du disque n'est pas mesurée.
+
+Horloges : sept allers-retours sur une connexion SSH DÉJÀ établie, avant et après la campagne. Estimation par milieu du meilleur aller-retour ; incertitude conservative = maximum des demi-RTT + dérive mesurée. Aucune durée négative écrêtée. Première méthode rejetée pour le chiffre publié : inclure le démarrage SSH/Python donnait une estimation négative et ±113 ms, quoique le majorant restât sous le budget. La méthode resserrée donne +7,285477 ms avant, +7,589852 ms après, ±3,389875 ms retenus.
+
+| Mesure exécutée | Résultat | Budget inchangé |
+|---|---|---|
+| Local, 600/600 reçus | p95 12,242375 ms ; max 13,064542 ms | p95 <1 s ; max <3 s |
+| Linux, 600/600 reçus | p95 brut 23,077190 ms ; corrigé 15,791713 ms ; max corrigé 19,051622 ms | p95 <3 s |
+| Majorant distant p95, incertitude comprise | 19,181588 ms | <3 s |
+| Pertes / doublons / différences d'octets | 0 / 0 / 0 ; 200 issues Accepted | Aucun |
+
+Rapport complet des 600 échantillons par mesure : `artifacts/charge-600-local-linux.json`. Durée du test 73,34 s, dont 60 s d'émission ; compilation 1,35 s. Commande exacte, dans le worktree 089 (les trois répertoires locaux étaient créés en 0700 avant la commande) :
+
+```sh
+env -i HOME=/private/tmp/b089load-7hSrWe/provider BRIDGET_HOME=/private/tmp/b089load-7hSrWe/state BRIDGET_SOCKET=/private/tmp/b089load-7hSrWe/state/bridget.sock TMPDIR=/private/tmp/b089load-7hSrWe/tmp CARGO_HOME=/Users/moi/.cargo RUSTUP_HOME=/Users/moi/.rustup PATH=/Users/moi/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin BRIDGET_SSH_LOAD_GATE=1 BRIDGET_SSH_REMOTE_GATE=1 BRIDGET_SSH_REMOTE_HOST=37.59.185.67 BRIDGET_SSH_REMOTE_USER=moi BRIDGET_SSH_REMOTE_PORT=2222 BRIDGET_SSH_IDENTITY=/Users/moi/.ssh/id_ed25519 BRIDGET_SSH_KNOWN_HOSTS=/Users/moi/.ssh/known_hosts BRIDGET_SSH_REMOTE_PARENT=/home/moi BRIDGET_SSH_REMOTE_BIN=/home/moi/bg089-cb62fdf/bin/bridget /usr/bin/perl -e 'alarm 180; exec @ARGV' /Users/moi/.cargo/bin/cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_federation_test charge_locale_distante -- --include-ignored --test-threads=1 --nocapture
+```
+
+Pour reproduire, créer une NOUVELLE racine `/private/tmp/b089load-XXXXXX` et remplacer ses quatre occurrences : ne jamais réutiliser une base déjà mesurée. La commande configure un enfant de test avec la boucle daemon de production et un disjoncteur porté explicitement à 10 000 échanges. Diagnostic préalable conservé : avec le réglage normal 8/180 s, SQLite attestait 8 Accepted et 192 refus circuit_breaker ; ce résultat n'est pas un test de charge réussi. Aucune hausse du disjoncteur de production.
+
+**SC-005 conservé, pas remplacé par la charge SSH.** Le harnais historique crée désormais un processus/namespace par banc, daemon récolté, UUID v2 et fichiers privés ; plus de daemon-thread survivant ni changement global d'environnement. Le parent alterne toujours les envois entre les DEUX bancs simultanés. 100 tours de chauffe, 1 000 mesurés, deux bornes par tour, cinq paires internes inchangées. Les instants append/rendu restent dans le même worker pour SC-001 ; pas de conversion approximative entre horloges de processus. La jonction SC-002 garde le témoin SnapshotCaughtUp unique AVANT le tour live, séquences [5] puis [5,6,7,8].
+
+Commande sous l'environnement privé T014 et watchdog 420 s : `cargo test --offline --locked -p bridget-daemon --features test-support --test sc005_attach_budget -- --test-threads=1 --nocapture` : **3/3**, 33,97 s, compilation 2,49 s. Deux entrées ignorées sont des workers réellement lancés par les parents ; la troisième est la campagne historique SC-001 de 21×60 s, **non exécutée ici**, conservée pour recette explicite. p95 médian sans vue 20,875 µs ; avec deux vues 22,667 µs ; deltas APPARIÉS [-917,-708,334,542,1792] ns ; médiane 334 ns <= max(5 % × médiane baseline, 5 µs) = 5 000 ns. Aucune exemption sous 100 µs ni modification du seuil.
+
+`cargo test --offline --locked -p bridget-transport --features test-support --lib journal::tests:: -- --test-threads=4` : 15/15, 0,39 s (compilation 7,93 s). Clippy workspace/all-targets/test-support -D warnings vert, 8,87 s ; fmt check vert ; gel 17 fichiers + six mutants vert. Les essais ayant échoué ont conduit à corriger le harnais : garde de PID adaptée aux seuls workers enfants exacts, pas d'élargissement aux processus de la flotte ; fichiers historiques de fixture créés privés ; socket de contrôle acceptée repassée en mode bloquant avec timeout (héritage non bloquant macOS).
+
+Nettoyage : daemon/wrapper/SSH de la recette finale arrêtés et récoltés, namespace distant retiré par contrôle de type/UID/inode et refus de connexion, puis rmdir uniquement si vide. Huit namespaces distants résiduels des essais précédents ont été contrôlés et retirés de même. Aucun processus worker restant au contrôle ps. Les diagnostics locaux restent privés jusqu'au nettoyage final T035 ; aucune donnée utilisateur effacée. Le seul déploiement client privé `/home/moi/bg089-cb62fdf` reste disponible pour la recette finale, aucun service système installé.
+
 ## 2026-09-05 — T027 : coupure SSH et reprise sans réinjection
 
 La recette distante étend T026 sans remplacer son scénario : journal historique de fixture seq=5 puis vrai tour seq=6..8 ; arrêt/récolte du SEUL SSH, ledger et relève en erreur explicite sans donnée/fraîcheur inventée. La socket stale est nettoyée dans le harnais seulement, après refus de connexion et vérification du couple device/inode relevé AVANT coupure, type et propriétaire ; le script livré conserve StreamLocalBindUnlink=no. Nouveau tunnel au même chemin, retry CLI avec les mêmes id/issued_at/cible/corps : accepted, un seul prompt et une ligne de ledger. Relève Seq(8) inclusive : exactement les mêmes bytes de l'événement 8 puis UN SnapshotCaughtUp. Connexions ACTOR/ACP_AGENT et PID enfant fournisseur du wrapper inchangés : le tunnel ne redémarre pas les agents.

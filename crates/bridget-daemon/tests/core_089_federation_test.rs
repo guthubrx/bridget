@@ -288,6 +288,440 @@ fn child_pids(parent: u32) -> Vec<u32> {
     pids
 }
 
+struct LoadWrapper {
+    daemon: Option<DaemonProcess>,
+    done: std::sync::mpsc::Receiver<Result<(), String>>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+impl LoadWrapper {
+    fn shutdown(&mut self) -> bool {
+        if let Some(daemon) = self.daemon.take() {
+            daemon.stop();
+        }
+        if self.handle.is_none() {
+            return true;
+        }
+        match self.done.recv_timeout(Duration::from_secs(8)) {
+            Ok(result) => {
+                let joined = self.handle.take().unwrap().join();
+                result.is_ok() && joined.is_ok()
+            }
+            Err(error) => {
+                eprintln!("wrapper de mesure non récolté : {error}");
+                false
+            }
+        }
+    }
+}
+impl Drop for LoadWrapper {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            // Le garde du daemon nettoie sans paniquer pendant un échec
+            // d'oracle ; jamais de double panique qui court-circuite les Drop.
+            drop(self.daemon.take());
+        } else {
+            let _ = self.shutdown();
+        }
+    }
+}
+
+fn unix_ns() -> i128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as i128
+}
+
+fn clock_offset(remote: &Remote, root: &Path, phase: &str) -> (i128, i128) {
+    use std::io::{BufRead, Write};
+    use std::os::fd::AsRawFd;
+    // Une connexion déjà établie : ne pas inclure l'authentification SSH et
+    // le lancement Python dans la moitié aller d'une sonde d'horloge.
+    let script = "import sys,time\nprint('ready',flush=True)\nfor line in sys.stdin: print(time.time_ns(),flush=True)";
+    let log = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(root.join(format!("clock-{phase}.stderr")))
+        .unwrap();
+    let child = remote
+        .command(&format!(
+            "python3 -u -c {} {}",
+            shell_quote(script),
+            shell_quote(remote.root.to_str().unwrap())
+        ))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(log))
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let mut process = SshChild {
+        child,
+        marker: PathBuf::from(root.file_name().unwrap()),
+    };
+    let mut input = process.child.stdin.take().unwrap();
+    let mut output = std::io::BufReader::new(process.child.stdout.take().unwrap());
+    let mut read = || {
+        let mut fd = libc::pollfd {
+            fd: output.get_ref().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        assert!(
+            unsafe { libc::poll(&mut fd, 1, 10_000) } > 0,
+            "sonde horloge muette"
+        );
+        let mut line = String::new();
+        assert!(output.read_line(&mut line).unwrap() > 0);
+        line
+    };
+    assert_eq!(read().trim(), "ready");
+    let mut samples = Vec::new();
+    for _ in 0..7 {
+        let before = unix_ns();
+        input.write_all(b"probe\n").unwrap();
+        input.flush().unwrap();
+        let line = read();
+        let after = unix_ns();
+        let distant: i128 = line.trim().parse().unwrap();
+        samples.push((after - before, distant - (before + after) / 2));
+    }
+    drop(input);
+    process.stop();
+    samples.sort_unstable();
+    (samples[0].1, samples[0].0 / 2)
+}
+
+#[test]
+#[ignore = "600 événements / 60 s, deux machines ; namespace BRIDGET_HOME dédié requis"]
+fn charge_locale_distante_600_evenements_en_soixante_secondes() {
+    use bridget_transport::DaemonToWrapper;
+    use std::io::Write;
+    assert_eq!(std::env::var("BRIDGET_SSH_LOAD_GATE").as_deref(), Ok("1"));
+    // Ce test est lancé seul dans SON processus configuré, sans set_var après
+    // démarrage des threads. Le wrapper injectable refuse toute autre racine.
+    bridget_daemon::environment::initialize_process().unwrap();
+    let namespace = bridget_daemon::environment::Namespace::from_environment().unwrap();
+    let root = namespace.root.parent().unwrap().to_path_buf();
+    assert!(
+        root.file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("b089load-")
+    );
+    for path in [root.join("provider"), root.join("tmp")] {
+        private_dir(&path).unwrap();
+    }
+    assert_eq!(namespace.socket, socket(&root));
+    let remote = Remote::configured(&root);
+    let daemon = spawn_performance_daemon(&root);
+    let actor = register_agent_as(&socket(&root), ACTOR, "load-actor");
+    let probe = bridget_transport::journal::AppendLatencyProbe::install_all_events(
+        root.join("state/sessions"),
+    );
+    let (registry, registry_root, _counter) = registry_with_counting_acp_agent(201);
+    let (done_tx, done) = std::sync::mpsc::channel();
+    let wrapper_root = root.clone();
+    let handle = std::thread::spawn(move || {
+        let result = bridget_daemon::wrapper::launch_acp_with(
+            "fixture-acp",
+            &[],
+            Some(ACP_AGENT),
+            &registry,
+            &socket(&wrapper_root),
+            &wrapper_root.join("provider"),
+        );
+        let _ = done_tx.send(result.map_err(|error| error.to_string()));
+    });
+    let mut wrapper = LoadWrapper {
+        daemon: Some(daemon),
+        done,
+        handle: Some(handle),
+    };
+    wait_for_registered_agent(&socket(&root), ACP_AGENT);
+    let mut local = Client::connect(&socket(&root));
+    local.send(WrapperToDaemon::RoleHandshake {
+        role: bridget_transport::protocol::ConnectionRole::Attach,
+    });
+    assert!(matches!(
+        local.receive(),
+        DaemonToWrapper::RoleAccepted { .. }
+    ));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        local.send(WrapperToDaemon::Subscribe {
+            agent: ACP_AGENT.into(),
+            window: bridget_transport::protocol::AttachWindow::Seq(0),
+        });
+        match local.receive() {
+            DaemonToWrapper::Subscribed { .. } => break,
+            DaemonToWrapper::AttachRejected {
+                reason: bridget_transport::protocol::AttachRefusal::JournalUnavailable,
+                ..
+            } => assert!(Instant::now() < deadline),
+            other => panic!("attache locale : {other:?}"),
+        }
+    }
+    assert!(matches!(
+        local.receive(),
+        DaemonToWrapper::SnapshotCaughtUp {
+            through_seq: None,
+            ..
+        }
+    ));
+    local
+        .reader
+        .get_ref()
+        .set_read_timeout(Some(Duration::from_secs(75)))
+        .unwrap();
+    let rendered_path = root.join("local-render.jsonl");
+    let (local_tx, local_rx) = std::sync::mpsc::channel();
+    let local_reader = std::thread::spawn(move || {
+        let mut rendered = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(rendered_path)
+            .unwrap();
+        let mut current = Vec::new();
+        let mut received = std::collections::BTreeMap::new();
+        while received.len() < 600 {
+            match local.receive() {
+                DaemonToWrapper::JournalFragment {
+                    seq,
+                    offset,
+                    final_fragment,
+                    bytes,
+                    ..
+                } => {
+                    assert_eq!(offset, current.len() as u64);
+                    current.extend(bytes);
+                    if final_fragment {
+                        rendered.write_all(&current).unwrap();
+                        rendered.write_all(b"\n").unwrap();
+                        rendered.flush().unwrap();
+                        assert!(
+                            received.insert(seq, Instant::now()).is_none(),
+                            "doublon local"
+                        );
+                        current.clear();
+                    }
+                }
+                other => panic!("flux local interrompu : {other:?}"),
+            }
+        }
+        local_tx.send(received).unwrap();
+    });
+    let tunnel = remote.tunnel(&root, "load-tunnel");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    for n in 0.. {
+        let result = remote.cli(
+            &root,
+            &format!("load-who-{n}"),
+            ACTOR,
+            "load-actor",
+            &["who"],
+        );
+        if result.status.success() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{}", output_text(&result));
+    }
+    let clock_before = clock_offset(&remote, &root, "before");
+    let frames = serde_json::json!([
+        WrapperToDaemon::RoleHandshake {
+            role: bridget_transport::protocol::ConnectionRole::Attach
+        },
+        WrapperToDaemon::Subscribe {
+            agent: ACP_AGENT.into(),
+            window: bridget_transport::protocol::AttachWindow::Seq(0)
+        }
+    ]);
+    let script = r#"import socket,sys,json,time,base64
+s=socket.socket(socket.AF_UNIX); s.settimeout(75); s.connect(sys.argv[1]); f=s.makefile('rb'); deadline=time.monotonic()+75
+def receive():
+ s.settimeout(max(0.001,deadline-time.monotonic())); raw=f.readline(16*1024*1024)
+ assert raw.endswith(b'\n'); return json.loads(raw)
+for request in json.loads(sys.argv[2]):
+ s.sendall((json.dumps(request,separators=(',',':'))+'\n').encode()); reply=receive()
+ assert reply['type'] in ('RoleAccepted','Subscribed'), reply
+assert receive()['type']=='SnapshotCaughtUp'
+print(json.dumps({'ready':True}),flush=True)
+seen=set(); line=bytearray()
+while len(seen)<600:
+ event=receive(); assert event['type']=='JournalFragment',event
+ assert event['offset']==len(line); line.extend(base64.b64decode(event['bytes']))
+ if event['final']:
+  assert event['seq'] not in seen; seen.add(event['seq'])
+  sys.stdout.buffer.write(line+b'\n'); sys.stdout.buffer.flush()
+  print(json.dumps({'rendered_seq':event['seq'],'rendered_ns':time.time_ns()}),flush=True); line.clear()
+"#;
+    let program = format!(
+        "python3 -c {} {} {}",
+        shell_quote(script),
+        shell_quote(remote.socket().to_str().unwrap()),
+        shell_quote(&frames.to_string())
+    );
+    let mut capture = SshChild::start(&mut remote.command(&program), &root, "load-remote");
+    ready(&mut capture, &root.join("load-remote.log"), || {
+        fs::read_to_string(root.join("load-remote.log"))
+            .unwrap()
+            .lines()
+            .any(|l| serde_json::from_str::<serde_json::Value>(l).is_ok_and(|v| v["ready"] == true))
+    });
+    let anchor_ns = unix_ns();
+    let anchor = Instant::now();
+    let started = Instant::now();
+    let mut sender = negotiate_client(&socket(&root));
+    let mut submitted = Vec::new();
+    for turn in 0..200 {
+        // 200 tours, trois lignes chacun : 600 événements à 10/s en moyenne,
+        // par petits groupes de trois. Ce profil est publié, pas présenté comme
+        // un événement uniformément espacé de 100 ms.
+        if let Some(delay) =
+            (started + Duration::from_millis(300) * turn).checked_duration_since(Instant::now())
+        {
+            std::thread::sleep(delay);
+        }
+        assert!(started.elapsed() < Duration::from_secs(70));
+        let id = format!("089-load-{turn}");
+        let mut message = BridgetMessage::new(ACTOR, ACP_AGENT, format!("charge numérotée {turn}"));
+        message.id = id.clone();
+        let command = WrapperToDaemon::SendIdempotent {
+            message,
+            message_id: id,
+            issued_at: issued_at(),
+        };
+        sender.send(command.clone());
+        let result = sender.receive();
+        match result {
+            DaemonToWrapper::IdempotencyResult {
+                issue: bridget_transport::protocol::IdempotencyIssue::Accepted { .. },
+                ..
+            } => {}
+            DaemonToWrapper::IdempotencyResult {
+                issue: bridget_transport::protocol::IdempotencyIssue::OutcomeUnknown { .. },
+                ..
+            } => {}
+            other => panic!("tour {turn} refusé : {other:?}"),
+        }
+        // Remise différée du protocole : ne pas sérialiser la cadence sur
+        // l'ACK, ni confondre OutcomeUnknown avec Accepted. Tous les terminaux
+        // sont contrôlés après la phase d'émission, avec ces mêmes bytes.
+        submitted.push(command);
+    }
+    if let Some(delay) = (started + Duration::from_secs(60)).checked_duration_since(Instant::now())
+    {
+        std::thread::sleep(delay);
+    }
+    let local_times = local_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    local_reader.join().unwrap();
+    for command in &submitted {
+        assert!(
+            matches!(
+                retry_command_issue(&socket(&root), command.clone()),
+                bridget_transport::protocol::IdempotencyIssue::Accepted { .. }
+            ),
+            "remise non terminale après rendu"
+        );
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let remote_status = loop {
+        if let Some(status) = capture.child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "réception distante incomplète");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(
+        remote_status.success(),
+        "{}",
+        fs::read_to_string(root.join("load-remote.log")).unwrap()
+    );
+    let clock_after = clock_offset(&remote, &root, "after");
+    let drift = (clock_after.0 - clock_before.0).abs();
+    assert!(
+        drift <= clock_before.1 + clock_after.1,
+        "horloge incompatible avec les bornes de mesure"
+    );
+    let remote_output = fs::read_to_string(root.join("load-remote.log")).unwrap();
+    let mut remote_times = std::collections::BTreeMap::new();
+    let mut remote_bytes = Vec::new();
+    for line in remote_output.lines() {
+        let entry: serde_json::Value = serde_json::from_str(line).unwrap();
+        if let Some(seq) = entry["rendered_seq"].as_u64() {
+            assert!(
+                remote_times
+                    .insert(seq, entry["rendered_ns"].as_i64().unwrap() as i128)
+                    .is_none()
+            );
+        } else if entry["v"] == 1 {
+            remote_bytes.extend_from_slice(line.as_bytes());
+            remote_bytes.push(b'\n');
+        } else {
+            assert_eq!(entry["ready"], true);
+        }
+    }
+    let expected = (1..=600).collect::<Vec<_>>();
+    assert_eq!(local_times.keys().copied().collect::<Vec<_>>(), expected);
+    assert_eq!(remote_times.keys().copied().collect::<Vec<_>>(), expected);
+    assert_eq!(
+        fs::read(root.join("local-render.jsonl")).unwrap(),
+        remote_bytes,
+        "rendu brut identique"
+    );
+    let samples = probe.take_samples();
+    assert_eq!(samples.len(), 600, "chaque append réellement échantillonné");
+    let uncertainty = clock_before.1.max(clock_after.1) + drift;
+    let mut local_ns = Vec::new();
+    let mut remote_raw_ns = Vec::new();
+    let mut remote_corrected_ns = Vec::new();
+    for sample in &samples {
+        local_ns.push(
+            local_times[&sample.seq]
+                .checked_duration_since(sample.completed_at)
+                .expect("rendu avant append")
+                .as_nanos() as i128,
+        );
+        let append_ns = anchor_ns + sample.completed_at.duration_since(anchor).as_nanos() as i128;
+        let raw = remote_times[&sample.seq] - append_ns;
+        remote_raw_ns.push(raw);
+        remote_corrected_ns.push(raw - clock_before.0);
+    }
+    let percentile = |values: &[i128]| {
+        let mut copy = values.to_vec();
+        copy.sort_unstable();
+        copy[(copy.len() * 95).div_ceil(100) - 1]
+    };
+    let local_p95 = percentile(&local_ns);
+    let remote_p95 = percentile(&remote_corrected_ns);
+    let report = serde_json::json!({"v":1,"criterion":"SC-08912","turns":200,"journal_events":600,"duration_s":60,"profile":"3 événements par tour, 1 tour/300ms","local_received":local_times.len(),"remote_received":remote_times.len(),"local_p95_ns":local_p95,"local_max_ns":local_ns.iter().max(),"remote_raw_p95_ns":percentile(&remote_raw_ns),"remote_corrected_p95_ns":remote_p95,"remote_corrected_max_ns":remote_corrected_ns.iter().max(),"clock_offset_before_ns":clock_before.0,"clock_offset_after_ns":clock_after.0,"clock_uncertainty_ns":uncertainty,"remote_p95_upper_bound_ns":remote_p95+uncertainty,"remote_raw_negative_count":remote_raw_ns.iter().filter(|v|**v<0).count(),"local_samples_ns":local_ns,"remote_raw_samples_ns":remote_raw_ns,"remote_corrected_samples_ns":remote_corrected_ns});
+    private_write(
+        &root.join("load-report.json"),
+        serde_json::to_vec_pretty(&report).unwrap(),
+    )
+    .unwrap();
+    eprintln!(
+        "rapport charge {} : local p95={}ms, distant corrigé p95={}ms, borne haute={}ms, incertitude={}ms, 600/600 deux vues",
+        root.join("load-report.json").display(),
+        local_p95 as f64 / 1e6,
+        remote_p95 as f64 / 1e6,
+        (remote_p95 + uncertainty) as f64 / 1e6,
+        uncertainty as f64 / 1e6
+    );
+    assert!(local_p95 < 1_000_000_000 && *local_ns.iter().max().unwrap() < 3_000_000_000);
+    assert!(remote_p95 + uncertainty < 3_000_000_000);
+    drop(sender);
+    drop(actor);
+    capture.stop();
+    tunnel.stop();
+    assert!(wrapper.shutdown());
+    fs::remove_dir_all(registry_root).unwrap();
+    cleanup_remote_namespace(&remote, &root);
+}
+
 #[test]
 #[ignore = "deux machines autorisées requises ; paramètres BRIDGET_SSH_REMOTE_* explicites"]
 fn deux_machines_cli_reel_demande_reponse_ledger_journal() {
@@ -744,6 +1178,12 @@ s.close(); m=os.lstat(p); assert [m.st_dev,m.st_ino]==wanted; os.unlink(p)
     tunnel.take().unwrap().stop();
     daemon.stop();
     assert_eq!(wrapper.join(), Ok(()));
+    cleanup_remote_namespace(&remote, &root);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(registry_root).unwrap();
+}
+
+fn cleanup_remote_namespace(remote: &Remote, root: &Path) {
     // Pas de rm -rf distant : suppression de la seule socket créée, après
     // échec de connexion, propriétaire/type vérifiés ; racine vide exigée.
     let cleanup = r#"import os,sys,socket,stat
@@ -769,12 +1209,10 @@ os.rmdir(r)
             shell_quote(remote.socket().to_str().unwrap()),
             shell_quote(remote.root.to_str().unwrap())
         )),
-        &root,
+        root,
         "cleanup",
     );
     assert!(cleaned.status.success(), "{}", output_text(&cleaned));
-    fs::remove_dir_all(root).unwrap();
-    fs::remove_dir_all(registry_root).unwrap();
 }
 
 impl Drop for SshChild {
