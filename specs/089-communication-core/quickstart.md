@@ -4,6 +4,11 @@
 
 Répertoire de travail : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core`.
 
+Le guide de paquet indépendant, de fédération et de retour arrière est dans
+`/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/docs/communication-installation.md`.
+Il conserve l'installation précédente intacte, y compris lorsque le diagnostic
+de version indique un écart : aucune relance du service historique n'est proposée.
+
 ## Avant tout essai de binaire
 
 Choisir une racine courte privée et utiliser le même binaire extrait partout :
@@ -56,8 +61,8 @@ Avec Rust 1.92.0 disponible dans le PATH, après isolation des harnais :
 
 ```sh
 PATH=/Users/moi/.cargo/bin:$PATH cargo fmt --all --check
-PATH=/Users/moi/.cargo/bin:$PATH cargo clippy --workspace --all-targets -- -D warnings
-PATH=/Users/moi/.cargo/bin:$PATH cargo test --workspace
+PATH=/Users/moi/.cargo/bin:$PATH cargo clippy --offline --locked --workspace --all-targets --features test-support -- -D warnings
+PATH=/Users/moi/.cargo/bin:$PATH cargo test --offline --locked --workspace --features test-support -- --test-threads=4
 ```
 
 Exécuter les crashs et tests longs sous watchdog global avec sorties conservées et barrières observables. Une suite verte sans les scénarios réels ignorés par défaut n'est pas une recette fournisseur/SSH verte. Reporter les résultats dans implementation.md ; aucune bascule de production automatique.

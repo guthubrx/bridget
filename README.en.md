@@ -15,8 +15,9 @@ Session 089 is being validated. Physical extraction and local guarantees are
 implemented progressively. A real native Codex exchange and journal attachment
 have passed. The real Claude gate remains open on local authentication; GLM has
 not been validated. Cross-server SSH, reconnect and the isolated 600-event,
-60-second load gates have passed. Migration, security and full
-regression gates remain mandatory. Nothing has been deployed to the existing fleet.
+60-second load gates have passed. Copy-only migrations and targeted security
+gates have been exercised; full regression and final review remain open.
+Nothing has been deployed to the existing fleet.
 
 See the [evidence log](specs/089-communication-core/implementation.md),
 [task list](specs/089-communication-core/tasks.md) and
@@ -77,6 +78,11 @@ Exit code zero alone is not proof of a durable acknowledgement.
 MCP request scope defaults to `mine` (incoming and outgoing); `all` reads the
 authorized global scope.
 
+`status`, `who` and `agents` reject an unavailable inventory instead of printing
+an empty list. Their probe is bounded; `status` never opens a client-side database.
+The protocol does not publish an exhaustive message count, so this total remains
+explicitly unavailable. A bounded ledger view must not be presented as that total.
+
 `attach` replays then follows the journal with continuous sequences or an explicit
 `Gap`. An unavailable source, end of stream and completed catch-up are distinct.
 Connection or freshness does not prove task activity or completion.
@@ -103,7 +109,10 @@ Use a NEW private, short, absolute state directory. The daemon stays in the
 foreground. Other terminals must use the same variables and extracted binary.
 Provider HOME is preserved during normal operation for subscription access;
 there is no fallback to a paid API. No existing daemon, launchd service, tunnel
-or provider profile is replaced. Full adoption instructions remain a final gate.
+or provider profile is replaced. The
+[independent installation and rollback guide](docs/communication-installation.md)
+documents the allowlisted source package, checksums and account requirements.
+This does not authorize a fleet migration.
 
 ## Cross-server communication
 

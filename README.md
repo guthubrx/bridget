@@ -15,8 +15,9 @@ Extraction physique et garanties locales en cours de validation dans la session
 089. Codex natif a répondu réellement avec journal attachable. La recette Claude
 réelle reste ouverte sur l'authentification locale ; GLM n'est pas encore validé.
 L'échange SSH interserveur, la coupure/reprise et la charge de 600 événements
-sur 60 secondes ont passé leurs recettes isolées. Les tests longs, migrations et sécurité finale
-doivent tous passer avant une bascule. Rien n'a été déployé dans la flotte.
+sur 60 secondes ont passé leurs recettes isolées. Les migrations sur copies et
+les gates de sécurité ciblés sont exécutés ; la non-régression globale et la
+revue finale restent ouvertes. Rien n'a été déployé dans la flotte.
 
 Preuves, refus observés et tâches ouvertes :
 [réalisation](specs/089-communication-core/implementation.md),
@@ -81,6 +82,11 @@ reste inconnue. `ledger` lit le maître ; une coupure ne crée pas une base loca
 vide. MCP peut consulter les demandes entrantes et sortantes (`mine`, défaut),
 ou la portée globale (`requests_scope=all`).
 
+`status`, `who` et `agents` refusent un inventaire non attesté au lieu de rendre
+une liste vide. Leur sonde est bornée ; `status` n'ouvre aucune base côté client.
+Le total des messages n'étant pas publié par le protocole, il reste explicitement
+indisponible ; le ledger expose une vue bornée, pas un total prétendument exhaustif.
+
 `attach` rejoue le journal puis suit le flux. La jonction conserve les séquences ;
 un curseur devenu indisponible annonce une lacune (`Gap`). Source inaccessible,
 fin de flux et rattrapage terminé sont distincts. Ni un journal frais ni une
@@ -114,8 +120,10 @@ export BRIDGET_SOCKET="$BRIDGET_HOME/bridget.sock"
 
 Ce daemon reste au premier plan. Les autres terminaux doivent recevoir EXACTEMENT
 ces variables, et utiliser CE binaire. Aucun launchd, tunnel, profil fournisseur
-ou processus de l'ancienne flotte n'est remplacé. Le guide d'adoption complet
-reste un gate de la session, pas une installation automatique.
+ou processus de l'ancienne flotte n'est remplacé. Le
+[guide d'installation indépendante et de retour arrière](docs/communication-installation.md)
+décrit le paquet à liste de sources fermée, ses empreintes et les préconditions
+de compte. Ce n'est pas une autorisation de bascule de la flotte.
 
 ## Plusieurs serveurs
 
