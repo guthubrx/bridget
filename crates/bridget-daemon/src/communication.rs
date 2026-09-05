@@ -126,7 +126,13 @@ mod tests {
         for source in [
             include_str!("daemon.rs"),
             include_str!("store.rs"),
+            include_str!("store/ledger_requests.rs"),
+            include_str!("store/service_events.rs"),
+            include_str!("store/project_compat.rs"),
             include_str!("idempotency.rs"),
+            include_str!("idempotency/send_delivery.rs"),
+            include_str!("idempotency/spawn_commands.rs"),
+            include_str!("idempotency/agent_links.rs"),
             include_str!("referent_control.rs"),
             include_str!("cli.rs"),
         ] {

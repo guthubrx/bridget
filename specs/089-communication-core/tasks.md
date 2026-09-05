@@ -1,7 +1,7 @@
 # Tâches 089 — extraction progressive du noyau
 
 **Entrées :** spec.md, plan.md, research.md, data-model.md, contracts/communication.md.
-**36 tâches de réalisation, 11 terminées.** P0 : référence mesurée et exclusions de sécurité consignées ; T005 ne signifie pas suite globale verte. T009 découple Maicie ; T010 retire UI/desktop en préservant les contenus ; T011 retire le moteur Docker/projet et prouve une session hôte sans lui. Modularisation SQL et paquet indépendant restent à fermer. Aucun SC fonctionnel complet n'est déclaré validé.
+**36 tâches de réalisation, 12 terminées.** P0 : référence mesurée et exclusions de sécurité consignées ; T005 ne signifie pas suite globale verte. Maicie/UI/runtime sont découplés ; stockage modularisé sans scinder les transactions, vérifié par fautes et crashs réels. Paquet indépendant T013 encore à fermer. Aucun SC fonctionnel complet n'est déclaré validé.
 
 Exécution séquentielle par tranches ; aucun lancement automatique de sous-agents. Un commit cohérent après tests, aucune capture d'un WIP tiers. Écrire l'oracle avant la modification qu'il doit protéger, vérifier son échec sur un mutant ciblé lorsqu'exigé, puis restaurer le vrai code. Les tests réels n'utilisent jamais les processus de production.
 
@@ -21,7 +21,7 @@ Exécution séquentielle par tranches ; aucun lancement automatique de sous-agen
 - [x] T009 [US4] Découpler maicie dans crates/bridget-daemon/Cargo.toml, src/lib.rs, mission_projection.rs et ses appelants ; conserver la frontière service publique sans import métier. Oracle : compilation sans plugins/maicie accessible et couture d'un consommateur externe.
 - [x] T010 [US4] Retirer UI/desktop/rendering HTML du produit extrait via src/cli.rs, mcp.rs, lib.rs, ui.rs, artifact_* et apps/, uniquement après disposition T001/T003 ; préserver la publication/référence de contenu communicable, son contrôle d'accès et ses bytes sans renderer. Oracle : commandes retirées refusées, références utiles résolubles sans HTTP/UI, communication verte.
 - [x] T011 [US4] Découpler runtime Docker/projet de src/daemon.rs, wrapper.rs, registry.rs et project_* ; retirer les implémentations hors périmètre, conserver droits/registre/capacités de session. Oracle : spawn/refus/stop sans Docker ; une permission absente reste refusée.
-- [ ] T012 [US4] Modulariser le stockage conservé dans src/store.rs et idempotency.rs sans scinder les transactions ACK/ledger/answered/événement ; isoler SQL hors périmètre selon T001. Oracle : atomicité par faute injectée et données historiques sur copies.
+- [x] T012 [US4] Modulariser le stockage conservé dans src/store.rs et idempotency.rs sans scinder les transactions ACK/ledger/answered/événement ; isoler SQL hors périmètre selon T001. Oracle : atomicité par faute injectée et données historiques sur copies.
 - [ ] T013 [US4] Fermer Cargo.toml/Cargo.lock et exports des trois crates ; ajouter tests/core_089_dependency_test.rs. Oracle : métadonnées sans dépendance Maicie/UI/Docker, construction et exécution depuis un paquet ne contenant pas leurs sources. SC-08906.
 
 ## P2 — Usage local et garanties conservées (US1/US3)

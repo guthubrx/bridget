@@ -1,5 +1,72 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T012 : modules SQL, transactions inchangées
+
+Store est réparti entre ledger_requests, service_events et project_compat ;
+IdempotencyStore entre send_delivery, spawn_commands et agent_links. Aucun
+trait de repository, aucune connexion ou table supplémentaire. Ouverture,
+ordre des migrations et purge transversale restent dans le propriétaire
+initial. Les tests historiques sont déplacés dans tests.rs, pas supprimés.
+Les types publics et chemins des helpers transactionnels sont réexportés.
+L'oracle d'absence de dépendance MCP couvre aussi les nouveaux fichiers.
+
+Contrôle mécanique contre 1ba0eb9 : 136 corps de fonctions Store et81
+Idempotency, tous identiques après neutralisation de la seule indentation
+de début de ligne. Aucun corps de production ni SQL de migration réécrit.
+Store.rs passe de6793 à439lignes, idempotency.rs de5093 à1168 ; il s'agit
+de séparation de responsabilités, PAS d'une baisse équivalente du volume.
+
+Le modèle de données/plan corrige une erreur de description : le ledger
+était déjà visible au dispatch, avant ACK. Le découpage conserve la transaction
+dispatch+ledger+suivi et celle ACK+Accepted+answered ; reply de service garde
+replied+answered+événement ensemble. Aucun fait d'émission n'est promu en ACK.
+
+Preuves sous les mêmes racines privées/env-i/umask077 que T011 :
+
+- `cargo test --offline -p bridget-daemon --lib -- store::tests::
+  idempotency::tests:: --test-threads=4` :82/82,1,38s (compilation3,92s).
+  Le filtre substring inclut les14 tests receipt/blob, conservés dans le total.
+  Réservations concurrentes, migrations historiques, même canon, insertion
+  de suivi forcée en erreur et finalisation de saga annulée sont exécutées.
+- `cargo test --offline -p bridget-daemon --features test-support
+  --test coordination_events_test --test guichet_integration_test
+  -- --test-threads=2 --skip depot_cli_reel_mesure_head_et_remote_au_lieu_de_copier_le_mandat
+  --skip depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois` :
+  coordination6/6,3,71s et guichet4/4,0,55s. Les deux exclusions CLI sont
+  le défaut d'attribution déjà consigné T014/T018, pas des succès implicites.
+  SIGKILL réel, génération de claim, reprise à mêmes bytes/event_id et
+  distinction Gap/Unavailable conservés.
+- `cargo test --offline -p bridget-daemon --features test-support
+  --test idempotency_crash_test -- --test-threads=1 --include-ignored` :
+  12/12,178,15s, dont la matrice50crashs/50prompts uniques (quatre frontières).
+  Watchdog externe420s, interne360s ; délais de jalon/prompt5s inchangés.
+  PREMIER RUN rouge : cycle14/50, reçu wrapper seen, phase indeterminate,
+  aucun turn_start, événement interne98octets correspondant au refus
+  « échéance de livraison dépassée ». Le faux fournisseur déclarait1s alors
+  que la reconnexion prend déjà1s ; le TTL de mission de cette fixture passe
+  à30s en c937928. Ce n'est PAS une extension du watchdog ni un changement
+  produit. Les11 autres crash-tests passaient déjà ; le cas Seen indéterminé
+  reste explicitement testé. Aucune compilation concurrente du binaire lors
+  de la contre-passe verte ; comptes/API/fournisseurs réels non utilisés.
+- `cargo test --offline -p bridget-daemon --test core_089_storage_test
+  --test core_089_host_session_test --test core_089_content_test
+  -- --test-threads=4` :10/10 (2/2,0,04s ;1/1,1,35s ;7/7,5,12s).
+  Deux nouveaux triggers SQLite font échouer LA dernière écriture : après
+  réouverture, aucun ACK/terminal/answered partiel, canon et ledger inchangés ;
+  retrait de la faute puis retry produit une unique issue/événement.
+  Mutants réellement exécutés, puis RETIRÉS : COMMIT intermédiaire avant
+  événement → answered au lieu de open ; COMMIT avant mark_answered →
+  issue terminale au lieu d'OutcomeUnknown. Les deux tests deviennent rouges
+  aux assertions d'état, pas au build, puis repassent verts après restauration.
+  Le premier essai du test guichet nommait le service « service » au lieu de
+  l'identité publique historique « maicie » : fixture corrigée, aucune
+  adaptation de la clôture de production pour contourner son autorité.
+- Clippy workspace/all-targets, fmt-check, diff-check et vérificateur des
+  17fixtures/six mutations verts. La suite workspace totale reste T034.
+
+Les racines de l'essai N50 rouge sont conservées pour diagnostic, sans enfant
+vivant ; aucun objet de la flotte n'a été visé. Dépendances/paquet T013 suivent.
+
 ## 2026-09-05 — T011 : moteur Docker/projet retiré, sessions hôte conservées
 
 Suppression des lanceurs Docker, ingress, moteurs de projet, catalogue de

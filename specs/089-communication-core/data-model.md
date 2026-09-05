@@ -8,7 +8,7 @@ Ce document décrit les invariants à préserver. Les noms SQL, versions et octe
 | Message | ID, émetteur et destinataire, corps exact, reply, in_reply_to et paramètres temporels | Enveloppe canonique acceptée |
 | Record d'idempotence | Scope stable + ID, issued_at immuable, bytes canoniques, expiration et issue originale | Transaction du store ; lookup ne réécrit pas le canon |
 | Demande suivie | Message source, destinataire, délai déclaré, état et événements attestés | Store Bridget ; une réponse valide ferme la demande, pas une mission métier |
-| Ledger | Message réellement remis, identité/corrélation, instant attesté | Même transaction d'ACK que l'issue ; unicité sous retry |
+| Ledger | Fait d'émission, identité/corrélation, instant attesté ; phase de remise distincte | Transaction de dispatch pour un envoi idempotent ; ACK atteste séparément sa remise, unicité sous retry |
 | Événement durable | event_id, corrélations, source, génération, instant transport et bytes conservés | Producteur transport ; un consommateur n'invente pas un rappel ou une clôture |
 | Journal et curseur | Séquence ordonnée, raw/source, génération, état Gap/Unavailable/fraîcheur | Append durable et protocole attach/reprise existant |
 | Définition de session | Commande résolue, arguments, protocole, modèle/effort, capacités, droits, digest | Registre déclaratif figé à l'ordre, revalidé sans resonder le fournisseur au replay |
@@ -17,9 +17,15 @@ Ce document décrit les invariants à préserver. Les noms SQL, versions et octe
 ## Transactions qui ne doivent pas être scindées
 
 1. Réservation : validation du canon puis création unique sous concurrence ; même clé et mêmes bytes retrouvent le même record.
-2. ACK : rendre l'issue durable, ajouter une unique ligne de ledger, résoudre la réponse liée via le helper partagé et conserver l'événement associé dans la même transaction lorsqu'il est requis par le chemin.
+2. Dispatch idempotent : état dispatching, remise, ledger et suivi éventuel sont écrits dans une transaction unique. ACK : remise acked + issue Accepted + réponse liée via le helper partagé dans une transaction unique, sans réécrire le ledger. Réponse de service : replied + answered + événement requis dans la même transaction.
 3. Reprise : avancer un curseur seulement après application durable de ce qu'il couvre ; échec au milieu du batch n'autorise pas le saut du reste.
 4. Guichet : contrôle de capacité et du détenteur courant ; une portée de déposant n'est pas une portée d'autorisation du service. Claim périmé refusé sans écraser la réponse.
+
+Précision issue de T012 : l'ancienne formulation « ledger à l'ACK » décrivait
+un état antérieur du projet, pas la référence Git épinglée. Le code conservé
+et le test `ledger_visible_pendant_dispatching_avant_accuse` attestent le
+ledger dès `begin_send_delivery`. L'extraction ne déplace pas cette écriture :
+une ligne visible n'est jamais une preuve d'injection fournisseur.
 
 ## États : ne pas fusionner des dimensions différentes
 
