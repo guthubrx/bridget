@@ -277,6 +277,9 @@ pub struct RecoveryCandidate {
     /// Définition persistée au passage Reserved→Starting. Une ancienne ligne
     /// sans définition ne peut pas être reprise sans trahir la preuve publique.
     pub resolved_definition: Option<ResolvedAgentDefinition>,
+    /// Métadonnée historique conservée pour refuser une reprise conteneur.
+    /// Elle ne constitue jamais une autorisation d'exécution sur l'hôte.
+    pub runtime_execution: Option<ContainerAgentExecution>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -516,6 +519,7 @@ impl FleetSupervisor {
                 agent_type: active.agent_type.clone(),
                 cwd: active.cwd.clone(),
                 resolved_definition: active.resolved_definition.clone(),
+                runtime_execution: active.runtime_execution.clone(),
             })
             .collect::<Vec<_>>();
         candidates.sort_by(|left, right| left.lease.name.cmp(&right.lease.name));
@@ -1130,79 +1134,6 @@ impl FleetSupervisor {
             .expect("la génération a été validée sous le verrou");
         active.state = SpawnCommandState::Starting;
         active.resolved_definition = Some(definition.clone());
-        Ok(())
-    }
-
-    /// Persiste l'exécution Docker avant `docker exec`, afin qu'un redémarrage
-    /// du daemon puisse accepter la reconnexion du wrapper déjà vivant sans
-    /// lancer une seconde génération.
-    pub fn record_runtime_execution(
-        &self,
-        lease: &SpawnLease,
-        execution: ContainerAgentExecution,
-    ) -> Result<(), FleetError> {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let active = active_for_lease(&inner, lease)?.clone();
-        let project = active
-            .project
-            .as_ref()
-            .ok_or(FleetError::InvalidOrder("exécution runtime sans projet"))?;
-        if active.state != SpawnCommandState::Starting {
-            return Err(FleetError::InvalidTransition {
-                command_id: active.command_id,
-                from: active.state,
-                expected: SpawnCommandState::Starting,
-            });
-        }
-        if execution.agent_instance_id != active.instance_id
-            || execution.generation != active.generation
-            || execution.project_id != project.project_id
-            || execution.binding_generation != project.binding_generation
-            || execution.environment_epoch == 0
-            || execution.container_id.len() != 64
-            || !execution
-                .container_id
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit())
-            || uuid::Uuid::parse_str(&execution.exec_id).is_err()
-            || execution.provider_identity.is_empty()
-            || execution.state != crate::desired_state::ContainerAgentExecutionState::Starting
-        {
-            return Err(FleetError::InvalidOrder("corrélation runtime invalide"));
-        }
-        self.desired.upsert(
-            active.name.clone(),
-            DesiredEquipier {
-                agent_type: active.agent_type.clone(),
-                cwd: active.cwd.clone(),
-                command_id: active.command_id.clone(),
-                generation: active.generation,
-                created: unix_now().to_string(),
-                persistent: active.persistent,
-                lifecycle_state: DesiredLifecycleState::Running,
-                resolved_definition: active.resolved_definition.clone(),
-                domain: resolved_domain(None, &active.cwd),
-                project: active.project.clone(),
-                agent_link: desired_agent_link(&active),
-                runtime_execution: Some(execution.clone()),
-            },
-        )?;
-        self.roster.remember(
-            active.name.clone(),
-            NamedRosterEntry {
-                agent_type: active.agent_type.clone(),
-                persistent: active.persistent,
-                domain: resolved_domain(None, &active.cwd),
-            },
-        );
-        inner
-            .active_by_command
-            .get_mut(&active.command_id)
-            .expect("la génération a été validée sous le verrou")
-            .runtime_execution = Some(execution);
         Ok(())
     }
 

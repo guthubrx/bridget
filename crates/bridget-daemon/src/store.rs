@@ -1,8 +1,7 @@
 //! Persistance SQLite — ledger, compteurs disjoncteur, historique.
 
-use crate::{
-    control_settings::{DogfoodingBridgetMode, DogfoodingBridgetState},
-    project_runtime::ProjectEnvironmentState,
+use crate::project_compat::{
+    DogfoodingBridgetMode, DogfoodingBridgetState, ProjectEnvironmentState,
 };
 use bridget_transport::greffe_authorization::GreffeAuthorizationAttestation;
 use bridget_transport::protocol::{
@@ -5993,7 +5992,19 @@ mod tests {
             Err(StoreError::Invariant(_))
         ));
 
+        let before_reopen = store.project_binding("project-docker").unwrap().unwrap();
         drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(
+            reopened.project_binding("project-docker").unwrap().unwrap(),
+            before_reopen,
+            "l’extraction du moteur ne convertit pas une ancienne portée Docker en hôte"
+        );
+        assert_eq!(
+            reopened.project_binding("project-host").unwrap().unwrap(),
+            host
+        );
+        drop(reopened);
         let _ = std::fs::remove_file(path);
     }
 

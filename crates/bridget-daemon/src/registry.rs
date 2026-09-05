@@ -232,23 +232,6 @@ impl AgentRegistry {
         Ok(Self { agents, source })
     }
 
-    /// Remplace uniquement la commande après validation du digest de la
-    /// définition figée. Cette exception est réservée au runtime de projet :
-    /// sa politique hôte fermée a déjà attesté l'exécutable interne de l'image.
-    pub(crate) fn from_resolved_with_runtime_command(
-        agent_type: &str,
-        resolved: &ResolvedAgentDefinition,
-        runtime_command: &str,
-    ) -> Result<Self, String> {
-        let mut registry = Self::from_resolved(agent_type, resolved)?;
-        let definition = registry
-            .agents
-            .get_mut(agent_type)
-            .ok_or_else(|| "définition figée runtime absente".to_string())?;
-        definition.command = runtime_command.to_string();
-        Ok(registry)
-    }
-
     pub fn source(&self) -> &Path {
         &self.source
     }

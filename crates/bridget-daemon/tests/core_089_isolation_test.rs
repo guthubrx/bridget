@@ -298,9 +298,6 @@ fn sous_etats_lies_sont_refuses_avant_bootstrap_ou_ecriture() {
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
-            project_root_policy_path: None,
-            project_runtime_policy_path: None,
-            project_resource_catalog_path: None,
         };
         assert!(
             bridget_daemon::daemon::run(config)

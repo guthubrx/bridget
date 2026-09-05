@@ -10,7 +10,6 @@ pub mod build_info;
 pub mod cli;
 pub mod communication;
 mod connection_channel;
-pub mod control_settings;
 pub mod daemon;
 pub mod desired_state;
 pub mod disk_hygiene;
@@ -35,9 +34,7 @@ pub use managed_supervisor::{
 };
 pub mod mcp;
 pub mod mcp_identity;
-pub mod project_policy;
-pub mod project_runtime;
-pub mod project_workspace;
+pub mod project_compat;
 pub mod reaper;
 pub mod receipt_store;
 pub mod recovery_trace;

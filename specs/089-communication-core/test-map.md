@@ -1,5 +1,143 @@
 # Carte des tests 089 — dispositions avant extraction
 
+## Disposition exécutée T011 — moteur projet retiré
+
+Retraits limités au moteur Docker, à son ingress, aux montages/catalogues et aux diagnostics de l'ancienne interface. 88 fonctions de test retirées, recensées ci-dessous par différence avec le commit T010 `8c783cc`. Ce ne sont ni des réussites ni des garanties de communication supprimées. Les six fichiers d'intégration moteur, leurs fixtures Docker/project-profile et les assets infra/project-runtime sont retirés après vérification de l'absence de consommateurs. L'historique Git reste récupérable.
+
+Le refus de nouveau projet sans binding, les variables runtime héritées, la reprise historique sans repli hôte et le rejeu terminal sont prouvés par les nouveaux oracles `core_089_*`. Les tests de liaison historique et les ACL contenus restent présents ; `referent_control`, permissions fournisseur, identité, pass_env et garde de facturation sont conservés. Les deux scénarios de pause/ronde retirés concernent la ronde projet, pas les rappels ni la pause de communication.
+
+### crates/bridget-daemon/src/daemon.rs
+
+- `spec_065_daemon_lie_apres_policy_uid_et_negociation_et_rejoue_l_issue`
+- `spec_086_contrat_systeme_exige_service_local_et_emplacement_systeme`
+- `spec_065_daemon_refuse_la_mutation_projet_sans_uid_pair`
+- `spec_066_daemon_runtime_status_est_local_et_ne_divulgue_pas_la_racine`
+- `spec_087_pause_differe_la_ronde_puis_la_reprise_la_livre`
+- `spec_079_tick_global_ne_livre_que_la_politique_projet_active`
+- `spec_066_ingress_prive_refuse_sans_reservation_avant_toute_inscription`
+- `spec_066_projet_docker_ne_replie_jamais_un_spawn_sur_hote`
+- `spec_067_preflight_ingress_ne_consomme_pas_la_reservation`
+- `spec_066_reservation_ingress_refuse_falsification_et_rejeu`
+- `spec_066_ingress_accepte_uniquement_la_reservation_avant_register`
+- `spec_066_redemarrage_retablit_ingress_sans_dupliquer_l_agent_docker`
+- `spec_066_lifecycle_refuse_l_action_destructive_si_agent_projet_actif`
+- `spec_085_capacite_runtime_daemon_ne_projette_que_des_raisons_fermees`
+- `spec_085_activation_echouee_compense_conteneur_ingress_et_conserve_host`
+- `spec_085_operations_destructives_refusees_agent_actif_et_rejeu`
+- `spec_085_redemarrage_reconcilie_runtime_sans_creer_un_second_conteneur`
+
+### crates/bridget-daemon/src/wrapper.rs
+
+- `spec_066_handshake_runtime_exige_toutes_les_identites`
+- `spec_066_socket_runtime_est_explicite_et_n_derive_pas_de_home`
+
+### crates/bridget-daemon/src/lifecycle.rs
+
+- `cwd_projet_accepte_racine_descendante_et_worktree_lie_mais_refuse_un_voisin`
+- `spec_066_runtime_docker_n_exige_jamais_la_commande_fournisseur_sur_l_hote`
+
+### crates/bridget-daemon/src/control_settings.rs
+
+- `spec_088_profile_for_rend_custom_quand_une_ligne_diverge_ou_manque`
+- `spec_088_chaque_profil_nomme_a_ses_valeurs_et_custom_aucune`
+- `spec_088_gestes_fermes_portent_le_jeton_et_n_ecrivent_jamais`
+- `spec_088_l_enveloppe_bash_de_codex_est_reconnue_mais_pas_une_commande_voisine`
+- `spec_088_commande_demarree_sans_fin_reste_pending_puis_expire`
+- `spec_088_fin_reussie_avec_jeton_passe_et_autre_message_ne_compte_pas`
+- `spec_088_fin_en_echec_apres_ligne_reconnue_est_un_refus_de_sandbox`
+- `spec_088_internet_injoignable_reconnu_par_curl`
+- `spec_088_une_tentative_par_ligne_et_document_0600`
+- `catalogue_est_ferme_et_seule_la_politique_projet_devient_modifiable`
+- `spec_084_catalogue_v2_previsualise_applique_rejoue_et_refuse_generation_obsolete`
+- `spec_085_migration_du_reglage_execution_conserve_host_et_ne_touche_aucune_liaison`
+- `spec_085_execution_default_refuse_docker_tant_que_la_capacite_est_incomplete`
+- `spec_085_execution_default_docker_est_versionne_et_idempotent`
+- `spec_086_dogfooding_est_desactive_par_defaut_et_refuse_les_transitions_non_admissibles`
+
+### crates/bridget-daemon/src/project_policy.rs
+
+- `spec_065_politique_absente_ferme_les_mutations`
+- `spec_065_politique_refuse_schema_vide_inconnu_ou_frontiere_large`
+- `spec_065_politique_refuse_proprietaire_ou_mode_non_prive`
+- `spec_065_politique_canonicalise_et_contient_les_racines_candidates`
+- `spec_065_politique_refuse_les_alias_de_politique_et_canonicalise_les_symlinks`
+- `spec_076_politique_avance_generation_atomiquement`
+- `spec_080_applique_avec_recu_et_accepte_un_rejeu_identique`
+- `spec_084_catalogue_v2_separe_creation_import_et_compatibilite_v1`
+- `spec_084_catalogue_v2_refuse_ids_et_chemins_ambigus`
+- `spec_084_catalogue_v2_applique_atomiquement_et_rejoue_le_recu`
+
+### crates/bridget-daemon/src/project_runtime.rs
+
+- `project_environment_refuses_invalid_transitions_and_reserves_current_epoch`
+- `policy_change_requires_recreation_and_invalidates_reservation`
+- `spec_086_topologie_mount_change_epoch_et_exige_recreate`
+- `spec_086_attestation_checkout_refuse_absent_faux_main_et_common_dir_etranger`
+- `absent_policy_file_closes_only_docker_runtime`
+- `spec_085_la_politique_docker_est_bornee_a_linux_amd64`
+- `policy_config_rejects_mutable_images_and_invalid_runtime_values`
+- `docker_arguments_are_closed_and_do_not_use_a_shell`
+- `docker_arguments_refuse_host_root_and_docker_socket_mounts`
+- `policy_loader_rejects_group_writable_file`
+- `docker_fixture_covers_timeout_hostile_json_image_and_daemon_failure`
+- `attestation_divergente_impose_recreate_required`
+- `environnement_a_recreer_est_arrete_et_supprime_sans_recherche_globale`
+- `arret_et_suppression_sont_deux_transitions_locales_distinctes`
+- `ingress_prive_est_deterministe_et_refuse_toute_identite_divergente`
+- `preflight_refuse_un_uid_ou_gid_incompatible_avec_le_state_root_prive`
+- `politique_runtime_resout_uniquement_un_executable_interne_declare`
+- `docker_exec_runtime_transporte_uniquement_les_identites_attestees`
+- `spec_066_raisons_runtime_oom_pid_exec_et_redemarrage_sont_fermees`
+- `spec_085_montages_incluent_checkout_et_worktrees_lies_aux_memes_chemins`
+
+### crates/bridget-daemon/src/project_workspace.rs
+
+- `spec_076_previsualisation_create_ne_cree_ni_n_ecrase`
+- `spec_084_previsualisation_v2_refuse_les_politques_v1_et_parents_libres`
+- `spec_084_previsualisation_v2_limite_creation_import_et_collisions`
+- `spec_084_previsualisation_v2_refuse_lien_symbolique_hors_workspace_et_systeme`
+- `spec_076_import_non_git_ne_modifie_pas_le_dossier`
+- `spec_076_import_git_diagnostique_propre_modifie_et_worktree_sans_contenu`
+- `spec_076_duree_decouverte_est_bornee`
+- `spec_076_configuration_coordinateur_exige_le_digest_atteste`
+
+### crates/bridget-daemon/src/cli.rs
+
+- `spec_066_cli_runtime_projet_exige_operation_et_identifiant_fermes`
+- `spec_079_cli_ronde_separe_politique_projet_et_tick_global`
+
+### crates/bridget-daemon/tests/project_runtime_ingress_test.rs
+
+- `spec_066_ingress_prive_isole_projets_et_refuse_les_identites_forgees`
+
+### crates/bridget-daemon/tests/project_runtime_agents_test.rs
+
+- `spec_066_deux_agents_partagent_un_conteneur_sans_melanger_deux_projets`
+
+### crates/bridget-daemon/tests/project_runtime_mounts_test.rs
+
+- `spec_066_worktrees_du_meme_common_dir_sont_montes_sans_elargir_le_projet`
+
+### crates/bridget-daemon/tests/project_runtime_integration_test.rs
+
+- `spec_066_prepare_docker_atteste_image_montages_abi_et_limites`
+- `spec_066_docker_exec_lance_bridget_et_un_fournisseur_de_fixture_isole`
+
+### crates/bridget-daemon/tests/project_profile_host_compat_test.rs
+
+- `spec_067_backend_host_refuse_un_profil_a_ressource_et_garde_le_profil_vide`
+
+### crates/bridget-daemon/tests/project_profile_resources_test.rs
+
+- `spec_067_catalogue_refuse_une_source_sans_projet_autorise`
+- `spec_067_catalogue_refuse_projet_etranger_et_wildcard`
+- `spec_067_catalogue_refuse_source_hors_racines`
+- `spec_067_catalogue_refuse_un_secret_place_sous_les_extensions`
+- `spec_067_catalogue_refuse_collision_de_source`
+- `spec_067_attestation_secrete_ne_porte_ni_valeur_ni_contenu`
+
+Les huit anciens libellés de fixtures lifecycle ont été remplacés par des UUIDv4 littéraux : mêmes identités pour collision, distinctes pour quota. Aucun assouplissement de la validation de production, aucun helper qui transformerait implicitement un nom en identité.
+
 Référence analysée : `dfa2134dcfe2a2522e3ae77d93561e6ae72556b3`.
 Racine de travail : /Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core.
 Les chemins des tableaux sont des coordonnées dans cet objet Git, pas des chemins de données de production.

@@ -614,9 +614,6 @@ sleep 2
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
-            project_root_policy_path: None,
-            project_runtime_policy_path: None,
-            project_resource_catalog_path: None,
         };
         thread::spawn(move || {
             let _ = daemon::run(config);
@@ -710,9 +707,6 @@ sleep 2
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
-            project_root_policy_path: None,
-            project_runtime_policy_path: None,
-            project_resource_catalog_path: None,
         };
 
         // Lancer le daemon dans un thread
@@ -792,9 +786,6 @@ sleep 2
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
-            project_root_policy_path: None,
-            project_runtime_policy_path: None,
-            project_resource_catalog_path: None,
         };
 
         let cfg = config.clone();
@@ -841,9 +832,6 @@ sleep 2
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
-            project_root_policy_path: None,
-            project_runtime_policy_path: None,
-            project_resource_catalog_path: None,
         };
         thread::spawn(move || {
             let _ = daemon::run(config);
@@ -895,9 +883,6 @@ sleep 2
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
-            project_root_policy_path: None,
-            project_runtime_policy_path: None,
-            project_resource_catalog_path: None,
         };
         thread::spawn(move || {
             let _ = daemon::run(config);
@@ -1017,9 +1002,6 @@ sleep 2
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
-            project_root_policy_path: None,
-            project_runtime_policy_path: None,
-            project_resource_catalog_path: None,
         };
         thread::spawn(move || {
             let _ = daemon::run(config);
@@ -1132,9 +1114,6 @@ sleep 2
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
-            project_root_policy_path: None,
-            project_runtime_policy_path: None,
-            project_resource_catalog_path: None,
         };
         thread::spawn(move || {
             let _ = daemon::run(config);

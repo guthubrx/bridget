@@ -20,7 +20,6 @@ use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const BASELINE_ENV: &[&str] = &["HOME", "PATH", "USER", "LANG", "TMPDIR"];
 const FALLBACK_PATH: &str = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
@@ -133,16 +132,26 @@ pub fn submit_spawn(
     recovering: bool,
     hosts: &SpawnHosts,
 ) -> Result<SpawnDecision, FleetError> {
-    submit_spawn_for_project(
-        supervisor, registry, source, order, now, recovering, hosts, None,
+    submit_spawn_with_policy(
+        supervisor, registry, source, order, now, recovering, hosts, false, false,
     )
 }
 
-/// Variante réservée aux admissions dont la référence projet a été résolue
-/// dans le store Bridget. Une référence présente exige cette racine déjà
-/// attestée : elle ne peut pas être redéduite du `cwd` demandé.
+/// Le moteur projet a été retiré. Une référence historique n'est ni effacée
+/// ni interprétée comme une autorisation de lancement sur l'hôte.
+fn reject_removed_project(
+    project: Option<&bridget_transport::protocol::ProjectReference>,
+) -> Result<(), SpawnRefusal> {
+    if let Some(project) = project {
+        return Err(SpawnRefusal::DockerRuntimeUnavailable {
+            project_id: project.project_id.clone(),
+        });
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
-pub fn submit_spawn_for_project(
+fn submit_spawn_with_policy(
     supervisor: &FleetSupervisor,
     registry: &AgentRegistry,
     source: &SourceEnvironment,
@@ -150,72 +159,35 @@ pub fn submit_spawn_for_project(
     now: i64,
     recovering: bool,
     hosts: &SpawnHosts,
-    canonical_project_root: Option<&Path>,
-) -> Result<SpawnDecision, FleetError> {
-    submit_spawn_for_project_with_policy(
-        supervisor,
-        registry,
-        source,
-        order,
-        now,
-        recovering,
-        hosts,
-        canonical_project_root,
-        false,
-        false,
-        true,
-    )
-}
-
-/// Admission Docker : la commande fournisseur est attestée par la politique
-/// de runtime et doit rester absente de l'hôte du daemon.
-#[allow(clippy::too_many_arguments)]
-pub fn submit_spawn_for_project_in_runtime(
-    supervisor: &FleetSupervisor,
-    registry: &AgentRegistry,
-    source: &SourceEnvironment,
-    order: &SpawnOrder,
-    now: i64,
-    recovering: bool,
-    hosts: &SpawnHosts,
-    canonical_project_root: Option<&Path>,
-) -> Result<SpawnDecision, FleetError> {
-    submit_spawn_for_project_with_policy(
-        supervisor,
-        registry,
-        source,
-        order,
-        now,
-        recovering,
-        hosts,
-        canonical_project_root,
-        false,
-        false,
-        false,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn submit_spawn_for_project_with_policy(
-    supervisor: &FleetSupervisor,
-    registry: &AgentRegistry,
-    source: &SourceEnvironment,
-    order: &SpawnOrder,
-    now: i64,
-    recovering: bool,
-    hosts: &SpawnHosts,
-    canonical_project_root: Option<&Path>,
     relaunch: bool,
     recovery: bool,
-    verify_host_command: bool,
 ) -> Result<SpawnDecision, FleetError> {
-    if let Some(project) = order.project.as_ref() {
-        let matches_root = canonical_project_root
-            .is_some_and(|root| project_cwd_belongs_to_binding(&order.cwd, root));
-        if !matches_root && !supervisor.knows_command(&order.command_id) {
-            return Ok(SpawnDecision::Rejected(SpawnRefusal::ProjectCwdMismatch {
-                project_id: project.project_id.clone(),
-            }));
+    // Le refus précède toute réservation NEUVE. Une clé connue conserve son
+    // canon et son issue durable : relire une réussite passée ne relance rien.
+    if !supervisor.knows_command(&order.command_id)
+        && let Err(reason) = reject_removed_project(order.project.as_ref())
+    {
+        return Ok(SpawnDecision::Rejected(reason));
+    }
+    if (relaunch || recovery)
+        && !supervisor.knows_command(&order.command_id)
+        && let Some(name) = order.requested_name.as_deref()
+        && let Some(entry) = supervisor.desired_entry(name)?
+    {
+        // Une ancienne exécution conteneur peut avoir perdu son binding ou
+        // sa référence projet. Son propre relevé reste une interdiction : le
+        // demandeur ne peut pas contourner la garde en omettant order.project.
+        if let Some(project_id) = entry
+            .project
+            .as_ref()
+            .map(|p| &p.project_id)
+            .or_else(|| entry.runtime_execution.as_ref().map(|e| &e.project_id))
+        {
+            return Ok(SpawnDecision::Rejected(
+                SpawnRefusal::DockerRuntimeUnavailable {
+                    project_id: project_id.clone(),
+                },
+            ));
         }
     }
     if recovering && !supervisor.knows_command(&order.command_id) {
@@ -241,11 +213,9 @@ fn submit_spawn_for_project_with_policy(
     {
         return Ok(SpawnDecision::Rejected(reason));
     }
-    // Une commande absente est une erreur de préparation locale, corrigeable
-    // dans le registre. Une admission Docker en a une autre autorité : le
-    // chemin interne est vérifié dans la politique et l'image, jamais ici.
-    if verify_host_command
-        && !supervisor.knows_command(&order.command_id)
+    // L'exécutable est toujours vérifié sur l'hôte : aucun chemin alternatif
+    // ne peut désormais désactiver cette garde avant réservation.
+    if !supervisor.knows_command(&order.command_id)
         && let Ok(definition) = registry.get(&order.agent_type)
         && let Ok(env) = build_environment(definition, source)
         && !command_exists(&definition.command, &env)
@@ -264,14 +234,7 @@ fn submit_spawn_for_project_with_policy(
     };
     match submission {
         SpawnSubmission::Start(lease) => {
-            let prepared = match prepare_spawn(
-                registry,
-                source,
-                order,
-                lease.clone(),
-                hosts,
-                verify_host_command,
-            ) {
+            let prepared = match prepare_spawn(registry, source, order, lease.clone(), hosts) {
                 Ok(prepared) => prepared,
                 Err(reason) => {
                     let (category, detail) = refusal_record(&reason);
@@ -291,46 +254,6 @@ fn submit_spawn_for_project_with_policy(
     }
 }
 
-/// Vérifie localement une appartenance de répertoire sans confiance dans le
-/// chemin déclaré. Une descendance de la racine canonique est admise. Sinon,
-/// les deux répertoires doivent attester le même `git-common-dir`, ce qui
-/// couvre un worktree lié mais refuse tout clone ou dépôt voisin.
-pub fn project_cwd_belongs_to_binding(cwd: &Path, canonical_root: &Path) -> bool {
-    let Ok(cwd) = cwd.canonicalize() else {
-        return false;
-    };
-    let Ok(root) = canonical_root.canonicalize() else {
-        return false;
-    };
-    if cwd.starts_with(&root) {
-        return true;
-    }
-    let Some(root_common_dir) = git_common_dir(&root) else {
-        return false;
-    };
-    let Some(cwd_common_dir) = git_common_dir(&cwd) else {
-        return false;
-    };
-    root_common_dir == cwd_common_dir
-}
-
-fn git_common_dir(path: &Path) -> Option<PathBuf> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let common_dir = std::str::from_utf8(&output.stdout).ok()?.trim();
-    if common_dir.is_empty() {
-        return None;
-    }
-    PathBuf::from(common_dir).canonicalize().ok()
-}
-
 /// Variante réservée à la reprise d'une entrée persistante déjà connectée :
 /// elle crée une nouvelle saga, mais sa préparation consomme la définition
 /// durable de `fleet.json` plutôt que le registre courant.
@@ -344,8 +267,8 @@ pub fn submit_spawn_from_resolved(
 ) -> Result<SpawnDecision, FleetError> {
     let registry = AgentRegistry::from_resolved(&order.agent_type, resolved)
         .map_err(|_| FleetError::InvalidOrder("définition figée de reprise invalide"))?;
-    submit_spawn_for_project_with_policy(
-        supervisor, &registry, source, order, now, false, hosts, None, false, true, true,
+    submit_spawn_with_policy(
+        supervisor, &registry, source, order, now, false, hosts, false, true,
     )
 }
 
@@ -359,22 +282,11 @@ pub fn submit_relaunch_from_resolved(
     now: i64,
     resolved: &ResolvedAgentDefinition,
     hosts: &SpawnHosts,
-    canonical_project_root: Option<&Path>,
 ) -> Result<SpawnDecision, FleetError> {
     let registry = AgentRegistry::from_resolved(&order.agent_type, resolved)
         .map_err(|_| FleetError::InvalidOrder("définition figée de relance invalide"))?;
-    submit_spawn_for_project_with_policy(
-        supervisor,
-        &registry,
-        source,
-        order,
-        now,
-        false,
-        hosts,
-        canonical_project_root,
-        true,
-        false,
-        true,
+    submit_spawn_with_policy(
+        supervisor, &registry, source, order, now, false, hosts, true, false,
     )
 }
 
@@ -384,7 +296,6 @@ fn prepare_spawn(
     order: &SpawnOrder,
     lease: SpawnLease,
     hosts: &SpawnHosts,
-    verify_host_command: bool,
 ) -> Result<PreparedSpawn, SpawnRefusal> {
     prepare_spawn_parts(
         registry,
@@ -393,7 +304,6 @@ fn prepare_spawn(
         &order.cwd,
         lease,
         hosts,
-        verify_host_command,
     )
 }
 
@@ -404,6 +314,12 @@ pub fn prepare_recovery(
     source: &SourceEnvironment,
     candidate: RecoveryCandidate,
 ) -> Result<PreparedSpawn, SpawnRefusal> {
+    reject_removed_project(candidate.lease.project.as_ref())?;
+    if let Some(execution) = candidate.runtime_execution.as_ref() {
+        return Err(SpawnRefusal::DockerRuntimeUnavailable {
+            project_id: execution.project_id.clone(),
+        });
+    }
     let resolved =
         candidate
             .resolved_definition
@@ -419,7 +335,6 @@ pub fn prepare_recovery(
         &candidate.cwd,
         candidate.lease,
         &SpawnHosts::local(),
-        true,
     )
 }
 
@@ -430,8 +345,8 @@ fn prepare_spawn_parts(
     cwd: &Path,
     lease: SpawnLease,
     hosts: &SpawnHosts,
-    verify_host_command: bool,
 ) -> Result<PreparedSpawn, SpawnRefusal> {
+    reject_removed_project(lease.project.as_ref())?;
     let definition = registry
         .get(agent_type)
         .map_err(|_| SpawnRefusal::UnknownType {
@@ -482,7 +397,7 @@ fn prepare_spawn_parts(
             OsString::from(max),
         );
     }
-    if verify_host_command && !command_exists(&definition.command, &env) {
+    if !command_exists(&definition.command, &env) {
         return Err(SpawnRefusal::CommandMissing {
             command: definition.command.clone(),
             registry: registry.source().display().to_string(),
@@ -717,7 +632,6 @@ mod tests {
     use crate::desired_state::DesiredStateStore;
     use crate::fleet::FleetConfig;
     use std::fs;
-    use std::process::Command;
 
     const NOW: i64 = 2_000_000;
 
@@ -816,45 +730,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn cwd_projet_accepte_racine_descendante_et_worktree_lie_mais_refuse_un_voisin() {
-        let root = root("project-cwd");
-        let project = root.join("project");
-        let linked = root.join("linked");
-        let foreign = root.join("foreign");
-        fs::create_dir_all(&project).unwrap();
-        fs::create_dir_all(&foreign).unwrap();
-        let git = |args: &[&str]| {
-            let status = Command::new("git")
-                .arg("-C")
-                .arg(&project)
-                .args(args)
-                .status()
-                .unwrap();
-            assert!(status.success(), "git {args:?}");
-        };
-        git(&["init", "--initial-branch=main"]);
-        git(&["config", "user.name", "fixture"]);
-        git(&["config", "user.email", "fixture@example.invalid"]);
-        fs::write(project.join("README"), "fixture\n").unwrap();
-        git(&["add", "README"]);
-        git(&["commit", "-m", "fixture"]);
-        git(&["worktree", "add", "--detach", linked.to_str().unwrap()]);
-
-        assert!(
-            !project_cwd_belongs_to_binding(&project.join("nested"), &project),
-            "un sous-répertoire inexistant est refusé"
-        );
-        fs::create_dir_all(project.join("nested")).unwrap();
-        assert!(project_cwd_belongs_to_binding(
-            &project.join("nested"),
-            &project
-        ));
-        assert!(project_cwd_belongs_to_binding(&linked, &project));
-        assert!(!project_cwd_belongs_to_binding(&foreign, &project));
-        fs::remove_dir_all(root).unwrap();
-    }
-
     fn rejection(decision: SpawnDecision) -> SpawnRefusal {
         match decision {
             SpawnDecision::Rejected(reason) => reason,
@@ -948,7 +823,11 @@ mod tests {
             &supervisor,
             &registry,
             &source(&root),
-            &order(&root, "claude-native", "claude-agent"),
+            &order(
+                &root,
+                "claude-native",
+                "89000000-0000-4000-8000-000000000201",
+            ),
             NOW,
             false,
             &hosts_fixture(),
@@ -970,7 +849,11 @@ mod tests {
                 "models": {"gpt-5.5": {"efforts": ["low"]}}
             }),
         );
-        let order = order(&root, "command-unsupported-model", "never-started");
+        let order = order(
+            &root,
+            "command-unsupported-model",
+            "89000000-0000-4000-8000-000000000202",
+        );
         let refusal = rejection(
             submit_spawn(
                 &supervisor,
@@ -1018,7 +901,11 @@ mod tests {
                 }
             }),
         );
-        let order = order(&root, "command-provider-observation", "never-started");
+        let order = order(
+            &root,
+            "command-provider-observation",
+            "89000000-0000-4000-8000-000000000202",
+        );
         let refusal = rejection(
             submit_spawn(
                 &supervisor,
@@ -1053,7 +940,11 @@ mod tests {
             }),
         );
         let supervisor = supervisor(&root, 1);
-        let request = order(&root, "command-unsupported-effort", "never-started");
+        let request = order(
+            &root,
+            "command-unsupported-effort",
+            "89000000-0000-4000-8000-000000000202",
+        );
         assert!(matches!(
             rejection(
                 submit_spawn(&supervisor, &registry, &source(&root), &request, NOW, false, &hosts_fixture())
@@ -1067,7 +958,7 @@ mod tests {
         let candidate = RecoveryCandidate {
             lease: SpawnLease {
                 command_id: "recovery-unsupported-effort".to_string(),
-                name: "never-started".to_string(),
+                name: "89000000-0000-4000-8000-000000000202".to_string(),
                 instance_id: "instance-recovery".to_string(),
                 generation: 1,
                 deadline_at: NOW + 10,
@@ -1080,6 +971,7 @@ mod tests {
             agent_type: "fixture".to_string(),
             cwd: root.clone(),
             resolved_definition: Some(resolved),
+            runtime_execution: None,
         };
         assert!(matches!(
             prepare_recovery(&source(&root), candidate),
@@ -1142,7 +1034,11 @@ mod tests {
             let root = root(label);
             fs::create_dir_all(&root).unwrap();
             let supervisor = supervisor(&root, 2);
-            let mut request = order(&root, &format!("command-{label}"), "agent-a");
+            let mut request = order(
+                &root,
+                &format!("command-{label}"),
+                "89000000-0000-4000-8000-000000000203",
+            );
             let mut env = source(&root);
             let registry = match label {
                 "unknown" => {
@@ -1222,7 +1118,11 @@ mod tests {
                 &nq_supervisor,
                 &nq_registry,
                 &env,
-                &order(&nq_root, "command-first", "agent-a"),
+                &order(
+                    &nq_root,
+                    "command-first",
+                    "89000000-0000-4000-8000-000000000203"
+                ),
                 NOW,
                 false,
                 &hosts_fixture(),
@@ -1237,7 +1137,11 @@ mod tests {
                     &nq_supervisor,
                     &nq_registry,
                     &env,
-                    &order(&nq_root, "command-name", "agent-a"),
+                    &order(
+                        &nq_root,
+                        "command-name",
+                        "89000000-0000-4000-8000-000000000203"
+                    ),
                     NOW,
                     false,
                     &hosts_fixture(),
@@ -1253,7 +1157,11 @@ mod tests {
                     &nq_supervisor,
                     &nq_registry,
                     &env,
-                    &order(&nq_root, "command-quota", "agent-b"),
+                    &order(
+                        &nq_root,
+                        "command-quota",
+                        "89000000-0000-4000-8000-000000000204"
+                    ),
                     NOW,
                     false,
                     &hosts_fixture(),
@@ -1275,7 +1183,11 @@ mod tests {
                     &supervisor,
                     &registry,
                     &source(&root),
-                    &order(&root, "command-recovering", "agent-r"),
+                    &order(
+                        &root,
+                        "command-recovering",
+                        "89000000-0000-4000-8000-000000000205"
+                    ),
                     NOW,
                     true,
                     &hosts_fixture(),
@@ -1287,7 +1199,11 @@ mod tests {
         assert_eq!(supervisor.active_count(), 0);
         assert!(!supervisor.knows_command("command-recovering"));
 
-        let known = order(&root, "command-known-before-recovery", "agent-known");
+        let known = order(
+            &root,
+            "command-known-before-recovery",
+            "89000000-0000-4000-8000-000000000206",
+        );
         assert!(matches!(
             submit_spawn(
                 &supervisor,
@@ -1339,7 +1255,7 @@ mod tests {
                 &supervisor,
                 &registry,
                 &env,
-                &order(&root, "cwd-present", "agent-present"),
+                &order(&root, "cwd-present", "89000000-0000-4000-8000-000000000207"),
                 NOW,
                 false,
                 &hosts_fixture(),
@@ -1349,7 +1265,7 @@ mod tests {
         ));
 
         // Répertoire absent : le refus porte les DEUX machines.
-        let mut absent = order(&root, "cwd-absent", "agent-absent");
+        let mut absent = order(&root, "cwd-absent", "89000000-0000-4000-8000-000000000208");
         absent.cwd = root.join("repertoire-qui-n-existe-pas");
         let refusal = rejection(
             submit_spawn(
@@ -1377,35 +1293,168 @@ mod tests {
     }
 
     #[test]
-    fn spec_066_runtime_docker_n_exige_jamais_la_commande_fournisseur_sur_l_hote() {
-        let root = root("runtime-command");
-        fs::create_dir_all(&root).unwrap();
-        let supervisor = supervisor(&root, 1);
-        let registry = registry("/usr/local/bin/fixture-agent", "acp", &[]);
-        let env = source(&root);
-        let mut spawn = order(&root, "runtime-command-066", "runtime-agent-066");
+    fn core_089_projet_refuse_avant_reservation_et_reparable_au_meme_id() {
+        let root = root("removed-project");
+        let supervisor = supervisor(&root, 2);
+        let registry = registry("/bin/sh", "acp", &[]);
+        let mut spawn = order(
+            &root,
+            "core-089-project",
+            "00000089-0000-4000-8000-000000000001",
+        );
         spawn.project = Some(bridget_transport::protocol::ProjectReference {
-            project_id: "project-066".to_string(),
-            binding_generation: 1,
+            project_id: "historical-project".to_string(),
+            binding_generation: 7,
         });
+        let refusal = rejection(
+            submit_spawn(
+                &supervisor,
+                &registry,
+                &source(&root),
+                &spawn,
+                NOW,
+                false,
+                &hosts_fixture(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            refusal,
+            SpawnRefusal::DockerRuntimeUnavailable {
+                project_id: "historical-project".to_string(),
+            }
+        );
+        // Mutation : une garde après request_spawn laisse ici une clé connue.
+        assert!(!supervisor.knows_command(&spawn.command_id));
+        assert_eq!(supervisor.active_count(), 0);
+        assert!(supervisor.desired_fleet().unwrap().equipiers.is_empty());
 
-        let decision = submit_spawn_for_project_in_runtime(
-            &supervisor,
-            &registry,
-            &env,
-            &spawn,
-            NOW,
-            false,
-            &hosts_fixture(),
-            Some(&root),
-        )
-        .unwrap();
+        // Changement EXPLICITE du demandeur, pas une suppression automatique.
+        spawn.project = None;
         assert!(matches!(
-            decision,
-            SpawnDecision::Ready(ref prepared)
-                if prepared.command == "/usr/local/bin/fixture-agent"
+            submit_spawn(
+                &supervisor,
+                &registry,
+                &source(&root),
+                &spawn,
+                NOW,
+                false,
+                &hosts_fixture()
+            )
+            .unwrap(),
+            SpawnDecision::Ready(_)
         ));
         drop(supervisor);
-        let _ = fs::remove_dir_all(root);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn core_089_reprise_refuse_le_runtime_meme_sans_reference_projet() {
+        use crate::desired_state::{ContainerAgentExecution, ContainerAgentExecutionState};
+        let root = root("removed-recovery");
+        let registry = registry("/bin/sh", "acp", &[]);
+        let mut candidate = RecoveryCandidate {
+            lease: SpawnLease {
+                command_id: "historical-recovery".to_string(),
+                name: "00000089-0000-4000-8000-000000000002".to_string(),
+                instance_id: "historical-instance".to_string(),
+                generation: 7,
+                deadline_at: NOW + 10,
+                persistent: true,
+                project: None,
+                link_id: None,
+                ownership: None,
+                agent_path: None,
+            },
+            agent_type: "fixture".to_string(),
+            cwd: root.clone(),
+            resolved_definition: Some(registry.resolved_definition("fixture").unwrap()),
+            runtime_execution: Some(ContainerAgentExecution {
+                agent_instance_id: "historical-instance".to_string(),
+                generation: 7,
+                project_id: "orphaned-project".to_string(),
+                binding_generation: 4,
+                environment_epoch: 1,
+                container_id: "a".repeat(64),
+                exec_id: uuid::Uuid::new_v4().to_string(),
+                cwd: root.clone(),
+                state: ContainerAgentExecutionState::Running,
+                provider_identity: "fixture".to_string(),
+            }),
+        };
+        // Le cwd n'existe même pas : la métadonnée interdit le lanceur hôte
+        // avant toute tentative de récupération de l'environnement.
+        assert_eq!(
+            prepare_recovery(&source(&root), candidate.clone()).unwrap_err(),
+            SpawnRefusal::DockerRuntimeUnavailable {
+                project_id: "orphaned-project".to_string()
+            }
+        );
+        candidate.runtime_execution = None;
+        candidate.lease.project = Some(bridget_transport::protocol::ProjectReference {
+            project_id: "project-only".to_string(),
+            binding_generation: 5,
+        });
+        assert_eq!(
+            prepare_recovery(&source(&root), candidate).unwrap_err(),
+            SpawnRefusal::DockerRuntimeUnavailable {
+                project_id: "project-only".to_string()
+            }
+        );
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn core_089_rejeu_terminal_historique_ne_relance_ni_ne_reecrit_le_resultat() {
+        let root = root("historical-replay");
+        let supervisor = supervisor(&root, 2);
+        let registry = registry("/bin/sh", "acp", &[]);
+        let mut spawn = order(
+            &root,
+            "historical-project-terminal",
+            "00000089-0000-4000-8000-000000000003",
+        );
+        spawn.project = Some(bridget_transport::protocol::ProjectReference {
+            project_id: "archived-project".to_string(),
+            binding_generation: 3,
+        });
+        // Reconstitution d'une issue écrite par l'ancien produit, au niveau
+        // du store/superviseur. Aucun moteur ni processus n'est lancé.
+        let SpawnSubmission::Start(lease) = supervisor.request_spawn(&spawn, NOW).unwrap() else {
+            panic!("réservation historique attendue");
+        };
+        let definition = registry.resolved_definition("fixture").unwrap();
+        supervisor.mark_starting(&lease, NOW, &definition).unwrap();
+        supervisor
+            .register_connected(&lease, &lease.instance_id, NOW)
+            .unwrap();
+        drop(supervisor);
+        let supervisor = super::tests::supervisor(&root, 2);
+        let before = fs::read(root.join("fleet.json")).unwrap();
+        assert!(
+            matches!(submit_spawn(&supervisor, &registry, &source(&root),
+            &spawn, NOW + 1, false, &hosts_fixture()).unwrap(),
+            SpawnDecision::Accepted { definition: Some(ref saved), .. } if saved == &definition)
+        );
+        assert_eq!(supervisor.active_count(), 0);
+        assert_eq!(fs::read(root.join("fleet.json")).unwrap(), before);
+        // Même clé, canon changé : ne contourne ni le rejet ni l'idempotence.
+        spawn.project = None;
+        assert!(matches!(
+            submit_spawn(
+                &supervisor,
+                &registry,
+                &source(&root),
+                &spawn,
+                NOW + 1,
+                false,
+                &hosts_fixture()
+            )
+            .unwrap(),
+            SpawnDecision::EnvelopeMismatch
+        ));
+        assert_eq!(fs::read(root.join("fleet.json")).unwrap(), before);
+        drop(supervisor);
+        fs::remove_dir_all(root).unwrap();
     }
 }

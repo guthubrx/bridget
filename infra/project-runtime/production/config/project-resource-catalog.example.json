@@ -1,6 +1,0 @@
-{
-  "contract_version": 1,
-  "extension_roots": ["/srv/bridget/project-extensions"],
-  "secret_roots": ["/srv/bridget/project-secrets"],
-  "sources": []
-}

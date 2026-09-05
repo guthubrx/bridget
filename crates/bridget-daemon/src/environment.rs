@@ -16,11 +16,10 @@ pub struct Namespace {
 }
 
 impl Namespace {
-    /// O(profondeur du chemin), sans création ni connexion.
+    /// Parcours des noms d'environnement puis O(profondeur du chemin), sans
+    /// création ni connexion. Les valeurs du runtime retiré ne sont jamais lues.
     pub fn from_environment() -> Result<Self, String> {
-        if std::env::var_os("BRIDGET_RUNTIME_SOCKET").is_some() {
-            return Err("BRIDGET_RUNTIME_SOCKET n'est pas pris en charge par le noyau communication ; utiliser BRIDGET_HOME/BRIDGET_SOCKET".into());
-        }
+        reject_removed_runtime_environment(std::env::vars_os().map(|(key, _)| key))?;
         Self::resolve(
             std::env::var_os("BRIDGET_HOME").map(PathBuf::from),
             std::env::var_os("BRIDGET_SOCKET").map(PathBuf::from),
@@ -102,6 +101,24 @@ impl Namespace {
             ),
         ]
     }
+}
+
+/// La présence d'une clé suffit, indépendamment de sa valeur (vide, secrète ou
+/// non UTF-8). Aucune liste de suffixes ne peut laisser passer une ancienne voie.
+fn reject_removed_runtime_environment(
+    keys: impl IntoIterator<Item = OsString>,
+) -> Result<(), String> {
+    use std::os::unix::ffi::OsStrExt;
+    if let Some(key) = keys
+        .into_iter()
+        .find(|key| key.as_os_str().as_bytes().starts_with(b"BRIDGET_RUNTIME_"))
+    {
+        return Err(format!(
+            "{} n'est pas pris en charge par le noyau communication ; utiliser BRIDGET_HOME/BRIDGET_SOCKET",
+            key.to_string_lossy()
+        ));
+    }
+    Ok(())
 }
 
 /// À appeler au point d'entrée CLI, avant tout thread. HOME n'est jamais
@@ -292,5 +309,55 @@ pub fn validate_state_file(path: &Path, socket: bool) -> Result<(), String> {
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("inspection {} : {error}", path.display())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reject_removed_runtime_environment;
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    #[test]
+    fn environnement_sans_prefixe_runtime_reste_accepte() {
+        assert!(reject_removed_runtime_environment([]).is_ok());
+        assert!(
+            reject_removed_runtime_environment(
+                [
+                    "HOME",
+                    "BRIDGET_HOME",
+                    "BRIDGET_RUNTIME",
+                    "XBRIDGET_RUNTIME_SOCKET"
+                ]
+                .into_iter()
+                .map(OsString::from)
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn toute_cle_runtime_est_refusee_sans_dependre_de_la_valeur() {
+        for value in [OsString::new(), OsString::from_vec(b"secret-\xff".to_vec())] {
+            let variables = [(OsString::from("BRIDGET_RUNTIME_FUTURE"), value)];
+            let error =
+                reject_removed_runtime_environment(variables.into_iter().map(|(key, _)| key))
+                    .unwrap_err();
+            assert_eq!(
+                error,
+                "BRIDGET_RUNTIME_FUTURE n'est pas pris en charge par le noyau communication ; utiliser BRIDGET_HOME/BRIDGET_SOCKET"
+            );
+            assert!(!error.contains("secret"));
+        }
+    }
+
+    #[test]
+    fn prefixe_runtime_est_reconnu_meme_avec_suffixe_non_utf8_ou_vide() {
+        for key in [
+            OsString::from("BRIDGET_RUNTIME_"),
+            OsString::from_vec(b"BRIDGET_RUNTIME_\xff".to_vec()),
+        ] {
+            assert!(reject_removed_runtime_environment([key]).is_err());
+        }
     }
 }

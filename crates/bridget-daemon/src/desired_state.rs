@@ -55,9 +55,9 @@ pub struct DesiredAgentLink {
     pub agent_path: String,
 }
 
-/// Corrélation durable entre une génération Bridget et son `docker exec`.
-/// Aucune commande hôte ni donnée secrète n'est conservée : ce relevé sert
-/// uniquement à rétablir l'ingress privé après redémarrage du daemon.
+/// Donnée historique du produit complet, conservée sans moteur Docker.
+/// Sa présence interdit la reprise sur l'hôte ; l'effacer rendrait la lecture
+/// des anciennes flottes dangereusement permissive.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContainerAgentExecution {

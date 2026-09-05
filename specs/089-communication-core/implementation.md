@@ -1,5 +1,70 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T011 : moteur Docker/projet retiré, sessions hôte conservées
+
+Suppression des lanceurs Docker, ingress, moteurs de projet, catalogue de
+ressources et assets infra/project-runtime. Disposition des 88 tests retirés
+dans test-map.md : périmètre projet uniquement, aucune suppression motivée
+par leur couleur. Fichiers récupérables par Git ; aucune donnée utilisateur
+ni processus de production supprimé. DTO et tables historiques restent
+lisibles dans project_compat/store : pas de DROP ni conversion Docker→hôte.
+Nouveau spawn.project refusé avant réservation ; reprise/relaunch refusés
+aussi sur runtime_execution même sans project. Le retry terminal historique
+conserve son issue et ses octets, sans nouveau processus. Anciennes commandes
+et options runtime refusées avant initialisation ; BRIDGET_RUNTIME_* refusé
+dès résolution du namespace (vide/non-UTF8 inclus, valeur jamais affichée).
+Permissions, billing/pass_env, observations fournisseur, raw/source et ACL
+des contenus restent en place.
+
+La recette a révélé un réglage de posture accessible uniquement par l'UI
+retirée. `bridget control posture discovery|complete` réutilise maintenant
+ControlStateRead/ControlStateSet, génération et autorisation existantes.
+Stdin ET stdout TTY obligatoires ; défaut discovery inchangé. Aucun bypass
+pour faire passer le test : CLI réel dans un pseudo-terminal, pas de SQL
+direct pour le changement de posture.
+
+Preuves root, env-i/umask077 sous /private/tmp/b9t011.7nVSnj, HOME/state/tmp
+privés, watchdog180s (recette hôte40s, CLI TTY10s) :
+
+- `cargo test --offline --workspace --no-run` vert8,52s ;
+  `cargo test --offline --workspace --features test-support --no-run`
+  vert12,91s : compilation, PAS exécution de tous les anciens harnais.
+- `cargo test --offline -p bridget-daemon --test core_089_host_session_test
+  --test core_089_retired_runtime_test --test core_089_content_test
+  --test channel_observation_test -- --test-threads=4` :14/14.
+  Respectivement1/1 en1,35s,2/2 en0,09s,7/7 en5,13s,4/4 en0,35s.
+  Daemon/CLI/wrapper réels, fournisseur ACP factice déterministe sans compte :
+  refus projet sans réservation/processus, puis refus posture au même ID,
+  réglage TTY, spawn accepté, SnapshotCaughtUp AVANT Send, journal contenant
+  la réponse, StopOrder et groupe disparu. PATH sans Docker.
+- `cargo test --offline -p bridget-daemon --lib lifecycle::tests::core_089
+  -- --test-threads=3 --nocapture` :3/3,0,16s. Métadonnées historiques et
+  canon terminal conservés. Auteur : lifecycle11/11 + registry34/34 +
+  wrapper ciblé19/19, soit64/64 chevauchants. Huit anciens command_id de
+  fixture invalides remplacés par UUIDv4 explicites, mêmes collisions/quota.
+  Environnement3/3 et wrapper sous-processus9clés×3entrées validés.
+- Contre-revue T011 APPROVE : contrôles de portée des contenus, Register et
+  posture conservés, aucune réintroduction d'ACL par inférence. Les fonctions
+  artifact_access_scope/artifact_scope_for_agent/handle_register_with_channel
+  et resolve_spawn_agent_type_for_posture sont inchangées.
+- `cargo clippy --offline --workspace --all-targets -- -D warnings` :
+  vert4,61s, aucune dérogation. Deux dettes de T010 retirées avec le moteur,
+  trois expressions équivalentes simplifiées en af483d3, boucle de test
+  mono-élément aplatie. Trois tests de migration attendaient encore v9 :
+  assertions alignées sur v10 DÉJÀ présente à HEAD, préservation maintenue.
+- `cargo test --offline -p bridget-daemon --test artifact_service_test
+  --test artifact_store_test --test execution_store_test --test execution_budget_test
+  --test project_profile_surface_test -- --test-threads=4` :24/24,0,11s
+  cumulées hors compilation1,90s. Une tentative antérieure par filtres lib
+  sélectionnait0test : elle n'est PAS comptée comme preuve.
+- `cargo fmt --all --check` et `git diff --check` verts ;
+  `bash scripts/verify-089-contracts.sh --self-test --require-complete` :
+  17 fixtures byte-identiques, six mutations refusées.
+
+Aucun enfant de recette restant au contrôle. Les scripts SSH préparés pour
+T024 restent un lot séparé. T012 doit découper le SQL sans changer les
+transactions ; fournisseurs réels, SSH et suite totale restent à prouver.
+
 ## 2026-09-05 — T010 : sortie effective de l'interface, contenus préservés
 
 Retrait de ui.rs, apps/bridget-desktop, assets web et renderers, projection

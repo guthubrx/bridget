@@ -1714,6 +1714,9 @@ pub enum SpawnRefusal {
     ProjectCwdMismatch {
         project_id: String,
     },
+    /// Refus historique conservé sur le fil : dans le cœur communication,
+    /// toute nouvelle exécution exigeant le runtime projet est indisponible.
+    /// Une ancienne référence n'est jamais convertie en lancement hôte.
     DockerRuntimeUnavailable {
         project_id: String,
     },

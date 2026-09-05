@@ -8,15 +8,9 @@ use bridget_core::{
 use bridget_transport::protocol::{
     AdoptStoppedOutcome, AgentInfo, AttachWindow, CLIENT_CONTRACT_VERSION, ClientCapability,
     ConnectionRole, DecommissionOutcome, GuichetDurationClass, IdempotencyIssue, LedgerMessage,
-    LedgerScope, PresenceMode, ProjectRuntimeOperation, ProjectRuntimeRequest, RelaunchOutcome,
-    RequestInfo, ReviewTarget, ReviewVerdict, ReviewVerdictEvidence, RuntimeSource,
-    ServiceRequestOperation, ServiceRequestPayload, ServiceSuiteDeclaration, decode, encode,
-    is_canonical_git_sha,
-};
-use bridget_transport::protocol::{
-    PROJECT_ROUND_INTERVAL_SECS, PROJECT_ROUND_POLICY_CONTRACT_VERSION, ProjectReference,
-    ProjectRoundDispatchOutcome, ProjectRoundDispatchRequest, ProjectRoundOperation,
-    ProjectRoundOutcome, ProjectRoundRequest,
+    LedgerScope, PresenceMode, RelaunchOutcome, RequestInfo, ReviewTarget, ReviewVerdict,
+    ReviewVerdictEvidence, RuntimeSource, ServiceRequestOperation, ServiceRequestPayload,
+    ServiceSuiteDeclaration, decode, encode, is_canonical_git_sha,
 };
 use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDaemon};
 use std::fmt::Write as _;
@@ -88,6 +82,23 @@ fn exit_argument_error(error: &str) -> ! {
     std::process::exit(2);
 }
 
+fn validate_communication_entry(command: &str, args: &[String]) -> Result<(), String> {
+    if matches!(
+        command,
+        "managed-runtime-wrapper" | "managed-runtime-stop" | "project-runtime" | "project-round"
+    ) {
+        return Err(format!(
+            "{command} : runtime de projet retiré du noyau de communication ; aucun repli sur l’hôte"
+        ));
+    }
+    if command == "daemon"
+        && let Some(argument) = args.first()
+    {
+        return Err(unknown_argument(command, argument));
+    }
+    Ok(())
+}
+
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
@@ -96,6 +107,12 @@ pub fn run() {
     }
 
     let cmd = &args[1];
+
+    // Avant namespace, résolution du registre et lancement : une invocation
+    // conteneur historique ne devient jamais une commande hôte.
+    if let Err(error) = validate_communication_entry(cmd, &args[2..]) {
+        exit_argument_error(&error);
+    }
 
     // Refus avant même l'ouverture du namespace : une ancienne commande UI
     // ne doit ni lancer un programme homonyme ni relire un endpoint historique.
@@ -147,8 +164,6 @@ pub fn run() {
         "daemon" => cmd_daemon(&args[2..]),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
-        "managed-runtime-wrapper" => cmd_managed_runtime_wrapper(&args[2..]),
-        "managed-runtime-stop" => cmd_managed_runtime_stop(&args[2..]),
         "mcp" => cmd_mcp(),
         "attach" => cmd_attach(&args[2..]),
         "artifact" => cmd_artifact(&args[2..]),
@@ -165,8 +180,6 @@ pub fn run() {
         "runtime" => cmd_runtime(&args[2..]),
         "identity" => cmd_identity(&args[2..]),
         "domain" => cmd_domain(&args[2..]),
-        "project-runtime" => cmd_project_runtime(&args[2..]),
-        "project-round" => cmd_project_round(&args[2..]),
         "control" => cmd_control(&args[2..]),
         "inbox" => cmd_inbox(&args[2..]),
         "dnd" => cmd_dnd(&args[2..]),
@@ -536,44 +549,6 @@ fn cmd_managed_wrapper(args: &[String]) {
     }
 }
 
-/// Entrée interne réservée au `docker exec` d'un environnement de projet.
-/// La commande fournisseur est issue de la politique runtime hôte et jamais
-/// du registre utilisateur ou des arguments d'un agent.
-fn cmd_managed_runtime_wrapper(args: &[String]) {
-    if args.len() != 4 {
-        eprintln!(
-            "bridget managed-runtime-wrapper: type, Agent ID, commande interne et définition figée requis"
-        );
-        std::process::exit(2);
-    }
-    let definition = match serde_json::from_str(&args[3]) {
-        Ok(definition) => definition,
-        Err(error) => {
-            eprintln!("bridget managed-runtime-wrapper: définition figée invalide: {error}");
-            std::process::exit(2);
-        }
-    };
-    if let Err(error) =
-        crate::wrapper::launch_runtime_acp(&args[0], &args[1], &args[2], &definition)
-    {
-        eprintln!("bridget managed-runtime-wrapper: {error}");
-        std::process::exit(1);
-    }
-}
-
-/// Entrée interne réservée au superviseur Docker. Elle ne reçoit qu'un UUID
-/// déjà attesté par le lease; aucun nom ni chemin libre n'est accepté.
-fn cmd_managed_runtime_stop(args: &[String]) {
-    if args.len() != 1 {
-        eprintln!("bridget managed-runtime-stop: instance_id requis");
-        std::process::exit(2);
-    }
-    if let Err(error) = crate::wrapper::stop_runtime_acp(&args[0]) {
-        eprintln!("bridget managed-runtime-stop: {error}");
-        std::process::exit(1);
-    }
-}
-
 fn extract_wrapper_args(args: &[String]) -> (Option<String>, Vec<String>) {
     let mut agent_id = None;
     let mut rest = Vec::new();
@@ -630,9 +605,7 @@ fn print_usage() {
            cancel <ID>            Annule une demande suivie [--reason <T>]\n  \
            requests [--all]       Mes demandes (défaut) ou toutes les ouvertes\n  \
            rename <N>             Renomme l'agent courant\n  \
-           project-runtime <OP> --project <ID> Prépare, consulte ou recrée Docker\n  \
-           project-round <OP>       Pilote ou déclenche la ronde par projet\n  \
-           control <OP>           Référent : status [--history] | pause [--reason <T>] | resume | budget <N>\n  \
+           control <OP>           Référent : status [--history] | pause [--reason <T>] | resume | budget <N> | posture discovery|complete\n  \
            inbox <OP>             Référent : list [--all] | resolve <ID> <CHOIX>\n  \
            runtime --model <M>    Déclare le modèle courant [--effort <E>]\n  \
            domain <N> | --reset   Change le domaine de l'agent courant\n  \
@@ -1507,75 +1480,10 @@ fn resolve_cli_agent_id(file_agent_id: Option<&str>, env_agent_id: Option<&str>)
 }
 
 fn cmd_daemon(args: &[String]) {
-    let mut project_root_policy_path = None;
-    let mut project_runtime_policy_path = None;
-    let mut project_resource_catalog_path = None;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--project-root-policy" => {
-                if project_root_policy_path.is_some() {
-                    eprintln!("bridget daemon: --project-root-policy dupliqué");
-                    std::process::exit(2);
-                }
-                index += 1;
-                let Some(path) = args.get(index).map(PathBuf::from) else {
-                    eprintln!("bridget daemon: --project-root-policy requiert un chemin absolu");
-                    std::process::exit(2);
-                };
-                if !path.is_absolute() {
-                    eprintln!("bridget daemon: --project-root-policy doit être absolu");
-                    std::process::exit(2);
-                }
-                project_root_policy_path = Some(path);
-            }
-            "--project-runtime-policy" => {
-                if project_runtime_policy_path.is_some() {
-                    eprintln!("bridget daemon: --project-runtime-policy dupliqué");
-                    std::process::exit(2);
-                }
-                index += 1;
-                let Some(path) = args.get(index).map(PathBuf::from) else {
-                    eprintln!("bridget daemon: --project-runtime-policy requiert un chemin absolu");
-                    std::process::exit(2);
-                };
-                if !path.is_absolute() {
-                    eprintln!("bridget daemon: --project-runtime-policy doit être absolu");
-                    std::process::exit(2);
-                }
-                project_runtime_policy_path = Some(path);
-            }
-            "--project-resource-catalog" => {
-                if project_resource_catalog_path.is_some() {
-                    eprintln!("bridget daemon: --project-resource-catalog dupliqué");
-                    std::process::exit(2);
-                }
-                index += 1;
-                let Some(path) = args.get(index).map(PathBuf::from) else {
-                    eprintln!(
-                        "bridget daemon: --project-resource-catalog requiert un chemin absolu"
-                    );
-                    std::process::exit(2);
-                };
-                if !path.is_absolute() {
-                    eprintln!("bridget daemon: --project-resource-catalog doit être absolu");
-                    std::process::exit(2);
-                }
-                project_resource_catalog_path = Some(path);
-            }
-            option => {
-                eprintln!("bridget daemon: option inconnue {option}");
-                std::process::exit(2);
-            }
-        }
-        index += 1;
+    if let Some(argument) = args.first() {
+        exit_argument_error(&unknown_argument("daemon", argument));
     }
-    let config = DaemonConfig {
-        project_root_policy_path,
-        project_resource_catalog_path,
-        project_runtime_policy_path,
-        ..DaemonConfig::default()
-    };
+    let config = DaemonConfig::default();
     match daemon::run(config) {
         Ok(_) => {}
         Err(e) => {
@@ -2733,529 +2641,6 @@ fn send_runtime_to_daemon(
     decode(line.trim()).map_err(|e| e.to_string())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProjectRoundCliOperation {
-    Policy(ProjectRoundOperation),
-    Dispatch,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ProjectRoundCliCommand {
-    operation: ProjectRoundCliOperation,
-    project_id: Option<String>,
-    binding_generation: Option<u64>,
-    command_id: Option<String>,
-    occurrence_at: Option<i64>,
-    json: bool,
-}
-
-fn parse_project_round_args(args: &[String]) -> Result<ProjectRoundCliCommand, String> {
-    let operation = match args.first().map(String::as_str) {
-        Some("list") => ProjectRoundCliOperation::Policy(ProjectRoundOperation::List),
-        Some("status") => ProjectRoundCliOperation::Policy(ProjectRoundOperation::Status),
-        Some("enable") => ProjectRoundCliOperation::Policy(ProjectRoundOperation::Enable),
-        Some("disable") => ProjectRoundCliOperation::Policy(ProjectRoundOperation::Disable),
-        Some("dispatch") => ProjectRoundCliOperation::Dispatch,
-        Some(other) => {
-            return Err(format!(
-                "project-round: opération inconnue: {other}; attendu list, status, enable, disable ou dispatch"
-            ));
-        }
-        None => return Err("project-round: opération manquante".to_string()),
-    };
-    let mut project_id = None;
-    let mut binding_generation = None;
-    let mut command_id = None;
-    let mut occurrence_at = None;
-    let mut json = false;
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--project" => {
-                if project_id.is_some() {
-                    return Err("project-round: --project dupliqué".to_string());
-                }
-                index += 1;
-                project_id = args.get(index).cloned();
-                if project_id
-                    .as_deref()
-                    .is_none_or(|value| value.trim().is_empty())
-                {
-                    return Err("project-round: --project requiert un identifiant".to_string());
-                }
-            }
-            "--binding-generation" => {
-                if binding_generation.is_some() {
-                    return Err("project-round: --binding-generation dupliqué".to_string());
-                }
-                index += 1;
-                binding_generation = Some(
-                    args.get(index)
-                        .ok_or_else(|| {
-                            "project-round: --binding-generation requiert un entier".to_string()
-                        })?
-                        .parse::<u64>()
-                        .ok()
-                        .filter(|value| *value > 0)
-                        .ok_or_else(|| {
-                            "project-round: --binding-generation requiert un entier positif"
-                                .to_string()
-                        })?,
-                );
-            }
-            "--command-id" => {
-                if command_id.is_some() {
-                    return Err("project-round: --command-id dupliqué".to_string());
-                }
-                index += 1;
-                let value = args
-                    .get(index)
-                    .cloned()
-                    .ok_or_else(|| "project-round: --command-id requiert une valeur".to_string())?;
-                validate_command_id(&value)?;
-                command_id = Some(value);
-            }
-            "--occurrence" => {
-                if occurrence_at.is_some() {
-                    return Err("project-round: --occurrence dupliqué".to_string());
-                }
-                index += 1;
-                occurrence_at = Some(
-                    args.get(index)
-                        .ok_or_else(|| {
-                            "project-round: --occurrence requiert un instant Unix".to_string()
-                        })?
-                        .parse::<i64>()
-                        .ok()
-                        .filter(|value| *value >= 0)
-                        .ok_or_else(|| {
-                            "project-round: --occurrence requiert un instant Unix positif ou nul"
-                                .to_string()
-                        })?,
-                );
-            }
-            "--json" if !json => json = true,
-            "--json" => return Err("project-round: --json dupliqué".to_string()),
-            option => return Err(unknown_argument("project-round", option)),
-        }
-        index += 1;
-    }
-
-    match operation {
-        ProjectRoundCliOperation::Policy(ProjectRoundOperation::List)
-            if project_id.is_none() && binding_generation.is_none() && occurrence_at.is_none() => {}
-        ProjectRoundCliOperation::Policy(ProjectRoundOperation::Status)
-            if project_id.is_some() && binding_generation.is_none() && occurrence_at.is_none() => {}
-        ProjectRoundCliOperation::Policy(
-            ProjectRoundOperation::Enable | ProjectRoundOperation::Disable,
-        ) if project_id.is_some() && binding_generation.is_some() && occurrence_at.is_none() => {}
-        ProjectRoundCliOperation::Dispatch
-            if project_id.is_none() && binding_generation.is_none() && command_id.is_none() => {}
-        ProjectRoundCliOperation::Policy(_) => {
-            return Err(
-                "project-round: forme invalide pour list/status/enable/disable".to_string(),
-            );
-        }
-        ProjectRoundCliOperation::Dispatch => {
-            return Err(
-                "project-round dispatch: seuls --occurrence et --json sont acceptés".to_string(),
-            );
-        }
-    }
-
-    Ok(ProjectRoundCliCommand {
-        operation,
-        project_id,
-        binding_generation,
-        command_id,
-        occurrence_at,
-        json,
-    })
-}
-
-fn send_project_round_client_request(request: WrapperToDaemon) -> Result<DaemonToWrapper, String> {
-    let stream = UnixStream::connect(socket_path()).map_err(|error| error.to_string())?;
-    let read_stream = stream.try_clone().map_err(|error| error.to_string())?;
-    let mut writer = BufWriter::new(stream);
-    let mut reader = BufReader::new(read_stream);
-
-    write_control_message(
-        &mut writer,
-        &WrapperToDaemon::RoleHandshake {
-            role: ConnectionRole::Client,
-        },
-    )?;
-    match read_control_message(&mut reader)? {
-        DaemonToWrapper::RoleAccepted {
-            role: ConnectionRole::Client,
-        } => {}
-        response => return Err(format!("handshake project-round refusé: {response:?}")),
-    }
-
-    write_control_message(
-        &mut writer,
-        &WrapperToDaemon::ClientHello {
-            contract_version: CLIENT_CONTRACT_VERSION,
-            issuer_scope: crate::communication::issuer_scope("project-round-cli-v1"),
-            capabilities: vec![ClientCapability::ProjectRoundPolicyV1],
-        },
-    )?;
-    match read_control_message(&mut reader)? {
-        DaemonToWrapper::ClientWelcome {
-            capabilities,
-            build_id,
-            ..
-        } if capabilities.contains(&ClientCapability::ProjectRoundPolicyV1) => {
-            if let Some(warning) = crate::build_info::stale_daemon_warning(&build_id) {
-                eprintln!("{warning}");
-            }
-        }
-        DaemonToWrapper::ClientRejected { reason } => {
-            return Ok(DaemonToWrapper::ClientRejected { reason });
-        }
-        response => return Err(format!("négociation project-round refusée: {response:?}")),
-    }
-
-    write_control_message(&mut writer, &request)?;
-    read_control_message(&mut reader)
-}
-
-fn request_project_round_policies(
-    operation: ProjectRoundOperation,
-    project_id: Option<String>,
-    binding_generation: Option<u64>,
-    command_id: Option<String>,
-) -> Result<ProjectRoundOutcome, String> {
-    let issued_at = unix_timestamp();
-    let request = ProjectRoundRequest {
-        contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
-        command_id: command_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-        issued_at,
-        deadline_at: issued_at.saturating_add(60),
-        operation,
-        project_id,
-        binding_generation,
-    };
-    match send_project_round_client_request(WrapperToDaemon::ProjectRoundRequest { request })? {
-        DaemonToWrapper::ProjectRoundOutcome { outcome } => Ok(outcome),
-        response => Err(format!(
-            "réponse de politique de ronde inattendue: {response:?}"
-        )),
-    }
-}
-
-fn dispatch_project_round(
-    occurrence_at: i64,
-    project: ProjectReference,
-) -> Result<ProjectRoundDispatchOutcome, String> {
-    let request = ProjectRoundDispatchRequest {
-        contract_version: PROJECT_ROUND_POLICY_CONTRACT_VERSION,
-        occurrence_at,
-        project,
-    };
-    match send_project_round_client_request(WrapperToDaemon::ProjectRoundDispatch { request })? {
-        DaemonToWrapper::ProjectRoundDispatchOutcome { outcome } => Ok(outcome),
-        response => Err(format!(
-            "réponse de dispatch de ronde inattendue: {response:?}"
-        )),
-    }
-}
-
-fn print_project_round_policy(outcome: &ProjectRoundOutcome, json: bool) {
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string(outcome).expect("issue de ronde sérialisable")
-        );
-        return;
-    }
-    if outcome.policies.is_empty() {
-        println!("Aucun projet enregistré.");
-        return;
-    }
-    for policy in &outcome.policies {
-        let state = if policy.enabled {
-            "enabled"
-        } else {
-            "disabled"
-        };
-        let configured = if policy.configured {
-            "configurée"
-        } else {
-            "implicite"
-        };
-        println!(
-            "{}: {} ({}, active={}, génération={:?}, révision={})",
-            policy.project_id,
-            state,
-            configured,
-            policy.active,
-            policy.binding_generation,
-            policy.revision
-        );
-    }
-}
-
-fn cmd_project_round(args: &[String]) {
-    let command = parse_project_round_args(args).unwrap_or_else(|error| {
-        eprintln!("{error}");
-        eprintln!(
-            "usage: bridget project-round <list|status|enable|disable|dispatch> [--project ID] [--binding-generation N] [--command-id ID] [--occurrence UNIX] [--json]"
-        );
-        std::process::exit(2);
-    });
-
-    match command.operation {
-        ProjectRoundCliOperation::Policy(operation) => {
-            let outcome = request_project_round_policies(
-                operation,
-                command.project_id,
-                command.binding_generation,
-                command.command_id,
-            )
-            .unwrap_or_else(|error| {
-                eprintln!("project-round: {error}");
-                std::process::exit(1);
-            });
-            if let Some(reason) = outcome.reason {
-                eprintln!("PROJECT-ROUND REFUSÉ: {reason:?}");
-                std::process::exit(1);
-            }
-            print_project_round_policy(&outcome, command.json);
-        }
-        ProjectRoundCliOperation::Dispatch => {
-            let now = unix_timestamp();
-            let occurrence_at = command
-                .occurrence_at
-                .unwrap_or_else(|| now - now.rem_euclid(PROJECT_ROUND_INTERVAL_SECS));
-            let listed =
-                request_project_round_policies(ProjectRoundOperation::List, None, None, None)
-                    .unwrap_or_else(|error| {
-                        eprintln!("project-round dispatch: {error}");
-                        std::process::exit(1);
-                    });
-            if let Some(reason) = listed.reason {
-                eprintln!("PROJECT-ROUND REFUSÉ: {reason:?}");
-                std::process::exit(1);
-            }
-            let mut outcomes = Vec::new();
-            for policy in listed
-                .policies
-                .into_iter()
-                .filter(|policy| policy.active && policy.configured && policy.enabled)
-            {
-                let binding_generation = policy
-                    .binding_generation
-                    .expect("une politique active porte sa génération");
-                let outcome = dispatch_project_round(
-                    occurrence_at,
-                    ProjectReference {
-                        project_id: policy.project_id,
-                        binding_generation,
-                    },
-                )
-                .unwrap_or_else(|error| {
-                    eprintln!("project-round dispatch: {error}");
-                    std::process::exit(1);
-                });
-                outcomes.push(outcome);
-            }
-            if command.json {
-                println!(
-                    "{}",
-                    serde_json::to_string(&outcomes)
-                        .expect("issues de dispatch de ronde sérialisables")
-                );
-            } else if outcomes.is_empty() {
-                println!("Ronde: aucun projet activé.");
-            } else {
-                for outcome in &outcomes {
-                    println!(
-                        "Ronde {}@{} occurrence {}: {}",
-                        outcome.project.project_id,
-                        outcome.project.binding_generation,
-                        outcome.occurrence_at,
-                        if outcome.issue.as_ref().is_some_and(send_deposited) {
-                            "déposée"
-                        } else {
-                            "refusée"
-                        }
-                    );
-                }
-            }
-            if outcomes.iter().any(|outcome| {
-                outcome.reason.is_some()
-                    || outcome
-                        .issue
-                        .as_ref()
-                        .is_none_or(|issue| !send_deposited(issue))
-            }) {
-                std::process::exit(1);
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ProjectRuntimeCliCommand {
-    operation: ProjectRuntimeOperation,
-    project_id: String,
-    command_id: String,
-    expected_binding_generation: Option<u64>,
-    policy_id: Option<String>,
-    policy_version: Option<u64>,
-}
-
-fn parse_project_runtime_args(args: &[String]) -> Result<ProjectRuntimeCliCommand, String> {
-    let operation = match args.first().map(String::as_str) {
-        Some("activate-docker") => ProjectRuntimeOperation::ActivateDocker,
-        Some("prepare") => ProjectRuntimeOperation::Prepare,
-        Some("status") => ProjectRuntimeOperation::Status,
-        Some("stop") => ProjectRuntimeOperation::Stop,
-        Some("remove") => ProjectRuntimeOperation::Remove,
-        Some("recreate") => ProjectRuntimeOperation::Recreate,
-        Some("switch-backend") => ProjectRuntimeOperation::SwitchBackend,
-        Some(other) => {
-            return Err(format!(
-                "project-runtime: opération inconnue: {other}; attendu activate-docker, prepare, status, stop, remove, recreate ou switch-backend"
-            ));
-        }
-        None => return Err("project-runtime: opération manquante".to_string()),
-    };
-    let mut project_id = None;
-    let mut command_id = None;
-    let mut expected_binding_generation = None;
-    let mut policy_id = None;
-    let mut policy_version = None;
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--project" => {
-                index += 1;
-                project_id = args.get(index).cloned();
-                if project_id
-                    .as_deref()
-                    .is_none_or(|value| value.trim().is_empty())
-                {
-                    return Err("project-runtime: --project requiert un identifiant".to_string());
-                }
-            }
-            "--command-id" => {
-                index += 1;
-                command_id = args.get(index).cloned();
-                if command_id
-                    .as_deref()
-                    .is_none_or(|value| value.trim().is_empty())
-                {
-                    return Err("project-runtime: --command-id requiert une valeur".to_string());
-                }
-            }
-            "--expected-generation" => {
-                index += 1;
-                expected_binding_generation = args
-                    .get(index)
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .filter(|value| *value > 0);
-                if expected_binding_generation.is_none() {
-                    return Err(
-                        "project-runtime: --expected-generation requiert un entier positif"
-                            .to_string(),
-                    );
-                }
-            }
-            "--policy" => {
-                index += 1;
-                policy_id = args.get(index).cloned();
-                if policy_id
-                    .as_deref()
-                    .is_none_or(|value| value.trim().is_empty())
-                {
-                    return Err("project-runtime: --policy requiert un identifiant".to_string());
-                }
-            }
-            "--policy-version" => {
-                index += 1;
-                policy_version = args
-                    .get(index)
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .filter(|value| *value > 0);
-                if policy_version.is_none() {
-                    return Err(
-                        "project-runtime: --policy-version requiert un entier positif".to_string(),
-                    );
-                }
-            }
-            option => return Err(unknown_argument("project-runtime", option)),
-        }
-        index += 1;
-    }
-    let project_id = project_id
-        .ok_or_else(|| "project-runtime: --project <identifiant> est obligatoire".to_string())?;
-    if operation == ProjectRuntimeOperation::ActivateDocker
-        && (expected_binding_generation.is_none()
-            || policy_id.is_none()
-            || policy_version.is_none())
-    {
-        return Err("project-runtime: activate-docker exige --expected-generation, --policy et --policy-version".to_string());
-    }
-    Ok(ProjectRuntimeCliCommand {
-        operation,
-        project_id,
-        command_id: command_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-        expected_binding_generation,
-        policy_id,
-        policy_version,
-    })
-}
-
-fn cmd_project_runtime(args: &[String]) {
-    let command = parse_project_runtime_args(args).unwrap_or_else(|error| {
-        eprintln!("{error}");
-        eprintln!(
-            "usage: bridget project-runtime <activate-docker|prepare|status|stop|remove|recreate|switch-backend> --project <identifiant> [--command-id <id>] [--expected-generation <n> --policy <id> --policy-version <n>]"
-        );
-        std::process::exit(2);
-    });
-    let issued_at = unix_timestamp();
-    let request = ProjectRuntimeRequest {
-        contract_version: crate::project_runtime::PROJECT_RUNTIME_CONTRACT_VERSION,
-        command_id: command.command_id,
-        issued_at,
-        deadline_at: issued_at.saturating_add(60),
-        operation: command.operation,
-        project_id: command.project_id,
-        expected_binding_generation: command.expected_binding_generation,
-        policy_id: command.policy_id,
-        policy_version: command.policy_version,
-        profile: None,
-    };
-    match send_control_to_daemon(WrapperToDaemon::ProjectRuntimeRequest { request }) {
-        Ok(DaemonToWrapper::ProjectRuntimeOutcome { outcome }) => {
-            if let Some(reason) = outcome.reason {
-                eprintln!("RUNTIME PROJET REFUSÉ: {reason:?}");
-                std::process::exit(1);
-            }
-            let state = outcome.state.unwrap_or_else(|| "inconnu".to_string());
-            let policy = outcome
-                .runtime_policy
-                .map(|policy| format!("{}@{}", policy.policy_id, policy.policy_version))
-                .unwrap_or_else(|| "sans politique".to_string());
-            println!(
-                "Projet {}: état {}, politique {}, génération {:?}",
-                outcome.project_id, state, policy, outcome.binding_generation
-            );
-        }
-        Ok(other) => {
-            eprintln!("project-runtime: réponse inattendue du daemon: {other:?}");
-            std::process::exit(1);
-        }
-        Err(error) => {
-            eprintln!("project-runtime: daemon inaccessible: {error}");
-            std::process::exit(1);
-        }
-    }
-}
-
 fn cmd_runtime(args: &[String]) {
     let mut model: Option<String> = None;
     let mut effort: Option<String> = None;
@@ -4344,6 +3729,13 @@ fn print_control_status(
         control_footer_line(state, inbox_open_count, unix_now_secs_cli())
     );
     println!("génération : {}", state.generation);
+    println!(
+        "posture : {}",
+        state
+            .agent_posture
+            .map(|posture| posture.as_sql())
+            .unwrap_or("inconnue")
+    );
     if state.paused {
         println!(
             "pause posée par {} · motif : {}",
@@ -4358,6 +3750,7 @@ fn apply_control_mutation(
     paused: Option<bool>,
     auto_objectives_cap: Option<u32>,
     reason: Option<String>,
+    agent_posture: Option<bridget_transport::protocol::AgentPosture>,
 ) {
     if !require_interactive_terminal(command) {
         std::process::exit(2);
@@ -4373,7 +3766,7 @@ fn apply_control_mutation(
         paused,
         auto_objectives_cap,
         reason,
-        agent_posture: None,
+        agent_posture,
         auto_reassignment: None,
     });
     match response {
@@ -4396,9 +3789,19 @@ fn apply_control_mutation(
     }
 }
 
+fn parse_control_posture(
+    args: &[String],
+) -> Result<bridget_transport::protocol::AgentPosture, String> {
+    match args {
+        [value] => bridget_transport::protocol::AgentPosture::from_sql(value).ok_or_else(|| {
+            "control posture : attendu discovery ou complete, sans substitution".to_string()
+        }),
+        _ => Err("usage: bridget control posture discovery|complete".to_string()),
+    }
+}
+
 fn cmd_control(args: &[String]) {
-    let usage =
-        "usage: bridget control status [--history] | pause [--reason <T>] | resume | budget <N>";
+    let usage = "usage: bridget control status [--history] | pause [--reason <T>] | resume | budget <N> | posture discovery|complete";
     match args.first().map(String::as_str) {
         Some("status") => {
             let (state, inbox_open_count) = fetch_control_state().unwrap_or_else(|error| {
@@ -4442,16 +3845,21 @@ fn cmd_control(args: &[String]) {
                 .position(|argument| argument == "--reason")
                 .and_then(|index| args.get(index + 1))
                 .cloned();
-            apply_control_mutation("control pause", Some(true), None, reason);
+            apply_control_mutation("control pause", Some(true), None, reason, None);
         }
-        Some("resume") => apply_control_mutation("control resume", Some(false), None, None),
+        Some("resume") => apply_control_mutation("control resume", Some(false), None, None, None),
         Some("budget") => {
             let cap = args.get(1).and_then(|value| value.parse::<u32>().ok());
             let Some(cap) = cap else {
                 eprintln!("{usage}");
                 std::process::exit(2);
             };
-            apply_control_mutation("control budget", None, Some(cap), None);
+            apply_control_mutation("control budget", None, Some(cap), None, None);
+        }
+        Some("posture") => {
+            let posture = parse_control_posture(&args[1..])
+                .unwrap_or_else(|error| exit_argument_error(&error));
+            apply_control_mutation("control posture", None, None, None, Some(posture));
         }
         _ => {
             eprintln!("{usage}");
@@ -6597,9 +6005,6 @@ mod idempotency_projection_tests {
             dedup_window: 180,
             quarantine_window: 3600,
             retention_days: 7,
-            project_root_policy_path: None,
-            project_runtime_policy_path: None,
-            project_resource_catalog_path: None,
         };
         std::thread::spawn(move || {
             let _ = daemon::run(config);
@@ -7557,141 +6962,66 @@ mod depot_tests {
             }
         }
     }
+
     #[test]
-    fn spec_066_cli_runtime_projet_exige_operation_et_identifiant_fermes() {
-        let argv = |values: &[&str]| {
-            values
-                .iter()
-                .map(|value| (*value).to_string())
-                .collect::<Vec<_>>()
-        };
-        let status =
-            parse_project_runtime_args(&argv(&["status", "--project", "project-066"])).unwrap();
-        assert_eq!(status.operation, ProjectRuntimeOperation::Status);
-        assert_eq!(status.project_id, "project-066");
-        assert!(!status.command_id.is_empty());
-
-        let stable = parse_project_runtime_args(&argv(&[
-            "prepare",
-            "--project",
-            "project-066",
-            "--command-id",
-            "stable",
-        ]))
-        .unwrap();
-        assert_eq!(stable.command_id, "stable");
-
-        let activation = parse_project_runtime_args(&argv(&[
-            "activate-docker",
-            "--project",
-            "project-085",
-            "--expected-generation",
-            "1",
-            "--policy",
-            "production-linux-amd64",
-            "--policy-version",
-            "1",
-        ]))
-        .unwrap();
-        assert_eq!(
-            activation.operation,
-            ProjectRuntimeOperation::ActivateDocker
-        );
-        assert_eq!(activation.expected_binding_generation, Some(1));
-        assert_eq!(
-            activation.policy_id.as_deref(),
-            Some("production-linux-amd64")
-        );
-        assert_eq!(activation.policy_version, Some(1));
-
-        for (operation, expected) in [
-            ("stop", ProjectRuntimeOperation::Stop),
-            ("remove", ProjectRuntimeOperation::Remove),
-            ("switch-backend", ProjectRuntimeOperation::SwitchBackend),
+    fn commandes_projet_retirees_refusees_par_la_garde_avant_namespace() {
+        for command in [
+            "managed-runtime-wrapper",
+            "managed-runtime-stop",
+            "project-runtime",
+            "project-round",
         ] {
-            let parsed =
-                parse_project_runtime_args(&argv(&[operation, "--project", "project-066"]))
-                    .unwrap();
-            assert_eq!(parsed.operation, expected);
+            for arguments in [
+                vec![],
+                vec!["--help".to_string()],
+                vec!["/bin/sh".to_string()],
+            ] {
+                let error = validate_communication_entry(command, &arguments).unwrap_err();
+                assert!(error.contains(command));
+                assert!(error.contains("aucun repli"));
+            }
         }
-        for invalid in [
-            argv(&[]),
-            argv(&["unknown", "--project", "project-066"]),
-            argv(&["prepare"]),
-            argv(&["prepare", "--project", "project-066", "--unexpected"]),
-            argv(&["activate-docker", "--project", "project-085"]),
+        for argument in [
+            "--project-root-policy",
+            "--project-runtime-policy",
+            "--project-resource-catalog",
         ] {
-            assert!(parse_project_runtime_args(&invalid).is_err());
+            assert!(
+                validate_communication_entry(
+                    "daemon",
+                    &[argument.to_string(), "/unread/policy".to_string()]
+                )
+                .is_err()
+            );
+        }
+        // Une observation fournisseur n'est pas un moteur de projet.
+        for command in ["runtime", "spawn", "stop", "attach", "daemon"] {
+            assert!(validate_communication_entry(command, &[]).is_ok());
         }
     }
+
     #[test]
-    fn spec_079_cli_ronde_separe_politique_projet_et_tick_global() {
-        let argv = |values: &[&str]| {
-            values
-                .iter()
-                .map(|value| (*value).to_string())
-                .collect::<Vec<_>>()
-        };
-        let list = parse_project_round_args(&argv(&["list", "--json"])).unwrap();
+    fn posture_cli_est_une_projection_fermee_sans_defaut_permissif() {
+        use bridget_transport::protocol::AgentPosture;
         assert_eq!(
-            list.operation,
-            ProjectRoundCliOperation::Policy(ProjectRoundOperation::List)
+            parse_control_posture(&["discovery".to_string()]).unwrap(),
+            AgentPosture::Discovery
         );
-        assert!(list.json);
-
-        let status =
-            parse_project_round_args(&argv(&["status", "--project", "project-079"])).unwrap();
         assert_eq!(
-            status.operation,
-            ProjectRoundCliOperation::Policy(ProjectRoundOperation::Status)
+            parse_control_posture(&["complete".to_string()]).unwrap(),
+            AgentPosture::Complete
         );
-        assert_eq!(status.project_id.as_deref(), Some("project-079"));
-
-        let enable = parse_project_round_args(&argv(&[
-            "enable",
-            "--project",
-            "project-079",
-            "--binding-generation",
-            "4",
-            "--command-id",
-            "enable-round-079",
-        ]))
-        .unwrap();
-        assert_eq!(
-            enable.operation,
-            ProjectRoundCliOperation::Policy(ProjectRoundOperation::Enable)
-        );
-        assert_eq!(enable.binding_generation, Some(4));
-        assert_eq!(enable.command_id.as_deref(), Some("enable-round-079"));
-
-        let dispatch =
-            parse_project_round_args(&argv(&["dispatch", "--occurrence", "1788000000"])).unwrap();
-        assert_eq!(dispatch.operation, ProjectRoundCliOperation::Dispatch);
-        assert_eq!(dispatch.occurrence_at, Some(1_788_000_000));
-
-        for invalid in [
-            argv(&[]),
-            argv(&["list", "--project", "project-079"]),
-            argv(&["status"]),
-            argv(&[
-                "status",
-                "--project",
-                "project-079",
-                "--binding-generation",
-                "4",
-            ]),
-            argv(&["enable", "--project", "project-079"]),
-            argv(&[
-                "dispatch",
-                "--project",
-                "project-079",
-                "--occurrence",
-                "1788000000",
-            ]),
-            argv(&["dispatch", "--command-id", "forbidden"]),
-            argv(&["disable", "--project", "project-079", "--unexpected"]),
+        for args in [
+            vec![],
+            vec![""],
+            vec!["Complete"],
+            vec!["allow"],
+            vec![" complete"],
+            vec!["discovery", "complete"],
+            vec!["complete", "--confirm"],
         ] {
-            assert!(parse_project_round_args(&invalid).is_err(), "{invalid:?}");
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert!(parse_control_posture(&args).is_err(), "{args:?}");
         }
     }
 }
