@@ -87,6 +87,16 @@ cette entrée intermédiaire ne les coche pas. Les relectures sont limitées à
 leurs périmètres (corpus/extraction et frontières ciblées), pas une certification
 exhaustive de sécurité de tout l'héritage.
 
+La répétition sur le même namespace de test a également révélé une clé fixe
+dans `spawn_executor_tests` : le premier run persistait un ordre pour son cwd
+temporaire, le second réutilisait cette clé avec un autre cwd. Le refus produit
+`--command-id rejoué avec des options divergentes` était juste. Le test utilise
+maintenant deux clés uniques et retire ses propres fichiers après vérification ;
+trois exécutions consécutives dans le même namespace passent (0,04/0,02/0,02 s).
+Pas d'effacement du magasin pour masquer la divergence. Une tentative globale
+interrompue sur le seul Cargo identifié n'est pas retenue : le shell héritait
+d'une variable fournisseur, retirée de la recette finale par `env -i`.
+
 ## 2026-09-05 — T033 : comparaison reconstruite depuis Git
 
 Deux builds offline/locked/2 jobs depuis archives immuables avec targets neufs, 39,935 s référence contre 27,047 s noyau ; 187 contre 94 packages. Les deux compilent. Vingt paires du même test de projection 256 agents, ordre alterné, **40/40**, p95 14,563 contre 13,635 ms. RSS du scénario quasi identique ; **RSS maximal de compilation augmente ~14 %**, explicitement conservé dans baseline.md. Aucun cold-cache système prétendu, aucun benchmark fournisseur extrapolé depuis ce test en mémoire. Script reproductible `scripts/measure-089-core.py`, rapport brut `artifacts/comparison-reference-core.json`. T028 conserve les vrais budgets append/rendu local/distant ; les graphiques de dépendances et nombres de modules ne les remplacent pas. Les archives de mesure sont privées, aucune flotte lancée.

@@ -1165,12 +1165,16 @@ mod spawn_executor_tests {
         std::fs::create_dir_all(&root).expect("racine de test");
         let cwd_absent = root.join("absent-sur-le-client");
         assert!(!cwd_absent.exists(), "précondition : cwd client absent");
+        // Le registre d'ordres appartient au namespace, pas au cwd. Deux
+        // passes du banc ne doivent pas réutiliser une clé pour deux cwd.
+        let absent_id = format!("cwd-absent-{}", uuid::Uuid::new_v4());
+        let valid_id = format!("cwd-valide-{}", uuid::Uuid::new_v4());
         let args_absents = vec![
             "fixture".to_string(),
             "--cwd".to_string(),
             cwd_absent.to_string_lossy().into_owned(),
             "--command-id".to_string(),
-            "cwd-executor-absent".to_string(),
+            absent_id.clone(),
             "--no-persistent".to_string(),
         ];
 
@@ -1187,7 +1191,7 @@ mod spawn_executor_tests {
         let daemon_absent = daemon_repond_a_un_spawn(
             &socket_absent,
             DaemonToWrapper::SpawnRejected {
-                command_id: "cwd-executor-absent".to_string(),
+                command_id: absent_id.clone(),
                 // DEUX machines ATTESTÉES et DIFFÉRENTES, imposées au banc :
                 // c'est la seule configuration où le rendu peut prouver qu'il
                 // distingue « où l'on a cherché » de « qui a demandé ». Des
@@ -1203,7 +1207,7 @@ mod spawn_executor_tests {
             .expect("la CLI reçoit le refus de l'exécuteur");
         let reason = match refusal {
             DaemonToWrapper::SpawnRejected { command_id, reason } => {
-                assert_eq!(command_id, "cwd-executor-absent");
+                assert_eq!(command_id, absent_id);
                 reason
             }
             other => panic!("SpawnRejected attendu, reçu {other:?}"),
@@ -1230,7 +1234,7 @@ mod spawn_executor_tests {
             "--cwd".to_string(),
             cwd_valide.to_string_lossy().into_owned(),
             "--command-id".to_string(),
-            "cwd-executor-valide".to_string(),
+            valid_id.clone(),
             "--no-persistent".to_string(),
         ];
         let ordre_valide = resolve_spawn_order(
@@ -1244,7 +1248,7 @@ mod spawn_executor_tests {
         let daemon_valide = daemon_repond_a_un_spawn(
             &socket_valide,
             DaemonToWrapper::SpawnAccepted {
-                command_id: "cwd-executor-valide".to_string(),
+                command_id: valid_id.clone(),
                 agent_id: "fixture-cwd".to_string(),
                 definition: None,
             },
@@ -1252,13 +1256,15 @@ mod spawn_executor_tests {
         assert!(matches!(
             send_control_to_daemon_at(&socket_valide, ordre_valide),
             Ok(DaemonToWrapper::SpawnAccepted { command_id, agent_id, .. })
-                if command_id == "cwd-executor-valide" && agent_id == "fixture-cwd"
+                if command_id == valid_id && agent_id == "fixture-cwd"
         ));
         assert!(matches!(
             daemon_valide.join().expect("daemon valide termine"),
             WrapperToDaemon::SpawnOrder { cwd, .. } if cwd == cwd_valide.to_string_lossy()
         ));
         let _ = std::fs::remove_file(&socket_valide);
+        std::fs::remove_file(spawn_order_path(&root, &absent_id)).unwrap();
+        std::fs::remove_file(spawn_order_path(&root, &valid_id)).unwrap();
         let _ = std::fs::remove_dir_all(root);
     }
 }
