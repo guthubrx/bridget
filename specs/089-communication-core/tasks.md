@@ -1,7 +1,7 @@
 # Tâches 089 — extraction progressive du noyau
 
 **Entrées :** spec.md, plan.md, research.md, data-model.md, contracts/communication.md.
-**36 tâches de réalisation, 15 terminées.** P0 : référence mesurée et exclusions de sécurité consignées ; T005 ne signifie pas suite globale verte. Maicie/UI/runtime sont découplés ; stockage modularisé sans scinder les transactions, vérifié par fautes et crashs réels. Paquet indépendant T013 construit et exécuté (SC-08906), parité réelle CLI/MCP T014 et renommage CLI/identité T015 vérifiés ; la clôture du service reste à corriger dans T018. Pas de livraison globale ni de recette SSH déclarée.
+**36 tâches de réalisation, 16 terminées.** P0 : référence mesurée et exclusions de sécurité consignées ; T005 ne signifie pas suite globale verte. Maicie/UI/runtime sont découplés ; stockage modularisé sans scinder les transactions, vérifié par fautes et crashs réels. Paquet indépendant T013, parité CLI/MCP T014, identité T015 et cycle réponse/annulation/délai T016 exécutés ; la clôture du service reste à corriger dans T018. Pas de livraison globale ni de recette SSH déclarée.
 
 Exécution séquentielle par tranches ; aucun lancement automatique de sous-agents. Un commit cohérent après tests, aucune capture d'un WIP tiers. Écrire l'oracle avant la modification qu'il doit protéger, vérifier son échec sur un mutant ciblé lorsqu'exigé, puis restaurer le vrai code. Les tests réels n'utilisent jamais les processus de production.
 
@@ -28,7 +28,7 @@ Exécution séquentielle par tranches ; aucun lancement automatique de sous-agen
 
 - [x] T014 [US1] Ajouter tests/core_089_contract_test.rs : CLI et MCP réels → même daemon → même canon/record, refus de divergence body/cible/reply/deadline/in_reply_to sans mutation ; corriger uniquement la couture concernée. SC-08902.
 - [x] T015 [US1] Ajouter tests/core_089_identity_test.rs : rename, reprise et instances distinctes de même binaire ; conserver issuer_scope stable et présence honnête dans src/mcp_identity.rs, identity_migration.rs et daemon.rs. SC-08901/09.
-- [ ] T016 [US1] Ajouter tests/core_089_reply_test.rs : demande suivie → réponse liée → answered, ledger unique, zéro rappel après clôture, timeout/annulation attestés ; préserver helper transactionnel partagé. SC-08901.
+- [x] T016 [US1] Ajouter tests/core_089_reply_test.rs : demande suivie → réponse liée → answered, ledger unique, zéro rappel après clôture, timeout/annulation attestés ; préserver helper transactionnel partagé. SC-08901.
 - [ ] T017 [US1] Porter les crash-tests idempotence existants dans tests/core_089_crash_test.rs avec barrières, watchdog et comptage de prompts ; même retry/canon/issue, limites wrapper explicites. SC-08903, aucun SIGTERM présenté comme crash.
 - [ ] T018 [US1] Ajouter tests/core_089_service_test.rs : consommateur public externe sans crate Maicie, dépôt/reprise/claim périmé/réponse/événement identique ; conserver capacité et quatuor du claim dans daemon.rs/store.rs. SC-08902/08.
 - [ ] T019 [US3] Rejouer et compléter tests/core_089_attach_test.rs : raw inhabituel/champ inconnu intact, journal avant snapshot, SnapshotCaughtUp avant live, rotation et curseur périmé ; mutants de fraîcheur et de Gap refusés. SC-08905.

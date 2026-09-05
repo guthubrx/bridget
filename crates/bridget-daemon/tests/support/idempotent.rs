@@ -640,11 +640,15 @@ pub fn register_recipient(socket: &Path) -> Client {
 }
 
 pub fn register_recipient_as(socket: &Path, instance_id: &str) -> Client {
+    register_agent_as(socket, RECIPIENT, instance_id)
+}
+
+pub fn register_agent_as(socket: &Path, agent_id: &str, instance_id: &str) -> Client {
     let mut recipient = Client::connect(socket);
     recipient.send(WrapperToDaemon::Register {
         agent_type: "fixture".to_string(),
         identity_version: 2,
-        agent_id: RECIPIENT.to_string(),
+        agent_id: agent_id.to_string(),
         host: Some("t1209".to_string()),
         transport: Some("acp".to_string()),
         channel: None.into(),

@@ -1,5 +1,14 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T016 : réponse liée et arrêt des rappels exécutés
+
+core_089_reply_test utilise les vrais CLI/MCP/daemon et deux pairs du protocole public. La demande naît par CLI, pas par INSERT de fixture. Réponse MCP in_flight : demande encore open avant ACK ; ACK réel : answered ; retry exact : même issue, une entrée ledger visible par SQL, CLI et MCP. Une seconde demande est annulée via le protocole et sa cible reçoit CancelDelivery. Une troisième demande témoin traverse les vrais rappels puis expire ; la réception sur socket et la lecture RequestList constituent la barrière, sans sleep de synchronisation. Les événements de rappel ne concernent QUE cette sentinelle : aucune relance de la demande answered ou cancelled. Le délai stocké est comparé à issued_at + timeout (canon), pas à l'heure d'insertion qui peut franchir une seconde.
+
+Mutant réellement exécuté dans handle_delivery_ack : garder le pending après ACK au lieu de le retirer. L'oracle échoue en 7,13 s sur deux événements ReminderSent corrélés à la demande déjà answered. Restauration du daemon vérifiée par diff vide avant la passe finale. Aucun code de production modifié dans cette tranche.
+
+Environnement et watchdog 180 s T014 : `cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_reply_test --test core_089_contract_test --test core_089_identity_test` : 7/7, réponse 7,22 s, contrat 1,32 s, identité 3,73 s ; compilation 2,16 s. Clippy workspace/all-targets/test-support -D warnings vert (4,69 s), fmt/diff contrôlés. Les premières erreurs du nouveau harnais (signature ListRequests, dédup de trois corps identiques, horloge de l'assert) ont été corrigées sur preuves du protocole et du code ; aucune règle produit assouplie. Les douze crash-tests historiques restent réservés à T017 et les lifecycle de service à T018.
+
+
 ## 2026-09-05 — T015 achevée : nom humain par le vrai CLI
 
 La première tranche ci-dessous est historique. `bridget rename "Équipe B"` passe maintenant par la socket et une extension versionnée fermée display_name_set/result ; le client ne lit aucune base. L'autorité est l'identité/instance active de LA connexion, extraite du contrôle déjà utilisé par la lecture de contenus. Aucun agent_id cible déclarable dans la commande. Le helper d'unicité SQL est partagé avec update_profile ; la transaction IMMEDIATE ne modifie que le nom, sa clé normalisée, la révision et updated_at. Instructions historiques (espaces inclus), révision d'instructions et autres champs restent identiques. Un retry du nom courant ne modifie pas la révision.

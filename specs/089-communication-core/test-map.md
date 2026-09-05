@@ -1,5 +1,9 @@
 # Carte des tests 089 — dispositions avant extraction
 
+## T016 — cycle de réponse sans horloge de complaisance
+
+core_089_reply_test remplace la simple attente du harnais historique par une demande sentinelle réellement rappelée puis expirée. CLI → demande open ; réponse MCP → ACK → answered ; annulation → cancelled ; échéance → timed_out ; ledger sans doublon aux trois lectures. Le mutant qui conserve le pending répondu est refusé sur ses événements ReminderSent, pas sur une formulation humaine du rappel. Aucun fournisseur réel impliqué ; son gate reste T020/T021.
+
 ## T015 — ancien rename remplacé par le nom affiché
 
 core_089_identity_test protège l'identité opaque, les refus de nom, le scope d'instance et les octets au redémarrage réel. Ses trois tests passent désormais par le vrai CLI rename, le daemon, le wrapper et MCP : renommage conservé après SIGKILL, refus sans écriture, instances distinctes, fixture filaire fermée. Les deux anciens tests integration_test de renommage supposent une route textuelle modifiable et le namespace historique : leur oracle fonctionnel est remplacé, pas leur ancienne hypothèse de route. Ils ne sont ni exécutés contre la flotte ni comptés verts ; leur disposition physique dans ce fichier mixte sera vérifiée à T034. Mutant supprimant l'UPDATE de nom réellement refusé par la lecture ListAgents du test.

@@ -2,13 +2,13 @@
 
 **Branche :** session-089-communication-core | **Date :** 2026-09-05 | **Spécification :** spec.md
 **Base immuable :** dfa2134dcfe2a2522e3ae77d93561e6ae72556b3.
-**État :** corpus, inventaire, revue pré-coupe, canon neutre et isolation réalisés ; baseline globale et découplage métier restent ouverts.
+**État :** découplage physique et paquet indépendant exécutés ; usages CLI/MCP/identité/réponse consolidés jusqu'à T016. Les recettes services, fournisseurs et SSH ainsi que la validation globale restent ouvertes.
 
 ## Résumé et approche
 
 Créer un dépôt indépendant avec historique, puis extraire par coutures testées. Le premier jalon utile est un échange réel Codex↔Claude sans GUI ni Maicie. La fédération SSH, la reprise et la sécurité ne sont pas des options de finition : leur contrat est verrouillé avant de couper les dépendances.
 
-Le clone contient encore tout le produit historique. Il ne devient « communication-only » qu'après suppression des dépendances et passage SC-08906. Ni un renommage de dossier, ni des features Cargo cachant tout le code, ni une réécriture intégrale ne constituent l'extraction.
+Le clone contenait initialement tout le produit historique. Les dépendances et sources métier/UI/runtime ont été retirées et le paquet indépendant T013 exécuté (SC-08906). Cela ne vaut pas recette complète des garanties de communication : les gates suivants restent obligatoires. Ni un renommage de dossier ni des features Cargo cachant tout le code ne constituent l'extraction.
 
 ## Contexte technique
 
