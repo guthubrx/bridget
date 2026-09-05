@@ -1901,6 +1901,22 @@ mod tests {
     use std::sync::{Arc, Barrier};
     use std::thread;
 
+    // Identités v4 stables : le même agent reste identique après rejeu/redémarrage.
+    const AGENT_DOMAIN: &str = "00000001-0000-4000-8000-000000000001";
+    const AGENT_SCOPE: &str = "00000002-0000-4000-8000-000000000001";
+    const AGENT_ADOPT: &str = "00000003-0000-4000-8000-000000000001";
+    const AGENT_RELAUNCH: &str = "00000004-0000-4000-8000-000000000001";
+    const AGENT_ALPHA: &str = "00000005-0000-4000-8000-000000000001";
+    const AGENT_ZETA: &str = "00000006-0000-4000-8000-000000000001";
+    const AGENT_UNIQUE: &str = "00000007-0000-4000-8000-000000000001";
+    const AGENT_WAIT: &str = "00000008-0000-4000-8000-000000000001";
+    const AGENT_QUOTA_A: &str = "00000009-0000-4000-8000-000000000001";
+    const AGENT_QUOTA_B: &str = "00000010-0000-4000-8000-000000000001";
+    const AGENT_GUARD: &str = "00000011-0000-4000-8000-000000000001";
+    const AGENT_EXPIRED: &str = "00000012-0000-4000-8000-000000000001";
+    const AGENT_STOP: &str = "00000013-0000-4000-8000-000000000001";
+    const AGENT_CRASH: &str = "00000014-0000-4000-8000-000000000001";
+
     const NOW: i64 = 1_000_000;
     const CRASH_CHILD_ENV: &str = "BRIDGET_T904_CRASH_CHILD";
     const CRASH_ROOT_ENV: &str = "BRIDGET_T904_CRASH_ROOT";
@@ -1959,7 +1975,7 @@ mod tests {
     fn domain_est_persiste_dans_fleet_json_apres_connexion() {
         let root = test_root("domain-connect");
         let supervisor = open(&root);
-        let mut spawn = order("command-domain", Some("cursor6"), true);
+        let mut spawn = order("command-domain", Some(AGENT_DOMAIN), true);
         spawn.cwd = PathBuf::from("/tmp/bridget");
         let lease = start(&supervisor, &spawn);
         supervisor
@@ -1970,16 +1986,16 @@ mod tests {
             .unwrap();
         let fleet = supervisor.desired_fleet().unwrap();
         assert_eq!(
-            fleet.equipiers["cursor6"].domain.as_deref(),
+            fleet.equipiers[AGENT_DOMAIN].domain.as_deref(),
             Some("bridget")
         );
         let raw = fs::read_to_string(root.join("fleet.json")).unwrap();
         assert!(raw.contains("\"domain\": \"bridget\""), "{raw}");
         supervisor
-            .set_desired_domain("cursor6", Some("nouveau-projet"))
+            .set_desired_domain(AGENT_DOMAIN, Some("nouveau-projet"))
             .unwrap();
         assert_eq!(
-            supervisor.desired_fleet().unwrap().equipiers["cursor6"]
+            supervisor.desired_fleet().unwrap().equipiers[AGENT_DOMAIN]
                 .domain
                 .as_deref(),
             Some("nouveau-projet")
@@ -2012,7 +2028,7 @@ mod tests {
         let root = test_root("scope");
         let supervisor = open(&root);
         let scope = supervisor.supervisor_scope();
-        let spawn = order("command-scope", Some("codex-scope"), true);
+        let spawn = order("command-scope", Some(AGENT_SCOPE), true);
         let lease = start(&supervisor, &spawn);
         supervisor
             .mark_starting(&lease, NOW, &resolved_test_definition())
@@ -2040,7 +2056,7 @@ mod tests {
     fn adoption_exige_une_generation_connectee_et_reconstruit_un_stopped_complet() {
         let root = test_root("adopt-stopped");
         let supervisor = open(&root);
-        let spawn = order("command-adopt", Some("ancien-codex"), false);
+        let spawn = order("command-adopt", Some(AGENT_ADOPT), false);
         let lease = start(&supervisor, &spawn);
         supervisor
             .mark_starting(&lease, NOW, &resolved_test_definition())
@@ -2048,20 +2064,20 @@ mod tests {
         supervisor
             .register_connected(&lease, &lease.instance_id, NOW + 1)
             .unwrap();
-        supervisor.remove_desired("ancien-codex").unwrap();
+        supervisor.remove_desired(AGENT_ADOPT).unwrap();
 
         assert_eq!(
             supervisor.adopt_stopped("inconnu", NOW + 2).unwrap(),
             AdoptStoppedResult::NoManagedHistory
         );
         assert_eq!(
-            supervisor.adopt_stopped("ancien-codex", NOW + 2).unwrap(),
+            supervisor.adopt_stopped(AGENT_ADOPT, NOW + 2).unwrap(),
             AdoptStoppedResult::Adopted {
                 generation: lease.generation
             }
         );
         let adopted = supervisor
-            .desired_entry("ancien-codex")
+            .desired_entry(AGENT_ADOPT)
             .unwrap()
             .expect("entrée adoptée");
         assert_eq!(adopted.lifecycle_state, DesiredLifecycleState::Stopped);
@@ -2072,7 +2088,7 @@ mod tests {
             Some(resolved_test_definition())
         );
         assert_eq!(
-            supervisor.adopt_stopped("ancien-codex", NOW + 3).unwrap(),
+            supervisor.adopt_stopped(AGENT_ADOPT, NOW + 3).unwrap(),
             AdoptStoppedResult::AlreadyManaged
         );
         fs::remove_dir_all(root).unwrap();
@@ -2082,7 +2098,7 @@ mod tests {
     fn relance_change_de_generation_sans_perdre_le_stopped_et_decommission_reserve_le_nom() {
         let root = test_root("relaunch-decommission");
         let supervisor = open(&root);
-        let initial = order("command-initial", Some("agent-logique"), true);
+        let initial = order("command-initial", Some(AGENT_RELAUNCH), true);
         let initial_lease = start(&supervisor, &initial);
         supervisor
             .mark_starting(&initial_lease, NOW, &resolved_test_definition())
@@ -2090,19 +2106,19 @@ mod tests {
         supervisor
             .register_connected(&initial_lease, &initial_lease.instance_id, NOW + 1)
             .unwrap();
-        assert!(supervisor.mark_stopped("agent-logique").unwrap());
+        assert!(supervisor.mark_stopped(AGENT_RELAUNCH).unwrap());
         drop(supervisor);
         let supervisor = open(&root);
         assert_eq!(
             supervisor
-                .desired_entry("agent-logique")
+                .desired_entry(AGENT_RELAUNCH)
                 .unwrap()
                 .unwrap()
                 .lifecycle_state,
             DesiredLifecycleState::Stopped
         );
 
-        let failed_order = order("command-relaunch-failed", Some("agent-logique"), true);
+        let failed_order = order("command-relaunch-failed", Some(AGENT_RELAUNCH), true);
         let failed_lease = match supervisor.request_relaunch(&failed_order, NOW + 2).unwrap() {
             SpawnSubmission::Start(lease) => lease,
             other => panic!("relance attendue: {other:?}"),
@@ -2114,13 +2130,13 @@ mod tests {
             .fail(&failed_lease, "startup_failed", "fixture")
             .unwrap();
         let retained = supervisor
-            .desired_entry("agent-logique")
+            .desired_entry(AGENT_RELAUNCH)
             .unwrap()
             .expect("stopped conservé après échec");
         assert_eq!(retained.lifecycle_state, DesiredLifecycleState::Stopped);
         assert_eq!(retained.command_id, initial.command_id);
 
-        let success_order = order("command-relaunch-ok", Some("agent-logique"), true);
+        let success_order = order("command-relaunch-ok", Some(AGENT_RELAUNCH), true);
         let success_lease = match supervisor
             .request_relaunch(&success_order, NOW + 3)
             .unwrap()
@@ -2136,19 +2152,19 @@ mod tests {
             .register_connected(&success_lease, &success_lease.instance_id, NOW + 4)
             .unwrap();
         let running = supervisor
-            .desired_entry("agent-logique")
+            .desired_entry(AGENT_RELAUNCH)
             .unwrap()
             .expect("relance connectée");
         assert_eq!(running.lifecycle_state, DesiredLifecycleState::Running);
         assert_eq!(running.command_id, success_order.command_id);
 
-        assert!(supervisor.mark_stopped("agent-logique").unwrap());
-        assert!(supervisor.decommission("agent-logique").unwrap());
+        assert!(supervisor.mark_stopped(AGENT_RELAUNCH).unwrap());
+        assert!(supervisor.decommission(AGENT_RELAUNCH).unwrap());
         drop(supervisor);
         let supervisor = open(&root);
         assert_eq!(
             supervisor
-                .desired_entry("agent-logique")
+                .desired_entry(AGENT_RELAUNCH)
                 .unwrap()
                 .unwrap()
                 .lifecycle_state,
@@ -2159,17 +2175,17 @@ mod tests {
             .lock()
             .unwrap()
             .idempotency
-            .latest_connected_spawn_by_name("agent-logique")
+            .latest_connected_spawn_by_name(AGENT_RELAUNCH)
             .unwrap()
             .expect("historique de la génération relancée conservé");
         assert_eq!(historical.generation, success_lease.generation);
-        let reserved = order("command-reuse", Some("agent-logique"), true);
+        let reserved = order("command-reuse", Some(AGENT_RELAUNCH), true);
         assert!(matches!(
             supervisor.request_spawn(&reserved, NOW + 5).unwrap(),
             SpawnSubmission::Terminal(SpawnCommandIssue::Failed { category, .. })
                 if category == "name_reserved"
         ));
-        assert!(!supervisor.named_persistence().contains_key("agent-logique"));
+        assert!(!supervisor.named_persistence().contains_key(AGENT_RELAUNCH));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2177,8 +2193,8 @@ mod tests {
     fn reprise_expose_les_generations_en_vol_dans_l_ordre_des_noms() {
         let root = test_root("recovery-candidates");
         let supervisor = open(&root);
-        for (command_id, name) in [("command-z", "zeta"), ("command-a", "alpha")] {
-            let project = (name == "alpha").then(|| ProjectReference {
+        for (command_id, name) in [("command-z", AGENT_ZETA), ("command-a", AGENT_ALPHA)] {
+            let project = (name == AGENT_ALPHA).then(|| ProjectReference {
                 project_id: "project-alpha".to_string(),
                 binding_generation: 2,
             });
@@ -2219,7 +2235,7 @@ mod tests {
                 .iter()
                 .map(|candidate| candidate.lease.name.as_str())
                 .collect::<Vec<_>>(),
-            ["alpha", "zeta"]
+            [AGENT_ALPHA, AGENT_ZETA]
         );
         assert!(
             candidates
@@ -2227,7 +2243,7 @@ mod tests {
                 .all(|candidate| candidate.lease.persistent)
         );
         assert!(candidates.iter().any(|candidate| {
-            candidate.lease.name == "alpha"
+            candidate.lease.name == AGENT_ALPHA
                 && candidate.lease.project.as_ref().is_some_and(|project| {
                     project.project_id == "project-alpha" && project.binding_generation == 2
                 })
@@ -2245,7 +2261,7 @@ mod tests {
             let supervisor = Arc::clone(&supervisor);
             let barrier = Arc::clone(&barrier);
             handles.push(thread::spawn(move || {
-                let order = order(command_id, Some("codex-unique"), false);
+                let order = order(command_id, Some(AGENT_UNIQUE), false);
                 barrier.wait();
                 supervisor.request_spawn(&order, NOW).unwrap()
             }));
@@ -2281,7 +2297,7 @@ mod tests {
     fn retry_en_vol_attend_le_vrai_register_sans_connected_synthetique() {
         let root = test_root("wait");
         let supervisor = Arc::new(open(&root));
-        let spawn = order("command-wait", Some("codex-wait"), true);
+        let spawn = order("command-wait", Some(AGENT_WAIT), true);
         let lease = start(&supervisor, &spawn);
         supervisor
             .mark_starting(&lease, NOW, &resolved_test_definition())
@@ -2317,8 +2333,8 @@ mod tests {
             },
         )
         .unwrap();
-        let first = order("command-quota-a", Some("codex-a"), false);
-        let second = order("command-quota-b", Some("codex-b"), false);
+        let first = order("command-quota-a", Some(AGENT_QUOTA_A), false);
+        let second = order("command-quota-b", Some(AGENT_QUOTA_B), false);
         assert!(matches!(
             supervisor.request_spawn(&first, NOW).unwrap(),
             SpawnSubmission::Start(_)
@@ -2391,7 +2407,7 @@ mod tests {
     fn mismatch_expiration_et_register_tardif_sont_terminaux() {
         let root = test_root("guards");
         let supervisor = open(&root);
-        let spawn = order("command-guard", Some("codex-guard"), false);
+        let spawn = order("command-guard", Some(AGENT_GUARD), false);
         let lease = start(&supervisor, &spawn);
         let mut divergent = spawn.clone();
         divergent.cwd = PathBuf::from("/var/tmp");
@@ -2424,7 +2440,7 @@ mod tests {
             command_id: "command-expired".to_string(),
             issued_at: NOW - 400,
             deadline_at: NOW + 1,
-            ..order("unused", Some("codex-expired"), false)
+            ..order("unused", Some(AGENT_EXPIRED), false)
         };
         assert_eq!(
             supervisor.request_spawn(&expired, NOW).unwrap(),
@@ -2438,7 +2454,7 @@ mod tests {
     fn stop_invalide_un_lancement_avant_toute_io_et_rejoue_cancelled() {
         let root = test_root("stop-starting");
         let supervisor = open(&root);
-        let spawn = order("command-stop-starting", Some("codex-stop"), true);
+        let spawn = order("command-stop-starting", Some(AGENT_STOP), true);
         let lease = start(&supervisor, &spawn);
         supervisor
             .mark_starting(&lease, NOW, &resolved_test_definition())
@@ -2455,7 +2471,7 @@ mod tests {
             DesiredStateStore::at_path(root.join("fleet.json"))
                 .load()
                 .unwrap()
-                .equipiers["codex-stop"]
+                .equipiers[AGENT_STOP]
                 .lifecycle_state,
             DesiredLifecycleState::Stopped
         );
@@ -2466,7 +2482,7 @@ mod tests {
     fn stop_connecte_preserve_l_issue_spawn_et_marque_l_agent_arrete() {
         let root = test_root("stop-connected");
         let supervisor = open(&root);
-        let spawn = order("command-stop-connected", Some("codex-stop"), true);
+        let spawn = order("command-stop-connected", Some(AGENT_STOP), true);
         let lease = start(&supervisor, &spawn);
         supervisor
             .mark_starting(&lease, NOW, &resolved_test_definition())
@@ -2485,14 +2501,66 @@ mod tests {
             DesiredStateStore::at_path(root.join("fleet.json"))
                 .load()
                 .unwrap()
-                .equipiers["codex-stop"]
+                .equipiers[AGENT_STOP]
                 .lifecycle_state,
             DesiredLifecycleState::Stopped
         );
         fs::remove_dir_all(root).unwrap();
     }
 
-    fn spawn_crash_child(root: &Path, stage: &str) -> (Child, UnixStream) {
+    struct CrashChild(Child);
+
+    impl CrashChild {
+        fn terminate(&mut self) {
+            if matches!(self.0.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            let pid = self.0.id();
+            let executable = std::env::current_exe().unwrap();
+            let observed = Command::new("/bin/ps")
+                .args(["-p", &pid.to_string(), "-o", "ppid=", "-o", "command="])
+                .output()
+                .unwrap();
+            let command = String::from_utf8_lossy(&observed.stdout);
+            let owned = command
+                .split_whitespace()
+                .next()
+                .and_then(|value| value.parse::<u32>().ok())
+                == Some(std::process::id())
+                && command.contains(executable.to_string_lossy().as_ref())
+                && !command.to_ascii_lowercase().contains("firefox")
+                && unsafe { libc::getpgid(pid as i32) } == pid as i32;
+            if matches!(self.0.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            assert!(
+                owned,
+                "le crash doit cibler notre enfant de test et son groupe dédié"
+            );
+            assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            loop {
+                if let Some(status) = self.0.try_wait().unwrap() {
+                    assert!(!status.success());
+                    return;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "enfant de crash non récolté"
+                );
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    impl Drop for CrashChild {
+        fn drop(&mut self) {
+            // Une barrière EOF/timeout ne doit pas abandonner un enfant suspendu.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.terminate()));
+        }
+    }
+
+    fn spawn_crash_child(root: &Path, stage: &str) -> (CrashChild, UnixStream) {
         let executable = std::env::current_exe().unwrap();
         assert!(
             executable
@@ -2507,7 +2575,16 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         let mut command = Command::new(executable);
+        for directory in ["home", "state", "tmp"] {
+            fs::create_dir_all(root.join(directory)).unwrap();
+        }
         command
+            .env_clear()
+            .env("HOME", root.join("home"))
+            .env("BRIDGET_HOME", root.join("state"))
+            .env("BRIDGET_SOCKET", root.join("state/bridget.sock"))
+            .env("TMPDIR", root.join("tmp"))
+            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
             .arg("fleet::tests::crash_child")
             .arg("--exact")
             .arg("--ignored")
@@ -2520,13 +2597,16 @@ mod tests {
             .env(CRASH_STAGE_ENV, stage);
         unsafe {
             command.pre_exec(move || {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
                 if libc::dup2(child_barrier.as_raw_fd(), CRASH_BARRIER_FD) < 0 {
                     return Err(io::Error::last_os_error());
                 }
                 Ok(())
             });
         }
-        (command.spawn().unwrap(), parent_barrier)
+        (CrashChild(command.spawn().unwrap()), parent_barrier)
     }
 
     fn wait_barrier(barrier: &mut UnixStream) {
@@ -2535,12 +2615,8 @@ mod tests {
         assert_eq!(byte[0], b'B');
     }
 
-    fn terminate_child(child: &mut Child) {
-        assert_eq!(
-            unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
-            0
-        );
-        assert!(!child.wait().unwrap().success());
+    fn terminate_child(child: &mut CrashChild) {
+        child.terminate();
     }
 
     fn signal_and_park() {
@@ -2563,7 +2639,7 @@ mod tests {
         let root = PathBuf::from(std::env::var_os(CRASH_ROOT_ENV).unwrap());
         let stage = std::env::var(CRASH_STAGE_ENV).unwrap();
         let supervisor = open(&root);
-        let spawn = order("command-crash", Some("codex-crash"), true);
+        let spawn = order("command-crash", Some(AGENT_CRASH), true);
         let lease = start(&supervisor, &spawn);
         supervisor
             .mark_starting(&lease, NOW, &resolved_test_definition())
@@ -2603,7 +2679,7 @@ mod tests {
             terminate_child(&mut child);
 
             let reopened = open(&root);
-            let spawn = order("command-crash", Some("codex-crash"), true);
+            let spawn = order("command-crash", Some(AGENT_CRASH), true);
             let outcome = reopened.request_spawn(&spawn, NOW + 2).unwrap();
             match stage {
                 "before_fleet" => assert!(matches!(
@@ -2617,7 +2693,7 @@ mod tests {
                     };
                     let lease = SpawnLease {
                         command_id: waiter.command_id,
-                        name: "codex-crash".to_string(),
+                        name: AGENT_CRASH.to_string(),
                         instance_id: waiter.instance_id,
                         generation: waiter.generation,
                         deadline_at: waiter.deadline_at,

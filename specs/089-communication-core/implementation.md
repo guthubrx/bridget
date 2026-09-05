@@ -1,5 +1,63 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — Référence avant coupe : clôture T005, pas de gate fonctionnel global
+
+La référence mesurée et reproductible est maintenant disponible : suites
+core/transport auditées, passe large daemon avec liste brute des rouges,
+71 unités wrapper, CLI/MCP/ledger, guichet, événements cursés, flotte et
+matrice de cinquante crashs. T005 clôt la COLLECTE de référence, pas une
+promesse de suite entièrement verte. Les exclusions de sécurité nommées
+ci-dessous restent des gates à porter dans T014–T021/T029–T034 ; les
+fournisseurs réels et SSH ne sont pas remplacés par les adaptateurs factices.
+Aucun de leurs résultats n'est inventé. Les scénarios contextuels Maicie et
+UI/Docker seront retirés selon T003 ; leurs garanties transport utiles doivent
+rester exercées par les coutures publiques, pas par une copie de leur métier.
+
+Contre-run final des tests d'identité/CLI/attach/fleet modifiés : **36/36**,
+un helper ignoré mais lancé par son parent, **0,42 s** ; même commande privée
+que les 21 tests, avec filtre supplémentaire `fleet::tests::`, watchdog90s.
+Les quatre fichiers de production n'ont changé que dans leurs modules de
+tests. `cargo fmt --all --check` et `git diff --check` verts. La coupe T009
+peut désormais commencer ; les défauts CLI/guichet et lints listés restent
+des travaux obligatoires, aucune dérogation au gate final.
+
+## 2026-09-05 — Fixtures d'identité : garanties restaurées, pas de modification produit
+
+Portage exclusivement dans les modules de tests de cli.rs, attach.rs,
+mcp_identity.rs et fleet.rs. Les UUID sont explicites/stables ; --agent-id
+remplace --name dans les fixtures du parseur. L'absence de choix de survie,
+le rejet des choix contradictoires, les bytes mémorisés du retry et les
+refus d'options de dépôt interdites restent testés. Les arguments négatifs
+attach utilisent maintenant une identité VALIDE : ils atteignent réellement
+la mauvaise fenêtre demandée, plutôt qu'un rejet d'identité préalable.
+
+Attach compare une sélection indépendante d'UUID routables, pas des noms
+affichés. Le DTO sans persistent reste inconnu avec agent_id requis ; un DTO
+sans agent_id est explicitement refusé, aucune fausse compatibilité nom-seul.
+MCP identity : naissance, filiation, trois ancêtres, legacy, instance et
+PID recyclé conservés. Le test de relecture du fichier d'identité n'est PAS
+une preuve de rename métier ; cette preuve distincte reste en T015.
+
+Tests CLI/attach/MCP identity ciblés sous le même env privé que la baseline
+lib : **21/21 verts, 0,03 s** (compilation 3,95 s). Filtres :
+`explique_les_refus_non_acp_et_nom_inconnu json_publie_la_persistance_meme_indeterminee mcp_identity::tests:: arguments_attach_ spawn_neuf_refuse_de_partir_sans_choix_de_survie rejeu_d_un_ordre_memorise_n_exige_pas_de_redeclarer_la_survie spawn_cli_rejoue_l_enveloppe_memorisee_octet_pour_octet stop_cli_genere_ou_reutilise_un_command_id depot_guichet_ depot_delegate_versionne_atomiquement_sa_cible_de_revue --test-threads=4`.
+
+Fleet : **15/15 verts, 0,43 s**, un helper enfant ignoré dans la sélection
+ordinaire MAIS réellement appelé par le test parent aux trois frontières.
+Le harnais a un enfant/groupe propre, env_clear, garde de secours et attente
+bornée, SIGKILL après barrière. Quota, réservations concurrentes, canon,
+générations, clôtures et reprise sont inchangés dans le code produit.
+
+Baseline wrapper supplémentaire auditée : **71/71 verts, 1,11 s**, sous
+racine privée /private/tmp/bw-9by53dt9 (HOME=h, namespace=n, TMPDIR=t),
+watchdog 90 s. Aucun fournisseur réel/tmux/daemon ; relais, jonction live,
+rotation, receipts et namespace MCP exécutés. Quinze exclusions explicites :
+onze scénarios contextuels Maicie, refus Zed au chemin /tmp fixe, shutdown
+avec thread volontairement parqué, faux Claude sans garde de panique et
+enfant du test de livraison interactive à exécuter séparément. Aucun succès
+n'est attribué à ces exclusions. Clippy reste rouge hors de ces hunks ;
+les lints répertoriés ne sont pas supprimés pour présenter une gate verte.
+
 ## 2026-09-05 — T005 : idempotence, 50 crashs réels exécutés
 
 idempotency_crash_test.rs porté sans code produit : namespace indépendant,

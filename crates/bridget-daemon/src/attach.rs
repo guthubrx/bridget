@@ -4666,7 +4666,7 @@ mod tests {
                 execution: None,
                 agent_link: None,
             };
-        let attachable = attachable_agent_names(vec![
+        let agents = vec![
             agent("connected", "acp", Some(PresenceMode::Acp), "connected"),
             agent("busy", "acp", Some(PresenceMode::Acp), "busy"),
             agent("dnd", "acp", Some(PresenceMode::Acp), "dnd"),
@@ -4676,8 +4676,12 @@ mod tests {
             agent("tmux", "acp", Some(PresenceMode::Tmux), "connected"),
             agent("historique", "acp", None, "connected"),
             agent("acp-sur-unix", "unix", Some(PresenceMode::Acp), "connected"),
-        ]);
-        assert_eq!(attachable, ["connected", "busy", "dnd", "acp-sur-unix"]);
+        ];
+        // La sélection retourne les identités routables, pas les noms affichés.
+        // Oracle indépendant : connecté/busy/dnd et ACP sur Unix sont les
+        // seuls éléments attendus, même si les autres annoncent transport ACP.
+        let expected = [0, 1, 2, 8].map(|index| agents[index].agent_id.clone());
+        assert_eq!(attachable_agent_names(agents), expected);
     }
 
     #[test]

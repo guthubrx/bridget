@@ -492,7 +492,11 @@ fn read_name_file(path: &Path) -> Result<String, NameFileReadError> {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    use std::os::unix::fs::symlink;
+    use std::io::Write;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, symlink};
+
+    const AGENT_A: &str = "96389249-07a4-4e29-83f0-9c46bd775021";
+    const AGENT_B: &str = "da78fd70-41e8-424c-a88d-e29e2c5babcd";
 
     #[derive(Default)]
     struct Fixture(BTreeMap<u32, (u64, u32)>);
@@ -505,24 +509,49 @@ mod tests {
         }
     }
     fn root(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "bridget-mcp-identity-{label}-{}",
-            uuid::Uuid::new_v4()
-        ))
+        // Le scan refuse à juste titre /tmp quand le chemin réel est /private/tmp.
+        let root = fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!(
+                "bridget-mcp-identity-{label}-{}",
+                uuid::Uuid::new_v4()
+            ));
+        private_dir(&root);
+        root
+    }
+    fn private_dir(path: &Path) {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)
+            .unwrap();
+    }
+    fn private_write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .unwrap();
+        file.write_all(bytes.as_ref()).unwrap();
     }
     fn marker(root: &Path, pid: u32, birth: u64, instance: &str, name: &str) -> PathBuf {
         let names = root.join("names");
-        fs::create_dir_all(&names).unwrap();
+        private_dir(&names);
         let path = names.join(format!("{pid}.txt"));
-        fs::write(&path, name).unwrap();
+        private_write(&path, name);
+        private_dir(&root.join("agent-pids"));
+        // Précréer le fichier privé, sans changer le umask global des tests.
+        private_write(root.join("agent-pids").join(pid.to_string()), []);
         write_marker(&root.join("agent-pids"), pid, birth, instance, &path).unwrap();
         path
     }
 
     #[test]
-    fn suit_rename_et_les_ancetres_valides() {
+    fn relit_le_fichier_identite_et_les_ancetres_valides() {
         let root = root("rename");
-        let name = marker(&root, 12, 120, "instance-1", "avant");
+        let name = marker(&root, 12, 120, "instance-1", AGENT_A);
         let tree = Fixture(BTreeMap::from([
             (42, (420, 30)),
             (30, (300, 12)),
@@ -536,9 +565,11 @@ mod tests {
                 42,
                 &tree
             ),
-            Ok("avant".into())
+            Ok(AGENT_A.into())
         );
-        fs::write(&name, "apres").unwrap();
+        // Changement de fixture d'identité : prouve la relecture, PAS un
+        // renommage métier (le nom affiché peut changer sans changer l'UUID).
+        private_write(&name, AGENT_B);
         assert_eq!(
             resolve_with(
                 None,
@@ -547,7 +578,7 @@ mod tests {
                 42,
                 &tree
             ),
-            Ok("apres".into())
+            Ok(AGENT_B.into())
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -556,9 +587,9 @@ mod tests {
     fn premier_agent_du_meme_binaire_gagne_dans_la_filiation() {
         let root = root("chain");
         let markers = root.join("agent-pids");
-        fs::create_dir_all(&markers).unwrap();
-        let _ = marker(&root, 10, 100, "instance-a", "agent-a");
-        let _ = marker(&root, 20, 200, "instance-b", "agent-b");
+        private_dir(&markers);
+        let _ = marker(&root, 10, 100, "instance-a", AGENT_A);
+        let _ = marker(&root, 20, 200, "instance-b", AGENT_B);
         let chain = Fixture(BTreeMap::from([
             (50, (500, 40)),
             (40, (400, 30)),
@@ -568,7 +599,7 @@ mod tests {
         ]));
         assert_eq!(
             resolve_with(None, &markers, Some("instance-b"), 50, &chain),
-            Ok("agent-b".into())
+            Ok(AGENT_B.into())
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -577,7 +608,7 @@ mod tests {
     fn traverse_une_chaine_npx_de_trois_processus() {
         let root = root("npx-chain");
         let markers = root.join("agent-pids");
-        let _ = marker(&root, 20, 200, "instance-1", "agent");
+        let _ = marker(&root, 20, 200, "instance-1", AGENT_A);
         let chain = Fixture(BTreeMap::from([
             (70, (700, 60)),
             (60, (600, 50)),
@@ -587,7 +618,7 @@ mod tests {
         ]));
         assert_eq!(
             resolve_with(None, &markers, Some("instance-1"), 70, &chain),
-            Ok("agent".into())
+            Ok(AGENT_A.into())
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -596,13 +627,13 @@ mod tests {
     fn resout_la_filiation_sans_variables_applicatives() {
         let root = root("sans-env");
         let markers = root.join("agent-pids");
-        let _ = marker(&root, 20, 200, "instance-marquee", "agent");
+        let _ = marker(&root, 20, 200, "instance-marquee", AGENT_A);
         let chain = Fixture(BTreeMap::from([(42, (420, 20)), (20, (200, 1))]));
 
         assert_eq!(
             resolve_identity_with(None, &markers, None, 42, &chain),
             Ok(ResolvedIdentity {
-                name: "agent".into(),
+                name: AGENT_A.into(),
                 instance_id: "instance-marquee".into(),
             })
         );
@@ -614,8 +645,8 @@ mod tests {
     fn refuse_pid_recycle_hors_agent_legacy_et_instance_divergente() {
         let root = root("negative");
         let markers = root.join("agent-pids");
-        fs::create_dir_all(&markers).unwrap();
-        let _ = marker(&root, 20, 200, "instance-1", "agent");
+        private_dir(&markers);
+        let _ = marker(&root, 20, 200, "instance-1", AGENT_A);
         let recycled = Fixture(BTreeMap::from([(20, (201, 1))]));
         assert_eq!(
             resolve_with(None, &markers, Some("instance-1"), 20, &recycled),
@@ -636,7 +667,7 @@ mod tests {
             ),
             Err(IdentityError::IdentityNotFound)
         );
-        fs::write(markers.join("77"), "ancien-nom").unwrap();
+        private_write(markers.join("77"), "ancien-nom");
         let legacy = Fixture(BTreeMap::from([(77, (770, 1))]));
         assert_eq!(
             resolve_with(None, &markers, Some("instance-1"), 77, &legacy),
@@ -654,9 +685,9 @@ mod tests {
     #[test]
     fn ignore_un_nom_invalide_avant_de_consulter_les_ancetres() {
         let root = root("invalid-name");
-        let _name = marker(&root, 12, 120, "instance-1", "agent-valide");
+        let _name = marker(&root, 12, 120, "instance-1", AGENT_A);
         let dynamic_name = root.join("dynamic-name");
-        fs::write(&dynamic_name, "agent invalide").unwrap();
+        private_write(&dynamic_name, "agent invalide");
         let tree = Fixture(BTreeMap::from([(42, (420, 12)), (12, (120, 1))]));
         assert_eq!(
             resolve_with(
@@ -666,7 +697,7 @@ mod tests {
                 42,
                 &tree
             ),
-            Ok("agent-valide".into())
+            Ok(AGENT_A.into())
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -675,8 +706,8 @@ mod tests {
     fn inventaire_mesure_sur_l_hote_distingue_vivant_et_pid_recycle() {
         let root = root("scan-live-stale");
         let markers = root.join("agent-pids");
-        let _ = marker(&root, 20, 200, "instance-nouvelle", "agent-vivant");
-        let _ = marker(&root, 30, 300, "instance-ancienne", "agent-recycle");
+        let _ = marker(&root, 20, 200, "instance-nouvelle", AGENT_A);
+        let _ = marker(&root, 30, 300, "instance-ancienne", AGENT_B);
         let processes = Fixture(BTreeMap::from([(20, (200, 1)), (30, (301, 1))]));
 
         let inventory = scan_marker_directory_with(
@@ -690,7 +721,7 @@ mod tests {
         assert_eq!(inventory.source.host, "hote-mesure");
         assert_eq!(inventory.source.marker_directory, markers);
         assert_eq!(inventory.live.len(), 1);
-        assert_eq!(inventory.live[0].principal, "agent-vivant");
+        assert_eq!(inventory.live[0].principal, AGENT_A);
         assert_eq!(inventory.live[0].instance_id, "instance-nouvelle");
         assert_eq!(inventory.stale.len(), 1);
         assert_eq!(inventory.stale[0].marker, "30");
@@ -704,7 +735,7 @@ mod tests {
     fn zero_marqueur_vivant_est_une_erreur_et_non_un_inventaire_vide() {
         let root = root("scan-zero-live");
         let markers = root.join("agent-pids");
-        let _ = marker(&root, 20, 200, "instance-ancienne", "agent-arrete");
+        let _ = marker(&root, 20, 200, "instance-ancienne", AGENT_A);
 
         assert_eq!(
             scan_marker_directory_with(
@@ -724,8 +755,8 @@ mod tests {
     fn entree_malformee_ou_repertoire_lie_interdit_un_succes_partiel() {
         let root = root("scan-invalid");
         let markers = root.join("agent-pids");
-        fs::create_dir_all(&markers).unwrap();
-        fs::write(markers.join("20"), "pas-du-json").unwrap();
+        private_dir(&markers);
+        private_write(markers.join("20"), "pas-du-json");
         assert_eq!(
             scan_marker_directory_with(
                 &markers,
@@ -740,7 +771,7 @@ mod tests {
         );
 
         fs::remove_file(markers.join("20")).unwrap();
-        let _ = marker(&root, 20, 200, "instance-vivante", "agent-vivant");
+        let _ = marker(&root, 20, 200, "instance-vivante", AGENT_A);
         let linked = root.join("linked-agent-pids");
         symlink(&markers, &linked).unwrap();
         assert_eq!(

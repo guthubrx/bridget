@@ -5780,27 +5780,33 @@ mod hook_tests {
     #[test]
     fn arguments_attach_resolvent_les_trois_fenetres() {
         assert_eq!(
-            parse_attach_args(&["codex-1".to_string()]).unwrap(),
-            ("codex-1".to_string(), AttachWindow::Today)
+            parse_attach_args(&["89000000-0000-4000-8000-000000000011".to_string()]).unwrap(),
+            (
+                "89000000-0000-4000-8000-000000000011".to_string(),
+                AttachWindow::Today
+            )
         );
         assert_eq!(
             parse_attach_args(&[
-                "codex-1".to_string(),
+                "89000000-0000-4000-8000-000000000011".to_string(),
                 "--from-seq".to_string(),
                 "42".to_string(),
             ])
             .unwrap(),
-            ("codex-1".to_string(), AttachWindow::Seq(42))
+            (
+                "89000000-0000-4000-8000-000000000011".to_string(),
+                AttachWindow::Seq(42)
+            )
         );
         assert_eq!(
             parse_attach_args(&[
-                "codex-1".to_string(),
+                "89000000-0000-4000-8000-000000000011".to_string(),
                 "--date".to_string(),
                 "2026-08-22".to_string(),
             ])
             .unwrap(),
             (
-                "codex-1".to_string(),
+                "89000000-0000-4000-8000-000000000011".to_string(),
                 AttachWindow::Date("2026-08-22".to_string())
             )
         );
@@ -5815,7 +5821,7 @@ mod hook_tests {
         );
         assert!(
             parse_attach_args(&[
-                "codex-1".to_string(),
+                "89000000-0000-4000-8000-000000000011".to_string(),
                 "--from-seq".to_string(),
                 "pas-un-entier".to_string(),
             ])
@@ -5823,7 +5829,7 @@ mod hook_tests {
         );
         assert!(
             parse_attach_args(&[
-                "codex-1".to_string(),
+                "89000000-0000-4000-8000-000000000011".to_string(),
                 "--date".to_string(),
                 "2026-08-22".to_string(),
                 "--from-seq".to_string(),
@@ -5880,7 +5886,8 @@ mod hook_tests {
             )
         };
 
-        let refus = neuf(&["--name", "sans-choix"]).expect_err("un spawn muet doit être refusé");
+        let refus = neuf(&["--agent-id", "89000000-0000-4000-8000-000000000012"])
+            .expect_err("un spawn muet doit être refusé");
         assert!(
             refus.contains("--persistent") && refus.contains("--no-persistent"),
             "le refus doit nommer les deux options : {refus}"
@@ -5890,11 +5897,23 @@ mod hook_tests {
             "le refus doit dire pourquoi le choix ne peut pas être différé : {refus}"
         );
 
-        match neuf(&["--name", "durable", "--persistent"]).expect("choix explicite accepté") {
+        match neuf(&[
+            "--agent-id",
+            "89000000-0000-4000-8000-000000000013",
+            "--persistent",
+        ])
+        .expect("choix explicite accepté")
+        {
             WrapperToDaemon::SpawnOrder { persistent, .. } => assert!(persistent),
             other => panic!("ordre inattendu: {other:?}"),
         }
-        match neuf(&["--name", "jetable", "--no-persistent"]).expect("choix explicite accepté") {
+        match neuf(&[
+            "--agent-id",
+            "89000000-0000-4000-8000-000000000014",
+            "--no-persistent",
+        ])
+        .expect("choix explicite accepté")
+        {
             WrapperToDaemon::SpawnOrder { persistent, .. } => assert!(!persistent),
             other => panic!("ordre inattendu: {other:?}"),
         }
@@ -5927,8 +5946,8 @@ mod hook_tests {
         let premier = resolve_spawn_order(
             &parse_spawn_args(&[
                 "codex".to_string(),
-                "--name".to_string(),
-                "rejoue".to_string(),
+                "--agent-id".to_string(),
+                "89000000-0000-4000-8000-000000000015".to_string(),
                 "--persistent".to_string(),
                 "--command-id".to_string(),
                 "garde-survie-rejeu".to_string(),
@@ -5984,8 +6003,8 @@ mod hook_tests {
         std::fs::create_dir_all(&cwd).unwrap();
         let args = vec![
             "codex".to_string(),
-            "--name".to_string(),
-            "codex-managed".to_string(),
+            "--agent-id".to_string(),
+            "89000000-0000-4000-8000-000000000016".to_string(),
             "--persistent".to_string(),
             "--command-id".to_string(),
             "command-retry".to_string(),
@@ -6117,17 +6136,21 @@ mod hook_tests {
 
     #[test]
     fn stop_cli_genere_ou_reutilise_un_command_id() {
-        let generated = parse_stop_args(&["codex-1".to_string()]).unwrap();
-        assert_eq!(generated.0, "codex-1");
+        let generated =
+            parse_stop_args(&["89000000-0000-4000-8000-000000000011".to_string()]).unwrap();
+        assert_eq!(generated.0, "89000000-0000-4000-8000-000000000011");
         assert!(!generated.1.is_empty());
         assert_eq!(
             parse_stop_args(&[
-                "codex-1".to_string(),
+                "89000000-0000-4000-8000-000000000011".to_string(),
                 "--command-id".to_string(),
                 "stop-retry".to_string(),
             ])
             .unwrap(),
-            ("codex-1".to_string(), "stop-retry".to_string())
+            (
+                "89000000-0000-4000-8000-000000000011".to_string(),
+                "stop-retry".to_string()
+            )
         );
     }
 
@@ -6758,7 +6781,7 @@ mod idempotency_projection_tests {
             "deposer",
             "delivery-report",
             "--from",
-            "codex-1",
+            "89000000-0000-4000-8000-000000000011",
             "--objective",
             "objective-1",
             "--delegation",
@@ -6801,11 +6824,11 @@ mod idempotency_projection_tests {
                     "deposer",
                     "delegate",
                     "--from",
-                    "jc2",
+                    "89000000-0000-4000-8000-000000000017",
                     "--goal",
                     "lot central",
                     "--target",
-                    "cursor-1",
+                    "89000000-0000-4000-8000-000000000018",
                     "--duration",
                     "courte",
                 ],
@@ -6816,7 +6839,7 @@ mod idempotency_projection_tests {
                     "deposer",
                     "registre-add",
                     "--from",
-                    "jc2",
+                    "89000000-0000-4000-8000-000000000017",
                     "--line",
                     "kind=add id=constat-1",
                 ],
@@ -6827,7 +6850,7 @@ mod idempotency_projection_tests {
                     "deposer",
                     "objective-close",
                     "--from",
-                    "jc2",
+                    "89000000-0000-4000-8000-000000000017",
                     "--objective",
                     "objective-1",
                     "--reason",
@@ -6849,7 +6872,7 @@ mod idempotency_projection_tests {
                 "deposer",
                 "registre-add",
                 "--from",
-                "jc2",
+                "89000000-0000-4000-8000-000000000017",
                 "--line",
                 "kind=add id=constat-1",
                 forbidden,
@@ -6868,7 +6891,7 @@ mod idempotency_projection_tests {
             "deposer",
             "delegate",
             "--from",
-            "jc2",
+            "89000000-0000-4000-8000-000000000017",
             "--goal",
             "relire le lot",
         ]
@@ -6891,7 +6914,7 @@ mod idempotency_projection_tests {
             "deposer",
             "delegate",
             "--from",
-            "jc2",
+            "89000000-0000-4000-8000-000000000017",
             "--goal",
             "relire le lot",
             "--review-ref",
@@ -7166,15 +7189,18 @@ mod idempotency_projection_tests {
             "la clé doit rester présente et valoir null quand nul ne l'atteste"
         );
 
-        // Compatibilité descendante : un daemon antérieur n'émet pas la clé,
-        // sa présence relue ne doit pas inventer de persistance.
+        // DTO d'identité courant sans champ optionnel persistent : on ne
+        // fabrique pas ce fait. Ce n'est pas une compatibilité nom-seul v0.
         let ancien: AgentInfo = serde_json::from_str(
-            r#"{"name":"vieux","agent_type":"codex","connection_id":"c","host":"h",
+            r#"{"agent_id":"89000000-0000-4000-8000-000000000011","display_name":"vieux","agent_type":"codex","connection_id":"c","host":"h",
                 "transport":"tmux","os":"Linux","state":"connected",
                 "last_seen_secs":0,"reconnect_count":0}"#,
         )
         .unwrap();
         assert_eq!(ancien.persistent, None);
+        let mut sans_identite = serde_json::to_value(&ancien).unwrap();
+        sans_identite.as_object_mut().unwrap().remove("agent_id");
+        assert!(serde_json::from_value::<AgentInfo>(sans_identite).is_err());
     }
 
     #[test]

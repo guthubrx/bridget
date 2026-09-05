@@ -1,7 +1,7 @@
 # Tâches 089 — extraction progressive du noyau
 
 **Entrées :** spec.md, plan.md, research.md, data-model.md, contracts/communication.md.
-**36 tâches de réalisation, 7 terminées.** P0 : T005 reste partielle ; l'isolation T007 est prête, les tests historiques doivent être portés sur les chemins privés. Aucun SC fonctionnel complet n'est déclaré validé.
+**36 tâches de réalisation, 8 terminées.** P0 : référence mesurée et exclusions de sécurité consignées ; T005 ne signifie pas suite globale verte. T009 ouvre la coupe. Aucun SC fonctionnel complet n'est déclaré validé.
 
 Exécution séquentielle par tranches ; aucun lancement automatique de sous-agents. Un commit cohérent après tests, aucune capture d'un WIP tiers. Écrire l'oracle avant la modification qu'il doit protéger, vérifier son échec sur un mutant ciblé lorsqu'exigé, puis restaurer le vrai code. Les tests réels n'utilisent jamais les processus de production.
 
@@ -11,7 +11,7 @@ Exécution séquentielle par tranches ; aucun lancement automatique de sous-agen
 - [x] T002 Épingler les fixtures de toutes les familles de contracts/communication.md dans specs/089-communication-core/contracts/fixtures/ avec source Git et SHA-256 ; ajouter scripts/verify-089-contracts.sh. Oracle : octet altéré/source absente/commit non ancêtre refusés ; tester aussi dépôts/replies/événements, pas seulement les handshakes.
 - [x] T003 Établir la liste des tests historiques retenus/retirés/déplacés dans specs/089-communication-core/test-map.md et les scénarios tests/features/089-communication-core.feature. Oracle : chaque SC-08901..12 a des tests nommés ; chaque retrait a une justification de périmètre, jamais « test rouge ».
 - [x] T004 Compléter specs/089-communication-core/threat-model.md : UID/SSH/identité/capacités, limites, secrets, permissions fournisseur et sorties de connexion. Oracle : scénario hostile, autorité et refus attendu pour chaque frontière.
-- [ ] T005 Exécuter les tests retenus et mesurer la référence dans un environnement de test isolé, après audit des harnais ; consigner commandes/durées/échecs et ressources dans implementation.md. Aucun rouge préexistant caché, aucune exécution contre HOME/socket historiques.
+- [x] T005 Exécuter les tests retenus et mesurer la référence dans un environnement de test isolé, après audit des harnais ; consigner commandes/durées/échecs et ressources dans implementation.md. Aucun rouge préexistant caché, aucune exécution contre HOME/socket historiques. Référence collectée sur les suites auditées ; exclusions explicites reprises par les gates de réalisation et T034, pas comptées comme réussies.
 - [x] T006 Relire spec/plan/contrats/test-map avant coupe ; proposer une revue indépendante et consigner le verdict dans checklists/extraction.md. Gate : absence de garantie perdue sans décision explicite.
 
 ## P1 — Découplage structurel (US4)
