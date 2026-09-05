@@ -31,7 +31,7 @@ pub const HUMAN_PRINCIPAL_LABELS: [&str; 2] = ["bridget-ui-control", "bridget-co
 pub fn human_principal_actor(issuer_scope: &str) -> Option<&'static str> {
     HUMAN_PRINCIPAL_LABELS
         .iter()
-        .find(|label| crate::mcp::issuer_scope(label) == issuer_scope)
+        .find(|label| crate::communication::issuer_scope(label) == issuer_scope)
         .map(|label| match *label {
             "bridget-ui-control" => "humain",
             _ => "cli",
@@ -821,15 +821,15 @@ mod tests {
     #[test]
     fn principal_humain_reconnu_par_perimetre_seulement() {
         assert_eq!(
-            human_principal_actor(&crate::mcp::issuer_scope("bridget-ui-control")),
+            human_principal_actor(&crate::communication::issuer_scope("bridget-ui-control")),
             Some("humain")
         );
         assert_eq!(
-            human_principal_actor(&crate::mcp::issuer_scope("bridget-control-cli")),
+            human_principal_actor(&crate::communication::issuer_scope("bridget-control-cli")),
             Some("cli")
         );
         assert_eq!(
-            human_principal_actor(&crate::mcp::issuer_scope("bridget-ui")),
+            human_principal_actor(&crate::communication::issuer_scope("bridget-ui")),
             None
         );
         assert_eq!(human_principal_actor("n-importe-quoi"), None);

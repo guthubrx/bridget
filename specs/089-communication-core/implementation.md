@@ -1,5 +1,28 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T008 : canon neutre, sans changement de protocole
+
+Les algorithmes historiques issuer_scope et canonical_send sont déplacés dans
+communication.rs ; daemon, CLI, MCP, contrôle du référent et relais encore
+présent les appellent directement. Le hash de scope n'est explicitement PAS
+une authentification. Aucune dépendance nouvelle, aucun second encodeur.
+Cette extraction additive et neutre ne supprime pas encore une fonctionnalité ;
+elle peut précéder la baseline binaire T005 qui attend l'isolation T007.
+
+`cargo test --offline -p bridget-daemon --lib communication::tests -- --test-threads=4` :
+3/3, 0,00 s (compilation 18,62 s). Attentes littérales indépendantes pour le
+scope et les bytes canoniques ; mutation de in_reply_to distinguée, renommage
+d'affichage neutre. L'oracle d'architecture refuse le retour d'un import MCP
+par les consommateurs du noyau. Le test historique
+`canonical_send_ignore_le_nom_affiche_et_le_timeout_relatif` passe également
+1/1, 0,00 s (compilation 5,61 s). Aucun daemon ni fournisseur lancé.
+
+Self-review XIX/XX : le diff déplace les algorithmes, il ne les réécrit pas.
+Le module neutre casse la dépendance noyau→présentation et garde un unique
+producteur du canon. Les octets restent le contrat ; les trois tests ciblés
+ne remplacent pas la future couture CLI/MCP réelle T014. Relecture du diff
+effectuée, aucune garantie fonctionnelle globale annoncée.
+
 ## 2026-09-05 — P0 vérifiée et baseline T005 partielle
 
 T002 : gel complet de familles, 17 fichiers, référence produit dfa2134 et

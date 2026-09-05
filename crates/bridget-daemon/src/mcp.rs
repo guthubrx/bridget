@@ -1,6 +1,7 @@
 //! Façade MCP stdio. Le protocole daemon reste le seul transport métier.
 
 use crate::artifact_types::{ARTIFACT_CONTRACT_VERSION, ArtifactPublicationV1, ArtifactReceiptV1};
+use crate::communication::issuer_scope;
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
     CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, GuichetDelegateMutationStatus,
@@ -1609,17 +1610,6 @@ fn request_dto(request: bridget_transport::protocol::RequestInfo) -> Value {
         "deadline": request.deadline_at,
         "created": request.created_at,
     })
-}
-
-pub(crate) fn issuer_scope(identity: &str) -> String {
-    let mut first = 0xcbf29ce484222325_u64;
-    let mut second = 0x9e3779b97f4a7c15_u64;
-    for byte in identity.bytes() {
-        first = (first ^ u64::from(byte)).wrapping_mul(0x100000001b3);
-        second = second.rotate_left(5) ^ u64::from(byte);
-        second = second.wrapping_mul(0x9e3779b185ebca87);
-    }
-    format!("012_scope_{first:016x}{second:016x}")
 }
 
 fn now_secs() -> i64 {

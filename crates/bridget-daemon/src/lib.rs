@@ -9,6 +9,7 @@ pub mod attach;
 pub mod build_identity;
 pub mod build_info;
 pub mod cli;
+pub mod communication;
 mod connection_channel;
 pub mod control_settings;
 pub mod daemon;

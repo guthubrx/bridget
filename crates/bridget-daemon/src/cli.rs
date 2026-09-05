@@ -1842,7 +1842,7 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
             (
                 uuid::Uuid::new_v4().to_string(),
                 unix_timestamp(),
-                crate::mcp::issuer_scope(&scope_identity),
+                crate::communication::issuer_scope(&scope_identity),
             )
         });
     if kind != "delivery-report" && verdict.is_some() {
@@ -2112,7 +2112,7 @@ fn resolved_idempotent_options(
     Ok(Some(IdempotentSendOptions {
         id: id.unwrap_or_else(|| generated_id.to_string()),
         issued_at,
-        issuer_scope: crate::mcp::issuer_scope(&instance_id),
+        issuer_scope: crate::communication::issuer_scope(&instance_id),
     }))
 }
 
@@ -2830,7 +2830,7 @@ fn send_project_round_client_request(request: WrapperToDaemon) -> Result<DaemonT
         &mut writer,
         &WrapperToDaemon::ClientHello {
             contract_version: CLIENT_CONTRACT_VERSION,
-            issuer_scope: crate::mcp::issuer_scope("project-round-cli-v1"),
+            issuer_scope: crate::communication::issuer_scope("project-round-cli-v1"),
             capabilities: vec![ClientCapability::ProjectRoundPolicyV1],
         },
     )?;
@@ -4198,7 +4198,7 @@ fn send_control_request(request: WrapperToDaemon) -> Result<DaemonToWrapper, Str
         &mut writer,
         &WrapperToDaemon::ClientHello {
             contract_version: CLIENT_CONTRACT_VERSION,
-            issuer_scope: crate::mcp::issuer_scope("bridget-control-cli"),
+            issuer_scope: crate::communication::issuer_scope("bridget-control-cli"),
             capabilities: vec![ClientCapability::ControlStateV1],
         },
     )?;

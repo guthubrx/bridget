@@ -572,7 +572,7 @@ impl UiRelayRuntime {
         };
         let frame = WrapperToDaemon::ServiceRequest {
             version: payload.required_contract_version(),
-            issuer_scope: crate::mcp::issuer_scope("bridget-ui-human-focus"),
+            issuer_scope: crate::communication::issuer_scope("bridget-ui-human-focus"),
             request_id,
             issued_at: now_secs(),
             from: UI_HUMAN_PRINCIPAL_ID.to_string(),
@@ -640,7 +640,7 @@ fn control_request(
         &mut writer,
         &WrapperToDaemon::ClientHello {
             contract_version: CLIENT_CONTRACT_VERSION,
-            issuer_scope: crate::mcp::issuer_scope("bridget-ui-control"),
+            issuer_scope: crate::communication::issuer_scope("bridget-ui-control"),
             capabilities: vec![ClientCapability::ControlStateV1],
         },
     )?;
@@ -5042,7 +5042,7 @@ fn open_project_registry_service(
         &WrapperToDaemon::ServiceHello {
             version: SERVICE_CONTRACT_VERSION,
             service: "maicie".to_string(),
-            issuer_scope: crate::mcp::issuer_scope("bridget-ui-project-registry"),
+            issuer_scope: crate::communication::issuer_scope("bridget-ui-project-registry"),
             capabilities: vec![ServiceCapability::ProjectRegistryV1],
         },
     )
@@ -5090,7 +5090,7 @@ fn open_project_round_client(
         &mut writer,
         &WrapperToDaemon::ClientHello {
             contract_version: CLIENT_CONTRACT_VERSION,
-            issuer_scope: crate::mcp::issuer_scope("bridget-ui-project-round"),
+            issuer_scope: crate::communication::issuer_scope("bridget-ui-project-round"),
             capabilities: vec![ClientCapability::ProjectRoundPolicyV1],
         },
     )
@@ -7517,7 +7517,7 @@ fn send_ui_message(
         &mut writer,
         &WrapperToDaemon::ClientHello {
             contract_version: CLIENT_CONTRACT_VERSION,
-            issuer_scope: crate::mcp::issuer_scope("bridget-ui"),
+            issuer_scope: crate::communication::issuer_scope("bridget-ui"),
             capabilities: vec![ClientCapability::SendIdempotent],
         },
     )?;

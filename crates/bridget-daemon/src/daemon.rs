@@ -47,6 +47,7 @@ use crate::artifact_policy::ArtifactPolicy;
 use crate::artifact_service::{ArtifactService, ArtifactServiceError};
 use crate::artifact_store::{ArtifactPersistResult, ArtifactPublicationContext};
 use crate::artifact_types::{ARTIFACT_CONTRACT_VERSION, ArtifactPublicationV1};
+use crate::communication::canonical_send;
 use crate::execution_store::{
     ConditionalTransition, ControlCommandStatus, ControlReservation, ExecutionRecoveryOutcome,
     ExecutionStore, ExecutionUsageSample, ProviderBindingOutcome,
@@ -7476,71 +7477,6 @@ fn next_delivery_generation() -> u64 {
     }
 }
 
-fn canonical_field(bytes: &mut Vec<u8>, value: &[u8]) {
-    bytes.extend_from_slice(&(value.len() as u64).to_be_bytes());
-    bytes.extend_from_slice(value);
-}
-
-fn canonical_option<T: ToString>(bytes: &mut Vec<u8>, value: Option<T>) {
-    match value {
-        Some(value) => {
-            bytes.push(1);
-            canonical_field(bytes, value.to_string().as_bytes());
-        }
-        None => bytes.push(0),
-    }
-}
-
-fn canonical_message_control(bytes: &mut Vec<u8>, message: &bridget_core::BridgetMessage) {
-    // Les anciens clients n'avaient pas ces champs. Ne rien ajouter pour leur
-    // forme vide conserve leurs rejeux exacts ; une sémantique nouvelle ajoute
-    // un suffixe distinct qui ne peut jamais réutiliser leur même identité.
-    if message.origin.is_none() && message.intent.is_none() && message.references.is_empty() {
-        return;
-    }
-    bytes.push(0xff);
-    bytes.push(match message.origin {
-        None => 0,
-        Some(bridget_core::MessageOrigin::Human) => 1,
-        Some(bridget_core::MessageOrigin::Agent) => 2,
-        Some(bridget_core::MessageOrigin::Routine) => 3,
-        Some(bridget_core::MessageOrigin::System) => 4,
-    });
-    bytes.push(match message.intent {
-        None => 0,
-        Some(bridget_core::MessageIntent::QueueOnly) => 1,
-        Some(bridget_core::MessageIntent::TriggerTurn) => 2,
-        Some(bridget_core::MessageIntent::SteerCurrent) => 3,
-        Some(bridget_core::MessageIntent::InterruptAndStart) => 4,
-        Some(bridget_core::MessageIntent::ControlOnly) => 5,
-    });
-    canonical_field(bytes, &(message.references.len() as u64).to_be_bytes());
-    for reference in &message.references {
-        canonical_field(bytes, reference.as_bytes());
-    }
-}
-/// Sérialisation binaire fermée et sans ambiguïté de l'enveloppe publiée.
-/// Elle ne dépend ni de l'ordre JSON ni des valeurs mutées lors du routage.
-fn canonical_send(
-    issuer_scope: &str,
-    message_id: &str,
-    message: &bridget_core::BridgetMessage,
-    issued_at: i64,
-) -> Vec<u8> {
-    let mut bytes = b"bridget/client-send/v1\0".to_vec();
-    canonical_field(&mut bytes, issuer_scope.as_bytes());
-    canonical_field(&mut bytes, message_id.as_bytes());
-    canonical_field(&mut bytes, message.to.as_bytes());
-    canonical_field(&mut bytes, message.body.as_bytes());
-    bytes.push(u8::from(message.reply));
-    canonical_field(&mut bytes, &message.hops.to_be_bytes());
-    canonical_option(&mut bytes, message.deadline_at);
-    canonical_option(&mut bytes, message.in_reply_to.as_deref());
-    canonical_message_control(&mut bytes, message);
-    canonical_field(&mut bytes, &issued_at.to_be_bytes());
-    bytes
-}
-
 fn issue_response(key: &IdempotencyKey, issue: IdempotencyIssue) -> DaemonToWrapper {
     DaemonToWrapper::IdempotencyResult {
         operation_kind: key.operation_kind.as_str().to_string(),
@@ -14858,7 +14794,7 @@ const BUILD_ID_PROBE_IDENTITY: &str = "bridget-status-build-id";
 const DAEMON_IDENTITY_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn build_id_probe_issuer_scope() -> String {
-    crate::mcp::issuer_scope(BUILD_ID_PROBE_IDENTITY)
+    crate::communication::issuer_scope(BUILD_ID_PROBE_IDENTITY)
 }
 
 /// Matrice message-role : la sonde d'identite doit rester atteignable.
@@ -16655,7 +16591,7 @@ mod presence_tests {
 
     #[test]
     fn sonde_build_id_partage_la_derivation_de_portee_client() {
-        let expected = crate::mcp::issuer_scope(BUILD_ID_PROBE_IDENTITY);
+        let expected = crate::communication::issuer_scope(BUILD_ID_PROBE_IDENTITY);
         assert_eq!(build_id_probe_issuer_scope(), expected);
         assert!(crate::idempotency::validate_issuer_scope(&expected).is_ok());
     }
@@ -23073,7 +23009,7 @@ mod presence_tests {
             "ui-client-079".to_string(),
             NegotiatedClient {
                 version: CLIENT_CONTRACT_VERSION,
-                issuer_scope: crate::mcp::issuer_scope("ui-client-real-restart-079"),
+                issuer_scope: crate::communication::issuer_scope("ui-client-real-restart-079"),
                 capabilities: vec![ClientCapability::SendIdempotent],
             },
         );
@@ -23961,7 +23897,7 @@ mod presence_tests {
             "ui-control".to_string(),
             NegotiatedClient {
                 version: CLIENT_CONTRACT_VERSION,
-                issuer_scope: crate::mcp::issuer_scope("bridget-ui-control"),
+                issuer_scope: crate::communication::issuer_scope("bridget-ui-control"),
                 capabilities: vec![ClientCapability::ControlStateV1],
             },
         );
@@ -23985,7 +23921,7 @@ mod presence_tests {
         };
         WrapperToDaemon::ServiceRequest {
             version: payload.required_contract_version(),
-            issuer_scope: crate::mcp::issuer_scope("bridget-ui-human-focus"),
+            issuer_scope: crate::communication::issuer_scope("bridget-ui-human-focus"),
             request_id: request_id.to_string(),
             issued_at: unix_now_secs(),
             from: from.to_string(),
@@ -24233,7 +24169,7 @@ mod presence_tests {
                 "mcp-client",
                 WrapperToDaemon::ClientHello {
                     contract_version: CLIENT_CONTRACT_VERSION,
-                    issuer_scope: crate::mcp::issuer_scope("instance-agent-2"),
+                    issuer_scope: crate::communication::issuer_scope("instance-agent-2"),
                     capabilities: vec![ClientCapability::SendIdempotent],
                 },
                 &shared,
@@ -24276,7 +24212,7 @@ mod presence_tests {
                 "cap-client",
                 WrapperToDaemon::ClientHello {
                     contract_version: CLIENT_CONTRACT_VERSION,
-                    issuer_scope: crate::mcp::issuer_scope("instance-agent-2"),
+                    issuer_scope: crate::communication::issuer_scope("instance-agent-2"),
                     capabilities: vec![ClientCapability::ControlStateV1],
                 },
                 &shared,
@@ -24428,7 +24364,7 @@ mod presence_tests {
                 "round-client",
                 WrapperToDaemon::ClientHello {
                     contract_version: CLIENT_CONTRACT_VERSION,
-                    issuer_scope: crate::mcp::issuer_scope("project-round-test-087"),
+                    issuer_scope: crate::communication::issuer_scope("project-round-test-087"),
                     capabilities: vec![ClientCapability::ProjectRoundPolicyV1],
                 },
                 &shared,
@@ -24555,7 +24491,7 @@ mod presence_tests {
                 "round-client",
                 WrapperToDaemon::ClientHello {
                     contract_version: CLIENT_CONTRACT_VERSION,
-                    issuer_scope: crate::mcp::issuer_scope("project-round-test-079"),
+                    issuer_scope: crate::communication::issuer_scope("project-round-test-079"),
                     capabilities: vec![ClientCapability::ProjectRoundPolicyV1],
                 },
                 &shared,
