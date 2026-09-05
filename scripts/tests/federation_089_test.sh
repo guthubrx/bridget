@@ -169,6 +169,11 @@ class Federation089(unittest.TestCase):
     def test_forwarding_echec_est_echec_pas_succes(self):
         self.tunnel(success=False,env=dict(self.env,TEST_FORWARD_EXIT='255'))
 
+    def test_socket_bind_umask_077_privee_acceptee(self):
+        (self.local/'master.sock').chmod(0o700)
+        self.tunnel()
+        self.assertEqual(stat.S_IMODE((self.local/'master.sock').stat().st_mode),0o700)
+
     def test_socket_occupee_intacte(self):
         path=self.remote/'peer.sock'
         path.write_bytes(b'SENTINELLE')

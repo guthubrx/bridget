@@ -142,7 +142,11 @@ federation_main() {
   (( ${#socket} <= 100 && ${#remote_socket} <= 100 )) || federation_fail "socket Unix trop longue (100 octets maximum)"
   federation_private_dir "$root"
   federation_ancestors "$socket"
-  [[ -S "$socket" && $(federation_metadata "$socket") == "$(id -u) 600" ]] || federation_fail "socket maître privée absente : $socket"
+  # bind(2) sous umask 077 crée une socket 0700 ; OpenSSH sous 0177 crée
+  # 0600. Le bit x propriétaire n'ouvre aucun accès réseau supplémentaire.
+  local socket_metadata
+  socket_metadata=$(federation_metadata "$socket")
+  [[ -S "$socket" && ( "$socket_metadata" == "$(id -u) 600" || "$socket_metadata" == "$(id -u) 700" ) ]] || federation_fail "socket maître privée absente : $socket"
   if $dry_run; then
     printf 'dry-run [%s] : %s:%s, transfert Unix %s -> %s ; préflight distant non exécuté\n' "$label" "$target" "$port" "$remote_socket" "$socket"
     return

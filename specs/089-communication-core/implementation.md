@@ -1,5 +1,13 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T025 : transfert Unix à travers OpenSSH réel
+
+`BRIDGET_SSH_LOCAL_GATE=1 cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_federation_test -- --include-ignored --nocapture`, environnement privé T014, watchdog externe 180 s : 1/1, 0,45 s, compilation 1,84 s. sshd OpenSSH 10.0p2 enfant sans privilèges, port loopback dynamique, clés hôte/client neuves, authorized_keys de fixture sous target et StrictModes conservé, aucun ~/.ssh ou /etc/ssh modifié. Le script de production établit le vrai transfert -R. CLI et client protocole lisent le même annuaire/ledger byte-identique, socket distante 0600/racine 0700 ; après arrêt/récolte du seul client SSH, lecture en échec sans DB locale, daemon et présence locale toujours disponibles. Clôture/récolte du sshd et du daemon puis nettoyage des seules racines du test. Il n'y a encore ni deuxième machine ni fournisseur dans CET oracle.
+
+Deux refus réels ont guidé le harnais : StrictModes refuse AuthorizedKeysFile sous le parent partagé /private/tmp, donc clé de test déplacée sous target privé ; AllowTcpForwarding=no désactive aussi l'ACL Unix dans OpenSSH 10 (session.c::do_authenticated, https://github.com/openssh/openssh-portable/blob/V_10_0_P2/session.c#L329-L344). Le sshd de fixture autorise remote mais borne le TCP à 127.0.0.1:1 (inutilisé), avec PermitOpen none ; le produit n'élargit aucune configuration système.
+
+Le gate a également détecté une garde de script trop stricte : le vrai bind du daemon sous umask 077 crée une socket 0700, pas 0600. Le script accepte désormais ces DEUX modes privés et le même propriétaire, sans chmod ; aucun droit groupe/autres admis. Oracle supplémentaire : test-federate-ssh passe maintenant 23/23 en 3,034 s. OpenSSH laisse une socket stale après fermeture du transfert : fait conservé explicitement, aucun unlink automatique ajouté. La reprise contrôlée à mêmes identifiants/journal reste T027, pas déclarée couverte par une simple reconnexion réussie.
+
 ## 2026-09-05 — T024 : scripts SSH privés, effets bornés
 
 federate-ssh run reste au premier plan et exige racines/socket/label/clés explicites. Aucun launchd, configuration SSH héritée, suppression de socket stale ou remplacement d'une cible occupée. Préflight propriétaire/0700/0600, composants sans symlink, alphabet de chemins fermé, socket courte ; StrictHostKeyChecking=yes et known_hosts explicite sans écriture. Le transfert reste une socket Unix, pas un protocole réseau supplémentaire. Le masque de la socket distante relève du serveur SSH et reste à constater au gate réel.
