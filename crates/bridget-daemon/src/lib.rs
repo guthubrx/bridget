@@ -42,6 +42,7 @@ pub mod registry;
 pub mod reprise;
 pub mod runtime;
 pub mod store;
+pub mod store_schema;
 #[cfg(feature = "test-support")]
 pub mod test_sync;
 pub mod wrapper;

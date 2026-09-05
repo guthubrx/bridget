@@ -3808,6 +3808,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     crate::environment::validate_state_file(&config.db_path, false)?;
     crate::environment::validate_state_file(&config.log_path, false)?;
     crate::environment::validate_state_file(&config.socket_path, true)?;
+    crate::store_schema::validate_existing(&config.db_path)?;
     // Gestionnaires de signaux AVANT toute trace visible de l'extérieur.
     //
     // Ils étaient installés après la liaison de la socket : entre le moment où

@@ -37,6 +37,7 @@ impl Store {
         let conn = Connection::open(path).map_err(StoreError::Sqlite)?;
         conn.busy_timeout(std::time::Duration::from_secs(2))
             .map_err(StoreError::Sqlite)?;
+        crate::store_schema::validate(&conn).map_err(StoreError::Schema)?;
         Self::init_schema(&conn)?;
         Ok(Store { conn })
     }
@@ -408,6 +409,7 @@ fn now_secs() -> i64 {
 
 #[derive(Debug)]
 pub enum StoreError {
+    Schema(crate::store_schema::SchemaError),
     Sqlite(rusqlite::Error),
     Invariant(&'static str),
     ProjectRegistryRefusal(ProjectRegistryRefusal),
@@ -418,6 +420,7 @@ pub enum StoreError {
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            StoreError::Schema(error) => write!(f, "{error}"),
             StoreError::Sqlite(e) => write!(f, "SQLite: {}", e),
             StoreError::Invariant(detail) => write!(f, "invariant store: {detail}"),
             StoreError::ProjectRegistryRefusal(reason) => {

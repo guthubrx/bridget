@@ -400,6 +400,7 @@ pub struct DelegatedRuntimeEventRecord {
 
 #[derive(Debug)]
 pub enum IdempotencyError {
+    Schema(crate::store_schema::SchemaError),
     InvalidIssuerScope,
     InvalidIdempotencyKey,
     CanonicalTooLarge,
@@ -420,6 +421,7 @@ pub enum IdempotencyError {
 impl std::fmt::Display for IdempotencyError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Schema(error) => write!(formatter, "{error}"),
             Self::InvalidIssuerScope => write!(formatter, "issuer_scope invalide"),
             Self::InvalidIdempotencyKey => write!(formatter, "clé d'idempotence invalide"),
             Self::CanonicalTooLarge => write!(formatter, "enveloppe canonique trop grande"),
@@ -504,6 +506,7 @@ impl IdempotencyStore {
     }
 
     fn init_schema(conn: &mut Connection) -> Result<(), IdempotencyError> {
+        crate::store_schema::validate(conn).map_err(IdempotencyError::Schema)?;
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS idempotency_records (
