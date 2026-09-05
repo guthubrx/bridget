@@ -1,5 +1,9 @@
 # Carte des tests 089 — dispositions avant extraction
 
+## T015 partielle — ancien rename et nouvelle identité
+
+core_089_identity_test protège l'identité opaque, les refus de nom, le scope d'instance et les octets au redémarrage réel. Les deux anciens tests integration_test de renommage ne sont PAS supprimés ni comptés verts : ils supposent encore une route textuelle modifiable, une commande aujourd'hui toujours refusée et le namespace historique. Le remplacement de leur parcours CLI reste dû dans T015 ; la première tranche n'exerce que la primitive de profil réelle et sa projection sur le daemon.
+
 ## Disposition exécutée T014 — harnais partagé
 
 Les douze scénarios de idempotency_crash_test.rs sont conservés byte-identiques ; leur seul préambule de fixture devient tests/support/idempotent.rs. Aucun test historique supprimé ni délai augmenté. core_089_contract_test.rs réutilise ces processus isolés pour le canon stocké CLI/MCP, les six formes partielles refusées avant connexion et l'attribution du CLI à UUID. Les sept unités d'attribution maintiennent les refus d'usurpation et ajoutent la propriété de route.

@@ -1,5 +1,18 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T015 partielle : invariants d'identité exécutés
+
+core_089_identity_test réutilise le harnais 012, sans nouveau processus de production. Deux tests avec vrais binaires daemon/MCP/wrapper et fournisseur ACP déterministe :
+
+- Mise à jour du nom humain via LA primitive AgentProfileStore::update_profile conservée, puis lecture par ListAgents ; collision et nom vide refusés, profil identique après refus. Après Accepted du vrai wrapper et observation du nouveau nom, SIGKILL du daemon, redémarrage et reconnexion du même wrapper : identité-file inchangée, nom humain conservé, MCP relancé sous la même instance → issue terminale et tous les champs du record identiques, compteur session/prompt toujours à un.
+- Deux processus MCP du même binaire, même principal et même clé, instances différentes → deux scopes/records et deux remises distinctes ; chaque retry réutilise son propre résultat, exactement deux prompts au total. Mutant exécuté : dériver le scope du principal au lieu de l'instance → échec, le second prompt n'arrive jamais (borne 5 s), 6,53 s pour le scénario. Restauration de mcp.rs vérifiée contre HEAD.
+
+Première passe corrigée à partir des réponses réelles, sans modifier la production : état de remise en vol = in_flight ; who retourne agents, pas un status fictif ; Accepted ne promet pas delivery_id. L'unicité des remises est donc vérifiée dans send_deliveries, pas déduite d'un champ absent. Le profil de l'émetteur est créé par son vrai appel MCP who/Register, pas par un INSERT de test.
+
+`cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_identity_test -- --test-threads=2` sous l'environnement isolé T014 : 2/2, 3,05 s (compilation 1,56 s), avant mutation. **T015 reste ouverte** : l'ancien cmd_rename refuse toujours tout renommage et renvoie vers les réglages GUI retirés. La primitive testée n'est PAS une surface CLI ; il reste à raccorder une commande de nom affiché à la socket avec autorisation d'instance, sans réintroduire le renommage de route ni lire la base depuis le client. Aucun nouveau type filaire inventé dans cette tranche de preuve.
+
+Après restauration : `cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_identity_test --test core_089_contract_test --test core_089_storage_test --test core_089_content_test -- --test-threads=4` : 14/14 ; identité 2,86 s, contrat 1,19 s, stockage 0,04 s, contenu 5,34 s ; compilation 2,07 s. Clippy workspace/all-targets/test-support -D warnings : vert 4,53 s ; fmt --check et diff --check verts. Diff mcp.rs/communication.rs vide, donc aucun mutant restant. Aucun enfant de ces harnais ne reste observé après les gates. L'état Git du dépôt original est identique au relevé initial.
+
 ## 2026-09-05 — T014 : couture CLI/MCP et canon durable
 
 Le nouveau core_089_contract_test traverse trois clients indépendants (socket de référence, CLI binaire, MCP stdio binaire) et un daemon réel isolé. Le scope attendu est une constante du corpus, pas le résultat du helper à tester. Le test relit les canonical_bytes réellement stockés et photographie TOUS les champs des quatre tables idempotency_records/send_deliveries/tracked_requests/ledger après ACK ; chaque refus de divergence doit laisser cette photographie inchangée. Corps riche UTF-8, cible, reply, deadline, in_reply_to et issued_at sont exercés ; CLI/MCP couvrent chacun leurs champs exposés. Le JSON structuré MCP est aussi comparé au TextContent.
