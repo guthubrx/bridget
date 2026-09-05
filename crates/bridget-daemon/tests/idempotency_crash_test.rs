@@ -765,7 +765,11 @@ done
                 "protocol": "acp",
                 "permissions": "allow",
                 "queue_capacity": 2,
-                "notify_timeout_secs": 1
+                // Ce banc mesure la reprise et l'unicité, pas l'expiration
+                // d'une mission. Le délai de reconnexion est déjà de 1 s ;
+                // un TTL de 1 s, tronqué en secondes, peut donc expirer avant
+                // le prompt. Les watchdogs de jalon/prompt restent à 5 s.
+                "notify_timeout_secs": 30
             }
         }
     });
