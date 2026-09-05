@@ -152,9 +152,11 @@ impl ArtifactService {
             .clone()
             .unwrap_or_else(|| format!("artifact:{}", Uuid::new_v4()));
         let version_ref = format!("artifact-version:{}", Uuid::new_v4());
-        let state = (!publication.quality_notices.is_empty())
-            .then_some(ArtifactState::Partial)
-            .unwrap_or(ArtifactState::Published);
+        let state = if publication.quality_notices.is_empty() {
+            ArtifactState::Published
+        } else {
+            ArtifactState::Partial
+        };
         let receipt = ArtifactReceiptV1 {
             artifact_ref: artifact_ref.clone(),
             version_ref: version_ref.clone(),

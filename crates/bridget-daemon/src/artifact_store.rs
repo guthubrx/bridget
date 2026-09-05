@@ -977,11 +977,11 @@ fn validate_write(input: &ArtifactStoreWrite) -> Result<(), ArtifactStoreError> 
     {
         return Err(ArtifactStoreError::InvalidInput("création initiale"));
     }
-    if let Some(existing) = &input.existing_artifact_ref {
-        if !is_token(existing) || input.publication.parent_artifact_ref.as_deref() != Some(existing)
-        {
-            return Err(ArtifactStoreError::InvalidInput("parent enfant"));
-        }
+    if let Some(existing) = &input.existing_artifact_ref
+        && (!is_token(existing)
+            || input.publication.parent_artifact_ref.as_deref() != Some(existing))
+    {
+        return Err(ArtifactStoreError::InvalidInput("parent enfant"));
     }
     if input.state == ArtifactState::Partial && input.publication.quality_notices.is_empty() {
         return Err(ArtifactStoreError::InvalidInput("partiel sans avis"));

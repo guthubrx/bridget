@@ -953,8 +953,8 @@ impl ExecutionStore {
                 | "waiting_user_input"
                 | "interrupting"
         );
-        if !parent_is_inactive
-            && !(context == ContinuationReservationContext::RecoveryAfterIdleWrapper
+        if !(parent_is_inactive
+            || context == ContinuationReservationContext::RecoveryAfterIdleWrapper
                 && parent_is_recoverable)
         {
             tx.commit()?;

@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[test]
 fn migration_execution_store_est_additive_et_idempotente() {
     let store = ExecutionStore::open_in_memory().expect("magasin en mémoire");
-    assert_eq!(store.schema_version().expect("version"), 9);
+    assert_eq!(store.schema_version().expect("version"), 10);
 }
 
 #[test]
@@ -27,10 +27,10 @@ fn migration_execution_store_garde_les_tables_heritees_et_rejoue_sans_effet() {
         legacy.execute_batch("CREATE TABLE legacy_messages (id TEXT PRIMARY KEY); INSERT INTO legacy_messages VALUES ('m-1');").unwrap();
     }
     let first = ExecutionStore::open(&path).expect("migration additive");
-    assert_eq!(first.schema_version().unwrap(), 9);
+    assert_eq!(first.schema_version().unwrap(), 10);
     drop(first);
     let second = ExecutionStore::open(&path).expect("migration idempotente");
-    assert_eq!(second.schema_version().unwrap(), 9);
+    assert_eq!(second.schema_version().unwrap(), 10);
     drop(second);
     let legacy = Connection::open(&path).unwrap();
     let preserved: i64 = legacy
@@ -51,7 +51,7 @@ fn migration_execution_store_complete_les_lignes_heritees_sans_les_effacer() {
     legacy.execute_batch("CREATE TABLE executions (execution_id TEXT PRIMARY KEY, submission_id TEXT NOT NULL, state TEXT NOT NULL); INSERT INTO executions VALUES ('e-1', 's-1', 'running');").unwrap();
     drop(legacy);
     let store = ExecutionStore::open(&path).expect("migration héritée");
-    assert_eq!(store.schema_version().unwrap(), 9);
+    assert_eq!(store.schema_version().unwrap(), 10);
     drop(store);
     let check = Connection::open(&path).unwrap();
     let revision_columns: i64 = check
