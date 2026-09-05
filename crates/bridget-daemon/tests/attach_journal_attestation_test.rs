@@ -24,6 +24,8 @@ impl DaemonProcess {
             .arg("daemon")
             .env_clear()
             .env("HOME", home)
+            .env("BRIDGET_HOME", home.join("state"))
+            .env("BRIDGET_SOCKET", home.join("state/bridget.sock"))
             .env("PATH", "/usr/bin:/bin")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -31,7 +33,7 @@ impl DaemonProcess {
             .spawn()
             .expect("daemon réel démarré");
         let daemon = Self(child);
-        let socket = home.join(".cache/bridget/bridget.sock");
+        let socket = home.join("state/bridget.sock");
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
             if UnixStream::connect(&socket).is_ok() {
@@ -65,6 +67,8 @@ impl InteractiveWrapper {
             .args(["--", agent.to_str().expect("agent UTF-8"), session])
             .env_clear()
             .env("HOME", root)
+            .env("BRIDGET_HOME", root.join("state"))
+            .env("BRIDGET_SOCKET", root.join("state/bridget.sock"))
             .env("PATH", "/usr/bin:/bin")
             .env("BRIDGET_TEST_NAME_FILE_PATH", &marker)
             .stdin(Stdio::null())
@@ -159,12 +163,12 @@ fn attach_role(socket: &Path) -> (BufReader<UnixStream>, BufWriter<UnixStream>) 
 }
 
 fn prepare_interactive_fixture(root: &Path) -> PathBuf {
-    let config = root.join(".config/bridget");
+    let config = root.join("state");
     std::fs::create_dir_all(&config).expect("config");
     let agent = root.join("fixture-agent");
     std::fs::write(
         &agent,
-        "#!/bin/sh\nprintf '%s' \"$BRIDGET_AGENT_NAME_FILE\" > \"$BRIDGET_TEST_NAME_FILE_PATH\"\nwhile :; do /bin/sleep 1; done\n",
+        "#!/bin/sh\nprintf '%s' \"$BRIDGET_AGENT_ID_FILE\" > \"$BRIDGET_TEST_NAME_FILE_PATH\"\nwhile :; do /bin/sleep 1; done\n",
     )
     .expect("agent");
     std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o700)).expect("chmod");
@@ -194,7 +198,14 @@ fn test_root(label: &str) -> PathBuf {
         "/tmp/br-attach-journal-{label}-{}-{nanos}",
         std::process::id()
     ));
-    std::fs::create_dir_all(&root).expect("racine");
+    bridget_daemon::environment::Namespace::resolve(
+        Some(root.join("state")),
+        None,
+        Some(root.clone()),
+    )
+    .unwrap()
+    .prepare()
+    .unwrap();
     root
 }
 
@@ -203,7 +214,7 @@ fn wrapper_interactif_avec_journal_actif_est_attachable() {
     let root = test_root("avec-journal");
     let agent = prepare_interactive_fixture(&root);
     let _daemon = DaemonProcess::start(&root);
-    let socket = root.join(".cache/bridget/bridget.sock");
+    let socket = root.join("state/bridget.sock");
     let (mut wrapper, name_state) =
         InteractiveWrapper::start(&root, &agent, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
     let agent_name = std::fs::read_to_string(&name_state)
@@ -214,7 +225,7 @@ fn wrapper_interactif_avec_journal_actif_est_attachable() {
     // Preuve empirique : le répertoire de journal existe après le spawn réel
     // (le fichier jsonl n'apparaît qu'à la première écriture).
     wait_until("répertoire journal interactif créé", || {
-        let dir = root.join(".cache/bridget/sessions").join(&agent_name);
+        let dir = root.join("state/sessions").join(&agent_name);
         dir.is_dir().then_some(())
     });
 
@@ -236,6 +247,9 @@ fn wrapper_interactif_avec_journal_actif_est_attachable() {
 
     // Livraison réelle → entrée journal → fragment attach.
     let sender_stream = UnixStream::connect(&socket).expect("sender");
+    sender_stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
     let mut sender_reader = BufReader::new(sender_stream.try_clone().expect("clone sender"));
     let mut sender_writer = BufWriter::new(sender_stream);
     write_frame(
@@ -243,7 +257,7 @@ fn wrapper_interactif_avec_journal_actif_est_attachable() {
         &WrapperToDaemon::Register {
             agent_type: "cli".into(),
             identity_version: 2,
-            agent_id: "sender-journal".into(),
+            agent_id: "89000000-0000-4000-8000-000000000501".into(),
             host: Some("test".into()),
             transport: Some("unix".into()),
             channel: None.into(),
@@ -260,7 +274,11 @@ fn wrapper_interactif_avec_journal_actif_est_attachable() {
         read_frame(&mut sender_reader),
         DaemonToWrapper::Registered { .. }
     ));
-    let mut mission = BridgetMessage::new("sender-journal", &agent_name, "mission journalisée");
+    let mut mission = BridgetMessage::new(
+        "89000000-0000-4000-8000-000000000501",
+        &agent_name,
+        "mission journalisée",
+    );
     mission.id = "mission-interactive-journal".into();
     write_frame(&mut sender_writer, &WrapperToDaemon::Send(mission));
     assert!(matches!(
@@ -296,9 +314,12 @@ fn wrapper_interactif_avec_journal_actif_est_attachable() {
 fn pilote_sans_journal_reste_refuse_par_le_gate() {
     let root = test_root("sans-journal");
     let _daemon = DaemonProcess::start(&root);
-    let socket = root.join(".cache/bridget/bridget.sock");
+    let socket = root.join("state/bridget.sock");
 
     let stream = UnixStream::connect(&socket).expect("connexion");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
     let mut reader = BufReader::new(stream.try_clone().expect("clone"));
     let mut writer = BufWriter::new(stream);
     write_frame(
@@ -306,7 +327,7 @@ fn pilote_sans_journal_reste_refuse_par_le_gate() {
         &WrapperToDaemon::Register {
             agent_type: "fixture".into(),
             identity_version: 2,
-            agent_id: "sans-journal".into(),
+            agent_id: "89000000-0000-4000-8000-000000000502".into(),
             host: Some("test".into()),
             transport: Some("unix".into()),
             channel: None.into(),
@@ -329,7 +350,7 @@ fn pilote_sans_journal_reste_refuse_par_le_gate() {
     write_frame(
         &mut attach_writer,
         &WrapperToDaemon::Subscribe {
-            agent: "sans-journal".into(),
+            agent: "89000000-0000-4000-8000-000000000502".into(),
             window: AttachWindow::Seq(0),
         },
     );

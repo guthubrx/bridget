@@ -30,7 +30,9 @@ impl Fixture {
         ));
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
-        Self { root }
+        Self {
+            root: fs::canonicalize(root).unwrap(),
+        }
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -86,7 +88,7 @@ fn vrai_binaire_regenere_puis_la_garde_accepte_une_mutation_durable() {
     fs::create_dir(&markers).unwrap();
     fs::create_dir(&names).unwrap();
     let name_file = names.join("current");
-    fs::write(&name_file, "agent-redemarre").unwrap();
+    fs::write(&name_file, "89000000-0000-4000-8000-000000000601").unwrap();
     let pid = std::process::id();
     let birth = process_birth(pid).unwrap();
     write_marker(&markers, pid, birth, "instance-nouvelle", &name_file).unwrap();
@@ -112,7 +114,10 @@ fn vrai_binaire_regenere_puis_la_garde_accepte_une_mutation_durable() {
     let inventory: MarkerInventory =
         serde_json::from_slice(&fs::read(&inventory_path).unwrap()).unwrap();
     assert_eq!(inventory.live.len(), 1);
-    assert_eq!(inventory.live[0].principal, "agent-redemarre");
+    assert_eq!(
+        inventory.live[0].principal,
+        "89000000-0000-4000-8000-000000000601"
+    );
     assert_eq!(inventory.live[0].instance_id, "instance-nouvelle");
 
     let now = SystemTime::now()
@@ -125,7 +130,7 @@ fn vrai_binaire_regenere_puis_la_garde_accepte_une_mutation_durable() {
         "generation": 11,
         "attestation_key": KEY,
         "principals": [{
-            "principal": "agent-redemarre",
+            "principal": "89000000-0000-4000-8000-000000000601",
             "marker_source": inventory.source,
             "actions": ["delegate"],
             "instances": [{
@@ -174,7 +179,10 @@ fn vrai_binaire_regenere_puis_la_garde_accepte_une_mutation_durable() {
     );
     let applied_report: PolicyRegenerationReport = serde_json::from_slice(&apply.stdout).unwrap();
     assert!(applied_report.applied);
-    assert_eq!(applied_report.refreshed_principals, ["agent-redemarre"]);
+    assert_eq!(
+        applied_report.refreshed_principals,
+        ["89000000-0000-4000-8000-000000000601"]
+    );
     let rewritten = fs::read_to_string(&policy_path).unwrap();
     assert!(rewritten.contains("instance-nouvelle"));
     assert!(!rewritten.contains("instance-ancienne"));
@@ -185,9 +193,9 @@ fn vrai_binaire_regenere_puis_la_garde_accepte_une_mutation_durable() {
     fs::write(&durable, b"unchanged").unwrap();
     let old = gate.authorize_deposit_then(
         GreffeDepositAuthorization {
-            canonical_name: Some("agent-redemarre"),
+            canonical_name: Some("89000000-0000-4000-8000-000000000601"),
             canonical_instance_id: Some("instance-ancienne"),
-            declared_from: Some("agent-redemarre"),
+            declared_from: Some("89000000-0000-4000-8000-000000000601"),
             action: GreffeMutationAction::Delegate,
             issuer_scope: "038_scope_0123456789abcdef0123456789abcdef",
             request_id: "request-old-instance",
@@ -205,9 +213,9 @@ fn vrai_binaire_regenere_puis_la_garde_accepte_une_mutation_durable() {
 
     gate.authorize_deposit_then(
         GreffeDepositAuthorization {
-            canonical_name: Some("agent-redemarre"),
+            canonical_name: Some("89000000-0000-4000-8000-000000000601"),
             canonical_instance_id: Some("instance-nouvelle"),
-            declared_from: Some("agent-redemarre"),
+            declared_from: Some("89000000-0000-4000-8000-000000000601"),
             action: GreffeMutationAction::Delegate,
             issuer_scope: "038_scope_0123456789abcdef0123456789abcdef",
             request_id: "request-new-instance",
@@ -282,7 +290,7 @@ fn vrai_binaire_refuse_les_fichiers_speciaux_sans_bloquer() {
         observed_at: now,
         complete: true,
         live: vec![bridget_transport::greffe_policy_refresh::LiveMarker {
-            principal: "agent-redemarre".to_string(),
+            principal: "89000000-0000-4000-8000-000000000601".to_string(),
             instance_id: "instance-nouvelle".to_string(),
             pid: 42,
             birth: 420,
@@ -315,7 +323,7 @@ fn vrai_binaire_refuse_les_fichiers_speciaux_sans_bloquer() {
         "generation": 11,
         "attestation_key": KEY,
         "principals": [{
-            "principal": "agent-redemarre",
+            "principal": "89000000-0000-4000-8000-000000000601",
             "marker_source": source,
             "actions": ["delegate"],
             "instances": [{

@@ -585,6 +585,7 @@ mod tests {
             ));
             fs::create_dir(&root).unwrap();
             fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+            let root = fs::canonicalize(root).unwrap();
             let source = MarkerSource {
                 host: "cartae-test".to_string(),
                 marker_directory: root.join("agent-pids"),

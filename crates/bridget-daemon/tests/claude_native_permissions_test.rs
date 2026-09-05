@@ -6,8 +6,6 @@
 //! muet (aucune réponse, aucun fichier). Avec les flags, l'outil aboutit.
 
 use bridget_core::BridgetMessage;
-use bridget_daemon::registry::AgentRegistry;
-use bridget_daemon::wrapper::launch_acp_with;
 use bridget_transport::protocol::{PresenceMode, decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::fs;
@@ -15,9 +13,28 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+const AGENT_ID: &str = "89000000-0000-4000-8000-000000000301";
+
+struct WrapperChild(Child);
+
+impl Drop for WrapperChild {
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_none() {
+            unsafe {
+                libc::kill(self.0.id() as i32, libc::SIGTERM);
+            }
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while self.0.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
 
 fn test_root(label: &str) -> PathBuf {
     PathBuf::from(format!(
@@ -37,7 +54,7 @@ fn write_tool_fixture(root: &Path) -> PathBuf {
 # (permissions bloquées). Avec bypass, écrit un fichier puis le relit.
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 printf '%s\n' "$@" > "$root/claude-argv.txt"
-printf '%s\n' "$BRIDGET_AGENT_NAME" > "$root/claude-name.txt"
+printf '%s\n' "$BRIDGET_AGENT_ID" > "$root/claude-name.txt"
 printf '%s\n' "$PATH" > "$root/claude-path.txt"
 has_skip=0
 has_mode=0
@@ -81,6 +98,7 @@ fn registry_json(adapter: &Path, with_bypass: bool, mcp_interactive: &str) -> St
                 "command": adapter,
                 "args": args,
                 "permissions": permissions,
+                "forbidden_env": [],
                 "protocol": "claude_stream_json",
                 "queue_capacity": 2,
                 "notify_timeout_secs": 2,
@@ -104,19 +122,41 @@ fn run_mission_with(
     mcp_interactive: &str,
 ) -> (PathBuf, Result<(String, bool), String>) {
     let root = test_root(if with_bypass { "bypass" } else { "sans" });
-    let socket = root.join(".cache/bridget/bridget.sock");
-    let registry_path = root.join(".config/bridget/agents.json");
-    fs::create_dir_all(socket.parent().unwrap()).unwrap();
-    fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+    let namespace = bridget_daemon::environment::Namespace::resolve(
+        Some(root.join("state")),
+        None,
+        Some(root.clone()),
+    )
+    .unwrap();
+    namespace.prepare().unwrap();
+    let socket = root.join("state/bridget.sock");
+    let registry_path = root.join("state/agents.json");
     let adapter = write_tool_fixture(&root);
     let registry_json = registry_json(&adapter, with_bypass, mcp_interactive);
     fs::write(&registry_path, &registry_json).unwrap();
     fs::set_permissions(&registry_path, fs::Permissions::from_mode(0o600)).unwrap();
 
     let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
     let (tx, rx) = mpsc::channel();
     let daemon = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "wrapper non connecté à sa socket privée"
+                    );
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept : {error}"),
+            }
+        };
+        // Darwin peut transmettre O_NONBLOCK au socket accepté. Le listener
+        // est pollé, mais les trames utilisent une lecture bloquante bornée.
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(12)))
             .unwrap();
@@ -130,15 +170,13 @@ fn run_mission_with(
                 transport,
                 channel,
                 mode,
+                agent_id,
                 ..
             } => {
+                assert_eq!(agent_id, AGENT_ID);
                 assert_eq!(agent_type, "claude");
                 assert_eq!(transport.as_deref(), Some("claude_stream_json"));
-                assert!(
-                    channel
-                        .as_deref()
-                        .is_some_and(|value| value != "claude_stream_json")
-                );
+                assert_eq!(channel.as_deref(), Some("unix"));
                 assert_eq!(mode, Some(PresenceMode::Cli));
             }
             other => panic!("Register Claude attendu, reçu : {other:?}"),
@@ -147,7 +185,7 @@ fn run_mission_with(
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                agent_id: "123e4567-e89b-42d3-a456-426614174000".to_string(),
+                agent_id: AGENT_ID.to_string(),
             })
             .unwrap()
         )
@@ -169,8 +207,8 @@ fn run_mission_with(
         }
 
         let mut mission = BridgetMessage::new(
-            "demandeur",
-            "claude-outil-1",
+            "89000000-0000-4000-8000-000000000302",
+            AGENT_ID,
             "écris mission-outil-ok dans worktree/outil.txt puis relis-le",
         );
         mission.id = "mission-outil".to_string();
@@ -186,45 +224,87 @@ fn run_mission_with(
         // intégrations du workspace : 3 s rendait ce témoin dépendant de la charge.
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         let mut body = None;
+        let mut peer_finished = false;
         while std::time::Instant::now() < deadline {
             line.clear();
             match reader.read_line(&mut line) {
-                Ok(0) => break,
+                Ok(0) => {
+                    peer_finished = true;
+                    break;
+                }
                 Ok(_) => match decode(line.trim_end()).unwrap() {
                     WrapperToDaemon::Send(reply) => {
                         body = Some(reply.body);
                         break;
                     }
-                    WrapperToDaemon::Unregister => break,
+                    WrapperToDaemon::Unregister => {
+                        peer_finished = true;
+                        break;
+                    }
                     _ => {}
                 },
                 Err(_) => break,
             }
         }
-        let _ = writeln!(writer, "{}", encode(&DaemonToWrapper::Disconnect).unwrap());
-        let _ = writer.flush();
+        if !peer_finished {
+            let _ = writeln!(writer, "{}", encode(&DaemonToWrapper::Disconnect).unwrap());
+            let _ = writer.flush();
+            // Comme le daemon, drainer jusqu'à Unregister/EOF : fermer avec des
+            // frames non lues provoque un RST qui peut effacer Disconnect (Darwin).
+            reader
+                .get_ref()
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_)
+                        if matches!(
+                            decode::<WrapperToDaemon>(line.trim_end()),
+                            Ok(WrapperToDaemon::Unregister)
+                        ) =>
+                    {
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(error) => panic!("arrêt du pair non attesté : {error}"),
+                }
+            }
+        }
         let _ = tx.send(Ok(body.unwrap_or_default()));
     });
 
-    let registry = AgentRegistry::from_json(&registry_json, &registry_path).unwrap();
-    let wrapper_root = root.clone();
-    let wrapper_socket = socket.clone();
-    let wrapper = thread::spawn(move || {
-        launch_acp_with(
-            "claude",
-            &[],
-            Some("claude-outil-1"),
-            &registry,
-            &wrapper_socket,
-            &wrapper_root,
-        )
-        .map_err(|error| error.to_string())
-    });
-
-    let wrapper_result = wrapper.join().unwrap();
-    let daemon_result = rx.recv_timeout(Duration::from_secs(5));
-    let _ = daemon.join();
-    assert_eq!(wrapper_result, Ok(()), "wrapper Claude géré");
+    // Processus réel : aucun HOME global manipulé par les tests parallèles.
+    let mut wrapper = WrapperChild(
+        Command::new(env!("CARGO_BIN_EXE_bridget"))
+            .args(["--", "claude", "--equipier", "--agent-id", AGENT_ID])
+            .env_clear()
+            .env("HOME", &root)
+            .env("BRIDGET_HOME", root.join("state"))
+            .env("BRIDGET_SOCKET", &socket)
+            .env("BRIDGET_CHANNEL", "unix")
+            .env("PATH", "/usr/bin:/bin")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap(),
+    );
+    let daemon_result = rx.recv_timeout(Duration::from_secs(20));
+    daemon.join().expect("pair terminé sans attente infinie");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = wrapper.0.try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "wrapper non arrêté après Disconnect"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success(), "wrapper Claude géré : {status}");
     let outcome = match daemon_result {
         Ok(Ok(body)) => Ok((body, root.join("worktree/outil.txt").is_file())),
         Ok(Err(error)) => Err(error),
@@ -263,10 +343,9 @@ fn claude_gere_recoit_mcp_identite_et_path() {
         "argv sans MCP strict: {argv}"
     );
     let name = fs::read_to_string(root.join("claude-name.txt")).unwrap();
-    assert_eq!(name.trim(), "claude-outil-1");
+    assert_eq!(name.trim(), AGENT_ID);
     let path = fs::read_to_string(root.join("claude-path.txt")).unwrap();
-    let directory = std::env::current_exe()
-        .unwrap()
+    let directory = Path::new(env!("CARGO_BIN_EXE_bridget"))
         .parent()
         .unwrap()
         .to_string_lossy()

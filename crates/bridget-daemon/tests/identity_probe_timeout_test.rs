@@ -23,7 +23,14 @@ struct FixtureRoot(PathBuf);
 impl FixtureRoot {
     fn new() -> Self {
         let root = PathBuf::from(format!("/tmp/bg51-{}", Uuid::new_v4()));
-        fs::create_dir_all(root.join(".cache/bridget")).expect("créer la fixture");
+        bridget_daemon::environment::Namespace::resolve(
+            Some(root.join("state")),
+            None,
+            Some(root.clone()),
+        )
+        .expect("namespace privé")
+        .prepare()
+        .expect("créer la fixture");
         Self(root)
     }
 
@@ -32,7 +39,7 @@ impl FixtureRoot {
     }
 
     fn socket(&self) -> PathBuf {
-        self.0.join(".cache/bridget/bridget.sock")
+        self.0.join("state/bridget.sock")
     }
 }
 
@@ -50,6 +57,8 @@ impl ChildGuard {
             .arg("status")
             .env_clear()
             .env("HOME", home)
+            .env("BRIDGET_HOME", home.join("state"))
+            .env("BRIDGET_SOCKET", home.join("state/bridget.sock"))
             .env("HOSTNAME", "banc-pair-muet")
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .stdin(Stdio::null())
@@ -100,10 +109,29 @@ struct SilentPeer {
 impl SilentPeer {
     fn start(socket: &Path) -> (Self, mpsc::Receiver<WrapperToDaemon>) {
         let listener = UnixListener::bind(socket).expect("lier la socket muette");
+        listener.set_nonblocking(true).unwrap();
         let (observed_tx, observed_rx) = mpsc::channel();
         let (stop_tx, stop_rx) = mpsc::channel();
         let join = thread::spawn(move || {
-            let (first, _) = listener.accept().expect("accepter la sonde");
+            // Une mauvaise socket doit faire échouer l'oracle, jamais suspendre
+            // le Drop du pair pendant une panique du parent.
+            let deadline = Instant::now() + CLIENT_DEADLINE;
+            let first = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(error) => panic!("accepter la sonde : {error}"),
+                }
+                if Instant::now() >= deadline
+                    || !matches!(
+                        stop_rx.recv_timeout(Duration::from_millis(10)),
+                        Err(mpsc::RecvTimeoutError::Timeout)
+                    )
+                {
+                    return 0;
+                }
+            };
+            first.set_nonblocking(false).unwrap();
             first
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .expect("borner la lecture du banc");
@@ -157,6 +185,13 @@ impl Drop for SilentPeer {
             let _ = join.join();
         }
     }
+}
+
+#[test]
+fn pair_jamais_connecte_se_ferme_sans_attendre_accept() {
+    let fixture = FixtureRoot::new();
+    let (peer, _observed) = SilentPeer::start(&fixture.socket());
+    assert_eq!(peer.finish(), 0);
 }
 
 #[test]

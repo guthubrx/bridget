@@ -8,34 +8,37 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-fn fixture_root(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "bridget-cli-arguments-{label}-{}-{}",
+fn fixture_root(_label: &str) -> PathBuf {
+    Path::new("/tmp").join(format!(
+        "b89cli-{}-{}",
         std::process::id(),
         uuid::Uuid::new_v4().simple()
     ))
 }
 
 fn run_cli(home: &Path, args: &[&str]) -> Output {
-    run_cli_as(home, args, Some("probe"))
+    run_cli_as(home, args, Some("89000000-0000-4000-8000-000000000701"))
 }
 
 fn run_cli_as(home: &Path, args: &[&str], agent_name: Option<&str>) -> Output {
+    bridget_daemon::environment::ensure_private_directory(&home.join("state")).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
     command
         .args(args)
         .env_clear()
         .env("HOME", home)
+        .env("BRIDGET_HOME", home.join("state"))
+        .env("BRIDGET_SOCKET", home.join("state/bridget.sock"))
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .stdin(Stdio::null());
     if let Some(agent_name) = agent_name {
-        command.env("BRIDGET_AGENT_NAME", agent_name);
+        command.env("BRIDGET_AGENT_ID", agent_name);
     }
     command.output().expect("exécuter le vrai binaire bridget")
 }
 
 fn short_message_fixture_root() -> PathBuf {
-    std::env::temp_dir().join(format!(
+    Path::new("/tmp").join(format!(
         "b41-{}-{}",
         std::process::id(),
         uuid::Uuid::new_v4().simple()
@@ -57,6 +60,7 @@ fn capture_one_message(
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
                     stream
                         .set_read_timeout(Some(Duration::from_secs(1)))
                         .unwrap();
@@ -89,7 +93,22 @@ fn capture_one_message(
                             connection_accepted: true,
                         };
                     }
-                    writeln!(stream, "{{\"type\":\"Registered\",\"name\":\"probe\"}}").unwrap();
+                    let registration: bridget_transport::WrapperToDaemon =
+                        serde_json::from_str(&register).unwrap();
+                    let bridget_transport::WrapperToDaemon::Register { agent_id, .. } =
+                        registration
+                    else {
+                        panic!("Register attendu");
+                    };
+                    writeln!(
+                        stream,
+                        "{}",
+                        serde_json::to_string(&bridget_transport::DaemonToWrapper::Registered {
+                            agent_id
+                        })
+                        .unwrap()
+                    )
+                    .unwrap();
                     stream.flush().unwrap();
                     let mut message = String::new();
                     match reader.read_line(&mut message) {
@@ -113,7 +132,13 @@ fn capture_one_message(
                         Ok(_) => {}
                         Err(error) => panic!("lire le Send CLI: {error}"),
                     }
-                    writeln!(stream, "{{\"type\":\"Ack\",\"id\":\"probe-ack\"}}").unwrap();
+                    let sent: serde_json::Value = serde_json::from_str(&message).unwrap();
+                    writeln!(
+                        stream,
+                        "{}",
+                        serde_json::json!({"type":"Ack", "id":sent["id"]})
+                    )
+                    .unwrap();
                     stream.flush().unwrap();
                     return CapturedMessage {
                         serialized_message: Some(message),
@@ -138,7 +163,11 @@ fn capture_one_message(
 }
 
 fn run_message_cli(args: &[&str]) -> (Output, Option<String>, bool, bool) {
-    run_message_cli_as(args, Some("probe"), Some("destinataire"))
+    run_message_cli_as(
+        args,
+        Some("89000000-0000-4000-8000-000000000701"),
+        Some("89000000-0000-4000-8000-000000000702"),
+    )
 }
 
 fn run_message_cli_as(
@@ -162,8 +191,8 @@ fn run_message_cli_observed(
     previous_sender: Option<&str>,
 ) -> (Output, CapturedMessage, bool, bool) {
     let root = short_message_fixture_root();
-    let cache = root.join(".cache/bridget");
-    fs::create_dir_all(&cache).unwrap();
+    let cache = root.join("state");
+    bridget_daemon::environment::ensure_private_directory(&cache).unwrap();
     if let Some(previous_sender) = previous_sender {
         let agent_name = agent_name.unwrap_or("human");
         fs::write(
@@ -187,7 +216,7 @@ fn run_message_cli_observed(
 
 fn assert_command_value_rejected(command: &str, option: &str, invalid_value: Option<&str>) {
     let mut args = match command {
-        "send" => vec!["send", "--to", "destinataire"],
+        "send" => vec!["send", "--to", "89000000-0000-4000-8000-000000000702"],
         "reply" => vec!["reply"],
         _ => panic!("commande de fixture inconnue: {command}"),
     };
@@ -274,8 +303,8 @@ fn assert_reply_contract_rejected(
 #[test]
 fn daemon_stop_est_refuse_avant_tout_effet_de_bord() {
     let root = fixture_root("daemon");
-    let cache = root.join(".cache/bridget");
-    fs::create_dir_all(&cache).unwrap();
+    let cache = root.join("state");
+    bridget_daemon::environment::ensure_private_directory(&cache).unwrap();
     fs::set_permissions(&cache, fs::Permissions::from_mode(0o500)).unwrap();
 
     let output = run_cli(&root, &["daemon", "stop"]);
@@ -326,7 +355,7 @@ fn reply_refuse_des_hops_invalides_avant_de_lire_son_etat() {
 #[test]
 fn reply_refuse_les_valeurs_invalides_sans_dernier_expediteur() {
     let root = fixture_root("reply-sans-expediteur");
-    fs::create_dir_all(root.join(".cache/bridget")).unwrap();
+    bridget_daemon::environment::ensure_private_directory(&root.join("state")).unwrap();
 
     let outputs = ["--timeout", "--hops"]
         .map(|option| (option, run_cli(&root, &["reply", option, "abc", "message"])));
@@ -343,15 +372,27 @@ fn reply_refuse_les_valeurs_invalides_sans_dernier_expediteur() {
 fn send_et_reply_refusent_timeout_sans_reply_avant_connexion() {
     for (args, previous_sender) in [
         (
-            vec!["send", "--to", "destinataire", "--timeout", "30", "message"],
-            Some("destinataire"),
+            vec![
+                "send",
+                "--to",
+                "89000000-0000-4000-8000-000000000702",
+                "--timeout",
+                "30",
+                "message",
+            ],
+            Some("89000000-0000-4000-8000-000000000702"),
         ),
         (
             vec!["reply", "--timeout", "30", "message"],
-            Some("destinataire"),
+            Some("89000000-0000-4000-8000-000000000702"),
         ),
     ] {
-        assert_reply_contract_rejected(&args, Some("probe"), previous_sender, "--timeout");
+        assert_reply_contract_rejected(
+            &args,
+            Some("89000000-0000-4000-8000-000000000701"),
+            previous_sender,
+            "--timeout",
+        );
     }
 }
 
@@ -362,29 +403,29 @@ fn send_et_reply_refusent_reply_humain_avant_connexion() {
             vec![
                 "send",
                 "--to",
-                "destinataire",
+                "89000000-0000-4000-8000-000000000702",
                 "--reply",
                 "--timeout",
                 "30",
                 "message",
             ],
-            Some("destinataire"),
+            Some("89000000-0000-4000-8000-000000000702"),
         ),
         (
             vec![
                 "send",
                 "--to",
-                "destinataire",
+                "89000000-0000-4000-8000-000000000702",
                 "--from",
                 "human",
                 "--reply",
                 "message",
             ],
-            Some("destinataire"),
+            Some("89000000-0000-4000-8000-000000000702"),
         ),
         (
             vec!["reply", "--reply", "--timeout", "30", "message"],
-            Some("destinataire"),
+            Some("89000000-0000-4000-8000-000000000702"),
         ),
     ] {
         assert_reply_contract_rejected(&args, None, previous_sender, "--reply");
@@ -397,7 +438,7 @@ fn send_et_reply_conservent_les_valeurs_numeriques_valides() {
         vec![
             "send",
             "--to",
-            "destinataire",
+            "89000000-0000-4000-8000-000000000702",
             "--reply",
             "--timeout",
             "9",
@@ -431,7 +472,12 @@ fn send_et_reply_conservent_les_valeurs_numeriques_valides() {
 fn send_refuse_les_options_inconnues_sans_serialiser_de_message() {
     for (args, unknown) in [
         (
-            vec!["send", "--to", "destinataire", "--to-fallback"],
+            vec![
+                "send",
+                "--to",
+                "89000000-0000-4000-8000-000000000702",
+                "--to-fallback",
+            ],
             "--to-fallback",
         ),
         (
@@ -439,7 +485,7 @@ fn send_refuse_les_options_inconnues_sans_serialiser_de_message() {
                 "send",
                 "--sonde-avant",
                 "--to",
-                "destinataire",
+                "89000000-0000-4000-8000-000000000702",
                 "corps",
                 "explicite",
             ],
@@ -449,7 +495,7 @@ fn send_refuse_les_options_inconnues_sans_serialiser_de_message() {
             vec![
                 "send",
                 "--to",
-                "destinataire",
+                "89000000-0000-4000-8000-000000000702",
                 "corps",
                 "explicite",
                 "--sonde-option-inexistante",
@@ -483,7 +529,7 @@ fn le_separateur_preserve_un_corps_commencant_par_un_tiret() {
         vec![
             "send",
             "--to",
-            "destinataire",
+            "89000000-0000-4000-8000-000000000702",
             "--",
             "--body",
             "TEST",
@@ -506,15 +552,29 @@ fn le_separateur_preserve_un_corps_commencant_par_un_tiret() {
 fn send_nomme_les_options_de_texte_privees_de_valeur() {
     assert_missing_message_option_value_rejected(&["send", "--to"], "--to");
     assert_missing_message_option_value_rejected(
-        &["send", "--to", "destinataire", "message", "--from"],
+        &[
+            "send",
+            "--to",
+            "89000000-0000-4000-8000-000000000702",
+            "message",
+            "--from",
+        ],
         "--from",
     );
 }
 
 #[test]
 fn message_humain_sans_demande_suivie_reste_envoye() {
-    let (output, message, pid_exists, database_exists) =
-        run_message_cli_as(&["send", "--to", "destinataire", "message"], None, None);
+    let (output, message, pid_exists, database_exists) = run_message_cli_as(
+        &[
+            "send",
+            "--to",
+            "89000000-0000-4000-8000-000000000702",
+            "message",
+        ],
+        None,
+        None,
+    );
     assert!(output.status.success(), "sortie réelle: {output:?}");
     let message: serde_json::Value =
         serde_json::from_str(message.as_deref().expect("message sérialisé")).unwrap();
@@ -545,7 +605,6 @@ fn toutes_les_commandes_fermees_refusent_le_surplus_dans_le_vrai_binaire() {
         vec!["dnd", "off", "SURPLUS"],
         vec!["agents", "--json", "SURPLUS"],
         vec!["who", "--domain", "revue", "SURPLUS"],
-        vec!["cleanup", "--dry-run", "SURPLUS"],
     ];
 
     for args in cases {
@@ -564,6 +623,17 @@ fn toutes_les_commandes_fermees_refusent_le_surplus_dans_le_vrai_binaire() {
         );
     }
 
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cleanup_retire_est_refuse_meme_avec_les_anciens_arguments() {
+    let root = fixture_root("cleanup-retire");
+    let output = run_cli(&root, &["cleanup", "--dry-run", "SURPLUS"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("retiré du noyau"));
+    assert!(!root.join("state/bridget.db").exists());
     fs::remove_dir_all(root).unwrap();
 }
 

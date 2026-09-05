@@ -48,24 +48,39 @@ fn racine_temporaire(etiquette: &str) -> PathBuf {
 }
 
 fn demarrer_daemon(home: &Path) -> Child {
-    fs::create_dir_all(home).expect("home isolé");
-    let enfant = Command::new(env!("CARGO_BIN_EXE_bridget"))
+    bridget_daemon::environment::Namespace::resolve(
+        Some(home.join("state")),
+        None,
+        Some(home.to_path_buf()),
+    )
+    .unwrap()
+    .prepare()
+    .unwrap();
+    let mut enfant = Command::new(env!("CARGO_BIN_EXE_bridget"))
         .arg("daemon")
         .env_clear()
         .env("HOME", home)
+        .env("BRIDGET_HOME", home.join("state"))
+        .env("BRIDGET_SOCKET", home.join("state/bridget.sock"))
         .env("PATH", "/usr/bin:/bin")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("daemon réel démarré");
-    let socket = home.join(".cache/bridget/bridget.sock");
+    let socket = home.join("state/bridget.sock");
     let echeance = Instant::now() + Duration::from_secs(10);
     while UnixStream::connect(&socket).is_err() {
-        assert!(
-            Instant::now() < echeance,
-            "daemon réel non joignable: {socket:?}"
-        );
+        if let Some(status) = enfant.try_wait().unwrap() {
+            panic!("daemon arrêté avant disponibilité : {status}");
+        }
+        if Instant::now() >= echeance {
+            unsafe {
+                libc::kill(enfant.id() as i32, libc::SIGTERM);
+            }
+            let _ = attendre_la_fin(&mut enfant, BUDGET_ARRET);
+            panic!("daemon réel non joignable : {socket:?}");
+        }
         thread::sleep(Duration::from_millis(10));
     }
     enfant
@@ -144,7 +159,7 @@ fn l_arret_reste_propre_et_ne_laisse_ni_socket_ni_fichier_pid() {
     let racine = racine_temporaire("propre");
     let home = racine.join("home");
     let mut daemon = demarrer_daemon(&home);
-    let socket = home.join(".cache/bridget/bridget.sock");
+    let socket = home.join("state/bridget.sock");
     let fichier_pid = socket.with_extension("pid");
 
     // Contrôle positif : les deux existent AVANT l'arrêt. Sans lui, un test qui

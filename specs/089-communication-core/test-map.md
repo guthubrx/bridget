@@ -2,6 +2,31 @@
 
 ## T034 — unités historiques du daemon portées, gate global encore ouvert
 
+Port des huit coutures restantes d'identité/arguments/permissions/attache/arrêt :
+33 tests réussis, 0 échec, 0 ignoré (4,21 s cumulées, compilation 3,63 s),
+namespace privé neuf, `env -i`, quatre threads, watchdog 90 s. Clippy ciblé
+sans warning (5,07 s). Les 14 unités `greffe_policy_refresh` passent (0,10 s) :
+la fixture canonicalise sa racine réelle, sans assouplir les refus de symlink,
+de politique divergente ou de fichier spécial. Les marqueurs portent les UUID v2.
+La matrice CLI conserve ses validations ; `cleanup`, retiré du produit, a son
+oracle de refus explicite au lieu d'une attente de parsing de ses anciennes options.
+
+Le harnais Claude lance désormais le vrai binaire dans son namespace (pas de
+HOME partagé entre threads). Les acceptations socket sont bornées ; le socket
+accepté est explicitement bloquant avec délai de lecture, car Darwin peut
+hériter O_NONBLOCK du listener. Sans cela le harnais prenait WouldBlock pour
+EOF avant JournalReady et induisait une reconnexion du wrapper. Le serveur
+attend Unregister/EOF après Disconnect ; les trois preuves permissions/MCP
+restent inchangées, avec fournisseur synthétique, sans preuve d'authentification.
+La sonde d'identité muette conserve son oracle 2 s et ajoute le cas où aucun
+client n'atteint le listener : le nettoyage ne reste plus suspendu sur accept.
+
+L'inventaire workspace lancé sur 0af28feb reste ROUGE : douze cibles en échec,
+dont deux processus de test arrêtés individuellement par SIGTERM après relevé
+de pile (accept/join bloqués). Ces ports en ferment neuf ; managed_wrapper,
+mcp_injection_smoke et spawn_refusal_hosts restent à porter. Aucun échec n'est
+requalifié en succès et aucun gate fournisseur ignoré n'est coché.
+
 Coutures capacités et version : chemins privés `BRIDGET_HOME/BRIDGET_SOCKET`,
 UUID explicites et précondition de posture complète pour le seul script de
 préflight ; lectures de pair bornées à 5 s. Les deux reconstructions du CLI

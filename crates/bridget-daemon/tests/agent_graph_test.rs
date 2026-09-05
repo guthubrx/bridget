@@ -45,10 +45,19 @@ fn ownership(
 }
 
 fn order(command_id: &str, name: &str, ownership: Option<SpawnOwnership>) -> SpawnOrder {
+    // Les libellés ne sont que des repères de fixture ; le graphe utilise
+    // l'identité opaque v2, stable pour un même libellé.
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    name.hash(&mut hash);
+    let agent_id = format!(
+        "89000000-0000-4000-8000-{:012x}",
+        hash.finish() & 0xffffffffffff
+    );
     SpawnOrder {
         agent_type: "fixture".to_string(),
         project: None,
-        requested_name: Some(name.to_string()),
+        requested_name: Some(agent_id),
         cwd: PathBuf::from("/tmp"),
         persistent: false,
         command_id: command_id.to_string(),
