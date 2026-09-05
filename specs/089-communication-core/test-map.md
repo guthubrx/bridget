@@ -650,6 +650,8 @@ Les ressources ne sont pas des tests exécutés. Elles accompagnent leur lecteur
 
 ## Gate d'exhaustivité et état réel
 
+Port T019 : `core_089_attach_test.rs` couvre la source JSONL brute inhabituelle, la barrière SnapshotCaughtUp AVANT injection live, la rotation et la lacune du curseur de rétention. `coordination_events_test.rs` est conservé : ses six cas isolés passent, dont crashs réels et mutants exécutés Gap→Unavailable/Gap→CaughtUp. Les bancs `sc005_attach_budget.rs` et l'ancien harnais d'attestation ne sont pas réputés portés par ce seul test ; leur disposition reste ouverte pour T028/T034.
+
 Le contrôle d'inventaire doit reconstruire l'union de la section méthode **depuis le commit épinglé**, comparer son ensemble aux 264 lignes explicites des quatre tableaux (pas aux occurrences incidentes dans le texte), et refuser un fichier absent ou doublonné. Les douze tags `@SC_08901` à `@SC_08912` de /Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/tests/features/089-communication-core.feature sont associés au tableau de critères.
 
 État de T003 : carte et scénarios écrits ; vérification statique de couverture uniquement. Aucun résultat fonctionnel nouveau. Les preuves d'exécution, durées, mutants et éventuelles limites de fournisseur/plateforme doivent être enregistrés par les tâches de réalisation, sans cocher les SC à partir de cette carte.

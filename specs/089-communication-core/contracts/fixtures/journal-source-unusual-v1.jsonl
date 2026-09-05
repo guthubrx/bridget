@@ -1,0 +1,1 @@
+{ "v":1, "seq":5,"ts":"2026-01-01T23:59:59Z","session_id":"fixture-source","event":"update","payload":{"kind":"text", "content":"  été 🐙  ","source":"external-fixture","future":{"opaque":[3,1,2]}} }

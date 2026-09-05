@@ -1,7 +1,7 @@
 # Tâches 089 — extraction progressive du noyau
 
 **Entrées :** spec.md, plan.md, research.md, data-model.md, contracts/communication.md.
-**36 tâches de réalisation, 18 terminées.** P0 : référence mesurée et exclusions de sécurité consignées ; T005 ne signifie pas suite globale verte. Maicie/UI/runtime sont découplés ; stockage modularisé sans scinder les transactions, vérifié par fautes et crashs réels. Paquet indépendant T013 et garanties locales T014–T018 exécutés, clôture du service à UUID corrigée. Attach, fournisseurs, SSH et gates finaux restent ouverts ; pas de livraison globale déclarée.
+**36 tâches de réalisation, 19 terminées.** P0 : référence mesurée et exclusions de sécurité consignées ; T005 ne signifie pas suite globale verte. Maicie/UI/runtime sont découplés ; stockage modularisé sans scinder les transactions, vérifié par fautes et crashs réels. Paquet indépendant T013 et garanties locales T014–T019 exécutés, clôture du service à UUID et lacune de curseur attach corrigées. Fournisseurs, SSH et gates finaux restent ouverts ; pas de livraison globale déclarée.
 
 Exécution séquentielle par tranches ; aucun lancement automatique de sous-agents. Un commit cohérent après tests, aucune capture d'un WIP tiers. Écrire l'oracle avant la modification qu'il doit protéger, vérifier son échec sur un mutant ciblé lorsqu'exigé, puis restaurer le vrai code. Les tests réels n'utilisent jamais les processus de production.
 
@@ -31,7 +31,7 @@ Exécution séquentielle par tranches ; aucun lancement automatique de sous-agen
 - [x] T016 [US1] Ajouter tests/core_089_reply_test.rs : demande suivie → réponse liée → answered, ledger unique, zéro rappel après clôture, timeout/annulation attestés ; préserver helper transactionnel partagé. SC-08901.
 - [x] T017 [US1] Porter les crash-tests idempotence existants dans tests/core_089_crash_test.rs avec barrières, watchdog et comptage de prompts ; même retry/canon/issue, limites wrapper explicites. SC-08903, aucun SIGTERM présenté comme crash.
 - [x] T018 [US1] Ajouter tests/core_089_service_test.rs : consommateur public externe sans crate Maicie, dépôt/reprise/claim périmé/réponse/événement identique ; conserver capacité et quatuor du claim dans daemon.rs/store.rs. SC-08902/08.
-- [ ] T019 [US3] Rejouer et compléter tests/core_089_attach_test.rs : raw inhabituel/champ inconnu intact, journal avant snapshot, SnapshotCaughtUp avant live, rotation et curseur périmé ; mutants de fraîcheur et de Gap refusés. SC-08905.
+- [x] T019 [US3] Rejouer et compléter tests/core_089_attach_test.rs : raw inhabituel/champ inconnu intact, journal avant snapshot, SnapshotCaughtUp avant live, rotation et curseur périmé ; mutants de fraîcheur et de Gap refusés. SC-08905.
 - [ ] T020 [US1] Rejouer les pilotes Codex/Claude natifs via src/wrapper.rs et bridget-transport/src/{codex_app_server,claude_stream_json,managed_session}.rs : échange réel, EOF en plein tour, groupe arrêté, attach et modèle/effort attestés. SC-08909.
 - [ ] T021 [US1] Vérifier ACP et GLM via Claude Code sans tmux ni substitution vers API facturée ; tests/core_089_providers_test.rs et preuves expurgées dans implementation.md. Compte indisponible = gate non validé, jamais remplacement de fournisseur implicite. SC-08909.
 - [ ] T022 [US3] Ajouter tests/core_089_ledger_test.rs : source unique src/ledger.rs et renderers CLI/MCP identiques au contrat ; golden binaire octet-pour-octet, données entrantes/sortantes et limites. SC-08902/10.

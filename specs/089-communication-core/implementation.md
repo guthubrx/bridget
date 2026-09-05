@@ -1,5 +1,16 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T019 : attache brute, rotation et curseur périmé
+
+Le nouveau core_089_attach_test traverse daemon et wrapper enfants réels, fournisseur synthétique compté : fixture JSONL du jour précédent avec espaces/UTF-8/champ inconnu → SnapshotCaughtUp(seq=5) → seulement ensuite envoi → journal live seq=6..8, sans seconde bascule ni doublon. Comparaison indépendante des bytes du fichier et des fragments ; le SEUL LF délimiteur est exclu selon le codec historique. Cela prouve les octets du journal, pas que le journal contiendrait toutes les notifications brutes d'un fournisseur (frontière native distincte couverte à T003/T020).
+
+Oracle écrit avant correction : après retrait de l'unique fixture historique (rétention simulée), SubscribeSeq(5) repartait à 6 sans Gap ; rouge réel en 1,44 s. Le relais suit désormais la prochaine séquence attendue du snapshot, annonce le trou avant le fragment suivant et refuse une séquence rétrograde. Les événements trop grands avancent ce témoin sans doubler leur Gap. Pas de modification du relais mémoire, du canon filaire ni de la politique de fraîcheur. L'attente d'activation vérifie JournalReady via le refus typé JournalUnavailable, pas seulement Register.
+
+Environnement privé T014/watchdog 180 s : `cargo test -p bridget-daemon --features test-support --test core_089_attach_test --test coordination_events_test -- --include-ignored --test-threads=1` : 7/7, coordination 6,35 s (dont deux SIGKILL), attache 1,48 s, compilation 2,59 s. Mutations réellement exécutées du daemon : Gap→Unavailable puis Gap→SnapshotCaughtUp, toutes deux refusées par l'oracle réel (0,09 s et 0,17 s). Daemon restauré, diff vide, AVANT la passe verte.
+
+Six tests unitaires voisins du relais passent : bascule_snapshot, perte_du_flux, lignes_illisibles, today_et_date, troncature_et, disparition_d_un ; respectivement 0,03/0,04/0,23/0,04/0,06/0,04 s. Six autres sélectionnés par relais_ passent en 0,09 s. Clippy workspace/all-targets/test-support -D warnings : vert 5,13 s ; fmt et vérificateur 17 fixtures/six mutants verts. Nouvelle fixture 089 indépendante, aucune fixture amont réécrite. Les anciens bancs SC-005 ne sont pas comptés comme exécutés ici : leurs harnais sont encore à porter pour T028/T034.
+
+
 ## 2026-09-05 — T018 : clôture service sous UUID et reprise brute
 
 La dette identifiée à T014 est corrigée : reply_guichet ne passe plus le nom historique maicie au helper de clôture. Dans LA transaction IMMEDIATE déjà existante, il lit l'émetteur de la demande liée dont target égale le déposant attesté. Le helper partagé contrôle toujours sender/target/state=open, puis l'événement s'écrit dans cette même transaction. Pas de nouvel UPDATE de clôture, pas de relecture d'annuaire ou de nom humain. La capacité, owner, token, génération et lease ne changent pas. Le rapport demeure durable lorsqu'une demande est déjà terminale, sans inventer un answered.

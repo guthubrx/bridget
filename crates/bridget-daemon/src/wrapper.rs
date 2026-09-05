@@ -2221,6 +2221,9 @@ struct RelaySubscription {
     subscription_id: String,
     window: AttachWindow,
     from_seq: Option<u64>,
+    // Prochaine séquence attendue au rejeu disque, indépendante du dernier
+    // fragment déjà émis : la lecture peut prendre de l'avance dans la file.
+    expected_snapshot_seq: Option<u64>,
     files: Vec<PathBuf>,
     follow_after: Option<PathBuf>,
     file_index: usize,
@@ -2256,6 +2259,7 @@ impl RelaySubscription {
             subscription_id,
             window,
             from_seq: resolved.from_seq,
+            expected_snapshot_seq: resolved.from_seq.filter(|seq| *seq > 0),
             files: resolved.files,
             follow_after,
             file_index: 0,
@@ -2320,6 +2324,7 @@ impl RelaySubscription {
         let resolved = resolve_window(directory, &AttachWindow::Seq(from_seq), host_today)?;
         self.window = AttachWindow::Seq(from_seq);
         self.from_seq = Some(from_seq);
+        self.expected_snapshot_seq = (from_seq > 0).then_some(from_seq);
         self.files = resolved.files;
         self.follow_after = self.files.last().cloned();
         self.file_index = 0;
@@ -2626,17 +2631,48 @@ impl AttachRelayWorker {
                                     .from_seq
                                     .is_none_or(|from_seq| event.seq >= from_seq) =>
                             {
+                                if let Some(expected) = subscription.expected_snapshot_seq {
+                                    if event.seq < expected {
+                                        worker_emit(WrapperToDaemon::JournalReadError {
+                                            subscription_id: subscription.subscription_id.clone(),
+                                            line: event.line,
+                                            offset: event.offset,
+                                            reason: "non_monotonic_sequence".to_string(),
+                                        });
+                                        continue;
+                                    }
+                                    if event.seq > expected {
+                                        // Un curseur dont le fichier a été purgé n'est
+                                        // pas rattrapé sans perte : annoncer le trou
+                                        // avant de livrer le premier octet suivant.
+                                        worker_emit(WrapperToDaemon::Gap {
+                                            subscription_id: subscription.subscription_id.clone(),
+                                            from_seq: expected,
+                                            to_seq: event.seq - 1,
+                                            reason: Some("journal_sequence_missing".to_string()),
+                                        });
+                                    }
+                                }
+                                subscription.expected_snapshot_seq = event.seq.checked_add(1);
                                 subscription
                                     .pending_events
                                     .push_back((event.seq, event.bytes));
                             }
                             JournalReadItem::Oversized { seq: Some(seq), .. } => {
+                                if subscription.from_seq.is_some_and(|from| seq < from)
+                                    || subscription
+                                        .expected_snapshot_seq
+                                        .is_some_and(|next| seq < next)
+                                {
+                                    continue;
+                                }
                                 worker_emit(WrapperToDaemon::Gap {
                                     subscription_id: subscription.subscription_id.clone(),
-                                    from_seq: seq,
+                                    from_seq: subscription.expected_snapshot_seq.unwrap_or(seq),
                                     to_seq: seq,
                                     reason: Some("event_too_large".to_string()),
-                                })
+                                });
+                                subscription.expected_snapshot_seq = seq.checked_add(1);
                             }
                             JournalReadItem::Oversized {
                                 seq: None,
@@ -7719,6 +7755,16 @@ mod reconnect_tests {
         });
         assert!(reads.load(Ordering::SeqCst) > 1);
         worker.shutdown();
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| matches!(event, WrapperToDaemon::Gap { .. }))
+                .count(),
+            1,
+            "une séquence trop grande n'est pas aussi annoncée comme absente au fragment suivant"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
