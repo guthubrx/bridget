@@ -878,7 +878,7 @@ mod tests {
 
     #[test]
     fn configuration_du_canal_exige_0600_et_chemin_absolu() {
-        let dir = std::env::temp_dir().join(format!("hc-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hc-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("human-channel.json");
         assert_eq!(
@@ -886,14 +886,22 @@ mod tests {
             None,
             "absent = aucun canal"
         );
-        std::fs::write(&path, r#"{"command":["relatif/notify"]}"#).unwrap();
+        std::fs::write(&path, r#"{"command":["/usr/bin/true"]}"#).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-            assert!(load_channel_config(&path).unwrap_err().contains("0600"));
+            // Seules les permissions changent : un refus ne doit pas dépendre
+            // du libellé humain ni être causé par une commande déjà invalide.
+            assert!(load_channel_config(&path).is_err());
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                br#"{"command":["/usr/bin/true"]}"#
+            );
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            assert!(load_channel_config(&path).unwrap().is_some());
         }
+        std::fs::write(&path, r#"{"command":["relatif/notify"]}"#).unwrap();
         assert!(load_channel_config(&path).unwrap_err().contains("absolu"));
         std::fs::write(
             &path,

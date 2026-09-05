@@ -10,21 +10,21 @@ use bridget_core::BridgetMessage;
 use bridget_daemon::registry::AgentRegistry;
 use bridget_daemon::store::Store;
 use bridget_daemon::test_sync::DIRECTORY_ENV;
-use bridget_daemon::wrapper::launch_acp_with;
 use bridget_transport::protocol::{
     CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::ffi::CString;
 use std::fs;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Mutex, Once, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -35,10 +35,183 @@ const GLOBAL_TIMEOUT: Duration = Duration::from_secs(360);
 const READY_TIMEOUT: Duration = Duration::from_secs(5);
 const CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(5);
 const SCOPE: &str = "abcdefghijklmnopqrstuv";
+const RECIPIENT: &str = "96389249-07a4-4e29-83f0-9c46bd775021";
+const ACTOR: &str = "da78fd70-41e8-424c-a88d-e29e2c5babcd";
+const MATRIX_AGENT: &str = "c8bf5ed7-7ba4-4193-afc0-ea5c404906c2";
+const ACP_AGENT: &str = "5da585af-5bc7-4808-985f-c73670633990";
+
+static CHILDREN: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
+static WATCHDOG: Once = Once::new();
+fn children() -> &'static Mutex<Vec<i32>> {
+    CHILDREN.get_or_init(|| Mutex::new(Vec::new()))
+}
+fn track(child: &Child) {
+    children().lock().unwrap().push(child.id() as i32);
+}
+fn untrack(child: &Child) {
+    children()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .retain(|pid| *pid != child.id() as i32);
+}
+fn is_owned_running_process(pid: i32) -> bool {
+    let Ok(observed) = Command::new("/bin/ps")
+        .args(["-p", &pid.to_string(), "-o", "ppid=", "-o", "command="])
+        .output()
+    else {
+        return false;
+    };
+    let command = String::from_utf8_lossy(&observed.stdout);
+    // Un PID conservé par erreur ne suffit jamais : le processus doit encore
+    // être notre enfant direct, avec notre exécutable et son groupe dédié.
+    command
+        .split_whitespace()
+        .next()
+        .and_then(|p| p.parse::<u32>().ok())
+        == Some(std::process::id())
+        && command.contains(env!("CARGO_BIN_EXE_bridget"))
+        && !command.to_ascii_lowercase().contains("firefox")
+        && unsafe { libc::getpgid(pid) } == pid
+}
+fn cleanup_child(child: &mut Child) {
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        untrack(child);
+        return;
+    }
+    let pid = child.id() as i32;
+    if is_owned_running_process(pid) {
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            untrack(child);
+            return;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    // Drop ne panique jamais, même pendant l'échec d'un oracle. Le watchdog
+    // conserve ce seul enfant identifié si son état n'a pas pu être récolté.
+    eprintln!("nettoyage enfant {pid} non attesté dans la borne");
+}
+fn signal_test_group(child: &mut Child, signal: i32) {
+    if child.try_wait().expect("état enfant").is_some() {
+        untrack(child);
+        return;
+    }
+    let pid = child.id() as i32;
+    assert!(children().lock().unwrap().contains(&pid), "PID non possédé");
+    let owned = is_owned_running_process(pid);
+    if child
+        .try_wait()
+        .expect("état après identification")
+        .is_some()
+    {
+        untrack(child);
+        return;
+    }
+    assert!(
+        owned,
+        "PID {pid} non identifié comme enfant Bridget du test"
+    );
+    let rc = unsafe { libc::kill(-pid, signal) };
+    assert!(rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH));
+}
+fn wait_child(child: &mut Child, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while child.try_wait().expect("état enfant").is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "enfant ne termine pas dans {timeout:?}"
+        );
+        thread::sleep(Duration::from_millis(5)); // watchdog, pas une barrière métier
+    }
+    untrack(child);
+}
+fn private_dir(path: &Path) -> std::io::Result<()> {
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
+}
+fn private_write(path: &Path, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(bytes.as_ref())
+}
+fn fixture_store(database: &Path) -> Result<Store, bridget_daemon::store::StoreError> {
+    private_dir(database.parent().unwrap()).unwrap();
+    if !database.exists() {
+        private_write(database, []).unwrap();
+    }
+    Store::open(database)
+}
+fn isolated_command(root: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
+    command
+        .env_clear()
+        .env("HOME", root.join("provider"))
+        .env("BRIDGET_HOME", root.join("state"))
+        .env("BRIDGET_SOCKET", socket(root))
+        .env("TMPDIR", root.join("tmp"))
+        .env("XDG_CACHE_HOME", root.join("provider/.cache"))
+        .env("XDG_CONFIG_HOME", root.join("provider/.config"))
+        .env("XDG_DATA_HOME", root.join("provider/.local/share"))
+        .env("XDG_STATE_HOME", root.join("provider/.local/state"))
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("HOSTNAME", "idempotency-isolated")
+        .stdin(Stdio::null());
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command
+}
+fn run_isolated(root: &Path, args: &[&str], linked: bool) -> std::process::Output {
+    let mut command = isolated_command(root);
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if linked {
+        command
+            .env("BRIDGET_AGENT_ID", ACTOR)
+            .env("BRIDGET_AGENT_INSTANCE_ID", "shared-cli-mcp-instance");
+    }
+    let mut child = WrapperProcess(command.spawn().expect("CLI réelle"));
+    track(&child.0);
+    let mut stdout = child.0.stdout.take().unwrap();
+    let mut stderr = child.0.stderr.take().unwrap();
+    let stdout = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let stderr = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    wait_child(&mut child.0, Duration::from_secs(15));
+    std::process::Output {
+        status: child.0.wait().unwrap(),
+        stdout: stdout.join().unwrap(),
+        stderr: stderr.join().unwrap(),
+    }
+}
 
 struct DaemonProcess {
     child: Child,
-    process_group_id: i32,
     logs: Option<thread::JoinHandle<()>>,
 }
 
@@ -57,7 +230,10 @@ impl MatrixDaemonGuard {
     }
 
     fn restart_with_sync(&mut self, root: &Path, sync: &Path) {
-        self.stop();
+        // Un SIGTERM envoie Disconnect aux wrappers externes et termine leur
+        // session : ce réarmement doit aussi être un crash, pas un arrêt poli
+        // dont la notification dépendrait d'un sommeil de 20 ms du harnais.
+        self.crash();
         self.0 = Some(spawn_daemon(root, Some(sync)));
     }
 
@@ -76,40 +252,81 @@ impl MatrixDaemonGuard {
 
 impl Drop for MatrixDaemonGuard {
     fn drop(&mut self) {
-        self.stop();
+        // Le Drop non paniquant de DaemonProcess récolte l'enfant même si un
+        // oracle échoue pendant un jalon bloqué.
+        drop(self.0.take());
     }
 }
 
 impl DaemonProcess {
     fn stop(mut self) {
-        unsafe {
-            libc::kill(-self.process_group_id, libc::SIGTERM);
+        signal_test_group(&mut self.child, libc::SIGTERM);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while self.child.try_wait().unwrap().is_none() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
         }
-        thread::sleep(Duration::from_millis(20));
-        let _ = unsafe { libc::kill(-self.process_group_id, libc::SIGKILL) };
-        let _ = self.child.wait();
+        if self.child.try_wait().unwrap().is_none() {
+            signal_test_group(&mut self.child, libc::SIGKILL);
+        }
+        wait_child(&mut self.child, Duration::from_secs(3));
         if let Some(logs) = self.logs.take() {
             let _ = logs.join();
         }
     }
 
     fn crash(mut self) {
-        unsafe {
-            libc::kill(-self.process_group_id, libc::SIGKILL);
-        }
-        let _ = self.child.wait();
+        signal_test_group(&mut self.child, libc::SIGKILL);
+        wait_child(&mut self.child, Duration::from_secs(3));
         if let Some(logs) = self.logs.take() {
             let _ = logs.join();
         }
     }
 }
-
 impl Drop for DaemonProcess {
     fn drop(&mut self) {
-        unsafe {
-            libc::kill(-self.process_group_id, libc::SIGKILL);
+        cleanup_child(&mut self.child);
+    }
+}
+
+struct WrapperProcess(Child);
+impl WrapperProcess {
+    fn start(root: &Path, registry: &AgentRegistry, agent_id: &str) -> Self {
+        // Même wrapper réel que launch_acp_with, désormais dans un processus
+        // env_clear : aucun HOME/namespace partagé avec le moteur de tests.
+        private_write(
+            &root.join("state/agents.json"),
+            fs::read(registry.source()).unwrap(),
+        )
+        .unwrap();
+        let log = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(root.join("wrapper.log"))
+            .expect("journal privé du wrapper");
+        let child = isolated_command(root)
+            .args(["--", "/bin/sh", "--equipier", "--agent-id", agent_id])
+            .env("RUST_LOG", "debug")
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(log))
+            .spawn()
+            .expect("wrapper réel");
+        track(&child);
+        Self(child)
+    }
+    fn join(mut self) -> Result<(), String> {
+        wait_child(&mut self.0, Duration::from_secs(10));
+        let status = self.0.wait().unwrap();
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("wrapper: {status}"))
         }
-        let _ = self.child.wait();
+    }
+}
+impl Drop for WrapperProcess {
+    fn drop(&mut self) {
+        cleanup_child(&mut self.0);
     }
 }
 
@@ -120,26 +337,26 @@ struct Client {
 
 struct McpProcess {
     child: Child,
-    input: BufWriter<std::process::ChildStdin>,
+    input: Option<BufWriter<std::process::ChildStdin>>,
     output: BufReader<std::process::ChildStdout>,
 }
 
 impl McpProcess {
     fn start(root: &Path, name: &str, instance_id: &str) -> Self {
-        let name_file = root.join("mcp-agent-name");
-        fs::write(&name_file, name).expect("nom MCP écrit");
-        let mut child = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        let name_file = root.join("state/mcp-agent-name");
+        private_write(&name_file, name).expect("nom MCP écrit");
+        let mut child = isolated_command(root)
             .arg("mcp")
-            .env("HOME", root)
-            .env("BRIDGET_AGENT_NAME_FILE", &name_file)
+            .env("BRIDGET_AGENT_ID_FILE", &name_file)
             .env("BRIDGET_AGENT_INSTANCE_ID", instance_id)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .expect("serveur MCP réel démarré");
+        track(&child);
         Self {
-            input: BufWriter::new(child.stdin.take().expect("stdin MCP")),
+            input: Some(BufWriter::new(child.stdin.take().expect("stdin MCP"))),
             output: BufReader::new(child.stdout.take().expect("stdout MCP")),
             child,
         }
@@ -147,12 +364,25 @@ impl McpProcess {
 
     fn request(&mut self, request: serde_json::Value) -> serde_json::Value {
         writeln!(
-            self.input,
+            self.input.as_mut().expect("stdin MCP ouvert"),
             "{}",
             serde_json::to_string(&request).expect("requête MCP sérialisable")
         )
         .expect("requête MCP écrite");
-        self.input.flush().expect("requête MCP vidée");
+        self.input
+            .as_mut()
+            .unwrap()
+            .flush()
+            .expect("requête MCP vidée");
+        let mut ready = libc::pollfd {
+            fd: self.output.get_ref().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        assert!(
+            unsafe { libc::poll(&mut ready, 1, 15_000) } > 0,
+            "réponse MCP absente avant la borne"
+        );
         let mut line = String::new();
         self.output
             .read_line(&mut line)
@@ -162,23 +392,27 @@ impl McpProcess {
 
     fn notify(&mut self, notification: serde_json::Value) {
         writeln!(
-            self.input,
+            self.input.as_mut().expect("stdin MCP ouvert"),
             "{}",
             serde_json::to_string(&notification).expect("notification MCP sérialisable")
         )
         .expect("notification MCP écrite");
-        self.input.flush().expect("notification MCP vidée");
+        self.input
+            .as_mut()
+            .unwrap()
+            .flush()
+            .expect("notification MCP vidée");
     }
 
-    fn stop(self) {
-        let Self {
-            mut child,
-            input,
-            output,
-        } = self;
-        drop(input);
-        drop(output);
-        let _ = child.wait();
+    fn stop(mut self) {
+        drop(self.input.take());
+        wait_child(&mut self.child, Duration::from_secs(5));
+    }
+}
+
+impl Drop for McpProcess {
+    fn drop(&mut self) {
+        cleanup_child(&mut self.child);
     }
 }
 
@@ -212,19 +446,37 @@ impl Client {
     }
 }
 
-fn test_root(label: &str) -> PathBuf {
-    PathBuf::from("/tmp").join(format!(
-        "bridget-t1209-{label}-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("horloge")
-            .as_nanos()
-    ))
+fn test_root(_label: &str) -> PathBuf {
+    WATCHDOG.call_once(|| {
+        thread::spawn(|| {
+            thread::sleep(GLOBAL_TIMEOUT);
+            let pids = children()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone();
+            for pid in pids {
+                if is_owned_running_process(pid) {
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
+                    }
+                }
+            }
+            eprintln!("watchdog global idempotency_crash_test: {GLOBAL_TIMEOUT:?}");
+            std::process::exit(124);
+        });
+    });
+    let root = PathBuf::from("/tmp").join(format!(
+        "bid-{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..12]
+    ));
+    for relative in ["", "provider", "state", "tmp"] {
+        private_dir(&root.join(relative)).unwrap();
+    }
+    root
 }
 
 fn socket(root: &Path) -> PathBuf {
-    root.join(".cache/bridget/bridget.sock")
+    root.join("state/bridget.sock")
 }
 
 fn make_fifo(path: &Path) {
@@ -239,7 +491,7 @@ fn make_fifo(path: &Path) {
 
 fn checkpoint_root(root: &Path, point: &str) -> (PathBuf, PathBuf) {
     let sync = root.join("sync");
-    fs::create_dir_all(&sync).expect("répertoire de synchronisation");
+    private_dir(&sync).expect("répertoire de synchronisation");
     make_fifo(&sync.join(format!("{point}.fifo")));
     let marker = sync.join(format!("{point}.ready"));
     (sync, marker)
@@ -254,10 +506,9 @@ fn arm_checkpoint(sync: &Path, points: &[&str], point: &str) {
 }
 
 fn spawn_daemon(root: &Path, sync: Option<&Path>) -> DaemonProcess {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
+    let mut command = isolated_command(root);
     command
         .arg("daemon")
-        .env("HOME", root)
         .env("RUST_LOG", "info")
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -275,7 +526,7 @@ fn spawn_daemon(root: &Path, sync: Option<&Path>) -> DaemonProcess {
         });
     }
     let mut child = command.spawn().expect("spawn daemon réel");
-    let process_group_id = child.id() as i32;
+    track(&child);
     let stderr = child.stderr.take().expect("stderr daemon");
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     let logs = thread::spawn(move || {
@@ -294,16 +545,16 @@ fn spawn_daemon(root: &Path, sync: Option<&Path>) -> DaemonProcess {
             let _ = ready_tx.send(Err(captured.join("\n")));
         }
     });
+    let process = DaemonProcess {
+        child,
+        logs: Some(logs),
+    };
     match ready_rx.recv_timeout(READY_TIMEOUT) {
         Ok(Ok(())) => {}
         Ok(Err(logs)) => panic!("daemon arrêté avant disponibilité: {logs}"),
         Err(_) => panic!("daemon non prêt dans la borne"),
     }
-    DaemonProcess {
-        child,
-        process_group_id,
-        logs: Some(logs),
-    }
+    process
 }
 
 /// Attend l'apparition d'un jalon fichier via kqueue (Darwin/BSD).
@@ -395,7 +646,8 @@ fn register_recipient_as(socket: &Path, instance_id: &str) -> Client {
     let mut recipient = Client::connect(socket);
     recipient.send(WrapperToDaemon::Register {
         agent_type: "fixture".to_string(),
-        name: Some("recipient".to_string()),
+        identity_version: 2,
+        agent_id: RECIPIENT.to_string(),
         host: Some("t1209".to_string()),
         transport: Some("acp".to_string()),
         channel: None.into(),
@@ -466,7 +718,7 @@ fn negotiate_client(socket: &Path) -> Client {
 }
 
 fn idempotent_send(message_id: String, issued_at: i64) -> WrapperToDaemon {
-    let mut message = BridgetMessage::new("human", "recipient", "crash matrix");
+    let mut message = BridgetMessage::new(ACTOR, RECIPIENT, "crash matrix");
     message.id = message_id.clone();
     WrapperToDaemon::SendIdempotent {
         message,
@@ -490,12 +742,12 @@ fn retry_command_issue(socket: &Path, command: WrapperToDaemon) -> IdempotencyIs
 
 fn registry_with_counting_acp_agent(prompt_limit: usize) -> (AgentRegistry, PathBuf, PathBuf) {
     let directory = test_root("acp-registry");
-    fs::create_dir_all(&directory).expect("répertoire du registre ACP");
+    private_dir(&directory).expect("répertoire du registre ACP");
     let counter = directory.join("session-prompt-count");
     let definition = serde_json::json!({
         "agents": {
             "fixture-acp": {
-                "command": "sh",
+                "command": "/bin/sh",
                 "args": ["-c", format!(r#"
 read initialize
 echo '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1}}}}'
@@ -518,13 +770,11 @@ done
         }
     });
     let path = directory.join("agents.json");
-    fs::write(
+    private_write(
         &path,
         serde_json::to_string_pretty(&definition).expect("registre sérialisable"),
     )
     .expect("registre ACP écrit");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-        .expect("permissions privées du registre ACP");
     let registry = AgentRegistry::from_json(
         &fs::read_to_string(&path).expect("registre ACP lisible"),
         &path,
@@ -551,7 +801,7 @@ fn wait_for_registered_agent(socket: &Path, name: &str) {
         probe.send(WrapperToDaemon::ListAgents);
         if matches!(
             probe.receive(),
-            DaemonToWrapper::AgentList { agents } if agents.iter().any(|agent| agent.name == name)
+            DaemonToWrapper::AgentList { agents } if agents.iter().any(|agent| agent.agent_id == name)
         ) {
             return;
         }
@@ -585,15 +835,7 @@ fn issued_at() -> i64 {
 }
 
 fn run_linked_cli(root: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_bridget"))
-        .args(args)
-        .env_clear()
-        .env("HOME", root)
-        .env("PATH", "/usr/bin:/bin")
-        .env("BRIDGET_AGENT_NAME", "worker")
-        .env("BRIDGET_AGENT_INSTANCE_ID", "shared-cli-mcp-instance")
-        .output()
-        .expect("binaire Bridget exécuté")
+    run_isolated(root, args, true)
 }
 
 fn output_text(output: &std::process::Output) -> String {
@@ -621,7 +863,7 @@ fn mcp_send_call(request_id: i64, message_id: &str, sent_at: i64, body: &str) ->
         "params": {
             "name": "bridget_send",
             "arguments": {
-                "to": "recipient",
+                "to": RECIPIENT,
                 "body": body,
                 "in_reply_to": "request-open",
                 "id": message_id,
@@ -635,7 +877,7 @@ fn mcp_send_call(request_id: i64, message_id: &str, sent_at: i64, body: &str) ->
 fn run_amont_cycle(point: &str, serial: usize) {
     let root = test_root(point);
     let sync = root.join("sync");
-    fs::create_dir_all(&sync).expect("répertoire de synchronisation");
+    private_dir(&sync).expect("répertoire de synchronisation");
     make_fifo(&sync.join(format!("{point}.fifo")));
     let marker = sync.join(format!("{point}.ready"));
     let daemon = spawn_daemon(&root, Some(&sync));
@@ -649,7 +891,7 @@ fn run_amont_cycle(point: &str, serial: usize) {
     let mut client = negotiate_client(&socket_path);
     client.send(idempotent_send(message_id.clone(), issued_at));
     watch_marker(&sync, &marker);
-    daemon.stop();
+    daemon.crash();
     drop(client);
 
     let restarted = spawn_daemon(&root, None);
@@ -675,7 +917,7 @@ fn run_amont_cycle(point: &str, serial: usize) {
 fn matrice_crash_sc001_redelivre_cinquante_prompts_uniques() {
     let root = test_root("sc001-matrix");
     let sync = root.join("sync");
-    fs::create_dir_all(&sync).expect("répertoire de synchronisation");
+    private_dir(&sync).expect("répertoire de synchronisation");
     let points = [
         "before_reservation",
         "after_prepared",
@@ -687,25 +929,15 @@ fn matrice_crash_sc001_redelivre_cinquante_prompts_uniques() {
     let mut daemon = MatrixDaemonGuard::start(&root, &sync);
     let socket_path = socket(&root);
     let (registry, registry_root, counter) = registry_with_counting_acp_agent(MATRIX_CYCLES);
-    let wrapper_home = registry_root.join("wrapper-home");
-    fs::create_dir_all(&wrapper_home).expect("home wrapper ACP");
-    let wrapper_registry = registry.clone();
-    let wrapper_socket = socket_path.clone();
-    let wrapper = thread::spawn(move || {
-        launch_acp_with(
-            "fixture-acp",
-            &[],
-            Some("acp-matrix"),
-            &wrapper_registry,
-            &wrapper_socket,
-            &wrapper_home,
-        )
-        .map_err(|error| error.to_string())
-    });
-    wait_for_registered_agent(&socket_path, "acp-matrix");
+    let wrapper = WrapperProcess::start(&root, &registry, MATRIX_AGENT);
+    wait_for_registered_agent(&socket_path, MATRIX_AGENT);
     let deadline = Instant::now() + GLOBAL_TIMEOUT;
 
     for serial in 0..MATRIX_CYCLES {
+        eprintln!(
+            "SC-001 cycle {serial}/{MATRIX_CYCLES}, racine {}",
+            root.display()
+        );
         assert!(
             Instant::now() < deadline,
             "matrice T1209 dépassée après {GLOBAL_TIMEOUT:?}"
@@ -715,7 +947,7 @@ fn matrice_crash_sc001_redelivre_cinquante_prompts_uniques() {
         let _ = fs::remove_file(&marker);
         let issued_at = issued_at();
         let message_id = format!("sc001-{serial}");
-        let mut message = BridgetMessage::new("human", "acp-matrix", "matrice SC-001");
+        let mut message = BridgetMessage::new(ACTOR, MATRIX_AGENT, "matrice SC-001");
         message.id = message_id.clone();
         let command = WrapperToDaemon::SendIdempotent {
             message,
@@ -727,8 +959,9 @@ fn matrice_crash_sc001_redelivre_cinquante_prompts_uniques() {
         watch_marker(&sync, &marker);
         daemon.crash();
 
+        eprintln!("SC-001 {serial}: relève après SIGKILL à {point}");
         daemon.restart(&root);
-        wait_for_registered_agent(&socket_path, "acp-matrix");
+        wait_for_registered_agent(&socket_path, MATRIX_AGENT);
         let first_replay = retry_command_issue(&socket_path, command.clone());
         let second_replay = retry_command_issue(&socket_path, command.clone());
         assert_eq!(first_replay, second_replay, "le rejeu en vol est stable");
@@ -746,9 +979,10 @@ fn matrice_crash_sc001_redelivre_cinquante_prompts_uniques() {
         );
         assert!(matches!(first_terminal, IdempotencyIssue::Accepted { .. }));
         if serial + 1 < MATRIX_CYCLES {
+            eprintln!("SC-001 {serial}: réarmement du jalon suivant");
             arm_checkpoint(&sync, &points, points[(serial + 1) % points.len()]);
             daemon.restart_with_sync(&root, &sync);
-            wait_for_registered_agent(&socket_path, "acp-matrix");
+            wait_for_registered_agent(&socket_path, MATRIX_AGENT);
         }
     }
 
@@ -758,7 +992,7 @@ fn matrice_crash_sc001_redelivre_cinquante_prompts_uniques() {
         "chaque crash remet exactement un prompt, sans doublon"
     );
     daemon.stop();
-    assert_eq!(wrapper.join().expect("thread wrapper"), Ok(()));
+    assert_eq!(wrapper.join(), Ok(()));
     fs::remove_dir_all(root).expect("nettoyage matrice");
     fs::remove_dir_all(registry_root).expect("nettoyage registre ACP");
 }
@@ -890,7 +1124,7 @@ fn recovery_terminal_acked_rejoue_accepted_apres_crash_daemon() {
         delivery_generation,
     });
     watch_marker(&sync, &marker);
-    daemon.stop();
+    daemon.crash();
     drop(client);
     drop(recipient);
 
@@ -910,11 +1144,11 @@ fn recovery_terminal_acked_rejoue_accepted_apres_crash_daemon() {
 )]
 fn recovery_ack_d_une_reponse_liee_cloture_la_demande_atomiquement() {
     let root = test_root("linked-reply-ack");
-    let database = root.join(".cache/bridget/bridget.db");
-    fs::create_dir_all(database.parent().expect("parent base")).expect("répertoire base");
-    Store::open(&database)
+    let database = root.join("state/bridget.db");
+    private_dir(database.parent().expect("parent base")).expect("répertoire base");
+    fixture_store(&database)
         .expect("store initial")
-        .create_request("request-open", "recipient", "human", 60)
+        .create_request("request-open", RECIPIENT, ACTOR, 60)
         .expect("demande suivie initiale");
 
     let (sync, marker) = checkpoint_root(&root, "after_delivery_acked");
@@ -948,7 +1182,7 @@ fn recovery_ack_d_une_reponse_liee_cloture_la_demande_atomiquement() {
     drop(recipient);
 
     let mut restarted = MatrixDaemonGuard::start(&root, &sync);
-    let request = Store::open(&database)
+    let request = fixture_store(&database)
         .expect("store après redémarrage")
         .get_request("request-open")
         .expect("demande lisible")
@@ -961,22 +1195,22 @@ fn recovery_ack_d_une_reponse_liee_cloture_la_demande_atomiquement() {
 #[test]
 fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
     let root = test_root("mcp-linked-mismatch");
-    let database = root.join(".cache/bridget/bridget.db");
-    fs::create_dir_all(database.parent().expect("parent base")).expect("répertoire base");
-    let store = Store::open(&database).expect("store initial");
+    let database = root.join("state/bridget.db");
+    private_dir(database.parent().expect("parent base")).expect("répertoire base");
+    let store = fixture_store(&database).expect("store initial");
     store
-        .create_request("request-a", "recipient", "human", 60)
+        .create_request("request-a", RECIPIENT, ACTOR, 60)
         .expect("demande A initiale");
     store
-        .create_request("request-b", "recipient", "human", 60)
+        .create_request("request-b", RECIPIENT, ACTOR, 60)
         .expect("demande B initiale");
 
     let sync = root.join("sync");
-    fs::create_dir_all(&sync).expect("synchronisation vide");
+    private_dir(&sync).expect("synchronisation vide");
     let mut daemon = MatrixDaemonGuard::start(&root, &sync);
     let socket_path = socket(&root);
     let mut recipient = register_recipient_as(&socket_path, "mcp-linked-recipient");
-    let mut mcp = McpProcess::start(&root, "human", "mcp-linked-instance");
+    let mut mcp = McpProcess::start(&root, ACTOR, "mcp-linked-instance");
     let initialize = mcp.request(serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}
     }));
@@ -994,7 +1228,7 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
             "params": {
                 "name": "bridget_send",
                 "arguments": {
-                    "to": "recipient",
+                    "to": RECIPIENT,
                     "body": "réponse MCP liée",
                     "in_reply_to": in_reply_to,
                     "id": "mcp-linked-retry",
@@ -1015,7 +1249,7 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
         "un dépôt attesté doit publier la preuve qui le distingue d'un sort inconnu"
     );
     // Oracle (ii) : visible au ledger AVANT DeliverAcked, pendant dispatching.
-    let store_before_ack = Store::open(&database).expect("store avant ack");
+    let store_before_ack = fixture_store(&database).expect("store avant ack");
     let before_ack = store_before_ack
         .recent_messages(20)
         .expect("ledger avant ack");
@@ -1066,11 +1300,7 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
         tool_entry["delivery_status"], "recu",
         "après DeliverAcked le DTO doit exposer reçu, pas en_vol"
     );
-    let cli_ledger = Command::new(env!("CARGO_BIN_EXE_bridget"))
-        .arg("ledger")
-        .env("HOME", &root)
-        .output()
-        .expect("ledger CLI exécuté");
+    let cli_ledger = run_isolated(&root, &["ledger"], false);
     assert!(cli_ledger.status.success(), "ledger CLI: {cli_ledger:?}");
     let cli_output = String::from_utf8(cli_ledger.stdout).expect("ledger CLI UTF-8");
     assert!(
@@ -1130,15 +1360,15 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
 #[test]
 fn binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee() {
     let root = test_root("cli-mcp-linked-parity");
-    let database = root.join(".cache/bridget/bridget.db");
-    fs::create_dir_all(database.parent().expect("parent base")).expect("répertoire base");
-    let store = Store::open(&database).expect("store initial");
+    let database = root.join("state/bridget.db");
+    private_dir(database.parent().expect("parent base")).expect("répertoire base");
+    let store = fixture_store(&database).expect("store initial");
     store
-        .create_request("request-open", "recipient", "worker", 60)
+        .create_request("request-open", RECIPIENT, ACTOR, 60)
         .expect("demande suivie initiale");
 
     let sync = root.join("sync");
-    fs::create_dir_all(&sync).expect("synchronisation vide");
+    private_dir(&sync).expect("synchronisation vide");
     let mut daemon = MatrixDaemonGuard::start(&root, &sync);
     let socket_path = socket(&root);
     let mut recipient = register_recipient_as(&socket_path, "recipient-parity-instance");
@@ -1148,7 +1378,7 @@ fn binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee() {
         &[
             "send",
             "--to",
-            "recipient",
+            RECIPIENT,
             "--in-reply-to",
             "request-open",
             "réponse liée paritaire",
@@ -1196,7 +1426,7 @@ fn binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee() {
         &[
             "send",
             "--to",
-            "recipient",
+            RECIPIENT,
             "--in-reply-to",
             "request-open",
             "--id",
@@ -1210,7 +1440,7 @@ fn binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee() {
     assert!(output_text(&retry).contains("accepted"));
     assert_no_delivery(&mut recipient);
 
-    let mut mcp = McpProcess::start(&root, "worker", "shared-cli-mcp-instance");
+    let mut mcp = McpProcess::start(&root, ACTOR, "shared-cli-mcp-instance");
     let initialized = mcp.request(serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}
     }));
@@ -1237,7 +1467,7 @@ fn binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee() {
         &[
             "send",
             "--to",
-            "recipient",
+            RECIPIENT,
             "--in-reply-to",
             "request-open",
             "--id",
@@ -1256,7 +1486,7 @@ fn binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee() {
     assert_no_delivery(&mut recipient);
 
     recipient.send(WrapperToDaemon::Availability {
-        agent: "recipient".to_string(),
+        agent: RECIPIENT.to_string(),
         until_secs: Some((issued_at() + 60) as u64),
     });
     assert!(matches!(recipient.receive(), DaemonToWrapper::Ack { .. }));
@@ -1266,7 +1496,7 @@ fn binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee() {
         &[
             "send",
             "--to",
-            "recipient",
+            RECIPIENT,
             "--in-reply-to",
             "request-open",
             "--id",
@@ -1317,7 +1547,7 @@ fn recovery_acked_wrapper_finalise_accepted_apres_crash_daemon() {
     client.send(idempotent_send(message_id.clone(), issued_at));
     let _ = client.receive();
     let first = receive_delivery(&mut recipient);
-    daemon.stop();
+    daemon.crash();
     drop(client);
     drop(recipient);
 
@@ -1378,7 +1608,7 @@ fn recovery_seen_indeterminate_maintient_outcome_unknown_apres_crash_daemon() {
         delivery_generation,
     });
     watch_marker(&sync, &marker);
-    daemon.stop();
+    daemon.crash();
     drop(client);
     drop(recipient);
 
@@ -1410,7 +1640,7 @@ fn recovery_absent_redelivre_sans_doublon_apres_crash_daemon() {
     let mut client = negotiate_client(&socket_path);
     client.send(idempotent_send(message_id.clone(), issued_at));
     watch_marker(&sync, &marker);
-    daemon.stop();
+    daemon.crash();
     drop(client);
     drop(recipient);
 
@@ -1453,7 +1683,7 @@ fn recovery_prepared_reprend_le_dispatch_apres_crash_daemon() {
     let mut client = negotiate_client(&socket_path);
     client.send(idempotent_send(message_id.clone(), issued_at));
     watch_marker(&sync, &marker);
-    daemon.stop();
+    daemon.crash();
     drop(client);
     drop(recipient);
 
@@ -1500,26 +1730,12 @@ fn recovery_terminal_acked_vrai_wrapper_rejoue_sans_second_prompt() {
     let daemon = spawn_daemon(&root, Some(&sync));
     let socket_path = socket(&root);
     let (registry, registry_root, counter) = registry_with_counting_acp_agent(1);
-    let wrapper_home = registry_root.join("wrapper-home");
-    fs::create_dir_all(&wrapper_home).expect("home wrapper ACP");
-    let wrapper_registry = registry.clone();
-    let wrapper_socket = socket_path.clone();
-    let wrapper = thread::spawn(move || {
-        launch_acp_with(
-            "fixture-acp",
-            &[],
-            Some("acp-recipient"),
-            &wrapper_registry,
-            &wrapper_socket,
-            &wrapper_home,
-        )
-        .map_err(|error| error.to_string())
-    });
-    wait_for_registered_agent(&socket_path, "acp-recipient");
+    let wrapper = WrapperProcess::start(&root, &registry, ACP_AGENT);
+    wait_for_registered_agent(&socket_path, ACP_AGENT);
     let issued_at = issued_at();
     let message_id = "vrai-wrapper-acp".to_string();
     let mut client = negotiate_client(&socket_path);
-    let mut message = BridgetMessage::new("human", "acp-recipient", "frame réelle");
+    let mut message = BridgetMessage::new(ACTOR, ACP_AGENT, "frame réelle");
     message.id = message_id.clone();
     let command = WrapperToDaemon::SendIdempotent {
         message,
@@ -1539,14 +1755,14 @@ fn recovery_terminal_acked_vrai_wrapper_rejoue_sans_second_prompt() {
     // commit durable, mais avant que le daemon puisse poursuivre son cycle.
     watch_marker(&sync, &marker);
 
-    daemon.stop();
+    daemon.crash();
     let restarted = spawn_daemon(&root, None);
     let socket_path = socket(&root);
     wait_for_accepted(&socket_path, &command);
     thread::sleep(Duration::from_millis(250));
     assert_eq!(fs::read(&counter).expect("compteur ACP"), b"x");
     restarted.stop();
-    assert_eq!(wrapper.join().expect("thread wrapper"), Ok(()));
+    assert_eq!(wrapper.join(), Ok(()));
     fs::remove_dir_all(root).expect("nettoyage daemon ACP");
     fs::remove_dir_all(registry_root).expect("nettoyage registre ACP");
 }

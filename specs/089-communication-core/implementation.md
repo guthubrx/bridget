@@ -1,5 +1,51 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T005 : idempotence, 50 crashs réels exécutés
+
+idempotency_crash_test.rs porté sans code produit : namespace indépendant,
+UUID v4 actuels, HOME fournisseur privé, env_clear et états 0700/0600. Les
+deux wrappers historiquement lancés en threads deviennent de vrais enfants
+isolés exécutant le même chemin wrapper ACP. L'adaptateur fournisseur est
+une fixture qui compte les prompts, pas un compte réel.
+
+Avant signal : enfant direct (PPID), exécutable Bridget du banc, groupe créé
+par le harnais et PID vivant vérifiés ; aucun PID arbitraire. Les Drop ne
+paniquent pas, l'attente de fin est bornée ; watchdog global 360 s et suivi
+des enfants. SIGKILL aux jalons test-support, pas de SIGTERM présenté comme
+crash. Les comptes/réponses/canons attendus n'ont pas été relâchés.
+
+Commandes :
+- `/Users/moi/.cargo/bin/cargo test --offline -p bridget-daemon --features test-support --test idempotency_crash_test -- --test-threads=1 --nocapture`
+  : **11/11 réussis, 7,00 s**. CLI/MCP réels, quatre issues d'une réponse
+  liée, divergence sans mutation, ACK/answered atomiques et vrai wrapper.
+- `/Users/moi/.cargo/bin/cargo test --offline -p bridget-daemon --features test-support --test idempotency_crash_test -- --ignored --exact matrice_crash_sc001_redelivre_cinquante_prompts_uniques --test-threads=1 --nocapture`
+  : **50 cycles / quatre barrières, exactement 50 prompts, 172,96 s**.
+  Replays intermédiaires puis terminaux stables ; watchdog non déclenché.
+
+Premier essai de matrice : arrêt au cycle 0 après réarmement coopératif,
+car SIGTERM envoyait Disconnect et fermait correctement le wrapper externe.
+Le journal attestait EOF ACP. Le réarmement intermédiaire est désormais
+lui aussi un crash réel, cohérent avec le scénario ; aucune correction du
+daemon pour empêcher son arrêt propre. Les anciens fichiers privés des
+essais rouges restent des traces, aucun processus /tmp/bid- résiduel.
+
+Format ciblé et diff-check verts ; Clippy reste bloqué sur les neuf lints
+historiques daemon déjà consignés. Ce portage exécute la baseline de crash ;
+il ne déclare ni les gates SSH/fournisseurs ni toute l'extraction livrés.
+
+Revue indépendante du seul diff du banc : APPROVE (contre-lecture,
+pas un second run N=50), isolement et gardes PPID/binaire/PGID vérifiés,
+oracles de prompts/canon/issue conservés.
+
+L'oracle human_inbox des permissions est également adapté, sans code produit :
+payload valide en 0644 refusé, puis mêmes bytes en 0600 acceptés ; ensuite
+seulement la commande relative est testée. Cela évite un faux positif dû au
+payload déjà invalide ou à un libellé d'erreur. Répertoire UUID indépendant.
+Sous le même env privé que la passe lib : filtre exact
+`human_inbox::tests::configuration_du_canal_exige_0600_et_chemin_absolu`
+**1/1 vert, 0,00 s** (build 4,66 s). La première invocation avec filtre court
+et --exact sélectionnait zéro test et ne compte pas comme validation.
+
 ## 2026-09-05 — T005 : reprise du flux public après crash
 
 coordination_events_test.rs porté exclusivement côté harnais : env_clear,
@@ -43,8 +89,9 @@ avant son oracle sur EOF de son enfant. Six rouges UI viennent de SUN_LEN
 sous TMPDIR long ; les scénarios runtime/projet ont aussi des gardes de
 politique/activation en échec. Ils seront retirés pour leur périmètre T010/T011,
 jamais pour leur couleur. Un rouge human_inbox est une adaptation T007 encore
-nécessaire : l'ancien test attend « 0600 », mais la nouvelle garde peut
-refuser son chemin extérieur au namespace avant les permissions. Ne pas
+nécessaire : l'ancien test attend « 0600 », mais la nouvelle garde rejette
+bien 0644 avec le libellé « état privé de type/propriétaire valide requis ».
+Il ne s'agit pas d'un refus de chemin extérieur au namespace. Ne pas
 présenter ces 55 rouges comme tous antérieurs à T007 sans distinction.
 
 ## 2026-09-05 — T005 : reprise des crash-tests autorisés et baseline guichet
