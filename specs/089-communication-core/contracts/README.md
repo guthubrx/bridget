@@ -1,34 +1,68 @@
-# Corpus 089 — intégrité acquise, gel encore partiel
+# Corpus 089 — gel vérifié avant extraction
 
-Les 13 fichiers de fixtures sont copiés **octet pour octet**, LF compris, depuis le commit source. manifest.json nomme leur chemin dans Git, leur SHA-256, leur famille et le lecteur historique identifié. Aucune re-sérialisation ni normalisation n'a été appliquée.
+17 fichiers épinglés, SHA-256 et comparaison aux objets Git ; LF inclus.
+Deux origines distinctes, jamais confondues :
 
-Depuis la racine de ce worktree :
+- dfa2134dcfe2a2522e3ae77d93561e6ae72556b3 : 13 fixtures historiques copiées à l'identique.
+- bd1cbe0e04d83a1cb5e258bf7df3ed0c6c2fbc14 : scénarios de caractérisation, 42 sorties du codec inchangé lors de la capture, et deux lignes natives extraites des émetteurs de tests historiques.
+
+Le second commit matérialise ce qui n'existait pas en fichiers autonomes dans le
+premier. Il ne prétend pas que ces nouveaux chemins existaient dans dfa2134.
+Le vérificateur épingle les deux commits et exige leur ascendance ; changer
+ensemble un golden et son hash ne suffit pas à le tromper.
+
+## Commandes
+
+Depuis la racine du worktree :
 
 ```sh
-sh scripts/verify-089-contracts.sh
-sh scripts/verify-089-contracts.sh --self-test
-sh scripts/verify-089-contracts.sh --require-complete
+sh scripts/verify-089-contracts.sh --self-test --require-complete
+PATH=/Users/moi/.cargo/bin:$PATH cargo test --offline -p bridget-transport --test core_089_wire_test
 ```
 
-Les deux premières commandes contrôlent ce qui existe. La troisième retourne actuellement **1**, intentionnellement : elle interdit de déclarer T002 terminée. Six familles restent à matérialiser :
+Les cinq familles matérialisées dans wire-reference.jsonl sont comptées d'après
+les lignes effectivement présentes, pas seulement leur étiquette de manifeste :
+messages/idempotence, annuaire/ledger, lifecycle, attach, guichet claim/reply.
+Les 42 cas incluent les sept issues idempotentes, les cinq issues stop, corps
+riche et corrélation, une présence native, un ledger non vide et le token/lease.
 
-| Famille manquante | Point de départ dans la référence |
-|---|---|
-| message-idempotency | protocol.rs:3895–3992 et :4680–4743 ; daemon.rs:7524 et test :19423 pour le canon stocké |
-| directory-ledger | protocol.rs:4168–4250 et :5286–5345 ; clients réels dans cli.rs:6508+ |
-| managed-lifecycle | protocol.rs:4816–4969 et :5128–5181 |
-| attach-wire | protocol.rs:4295–4327, :4971–5096, :5228–5265 ; les contenus de journal ne remplacent pas ces trames |
-| guichet-claim-reply | protocol.rs:4328–4555 ; la fixture 015 de sept lignes ne couvre pas token/lease/réponse finale |
-| provider-native-wire | codex_app_server.rs:5235 interdit jsonrpc sur le fil ; la fixture historique de forme en contient |
+Chaque ligne contient la direction et une chaîne wire : **cette chaîne garde
+l'ordre et les octets du codec**, contrairement à une structure JSON qui serait
+triée/réencodée avant comparaison. Le test compare l'émission aux bytes figés,
+puis les décode et les réémet par le codec réel. Aucun DTO parallèle.
 
-Les références protocol.rs désignent crates/bridget-transport/src/protocol.rs ; daemon.rs et cli.rs désignent crates/bridget-daemon/src/. Les numéros de ligne valent au commit épinglé.
+## Provenance de matérialisation
 
-## Ce que vérifie l'auto-test
+Commande exécutée AVANT les changements de production :
 
-Une copie temporaire privée reçoit les mutations ; aucun fichier du dépôt ni objet Git n'est modifié. Le même vérificateur refuse : un octet altéré ; son empreinte réécrite pour masquer l'altération ; une source Git absente ; une fixture absente ; une déclaration de gel complet privée d'une famille requise. La relation d'ancêtre est testée avec deux commits existants dans le sens invalide, pas seulement avec un SHA inventé.
+```sh
+PATH=/Users/moi/.cargo/bin:$PATH cargo test --offline -p bridget-transport --test core_089_wire_test core_089_materialize_reference -- --ignored --nocapture
+```
 
-Le contrôle d'intégrité n'est pas une preuve de conformité du fournisseur. En particulier, provider-codex-0.150.1.jsonl est une fixture historique de **forme** ; son lecteur ne vérifie que des méthodes et des capacités construites localement. Elle ne peut pas servir de recette d'app-server ni remplacer une capture réelle. Les 65 tests protocol:: de la référence sont verts ; ils ne matérialisent pas à eux seuls tous les octets de leurs constructions typées.
+Les lignes CAPTURE de stdout ont été archivées telles quelles, préfixe technique
+retiré. Le générateur n'écrit aucun fichier et est ignoré par défaut. À cet
+instant protocol.rs et core/message.rs étaient identiques au commit source.
+Les corrections Clippy ultérieures n'ont changé ni encode/decode, ni les champs
+des trames : Default dérivé identique et suppression d'un format de test.
 
-## Suite de T002
+Les lignes natives proviennent des émetteurs shell de tests de dfa2134 :
+codex_app_server.rs:3303 et claude_stream_json.rs:1467. Le consommateur vérifie
+raw/source/origine ; seul le délimiteur LF est retiré explicitement. Les vrais
+pilotes lisent les flux de faux fournisseurs : **pas une recette de compte réel**.
 
-Matérialiser les sorties du codec de référence avec provenance de génération explicite, les faire lire par des consommateurs réels et verrouiller leur émission avec des goldens indépendants. Ne pas modifier le protocole pour le faire correspondre à une fixture périmée. Tant que cela manque, garder la revue avant suppression ouverte.
+## Limites du gel
+
+C'est une caractérisation de chaque famille conservée, pas une preuve de tous
+ses comportements, schémas fournisseur exhaustifs ou canons SQL. T014/T018
+exercent CLI/MCP/daemon/store réels ; T020/T021 valident les fournisseurs réels.
+Les tests de clients externes encore logés dans Maicie sont classés à déplacer
+par T003 et doivent survivre à son retrait.
+
+provider-codex-0.150.1.jsonl reste une fixture historique de forme : son champ
+jsonrpc n'est PAS promu comme contrat du pilote natif qui l'interdit. Le témoin
+native-codex-delta.jsonl préserve une vraie ligne de son émetteur de test sans ce
+champ. Aucun changement du pilote pour satisfaire une fixture périmée.
+
+L'auto-test altère seulement une copie privée : octet modifié, hash réécrit,
+source absente, fixture absente, famille effacée et commit existant non ancêtre
+sont refusés. L'intégrité du corpus ne remplace jamais les gates d'exécution.

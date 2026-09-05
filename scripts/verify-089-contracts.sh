@@ -13,6 +13,7 @@ import sys
 import tempfile
 
 PIN = "dfa2134dcfe2a2522e3ae77d93561e6ae72556b3"
+CAPTURE = "bd1cbe0e04d83a1cb5e258bf7df3ed0c6c2fbc14"
 CORPUS = Path("specs/089-communication-core/contracts")
 MAX_BYTES = 2 * 1024 * 1024
 REQUIRED_FAMILIES = {
@@ -49,15 +50,23 @@ def local_file(root, relative):
 
 
 def verify(root, candidates, manifest):
-    if set(manifest) != {"version", "source_commit", "entries", "missing_families"}:
+    if set(manifest) != {"version", "source_commit", "capture_commit", "entries", "missing_families"}:
         raise ValueError("champs de manifeste inconnus ou manquants")
-    if manifest["version"] != 1 or manifest["source_commit"] != PIN:
+    if manifest["version"] != 2 or manifest["source_commit"] != PIN or manifest["capture_commit"] != CAPTURE:
         raise ValueError("version ou référence Git non épinglée")
     require_ancestor(root, PIN)
+    require_ancestor(root, PIN, CAPTURE)
+    require_ancestor(root, CAPTURE)
     seen = set()
     for entry in manifest["entries"]:
-        if set(entry) != {"file", "source", "sha256", "family", "reader"}:
+        required = {"file", "source", "sha256", "family", "reader"}
+        if set(entry) not in (required, required | {"source_commit"}):
             raise ValueError("champs d'entrée inconnus ou manquants")
+        source_commit = entry.get("source_commit", PIN)
+        if source_commit not in (PIN, CAPTURE):
+            raise ValueError("origine de fixture non épinglée")
+        if not isinstance(entry["family"], list) or not entry["family"] or not all(isinstance(f, str) and f for f in entry["family"]):
+            raise ValueError("familles invalides")
         relative = CORPUS / "fixtures" / entry["file"]
         if str(relative) in seen:
             raise ValueError(f"fixture dupliquée : {relative}")
@@ -65,18 +74,21 @@ def verify(root, candidates, manifest):
         raw = local_file(candidates, relative).read_bytes()
         if hashlib.sha256(raw).hexdigest() != entry["sha256"]:
             raise ValueError(f"empreinte divergente : {relative}")
-        original = git(root, "show", f"{PIN}:{entry['source']}")
+        original = git(root, "show", f"{source_commit}:{entry['source']}")
         if raw != original:
             raise ValueError(f"octets différents de l'objet Git : {relative}")
         # Fixtures historiques, pas forcément trames entrantes valides : les
         # scénarios négatifs restent des données, jamais normalisées ici.
-        for line in raw.splitlines():
-            json.loads(line)
+        rows = [json.loads(line) for line in raw.splitlines()]
+        if entry["file"] == "wire-reference.jsonl":
+            families = {row["family"] for row in rows}
+            if families != set(entry["family"]):
+                raise ValueError("famille déclarée sans trame dans le corpus matérialisé")
         if not raw.endswith(b"\n") or not entry["family"] or not entry["reader"]:
             raise ValueError(f"fixture incomplète : {relative}")
     if not seen:
         raise ValueError("corpus vide")
-    missing = sorted(REQUIRED_FAMILIES - {entry["family"] for entry in manifest["entries"]})
+    missing = sorted(REQUIRED_FAMILIES - {f for entry in manifest["entries"] for f in entry["family"]})
     if sorted(manifest["missing_families"]) != missing:
         raise ValueError("les familles manquantes ne correspondent pas aux fixtures présentes")
     return len(seen)
@@ -112,7 +124,7 @@ def self_test(root, manifest):
         must_refuse("fixture absente", lambda: verify(root, candidates, manifest))
         path.write_bytes(raw)
         changed = dict(manifest, missing_families=[], entries=[
-            entry for entry in manifest["entries"] if entry["family"] != "coordination-v2"
+            entry for entry in manifest["entries"] if "coordination-v2" not in entry["family"]
         ])
         must_refuse("gel déclaré complet sans les familles", lambda: verify(root, candidates, changed))
     current = git(root, "rev-parse", "HEAD").decode().strip()
@@ -134,7 +146,7 @@ def main():
     if args.self_test:
         self_test(root, manifest)
     missing = manifest["missing_families"]
-    print(f"PASS intégrité : {count} fichiers identiques au commit {PIN}")
+    print(f"PASS intégrité : {count} fichiers identiques aux objets Git épinglés")
     if missing:
         print("GEL INCOMPLET : " + "; ".join(missing))
         if args.require_complete:
