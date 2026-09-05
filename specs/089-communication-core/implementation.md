@@ -25,6 +25,62 @@ effectuée, aucune garantie fonctionnelle globale annoncée.
 
 ## 2026-09-05 — P0 vérifiée et baseline T005 partielle
 
+Complément de baseline : 37/37 tests ciblés, 0,01 s, compilation 3,38 s :
+communication (3), connection_channel (4), build_info (9), artifact_policy (3),
+artifact_types (4), mission_projection (2), runtime (12). Commande dans le
+worktree : `env -i PATH=/Users/moi/.cargo/bin:/usr/bin:/bin
+HOME=/tmp/bg089-daemon-pure.UDEXtq TMPDIR=/tmp/bg089-daemon-pure.UDEXtq
+CARGO_HOME=/Users/moi/.cargo RUSTUP_HOME=/Users/moi/.rustup HOSTNAME=bg089-test
+BRIDGET_HOME=/tmp/bg089-daemon-pure.UDEXtq
+BRIDGET_SOCKET=/tmp/bg089-daemon-pure.UDEXtq/bridget.sock cargo test --offline
+-p bridget-daemon --lib -- communication::tests:: connection_channel::tests::
+build_info::tests:: artifact_policy::tests:: artifact_types::tests::
+mission_projection::tests:: runtime::tests:: --skip project_runtime::tests::
+--test-threads=4`.
+
+Le premier essai sans `--skip project_runtime::tests::` sélectionnait aussi
+project_runtime, par sous-chaîne Rust : 53 réussis, 4 rouges en 1,27 s.
+Échecs conservés : absent_policy_file_closes_only_docker_runtime (2399),
+ingress_prive (2663), policy_loader_rejects_group_writable_file (2522),
+spec086attestationcheckout (2261). Inspection des exécutables : Docker était
+simulé par tests/fixtures/docker/docker, Git limité à la racine privée ;
+aucun fournisseur, daemon ou Docker réel. Ces rouges hors périmètre cible
+ne sont ni corrigés ni présentés comme verts.
+
+Ledger : filtre `ledger::tests::` du binaire de tests bridget_daemon-b7902f0f20bc17cc
+sous `env -i PATH=/usr/bin:/bin HOME=<racine> TMPDIR=<racine>
+BRIDGET_HOME=<racine> BRIDGET_SOCKET=<racine>/bridget.sock`, racine créée avec
+`mktemp -d /tmp/bg089-ledger.XXXXXX` : 5/5, 0,06 s. Vérifie corps exact,
+demandes globales et états en vol/reçu/indéterminé/orphelin distincts.
+
+Lot SQLite supplémentaire : 32/32 lib (0,15 s, compilation 3,74 s),
+artifact_service_test 3/3 (0,04 s), artifact_store_test 4/4 (0,01 s),
+execution_resume_test 2/2, work_submission_test 3/3 (0,01 s).
+Même env nettoyé, racine /tmp/bg089-sqlite.E4DbLM. Filtres lib :
+`agent_profile::tests:: execution_store::focus_priority_tests:: control_settings::
+human_inbox::tests:: recovery_trace::tests:: --skip
+canal_externe_commande_factice_et_echec_consignes --test-threads=4` ;
+les quatre intégrations nommées sont appelées via `cargo test --offline
+-p bridget-daemon --test …`. Exclusion explicite du test de notification
+humaine par shell ; aucun fournisseur réel, daemon ou crash.
+
+MCP : binaire de tests sous même env privé créé par
+`mktemp -d /tmp/bg089-mcp.XXXXXX`, watchdog `/usr/bin/perl -e
+'alarm 120; exec @ARGV'`, filtre `mcp::tests:: --test-threads=4` :
+39/39 (1,01 s annoncée par le runner). Sockets de serveurs de fixture,
+jamais de connexion à un daemon utilisateur : inclut FR009, huit connexions,
+corps riche, in_reply_to, coupures, retries et stdout JSON uniquement.
+
+Identité : même commande, filtre `mcp_identity::tests::`, 9 scénarios :
+1 réussi / 8 rouges sous /tmp/bg089-identity.*. Contre-sonde sous
+/private/tmp/bg089-identity.* : 3 réussis / 6 rouges. Deux causes distinctes
+vérifiées : oracle de chemin canonique sensible à l'alias macOS /tmp ;
+anciennes fixtures « avant », « agent-b », etc. incompatibles avec le
+validate_agent_id UUID déjà utilisé par read_name. Le diff T007 ne change
+pas ce validateur ni ces fixtures ; resolve_identity_with garde sa voie
+sans namespace via None. Les échecs sont consignés pour les fixtures T015,
+pas effacés par un assouplissement de validation du produit.
+
 T002 : gel complet de familles, 17 fichiers, référence produit dfa2134 et
 capture bd1cbe0 épinglées séparément. Vérificateur --self-test --require-complete
 exit 0, six mutants refusés. T003 : 264 fichiers historiques classés, zéro
