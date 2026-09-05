@@ -83,6 +83,9 @@ fn exit_argument_error(error: &str) -> ! {
 }
 
 fn validate_communication_entry(command: &str, args: &[String]) -> Result<(), String> {
+    if command == "cleanup" {
+        return Err("cleanup : inventaire des worktrees retiré du noyau de communication".into());
+    }
     if matches!(
         command,
         "managed-runtime-wrapper" | "managed-runtime-stop" | "project-runtime" | "project-round"
@@ -193,7 +196,6 @@ pub fn run() {
         "ledger" => cmd_ledger(&args[2..]),
         "reprise" => cmd_reprise(&args[2..]),
         "reaper" => cmd_reaper(&args[2..]),
-        "cleanup" => cmd_cleanup(&args[2..]),
         "version" | "--version" | "-v" => {
             println!("bridget {}", env!("CARGO_PKG_VERSION"));
         }
@@ -618,7 +620,6 @@ fn print_usage() {
            artifact read          Lit un contenu exact par références, sans exécution\n  \
            reprise [--write P]    Carte de reprise du référent\n  \
            reaper report          Observateur J2 (ne tue jamais)\n  \
-           cleanup --dry-run      Liste target/ des worktrees mergés\n  \
            version                Version\n  \
            help                   Cette aide\n\n\
          Options de send :\n  \
@@ -3986,7 +3987,6 @@ fn cmd_who(args: &[String]) {
     print!("{}", render_who(&agents, parsed.domain.as_deref()));
     println!("Daemon build-id: {build_id}");
     emit_control_footer();
-    emit_disk_trend();
     emit_stale_daemon_warning(status.build_id.as_deref(), status.daemon_host.as_deref());
     emit_disk_warning();
 }
@@ -4407,37 +4407,6 @@ fn require_explicit_reaper_tmp(tmp_dir: Option<PathBuf>) -> Result<PathBuf, Stri
     tmp_dir.ok_or_else(|| "--tmp DIR est obligatoire : aucune racine TMPDIR implicite".to_string())
 }
 
-fn parse_cleanup_args(args: &[String]) -> Result<(), String> {
-    match args {
-        [option] if option == "--dry-run" => Ok(()),
-        [option, argument, ..] if option == "--dry-run" => {
-            Err(unknown_argument("cleanup", argument))
-        }
-        [argument, ..] => Err(unknown_argument("cleanup", argument)),
-        [] => Err("cleanup: --dry-run requis".to_string()),
-    }
-}
-
-fn cmd_cleanup(args: &[String]) {
-    if let Err(error) = parse_cleanup_args(args) {
-        eprintln!("bridget {error}");
-        eprintln!("usage: bridget cleanup --dry-run");
-        eprintln!("Liste les target/ des worktrees déjà mergés — aucune suppression.");
-        std::process::exit(2);
-    }
-    let repo = std::env::current_dir().unwrap_or_else(|error| {
-        eprintln!("bridget cleanup: répertoire courant indisponible: {error}");
-        std::process::exit(1);
-    });
-    match crate::disk_hygiene::list_merged_worktree_targets(&repo) {
-        Ok(targets) => print!("{}", crate::disk_hygiene::render_cleanup_dry_run(&targets)),
-        Err(error) => {
-            eprintln!("bridget cleanup: {error}");
-            std::process::exit(1);
-        }
-    }
-}
-
 fn cmd_status() {
     let config = DaemonConfig::default();
     let status = daemon_status_or_exit("status", &config);
@@ -4495,40 +4464,6 @@ fn emit_disk_warning() {
     if let Some(warning) = crate::disk_hygiene::disk_warning_for_display(Path::new("/")) {
         eprintln!("{warning}");
     }
-}
-
-/// Relève l'espace libre, l'ajoute à l'historique, et publie la pente en pied
-/// d'annuaire.
-///
-/// La colonne DISQUE de `who` est une photographie : elle dit l'espace libre à
-/// l'instant, jamais la vitesse à laquelle il s'en va. Calculer cette vitesse
-/// demande deux relevés espacés, et aucun observateur ne conserve le précédent.
-/// C'est l'historique qui s'en souvient — chaque `who` alimente la mesure que
-/// le `who` suivant pourra lire.
-///
-/// Sous la fenêtre minimale, on affiche un refus nommé plutôt qu'un nombre :
-/// une dérivée sur 90 secondes mesure une compilation, pas une tendance.
-fn emit_disk_trend() {
-    let Some(free_bytes) = crate::disk_hygiene::free_bytes_for(Path::new("/")) else {
-        return;
-    };
-    let observed_at_unix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs().min(i64::MAX as u64) as i64)
-        .unwrap_or_default();
-    let path = crate::disk_trend::history_path(&crate::reaper::default_state_dir());
-    let trend = crate::disk_trend::record_and_assess(
-        &path,
-        crate::disk_trend::DiskSample {
-            observed_at_unix,
-            free_bytes,
-        },
-    );
-    println!(
-        "Disque / : {:.1} Gio libres · {}",
-        free_bytes as f64 / 1024_f64.powi(3),
-        crate::disk_trend::format_trend(&trend, free_bytes)
-    );
 }
 
 /// Borne d'affichage par défaut du ledger : le maximum que la projection
@@ -4833,7 +4768,6 @@ mod hook_tests {
             parse_directory_args("agents", &argv(&["--json", "SURPLUS"]), true).unwrap_err(),
             parse_directory_args("who", &argv(&["--domain", "revue", "SURPLUS"]), false)
                 .unwrap_err(),
-            parse_cleanup_args(&argv(&["--dry-run", "SURPLUS"])).unwrap_err(),
         ];
         for error in errors {
             assert!(error.contains("SURPLUS"), "argument non nommé dans {error}");
@@ -4877,7 +4811,6 @@ mod hook_tests {
                 domain: Some("revue".to_string()),
             }
         );
-        assert!(parse_cleanup_args(&argv(&["--dry-run"])).is_ok());
     }
 
     #[test]

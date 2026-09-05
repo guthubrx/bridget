@@ -1,5 +1,5 @@
-//! Ramasse-copies : purge des `/tmp/bridget-*` orphelins âgés, alerte disque,
-//! et inventaire dry-run des `target/` de worktrees déjà mergés.
+//! Purge bornée des copies orphelines dans le namespace autorisé et alerte disque.
+//! Aucun inventaire des worktrees de l'hôte.
 //!
 //! Discipline alignée sur `purge_orphan_mcp_configs` : best-effort, log
 //! nominatif, jamais d'effacement sous un processus vivant (fail-closed si la
@@ -44,14 +44,6 @@ pub struct PurgeReport {
     pub errors: Vec<(PathBuf, String)>,
     /// Entrées âgées non traitées faute de borne (prochain passage).
     pub deferred: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MergedWorktreeTarget {
-    pub worktree: PathBuf,
-    pub branch: Option<String>,
-    pub target_dir: PathBuf,
-    pub size_bytes: Option<u64>,
 }
 
 /// Décision pure : **âge d'abord** (Article XVIII), puis propriétaires.
@@ -454,106 +446,6 @@ fn pid_suffix_from_name(path: &Path) -> Option<u32> {
 fn process_alive(pid: u32) -> bool {
     // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence.
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
-}
-
-/// Inventaire dry-run : `target/` des worktrees dont la branche est ancêtre de HEAD.
-pub fn list_merged_worktree_targets(repo_root: &Path) -> io::Result<Vec<MergedWorktreeTarget>> {
-    let worktrees_dir = repo_root.join(".worktrees");
-    if !worktrees_dir.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let head = git_stdout(repo_root, &["rev-parse", "HEAD"])?;
-    let head = head.trim();
-    let mut out = Vec::new();
-
-    for entry in fs::read_dir(&worktrees_dir)?.flatten() {
-        let worktree = entry.path();
-        if !worktree.is_dir() {
-            continue;
-        }
-        let target_dir = worktree.join("target");
-        if !target_dir.is_dir() {
-            continue;
-        }
-        let branch = git_stdout(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"])
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty() && s != "HEAD");
-        let tip = match git_stdout(&worktree, &["rev-parse", "HEAD"]) {
-            Ok(tip) => tip.trim().to_string(),
-            Err(_) => continue,
-        };
-        // Mergé = tip ancêtre de main/HEAD du dépôt principal.
-        let merged = git_stdout(
-            repo_root,
-            &["merge-base", "--is-ancestor", tip.as_str(), head],
-        )
-        .is_ok();
-        if !merged {
-            continue;
-        }
-        let size_bytes = dir_size_bytes(&target_dir).ok();
-        out.push(MergedWorktreeTarget {
-            worktree,
-            branch,
-            target_dir,
-            size_bytes,
-        });
-    }
-    out.sort_by(|a, b| a.worktree.cmp(&b.worktree));
-    Ok(out)
-}
-
-fn git_stdout(cwd: &Path, args: &[&str]) -> io::Result<String> {
-    let output = Command::new("git").args(args).current_dir(cwd).output()?;
-    if !output.status.success() {
-        return Err(io::Error::other(format!("git {} a échoué", args.join(" "))));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn dir_size_bytes(path: &Path) -> io::Result<u64> {
-    let mut total = 0u64;
-    let mut stack = vec![path.to_path_buf()];
-    while let Some(current) = stack.pop() {
-        for entry in fs::read_dir(&current)?.flatten() {
-            let meta = match entry.metadata() {
-                Ok(meta) => meta,
-                Err(_) => continue,
-            };
-            if meta.is_dir() {
-                stack.push(entry.path());
-            } else {
-                total = total.saturating_add(meta.len());
-            }
-        }
-    }
-    Ok(total)
-}
-
-pub fn render_cleanup_dry_run(targets: &[MergedWorktreeTarget]) -> String {
-    let mut out = String::new();
-    out.push_str("bridget cleanup --dry-run (aucune suppression)\n");
-    if targets.is_empty() {
-        out.push_str("Aucune cible target/ de worktree mergé trouvée.\n");
-        return out;
-    }
-    for target in targets {
-        let size = match target.size_bytes {
-            Some(bytes) => format!("{:.1} Gi", bytes as f64 / (1024.0 * 1024.0 * 1024.0)),
-            None => "?".into(),
-        };
-        let branch = target.branch.as_deref().unwrap_or("(détaché)");
-        out.push_str(&format!(
-            "  {}  branch={}  size={}\n",
-            target.target_dir.display(),
-            branch,
-            size
-        ));
-    }
-    out.push_str("Décision utilisateur requise — pas d'effacement auto de target/.\n");
-    out
 }
 
 #[cfg(test)]

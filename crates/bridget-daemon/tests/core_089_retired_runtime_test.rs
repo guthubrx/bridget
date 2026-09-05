@@ -142,6 +142,7 @@ fn anciennes_entrees_runtime_refusees_avant_namespace_et_fournisseur() {
         vec!["managed-runtime-stop", "obsolete"],
         vec!["project-runtime", "prepare", "--project", "obsolete"],
         vec!["project-round", "dispatch"],
+        vec!["cleanup", "--dry-run"],
         vec!["daemon", "--project-root-policy", "/never-read"],
         vec!["daemon", "--project-runtime-policy", "/never-read"],
         vec!["daemon", "--project-resource-catalog", "/never-read"],
@@ -152,6 +153,11 @@ fn anciennes_entrees_runtime_refusees_avant_namespace_et_fournisseur() {
         assert!(stderr.contains(arguments[0]), "{stderr}");
         if arguments[0] == "daemon" {
             assert!(stderr.contains(arguments[1]), "{stderr}");
+        } else if arguments[0] == "cleanup" {
+            assert!(
+                stderr.contains("inventaire des worktrees retiré"),
+                "{stderr}"
+            );
         } else {
             assert!(stderr.contains("runtime de projet retiré"), "{stderr}");
         }

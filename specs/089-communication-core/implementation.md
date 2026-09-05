@@ -1,5 +1,27 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T013 : paquet source indépendant exécuté
+
+Suppression physique du plugin Maicie (129 fichiers récupérables dans Git), de disk_trend et de l'inventaire des worktrees de l'hôte. Le nettoyage borné des ressources propres et les alertes d'espace restent en place. Le refus cleanup intervient avant le namespace ; aucune commande hôte de remplacement. Les trois manifests et Cargo.lock étaient déjà fermés à T009/T010 : aucun changement artificiel de dépendance. serde_yaml reste utilisé par reprise.rs pour lire une épingle, pas par Maicie.
+
+Paquet neuf : /private/tmp/b089pkg.0s2Dq5/source, produit par
+`bash scripts/package-089-core.sh /private/tmp/b089pkg.0s2Dq5/source`.
+Liste d'autorisation : trois crates, manifests/lock/toolchain/licence, fixtures de protocole 015/016/089. Aucun .git, plugins, apps, infra, node_modules ni script historique d'installation. Les types historiques du protocole et tables de compatibilité restent volontairement présents : ce ne sont pas un moteur de projet. Le script refuse une cible existante (exit 2 vérifié), ne déploie rien et refuse les symlinks des sources.
+
+Environnement des commandes suivantes : `env -i HOME=/private/tmp/b089pkg.0s2Dq5/home BRIDGET_HOME=/private/tmp/b089pkg.0s2Dq5/state TMPDIR=/private/tmp/b089pkg.0s2Dq5/tmp CARGO_HOME=/Users/moi/.cargo RUSTUP_HOME=/Users/moi/.rustup PATH=/Users/moi/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin`, umask 077. Cwd = paquet ci-dessus sauf Clippy/fmt et vérificateur qui opèrent dans le worktree 089. Watchdog externe Perl alarm/exec : 900 s compilation, 180 s gates, 120 s unités.
+
+- `cargo metadata --offline --locked --format-version 1 --filter-platform aarch64-apple-darwin` : 73 paquets/nœuds transitifs, exactement trois crates locales ; aucun paquet Maicie/UI/Docker. JSON conservé dans /private/tmp/b089pkg.0s2Dq5/metadata.json.
+- `cargo test --offline --locked --workspace --features test-support --no-run` : toutes les cibles compilent depuis le paquet neuf, 21,09 s. Ce n'est PAS une exécution de la suite complète.
+- `cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_dependency_test --test core_089_host_session_test --test core_089_content_test --test core_089_storage_test --test core_089_retired_runtime_test -- --include-ignored --test-threads=4` : 14/14, respectivement 0,01 s / 1,37 s / 5,14 s / 0,04 s / 0,10 s. Gate dépendances avec BRIDGET_CORE_PACKAGE_ROOT=/private/tmp/b089pkg.0s2Dq5/source et BRIDGET_CORE_PACKAGE_METADATA=/private/tmp/b089pkg.0s2Dq5/metadata.json. Vrai daemon, wrapper et CLI, faux fournisseur ACP déterministe sans compte ; send/attach/stop et accès au contenu passent sans aucune implémentation retirée.
+- Après ajout de l'identification ps au watchdog metadata : copie du seul test dans le paquet, `diff -qr crates /private/tmp/b089pkg.0s2Dq5/source/crates` vide ; gate dépendances recompilé puis 2/2 en 0,01 s.
+- Mutant exécuté : création du répertoire plugins dans le paquet → oracle FAILED « source interdite dans le paquet : plugins » (exit 101). Suppression du seul répertoire vide créé, contre-passe 2/2 verte. Aucun fichier source original ni processus de flotte modifié.
+- `cargo test --offline --locked -p bridget-daemon --features test-support --lib -- disk_hygiene::tests:: --test-threads=4` : 8/8, 0,09 s ; même commande avec filtre `parseurs_structures` : 2/2, 0,00 s.
+- `cargo clippy --offline --locked --workspace --all-targets --features test-support -- -D warnings` : vert, 7,12 s ; `cargo fmt --all --check` et `git diff --check` verts.
+- `bash scripts/verify-089-contracts.sh --self-test --require-complete` : 17 fichiers égaux aux objets Git, six mutants refusés.
+
+SC-08906 est prouvé pour construction/exécution du paquet minimal. Pas de déclaration de livraison globale : recettes comptes fournisseurs, SSH distant, suite complète et installateur final restent T020/T021/T026/T034/T035. Les scripts d'installation historiques encore dans le dépôt de travail ne sont PAS distribués dans ce paquet. Aucun remplacement du produit en service.
+
+
 ## 2026-09-05 — T012 : modules SQL, transactions inchangées
 
 Store est réparti entre ledger_requests, service_events et project_compat ;

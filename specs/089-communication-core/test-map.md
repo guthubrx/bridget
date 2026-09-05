@@ -1,5 +1,30 @@
 # Carte des tests 089 — dispositions avant extraction
 
+## Disposition exécutée T013 — paquet physique
+
+Les 129 fichiers du plugin Maicie (dont sa fixture SQLite historique, pas une base utilisateur) sont retirés de l'extraction ; leur disposition métier/consommateur figure dans la table ci-dessous. Ils étaient déjà hors graphe depuis T009. Les retirer ne transforme aucun de leurs tests en succès du noyau ; les oracles du consommateur public restent dus à T018/T019/T029.
+
+Le module disk_trend et ses 13 tests de prédiction sont retirés conformément à T001, sans toucher aux quotas des journaux ni aux huit tests disk_hygiene. L'inventaire Git/target des worktrees sort aussi : cleanup est désormais refusé avant initialisation du namespace. Les deux tests de parseurs multi-commandes conservent leurs autres assertions, seule la forme cleanup disparue est retirée. Le nouveau refus est exercé dans core_089_retired_runtime_test.
+
+Tests disk_trend retirés (périmètre, jamais motif de rouge) :
+
+- `temoin_nominal_pente_reelle_du_28_08`
+- `temoin_plateau_serie_reelle_du_28_08_ne_produit_aucune_pente`
+- `serie_en_marches_rend_les_marches_et_jamais_une_pente`
+- `temoin_refus_fenetre_trop_courte_cas_compilation_112_gio_h`
+- `serie_stable_sur_fenetre_courte_reste_un_refus`
+- `un_pic_ne_fixe_pas_la_pente`
+- `aucun_releve_et_releves_insuffisants_sont_des_refus_distincts`
+- `disque_qui_se_libere_ne_predit_aucune_saturation`
+- `historique_borne_et_garde_les_plus_recents`
+- `trois_observateurs_ignorants_rendent_une_pente_grace_a_l_historique`
+- `meme_seconde_remplace_au_lieu_d_empiler`
+- `historique_corrompu_donne_un_refus_pas_une_pente`
+- `ordre_d_arrivee_indifferent`
+
+Preuve de remplacement structurelle : core_089_dependency_test lit les métadonnées Cargo réelles ; son gate explicite dans un paquet sans plugins/apps/infra vérifie aussi le graphe transitif. Le paquet compile toutes les cibles sans accéder au checkout original. Les tests de communication restent présents, y compris les contrats historiques externes en fixtures.
+
+
 ## Disposition exécutée T011 — moteur projet retiré
 
 Retraits limités au moteur Docker, à son ingress, aux montages/catalogues et aux diagnostics de l'ancienne interface. 88 fonctions de test retirées, recensées ci-dessous par différence avec le commit T010 `8c783cc`. Ce ne sont ni des réussites ni des garanties de communication supprimées. Les six fichiers d'intégration moteur, leurs fixtures Docker/project-profile et les assets infra/project-runtime sont retirés après vérification de l'absence de consommateurs. L'historique Git reste récupérable.

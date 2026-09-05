@@ -1,5 +1,0 @@
-{"v":1,"kind":"add","id":"c-blocker-gate","date":"2026-08-23T22:00:00+02:00","mission_source":{"kind":"gate","id":"G1701","failed":true},"severity":"blocker","recurrence_of":"c-info-base","text":"gate G1701 rouge sur corpus fermé"}
-{"v":1,"kind":"add","id":"c-info-base","date":"2026-08-22T10:00:00Z","mission_source":{"kind":"mission","id":"m-011"},"severity":"info","text":"base informative sans récurrence"}
-{"v":1,"kind":"add","id":"c-major","date":"2026-08-23T09:00:00+02:00","mission_source":{"kind":"review","id":"r-hostile"},"severity":"major","text":"revue hostile a demandé un amendement"}
-{"v":1,"kind":"transition","constat_id":"c-major","from":"open","to":"delivered","objective_id":"obj-42","observed_at":"2026-08-23T23:00:00+02:00","trigger":"objective_closed"}
-{"v":1,"kind":"pending_qualification","id":"pending:exigences#001","provenance_id":"exigences-coordination-v2.md#001","text":"entrée historique sans sévérité déclarée"}
