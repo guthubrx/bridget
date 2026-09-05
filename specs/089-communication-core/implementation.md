@@ -1,5 +1,11 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T032 : dépendances et scripts audités
+
+`dependencies.md` documente le périmètre et les limites ; sorties machine dans `artifacts/rustsec-audit.json` et `artifacts/dependency-licenses.json`. cargo-audit 0.22.2 privé : exit 0, 94 dépendances, zéro vulnérabilité/avertissement, aucune exception ; base RustSec épinglée `5a0ebedfe8bdd2e295b171f4162f8c977bcad9a5`. Licences présentes pour toutes les entrées metadata, y compris plateformes non compilées ; pas d'affirmation juridique ni de texte de notices inventé. Dette explicite : serde_yaml 0.9.34+deprecated reste le lecteur compatible de pins, pas de remplacement improvisé.
+
+Seule simplification Cargo : les deux dépendances libc utilisent la version workspace existante ; Cargo.lock SHA-256 inchangé `b1dad808f86e619985e8a02050cce82851388a88b0cf9a3d7e67eff4d0754c67`. Test graphe réel **1/1**, 0,02 s (compilation 8,53 s), gate paquet physique ignoré ici car rejoué à T034/T035. Tests shell fédération **23/23**, 2,646 s ; gel **17 fixtures + six mutants** ; fmt check et clippy workspace/all-targets/test-support -D warnings verts. Aucun outil installé globalement, aucun script d'installation de l'ancien produit exécuté. La simple absence d'avis RustSec ne ferme pas à elle seule SC-08911 : suite complète et revue restent requises.
+
 ## 2026-09-05 — T031 : copies historiques et refus d'un schéma futur
 
 Le schéma v1 est matérialisé dans `tests/fixtures/core_089/idempotency-v1.sql`, issu du test historique du commit dfa2134dcfe2a2522e3ae77d93561e6ae72556b3 (`src/idempotency.rs:4328`). La recette ajoute ses données synthétiques, ferme SQLite, met la source en lecture seule puis copie vers son namespace neuf. Trois ouvertures des deux magasins : mêmes IDs, mêmes canons opaques (NUL/UTF-8 invalide compris), même Accepted durable ; payload avec espaces/champ inconnu identique, remise sans payload classée indeterminate selon la migration existante. Toutes les lignes de toutes les tables sont comparées entre seconde et troisième passe ; le fichier source entier reste octet-identique.
