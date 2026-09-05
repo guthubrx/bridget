@@ -1,7 +1,7 @@
 # Tâches 089 — extraction progressive du noyau
 
 **Entrées :** spec.md, plan.md, research.md, data-model.md, contracts/communication.md.
-**36 tâches de réalisation, 19 terminées.** P0 : référence mesurée et exclusions de sécurité consignées ; T005 ne signifie pas suite globale verte. Maicie/UI/runtime sont découplés ; stockage modularisé sans scinder les transactions, vérifié par fautes et crashs réels. Paquet indépendant T013 et garanties locales T014–T019 exécutés, clôture du service à UUID et lacune de curseur attach corrigées. Fournisseurs, SSH et gates finaux restent ouverts ; pas de livraison globale déclarée.
+**36 tâches de réalisation, 20 terminées.** P0 : référence mesurée et exclusions de sécurité consignées ; T005 ne signifie pas suite globale verte. Maicie/UI/runtime sont découplés ; stockage modularisé sans scinder les transactions, vérifié par fautes et crashs réels. Paquet indépendant T013 et garanties locales T014–T019 exécutés, clôture du service à UUID et lacune de curseur attach corrigées. Ledger maître vérifié à T022. Fournisseurs, SSH et gates finaux restent ouverts ; pas de livraison globale déclarée.
 
 Exécution séquentielle par tranches ; aucun lancement automatique de sous-agents. Un commit cohérent après tests, aucune capture d'un WIP tiers. Écrire l'oracle avant la modification qu'il doit protéger, vérifier son échec sur un mutant ciblé lorsqu'exigé, puis restaurer le vrai code. Les tests réels n'utilisent jamais les processus de production.
 
@@ -34,7 +34,7 @@ Exécution séquentielle par tranches ; aucun lancement automatique de sous-agen
 - [x] T019 [US3] Rejouer et compléter tests/core_089_attach_test.rs : raw inhabituel/champ inconnu intact, journal avant snapshot, SnapshotCaughtUp avant live, rotation et curseur périmé ; mutants de fraîcheur et de Gap refusés. SC-08905.
 - [ ] T020 [US1] Rejouer les pilotes Codex/Claude natifs via src/wrapper.rs et bridget-transport/src/{codex_app_server,claude_stream_json,managed_session}.rs : échange réel, EOF en plein tour, groupe arrêté, attach et modèle/effort attestés. SC-08909.
 - [ ] T021 [US1] Vérifier ACP et GLM via Claude Code sans tmux ni substitution vers API facturée ; tests/core_089_providers_test.rs et preuves expurgées dans implementation.md. Compte indisponible = gate non validé, jamais remplacement de fournisseur implicite. SC-08909.
-- [ ] T022 [US3] Ajouter tests/core_089_ledger_test.rs : source unique src/ledger.rs et renderers CLI/MCP identiques au contrat ; golden binaire octet-pour-octet, données entrantes/sortantes et limites. SC-08902/10.
+- [x] T022 [US3] Ajouter tests/core_089_ledger_test.rs : source unique src/ledger.rs et renderers CLI/MCP identiques au contrat ; golden binaire octet-pour-octet, données entrantes/sortantes et limites. SC-08902/10.
 - [ ] T023 [US1] Livrer skills/bridget/SKILL.md, README.md et README.en.md centrés sur envoyer/répondre/consulter/retry ; tests/core_089_skill_test.rs pour in_reply_to et statuts distincts. Exécuter le scénario court sans Maicie ; ne pas modifier les skills globales. SC-08910.
 
 ## P3 — Fédération SSH obligatoire (US2)

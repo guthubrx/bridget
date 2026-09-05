@@ -1,0 +1,4 @@
+Derniers 2 messages :
+  [4102444801] alice → bob: premier
+  [4102444802] bob → alice: corps riche $VAR
+intact

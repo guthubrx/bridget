@@ -20931,7 +20931,10 @@ mod presence_tests {
 
     #[test]
     fn projection_ledger_est_bornee_et_lit_le_store_du_daemon() {
-        let (state, config) = state_with_registered_agent("ledger-projection");
+        // Une projection globale n'exige aucune présence : ne pas enregistrer
+        // le nom pré-v2 agent-2 de l'ancien harnais pour exercer une lecture.
+        let root = std::env::temp_dir().join(format!("ledger-projection-{}", uuid::Uuid::new_v4()));
+        let (state, _config) = recovery_fixture_state(&root);
         let mut first = bridget_core::BridgetMessage::new("alice", "bob", "bonjour");
         first.id = "m-1".to_string();
         let mut second = bridget_core::BridgetMessage::new("alice", "bob", "salut");
@@ -20956,7 +20959,8 @@ mod presence_tests {
                     && messages.iter().any(|message| message.id == "m-1")
                     && requests.is_empty()
         ));
-        let _ = std::fs::remove_file(&config.db_path);
+        drop(shared);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -1,5 +1,14 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T022 : ledger maître unique, golden exécuté
+
+Le test réel sans socket rendait `Ledger vide.` avec exit 0 et créait une base cliente (rouge en 0,16 s). Suppression de CE repli dans cmd_ledger conformément à FR-08905/US3 : erreur explicite sans données stdout ni nouvelle DB. Le renderer ne change pas. C'est notamment nécessaire pour ne pas masquer une coupure SSH par une base vide.
+
+`core_089_ledger_test` : CLI et MCP binaires → daemon réel → même projection de deux messages, corps multiligne/UTF-8 et champs de DTO exacts ; golden CLI indépendant byte-identique, borne 1 et notice d'omission inchangées ; demandes entrantes/sortantes, portée globale distincte et limites des deux collections. Les données de lecture sont des fixtures SQL, avec timestamps fixes en 2100 pour ne pas être supprimées par la rétention au bootstrap ; ce n'est pas une preuve d'émission, assurée séparément par T014–T018. Les deux tests passent en 0,48 s (compilation 2,45 s).
+
+`cargo test --offline --locked -p bridget-daemon --features test-support --lib ledger -- --test-threads=4` : 17/17 en 0,08 s. L'ancien cas daemon enregistrait inutilement `agent-2`, refusé depuis les UUID v2 ; il réutilise maintenant l'autre fixture d'état existante sans présence. Aucun assouplissement du validateur d'identité, aucun changement des autres harnais. Clippy workspace/all-targets/test-support -D warnings : vert 5,27 s. Environnement privé et watchdog 180 s identiques à T014. T020/T021 restent ouverts sur recettes de compte, pas dissimulés par cette tranche indépendante.
+
+
 ## 2026-09-05 — T020 partielle : Codex réel vert, authentification Claude ouverte
 
 Le harnais historique codex_native_test devient core_089_native_test : mêmes oracles effort/limite/absence de signal, mais UUID v2, pair adressable (pas CLI éphémère pour reply), racine/socket indépendantes, enfants groupés suivis, logs 0600, répertoire fournisseur neuf. Nettoyage normal désormais par arrêt du daemon puis attente des wrappers ET vérification de disparition des PID/groupes fournisseur réellement observés. Les tests unitaires de pilotes sont distincts de la recette de compte.

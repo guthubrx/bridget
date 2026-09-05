@@ -4689,16 +4689,11 @@ fn cmd_ledger(args: &[String]) {
         Ok(DaemonToWrapper::LedgerProjection { messages, .. }) => Ok(messages),
         Ok(DaemonToWrapper::Nack { reason, .. }) => Err(format!("erreur lecture ledger: {reason}")),
         Ok(_) => Err("réponse inattendue du daemon".to_string()),
-        Err(_) => {
-            let config = DaemonConfig::default();
-            crate::store::Store::open(&config.db_path)
-                .map_err(|error| format!("base inaccessible: {error}"))
-                .and_then(|store| {
-                    crate::ledger::read_projection(&store, LedgerScope::Messages, demande)
-                        .map(|projection| projection.messages)
-                        .map_err(|error| format!("erreur lecture ledger: {error}"))
-                })
-        }
+        // Le maître est l'unique source, y compris au travers de SSH. Créer
+        // une base cliente après une coupure fabriquerait un historique vide.
+        Err(error) => Err(format!(
+            "ledger indisponible : daemon inaccessible ({error})"
+        )),
     };
     match messages {
         Ok(messages) => print!("{}", render_ledger_borne(&messages, limite)),
