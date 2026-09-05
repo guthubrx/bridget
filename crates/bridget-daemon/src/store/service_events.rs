@@ -362,9 +362,26 @@ impl Store {
             // La clôture, lorsqu'elle est encore ouverte, est indissociable
             // du résultat guichet durable. Une demande déjà terminale relève
             // de D-208 : le rapport reste traçable sans la rouvrir.
-            let answered =
-                mark_answered_in_transaction(&tx, linked_request_id, &row.sender, "maicie")
-                    .map_err(StoreError::Sqlite)?;
+            // La clé du service n'est pas l'identité de l'émetteur de la
+            // demande suivie (désormais un UUID). L'autorité est le couple
+            // durable de CETTE demande, pas le nom historique « maicie ».
+            // Le déposant doit en être le destinataire ; une référence vers
+            // la demande d'un tiers ne confère jamais le droit de la clôturer.
+            let recipient: Option<String> = tx
+                .query_row(
+                    "SELECT sender FROM tracked_requests WHERE id=?1 AND target=?2",
+                    params![linked_request_id, row.sender],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(StoreError::Sqlite)?;
+            let answered = match recipient {
+                Some(recipient) => {
+                    mark_answered_in_transaction(&tx, linked_request_id, &row.sender, &recipient)
+                        .map_err(StoreError::Sqlite)?
+                }
+                None => false,
+            };
             if answered {
                 record_lifecycle_event_in_transaction(
                     &tx,

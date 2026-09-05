@@ -1,3 +1,5 @@
+//! Consommateur externe par le protocole public, sans dépendance à Maicie.
+//! Les six scénarios 015 conservés, replay brut et droits par connexion.
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
     ConnectionRole, GuichetDurationClass, GuichetOutcome, GuichetReplyPayload,
@@ -258,6 +260,14 @@ fn request(
 }
 
 fn service(home: &Path, issuer_scope: &str) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
+    service_with_capabilities(home, issuer_scope, vec![ServiceCapability::MaicieGuichet])
+}
+
+fn service_with_capabilities(
+    home: &Path,
+    issuer_scope: &str,
+    capabilities: Vec<ServiceCapability>,
+) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
     let (mut reader, mut writer) = connect(home);
     assert!(matches!(
         request(
@@ -279,12 +289,67 @@ fn service(home: &Path, issuer_scope: &str) -> (BufReader<UnixStream>, BufWriter
                 version: SERVICE_CONTRACT_VERSION,
                 service: "maicie".to_string(),
                 issuer_scope: issuer_scope.to_string(),
-                capabilities: vec![ServiceCapability::MaicieGuichet],
+                capabilities,
             },
         ),
         DaemonToWrapper::ServiceWelcome { .. }
     ));
     (reader, writer)
+}
+
+#[test]
+fn une_connexion_suivante_ne_recoit_ni_claim_ni_lookup_ni_reply_sans_capacite() {
+    let home = unique_home();
+    let daemon = DaemonGuard::start(&home);
+    let (mut capable_reader, mut capable_writer) = service(&home, SERVICE_SCOPE);
+    assert!(matches!(
+        request(
+            &mut capable_reader,
+            &mut capable_writer,
+            WrapperToDaemon::GuichetClaimNext {
+                version: SERVICE_CONTRACT_VERSION
+            }
+        ),
+        DaemonToWrapper::GuichetEmpty { .. }
+    ));
+    drop(capable_reader);
+    drop(capable_writer);
+    let (mut reader, mut writer) = service_with_capabilities(&home, SERVICE_SCOPE, vec![]);
+    for frame in [
+        WrapperToDaemon::GuichetClaimNext {
+            version: SERVICE_CONTRACT_VERSION,
+        },
+        WrapperToDaemon::GuichetLookup {
+            version: SERVICE_CONTRACT_VERSION,
+            issuer_scope: SCOPE.into(),
+            request_id: "gate-request-1".into(),
+        },
+        WrapperToDaemon::GuichetClaim {
+            version: SERVICE_CONTRACT_VERSION,
+            issuer_scope: SCOPE.into(),
+            request_id: "gate-request-1".into(),
+            claim_token: "a".repeat(22),
+        },
+        reply(1, "a".repeat(22), "forged"),
+    ] {
+        // Mutation : une capacité globale/reprise de la précédente connexion
+        // rendrait une issue métier (Empty/Expired), au lieu du refus en amont.
+        assert!(matches!(
+            request(&mut reader, &mut writer, frame),
+            DaemonToWrapper::ServiceRejected {
+                reason: bridget_transport::protocol::ServiceRefusal::CapabilityRequired
+            }
+        ));
+    }
+    let db = rusqlite::Connection::open(home.join("state/bridget.db")).unwrap();
+    let count: i64 = db
+        .query_row("SELECT COUNT(*) FROM guichet_requests", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+    drop(reader);
+    drop(writer);
+    daemon.kill();
+    std::fs::remove_dir_all(home).unwrap();
 }
 
 #[test]
@@ -1191,6 +1256,24 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
     // Mutation discriminante : retirer mark_answered_in_transaction du reply
     // laisse la demande ouverte malgré GuichetResult accepted.
     daemon.kill();
+    drop(service_reader);
+    drop(service_writer);
+    drop(maicie_reader);
+    drop(maicie_writer);
+    drop(recipient_reader);
+    drop(recipient_writer);
+    let restarted = DaemonGuard::start(&home);
+    let (mut replay_reader, replay_writer) = service(&home, SERVICE_SCOPE);
+    let mut replay_line = String::new();
+    replay_reader.read_line(&mut replay_line).unwrap();
+    assert_eq!(
+        replay_line.as_bytes(),
+        lifecycle_line.as_bytes(),
+        "mêmes octets et event_id après SIGKILL, pas une reconstruction équivalente"
+    );
+    drop(replay_reader);
+    drop(replay_writer);
+    restarted.kill();
     let _ = std::fs::remove_dir_all(home);
 }
 

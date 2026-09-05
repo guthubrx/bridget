@@ -1,5 +1,9 @@
 # Carte des tests 089 — dispositions avant extraction
 
+## T018 — service externe et clôture sous identité opaque
+
+Les six scénarios guichet_integration_test.rs sont portés dans core_089_service_test.rs, sans import de Maicie. Le scénario de clôture ajoute un SIGKILL puis compare la ligne lifecycle complète (LF compris) reçue après redémarrage. Un septième scénario refuse claim/lookup/reply sur la connexion suivante sans capacité, même portée négociée. core_089_storage_test étend la faute transactionnelle à l'émetteur UUID et protège demande d'autrui/terminal. L'ancien nom de fichier ci-dessous reste une référence au commit source.
+
 ## T017 — matrice de crash portée
 
 Les douze scénarios historiques sont maintenant dans core_089_crash_test.rs, sans double exécution de l'ancien fichier. La matrice N=50 et ses quatre barrières sont inchangées. Le scénario terminal avec wrapper réel est renforcé : fournisseur témoin gardé vivant après le premier prompt, attente de sa reconnexion et compteur FINAL après join, au lieu d'un sleep 250 ms. La garantie est bornée au daemon tué tandis que wrapper/fournisseur survivent ; elle ne promet pas une transaction atomique avec un fournisseur externe. Les noms de fichiers de référence ci-dessous désignent toujours le commit source épinglé.
@@ -421,7 +425,7 @@ trop étroite trouvée par contre-revue. Aucun retrait n'est motivé par un roug
 | `crates/bridget-daemon/tests/execution_scale_test.rs` | M | Borne de lecture des exécutions conservée ; adapter la projection sans UI, pas le budget (T012/T033). |
 | `crates/bridget-daemon/tests/execution_store_test.rs` | M | Migrations et bytes de reprise obligatoires ; sortir seulement politiques/projections liées au projet (T012/T031). |
 | `crates/bridget-daemon/tests/greffe_policy_refresh_test.rs` | M | Garder capacité/permissions de service ; retirer contenu et renouvellement de politique métier Maicie (T018). |
-| `crates/bridget-daemon/tests/guichet_integration_test.rs` | C | Communication, observation ou cycle de vie fournisseur dans le périmètre ; conserver sans ignorer de rouge. |
+| `crates/bridget-daemon/tests/guichet_integration_test.rs` | M | Six scénarios portés dans core_089_service_test.rs ; clôture UUID corrigée, replay brut et refus de capacité ajoutés à T018. |
 | `crates/bridget-daemon/tests/idempotency_crash_test.rs` | M | Douze scénarios portés dans core_089_crash_test.rs à T017 ; N=50 exécuté, fin de vie du témoin rendue observable. |
 | `crates/bridget-daemon/tests/idempotency_test.rs` | C | Communication, observation ou cycle de vie fournisseur dans le périmètre ; conserver sans ignorer de rouge. |
 | `crates/bridget-daemon/tests/identity_migration_test.rs` | C | Communication, observation ou cycle de vie fournisseur dans le périmètre ; conserver sans ignorer de rouge. |

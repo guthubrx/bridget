@@ -43,12 +43,13 @@ impl Drop for Fixture {
 
 #[test]
 fn echec_evenement_annule_reply_et_answered_puis_rejoue_les_memes_octets() {
-    let fixture = Fixture::new();
-    let mut store = Store::open(&fixture.database()).unwrap();
-    store
-        .create_request("linked", "maicie", "agent", 60)
-        .unwrap();
-    let deposit = GuichetDeposit {
+    for sender in ["maicie", "89000000-0000-4000-8000-000000000002"] {
+        reply_atomic_with_sender(sender);
+    }
+}
+
+fn linked_deposit() -> GuichetDeposit {
+    GuichetDeposit {
         issuer_scope: SCOPE.to_string(),
         request_id: "deposit".to_string(),
         issued_at: NOW,
@@ -64,7 +65,14 @@ fn echec_evenement_annule_reply_et_answered_puis_rejoue_les_memes_octets() {
         // Le Store reçoit le canon validé par le daemon et ne le reconstruit pas.
         canonical_bytes: b"fixture-request-verbatim".to_vec(),
         authorization_attestation: None,
-    };
+    }
+}
+
+fn reply_atomic_with_sender(sender: &str) {
+    let fixture = Fixture::new();
+    let mut store = Store::open(&fixture.database()).unwrap();
+    store.create_request("linked", sender, "agent", 60).unwrap();
+    let deposit = linked_deposit();
     store.deposit_guichet(&deposit, 600, 60, NOW).unwrap();
     let GuichetNext::Claimed(claim) = store.claim_next_guichet("owner", NOW).unwrap() else {
         panic!("claim absent");
@@ -128,6 +136,57 @@ fn echec_evenement_annule_reply_et_answered_puis_rejoue_les_memes_octets() {
     assert_eq!(replay.len(), 1);
     assert_eq!(replay[0].event_id, events[0].event_id);
     assert_eq!(replay[0].observed_at, events[0].observed_at);
+}
+
+#[test]
+fn service_ne_clot_pas_une_demande_d_autrui_et_ne_rouvre_pas_un_terminal() {
+    for (target, terminal) in [("un-autre-agent", false), ("agent", true)] {
+        let fixture = Fixture::new();
+        let mut store = Store::open(&fixture.database()).unwrap();
+        let sender = "89000000-0000-4000-8000-000000000002";
+        store.create_request("linked", sender, target, 60).unwrap();
+        if terminal {
+            store
+                .cancel_request("linked", sender, Some("déjà clos"))
+                .unwrap();
+        }
+        let before = store.get_request("linked").unwrap();
+        let deposit = linked_deposit();
+        store.deposit_guichet(&deposit, 600, 60, NOW).unwrap();
+        let GuichetNext::Claimed(claim) = store.claim_next_guichet("owner", NOW).unwrap() else {
+            panic!("claim absent")
+        };
+        let result = store
+            .reply_guichet(
+                "owner",
+                GuichetReplyInput {
+                    issuer_scope: SCOPE,
+                    request_id: "deposit",
+                    generation: claim.claim_generation,
+                    token: &claim.claim_token,
+                    response_message_id: "reply",
+                    reply_bytes: b"report-verbatim",
+                    in_reply_to: "linked",
+                    outcome: GuichetOutcome::Accepted,
+                },
+                NOW,
+            )
+            .unwrap();
+        // L'acceptation du RAPPORT ne permet ni d'inventer une réponse de
+        // l'autre agent, ni de rouvrir une demande déjà terminale (D-208).
+        assert!(
+            matches!(result, GuichetResult::Terminal { reply_bytes, .. } if reply_bytes == b"report-verbatim")
+        );
+        assert_eq!(
+            store.get_request("linked").unwrap(),
+            before,
+            "mutation : UPDATE sans le couple sender/target ou sans state=open"
+        );
+        assert!(
+            store.guichet_lifecycle_events().unwrap().is_empty(),
+            "aucun answered inventé"
+        );
+    }
 }
 
 #[test]

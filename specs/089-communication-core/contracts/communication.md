@@ -46,6 +46,16 @@ T002 doit matérialiser les bytes réels, leur SHA-256 et leur origine Git pour 
 
 L'évolution additive nécessaire à l'isolation est versionnée et testée avec le client précédent. Une inconnue n'est ni ignorée silencieusement ni déclarée disponible. Le corpus historique épinglé n'est pas réécrit.
 
+## Clôture d'un service externe — clarification T018
+
+La clôture d'un rapport de service utilise les identités de la demande suivie
+durable, jamais le libellé historique du service : le déposant doit être le
+destinataire de cette demande. La capacité et le claim courant autorisent le
+traitement du rapport, pas la clôture d'une demande tierce. Le helper partagé
+conserve son couple sender/target et state=open, dans la transaction de replied
+et de l'événement. Un rapport accepté peut rester traçable sans rouvrir un
+terminal (D-208) ; l'état métier du rapport n'est pas une identité de session.
+
 ## Nom affiché sans interface — extension additive T015, version 1
 
 `display_name_set` porte uniquement `request: {version:1, display_name}`. Aucun

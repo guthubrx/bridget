@@ -1,5 +1,14 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T018 : clôture service sous UUID et reprise brute
+
+La dette identifiée à T014 est corrigée : reply_guichet ne passe plus le nom historique maicie au helper de clôture. Dans LA transaction IMMEDIATE déjà existante, il lit l'émetteur de la demande liée dont target égale le déposant attesté. Le helper partagé contrôle toujours sender/target/state=open, puis l'événement s'écrit dans cette même transaction. Pas de nouvel UPDATE de clôture, pas de relecture d'annuaire ou de nom humain. La capacité, owner, token, génération et lease ne changent pas. Le rapport demeure durable lorsqu'une demande est déjà terminale, sans inventer un answered.
+
+Oracle AVANT correction : la faute d'écriture d'événement étendue à l'émetteur UUID ne se déclenchait même pas, résultat indûment accepted (test rouge en 0,03 s). Après correction : rollback replied+answered sur faute SQL pour noms historiques ET UUID ; demande d'un autre destinataire inchangée et terminal jamais rouvert. La couture réelle CLI → service externe → replied/answered/lifecycle passe maintenant. SIGKILL du daemon après événement, redémarrage et nouvel abonnement : ligne JSONL reçue byte-identique, même event_id et LF. Sept scénarios de service au total, dont quatre opérations refusées sur une nouvelle connexion sans capacité. Les six scénarios historiques ne sont pas supprimés, seulement déplacés.
+
+Environnement privé T014/watchdog 180 s : `cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_storage_test --test core_089_service_test --test core_089_reply_test` : 11/11, réponse 7,27 s, service 0,48 s, stockage 0,06 s ; compilation 3,74 s. Clippy workspace/all-targets/test-support -D warnings et fmt contrôlés. Aucun processus de service Maicie n'est requis, aucun import de sa crate ni lecture de sa base. Les captures proviennent de clients publics indépendants et du binaire daemon isolé ; les SIGTERM du test de nettoyage restent des arrêts propres, seuls les appels kill documentés constituent les crashs.
+
+
 ## 2026-09-05 — T017 : cinquante crashs et douze scénarios portés
 
 idempotency_crash_test.rs devient core_089_crash_test.rs (les douze scénarios restent présents). Environnement privé T014, watchdog 420 s et watchdog interne 360 s : `cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_crash_test -- --include-ignored --test-threads=1` termine en 182,59 s, compilation 2,35 s. **La matrice N=50 réussit, un scénario séparé de reconnexion échoue** : le fournisseur synthétique sortait après son premier prompt. Le journal /private/tmp/bid-b120b3ff371a/wrapper.log et le script de fixture confirment la sortie/BrokenPipe ; ce n'est pas un blocage du daemon.
