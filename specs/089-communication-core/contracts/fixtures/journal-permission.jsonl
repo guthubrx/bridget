@@ -1,0 +1,1 @@
+{"v":1,"seq":4,"ts":"2026-08-23T00:00:00Z","session_id":"session-1","event":"permission","message_id":"m2","payload":{"tool":"écrire","options":[{"optionId":"allow-1","kind":"allow_once"},{"optionId":"reject-1","kind":"reject_once"}],"decision":{"outcome":"selected","option_id":"allow-1"}}}

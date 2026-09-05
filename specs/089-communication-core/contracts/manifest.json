@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "source_commit": "dfa2134dcfe2a2522e3ae77d93561e6ae72556b3",
+  "entries": [
+    {
+      "file": "service-negotiation-v1.jsonl",
+      "source": "specs/016-coordination-active/contracts/fixtures/service-negotiation-v1.jsonl",
+      "sha256": "494bc21a9eacb47296ab9ef0b22d6b830060c77b6d5c8cbc5ef0bb7534244303",
+      "family": "service-negotiation",
+      "reader": "bridget-transport::protocol::tests::service_negotiation_v1_emploie_la_fixture_canonique_partagee"
+    },
+    {
+      "file": "service-frames-v1.jsonl",
+      "source": "specs/016-coordination-active/contracts/fixtures/service-frames-v1.jsonl",
+      "sha256": "42e0ea32690e267221804a8af9aee538162f7c141a9cffacf6d6a44a9a8cda1f",
+      "family": "service-deposit-lifecycle",
+      "reader": "plugins/maicie/tests/contract/coordination_client.rs : consommateur externe à découpler"
+    },
+    {
+      "file": "coordination-events-v1.jsonl",
+      "source": "specs/016-coordination-active/contracts/fixtures/coordination-events-v1.jsonl",
+      "sha256": "257215547c2858ee83fb64c61aeacdecbbdaee96df5661ced4e7403aaf40b590",
+      "family": "coordination-v1",
+      "reader": "bridget-transport::protocol::tests::coordination_events_v1_emploie_la_fixture_canonique_fermee"
+    },
+    {
+      "file": "coordination-stream-v2.jsonl",
+      "source": "specs/016-coordination-active/contracts/fixtures/coordination-stream-v2.jsonl",
+      "sha256": "a384b492b53644a9357c5254df2d46b80b36b7d5761987d88d21c336dacdf00c",
+      "family": "coordination-v2",
+      "reader": "bridget-transport::protocol::tests::coordination_stream_v2_emploie_la_fixture_canonique_fermee"
+    },
+    {
+      "file": "provider-acp-v1.jsonl",
+      "source": "crates/bridget-transport/tests/fixtures/provider-contracts/acp-v1.jsonl",
+      "sha256": "4798336ec80994781f2e54b9fd47758790a1d0acda9644a575e1f0c228023b94",
+      "family": "provider-shape-acp",
+      "reader": "crates/bridget-transport/tests/provider_contract_test.rs"
+    },
+    {
+      "file": "provider-codex-0.150.1.jsonl",
+      "source": "crates/bridget-transport/tests/fixtures/provider-contracts/codex-0.150.1.jsonl",
+      "sha256": "1ee62a89636c0ca6d6afedd20205f47a75071067f9638a5d0154133de302b3e9",
+      "family": "provider-shape-codex",
+      "reader": "crates/bridget-transport/tests/provider_contract_test.rs — pas une capture filaire validée"
+    },
+    {
+      "file": "provider-claude-2.1.221.jsonl",
+      "source": "crates/bridget-transport/tests/fixtures/provider-contracts/claude-2.1.221.jsonl",
+      "sha256": "dd2bfd66415292d04187a38b14116b71a0d1863dfc929a5e38caf7bcde01ff5f",
+      "family": "provider-shape-claude",
+      "reader": "crates/bridget-transport/tests/provider_contract_test.rs"
+    },
+    {
+      "file": "mcp-fr009.jsonl",
+      "source": "crates/bridget-daemon/tests/fixtures/mcp/fr009.jsonl",
+      "sha256": "fd548ab566a82371056ddf10f5b96d557971580cfe4d1fe19d2da53941318e4d",
+      "family": "mcp-dispatch",
+      "reader": "crates/bridget-daemon/src/mcp.rs::tests"
+    },
+    {
+      "file": "attach-tool-call-correlation.jsonl",
+      "source": "crates/bridget-daemon/tests/fixtures/attach-tool-call-correlation.jsonl",
+      "sha256": "3b82d14ec1ef68771d486cfaf1f7d704ee8f443ba01b5d92704e74c1654c0173",
+      "family": "journal-correlation",
+      "reader": "crates/bridget-daemon/src/attach.rs::tests"
+    },
+    {
+      "file": "journal-complete-turn.jsonl",
+      "source": "crates/bridget-transport/tests/fixtures/journal/complete-turn.jsonl",
+      "sha256": "09abcb157f9e6064e774ab320e6eede674db3c0e3477027130b692f4fa66fcbe",
+      "family": "journal-turn",
+      "reader": "crates/bridget-transport/src/journal.rs::tests"
+    },
+    {
+      "file": "journal-permission.jsonl",
+      "source": "crates/bridget-transport/tests/fixtures/journal/permission.jsonl",
+      "sha256": "e5c71218231a61c8ec68003b44714fe748e9cb5a1318e35c679875acab0342cb",
+      "family": "journal-permission",
+      "reader": "crates/bridget-transport/src/journal.rs::tests"
+    },
+    {
+      "file": "journal-rotation-before.jsonl",
+      "source": "crates/bridget-transport/tests/fixtures/journal/rotation/2026-08-23.jsonl",
+      "sha256": "0da91a31a9f594cc54ec237e629c7d04ce8171c9cbe0410fd99cc9abe10907b9",
+      "family": "journal-rotation",
+      "reader": "crates/bridget-transport/src/journal.rs::tests"
+    },
+    {
+      "file": "journal-rotation-after.jsonl",
+      "source": "crates/bridget-transport/tests/fixtures/journal/rotation/2026-08-24.jsonl",
+      "sha256": "735fd305b426ea56e165ac73c6244a5591fb939afef7b95531e3484e95a7eff4",
+      "family": "journal-rotation",
+      "reader": "crates/bridget-transport/src/journal.rs::tests"
+    }
+  ],
+  "missing_families": [
+    "message-idempotency",
+    "directory-ledger",
+    "managed-lifecycle",
+    "attach-wire",
+    "guichet-claim-reply",
+    "provider-native-wire"
+  ]
+}

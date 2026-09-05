@@ -49,7 +49,7 @@ Les modules de stockage et de transport ne doivent jamais importer cli.rs/mcp.rs
 | Zone existante | Traitement prévu et vérification |
 |---|---|
 | Cargo.toml ; crates/bridget-daemon/Cargo.toml | Retirer le membre métier obligatoire et la dépendance maicie après extraction des lectures neutres. cargo metadata/cargo tree et installation sans plugin doivent le prouver. |
-| crates/bridget-daemon/src/cli.rs, mcp.rs | Garder communication/processus/observation et services négociés ; retirer commandes UI/projets/artifacts du noyau, refus de commande explicite. |
+| crates/bridget-daemon/src/cli.rs, mcp.rs | Garder communication/processus/observation, contenus référencés et services négociés ; retirer commandes UI/projets et prévisualisation, refus de commande explicite. |
 | crates/bridget-daemon/src/daemon.rs | Séparer dispatch communication, autorisation et orchestration de projet ; ne pas déplacer des branches aveuglément. |
 | crates/bridget-daemon/src/store.rs, idempotency.rs | Préserver ACK+ledger+answered+événement dans une transaction, migrations testées ; table inutilisée ne signifie pas table supprimable sans inventaire. |
 | crates/bridget-daemon/src/ui.rs, mission_projection.rs, project_runtime.rs et modules artifact_* | Retirer présentation/runtime ; classer artifact_* avant coupe : préserver la publication/référence de contenu utile aux messages, retirer le renderer/sandbox HTML. L'histoire reste disponible dans Git. |

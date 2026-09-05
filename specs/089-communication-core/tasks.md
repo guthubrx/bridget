@@ -1,13 +1,13 @@
 # Tâches 089 — extraction progressive du noyau
 
 **Entrées :** spec.md, plan.md, research.md, data-model.md, contracts/communication.md.
-**36 tâches de réalisation, 0 terminée.** La préparation documentaire n'est pas comptée comme une preuve de fonctionnement. Les chemins ci-dessous sont relatifs à la racine du worktree de cette session, pas à l'ancien dépôt.
+**36 tâches de réalisation, 1 terminée (T001). T002 en cours.** L'inventaire n'est pas une preuve de fonctionnement du produit extrait. Les chemins ci-dessous sont relatifs à la racine du worktree de cette session, pas à l'ancien dépôt.
 
 Exécution séquentielle par tranches ; aucun lancement automatique de sous-agents. Un commit cohérent après tests, aucune capture d'un WIP tiers. Écrire l'oracle avant la modification qu'il doit protéger, vérifier son échec sur un mutant ciblé lorsqu'exigé, puis restaurer le vrai code. Les tests réels n'utilisent jamais les processus de production.
 
 ## P0 — Fondation vérifiable (bloque toute suppression)
 
-- [ ] T001 Inventorier les dépendances, tables, commandes, constantes de namespace et points d'appel à partir du commit source ; compléter specs/089-communication-core/baseline.md avec fichier:ligne et dispositions conserver/extraire/retirer. Inclure Cargo.toml, les trois manifests, daemon.rs/store.rs/wrapper.rs/cli.rs/mcp.rs et le protocole. Oracle : chaque module importé par lib.rs a une disposition, aucune entrée seulement supposée.
+- [x] T001 Inventorier les dépendances, tables, commandes, constantes de namespace et points d'appel à partir du commit source ; compléter specs/089-communication-core/baseline.md avec fichier:ligne et dispositions conserver/extraire/retirer. Inclure Cargo.toml, les trois manifests, daemon.rs/store.rs/wrapper.rs/cli.rs/mcp.rs et le protocole. Oracle : chaque module importé par lib.rs a une disposition, aucune entrée seulement supposée.
 - [ ] T002 Épingler les fixtures de toutes les familles de contracts/communication.md dans specs/089-communication-core/contracts/fixtures/ avec source Git et SHA-256 ; ajouter scripts/verify-089-contracts.sh. Oracle : octet altéré/source absente/commit non ancêtre refusés ; tester aussi dépôts/replies/événements, pas seulement les handshakes.
 - [ ] T003 Établir la liste des tests historiques retenus/retirés/déplacés dans specs/089-communication-core/test-map.md et les scénarios tests/features/089-communication-core.feature. Oracle : chaque SC-08901..12 a des tests nommés ; chaque retrait a une justification de périmètre, jamais « test rouge ».
 - [ ] T004 Compléter specs/089-communication-core/threat-model.md : UID/SSH/identité/capacités, limites, secrets, permissions fournisseur et sorties de connexion. Oracle : scénario hostile, autorité et refus attendu pour chaque frontière.
@@ -16,7 +16,7 @@ Exécution séquentielle par tranches ; aucun lancement automatique de sous-agen
 
 ## P1 — Découplage structurel (US4)
 
-- [ ] T007 [US4] Poser configuration indépendante de home/socket/instance dans crates/bridget-daemon/src/runtime.rs et cli.rs, en réutilisant la résolution existante ; ajouter tests/core_089_isolation_test.rs. Oracle : défaut historique et namespace occupé refusés ; aucune connexion/écriture vers la flotte.
+- [ ] T007 [US4] Poser configuration indépendante de home/socket/instance dans crates/bridget-daemon/src/daemon.rs (DaemonConfig, dirs_cache, dirs_data), cli.rs et mcp_identity.rs, en réutilisant la résolution existante ; ajouter tests/core_089_isolation_test.rs. Oracle : défaut historique et namespace occupé refusés ; aucune connexion/écriture vers la flotte. runtime.rs représente les faits fournisseur et n'est pas le propriétaire de cette configuration.
 - [ ] T008 [US4] Sortir les helpers partagés de scope/canon/résolution des façades cli.rs/mcp.rs vers un module neutre crates/bridget-daemon/src/communication.rs, sans changer les octets ; garder un seul producteur. Oracle : tests du corpus et absence d'import de présentation par le store/daemon.
 - [ ] T009 [US4] Découpler maicie dans crates/bridget-daemon/Cargo.toml, src/lib.rs, mission_projection.rs et ses appelants ; conserver la frontière service publique sans import métier. Oracle : compilation sans plugins/maicie accessible et couture d'un consommateur externe.
 - [ ] T010 [US4] Retirer UI/desktop/rendering HTML du produit extrait via src/cli.rs, mcp.rs, lib.rs, ui.rs, artifact_* et apps/, uniquement après disposition T001/T003 ; préserver la publication/référence de contenu communicable, son contrôle d'accès et ses bytes sans renderer. Oracle : commandes retirées refusées, références utiles résolubles sans HTTP/UI, communication verte.
