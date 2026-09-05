@@ -23,9 +23,21 @@ client n'atteint le listener : le nettoyage ne reste plus suspendu sur accept.
 
 L'inventaire workspace lancé sur 0af28feb reste ROUGE : douze cibles en échec,
 dont deux processus de test arrêtés individuellement par SIGTERM après relevé
-de pile (accept/join bloqués). Ces ports en ferment neuf ; managed_wrapper,
-mcp_injection_smoke et spawn_refusal_hosts restent à porter. Aucun échec n'est
-requalifié en succès et aucun gate fournisseur ignoré n'est coché.
+de pile (accept/join bloqués). Les douze cibles ont désormais leur correction
+ciblée ; la passe globale reste à rejouer au jalon final. Aucun échec de cette
+ancienne passe n'est requalifié en succès et aucun gate fournisseur ignoré n'est coché.
+
+Dernières coutures : managed_wrapper 4/4 (5,21 s), mcp_injection_smoke 1/1
+(1,24 s, un gate authentifié historique ignoré), spawn_refusal_hosts 1/1
+(0,13 s). Vrais wrappers enfants à environnement privé, UUID v2, acceptations
+bornées et précondition de lancement explicite. Le port révèle aussi une
+ambiguïté réelle du CLI : le fournisseur natif et sa dérivation interne
+lecture seule partageaient le même exécutable. Le test de résolution est rouge
+avant le filtre des seules variantes internes, puis les 35 unités du registre
+passent (0,01 s), y compris le refus de deux fournisseurs déclarés ambigus et
+la conservation des restrictions de découverte. Aucun renommage opportuniste
+de fixture ni assouplissement du préflight. Clippy des trois cibles et de la
+bibliothèque, fmt et diff check font partie du même jalon.
 
 Coutures capacités et version : chemins privés `BRIDGET_HOME/BRIDGET_SOCKET`,
 UUID explicites et précondition de posture complète pour le seul script de

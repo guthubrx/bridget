@@ -38,7 +38,37 @@ fn racine_temporaire() -> PathBuf {
 /// garde du `cwd` soit ATTEINTE. Sans lui le refus serait `CommandMissing` et
 /// l'oracle passerait à côté de ce qu'il éprouve.
 fn ecrire_registre(home: &Path) {
-    let dossier = home.join(".config/bridget");
+    bridget_daemon::environment::Namespace::resolve(
+        Some(home.join("state")),
+        None,
+        Some(home.to_path_buf()),
+    )
+    .unwrap()
+    .prepare()
+    .unwrap();
+    // La garde CwdGone est située après la posture. Précondition privée,
+    // écrite avant le daemon ; aucune autorisation de la flotte n'est changée.
+    let database = home.join("state/bridget.db");
+    drop(bridget_daemon::store::Store::open(&database).unwrap());
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let initial = bridget_daemon::referent_control::read(&connection).unwrap();
+    bridget_daemon::referent_control::set(
+        &connection,
+        bridget_daemon::referent_control::ControlMutation {
+            command_id: "host-fixture-complete",
+            expected_generation: initial.generation,
+            paused: None,
+            auto_objectives_cap: None,
+            reason: None,
+            actor: "test",
+            now: 1,
+            agent_posture: Some(bridget_transport::protocol::AgentPosture::Complete),
+            auto_reassignment: None,
+        },
+    )
+    .unwrap()
+    .unwrap();
+    let dossier = home.join("state");
     fs::create_dir_all(&dossier).expect("dossier de configuration");
     fs::write(
         dossier.join("agents.json"),
@@ -58,11 +88,29 @@ fn ecrire_registre(home: &Path) {
     .expect("registre privé");
 }
 
-fn demarrer_daemon(home: &Path) -> Child {
+struct DaemonProcess(Child);
+
+impl Drop for DaemonProcess {
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_none() {
+            unsafe {
+                libc::kill(self.0.id() as i32, libc::SIGTERM);
+            }
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while self.0.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+fn demarrer_daemon(home: &Path) -> DaemonProcess {
     let enfant = Command::new(env!("CARGO_BIN_EXE_bridget"))
         .arg("daemon")
         .env_clear()
         .env("HOME", home)
+        .env("BRIDGET_HOME", home.join("state"))
+        .env("BRIDGET_SOCKET", home.join("state/bridget.sock"))
         .env("HOSTNAME", HOTE_DAEMON)
         .env("PATH", "/usr/bin:/bin")
         .stdin(Stdio::null())
@@ -70,7 +118,8 @@ fn demarrer_daemon(home: &Path) -> Child {
         .stderr(Stdio::null())
         .spawn()
         .expect("daemon réel démarré");
-    let socket = home.join(".cache/bridget/bridget.sock");
+    let enfant = DaemonProcess(enfant);
+    let socket = home.join("state/bridget.sock");
     let echeance = Instant::now() + Duration::from_secs(10);
     while UnixStream::connect(&socket).is_err() {
         assert!(
@@ -82,17 +131,16 @@ fn demarrer_daemon(home: &Path) -> Child {
     enfant
 }
 
-fn arreter(mut daemon: Child) {
-    let _ = unsafe { libc::kill(daemon.id() as i32, libc::SIGTERM) };
+fn arreter(mut daemon: DaemonProcess) {
+    let _ = unsafe { libc::kill(daemon.0.id() as i32, libc::SIGTERM) };
     let echeance = Instant::now() + Duration::from_secs(15);
     while Instant::now() < echeance {
-        if matches!(daemon.try_wait(), Ok(Some(_))) {
+        if matches!(daemon.0.try_wait(), Ok(Some(_))) {
             return;
         }
         thread::sleep(Duration::from_millis(20));
     }
-    let _ = daemon.kill();
-    let _ = daemon.wait();
+    panic!("daemon privé non arrêté après SIGTERM");
 }
 
 /// Se connecte, s'enregistre en se déclarant sur une AUTRE machine que le
@@ -117,7 +165,7 @@ fn refus_de_lancement(socket: &Path, cwd: &Path) -> SpawnRefusal {
     let register = WrapperToDaemon::Register {
         agent_type: "cli".to_string(),
         identity_version: 2,
-        agent_id: "temoin-hotes".to_string(),
+        agent_id: "89000000-0000-4000-8000-000000000901".to_string(),
         // La valeur que le CLI transmet désormais. Avant le correctif : `None`.
         host: Some(HOTE_CLIENT.to_string()),
         transport: None,
@@ -149,7 +197,7 @@ fn refus_de_lancement(socket: &Path, cwd: &Path) -> SpawnRefusal {
     let ordre = WrapperToDaemon::SpawnOrder {
         agent_type: "fixture".to_string(),
         project: None,
-        agent_id: Some("temoin-lance".to_string()),
+        agent_id: Some("89000000-0000-4000-8000-000000000902".to_string()),
         cwd: cwd.display().to_string(),
         persistent: false,
         command_id: "temoin-hotes-1".to_string(),
@@ -177,7 +225,7 @@ fn le_refus_de_cwd_nomme_les_deux_machines_par_la_vraie_couture() {
     let home = racine.join("home");
     ecrire_registre(&home);
     let daemon = demarrer_daemon(&home);
-    let socket = home.join(".cache/bridget/bridget.sock");
+    let socket = home.join("state/bridget.sock");
 
     let refus = refus_de_lancement(&socket, &racine.join("repertoire-qui-n-existe-pas"));
 

@@ -3,7 +3,6 @@ use bridget_daemon::managed_process::{
     ManagedIdentity, ManagedLaunch, ManagedMarkerStore, ManagedStopResult, spawn_managed_bootstrap,
 };
 use bridget_daemon::registry::AgentRegistry;
-use bridget_daemon::wrapper::launch_acp_with;
 use bridget_transport::protocol::{PresenceMode, decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::collections::BTreeMap;
@@ -11,25 +10,111 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixListener;
-use std::path::PathBuf;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn test_root() -> PathBuf {
-    PathBuf::from(format!(
+    let root = PathBuf::from(format!(
         "/tmp/bg906-{}-{}",
         std::process::id(),
         uuid::Uuid::new_v4()
-    ))
+    ));
+    bridget_daemon::environment::Namespace::resolve(
+        Some(root.join("state")),
+        None,
+        Some(root.clone()),
+    )
+    .unwrap()
+    .prepare()
+    .unwrap();
+    root
+}
+
+fn accept_peer(listener: UnixListener) -> UnixStream {
+    listener.set_nonblocking(true).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                return stream;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(Instant::now() < deadline, "aucun Register réel reçu");
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("accept : {error}"),
+        }
+    }
+}
+
+fn run_wrapper(root: &Path, agent_type: &str, agent_id: &str) -> Result<(), String> {
+    let registry_path = root.join("state/agents.json");
+    let registry = AgentRegistry::from_json(
+        &fs::read_to_string(&registry_path).map_err(|error| error.to_string())?,
+        &registry_path,
+    )
+    .map_err(|error| error.to_string())?;
+    let definition = registry
+        .get(agent_type)
+        .map_err(|error| error.to_string())?;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .args([
+            "--",
+            definition.command.as_str(),
+            "--equipier",
+            "--agent-id",
+            agent_id,
+        ])
+        .env_clear()
+        .env("HOME", root)
+        .env("BRIDGET_HOME", root.join("state"))
+        .env("BRIDGET_SOCKET", root.join("state/bridget.sock"))
+        .env("BRIDGET_CHANNEL", "unix")
+        .env("PATH", "/usr/bin:/bin")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            return if status.success() {
+                Ok(())
+            } else {
+                Err(status.to_string())
+            };
+        }
+        if Instant::now() >= deadline {
+            unsafe {
+                libc::kill(child.id() as i32, libc::SIGTERM);
+            }
+            let stop = Instant::now() + Duration::from_secs(3);
+            while child.try_wait().ok().flatten().is_none() && Instant::now() < stop {
+                thread::sleep(Duration::from_millis(10));
+            }
+            return Err("wrapper non arrêté dans le budget".into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
 fn wrapper_claude_natif_livre_une_mission_repond_et_tient_un_journal() {
     let root = test_root();
-    let socket = root.join(".cache/bridget/bridget.sock");
-    let registry_path = root.join(".config/bridget/agents.json");
+    let socket = root.join("state/bridget.sock");
+    let registry_path = root.join("state/agents.json");
     let adapter = root.join("claude-stream-json-fixture.sh");
     fs::create_dir_all(socket.parent().unwrap()).unwrap();
     fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -63,7 +148,7 @@ done
 
     let listener = UnixListener::bind(&socket).unwrap();
     let daemon = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
+        let stream = accept_peer(listener);
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
@@ -96,7 +181,7 @@ done
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                agent_id: "claude-native-1".to_string(),
+                agent_id: "89000000-0000-4000-8000-000000000801".to_string(),
             })
             .unwrap()
         )
@@ -113,7 +198,11 @@ done
                 break;
             }
         }
-        let mut mission = BridgetMessage::new("demandeur", "claude-native-1", "mission native");
+        let mut mission = BridgetMessage::new(
+            "89000000-0000-4000-8000-000000000805",
+            "89000000-0000-4000-8000-000000000801",
+            "mission native",
+        );
         mission.id = "mission-claude-native".to_string();
         mission.reply = true;
         writeln!(
@@ -152,8 +241,8 @@ done
                     }
                 }
                 WrapperToDaemon::Send(reply) => {
-                    assert_eq!(reply.from, "claude-native-1");
-                    assert_eq!(reply.to, "demandeur");
+                    assert_eq!(reply.from, "89000000-0000-4000-8000-000000000801");
+                    assert_eq!(reply.to, "89000000-0000-4000-8000-000000000805");
                     assert_eq!(reply.in_reply_to.as_deref(), Some("mission-claude-native"));
                     assert_eq!(reply.body, "claude-opus-5: mission reçue");
                     answered = true;
@@ -166,24 +255,18 @@ done
         }
     });
 
-    let registry = AgentRegistry::from_json(&registry_json, &registry_path).unwrap();
     let wrapper_root = root.clone();
-    let wrapper_socket = socket.clone();
     let wrapper = thread::spawn(move || {
-        launch_acp_with(
-            "claude-native",
-            &[],
-            Some("claude-native-1"),
-            &registry,
-            &wrapper_socket,
+        run_wrapper(
             &wrapper_root,
+            "claude-native",
+            "89000000-0000-4000-8000-000000000801",
         )
-        .map_err(|error| error.to_string())
     });
 
     assert_eq!(wrapper.join().unwrap(), Ok(()));
     assert!(daemon.join().unwrap());
-    let sessions = root.join(".cache/bridget/sessions/claude-native-1");
+    let sessions = root.join("state/sessions/89000000-0000-4000-8000-000000000801");
     let entries = fs::read_dir(&sessions).unwrap().count();
     assert!(
         entries > 0,
@@ -201,8 +284,8 @@ fn wrapper_claude_gere_annonce_un_register_natif_complet() {
         .expect("racine de test nommée")
         .to_string_lossy()
         .into_owned();
-    let socket = root.join(".cache/bridget/bridget.sock");
-    let registry = root.join(".config/bridget/agents.json");
+    let socket = root.join("state/bridget.sock");
+    let registry = root.join("state/agents.json");
     let adapter = root.join("claude-stream-json-managed.sh");
     fs::create_dir_all(socket.parent().unwrap()).unwrap();
     fs::create_dir_all(registry.parent().unwrap()).unwrap();
@@ -233,7 +316,7 @@ while IFS= read -r line; do :; done
     let listener = UnixListener::bind(&socket).unwrap();
     let (register_tx, register_rx) = mpsc::channel();
     let daemon = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
+        let stream = accept_peer(listener);
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut writer = BufWriter::new(stream);
         let mut line = String::new();
@@ -244,7 +327,7 @@ while IFS= read -r line; do :; done
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                agent_id: "claude-manage-1".to_string(),
+                agent_id: "89000000-0000-4000-8000-000000000802".to_string(),
             })
             .unwrap()
         )
@@ -281,12 +364,20 @@ while IFS= read -r line; do :; done
         wrapper_args: vec![
             "managed-wrapper".to_string(),
             "claude".to_string(),
-            "claude-manage-1".to_string(),
+            "89000000-0000-4000-8000-000000000802".to_string(),
             serde_json::to_string(&frozen_definition).unwrap(),
         ],
         cwd: root.clone(),
         env: BTreeMap::from([
             ("HOME".to_string(), root.as_os_str().to_owned()),
+            (
+                "BRIDGET_HOME".to_string(),
+                root.join("state").into_os_string(),
+            ),
+            (
+                "BRIDGET_SOCKET".to_string(),
+                root.join("state/bridget.sock").into_os_string(),
+            ),
             ("PATH".to_string(), OsString::from("/bin:/usr/bin")),
             ("USER".to_string(), OsString::from("tester")),
             ("LANG".to_string(), OsString::from("C")),
@@ -301,7 +392,7 @@ while IFS= read -r line; do :; done
         .unwrap();
     assert_eq!(ready.ready().instance_id, identity.instance_id);
     let mut running = ready
-        .persist_marker(&marker_store, "claude-manage-1")
+        .persist_marker(&marker_store, "89000000-0000-4000-8000-000000000802")
         .unwrap()
         .release()
         .unwrap();
@@ -317,7 +408,7 @@ while IFS= read -r line; do :; done
             ..
         } => {
             assert_eq!(agent_type, "claude");
-            assert_eq!(agent_id, "claude-manage-1".to_string());
+            assert_eq!(agent_id, "89000000-0000-4000-8000-000000000802".to_string());
             assert_eq!(transport.as_deref(), Some("claude_stream_json"));
             assert!(
                 channel
@@ -351,8 +442,8 @@ while IFS= read -r line; do :; done
 #[test]
 fn arret_du_wrapper_reel_termine_l_adaptateur_qui_ignore_l_annulation() {
     let root = test_root();
-    let socket = root.join(".cache/bridget/bridget.sock");
-    let registry = root.join(".config/bridget/agents.json");
+    let socket = root.join("state/bridget.sock");
+    let registry = root.join("state/agents.json");
     let adapter = root.join("adaptateur-ignore-cancel.sh");
     fs::create_dir_all(socket.parent().unwrap()).unwrap();
     fs::create_dir_all(registry.parent().unwrap()).unwrap();
@@ -388,7 +479,7 @@ while :; do :; done
     let (registered_tx, registered_rx) = mpsc::channel();
     let (disconnect_tx, disconnect_rx) = mpsc::channel();
     let daemon = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
+        let stream = accept_peer(listener);
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
@@ -404,7 +495,7 @@ while :; do :; done
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                agent_id: "fixture-ignore-cancel-1".to_string(),
+                agent_id: "89000000-0000-4000-8000-000000000803".to_string(),
             })
             .unwrap()
         )
@@ -414,7 +505,7 @@ while :; do :; done
             "{}",
             encode(&DaemonToWrapper::Deliver(BridgetMessage::new(
                 "humain",
-                "fixture-ignore-cancel-1",
+                "89000000-0000-4000-8000-000000000803",
                 "tour bloqué",
             )))
             .unwrap()
@@ -468,12 +559,20 @@ while :; do :; done
         wrapper_args: vec![
             "managed-wrapper".to_string(),
             "fixture-ignore-cancel".to_string(),
-            "fixture-ignore-cancel-1".to_string(),
+            "89000000-0000-4000-8000-000000000803".to_string(),
             serde_json::to_string(&frozen_definition).unwrap(),
         ],
         cwd: root.clone(),
         env: BTreeMap::from([
             ("HOME".to_string(), root.as_os_str().to_owned()),
+            (
+                "BRIDGET_HOME".to_string(),
+                root.join("state").into_os_string(),
+            ),
+            (
+                "BRIDGET_SOCKET".to_string(),
+                root.join("state/bridget.sock").into_os_string(),
+            ),
             ("PATH".to_string(), OsString::from("/bin:/usr/bin")),
             ("USER".to_string(), OsString::from("tester")),
             ("LANG".to_string(), OsString::from("C")),
@@ -486,7 +585,7 @@ while :; do :; done
         .wait_ready()
         .unwrap();
     let mut running = ready
-        .persist_marker(&marker_store, "fixture-ignore-cancel-1")
+        .persist_marker(&marker_store, "89000000-0000-4000-8000-000000000803")
         .unwrap()
         .release()
         .unwrap();
@@ -526,8 +625,8 @@ while :; do :; done
 #[test]
 fn wrapper_borne_le_silence_et_signale_la_saturation_sans_confondre_les_tours() {
     let root = test_root();
-    let socket = root.join(".cache/bridget/bridget.sock");
-    let registry_path = root.join(".config/bridget/agents.json");
+    let socket = root.join("state/bridget.sock");
+    let registry_path = root.join("state/agents.json");
     let adapter = root.join("claude-silencieux.sh");
     fs::create_dir_all(socket.parent().unwrap()).unwrap();
     fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
@@ -556,7 +655,7 @@ while IFS= read -r line; do :; done
 
     let listener = UnixListener::bind(&socket).unwrap();
     let daemon = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
+        let stream = accept_peer(listener);
         stream
             .set_read_timeout(Some(Duration::from_secs(15)))
             .unwrap();
@@ -572,7 +671,7 @@ while IFS= read -r line; do :; done
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
-                agent_id: "claude-silencieux-1".to_string(),
+                agent_id: "89000000-0000-4000-8000-000000000804".to_string(),
             })
             .unwrap()
         )
@@ -590,7 +689,7 @@ while IFS= read -r line; do :; done
         }
 
         let id = "silence";
-        let mut message = BridgetMessage::new("maicie", "claude-silencieux-1", id);
+        let mut message = BridgetMessage::new("maicie", "89000000-0000-4000-8000-000000000804", id);
         message.id = id.to_string();
         writeln!(
             writer,
@@ -627,7 +726,8 @@ while IFS= read -r line; do :; done
         assert!(silence_running, "le démarrage du premier tour manque");
 
         for id in ["en-file", "saturation"] {
-            let mut message = BridgetMessage::new("maicie", "claude-silencieux-1", id);
+            let mut message =
+                BridgetMessage::new("maicie", "89000000-0000-4000-8000-000000000804", id);
             message.id = id.to_string();
             writeln!(
                 writer,
@@ -715,19 +815,13 @@ while IFS= read -r line; do :; done
         }
     });
 
-    let registry = AgentRegistry::from_json(&registry_json, &registry_path).unwrap();
     let wrapper_root = root.clone();
-    let wrapper_socket = socket.clone();
     let wrapper = thread::spawn(move || {
-        launch_acp_with(
-            "claude-silencieux",
-            &[],
-            Some("claude-silencieux-1"),
-            &registry,
-            &wrapper_socket,
+        run_wrapper(
             &wrapper_root,
+            "claude-silencieux",
+            "89000000-0000-4000-8000-000000000804",
         )
-        .map_err(|error| error.to_string())
     });
 
     assert_eq!(wrapper.join().unwrap(), Ok(()));

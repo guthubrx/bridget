@@ -23,10 +23,6 @@ use std::thread;
 #[cfg(feature = "test-support")]
 use bridget_core::BridgetMessage;
 #[cfg(feature = "test-support")]
-use bridget_daemon::registry::AgentRegistry;
-#[cfg(feature = "test-support")]
-use bridget_daemon::wrapper::launch_acp_with;
-#[cfg(feature = "test-support")]
 use bridget_transport::protocol::{decode, encode};
 #[cfg(feature = "test-support")]
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
@@ -176,7 +172,7 @@ for line in sys.stdin:
 #[test]
 fn voie_acp_lance_la_session_wrapper_avec_probe_ephemere() {
     // Une socket Unix macOS est bornée à 104 octets : garder la racine courte
-    // pour conserver le chemin de production `.cache/bridget/bridget.sock`.
+    // pour conserver une socket privée portable.
     let root = PathBuf::from("/tmp").join(format!(
         "b10-{}-{}",
         std::process::id(),
@@ -185,34 +181,45 @@ fn voie_acp_lance_la_session_wrapper_avec_probe_ephemere() {
     let home = root.join("home");
     write_user_config_sentinels(&home);
     let before = config_snapshot(&home);
-    let socket = home.join(".cache/bridget/bridget.sock");
-    fs::create_dir_all(socket.parent().unwrap()).unwrap();
-    let adapter = write_acp_probe_adapter(&root);
-    let registry = AgentRegistry::from_json(
-        &serde_json::json!({
-            "agents": { "probe-acp": {
-                "command": "python3", "args": [adapter], "protocol": "acp",
-                "permissions": "allow", "queue_capacity": 1, "notify_timeout_secs": 1,
-                "mcp": { "acp_session": true }
-            }}
-        })
-        .to_string(),
-        root.join("agents.json"),
+    let namespace = bridget_daemon::environment::Namespace::resolve(
+        Some(root.join("state")),
+        None,
+        Some(home.clone()),
     )
     .unwrap();
+    namespace.prepare().unwrap();
+    let socket = root.join("state/bridget.sock");
+    let adapter = write_acp_probe_adapter(&root);
+    let registry_json = serde_json::json!({
+        "agents": { "probe-acp": {
+            "command": "python3", "args": [adapter], "protocol": "acp",
+            "permissions": "allow", "queue_capacity": 1, "notify_timeout_secs": 1,
+            "mcp": { "acp_session": true }
+        }}
+    })
+    .to_string();
+    let registry_path = root.join("state/agents.json");
+    fs::write(&registry_path, registry_json).unwrap();
+    fs::set_permissions(&registry_path, fs::Permissions::from_mode(0o600)).unwrap();
     let log = root.join("fake-mcp.log");
-    unsafe {
-        std::env::set_var("BRIDGET_TEST_MCP_SERVER_COMMAND", "python3");
-        std::env::set_var(
-            "BRIDGET_TEST_MCP_SERVER_ARGS",
-            serde_json::to_string(&vec![fake_server().display().to_string()]).unwrap(),
-        );
-        std::env::set_var("BRIDGET_MCP_SMOKE_LOG", &log);
-    }
-
     let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
     let server = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(std::time::Instant::now() < deadline, "wrapper non connecté");
+                    thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept : {error}"),
+            }
+        };
+        stream.set_nonblocking(false).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut writer = BufWriter::new(stream);
         let mut line = String::new();
@@ -253,31 +260,53 @@ fn voie_acp_lance_la_session_wrapper_avec_probe_ephemere() {
             }
         }
     });
-    let wrapper_home = home.clone();
-    let wrapper_socket = socket.clone();
-    let wrapper = thread::spawn(move || {
-        launch_acp_with(
-            "probe-acp",
-            &[],
-            Some("probe-acp"),
-            &registry,
-            &wrapper_socket,
-            &wrapper_home,
+    let mut wrapper = Command::new(env!("CARGO_BIN_EXE_bridget"))
+        .args([
+            "--",
+            "python3",
+            "--equipier",
+            "--agent-id",
+            "89000000-0000-4000-8000-000000000a01",
+        ])
+        .env_clear()
+        .env("HOME", &home)
+        .env("BRIDGET_HOME", root.join("state"))
+        .env("BRIDGET_SOCKET", &socket)
+        .env("PATH", "/usr/bin:/bin")
+        .env("BRIDGET_TEST_MCP_SERVER_COMMAND", "python3")
+        .env(
+            "BRIDGET_TEST_MCP_SERVER_ARGS",
+            serde_json::to_string(&vec![fake_server().display().to_string()]).unwrap(),
         )
-        .map_err(|error| error.to_string())
-    });
-
-    assert_eq!(wrapper.join().unwrap(), Ok(()));
+        .env("BRIDGET_MCP_SMOKE_LOG", &log)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = wrapper.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            unsafe {
+                libc::kill(wrapper.id() as i32, libc::SIGTERM);
+            }
+            let stop = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while wrapper.try_wait().ok().flatten().is_none() && std::time::Instant::now() < stop {
+                thread::sleep(std::time::Duration::from_millis(10));
+            }
+            panic!("wrapper MCP non arrêté dans le budget");
+        }
+        thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert!(status.success(), "wrapper MCP : {status}");
     server.join().unwrap();
     let transcript = fs::read_to_string(&log).unwrap();
     assert!(transcript.contains("method=tools/list"));
     assert!(transcript.contains("method=tools/call") && transcript.contains("probe"));
     assert_eq!(config_snapshot(&home), before);
-    unsafe {
-        std::env::remove_var("BRIDGET_TEST_MCP_SERVER_COMMAND");
-        std::env::remove_var("BRIDGET_TEST_MCP_SERVER_ARGS");
-        std::env::remove_var("BRIDGET_MCP_SMOKE_LOG");
-    }
     fs::remove_dir_all(root).unwrap();
 }
 

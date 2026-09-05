@@ -265,6 +265,10 @@ impl AgentRegistry {
         let matching_types = self
             .agents
             .iter()
+            // Les dérivations de politique ne sont pas des déclarations de
+            // fournisseur supplémentaires. Leur sélection reste du ressort
+            // du préflight, après résolution du type demandé.
+            .filter(|(agent_type, _)| !agent_type.starts_with(PROJECT_DISCOVERY_AGENT_PREFIX))
             .filter(|(_, definition)| command_basename(&definition.command) == basename)
             .map(|(agent_type, _)| agent_type.as_str())
             .collect::<Vec<_>>();
@@ -1774,6 +1778,32 @@ mod tests {
     fn generic_codex_command_resolves_through_the_registry() {
         let registry = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
         assert_eq!(registry.type_for_command("codex").unwrap(), "codex");
+    }
+
+    #[test]
+    fn native_custom_command_resolves_without_its_internal_discovery_variant() {
+        let registry = AgentRegistry::from_json(
+            r#"{"agents":{"provider":{"command":"/tmp/custom-provider","protocol":"claude_stream_json","args":["--model","fixture"]}}}"#,
+            "/tmp/agents.json",
+        )
+        .unwrap();
+        // Le type restreint reste disponible pour la politique de lancement,
+        // mais ne constitue pas un deuxième fournisseur déclaré par l'humain.
+        assert_eq!(
+            registry
+                .get("project-discovery-provider")
+                .unwrap()
+                .permissions,
+            "deny"
+        );
+        assert_eq!(
+            registry.type_for_command("/tmp/custom-provider").unwrap(),
+            "provider"
+        );
+        assert_eq!(
+            registry.type_for_command("custom-provider").unwrap(),
+            "provider"
+        );
     }
 
     #[test]
