@@ -10,7 +10,7 @@ dans la session 089 ; un paquet construit n'est pas une validation de compte.
 Depuis le chantier actuel :
 
 ```sh
-cd /Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core
+cd /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core
 package_parent=$(mktemp -d /tmp/bgpackage.XXXXXX)
 package_parent=$(cd "$package_parent" && pwd -P)
 bash scripts/package-089-core.sh "$package_parent/source"

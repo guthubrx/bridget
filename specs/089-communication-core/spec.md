@@ -51,7 +51,7 @@ Un agent Codex envoie une demande à un agent Claude Code ; celui-ci répond ave
 
 ## Exigences fonctionnelles
 
-- **FR-08901 — Isolation :** nouveau dépôt indépendant dans `/Users/moi/Nextcloud/10.Scripts/XX.bridget`, historique conservé. Aucun fichier non committé, secret, registre personnel ou store de production importé automatiquement. L'ancien dépôt et son daemon restent intacts.
+- **FR-08901 — Isolation :** nouveau dépôt indépendant dans `/Users/moi/Nextcloud/10.Scripts/64.bridget`, historique conservé. Aucun fichier non committé, secret, registre personnel ou store de production importé automatiquement. L'ancien dépôt et son daemon restent intacts.
 - **FR-08902 — Identité :** préserver identité stable, rename, annuaire, provenance et distinction mode/transport ; aucun scope dérivé du seul nom affiché.
 - **FR-08903 — Envoi :** préserver canon, clé stable, issued_at immutable, horizon d'idempotence et refus déterministes. Une même clé divergente refuse sans mutation du premier record.
 - **FR-08904 — Demandes :** préserver corrélation in_reply_to, timeout déclaré, rappel attesté et annulation. La clôture et ses faits durables restent atomiques ; une commande métier extérieure ne se déduit jamais d'un timeout.

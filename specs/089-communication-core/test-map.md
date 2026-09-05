@@ -303,7 +303,7 @@ Le refus de nouveau projet sans binding, les variables runtime héritées, la re
 Les huit anciens libellés de fixtures lifecycle ont été remplacés par des UUIDv4 littéraux : mêmes identités pour collision, distinctes pour quota. Aucun assouplissement de la validation de production, aucun helper qui transformerait implicitement un nom en identité.
 
 Référence analysée : `dfa2134dcfe2a2522e3ae77d93561e6ae72556b3`.
-Racine de travail : /Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core.
+Racine de travail : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core.
 Les chemins des tableaux sont des coordonnées dans cet objet Git, pas des chemins de données de production.
 
 ## Portée et méthode
@@ -771,6 +771,6 @@ Port T020 partiel : `codex_native_test.rs` devient `core_089_native_test.rs` ave
 
 Port T019 : `core_089_attach_test.rs` couvre la source JSONL brute inhabituelle, la barrière SnapshotCaughtUp AVANT injection live, la rotation et la lacune du curseur de rétention. `coordination_events_test.rs` est conservé : ses six cas isolés passent, dont crashs réels et mutants exécutés Gap→Unavailable/Gap→CaughtUp. Les bancs `sc005_attach_budget.rs` et l'ancien harnais d'attestation ne sont pas réputés portés par ce seul test ; leur disposition reste ouverte pour T028/T034.
 
-Le contrôle d'inventaire doit reconstruire l'union de la section méthode **depuis le commit épinglé**, comparer son ensemble aux 264 lignes explicites des quatre tableaux (pas aux occurrences incidentes dans le texte), et refuser un fichier absent ou doublonné. Les douze tags `@SC_08901` à `@SC_08912` de /Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/tests/features/089-communication-core.feature sont associés au tableau de critères.
+Le contrôle d'inventaire doit reconstruire l'union de la section méthode **depuis le commit épinglé**, comparer son ensemble aux 264 lignes explicites des quatre tableaux (pas aux occurrences incidentes dans le texte), et refuser un fichier absent ou doublonné. Les douze tags `@SC_08901` à `@SC_08912` de /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/tests/features/089-communication-core.feature sont associés au tableau de critères.
 
 État de T003 : carte et scénarios écrits ; vérification statique de couverture uniquement. Aucun résultat fonctionnel nouveau. Les preuves d'exécution, durées, mutants et éventuelles limites de fournisseur/plateforme doivent être enregistrés par les tâches de réalisation, sans cocher les SC à partir de cette carte.

@@ -83,24 +83,24 @@ Pour chaque cible : commande exacte, contexte isolé vérifié, durée, résulta
 
 Tous les chemins désignent le nouveau worktree, jamais le checkout historique ; l'identifiant Git en tête fige les références avant changements concurrents.
 
-- S1 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/daemon.rs`
-- S2 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/registry.rs`
-- S3 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/mcp_identity.rs`
-- S4 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-transport/src/fsutil.rs`
-- S5 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/scripts/federate-ssh.sh`
-- S6 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/mcp.rs`
-- S7 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-daemon/tests/guichet_integration_test.rs`
-- S8 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/idempotency.rs`
-- S9 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/lifecycle.rs`
-- S10 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-daemon/tests/capabilities_integration_test.rs`
-- S11 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/managed_process.rs`
-- S12 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-transport/src/managed_session.rs`
-- S13 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-daemon/tests/coordination_events_test.rs`
-- S14 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/artifact_service.rs`
-- S15 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-daemon/tests/artifact_store_test.rs`
-- S16 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-daemon/tests/artifact_publication_test.rs`
-- S17 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/disk_hygiene.rs`
-- S18 : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-daemon/tests/build_id_integration_test.rs`
+- S1 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/daemon.rs`
+- S2 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/registry.rs`
+- S3 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/mcp_identity.rs`
+- S4 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-transport/src/fsutil.rs`
+- S5 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/scripts/federate-ssh.sh`
+- S6 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/mcp.rs`
+- S7 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-daemon/tests/guichet_integration_test.rs`
+- S8 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/idempotency.rs`
+- S9 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/lifecycle.rs`
+- S10 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-daemon/tests/capabilities_integration_test.rs`
+- S11 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/managed_process.rs`
+- S12 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-transport/src/managed_session.rs`
+- S13 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-daemon/tests/coordination_events_test.rs`
+- S14 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/artifact_service.rs`
+- S15 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-daemon/tests/artifact_store_test.rs`
+- S16 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-daemon/tests/artifact_publication_test.rs`
+- S17 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-daemon/src/disk_hygiene.rs`
+- S18 : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-daemon/tests/build_id_integration_test.rs`
 
 ## Minimalisme et responsabilité de l'extraction
 

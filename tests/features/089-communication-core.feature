@@ -7,7 +7,7 @@ Fonctionnalité: Communiquer entre agents sans dépendre de l'interface ni de Ma
   Un accusé de livraison ne prouve pas la réussite intellectuelle d'une mission.
 
   Contexte:
-    Étant donné un paquet de test issu du dépôt indépendant XX.bridget
+    Étant donné un paquet de test issu du dépôt indépendant 64.bridget
     Et un home, un cache, un magasin de contenus et une socket réservés à ce test
     Et aucune donnée ni aucun processus de la flotte historique utilisé par le test
     Et un délai global qui fait échouer proprement le harnais en cas de blocage

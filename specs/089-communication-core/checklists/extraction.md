@@ -8,17 +8,17 @@ Ce verdict constate qu'aucune garantie de communication n'est volontairement aba
 
 ## Pièces lues
 
-- `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/specs/089-communication-core/spec.md`
-- `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/specs/089-communication-core/plan.md`
-- `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/specs/089-communication-core/tasks.md`
-- `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/specs/089-communication-core/baseline.md`
-- `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/specs/089-communication-core/data-model.md`
-- `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/specs/089-communication-core/contracts/communication.md`
-- `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/specs/089-communication-core/contracts/README.md`
-- `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/specs/089-communication-core/test-map.md`
-- `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/specs/089-communication-core/threat-model.md`
+- `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/specs/089-communication-core/spec.md`
+- `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/specs/089-communication-core/plan.md`
+- `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/specs/089-communication-core/tasks.md`
+- `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/specs/089-communication-core/baseline.md`
+- `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/specs/089-communication-core/data-model.md`
+- `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/specs/089-communication-core/contracts/communication.md`
+- `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/specs/089-communication-core/contracts/README.md`
+- `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/specs/089-communication-core/test-map.md`
+- `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/specs/089-communication-core/threat-model.md`
 
-Le nouveau golden de trames a également été lu dans `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/crates/bridget-transport/tests/core_089_wire_test.rs` : comparaison d'émission aux bytes figés puis consommation des bytes figés, et générateur de référence distinct ignoré par défaut. Le manifeste/verrou complet est encore en travail au moment de cette lecture : aucun résultat d'intégrité finale n'est imputé à cette revue.
+Le nouveau golden de trames a également été lu dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/crates/bridget-transport/tests/core_089_wire_test.rs` : comparaison d'émission aux bytes figés puis consommation des bytes figés, et générateur de référence distinct ignoré par défaut. Le manifeste/verrou complet est encore en travail au moment de cette lecture : aucun résultat d'intégrité finale n'est imputé à cette revue.
 
 ## Points retenus
 

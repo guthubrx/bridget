@@ -98,16 +98,16 @@ data: no rendering, JavaScript or browser is part of the core.
 ## Build independently
 
 Implementation directory:
-`/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core`.
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core`.
 Rust is pinned in rust-toolchain.toml.
 
 ```sh
-cd /Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core
+cd /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core
 PATH=/Users/moi/.cargo/bin:$PATH cargo build --locked -p bridget-daemon
 bridget_state=$(mktemp -d /tmp/bgcore.XXXXXX)
 export BRIDGET_HOME="$bridget_state"
 export BRIDGET_SOCKET="$BRIDGET_HOME/bridget.sock"
-/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/target/debug/bridget daemon
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/target/debug/bridget daemon
 ```
 
 Use a NEW private, short, absolute state directory. The daemon stays in the

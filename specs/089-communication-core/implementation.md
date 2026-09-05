@@ -296,7 +296,7 @@ Commande T026 avec les MÊMES paramètres distants, ajouter BRIDGET_SSH_LOCAL_GA
 Déploiement exécuté depuis le worktree 089 propre à cb62fdf :
 
 ```sh
-bash scripts/deploy-remote.sh --label core-089 --host 37.59.185.67 --user moi --port 2222 --identity /Users/moi/.ssh/id_ed25519 --known-hosts /Users/moi/.ssh/known_hosts --source /Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core --remote-prefix /home/moi/bg089-cb62fdf --remote-cargo /home/moi/.cargo/bin/cargo
+bash scripts/deploy-remote.sh --label core-089 --host 37.59.185.67 --user moi --port 2222 --identity /Users/moi/.ssh/id_ed25519 --known-hosts /Users/moi/.ssh/known_hosts --source /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core --remote-prefix /home/moi/bg089-cb62fdf --remote-cargo /home/moi/.cargo/bin/cargo
 ```
 
 Client Linux construit hors ligne en 47,38 s avec Rust 1.92.0 déjà installé. Binaire privé `/home/moi/bg089-cb62fdf/bin/bridget` ; aucun daemon, wrapper, profil, skill ou service distant démarré. Cette copie demeure pour T027/T028, distincte du namespace de chaque recette. Le gate a révélé le SHA complet injecté par le script contre les 12 caractères du build local : même représentation désormais utilisée, verrouillée par la doublure Cargo. Les écarts du binaire de test local dirty restent honnêtement avertis, pas masqués.
@@ -440,7 +440,7 @@ Mutations réellement exécutées puis restaurées :
 
 Harnais 012 réutilisé dans tests/support/idempotent.rs, pas recopié : les douze scénarios historiques restent identiques octet pour octet depuis run_amont_cycle jusqu'à EOF (comparaison contre HEAD). Les enfants, barrières, watchdogs et durées ne changent pas. Les nouveaux tests refusent également les six ensembles partiels id/issued_at/issuer_scope AVANT la socket ; listener de test privé 0600, répertoire 0700.
 
-Commandes dans /Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core, préfixées par `env -i HOME=/private/tmp/b9t011.7nVSnj/home BRIDGET_HOME=/private/tmp/b9t011.7nVSnj/state TMPDIR=/private/tmp/b9t011.7nVSnj/tmp CARGO_HOME=/Users/moi/.cargo RUSTUP_HOME=/Users/moi/.rustup PATH=/Users/moi/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin`. Watchdog externe Perl alarm/exec 180 s (420 s pour la matrice), watchdog interne 360 s ; aucune compilation concurrente pendant les crashs.
+Commandes dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core, préfixées par `env -i HOME=/private/tmp/b9t011.7nVSnj/home BRIDGET_HOME=/private/tmp/b9t011.7nVSnj/state TMPDIR=/private/tmp/b9t011.7nVSnj/tmp CARGO_HOME=/Users/moi/.cargo RUSTUP_HOME=/Users/moi/.rustup PATH=/Users/moi/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin`. Watchdog externe Perl alarm/exec 180 s (420 s pour la matrice), watchdog interne 360 s ; aucune compilation concurrente pendant les crashs.
 
 - `cargo test --offline --locked -p bridget-daemon --features test-support --test core_089_contract_test -- --test-threads=3` : 3/3, 1,26 s (compilation 1,55 s).
 - `cargo test --offline --locked -p bridget-daemon --features test-support --lib attribution_emetteur_cli_tests` : 7/7, 0,00 s (compilation 7,92 s).
@@ -1157,12 +1157,12 @@ fmt ne signalait que les deux include_bytes nouveaux, désormais formatés.
 Base : dfa2134dcfe2a2522e3ae77d93561e6ae72556b3, main de l'ancien dépôt. Clone indépendant créé par :
 
 ```sh
-git clone --no-local --no-hardlinks --single-branch --branch main /Users/moi/Nextcloud/10.Scripts/bridget /Users/moi/Nextcloud/10.Scripts/XX.bridget
+git clone --no-local --no-hardlinks --single-branch --branch main /Users/moi/Nextcloud/10.Scripts/bridget /Users/moi/Nextcloud/10.Scripts/64.bridget
 ```
 
 Résultat : exit 0, 0,5 s observée. L'origine locale a ensuite été retirée du nouveau clone pour empêcher un push accidentel vers l'ancien dépôt. Aucune identité Git modifiée.
 
-Worktree dédié : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core`, branche `session-089-communication-core`, créée par le hook SpecKit git-feature. Synchronisation SpecKit limitée au nouveau projet ; aucun adaptateur global modifié. La préparation officielle plan/tasks résout correctement ce dossier via feature.json.
+Worktree dédié : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core`, branche `session-089-communication-core`, créée par le hook SpecKit git-feature. Synchronisation SpecKit limitée au nouveau projet ; aucun adaptateur global modifié. La préparation officielle plan/tasks résout correctement ce dossier via feature.json.
 
 `cargo metadata --no-deps --format-version 1 --offline` : exit 0. Quatre membres encore présents, dont Maicie ; la dépendance directe maicie du daemon est constatée. **Le clone n'est pas encore le noyau extrait.**
 

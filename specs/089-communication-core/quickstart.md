@@ -2,10 +2,10 @@
 
 **État actuel :** paquet autonome validé (1 199 tests automatiques, matrice 50 crashs, fmt/clippy, installation privée et revue). T007 isole le namespace ; T014–T019 exécutent les coutures daemon/CLI/MCP, T020 a exécuté Codex réel. T025–T028 ont exercé SSH local, macOS↔Linux, coupure/reprise et charge. Claude reste en attente d'une authentification valide et GLM réel sur forfait reste non validé. Voir implementation.md pour les preuves et leurs limites, pas les résultats d'anciens chantiers.
 
-Répertoire de travail : `/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core`.
+Répertoire de travail : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core`.
 
 Le guide de paquet indépendant, de fédération et de retour arrière est dans
-`/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/docs/communication-installation.md`.
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/docs/communication-installation.md`.
 Il conserve l'installation précédente intacte, y compris lorsque le diagnostic
 de version indique un écart : aucune relance du service historique n'est proposée.
 
@@ -14,12 +14,12 @@ de version indique un écart : aucune relance du service historique n'est propos
 Choisir une racine courte privée et utiliser le même binaire extrait partout :
 
 ```sh
-cd /Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core
+cd /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core
 PATH=/Users/moi/.cargo/bin:$PATH cargo build --locked -p bridget-daemon
 bridget_state=$(mktemp -d /tmp/bgcore.XXXXXX)
 export BRIDGET_HOME="$bridget_state"
 export BRIDGET_SOCKET="$bridget_state/bridget.sock"
-/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/target/debug/bridget daemon
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/target/debug/bridget daemon
 ```
 
 Le daemon reste au premier plan. Dans les autres terminaux, reprendre EXACTEMENT ces deux chemins d'environnement, pas un nouvel appel à mktemp. L'instance d'agent est créée par sa session, jamais fabriquée depuis le nom affiché. Pour les tests de fournisseur, les harnais préparent un profil privé ; aucune configuration globale MCP/skill n'est importée. Cette recette n'installe ni service launchd ni profil agent.

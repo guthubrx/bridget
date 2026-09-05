@@ -104,12 +104,12 @@ est du contenu inerte : aucun rendu, script ou navigateur dans le noyau.
 ## Construire sans toucher à l'installation existante
 
 Répertoire de réalisation :
-`/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core`.
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core`.
 
 Rust est épinglé dans rust-toolchain.toml. Construire avec Cargo disponible :
 
 ```sh
-cd /Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core
+cd /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core
 PATH=/Users/moi/.cargo/bin:$PATH cargo build --locked -p bridget-daemon
 ```
 
@@ -121,7 +121,7 @@ les abonnements. Aucun repli vers une API facturée n'est ajouté.
 bridget_state=$(mktemp -d /tmp/bgcore.XXXXXX)
 export BRIDGET_HOME="$bridget_state"
 export BRIDGET_SOCKET="$BRIDGET_HOME/bridget.sock"
-/Users/moi/Nextcloud/10.Scripts/XX.bridget/.worktrees/089-communication-core/target/debug/bridget daemon
+/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core/target/debug/bridget daemon
 ```
 
 Ce daemon reste au premier plan. Les autres terminaux doivent recevoir EXACTEMENT
