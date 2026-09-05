@@ -11,6 +11,13 @@ pub const MAX_LABEL_CHARS: usize = 32;
 pub const MAX_LABELS: usize = 12;
 pub const MAX_INSTRUCTIONS_CHARS: usize = 8_000;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentDisplayName {
+    pub agent_id: String,
+    pub display_name: String,
+    pub revision: u64,
+}
+
 const AVATAR_SHAPES: &[&str] = &[
     "round",
     "soft-square",
@@ -623,6 +630,57 @@ impl AgentProfileStore {
         })
     }
 
+    /// Mise à jour de présentation sous verrou d'écriture, jamais une réécriture
+    /// du profil complet : instructions et étiquettes ne sont même pas relues.
+    /// Un retry du même nom est sans écriture.
+    pub fn rename_display_name(
+        &mut self,
+        agent_id: &str,
+        name: &str,
+    ) -> Result<AgentDisplayName, AgentProfileError> {
+        if name.chars().any(char::is_control) {
+            return Err(AgentProfileError::Invalid(
+                "caractère de contrôle dans le nom",
+            ));
+        }
+        let display_name = clean_display_name(name)?;
+        let normalized = normalize_display_name(&display_name)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(AgentProfileError::Sqlite)?;
+        let (current_name, revision) = tx
+            .query_row(
+                "SELECT display_name, revision FROM agent_profiles WHERE agent_id=?1",
+                [agent_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()
+            .map_err(AgentProfileError::Sqlite)?
+            .ok_or(AgentProfileError::NotFound)?;
+        if current_name != display_name {
+            ensure_display_name_available(&tx, agent_id, &normalized)?;
+            let changed = tx.execute("UPDATE agent_profiles SET display_name=?2, display_name_normalized=?3, revision=revision+1, updated_at=?4 WHERE agent_id=?1 AND revision=?5",
+                params![agent_id, display_name, normalized, now_secs(), revision]).map_err(AgentProfileError::Sqlite)?;
+            if changed != 1 {
+                return Err(AgentProfileError::RevisionConflict);
+            }
+        }
+        let revision = tx
+            .query_row(
+                "SELECT revision FROM agent_profiles WHERE agent_id=?1",
+                [agent_id],
+                |row| row.get::<_, u64>(0),
+            )
+            .map_err(AgentProfileError::Sqlite)?;
+        tx.commit().map_err(AgentProfileError::Sqlite)?;
+        Ok(AgentDisplayName {
+            agent_id: agent_id.into(),
+            display_name,
+            revision,
+        })
+    }
+
     pub fn update_profile(
         &mut self,
         agent_id: &str,
@@ -661,17 +719,7 @@ impl AgentProfileStore {
         if u64::try_from(current.1).ok() != Some(update.expected_revision) {
             return Err(AgentProfileError::RevisionConflict);
         }
-        let conflict = transaction
-            .query_row(
-                "SELECT agent_id FROM agent_profiles WHERE display_name_normalized = ?1 AND agent_id != ?2",
-                params![normalized_display_name, agent_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(AgentProfileError::Sqlite)?;
-        if conflict.is_some() {
-            return Err(AgentProfileError::DisplayNameConflict);
-        }
+        ensure_display_name_available(&transaction, agent_id, &normalized_display_name)?;
         let instructions_changed = current.3 != instructions;
         let instructions_revision = if instructions_changed {
             current.2 + 1
@@ -1225,6 +1273,25 @@ fn available_display_name(
         }
     }
     Err(AgentProfileError::Invalid("noms affichés épuisés"))
+}
+
+fn ensure_display_name_available(
+    tx: &rusqlite::Transaction<'_>,
+    agent_id: &str,
+    normalized: &str,
+) -> Result<(), AgentProfileError> {
+    let conflict = tx
+        .query_row(
+            "SELECT agent_id FROM agent_profiles WHERE display_name_normalized=?1 AND agent_id!=?2",
+            params![normalized, agent_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(AgentProfileError::Sqlite)?;
+    if conflict.is_some() {
+        return Err(AgentProfileError::DisplayNameConflict);
+    }
+    Ok(())
 }
 
 fn clean_display_name(raw: &str) -> Result<String, AgentProfileError> {

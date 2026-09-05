@@ -174,15 +174,17 @@ pub fn isolated_command(root: &Path) -> Command {
 }
 pub fn run_isolated(root: &Path, args: &[&str], linked: bool) -> std::process::Output {
     let mut command = isolated_command(root);
-    command
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    command.args(args);
     if linked {
         command
             .env("BRIDGET_AGENT_ID", ACTOR)
             .env("BRIDGET_AGENT_INSTANCE_ID", "shared-cli-mcp-instance");
     }
+    run_command(command)
+}
+
+pub fn run_command(mut command: Command) -> std::process::Output {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = WrapperProcess(command.spawn().expect("CLI réelle"));
     track(&child.0);
     let mut stdout = child.0.stdout.take().unwrap();

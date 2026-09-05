@@ -1,0 +1,3 @@
+{"type":"display_name_set","request":{"version":1,"display_name":"Équipe B"}}
+{"type":"display_name_result","outcome":{"status":"applied","agent_id":"5da585af-5bc7-4808-985f-c73670633990","display_name":"Équipe B","revision":2}}
+{"type":"display_name_result","outcome":{"status":"rejected","reason":"identity_unavailable"}}

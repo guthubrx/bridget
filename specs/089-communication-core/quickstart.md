@@ -24,6 +24,21 @@ Pour les outils SpecKit qui imposent un préfixe numérique malgré le nom de br
 
 Deux machines réelles, sockets de test distinctes des sockets historiques. Préflight de possession et de disponibilité avant d'établir le transfert. Lire annuaire et ledger depuis le distant, livrer une demande et sa réponse, couper uniquement le tunnel de test, puis reconnecter. Vérifier mêmes identifiants, aucun prompt dupliqué et aucun redémarrage fournisseur indu. Consigner commande SSH exacte, durée, clock skew des mesures et nettoyage. Un gate distant non exécuté reste non validé.
 
+## Changer le nom affiché, sans interface
+
+Depuis une session Bridget enregistrée (même namespace et instance vivante),
+`bridget rename "Équipe B"` met à jour le nom projeté par who. L'adresse reste
+l'UUID : les envois, réponses, scopes et retries ne changent pas. La commande
+utilise la socket, le même chemin prévu pour le tunnel autorisé ; sa recette
+distante reste à exécuter à T026. Elle ne consulte jamais une base locale pour
+modifier celle du daemon.
+
+Une identité absente, une autre instance, un nom déjà pris ou des caractères
+de contrôle sont refusés. Répéter le même nom ne crée pas de nouvelle révision.
+Le client répond par JSON (agent_id/display_name/revision), pas par une
+instruction d'aller ouvrir des réglages graphiques. Aucun fichier d'identité
+du fournisseur n'est réécrit.
+
 ## Gates de qualité
 
 Avec Rust 1.92.0 disponible dans le PATH, après isolation des harnais :

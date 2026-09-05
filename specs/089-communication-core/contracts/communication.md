@@ -46,6 +46,31 @@ T002 doit matérialiser les bytes réels, leur SHA-256 et leur origine Git pour 
 
 L'évolution additive nécessaire à l'isolation est versionnée et testée avec le client précédent. Une inconnue n'est ni ignorée silencieusement ni déclarée disponible. Le corpus historique épinglé n'est pas réécrit.
 
+## Nom affiché sans interface — extension additive T015, version 1
+
+`display_name_set` porte uniquement `request: {version:1, display_name}`. Aucun
+agent cible, chemin, scope, instruction ou label n'est accepté. Le principal
+et l'instance sont ceux de la connexion wrapper/auxiliaire vivante, validés par
+le même helper que la lecture de contenu ; les droits historiques de contenu
+projet restent un contrôle supplémentaire propre au contenu, pas au renommage.
+Les rôles service et client idempotent n'acquièrent pas ce droit. La CLI utilise
+l'inscription auxiliaire déjà partagée avec MCP, jamais une ouverture de SQLite.
+
+Canon fermé et fixture additive display-name-v1.jsonl (les 17 fixtures amont
+restent inchangées). Version inconnue, nom vide/trop long (80 caractères),
+caractère de contrôle, champ supplémentaire ou encodage non canonique :
+invalid_request sans mutation. Les autres refus sont identity_unavailable,
+name_conflict, revision_conflict et storage_unavailable, non fusionnés.
+
+La transaction IMMEDIATE ne modifie que le nom affiché, son index normalisé,
+sa révision et son horodatage ; elle contrôle rows_affected et réutilise la
+garde d'unicité des profils. UUID, instance, canon, instructions/labels et
+historique restent intacts. Même nom courant : aucune écriture. Le résultat
+Applied contient l'UUID, le nom normalisé et la révision constatés AVANT commit,
+renvoyés APRÈS succès du commit. Une lecture concurrente post-commit ne peut
+substituer le résultat d'une autre opération. Une erreur de transport n'est
+jamais annoncée comme un succès ; répéter la commande identique est possible.
+
 ## Lecture de contenu sans interface — extension additive T010, version 1
 
 Le renderer retiré n'est pas remplacé par un serveur web. `artifact_read` sur

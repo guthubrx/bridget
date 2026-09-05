@@ -30,6 +30,37 @@ pub enum ConnectionRole {
     Service,
 }
 
+/// Changement de présentation uniquement : l'identité vient de la connexion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DisplayNameRequest {
+    pub version: u8,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisplayNameRefusal {
+    InvalidRequest,
+    IdentityUnavailable,
+    NameConflict,
+    RevisionConflict,
+    StorageUnavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DisplayNameOutcome {
+    Applied {
+        agent_id: String,
+        display_name: String,
+        revision: u64,
+    },
+    Rejected {
+        reason: DisplayNameRefusal,
+    },
+}
+
 /// Mode réel de présence d'un agent.
 ///
 /// Cette information décrit le chemin d'attelage (et non le transport réseau)
@@ -2454,6 +2485,11 @@ pub enum WrapperToDaemon {
     Heartbeat,
     /// Demander la liste des agents connectés.
     ListAgents,
+    /// Extension 089 v1 : aucune mutation de route, de scope ou d'instructions.
+    #[serde(rename = "display_name_set")]
+    DisplayNameSet {
+        request: DisplayNameRequest,
+    },
     /// Demande au daemon ce qu'il atteste de LUI-MÊME : sa machine et sa base.
     ///
     /// Un client fédéré ne peut pas les déduire — il affichait jusqu'ici SES
@@ -3209,6 +3245,8 @@ pub enum DaemonToWrapper {
     Disconnect,
     /// Réponse à ListAgents.
     AgentList { agents: Vec<AgentInfo> },
+    #[serde(rename = "display_name_result")]
+    DisplayNameResult { outcome: DisplayNameOutcome },
     /// Machine, base et instance attestées par le daemon lui-même.
     ///
     /// `instance_id` est renouvelé à chaque démarrage : contrairement à

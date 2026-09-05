@@ -12,6 +12,30 @@ use std::time::{Duration, Instant};
 
 const DAEMON_BUDGET: Duration = Duration::from_secs(10);
 
+pub(crate) fn rename_display_name(
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+    name: &str,
+) -> Result<DaemonToWrapper, ClientError> {
+    let mut connection = registered_connection(identity, instance_id, socket)?;
+    let response = connection.send_then_wait(&WrapperToDaemon::DisplayNameSet {
+        request: bridget_transport::protocol::DisplayNameRequest {
+            version: 1,
+            display_name: name.into(),
+        },
+    })?;
+    match &response {
+        DaemonToWrapper::DisplayNameResult {
+            outcome: bridget_transport::protocol::DisplayNameOutcome::Applied { agent_id, .. },
+        } if agent_id == identity => Ok(response),
+        DaemonToWrapper::DisplayNameResult {
+            outcome: bridget_transport::protocol::DisplayNameOutcome::Rejected { .. },
+        } => Ok(response),
+        _ => unexpected_response(response),
+    }
+}
+
 /// La portée vient de l'inscription auxiliaire attestée, jamais des arguments.
 pub(crate) fn read_artifact(
     identity: &str,

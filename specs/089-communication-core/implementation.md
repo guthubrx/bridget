@@ -1,5 +1,20 @@
 # Journal de réalisation — 089
 
+## 2026-09-05 — T015 achevée : nom humain par le vrai CLI
+
+La première tranche ci-dessous est historique. `bridget rename "Équipe B"` passe maintenant par la socket et une extension versionnée fermée display_name_set/result ; le client ne lit aucune base. L'autorité est l'identité/instance active de LA connexion, extraite du contrôle déjà utilisé par la lecture de contenus. Aucun agent_id cible déclarable dans la commande. Le helper d'unicité SQL est partagé avec update_profile ; la transaction IMMEDIATE ne modifie que le nom, sa clé normalisée, la révision et updated_at. Instructions historiques (espaces inclus), révision d'instructions et autres champs restent identiques. Un retry du nom courant ne modifie pas la révision.
+
+Oracle écrit avant correction : le vrai CLI refusait le nom humain (exit de test 101, 1,74 s). Après raccord : nom projeté, refus de collision/champ inconnu/version/contrôle/instance étrangère, profil inchangé après refus, arrêt brutal du daemon puis reprise au même UUID/instance/canon ; aucun deuxième prompt. Fixture JSONL additive indépendante, les 17 fixtures amont restent inchangées. Mutant exécuté : supprimer l'UPDATE de nom en gardant la réponse Applied fait échouer ListAgents (Agent au lieu de Destinataire renommé, 1,69 s). Mutant restauré avant validations.
+
+Commandes sous l'environnement privé et watchdog 180 s décrits à T014 :
+
+- `cargo test --offline -p bridget-daemon --features test-support --test core_089_identity_test --test core_089_contract_test --test core_089_content_test --test core_089_isolation_test` : 21/21 ; identité 3,19 s, contrat 1,19 s, contenus 5,17 s, isolation 0,38 s ; compilation 0,41 s.
+- `cargo test --offline --locked -p bridget-daemon --features test-support --lib -- mcp_identity::tests identity_migration::tests agent_profile::tests --test-threads=4` : 14/14, 0,34 s ; compilation 9,60 s.
+- `cargo clippy --offline --locked --workspace --all-targets --features test-support -- -D warnings` : vert, 4,76 s après restauration.
+- `cargo fmt --all --check`, `git diff --check`, `bash scripts/verify-089-contracts.sh --self-test --require-complete` : verts, 17 fichiers et six mutations refusées.
+
+Le harnais commun extrait seulement run_command de run_isolated pour les variables d'identité du vrai CLI ; mêmes bornes et gestion des enfants. Pas de recette SSH ni de compte fournisseur réel dans T015. Le WIP des scripts de fédération est conservé séparément, non inclus dans ce lot.
+
 ## 2026-09-05 — T015 partielle : invariants d'identité exécutés
 
 core_089_identity_test réutilise le harnais 012, sans nouveau processus de production. Deux tests avec vrais binaires daemon/MCP/wrapper et fournisseur ACP déterministe :

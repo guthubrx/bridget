@@ -3,10 +3,12 @@
 #[path = "support/idempotent.rs"]
 pub mod fixture;
 use bridget_daemon::agent_profile::{AgentProfileError, AgentProfileStore, AgentProfileUpdate};
+use bridget_transport::protocol::{DisplayNameOutcome, DisplayNameRefusal, decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use fixture::*;
 use rusqlite::{Connection, OpenFlags, types::Value as SqlValue};
 use serde_json::{Value, json};
+use std::io::Write;
 use std::{
     fs,
     path::Path,
@@ -69,8 +71,8 @@ fn rename_profile(
     name: &str,
 ) -> Result<(), AgentProfileError> {
     // Vraie primitive de profil conservée, aucune écriture SQL de simulation.
-    // Cette preuve ne prétend PAS tester une commande rename CLI (T015 reste
-    // ouverte tant que la surface sans GUI n'est pas raccordée).
+    // Préparation du profil de l'émetteur et oracle historique de refus ; le
+    // destinataire est renommé plus bas par le vrai binaire CLI, puis repris.
     let current = profiles.profile_detail(agent)?;
     profiles
         .update_profile(
@@ -103,6 +105,28 @@ fn listed_name(root: &Path, agent: &str) -> String {
 }
 
 #[test]
+fn extension_nom_affiche_v1_a_un_canon_externe_et_ferme() {
+    let corpus = include_str!(
+        "../../../specs/089-communication-core/contracts/fixtures/display-name-v1.jsonl"
+    );
+    for (i, line) in corpus.lines().enumerate() {
+        let bytes = if i == 0 {
+            encode(&decode::<WrapperToDaemon>(line).unwrap()).unwrap()
+        } else {
+            encode(&decode::<DaemonToWrapper>(line).unwrap()).unwrap()
+        };
+        assert_eq!(bytes.as_bytes(), line.as_bytes());
+    }
+    assert!(decode::<WrapperToDaemon>(r#"{"type":"display_name_set","request":{"version":1,"display_name":"B","future":true}}"#).is_err());
+    assert!(
+        decode::<DaemonToWrapper>(
+            r#"{"type":"display_name_result","outcome":{"status":"rejected","reason":"unknown"}}"#
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper() {
     let root = test_root("identity-restart");
     let db = root.join("state/bridget.db");
@@ -124,11 +148,87 @@ fn noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper() 
         })
         .collect::<Vec<_>>();
     assert!(!identity_files.is_empty(), "fichiers du vrai wrapper");
+    let name_file = &identity_files[0].0;
+    let instance = name_file
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .strip_prefix("instance-")
+        .unwrap();
+    let rename_cli = |name: &str, caller_instance: &str| {
+        let mut command = isolated_command(&root);
+        command
+            .args(["rename", name])
+            .env("BRIDGET_AGENT_ID_FILE", name_file)
+            .env("BRIDGET_AGENT_INSTANCE_ID", caller_instance);
+        run_command(command)
+    };
     let mut profiles = AgentProfileStore::open(&db).unwrap();
     rename_profile(&mut profiles, ACTOR, "Auteur renommé").unwrap();
-    rename_profile(&mut profiles, ACP_AGENT, "Destinataire renommé").unwrap();
+    // Données historiques non normalisées : renommer ne doit jamais nettoyer
+    // ni re-déployer le prompt. Mutation update_profile complet → bytes perdus.
+    Connection::open(&db).unwrap().execute("UPDATE agent_profiles SET instructions='  instructions verbatim  ', instructions_revision=7 WHERE agent_id=?1", [ACP_AGENT]).unwrap();
+    let renamed = rename_cli("Destinataire renommé", instance);
+    assert!(renamed.status.success(), "{}", output_text(&renamed));
     assert_eq!(listed_name(&root, ACP_AGENT), "Destinataire renommé");
     let stable_profile = profiles.profile_detail(ACP_AGENT).unwrap();
+    assert_eq!(stable_profile.instructions, "  instructions verbatim  ");
+    assert_eq!(stable_profile.summary.instructions_revision, 7);
+    let replay = rename_cli("Destinataire renommé", instance);
+    assert!(replay.status.success(), "{}", output_text(&replay));
+    assert_eq!(
+        replay.stdout, renamed.stdout,
+        "même nom : pas de nouvelle révision"
+    );
+    for raw in [
+        r#"{"type":"display_name_set","request":{"version":1,"display_name":"B","future":true}}"#,
+        r#"{"type":"display_name_set","request":{"version":1,"display_name":"B"},"agent_id":"foreign"}"#,
+        r#"{"type":"display_name_set","request":{"version":2,"display_name":"B"}}"#,
+        r#"{"type":"display_name_set","request":{"version":1,"display_name":"B\u001b"}}"#,
+    ] {
+        let mut raw_client = Client::connect(&socket(&root));
+        writeln!(raw_client.writer, "{raw}").unwrap();
+        raw_client.writer.flush().unwrap();
+        assert!(matches!(
+            raw_client.receive(),
+            DaemonToWrapper::DisplayNameResult {
+                outcome: DisplayNameOutcome::Rejected {
+                    reason: DisplayNameRefusal::InvalidRequest
+                }
+            }
+        ));
+        assert_eq!(profiles.profile_detail(ACP_AGENT).unwrap(), stable_profile);
+    }
+    let mut anonymous = Client::connect(&socket(&root));
+    anonymous.send(WrapperToDaemon::DisplayNameSet {
+        request: bridget_transport::protocol::DisplayNameRequest {
+            version: 1,
+            display_name: "B".into(),
+        },
+    });
+    assert!(matches!(
+        anonymous.receive(),
+        DaemonToWrapper::DisplayNameResult {
+            outcome: DisplayNameOutcome::Rejected {
+                reason: DisplayNameRefusal::IdentityUnavailable
+            }
+        }
+    ));
+    drop(anonymous);
+    for (name, caller_instance) in [
+        ("Usurpation", "foreign-instance"),
+        ("Auteur renommé", instance),
+        ("", instance),
+    ] {
+        let rejected = rename_cli(name, caller_instance);
+        assert!(
+            !rejected.status.success(),
+            "{name}: {}",
+            output_text(&rejected)
+        );
+        assert_eq!(profiles.profile_detail(ACP_AGENT).unwrap(), stable_profile);
+    }
     for (name, collision) in [("Auteur renommé", true), ("", false)] {
         let error = rename_profile(&mut profiles, ACP_AGENT, name).unwrap_err();
         assert!(if collision {

@@ -1437,19 +1437,50 @@ fn cmd_rename(args: &[String]) {
         std::process::exit(2);
     }
 
-    // Validation du nouveau nom (H-001)
-    if let Err(e) = validate_technical_label(&args[0]) {
-        eprintln!("erreur: {}", e);
-        std::process::exit(2);
+    if args[0].chars().any(char::is_control)
+        || args[0].chars().count() > crate::agent_profile::MAX_DISPLAY_NAME_CHARS
+    {
+        exit_argument_error("nom affiché invalide (80 caractères maximum, sans contrôle)");
     }
-
-    let current_agent_id = current_agent_id();
-    if current_agent_id == "human" {
-        eprintln!("rename indisponible hors d'un agent Bridget");
+    let identity = crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
+        eprintln!(
+            "bridget rename : {} : {}",
+            error.code(),
+            error.remediation()
+        );
         std::process::exit(1);
+    });
+    match crate::communication::client::rename_display_name(
+        &identity.name,
+        &identity.instance_id,
+        &socket_path(),
+        &args[0],
+    ) {
+        Ok(DaemonToWrapper::DisplayNameResult {
+            outcome:
+                bridget_transport::protocol::DisplayNameOutcome::Applied {
+                    agent_id,
+                    display_name,
+                    revision,
+                },
+        }) => {
+            println!(
+                "{}",
+                serde_json::json!({"agent_id":agent_id,"display_name":display_name,"revision":revision})
+            );
+        }
+        Ok(response) => {
+            eprintln!(
+                "bridget rename : {}",
+                encode(&response).expect("réponse sérialisable")
+            );
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("bridget rename : résultat non confirmé : {error:?}");
+            std::process::exit(1);
+        }
     }
-    eprintln!("rename de route supprimé : modifiez le nom affiché dans les réglages de l’agent");
-    std::process::exit(2);
 }
 
 fn current_agent_id() -> String {

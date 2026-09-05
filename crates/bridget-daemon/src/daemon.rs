@@ -4287,6 +4287,29 @@ fn handle_connection(
             if serde_json::from_str::<serde_json::Value>(&line)
                 .ok()
                 .is_some_and(|value| {
+                    value.get("type").and_then(|kind| kind.as_str()) == Some("display_name_set")
+                })
+                && !decode::<WrapperToDaemon>(&line)
+                    .ok()
+                    .is_some_and(|message| {
+                        encode(&message).is_ok_and(|canonical| canonical == line)
+                    })
+            {
+                writeln!(
+                    my_writer,
+                    "{}",
+                    encode(&DaemonToWrapper::DisplayNameResult {
+                        outcome: bridget_transport::protocol::DisplayNameOutcome::Rejected {
+                            reason: bridget_transport::protocol::DisplayNameRefusal::InvalidRequest
+                        }
+                    })?
+                )?;
+                my_writer.flush()?;
+                continue;
+            }
+            if serde_json::from_str::<serde_json::Value>(&line)
+                .ok()
+                .is_some_and(|value| {
                     value.get("type").and_then(|kind| kind.as_str()) == Some("artifact_read")
                 })
                 && !decode::<WrapperToDaemon>(&line)
@@ -6704,22 +6727,10 @@ fn artifact_scope_for_agent(agent_id: &str) -> String {
 /// Autorité unique de publication ET lecture : principal/instance attestés,
 /// route vivante, ou connexion MCP auxiliaire déjà reconnue pour cette même
 /// instance. Le client n'élargit jamais sa portée en fournissant un identifiant.
-fn artifact_access_scope(
-    st: &DaemonState,
-    conn_id: &str,
-) -> Result<(String, String, String), ArtifactReadRefusal> {
-    let agent = st
-        .conn_names
-        .get(conn_id)
-        .ok_or(ArtifactReadRefusal::IdentityUnavailable)?;
-    let instance = st
-        .conn_instances
-        .get(conn_id)
-        .ok_or(ArtifactReadRefusal::IdentityUnavailable)?;
-    let route = st
-        .router
-        .get_agent(agent)
-        .ok_or(ArtifactReadRefusal::IdentityUnavailable)?;
+fn live_connection_identity(st: &DaemonState, conn_id: &str) -> Option<(String, String)> {
+    let agent = st.conn_names.get(conn_id)?;
+    let instance = st.conn_instances.get(conn_id)?;
+    let route = st.router.get_agent(agent)?;
     if !st.connections.contains_key(&route.connection_id)
         || st.conn_instances.get(&route.connection_id) != Some(instance)
         || (route.connection_id != conn_id && !st.auxiliary_connections.contains(conn_id))
@@ -6729,9 +6740,18 @@ fn artifact_access_scope(
                 && matches!(presence.state.as_str(), "connected" | "busy")
         })
     {
-        return Err(ArtifactReadRefusal::IdentityUnavailable);
+        return None;
     }
-    let scope = match st.fleet.project_for_agent(agent) {
+    Some((agent.clone(), instance.clone()))
+}
+
+fn artifact_access_scope(
+    st: &DaemonState,
+    conn_id: &str,
+) -> Result<(String, String, String), ArtifactReadRefusal> {
+    let (agent, instance) =
+        live_connection_identity(st, conn_id).ok_or(ArtifactReadRefusal::IdentityUnavailable)?;
+    let scope = match st.fleet.project_for_agent(&agent) {
         Some(project) => {
             let binding = st
                 .store
@@ -6745,9 +6765,9 @@ fn artifact_access_scope(
             }
             project.project_id
         }
-        None => artifact_scope_for_agent(agent),
+        None => artifact_scope_for_agent(&agent),
     };
-    Ok((agent.clone(), instance.clone(), scope))
+    Ok((agent, instance, scope))
 }
 
 fn artifact_read_response(
@@ -8339,6 +8359,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::ListRequests { .. }
                 | WrapperToDaemon::LedgerProjection { .. }
                 | WrapperToDaemon::ListAgents
+                | WrapperToDaemon::DisplayNameSet { .. }
                 | WrapperToDaemon::Runtime { .. }
                 | WrapperToDaemon::ServedModel { .. }
                 | WrapperToDaemon::RateLimit { .. }
@@ -8545,6 +8566,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::LedgerProjection { .. }
                 | WrapperToDaemon::Heartbeat
                 | WrapperToDaemon::ListAgents
+                | WrapperToDaemon::DisplayNameSet { .. }
                 | WrapperToDaemon::Runtime { .. }
                 | WrapperToDaemon::ServedModel { .. }
                 | WrapperToDaemon::RateLimit { .. }
@@ -11177,6 +11199,44 @@ fn handle_wrapper_message(
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let agents = st.agent_infos();
             Some(DaemonToWrapper::AgentList { agents })
+        }
+        WrapperToDaemon::DisplayNameSet { request } => {
+            use crate::agent_profile::{AgentProfileError, AgentProfileStore};
+            use bridget_transport::protocol::{
+                DisplayNameOutcome as Outcome, DisplayNameRefusal as Refusal,
+            };
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let result = (|| {
+                if request.version != 1
+                    || request.display_name.is_empty()
+                    || request.display_name.chars().count()
+                        > crate::agent_profile::MAX_DISPLAY_NAME_CHARS
+                    || request.display_name.chars().any(char::is_control)
+                {
+                    return Err(Refusal::InvalidRequest);
+                }
+                let (agent, _) =
+                    live_connection_identity(&st, conn_id).ok_or(Refusal::IdentityUnavailable)?;
+                let mut profiles = AgentProfileStore::open(&st.db_path)
+                    .map_err(|_| Refusal::StorageUnavailable)?;
+                profiles
+                    .rename_display_name(&agent, &request.display_name)
+                    .map_err(|error| match error {
+                        AgentProfileError::Invalid(_) => Refusal::InvalidRequest,
+                        AgentProfileError::NotFound => Refusal::IdentityUnavailable,
+                        AgentProfileError::DisplayNameConflict => Refusal::NameConflict,
+                        AgentProfileError::RevisionConflict => Refusal::RevisionConflict,
+                        AgentProfileError::Sqlite(_) => Refusal::StorageUnavailable,
+                    })
+                    .map(|profile| Outcome::Applied {
+                        agent_id: profile.agent_id,
+                        display_name: profile.display_name,
+                        revision: profile.revision,
+                    })
+            })();
+            Some(DaemonToWrapper::DisplayNameResult {
+                outcome: result.unwrap_or_else(|reason| Outcome::Rejected { reason }),
+            })
         }
         WrapperToDaemon::Runtime {
             agent,
