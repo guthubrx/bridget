@@ -1202,6 +1202,19 @@ fn private_prompt(instructions: Option<&str>, body: &str) -> String {
     format!("[Instructions individuelles Bridget]\n{instructions}\n\n[Demande]\n{body}")
 }
 
+fn communication_prompt(message: &BridgetMessage, interactive: bool) -> String {
+    let response = if interactive {
+        "Si reply=true, réponds une seule fois par l'outil bridget_send avec to=from et in_reply_to=id ci-dessus. La réponse finale à l'écran n'est pas envoyée à cet agent."
+    } else {
+        "Si reply=true, le wrapper relaie automatiquement ta réponse finale à from avec in_reply_to=id ci-dessus. Utilise cette réponse finale pour terminer la demande ; pour un avancement distinct, utilise bridget_send avec to=from et reply=false, sans in_reply_to."
+    };
+    format!(
+        "[Message Bridget : {}]\n{}\n\n[Réponse Bridget]\n{response}\nPour communiquer, utilise les outils MCP Bridget (bridget_send, bridget_who, bridget_ledger). S'ils ne sont pas affichés, cherche-les dans le catalogue d'outils disponible. L'accès à la socket depuis le shell restreint n'est pas requis ; un refus du shell ne prouve pas une panne MCP.",
+        json!({"from": message.from, "to": message.to, "id": message.id, "reply": message.reply, "in_reply_to": message.in_reply_to}),
+        message.body
+    )
+}
+
 fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<String, String> {
     let instructions = worker
         .private_profile_instructions
@@ -1211,18 +1224,8 @@ fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<St
     // Les outils exposent leurs capacités ; le pilote ne promet ni interface
     // de rendu ni disponibilité du sandbox et ne transforme pas un document
     // HTML en ordre de publication ou d'exécution.
-    let body = if worker.interactive {
-        // Métadonnées de transport distinctes du corps : le message durable,
-        // son canon et ses octets ne sont jamais réécrits. La réponse appartient
-        // au seul outil MCP, pas à la réponse finale de l'interface humaine.
-        format!(
-            "[Message Bridget : {}]\n{}\n\n[Réponse Bridget]\nSi reply=true, réponds une seule fois par l'outil bridget_send avec to=from et in_reply_to=id ci-dessus. La réponse finale à l'écran n'est pas envoyée à cet agent.",
-            json!({"from": message.from, "to": message.to, "id": message.id, "reply": message.reply}),
-            message.body
-        )
-    } else {
-        message.body.clone()
-    };
+    // L'enveloppe est une projection fournisseur ; le corps durable reste intact.
+    let body = communication_prompt(message, worker.interactive);
     let prompt = private_prompt(instructions.as_deref(), &body);
     for attempt in 0..=SATURATION_RETRIES {
         match request(
@@ -1539,7 +1542,7 @@ fn steer_into_turn(worker: &Worker, turn_id: &str, accepted: &mut Vec<BridgetMes
                 "threadId": worker.thread_id,
                 "expectedTurnId": turn_id,
                 "clientUserMessageId": message.id,
-                "input": [{ "type": "text", "text": message.body }],
+                "input": [{ "type": "text", "text": communication_prompt(&message, worker.interactive) }],
             }),
             STEER_REQUEST_TIMEOUT,
         );
@@ -5142,6 +5145,21 @@ mod tests {
             ligne_steer.contains("\"clientUserMessageId\":\"codex-steer-injecte\""),
             "turn/steer doit porter le message arrivé, ligne={ligne_steer}"
         );
+        let steer: Value = serde_json::from_str(&ligne_steer).unwrap();
+        let prompt = steer["params"]["input"][0]["text"].as_str().unwrap();
+        let header = prompt.lines().next().unwrap();
+        let envelope: Value = serde_json::from_str(
+            header
+                .strip_prefix("[Message Bridget : ")
+                .unwrap()
+                .strip_suffix(']')
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(envelope["from"], second.from);
+        assert_eq!(envelope["id"], second.id);
+        assert_eq!(envelope["reply"], second.reply);
+        assert!(prompt.contains(&second.body));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -6166,9 +6184,8 @@ mod tests {
             ]
         );
         assert!(frames.iter().all(|frame| !frame.contains("jsonrpc")));
-        // Oracle au destinataire (la trace écrite par le faux fournisseur),
-        // pas sur le générateur de prompt : réintroduire le préfixe UI ou
-        // l'ordre kind:html ferait échouer les DEUX tentatives de remise.
+        // Oracle au destinataire : enveloppe complète et corps inchangé,
+        // sans ordre de rendu/publication ajouté au contenu HTML.
         let turns = frames
             .iter()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
@@ -6176,10 +6193,30 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(turns.len(), 2);
         for turn in turns {
+            let prompt = turn["params"]["input"][0]["text"].as_str().unwrap();
+            let (header, rest) = prompt.split_once('\n').unwrap();
+            let envelope: Value = serde_json::from_str(
+                header
+                    .strip_prefix("[Message Bridget : ")
+                    .unwrap()
+                    .strip_suffix(']')
+                    .unwrap(),
+            )
+            .unwrap();
             assert_eq!(
-                turn["params"]["input"][0]["text"].as_str(),
-                Some(sent.body.as_str())
+                envelope,
+                json!({"from": sent.from, "to": sent.to, "id": sent.id, "reply": true, "in_reply_to": null})
             );
+            assert_eq!(
+                rest.split_once("\n\n[Réponse Bridget]\n")
+                    .unwrap()
+                    .0
+                    .as_bytes(),
+                sent.body.as_bytes()
+            );
+            assert!(rest.contains("le wrapper relaie automatiquement ta réponse finale"));
+            assert!(rest.contains("catalogue d'outils disponible"));
+            assert!(!rest.contains("kind:html"));
         }
         transport.stop();
         let _ = fs::remove_dir_all(root);
@@ -6501,6 +6538,25 @@ mod tests {
         assert!(prompt.ends_with(body));
         assert_eq!(body, "Demande utilisateur visible.");
         assert_eq!(private_prompt(None, body), body);
+    }
+
+    #[test]
+    fn consigne_reponse_distingue_mcp_interactif_et_relais_gere() {
+        let mut message = message("demande-liée");
+        message.in_reply_to = Some("parent".into());
+        for interactive in [false, true] {
+            let prompt = communication_prompt(&message, interactive);
+            assert!(prompt.contains("\"in_reply_to\":\"parent\""));
+            assert_eq!(
+                prompt.contains("réponds une seule fois par l'outil bridget_send"),
+                interactive
+            );
+            assert_eq!(
+                prompt.contains("le wrapper relaie automatiquement"),
+                !interactive
+            );
+            assert!(prompt.contains("un refus du shell ne prouve pas une panne MCP"));
+        }
     }
 
     #[test]

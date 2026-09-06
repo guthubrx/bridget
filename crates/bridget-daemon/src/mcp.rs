@@ -443,6 +443,7 @@ fn execute_tool_at_with_scope(
 ) -> Result<Value, ToolError> {
     match name {
         "bridget_send" => execute_send(identity, instance_id, arguments, socket),
+        "bridget_cancel" => execute_cancel(identity, instance_id, arguments, socket),
         "bridget_publish_artifact" => {
             execute_publish_artifact(identity, instance_id, arguments, socket)
         }
@@ -653,6 +654,25 @@ fn execute_send(
             "reason": format!("{DIAGNOSTIC_ACCUSE_PERDU} — {REJEU_A_L_IDENTIQUE} ({message})")
         })),
         Err(error) => Err(error),
+    }
+}
+
+fn execute_cancel(
+    identity: &str,
+    instance_id: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    reject_unknown_arguments(arguments, &["id", "reason"])?;
+    let id = required_non_empty_string(arguments, "id")?;
+    let reason = optional_non_empty_string(arguments, "reason")?;
+    match crate::communication::client::cancel_request(identity, instance_id, socket, &id, reason)?
+    {
+        DaemonToWrapper::RequestCancelled { id, state } => Ok(json!({"status": state, "id": id})),
+        DaemonToWrapper::Nack { id, reason } => {
+            Ok(json!({"status": "rejected", "id": id, "reason": reason}))
+        }
+        other => unexpected_response(other),
     }
 }
 
@@ -1493,6 +1513,19 @@ fn tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "bridget_cancel",
+            "description": "Annuler une demande suivie dont tu es l'émetteur. Le daemon vérifie l'identité connectée ; cette opération n'arrête pas l'agent et ne prouve pas la fin de sa mission.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "minLength": 1 },
+                    "reason": { "type": "string", "minLength": 1 }
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
             "name": "bridget_who",
             "description": "Lister les équipiers Bridget visibles.",
             "inputSchema": {
@@ -1666,7 +1699,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    9
+                    10
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -1691,6 +1724,7 @@ mod tests {
             .map(|tool| tool["name"].as_str().unwrap().to_string())
             .collect::<BTreeSet<_>>();
         let expected = [
+            "bridget_cancel",
             "bridget_ledger",
             "bridget_publish_artifact",
             "bridget_read_artifact",
