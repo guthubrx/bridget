@@ -1,7 +1,7 @@
 """Le vrai parseur/config/read Codex lit la projection de production, sans LLM.
 
 Mutation : retirer tools ou remplacer approve par auto fait échouer l'oracle.
-Le serveur MCP inexistant n'est jamais lancé : aucun thread/start ni appel métier.
+Le serveur MCP n'est jamais lancé : aucun thread/start ni appel métier.
 """
 import json
 import os
@@ -23,7 +23,7 @@ with tempfile.TemporaryDirectory(prefix="b91-policy-", dir="/tmp") as root:
                      'default_tools_approval_mode="prompt"\n')
     process = subprocess.Popen(
         [os.environ.get("BRIDGET_TEST_CODEX_BIN", "/opt/homebrew/bin/codex"),
-         "-c", sys.argv[1], "app-server"],
+         *json.loads(sys.argv[1])],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         text=True, cwd=root, env={**os.environ, "CODEX_HOME": root},
     )
@@ -60,6 +60,7 @@ with tempfile.TemporaryDirectory(prefix="b91-policy-", dir="/tmp") as root:
         }, bridget
         assert config["mcp_servers"]["other"]["default_tools_approval_mode"] == "prompt"
         assert config["approval_policy"] == "never", config["approval_policy"]
+        assert config["model"] == "gpt-5.6-terra", config["model"]
         assert config["sandbox_mode"] == "workspace-write", config["sandbox_mode"]
         assert config["sandbox_workspace_write"]["network_access"] is False
     finally:

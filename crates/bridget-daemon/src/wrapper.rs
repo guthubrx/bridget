@@ -4146,11 +4146,38 @@ fn apply_managed_mcp(
         // un artefact.
         ("codex_app_server", "codex") => {
             let override_ = codex_mcp_override(&interactive_mcp_server_entry()?)?;
-            let insertion = args
-                .iter()
-                .position(|argument| argument == "app-server")
-                .unwrap_or(args.len());
-            args.splice(insertion..insertion, ["-c".to_string(), override_]);
+            // Codex porte aussi -c sur sa sous-commande : un groupe après
+            // app-server remplace celui d'avant. Réunir les overrides au même
+            // niveau, sans changer leurs octets ni leur ordre de priorité.
+            // Sinon ajouter MCP après app-server ferait perdre notamment le
+            // --yolo humain projeté en -c avant app-server.
+            if let Some(at) = args.iter().position(|argument| argument == "app-server") {
+                let mut prefix = Vec::new();
+                let mut overrides = Vec::new();
+                let mut index = 0;
+                while index < at {
+                    let argument = &args[index];
+                    if matches!(argument.as_str(), "-c" | "--config") {
+                        if index + 1 == at {
+                            return Err("option Codex de configuration sans valeur".into());
+                        }
+                        overrides.extend_from_slice(&args[index..index + 2]);
+                        index += 2;
+                    } else {
+                        if argument.starts_with("--config=") || argument.starts_with("-c=") {
+                            overrides.push(argument.clone());
+                        } else {
+                            prefix.push(argument.clone());
+                        }
+                        index += 1;
+                    }
+                }
+                prefix.push("app-server".into());
+                prefix.extend(overrides);
+                prefix.extend_from_slice(&args[at + 1..]);
+                *args = prefix;
+            }
+            args.extend(["-c".to_string(), override_]);
             Ok(None)
         }
         _ => Ok(None),
@@ -6546,9 +6573,9 @@ mod reconnect_tests {
             .unwrap()
             .is_none()
         );
-        assert_eq!(codex_args[0], "-c");
-        assert!(codex_args[1].contains("mcp_servers.bridget"));
-        assert_eq!(codex_args[2], "app-server");
+        assert_eq!(codex_args[0], "app-server");
+        assert_eq!(codex_args[1], "-c");
+        assert!(codex_args[2].contains("mcp_servers.bridget"));
 
         let mut none_args = Vec::new();
         assert!(
@@ -6668,6 +6695,59 @@ mod reconnect_tests {
     }
 
     #[test]
+    fn spec091_mcp_conserve_les_overrides_codex_des_deux_niveaux() {
+        let mut args: Vec<String> = [
+            "--sandbox",
+            "workspace-write",
+            "-c",
+            "approval_policy=\"never\"",
+            "--config=model_reasoning_effort=\"high\"",
+            "-c=model=\"gpt-5.6-terra\"",
+            "app-server",
+            "-c",
+            "sandbox_mode=\"workspace-write\"",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        apply_managed_mcp(
+            "codex_app_server",
+            "codex",
+            &mut args,
+            "unused",
+            Path::new("/tmp/unused.sock"),
+        )
+        .unwrap();
+        assert_eq!(
+            &args[..9],
+            [
+                "--sandbox",
+                "workspace-write",
+                "app-server",
+                "-c",
+                "approval_policy=\"never\"",
+                "--config=model_reasoning_effort=\"high\"",
+                "-c=model=\"gpt-5.6-terra\"",
+                "-c",
+                "sandbox_mode=\"workspace-write\"",
+            ]
+        );
+        assert_eq!(args[9], "-c");
+        assert!(args[10].starts_with("mcp_servers.bridget="));
+        let mut invalid = vec!["-c".to_owned(), "app-server".to_owned()];
+        assert!(
+            apply_managed_mcp(
+                "codex_app_server",
+                "codex",
+                &mut invalid,
+                "unused",
+                Path::new("/tmp/unused.sock")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn spec091_mcp_autorise_seulement_les_quatre_outils_de_communication() {
         let server = serde_json::json!({
             "command": "/tmp/bridget-test", "env": {
@@ -6694,16 +6774,29 @@ mod reconnect_tests {
     #[test]
     #[ignore = "requiert le binaire Codex installé ; config/read réel, sans appel modèle"]
     fn spec091_codex_lit_la_politique_mcp_injectee() {
-        let server = serde_json::json!({
-            "command": "/nonexistent/bridget-test", "env": {
-                "HOME": "/tmp/home", "BRIDGET_HOME": "/tmp/state",
-                "BRIDGET_SOCKET": "/tmp/state/bridget.sock"
-            }
-        });
+        let registry = crate::registry::AgentRegistry::from_json("{}", "/tmp/unused-registry.json")
+            .unwrap()
+            .for_spawn_posture(
+                "codex",
+                bridget_transport::protocol::SpawnPosture::Development,
+            )
+            .unwrap();
+        let mut args = registry.get("codex").unwrap().args.clone();
+        // VRAI assemblage registre -> projection wrapper -> parseur Codex.
+        // Un simple `-c ... app-server` ne reproduit pas la collision entre
+        // les overrides globaux et ceux du profil placés après app-server.
+        apply_managed_mcp(
+            "codex_app_server",
+            "codex",
+            &mut args,
+            "unused",
+            Path::new("/tmp/unused.sock"),
+        )
+        .unwrap();
         let output = std::process::Command::new("python3")
             .arg("-c")
             .arg(include_str!("../tests/fixtures/codex_mcp_policy_091.py"))
-            .arg(codex_mcp_override(&server).unwrap())
+            .arg(serde_json::to_string(&args).unwrap())
             .output()
             .unwrap();
         assert!(

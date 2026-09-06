@@ -166,3 +166,14 @@ explicitement : **1/1**). Fmt, clippy workspace/all-targets/test-support et
 diff-check sont verts. La preuve d'écriture de l'équipier reste non versionnée.
 Le statut de la recette MCP de l'agent vivant est consigné séparément : un
 succès du parseur natif ne vaut pas encore un appel métier réussi.
+
+La reprise réelle à 786e6372 révèle une seconde couture : les arguments -c
+globaux injectés avant `app-server` disparaissent de la configuration effective
+quand le profil possède aussi des -c après la sous-commande. Vérifié en relisant
+les arguments du processus puis `config/read` : les quatre autorisations sont
+absentes malgré leur présence dans argv. L'assemblage réunit désormais les
+overrides après la sous-commande en préservant leurs octets et priorité, puis
+ajoute la projection MCP. Cela conserve également modèle/effort et le bypass
+explicitement demandé par un humain, sans en créer un. Le test natif consomme
+maintenant les arguments du VRAI registre development passés au VRAI assembleur
+wrapper ; les arguments anciens observés en production font échouer ce test.
