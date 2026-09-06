@@ -71,6 +71,17 @@ native_recipe!(
 );
 native_recipe!(reprise_absente_refusee_avant_presence, "--missing-resume");
 native_recipe!(
+    reprise_nom_codex_reel_conserve_historique_et_messages,
+    "--named-resume"
+);
+native_recipe!(menu_reprise_reel_sans_fil_provisoire, "--menu-resume");
+native_recipe!(menu_annule_nettoie_serveur_avant_presence, "--menu-cancel");
+native_recipe!(nom_codex_absent_refuse_sans_presence, "--name-missing");
+native_recipe!(
+    nom_codex_ambigu_refuse_sans_selection_arbitraire,
+    "--name-ambiguous"
+);
+native_recipe!(
     reprise_humaine_par_nom_et_fil_sans_uuid_bridget,
     "--human-resume"
 );

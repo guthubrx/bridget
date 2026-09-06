@@ -69,6 +69,13 @@ reconstruire soi-même cette dérivation ni convertir une clé d'une autre insta
 
 ## Session Codex interactive native
 
+`bridget codex resume <nom-Codex>` reprend aussi une conversation nommée.
+`bridget codex resume` propose un menu numéroté des conversations publiées
+par Codex (n/p, q ou Ctrl-C pour annuler). Ne pas le présenter comme le
+sélecteur natif : la TUI native est lancée après sélection et inscription.
+`--name` choisit le nom Bridget, indépendant du nom Codex après `resume`.
+Ne pas inventer un UUID ni choisir arbitrairement parmi des noms ambigus.
+
 `bridget codex --name <nom> resume <UUID-Codex>` retrouve l'identité portant
 ce nom et reprend le fil, sans UUID Bridget demandé à l'humain. Le nom reste
 distinct de l'adresse UUID. Un nom déjà actif est refusé, un nom inactif est

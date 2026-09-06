@@ -1,5 +1,52 @@
 # Implémentation 090 — Implemented, adoptée le 2026-09-06
 
+## Complément humain : nom de conversation et menu de reprise
+
+Base `6ee129b5880d`, branche `fix/090-resume-selector`. Codex 0.153.4 accepte
+UUID ou nom après `resume` et un sélecteur sans argument (`codex resume --help`,
+vérifié localement). Bridget imposait indûment un UUID. Le nom utilisateur
+`horizon-original` existe réellement dans l'index fournisseur ; aucune
+réécriture de cet index ni lecture de base fournisseur n'est ajoutée au produit.
+
+Le parseur distingue absence de reprise, UUID, nom exact et sélection humaine.
+La sélection utilise `thread/list` sur le même app-server privé : pages de 100,
+borne de 1 000 résumés et échéance absolue de 10 s pour la lecture. UUID invalides,
+curseur manquant/répété, page excessive, catalogue incomplet : refus, jamais
+sélection sur un préfixe incomplet. Métadonnées seulement (nom ou aperçu, cwd,
+UUID) ; aucun ancien tour chargé. Le sélecteur est un menu Bridget numéroté,
+pas la TUI de sélection Codex. La TUI officielle commence après le choix,
+la résolution de la liaison d'identité, Register et activation du journal.
+Pas de nouveau fil provisoire, pas de sonde fournisseur facturée, pas de cache.
+
+Nom exact absent/ambigu : refus avec invitation au menu. `--name` reste le
+nom de présence Bridget, distinct du nom de conversation. Un changement de nom
+Codex n'affecte pas la liaison durable UUID-fil→identité. Le terminal du menu
+reste canonique ; q/Ctrl-C/HUP/TERM libèrent l'attente et déclenchent le nettoyage
+du pilote. Contrôles neutralisés dans les métadonnées affichées.
+
+Preuves : **16/16** recettes du vrai Codex/TUI/daemon/MCP, 64,32 s, HTTP local
+et HOME/CODEX_HOME privés. Les cinq nouvelles recettes couvrent nom réel avec
+historique+tour humain+envoi Bridget+ACK/retry, menu réel sans fil chargé avant
+sélection, numéro invalide, Ctrl-C, nom absent, homonymes refusés. Ancien binaire
+installé : même recette nom → rouge `resume exige l'UUID explicite du fil Codex` ;
+version corrigée verte. Logs `/tmp/b90-selector-old-red.log`,
+`/tmp/b90-selector-native-final.log`, `/tmp/b90-selector-cancel.log`.
+
+Deux défauts du harnais corrigés sur observation réelle : une conversation sans
+premier tour n'est pas publiée par thread/list (avec ou sans useStateDbOnly),
+donc les scénarios de sélection créent un vrai tour préalable ; le faux shell
+PTY interceptait lui aussi Ctrl-C, désormais ignoré par le parent après spawn
+comme un shell attendant son job. Le programme testé reçoit toujours le signal.
+
+Gate unitaire : **1 014 succès**, zéro échec, 8 ignorés, plus deux sous-tests
+enfants verts ; `cargo test --workspace --lib -- --test-threads=1`, racines
+privées courtes/env vide/umask 077, 67,19 s hors compilation. Test de la borne
+du catalogue : la onzième page est interdite et une échéance consommée empêche
+tout appel. Clippy workspace/all-targets -D warnings et fmt --all --check : PASS.
+Logs `/tmp/b90-selector-units.log`, `/tmp/b90-selector-clippy-final.log`.
+La dépendance UUID déjà au workspace est réutilisée pour valider les IDs Codex,
+sans parseur maison. Aucune modification du protocole daemon ni migration DB.
+
 ## Correctif utilisateur du 2026-09-06 : reprise humaine sans UUID Bridget
 
 Base `49710fa66563`, branche `fix/090-human-resume`. Le wrapper créait une

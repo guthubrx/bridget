@@ -3255,7 +3255,7 @@ fn launch_session_with_status(
     home: &Path,
     mut managed_reporter: Option<&mut crate::managed_process::ManagedStatusReporter>,
     frozen_definition_digest: Option<&str>,
-    interactive: Option<crate::codex_interactive::Launch>,
+    mut interactive: Option<crate::codex_interactive::Launch>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Les API injectables ne peuvent envoyer le wrapper sur un socket et ses
     // outils MCP sur un autre. Refus avant création d'état ou fournisseur.
@@ -3307,7 +3307,7 @@ fn launch_session_with_status(
         return Err(billing_guard_error(&variable).into());
     }
 
-    let effective_name = match interactive.as_ref() {
+    let mut effective_name = match interactive.as_ref() {
         Some(launch) => resolve_interactive_identity(launch, explicit_name, socket)?,
         None => explicit_name.map(str::to_owned),
     };
@@ -3317,10 +3317,6 @@ fn launch_session_with_status(
         .as_ref()
         .map(|reporter| reporter.instance_id().to_string())
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let initial_domain = effective_name
-        .as_deref()
-        .and_then(effective_domain)
-        .or_else(derive_domain);
     let name_state_path = instance_name_state_path(socket, &instance_id);
     if let Some(parent) = name_state_path.parent() {
         crate::environment::ensure_private_directory(parent)?;
@@ -3374,8 +3370,14 @@ fn launch_session_with_status(
     let inherit_stderr = managed_reporter.is_some();
     let codex_socket = state_root.join(format!("c-{}.sock", &instance_id[..12]));
     let mut tui_binding = None;
-    let mut transport: Box<dyn ManagedSession> = if let Some(launch) = &interactive {
-        let native = bridget_transport::CodexAppServerTransport::spawn_interactive(
+    let mut transport: Box<dyn ManagedSession> = if let Some(launch) = interactive.as_mut() {
+        let select = |threads: &[bridget_transport::codex_app_server::CodexThreadSummary]| {
+            launch.select_thread(threads)
+        };
+        let selector = launch.needs_selection().then_some(
+            &select as bridget_transport::codex_app_server::InteractiveThreadSelector<'_>,
+        );
+        let native = bridget_transport::CodexAppServerTransport::spawn_interactive_selecting(
             bridget_transport::CodexAppServerOptions {
                 command: definition.command.clone(),
                 args: native_args.clone(),
@@ -3394,7 +3396,14 @@ fn launch_session_with_status(
             },
             &string_environment(&mcp_environment),
             &codex_socket,
+            selector,
         )?;
+        if launch.resume_thread.is_some() {
+            // Le fournisseur a maintenant résolu le nom/le choix en UUID.
+            // Vérifier sa liaison AVANT Register, pas après avoir écrasé un nom.
+            launch.resume_thread = Some(native.thread_id().to_owned());
+            effective_name = resolve_interactive_identity(launch, explicit_name, socket)?;
+        }
         tui_binding = Some((
             native.thread_id().to_string(),
             native.interactive_lifetime(),
@@ -3416,6 +3425,10 @@ fn launch_session_with_status(
     };
     let descriptor = transport.descriptor();
     let channel = connection_channel();
+    let initial_domain = effective_name
+        .as_deref()
+        .and_then(effective_domain)
+        .or_else(derive_domain);
     let (mut reader, initial_writer, mut my_name) = match connect_and_register_at(
         socket,
         agent_type,
@@ -3994,7 +4007,9 @@ fn resolve_interactive_identity(
         .map(str::to_owned)
         .into_iter()
         .collect::<Vec<_>>();
-    if let Some(thread_id) = &launch.resume_thread {
+    if let Some(thread_id) = &launch.resume_thread
+        && uuid::Uuid::parse_str(thread_id).is_ok()
+    {
         let path = persistent_name_path(&session_hash(std::slice::from_ref(thread_id)));
         crate::environment::validate_state_file(&path, false)?;
         match std::fs::read_to_string(&path) {

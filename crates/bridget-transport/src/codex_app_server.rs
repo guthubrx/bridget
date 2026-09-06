@@ -64,6 +64,17 @@ type PendingRequest = Arc<Mutex<Option<PendingProviderRequest>>>;
 /// possède ni identité Bridget ni accès direct à la socket métier.
 pub type DynamicToolHandler = Arc<dyn Fn(&str, &Value) -> Result<Value, String> + Send + Sync>;
 
+/// Métadonnées publiques de thread/list, jamais un accès aux fichiers Codex.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct CodexThreadSummary {
+    pub id: String,
+    pub name: Option<String>,
+    pub preview: Option<String>,
+    pub cwd: String,
+}
+pub type InteractiveThreadSelector<'a> =
+    &'a dyn Fn(&[CodexThreadSummary]) -> Result<String, String>;
+
 #[derive(Debug)]
 struct ServerResponse {
     value: Value,
@@ -280,7 +291,7 @@ impl CodexAppServerTransport {
         environment: &[(String, String)],
         inherit_stderr: bool,
     ) -> Result<Self, TransportError> {
-        Self::spawn_endpoint(options, environment, inherit_stderr, None)
+        Self::spawn_endpoint(options, environment, inherit_stderr, None, None)
     }
 
     /// Un app-server privé, partagé avec la TUI native. Aucun octet terminal
@@ -290,7 +301,18 @@ impl CodexAppServerTransport {
         environment: &[(String, String)],
         socket: &Path,
     ) -> Result<Self, TransportError> {
-        Self::spawn_endpoint(options, environment, false, Some(socket))
+        Self::spawn_endpoint(options, environment, false, Some(socket), None)
+    }
+
+    /// La sélection précède thread/resume, Register et la TUI : aucun fil
+    /// provisoire et aucun premier tour avant attachement de Bridget.
+    pub fn spawn_interactive_selecting(
+        options: CodexAppServerOptions,
+        environment: &[(String, String)],
+        socket: &Path,
+        selector: Option<InteractiveThreadSelector<'_>>,
+    ) -> Result<Self, TransportError> {
+        Self::spawn_endpoint(options, environment, false, Some(socket), selector)
     }
 
     pub fn thread_id(&self) -> &str {
@@ -304,10 +326,11 @@ impl CodexAppServerTransport {
     }
 
     fn spawn_endpoint(
-        options: CodexAppServerOptions,
+        mut options: CodexAppServerOptions,
         environment: &[(String, String)],
         inherit_stderr: bool,
         interactive_socket: Option<&Path>,
+        selector: Option<InteractiveThreadSelector<'_>>,
     ) -> Result<Self, TransportError> {
         if options.queue_capacity == 0 {
             return Err(TransportError::DeliveryFailed(
@@ -442,6 +465,18 @@ impl CodexAppServerTransport {
                 }
             }
             write_notification(&writer, "initialized", json!({}))?;
+            if let Some(select) = selector {
+                let threads = list_interactive_threads(&writer, &waiters, &next_id)?;
+                let selected = select(&threads).map_err(TransportError::DeliveryFailed)?;
+                if !threads.iter().any(|thread| thread.id == selected) {
+                    return Err(TransportError::DeliveryFailed(
+                        "fil choisi absent du catalogue Codex".into(),
+                    ));
+                }
+                options.thread_bootstrap = CodexThreadBootstrap::Resume {
+                    thread_id: selected,
+                };
+            }
             let cwd =
                 std::env::current_dir().map_err(|error| TransportError::Io(error.to_string()))?;
             let (thread_method, mut thread_params) = thread_bootstrap_request(
@@ -2221,6 +2256,72 @@ fn is_saturated(reason: &str) -> bool {
     reason == CODEX_SATURATED_REASON
 }
 
+fn list_interactive_threads(
+    writer: &Writer,
+    waiters: &Waiters,
+    next_id: &Arc<AtomicU64>,
+) -> Result<Vec<CodexThreadSummary>, TransportError> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    collect_thread_pages(deadline, |params, remaining| {
+        request_with_timeout(writer, waiters, next_id, "thread/list", params, remaining)
+            .map(|response| response.value)
+    })
+}
+
+fn collect_thread_pages(
+    deadline: std::time::Instant,
+    mut fetch: impl FnMut(Value, Duration) -> Result<Value, TransportError>,
+) -> Result<Vec<CodexThreadSummary>, TransportError> {
+    let mut cursor = None::<String>;
+    let mut cursors = HashSet::new();
+    let mut ids = HashSet::new();
+    let mut threads = Vec::new();
+    for _ in 0..10 {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let response = fetch(
+            json!({
+                "cursor": cursor, "limit": 100, "sortKey": "updated_at", "modelProviders": [],
+                "sourceKinds": ["cli", "vscode", "appServer"]
+            }),
+            remaining,
+        )?;
+        let data = response
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                TransportError::DeliveryFailed("thread/list : catalogue absent".into())
+            })?;
+        if data.len() > 100 {
+            break;
+        }
+        for value in data {
+            let entry: CodexThreadSummary =
+                serde_json::from_value(value.clone()).map_err(|error| {
+                    TransportError::DeliveryFailed(format!("thread/list invalide : {error}"))
+                })?;
+            if uuid::Uuid::parse_str(&entry.id).is_err() || !ids.insert(entry.id.clone()) {
+                return Err(TransportError::DeliveryFailed(
+                    "thread/list : identifiant invalide ou répété".into(),
+                ));
+            }
+            threads.push(entry);
+        }
+        match response.get("nextCursor") {
+            Some(Value::Null) => return Ok(threads),
+            Some(Value::String(next)) if !next.is_empty() && cursors.insert(next.clone()) => {
+                cursor = Some(next.clone())
+            }
+            _ => break,
+        }
+    }
+    Err(TransportError::DeliveryFailed(
+        "catalogue Codex incomplet (borne 1 000 fils / 10 s) ; reprendre par UUID explicite".into(),
+    ))
+}
+
 fn bootstrap_operation(bootstrap: &CodexThreadBootstrap) -> Option<ProviderOperation> {
     match bootstrap {
         CodexThreadBootstrap::Start => None,
@@ -3325,6 +3426,37 @@ mod tests {
     use std::time::Instant;
 
     static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn catalogue_reprise_pagine_sans_ignorer_la_borne_ni_un_curseur_invalide() {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut count = 0;
+        let result = collect_thread_pages(deadline, |params, remaining| {
+            assert!(remaining <= Duration::from_secs(10));
+            assert_eq!(params["limit"], 100);
+            assert_eq!(params["cursor"], if count == 0 { Value::Null } else { json!(count.to_string()) });
+            count += 1;
+            Ok(json!({"data":[{"id":uuid::Uuid::new_v4().to_string(),"name":"N","cwd":"/tmp"}],"nextCursor": if count == 2 { Value::Null } else { json!(count.to_string()) }}))
+        }).unwrap();
+        assert_eq!(result.len(), 2);
+        count = 0;
+        // Mutation : retirer la borne permettrait une onzième page. Le
+        // catalogue incomplet n'est jamais livré au sélecteur comme complet.
+        assert!(collect_thread_pages(deadline, |_, _| {
+            count += 1;
+            assert!(count <= 10);
+            Ok(json!({"data":(0..100).map(|_| json!({"id":uuid::Uuid::new_v4().to_string(),"name":"N","cwd":"/tmp"})).collect::<Vec<_>>(),"nextCursor":count.to_string()}))
+        }).is_err());
+        assert_eq!(count, 10);
+        for invalid in [
+            json!({"data":[]}),
+            json!({"data":[],"nextCursor":1}),
+            json!({"data":[],"nextCursor":"same"}),
+        ] {
+            assert!(collect_thread_pages(deadline, |_, _| Ok(invalid.clone())).is_err());
+        }
+        assert!(collect_thread_pages(Instant::now(), |_, _| panic!("RPC après échéance")).is_err());
+    }
 
     #[test]
     fn lecteur_interactif_ne_repond_jamais_pour_humain_et_conserve_raw() {

@@ -79,12 +79,19 @@ impl Launch {
                 }
                 "resume" => {
                     if resume_thread.is_some() || prompt.is_some() || inline.is_some() {
-                        return Err("resume <UUID> doit précéder le prompt et ne peut apparaître qu'une fois".into());
+                        return Err("resume [UUID|nom] doit précéder le prompt et ne peut apparaître qu'une fois".into());
                     }
-                    index += 1;
-                    let value = args.get(index).ok_or("resume exige l'UUID explicite du fil Codex")?;
-                    let id = uuid::Uuid::parse_str(value).map_err(|_| "resume exige l'UUID explicite du fil Codex")?;
-                    resume_thread = Some(id.to_string());
+                    let target = args.get(index + 1).filter(|value| !value.starts_with('-'));
+                    resume_thread = Some(match target {
+                        Some(value) => {
+                            if value.trim().is_empty() || value.chars().any(char::is_control) || value.len() > 1024 {
+                                return Err("nom de conversation Codex invalide".into());
+                            }
+                            index += 1;
+                            uuid::Uuid::parse_str(value).map_or_else(|_| value.clone(), |id| id.to_string())
+                        }
+                        None => String::new(), // Sélection humaine avant tout fil ou présence.
+                    });
                 }
                 "fork" | "app-server" | "exec" =>
                     return Err("sous-commande non prise en charge ; utilisez resume <UUID> pour choisir le fil initial".into()),
@@ -142,11 +149,143 @@ impl Launch {
             .join(" ")
     }
 
+    pub(crate) fn needs_selection(&self) -> bool {
+        self.resume_thread
+            .as_ref()
+            .is_some_and(|target| uuid::Uuid::parse_str(target).is_err())
+    }
+
+    pub(crate) fn select_thread(
+        &self,
+        threads: &[bridget_transport::codex_app_server::CodexThreadSummary],
+    ) -> Result<String, String> {
+        let target = self
+            .resume_thread
+            .as_deref()
+            .ok_or("sélection sans reprise")?;
+        if !target.is_empty() {
+            let matches = threads
+                .iter()
+                .filter(|thread| thread.name.as_deref() == Some(target))
+                .collect::<Vec<_>>();
+            return match matches.as_slice() {
+                [thread] => Ok(thread.id.clone()),
+                [] => Err(format!(
+                    "conversation Codex « {target} » introuvable ; utilisez `bridget codex resume` pour choisir"
+                )),
+                _ => Err(format!(
+                    "plusieurs conversations Codex portent « {target} » ; utilisez `bridget codex resume` pour choisir"
+                )),
+            };
+        }
+        select_thread_in_terminal(threads)
+    }
+
     pub(crate) fn check_terminal() -> Result<(), String> {
         if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
             return Err("Codex interactif exige stdin et stdout sur un terminal ; utilisez bridget spawn pour un agent détaché".into());
         }
         Ok(())
+    }
+}
+
+fn select_thread_in_terminal(
+    threads: &[bridget_transport::codex_app_server::CodexThreadSummary],
+) -> Result<String, String> {
+    use std::io::Write;
+    Launch::check_terminal()?;
+    if threads.is_empty() {
+        return Err("aucune conversation Codex à reprendre".into());
+    }
+    // Mode canonique conservé : pas de capture de la TUI, ni de terminal raw.
+    // Intercepter les signaux pendant l'attente permet au pilote de nettoyer
+    // SON app-server si l'humain annule avant toute sélection.
+    struct Signals(Vec<signal_hook::SigId>);
+    impl Drop for Signals {
+        fn drop(&mut self) {
+            for id in self.0.drain(..) {
+                signal_hook::low_level::unregister(id);
+            }
+        }
+    }
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let mut signals = Signals(Vec::new());
+    for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+        signals.0.push(
+            signal_hook::flag::register(signal, cancelled.clone())
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    let clean = |text: &str| {
+        text.chars()
+            .filter(|ch| !ch.is_control())
+            .take(120)
+            .collect::<String>()
+    };
+    let mut page = 0;
+    loop {
+        eprintln!(
+            "Conversations Codex — choisir un numéro (n : suivantes, p : précédentes, q : annuler)"
+        );
+        for (i, thread) in threads.iter().enumerate().skip(page * 20).take(20) {
+            eprintln!(
+                "  {}. {} — {} [{}]",
+                i + 1,
+                clean(
+                    thread
+                        .name
+                        .as_deref()
+                        .filter(|name| !name.is_empty())
+                        .or(thread.preview.as_deref())
+                        .unwrap_or("sans titre")
+                ),
+                clean(&thread.cwd),
+                thread.id
+            );
+        }
+        eprint!("Choix : ");
+        io::stderr().flush().map_err(|error| error.to_string())?;
+        loop {
+            if cancelled.load(Ordering::SeqCst) {
+                return Err("reprise annulée : aucune session ouverte".into());
+            }
+            let mut fd = libc::pollfd {
+                fd: libc::STDIN_FILENO,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let result = unsafe { libc::poll(&mut fd, 1, 100) };
+            if result > 0 {
+                break;
+            }
+            if result < 0 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+                return Err(io::Error::last_os_error().to_string());
+            }
+        }
+        let mut choice = String::new();
+        if io::stdin()
+            .read_line(&mut choice)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            return Err("reprise annulée : terminal fermé".into());
+        }
+        match choice.trim() {
+            "q" => return Err("reprise annulée : aucune session ouverte".into()),
+            "n" if (page + 1) * 20 < threads.len() => page += 1,
+            "p" if page > 0 => page -= 1,
+            value => {
+                if let Some(thread) = value
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|number| number.checked_sub(1))
+                    .and_then(|index| threads.get(index))
+                {
+                    return Ok(thread.id.clone());
+                }
+                eprintln!("Choix invalide, aucun fil ouvert.");
+            }
+        }
     }
 }
 
@@ -313,6 +452,53 @@ mod tests {
     }
 
     #[test]
+    fn reprise_par_nom_exact_ou_menu_sans_nom_bridget_invente() {
+        use bridget_transport::codex_app_server::CodexThreadSummary;
+        let named = Launch::parse(&args(&[
+            "--yolo",
+            "--name",
+            "agent-visible",
+            "resume",
+            "horizon-original",
+        ]))
+        .unwrap();
+        assert!(named.needs_selection());
+        assert_eq!(named.display_name.as_deref(), Some("agent-visible"));
+        let entry = CodexThreadSummary {
+            id: "01a06f68-dbab-7b43-84b5-7e63b03d93b0".into(),
+            name: Some("horizon-original".into()),
+            preview: None,
+            cwd: "/tmp".into(),
+        };
+        assert_eq!(
+            named.select_thread(std::slice::from_ref(&entry)).unwrap(),
+            entry.id
+        );
+        assert!(
+            named
+                .select_thread(&[])
+                .unwrap_err()
+                .contains("introuvable")
+        );
+        let mut other = entry.clone();
+        other.id = "01a06f68-dbab-7b43-84b5-7e63b03d93b1".into();
+        assert!(
+            named
+                .select_thread(&[entry, other])
+                .unwrap_err()
+                .contains("plusieurs")
+        );
+        for arguments in [
+            vec!["resume"],
+            vec!["resume", "--yolo", "--name", "agent-visible"],
+        ] {
+            let menu = Launch::parse(&args(&arguments)).unwrap();
+            assert_eq!(menu.resume_thread.as_deref(), Some(""));
+            assert!(menu.needs_selection());
+        }
+    }
+
+    #[test]
     fn options_natives_conservees_sans_bypass_implicite() {
         let parsed = Launch::parse(&args(&[
             "-m",
@@ -357,7 +543,6 @@ mod tests {
         assert!(Launch::parse(&[]).unwrap().display_name.is_none());
         assert!(Launch::parse(&[]).unwrap().resume_thread.is_none());
         for values in [
-            vec!["resume"],
             vec!["--name"],
             vec!["--name", " "],
             vec!["--name", "nom\nmenteur"],
@@ -374,7 +559,7 @@ mod tests {
             &["--remote", "unix:///tmp/other"][..],
             &["--model"],
             &["--cd", "/tmp"],
-            &["resume", "thread"],
+            &["resume", "\nthread"],
             &["--inventee"],
         ] {
             assert!(Launch::parse(&args(values)).is_err(), "{values:?}");

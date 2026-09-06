@@ -8,6 +8,7 @@ license.workspace = true
 test-support = []
 
 [dependencies]
+uuid.workspace = true
 bridget-core = { path = "../bridget-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }

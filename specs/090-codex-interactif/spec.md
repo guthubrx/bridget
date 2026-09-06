@@ -2,6 +2,12 @@
 
 ## Amendement 2026-09-06 — options et reprise initiale
 
+- Reprise humaine étendue : `resume <UUID|nom-Codex>` ou `resume` seul.
+  Résolution depuis le protocole public `thread/list`, sans lire l'index ni
+  la base Codex depuis Bridget. Nom exact absent/ambigu : refus. Menu numéroté
+  Bridget avant la TUI native, pagination et annulation sans session ni prompt.
+  Catalogue non archivé borné 1 000 entrées/10 s, incomplet refusé. Le nom
+  de conversation Codex est distinct du nom Bridget `--name`.
 - `bridget codex --yolo resume <UUID>` reprend explicitement ce fil ; `--yolo`
   est l'alias exact de `--dangerously-bypass-approvals-and-sandbox`. Sans option
   explicite, aucun contournement n'est activé. La TUI reste l'autorité des décisions.

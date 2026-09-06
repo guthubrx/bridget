@@ -4,6 +4,14 @@ Statut : implémenté, validé et adopté le 2026-09-06. Rust 1.92 / trois crate
 
 ## Architecture et réutilisation
 
+Complément reprise nom/menu : callback de sélection humaine avant le bootstrap
+sur LE même app-server privé. Il lit `thread/list` paginé sous échéance globale,
+puis passe un UUID attesté au `CodexThreadBootstrap::Resume` existant. La liaison
+fil→identité est revalidée après résolution et avant Register. Aucun second
+processus de catalogue, aucun stockage doublonné, aucune conversation provisoire.
+Le menu garde le terminal canonique ; Ctrl-C/HUP/TERM annulent en laissant le
+pilote arrêter son enfant. Les métadonnées rendues neutralisent les contrôles.
+
 Amendement du 2026-09-06 : `Launch` distingue nom Bridget, alias explicite et
 UUID de reprise. Le wrapper appelle le client partagé `rename_display_name`
 après Register et avant la TUI. Le pilote réutilise `CodexThreadBootstrap::Resume`
@@ -41,7 +49,8 @@ qui changeraient ce lien doivent être prises en charge ou refusées expliciteme
 jamais laisser les messages partir vers un ancien fil invisible.
 
 Read/Write WS borné en taille et en temps, mémoire O(taille maximale de trame +
-file déjà bornée) ; pas de collection globale de toutes les conversations.
+file déjà bornée) ; sélection initiale seule : catalogue limité à 1 000 résumés,
+aucun historique de tours chargé ni collection persistante des conversations.
 Socket accessible au seul compte Unix ; aucune prétention d'isolation contre
 un autre processus malveillant du même compte. Pas de secrets dans les preuves.
 Le provider reste expérimental : version incompatible = erreur avant présence.

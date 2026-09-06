@@ -40,6 +40,9 @@ def terminal_host():
     root = pathlib.Path(sys.argv[2])
     before = termios.tcgetattr(0)
     child = subprocess.Popen(sys.argv[3:])
+    # Comme un shell attendant son job de premier plan : Ctrl-C appartient
+    # au programme, pas au parent chargé de constater la restauration termios.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     (root / "wrapper.pid").write_text(str(child.pid))
     status = child.wait()
     after = termios.tcgetattr(0)
@@ -52,7 +55,8 @@ def terminal_host():
 def main():
     bridget, codex = sys.argv[1:3]
     live = "--subscription" in sys.argv
-    initial_resume = "--initial-resume" in sys.argv
+    selection = next((mode for mode in ["--named-resume", "--menu-resume", "--menu-cancel", "--name-missing", "--name-ambiguous"] if mode in sys.argv), None)
+    initial_resume = "--initial-resume" in sys.argv or selection in ["--named-resume", "--menu-resume"]
     copied_resume = "--copied-resume" in sys.argv
     paginated_resume = "--paginated-resume" in sys.argv
     human_resume = "--human-resume" in sys.argv
@@ -178,7 +182,7 @@ def main():
             shutil.copyfile(source, destination)
             with destination.open() as rollout:
                 resume_id = json.loads(rollout.readline())["payload"]["id"]
-        if "--resume-thread" in sys.argv or initial_resume or paginated_resume:
+        if "--resume-thread" in sys.argv or initial_resume or paginated_resume or selection:
             seed_path = root / "seed.sock"
             seed = subprocess.Popen([codex, "app-server", "--listen", "unix://" + str(seed_path)], env=environment,
                 cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -189,9 +193,21 @@ def main():
                     "historyMode": "paginated" if paginated_resume else "legacy"})
                 resume_id = started["result"]["thread"]["id"]
                 assert "result" in client.rpc("thread/name/set", {"threadId": resume_id, "name": "HISTORIQUE-090"})
-                if initial_resume or paginated_resume:
+                if initial_resume or paginated_resume or selection:
                     assert "result" in client.rpc("turn/start", {"threadId": resume_id,
                         "input": [{"type": "text", "text": "HISTORIQUE-A-CONSERVER-090"}]})
+                    seed_deadline = time.monotonic() + 10
+                    while not any(event.get("method") == "turn/completed" for event in client.events):
+                        client.socket.settimeout(max(0.001, seed_deadline - time.monotonic()))
+                        client.events.append(client.receive())
+                        assert time.monotonic() < seed_deadline
+                    probe.Fixture.count = 0
+                if selection == "--name-ambiguous":
+                    duplicate = client.rpc("thread/start", {"cwd": str(root), "historyMode": "legacy"})["result"]["thread"]["id"]
+                    assert "result" in client.rpc("thread/name/set", {"threadId": duplicate, "name": "HISTORIQUE-090"})
+                    client.events.clear()
+                    assert "result" in client.rpc("turn/start", {"threadId": duplicate,
+                        "input": [{"type": "text", "text": "DEUXIEME-CONVERSATION-090"}]})
                     seed_deadline = time.monotonic() + 10
                     while not any(event.get("method") == "turn/completed" for event in client.events):
                         client.socket.settimeout(max(0.001, seed_deadline - time.monotonic()))
@@ -215,9 +231,44 @@ def main():
             wrapper_args += ["resume", "90000000-0000-4000-8000-000000000099"]
         if live:
             wrapper_args += ["-m", "gpt-5.6-luna"]
+        if selection:
+            wrapper_args = [bridget, "codex", "--agent-id", "90000000-0000-4000-8000-000000000001", "--name", "coder-recette-090", "--yolo", "--no-alt-screen", "resume"]
+            if selection in ["--named-resume", "--name-ambiguous"]:
+                wrapper_args += ["HISTORIQUE-090"]
+            elif selection == "--name-missing":
+                wrapper_args += ["NOM-ABSENT-090"]
         wrapper = subprocess.Popen([sys.executable, __file__, "--terminal-host", str(root), *wrapper_args],
             env=environment, cwd=root, stdin=slave, stdout=slave, stderr=slave,
             preexec_fn=own_terminal)
+        if selection in ["--menu-resume", "--menu-cancel"]:
+            until(lambda: b"Choix :" in transcript, "menu réel depuis thread/list")
+            menu_children = subprocess.check_output(["/usr/bin/pgrep", "-P", (root / "wrapper.pid").read_text()]).decode().split()
+            assert menu_children, "aucun app-server réel au menu"
+            assert not json.loads(cli("agents", "--json")), "présence avant choix humain"
+            menu_socket = next(state.glob("c-*.sock"))
+            menu_observer = probe.Client(str(menu_socket))
+            assert menu_observer.rpc("thread/loaded/list", {})["result"]["data"] == [], "fil provisoire créé pour le menu"
+            menu_observer.socket.close()
+            if selection == "--menu-cancel":
+                os.write(master, b"\x03")
+            else:
+                os.write(master, b"9999\r")
+                until(lambda: b"Choix invalide" in transcript, "choix invalide sans ouverture de fil")
+                os.write(master, b"1\r")
+        if selection in ["--menu-cancel", "--name-missing", "--name-ambiguous"]:
+            until(lambda: wrapper.poll() is not None, "sélection refusée/annulée avant présence")
+            tick()
+            assert wrapper.returncode != 0
+            assert not json.loads(cli("agents", "--json"))
+            assert not list(state.glob("c-*.sock"))
+            if selection == "--menu-cancel":
+                for pid in menu_children:
+                    assert subprocess.run(["/bin/ps", "-p", pid, "-o", "pid="], capture_output=True).returncode != 0, f"serveur survivant {pid}"
+            assert terminal_restored() and probe.Fixture.count == 0
+            expected = {"--menu-cancel": "reprise annulée", "--name-missing": "introuvable", "--name-ambiguous": "plusieurs"}[selection]
+            assert expected in terminal_text(), terminal_text()
+            print("selection_refused_or_cancelled_without_thread_presence_prompt", selection, flush=True)
+            return
         if "--missing-resume" in sys.argv:
             until(lambda: wrapper.poll() is not None, "fil absent refusé avant présence")
             assert wrapper.returncode != 0

@@ -63,6 +63,8 @@ From a real terminal, in the intended working directory:
 bridget codex
 bridget codex -m gpt-5.6-terra
 bridget codex --name coderBridget --yolo resume <Codex-thread-UUID>
+bridget codex --name horizon-original --yolo resume horizon-original
+bridget codex --name horizon-original --yolo resume
 ```
 
 This branch opens the **official Codex TUI** against a private local app-server.
@@ -82,7 +84,16 @@ remain independent and reachable. Quit and relaunch to change directory.
 This first version rejects `--cd`, images and local providers;
 unsupported options are rejected rather than silently ignored.
 
-`resume <UUID>` selects the initial thread, preserving its history and title.
+`resume <UUID>` or `resume <Codex-name>` selects the initial thread, preserving
+its history and title. Exact names must be unique: missing or ambiguous names
+are rejected without opening a session. Bare `resume` opens a Bridget selection
+menu using Codex's `thread/list`: enter a number, `n`/`p` for pages, `q` or Ctrl-C
+to cancel. This is not Codex's native picker: the official TUI starts after
+selection, once Bridget registration and journaling are ready. No temporary
+thread is created. The menu lists non-archived interactive threads across
+directories, most recently updated first. Listing is bounded to 1,000 threads
+and 10 seconds; incomplete results are rejected, never used for a guess.
+The name after `resume` is the **Codex conversation name**, not the Bridget name.
 `--name` resolves the Bridget identity bearing that name (80 characters maximum),
 or creates one for a new name. No Bridget UUID to remember: inactive names can
 be reused, while active agents are protected against a second launch.

@@ -68,6 +68,8 @@ Depuis un vrai terminal, dans le répertoire de travail souhaité :
 bridget codex
 bridget codex -m gpt-5.6-terra
 bridget codex --name coderBridget --yolo resume <UUID-du-fil-Codex>
+bridget codex --name horizon-original --yolo resume horizon-original
+bridget codex --name horizon-original --yolo resume
 ```
 
 Le binaire de cette branche ouvre la **TUI officielle Codex**, reliée à un
@@ -90,7 +92,17 @@ quitter puis relancer depuis ce répertoire ; `--cd`, images, fournisseur local
 ne sont pas proposés par cette première version.
 Une option non prise en charge est refusée, jamais ignorée.
 
-`resume <UUID>` choisit le fil initial et conserve son historique et son titre.
+`resume <UUID>` ou `resume <nom-Codex>` choisit le fil initial et conserve
+son historique et son titre. Le nom Codex est recherché exactement ; absent
+ou ambigu, il est refusé sans ouvrir de session. `resume` seul propose un
+menu Bridget alimenté par `thread/list` de Codex : numéro puis Entrée,
+`n`/`p` pour paginer, `q` ou Ctrl-C pour annuler. Ce n'est pas le sélecteur
+graphique natif Codex : la TUI officielle démarre après le choix, lorsque
+Bridget est déjà inscrit et son journal actif. Aucun fil provisoire créé.
+Le menu liste les conversations interactives non archivées, tous répertoires
+affichés, par activité récente. Lecture bornée à 1 000 fils/10 s ; un catalogue
+incomplet est refusé, jamais utilisé pour choisir arbitrairement.
+Le nom après `resume` désigne la conversation **Codex**, pas l'agent Bridget.
 `--name` retrouve l'identité Bridget portant ce nom (80 caractères maximum),
 ou la crée si le nom est nouveau. Aucun UUID Bridget à connaître : un nom
 inactif est réutilisable, un agent encore actif reste protégé contre une
