@@ -860,7 +860,11 @@ fn domain_state_path(agent: &str) -> PathBuf {
 /// raison que le nom : seule la trace sur disque connaît l'intention de
 /// l'utilisateur.
 fn effective_domain(agent: &str) -> Option<String> {
-    std::fs::read_to_string(domain_state_path(agent))
+    effective_domain_at(&domain_state_path(agent))
+}
+
+fn effective_domain_at(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path)
         .map(|domain| domain.trim().to_string())
         .ok()
         .filter(|domain| !domain.is_empty())
@@ -7324,20 +7328,20 @@ mod reconnect_tests {
 
     #[test]
     fn le_domaine_surcharge_prime_sur_le_derive() {
-        // Même remède que les bases SQLite : le composant d'agent est la
-        // source d'unicité du fichier `agent-domains/`. Un nom figé collisionne
-        // dès que deux tests du binaire écrivent le même chemin.
-        let agent = format!("agent-de-test-domaine-{}", uuid::Uuid::new_v4());
-        let path = domain_state_path(&agent);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
+        // Un UUID ne suffit pas à isoler un test : domain_state_path viserait
+        // encore le HOME réel et y créerait agent-domains. Injecter le fichier
+        // dans le même lecteur utilisé en production, sans mutation d'env.
+        let root =
+            PathBuf::from("/tmp").join(format!("bgdomain-{}", uuid::Uuid::new_v4().simple()));
+        crate::environment::ensure_private_directory(&root).unwrap();
+        let path = root.join("domain");
         std::fs::write(&path, "revue-croisee\n").unwrap();
-        assert_eq!(effective_domain(&agent).as_deref(), Some("revue-croisee"));
+        assert_eq!(effective_domain_at(&path).as_deref(), Some("revue-croisee"));
 
         // Sans trace disque, on retombe sur le domaine dérivé.
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(effective_domain(&agent), derive_domain());
+        assert_eq!(effective_domain_at(&path), derive_domain());
+        std::fs::remove_dir(root).unwrap();
     }
 
     #[test]

@@ -98,3 +98,31 @@ Les sessions MCP déjà ouvertes peuvent garder leur ancien catalogue jusqu'à
 leur reprise. Ne pas annoncer `bridget_cancel` visible dans une session ancienne
 avant d'avoir constaté son catalogue. Aucun redémarrage de production n'est requis
 par les tests isolés.
+
+## Vérification installée et compléments observés
+
+Installation initiale de 99b952dd : `who` confirme le build daemon
+`99b952dd8ac9`, le profil global reste `discovery`, génération 0. Le redémarrage
+SIGTERM du service launchd conserve/reprend l'agent de recette existant.
+L'ouverture réelle d'attach en terminal sur d61be10c-db0c-41a3-9f79-47e7af73734b
+affiche Codex, gpt-5.6-terra, medium, connected et les commandes historiques.
+Ctrl-C ferme uniquement cette vue. Le MCP installé expose `bridget_cancel`
+via une négociation/listage stdio sous namespace temporaire isolé.
+
+Deux constats de cette recette ont été corrigés avant livraison finale :
+
+- Le journal natif porte aussi `reasoning { available:false }` : c'est une absence
+  déclarée, pas un format inconnu. Le renderer affiche cette absence, ou le résumé
+  déclaré s'il existe ; il ne projette jamais le champ brut `raw`. Fixture réelle
+  ajoutée et absence/résumé/manquant testés.
+- Le test historique `le_domaine_surcharge_prime_sur_le_derive` utilisait le vrai
+  HOME et y créait `agent-domains` (0755 sous umask 022). Au redémarrage, la garde
+  privée refusait légitimement ce répertoire vide. Type, absence de symlink,
+  propriétaire 501 et vacuité vérifiés ; droits remis à 0700, aucune donnée
+  supprimée. Le test injecte désormais son fichier privé dans le même lecteur
+  métier, sans passer par le namespace réel ni muter l'environnement global.
+
+Après ces compléments : attach **58/58**, wrapper **59/59**, exécutés en parallèle
+à l'intérieur de chaque cible ; `cargo clippy --workspace --all-targets --features
+test-support -- -D warnings`, fmt et diff-check réussis. Pas de répétition inutile
+des recettes lourdes des autres composants non modifiés.

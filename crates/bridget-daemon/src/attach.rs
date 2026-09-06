@@ -2078,6 +2078,22 @@ fn render_journal_event(bytes: &[u8], agent: &str) -> String {
             "[interaction refusée]".to_string(),
             provider_request_rejected_summary(payload),
         ),
+        "reasoning" => (
+            "[raisonnement]".to_string(),
+            match payload
+                .get("available")
+                .and_then(serde_json::Value::as_bool)
+            {
+                Some(false) => "non communiqué par le fournisseur".to_string(),
+                Some(true) => payload
+                    .get("summary")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|summary| !summary.is_empty())
+                    .unwrap_or("signal reçu, résumé non communiqué")
+                    .to_string(),
+                None => "disponibilité inconnue".to_string(),
+            },
+        ),
         "turn_end" => ("[fin]".to_string(), turn_end_summary(payload)),
         "error" => ("[erreur]".to_string(), error_summary(payload)),
         // Les extensions inconnues sont signalées, jamais interprétées.
@@ -2603,6 +2619,22 @@ mod tests {
         assert!(rendered[1].contains("Finished dev profile"));
         assert!(rendered[2].contains("[autorisation demandée]"));
         assert!(rendered[3].contains("autorisation refusée"));
+        assert!(rendered[4].contains("non communiqué par le fournisseur"));
+        for (payload, expected) in [
+            (
+                json!({"available":true,"summary":"résumé déclaré","raw":"brut privé"}),
+                "résumé déclaré",
+            ),
+            (
+                json!({"available":true,"raw":"brut privé"}),
+                "résumé non communiqué",
+            ),
+            (json!({}), "disponibilité inconnue"),
+        ] {
+            let rendered = render_journal_event(&journal_record(6, "reasoning", payload), "agent");
+            assert!(rendered.contains(expected));
+            assert!(!rendered.contains("brut privé"));
+        }
         let hostile = journal_record(
             5,
             "update",
