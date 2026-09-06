@@ -243,8 +243,29 @@ umask 077, target partagé du dépôt actif) :
 - `cargo test -p bridget-daemon --test runtime_selection_integration_test -- --ignored --nocapture` : 1/1, 2,03 s.
 - `cargo fmt --all --check` et `git diff --check` : verts.
 
-Installation et reprise de production restent à constater pour T10, pas déduites
-des recettes privées. Le fichier de preuve d'écriture antérieur reste hors commit.
+Installation et reprise de production constatées pour T10 : code **9e55e515**,
+compilation release réussie (31,90 s), lien actif conservé vers le binaire du dépôt
+64.bridget. Ancien binaire sauvegardé sous
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget.previous-b42aeb48-091-color`.
+Arrêt explicite du seul équipier de recette, puis SIGTERM du daemon identifié
+(PID 61837) et reprise par launchd. La session interactive humaine est restée
+connectée ; aucune relance de son Codex. L'équipier de recette a été relancé en
+génération **445**, profil et modèle/effort conservés (Terra/medium).
+`who` atteste le build daemon **9e55e5150d0c**, sans avertissement de divergence.
+
+Recette sur le **release installé**, daemon de production, agent vivant :
+`/model gpt-5.6-terra medium` reçoit `prochain tour ... même fil, sans redémarrage` ;
+`/model absent-recette-091 medium` reçoit le refus de catalogue. Le statut demeure
+Terra/medium. La saisie multiligne colorée est constatée ensuite sous ce même
+attach, puis Ctrl-C ferme cette seule vue. Aucun message de recette n'est envoyé
+à l'agent par la saisie. Le premier observateur du pseudo-terminal prenait une
+image au milieu d'un redraw : il attend désormais le prédicat complet texte ET
+coordonnées du curseur, et draine la sortie pendant la fermeture.
+Log final : `/tmp/b91-model.DzNs/production-final2.log`.
+Les symlinks Codex et agents pointent toujours sur la skill du dépôt 64.bridget,
+désormais documentée pour le rendu et `/model` ; aucune installation globale ajoutée.
+
+Le fichier de preuve d'écriture antérieur reste hors commit.
 Les deux répertoires temporaires de compilation de l'équipier ont été déplacés,
 sans suppression, sous `/tmp/b91-model.DzNs/agent-build-Gd83Re` et
 `/tmp/b91-model.DzNs/agent-build-XdMxR8` pour conserver le worktree propre.

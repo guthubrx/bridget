@@ -9,4 +9,4 @@
 - [x] T07 Recette du nouvel agent développement : écriture et MCP prouvés ; message mcp-66627-6a9d386f-1 reçu par la session humaine.
 - [x] T08 Saisie à fond adaptatif et statut coloré, tests géométriques et recette visuelle réelle.
 - [x] T09 Sélection modèle/effort à chaud sur le même fil Codex, reçus honnêtes et refus ; tests natifs et couture.
-- [ ] T10 Documentation, consolidation ciblée, rebuild/install et recette finale.
+- [x] T10 Documentation, consolidation ciblée, rebuild/install et recette finale.
