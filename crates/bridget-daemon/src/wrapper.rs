@@ -3307,7 +3307,10 @@ fn launch_session_with_status(
         return Err(billing_guard_error(&variable).into());
     }
 
-    let effective_name = explicit_name.map(str::to_owned);
+    let effective_name = match interactive.as_ref() {
+        Some(launch) => resolve_interactive_identity(launch, explicit_name, socket)?,
+        None => explicit_name.map(str::to_owned),
+    };
     let host = host_name();
     let os = operating_system();
     let instance_id = managed_reporter
@@ -3327,10 +3330,13 @@ fn launch_session_with_status(
     // un concurrent ne peut pas usurper le fichier d'un autre équipier.
     std::fs::write(
         &name_state_path,
-        explicit_name.unwrap_or_default().as_bytes(),
+        effective_name.as_deref().unwrap_or_default().as_bytes(),
     )?;
-    let mcp_environment =
-        managed_adapter_environment(&instance_id, explicit_name, Some(&name_state_path))?;
+    let mcp_environment = managed_adapter_environment(
+        &instance_id,
+        effective_name.as_deref(),
+        Some(&name_state_path),
+    )?;
     // Le masquage de sortie demeure disponible pour les adaptateurs, mais
     // aucune valeur de secret n'est désormais lue depuis un conteneur.
     let mut redaction_lease = None;
@@ -3503,9 +3509,16 @@ fn launch_session_with_status(
     }
     // Après Register, identité durable et activation du journal : aucun
     // premier tour humain ne peut précéder l'abonnement Bridget au même fil.
+    let bound_codex_thread = tui_binding.as_ref().map(|(thread_id, _)| thread_id.clone());
     let mut native_tui = if let (Some(launch), Some((thread_id, alive))) =
         (&interactive, tui_binding)
     {
+        // Réutilise le lien de reprise existant, mais avec écriture atomique
+        // durable avant toute saisie humaine. Le fil fournisseur n'est jamais
+        // rebaptisé : ce fichier contient seulement l'identité Bridget.
+        let binding_path = persistent_name_path(&session_hash(std::slice::from_ref(&thread_id)));
+        crate::environment::validate_state_file(&binding_path, false)?;
+        bridget_transport::fsutil::write_private_file_atomic(&binding_path, my_name.as_bytes())?;
         let label = display_name
             .as_ref()
             .map_or_else(|| my_name.clone(), |name| format!("{name} [{my_name}]"));
@@ -3940,12 +3953,6 @@ fn launch_session_with_status(
     );
     send_wrapper_message(&writer, WrapperToDaemon::TurnState { in_progress: false });
     send_wrapper_message(&writer, WrapperToDaemon::Unregister);
-    if let Some(result) = tui_result {
-        result?;
-    }
-    if let Some(result) = tui_stopped {
-        result.map_err(|error| error.to_string())?;
-    }
     // Le pilote garde sa socket si la disparition de son groupe n'est pas
     // confirmée. Ne pas transformer ce diagnostic de récupération en exit 0.
     if interactive.is_some() && codex_socket.try_exists().map_err(|e| e.to_string())? {
@@ -3955,7 +3962,87 @@ fn launch_session_with_status(
         )
         .into());
     }
+    if let Some(launch) = &interactive {
+        // La TUI fournisseur annonce une reconnexion --remote générique,
+        // alors que SON serveur vient d'être fermé par le propriétaire Bridget.
+        // La dernière instruction affichée doit refléter ce cycle de vie réel.
+        if let Some(thread_id) = bound_codex_thread.as_deref() {
+            eprintln!(
+                "Bridget : session fermée ; la socket temporaire n'est plus utilisable.\nReprendre : {}",
+                launch.resume_command(thread_id)
+            );
+        }
+    }
+    if let Some(result) = tui_result {
+        result?;
+    }
+    if let Some(result) = tui_stopped {
+        result.map_err(|error| error.to_string())?;
+    }
     Ok(())
+}
+
+/// --name sélectionne une identité durable ; Register reste l'arbitre atomique
+/// d'activité si une autre connexion apparaît entre cette lecture et l'inscription.
+fn resolve_interactive_identity(
+    launch: &crate::codex_interactive::Launch,
+    explicit_id: Option<&str>,
+    socket: &Path,
+) -> Result<Option<String>, String> {
+    use bridget_transport::protocol::{DisplayNameRequest, DisplayNameResolution};
+    let mut candidates = explicit_id
+        .map(str::to_owned)
+        .into_iter()
+        .collect::<Vec<_>>();
+    if let Some(thread_id) = &launch.resume_thread {
+        let path = persistent_name_path(&session_hash(std::slice::from_ref(thread_id)));
+        crate::environment::validate_state_file(&path, false)?;
+        match std::fs::read_to_string(&path) {
+            Ok(id) => {
+                let id = id.trim();
+                bridget_core::router::validate_agent_id(id).map_err(
+                    |_| "liaison de reprise Bridget invalide : aucun remplacement automatique",
+                )?;
+                candidates.push(id.to_owned());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("liaison de reprise illisible : {error}")),
+        }
+    }
+    if let Some(name) = &launch.display_name {
+        let mut client = crate::communication::client::DaemonConnection::connect(socket)
+            .map_err(|error| error.to_string())?;
+        let reply = client
+            .exchange(&WrapperToDaemon::DisplayNameResolve {
+                request: DisplayNameRequest {
+                    version: 1,
+                    display_name: name.clone(),
+                },
+            })
+            .map_err(|error| error.to_string())?;
+        match reply {
+            DaemonToWrapper::DisplayNameResolved {
+                outcome: DisplayNameResolution::Found { agent_id, active },
+            } => {
+                if active {
+                    return Err(format!(
+                        "l'agent « {name} » est déjà actif ; fermez sa session avant de le reprendre"
+                    ));
+                }
+                candidates.push(agent_id);
+            }
+            DaemonToWrapper::DisplayNameResolved {
+                outcome: DisplayNameResolution::NotFound,
+            } => {}
+            other => return Err(format!("résolution du nom Bridget refusée : {other:?}")),
+        }
+    }
+    if let Some(first) = candidates.first()
+        && candidates.iter().any(|id| id != first)
+    {
+        return Err("le nom, le fil et --agent-id désignent des identités différentes ; reprise refusée sans modification".into());
+    }
+    Ok(candidates.into_iter().next())
 }
 
 fn billing_guard_error(variable: &str) -> String {

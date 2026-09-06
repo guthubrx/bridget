@@ -91,10 +91,20 @@ ne sont pas proposés par cette première version.
 Une option non prise en charge est refusée, jamais ignorée.
 
 `resume <UUID>` choisit le fil initial et conserve son historique et son titre.
-`--name` choisit uniquement le nom d'affichage Bridget (80 caractères maximum,
-nom déjà attribué refusé) ; `--agent-id <UUID>` conserve une identité Bridget
-existante. Sans `--name`, le nom existant n'est pas changé. L'agent peut ensuite
-se renommer avec `bridget rename <nom>`, sans changer son UUID.
+`--name` retrouve l'identité Bridget portant ce nom (80 caractères maximum),
+ou la crée si le nom est nouveau. Aucun UUID Bridget à connaître : un nom
+inactif est réutilisable, un agent encore actif reste protégé contre une
+seconde ouverture. Avec `resume <UUID-Codex>`, son historique est repris ;
+sans `resume`, une nouvelle conversation commence sous la même identité.
+Le lien fil→identité est conservé localement, donc `resume <UUID-Codex>` sans
+`--name` retrouve aussi l'identité d'un fil déjà lancé par cette version.
+Pour un fil ancien sans liaison, préciser son nom Bridget une première fois.
+Un nom et un fil désignant deux identités distinctes sont refusés sans mutation.
+`--agent-id` reste une option avancée, pas un prérequis de reprise humaine.
+L'agent peut se renommer avec `bridget rename <nom>`, sans changer son UUID.
+À la fermeture, recopier la dernière ligne `Reprendre : bridget codex …` :
+la commande Codex générique `--remote …` affichée plus haut pointe vers une
+socket temporaire désormais fermée. Aucun prompt initial n'est rejoué.
 `--yolo` est l'alias de `--dangerously-bypass-approvals-and-sandbox` : il désactive
 explicitement sandbox et approbations Codex ; il n'est jamais ajouté par défaut.
 

@@ -633,6 +633,23 @@ impl AgentProfileStore {
     /// Mise à jour de présentation sous verrou d'écriture, jamais une réécriture
     /// du profil complet : instructions et étiquettes ne sont même pas relues.
     /// Un retry du même nom est sans écriture.
+    /// Même normalisation et même index UNIQUE que le renommage. Lecture seule,
+    /// y compris pour un profil sans présence après redémarrage du daemon.
+    pub fn agent_id_for_display_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<String>, AgentProfileError> {
+        let normalized = normalize_display_name(name)?;
+        self.conn
+            .query_row(
+                "SELECT agent_id FROM agent_profiles WHERE display_name_normalized=?1",
+                [normalized],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(AgentProfileError::Sqlite)
+    }
+
     pub fn rename_display_name(
         &mut self,
         agent_id: &str,
@@ -1359,6 +1376,31 @@ mod tests {
     fn store() -> (AgentProfileStore, std::path::PathBuf) {
         let path = std::env::temp_dir().join(format!("bridget-profile-{}.db", Uuid::new_v4()));
         (AgentProfileStore::open(&path).unwrap(), path)
+    }
+
+    #[test]
+    fn resolution_du_nom_survit_a_la_reouverture_sans_creer_de_profil() {
+        let (mut store, path) = store();
+        let id = Uuid::new_v4().to_string();
+        store.ensure_agent_ids([id.as_str()]).unwrap();
+        store.rename_display_name(&id, "Gui-Codér").unwrap();
+        drop(store);
+        let store = AgentProfileStore::open(&path).unwrap();
+        assert_eq!(
+            store.agent_id_for_display_name("gui-coder").unwrap(),
+            Some(id)
+        );
+        let before: i64 = store
+            .conn
+            .query_row("SELECT count(*) FROM agent_profiles", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(store.agent_id_for_display_name("absent").unwrap(), None);
+        let after: i64 = store
+            .conn
+            .query_row("SELECT count(*) FROM agent_profiles", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(before, after);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

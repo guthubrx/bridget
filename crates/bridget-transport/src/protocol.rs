@@ -61,6 +61,15 @@ pub enum DisplayNameOutcome {
     },
 }
 
+/// Lecture durable du nom humain ; ne réserve ni ne prend une identité.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DisplayNameResolution {
+    Found { agent_id: String, active: bool },
+    NotFound,
+    Rejected { reason: DisplayNameRefusal },
+}
+
 /// Mode réel de présence d'un agent.
 ///
 /// Cette information décrit le chemin d'attelage (et non le transport réseau)
@@ -2494,6 +2503,10 @@ pub enum WrapperToDaemon {
     DisplayNameSet {
         request: DisplayNameRequest,
     },
+    #[serde(rename = "display_name_resolve")]
+    DisplayNameResolve {
+        request: DisplayNameRequest,
+    },
     /// Demande au daemon ce qu'il atteste de LUI-MÊME : sa machine et sa base.
     ///
     /// Un client fédéré ne peut pas les déduire — il affichait jusqu'ici SES
@@ -3251,6 +3264,8 @@ pub enum DaemonToWrapper {
     AgentList { agents: Vec<AgentInfo> },
     #[serde(rename = "display_name_result")]
     DisplayNameResult { outcome: DisplayNameOutcome },
+    #[serde(rename = "display_name_resolution")]
+    DisplayNameResolved { outcome: DisplayNameResolution },
     /// Machine, base et instance attestées par le daemon lui-même.
     ///
     /// `instance_id` est renouvelé à chaque démarrage : contrairement à

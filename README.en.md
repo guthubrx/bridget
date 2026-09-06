@@ -83,10 +83,19 @@ This first version rejects `--cd`, images and local providers;
 unsupported options are rejected rather than silently ignored.
 
 `resume <UUID>` selects the initial thread, preserving its history and title.
-`--name` sets the Bridget display name only (80 characters maximum; already
-assigned names are rejected); `--agent-id <UUID>` retains an existing Bridget
-identity. Omitting `--name` leaves the existing name unchanged. The agent can
-later use `bridget rename <name>` without changing its UUID.
+`--name` resolves the Bridget identity bearing that name (80 characters maximum),
+or creates one for a new name. No Bridget UUID to remember: inactive names can
+be reused, while active agents are protected against a second launch.
+With `resume <Codex-UUID>`, the existing conversation is resumed; without it,
+a new conversation starts under the same identity. The thread→identity binding
+is stored locally, so resuming a thread previously launched by this version
+also works without `--name`. For older unbound threads, supply the name once.
+Conflicting name/thread identities are rejected without mutation. `--agent-id`
+remains an advanced option, not a prerequisite for human resume.
+The agent can later use `bridget rename <name>` without changing its UUID.
+At exit, copy the final `Reprendre : bridget codex …` command: Codex's generic
+`--remote …` hint above it refers to a temporary socket that is now closed.
+The initial prompt is never replayed.
 `--yolo` aliases `--dangerously-bypass-approvals-and-sandbox`: it explicitly
 disables Codex sandbox and approvals and is never added by default.
 

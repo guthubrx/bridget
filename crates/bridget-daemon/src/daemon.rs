@@ -4620,24 +4620,35 @@ fn handle_connection(
 
             // Contrat fermé de lecture : une extension inconnue ne disparaît
             // pas silencieusement dans les defaults Serde de l'enveloppe commune.
-            if serde_json::from_str::<serde_json::Value>(line)
+            let display_name_kind = serde_json::from_str::<serde_json::Value>(line)
                 .ok()
-                .is_some_and(|value| {
-                    value.get("type").and_then(|kind| kind.as_str()) == Some("display_name_set")
-                })
-                && !decode::<WrapperToDaemon>(line).ok().is_some_and(|message| {
-                    encode(&message).is_ok_and(|canonical| canonical == line)
-                })
+                .and_then(|value| {
+                    value
+                        .get("type")
+                        .and_then(|kind| kind.as_str())
+                        .map(str::to_owned)
+                });
+            if matches!(
+                display_name_kind.as_deref(),
+                Some("display_name_set" | "display_name_resolve")
+            ) && !decode::<WrapperToDaemon>(line)
+                .ok()
+                .is_some_and(|message| encode(&message).is_ok_and(|canonical| canonical == line))
             {
-                writeln!(
-                    my_writer,
-                    "{}",
-                    encode(&DaemonToWrapper::DisplayNameResult {
+                let response = if display_name_kind.as_deref() == Some("display_name_resolve") {
+                    DaemonToWrapper::DisplayNameResolved {
+                        outcome: bridget_transport::protocol::DisplayNameResolution::Rejected {
+                            reason: bridget_transport::protocol::DisplayNameRefusal::InvalidRequest,
+                        },
+                    }
+                } else {
+                    DaemonToWrapper::DisplayNameResult {
                         outcome: bridget_transport::protocol::DisplayNameOutcome::Rejected {
-                            reason: bridget_transport::protocol::DisplayNameRefusal::InvalidRequest
-                        }
-                    })?
-                )?;
+                            reason: bridget_transport::protocol::DisplayNameRefusal::InvalidRequest,
+                        },
+                    }
+                };
+                writeln!(my_writer, "{}", encode(&response)?)?;
                 my_writer.flush()?;
                 continue;
             }
@@ -8683,6 +8694,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::LedgerProjection { .. }
                 | WrapperToDaemon::ListAgents
                 | WrapperToDaemon::DisplayNameSet { .. }
+                | WrapperToDaemon::DisplayNameResolve { .. }
                 | WrapperToDaemon::Runtime { .. }
                 | WrapperToDaemon::ServedModel { .. }
                 | WrapperToDaemon::RateLimit { .. }
@@ -8891,6 +8903,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::Heartbeat
                 | WrapperToDaemon::ListAgents
                 | WrapperToDaemon::DisplayNameSet { .. }
+                | WrapperToDaemon::DisplayNameResolve { .. }
                 | WrapperToDaemon::Runtime { .. }
                 | WrapperToDaemon::ServedModel { .. }
                 | WrapperToDaemon::RateLimit { .. }
@@ -11541,6 +11554,41 @@ fn handle_wrapper_message(
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let agents = st.agent_infos();
             Some(DaemonToWrapper::AgentList { agents })
+        }
+        WrapperToDaemon::DisplayNameResolve { request } => {
+            use crate::agent_profile::AgentProfileStore;
+            use bridget_transport::protocol::{
+                DisplayNameRefusal as Refusal, DisplayNameResolution as Outcome,
+            };
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let outcome = if request.version != 1
+                || request.display_name.chars().any(char::is_control)
+                || request.display_name.trim().is_empty()
+                || request.display_name.chars().count()
+                    > crate::agent_profile::MAX_DISPLAY_NAME_CHARS
+            {
+                Outcome::Rejected {
+                    reason: Refusal::InvalidRequest,
+                }
+            } else {
+                match AgentProfileStore::open(&st.db_path)
+                    .and_then(|profiles| profiles.agent_id_for_display_name(&request.display_name))
+                {
+                    Ok(Some(agent_id)) => {
+                        let active = st
+                            .router
+                            .list_agents()
+                            .iter()
+                            .any(|agent| agent.agent_id == agent_id);
+                        Outcome::Found { agent_id, active }
+                    }
+                    Ok(None) => Outcome::NotFound,
+                    Err(_) => Outcome::Rejected {
+                        reason: Refusal::StorageUnavailable,
+                    },
+                }
+            };
+            Some(DaemonToWrapper::DisplayNameResolved { outcome })
         }
         WrapperToDaemon::DisplayNameSet { request } => {
             use crate::agent_profile::{AgentProfileError, AgentProfileStore};

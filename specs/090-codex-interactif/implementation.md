@@ -1,5 +1,55 @@
 # Implémentation 090 — Implemented, adoptée le 2026-09-06
 
+## Correctif utilisateur du 2026-09-06 : reprise humaine sans UUID Bridget
+
+Base `49710fa66563`, branche `fix/090-human-resume`. Le wrapper créait une
+nouvelle identité avant de tenter de lui donner le nom durable déjà possédé
+par l'ancienne : `NameConflict` après fermeture, y compris avec `resume`.
+Le message natif `codex --remote …` proposait en outre une socket que Bridget
+ferme lorsqu'il possède la session ; la dernière instruction de sortie doit
+être une vraie commande Bridget, pas cette adresse temporaire.
+
+Ajout d'une lecture fermée `display_name_resolve` version 1 auprès du daemon,
+sur le même index normalisé UNIQUE que le renommage. Aucun accès client à la
+base, aucune table supplémentaire, aucune suppression de profil. `--name`
+réutilise l'identité inactive ; le contrôle d'activité précède le fournisseur
+et Register reste l'arbitre atomique en cas de course. Nom, liaison de fil et
+UUID explicite contradictoires : refus sans modification. La liaison locale
+fil→identité réutilise `agent-names` et est écrite atomiquement, synchronisée,
+avant la saisie. La reprise conserve le titre fournisseur et son historique.
+Sans `resume`, même nom signifie nouvelle conversation, même identité.
+Pour les fils antérieurs sans liaison, fournir le nom une première fois.
+
+La commande finale `Reprendre : bridget codex … resume <fil>` conserve les
+options explicites, protège les arguments shell et ne rejoue pas le prompt
+initial. Aucun UUID Bridget requis. README FR/EN et skill canonique alignés.
+
+Preuves exécutées (HOME, CODEX_HOME, BRIDGET_HOME privés, HTTP local, vraie TUI
+et vrai app-server Codex 0.153.4, aucun compte ni fil utilisateur modifié) :
+
+- `cargo test -p bridget-daemon --test codex_interactive_090_test -- --include-ignored --test-threads=1` : **11/11**, 40,09 s.
+- Nouvelle recette `--human-resume` : démarrage nommé sans UUID, tour humain,
+  refus d'un second actif avant fournisseur et sans nouveau profil, fermeture,
+  redémarrage daemon, reprise nom+fil puis fil seul, nouvelle conversation
+  sous le même nom ; identité/historique inchangés, zéro prompt implicite,
+  termios restauré, sockets supprimées. Refus fil/UUID contradictoires.
+- Couture RPC : réponse nom→UUID+activité réelle, refus champ futur et version
+  inconnue. Mutation du résolveur exécutée : ignorer l'identité retrouvée
+  fait échouer la recette sur `name-new-thread` (exit 1, `NameConflict`).
+  Restauration : **1/1**, 12,07 s, corpus RPC fermé inclus.
+- `cargo test --workspace --lib -- --test-threads=1` : **1 012 succès**, zéro
+  échec, 8 ignorés, plus deux sous-tests enfants verts ; 61,83 s hors build.
+  Racines courtes sous `/tmp`, environnement vide et `umask 077`.
+- `cargo test -p bridget-daemon --features test-support --test core_089_identity_test -- --test-threads=1` : **3/3**, 1 worker ignoré, 6,49 s.
+- `cargo clippy --workspace --all-targets -- -D warnings` et
+  `cargo fmt --all --check` : PASS. Pas de nouvelle dépendance.
+
+Logs locaux : `/tmp/b90-human-all-native.log`, `/tmp/b90-human-mutant.log`,
+`/tmp/b90-human-restored.log`, `/tmp/b90-human-units.log`,
+`/tmp/b90-human-identity.log`, `/tmp/b90-human-clippy-final.log`.
+La mutation n'est pas livrée. L'adoption du daemon nécessite la nouvelle RPC ;
+les anciens wrappers restent compatibles avec ce protocole additif.
+
 ## Correctif utilisateur du 2026-09-06 : reprise d'un historique volumineux
 
 Branche `fix/090-codex-history`, base `264597c44c32`. Cause mesurée sur une

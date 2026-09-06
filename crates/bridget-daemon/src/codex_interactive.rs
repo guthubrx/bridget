@@ -108,6 +108,40 @@ impl Launch {
         })
     }
 
+    pub(crate) fn resume_command(&self, thread_id: &str) -> String {
+        // Conserver les options explicites, jamais rejouer le prompt initial.
+        let mut args = vec!["bridget".to_owned(), "codex".to_owned()];
+        let mut index = 0;
+        while let Some(option) = self.tui_args.get(index).filter(|arg| arg.starts_with('-')) {
+            args.push(option.clone());
+            if crate::wrapper::codex_option_takes_value(option) {
+                index += 1;
+                if let Some(value) = self.tui_args.get(index) {
+                    args.push(value.clone());
+                }
+            }
+            index += 1;
+        }
+        if let Some(name) = &self.display_name {
+            args.extend(["--name".into(), name.clone()]);
+        }
+        args.extend(["resume".into(), thread_id.into()]);
+        args.into_iter()
+            .map(|arg| {
+                if arg
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"-._/".contains(&c))
+                    && !arg.is_empty()
+                {
+                    arg
+                } else {
+                    format!("'{}'", arg.replace('\'', "'\\''"))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     pub(crate) fn check_terminal() -> Result<(), String> {
         if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
             return Err("Codex interactif exige stdin et stdout sur un terminal ; utilisez bridget spawn pour un agent détaché".into());
@@ -255,6 +289,29 @@ mod tests {
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|s| s.to_string()).collect()
     }
+    #[test]
+    fn commande_de_reprise_humaine_conserve_options_et_quote_le_nom_sans_prompt() {
+        let launch = Launch::parse(&args(&[
+            "--name",
+            "l'agent humain",
+            "--yolo",
+            "-m",
+            "fixture",
+            "-c",
+            "key=\"a b\"",
+            "PROMPT-NE-PAS-REJOUER",
+        ]))
+        .unwrap();
+        let command = launch.resume_command("90000000-0000-4000-8000-000000000001");
+        assert_eq!(
+            command,
+            "bridget codex --dangerously-bypass-approvals-and-sandbox -m fixture -c 'key=\"a b\"' --name 'l'\\''agent humain' resume 90000000-0000-4000-8000-000000000001"
+        );
+        assert!(!command.contains("PROMPT-NE-PAS-REJOUER"));
+        assert!(!command.contains("--agent-id"));
+        assert!(!command.contains("--remote"));
+    }
+
     #[test]
     fn options_natives_conservees_sans_bypass_implicite() {
         let parsed = Launch::parse(&args(&[

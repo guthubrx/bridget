@@ -55,6 +55,7 @@ def main():
     initial_resume = "--initial-resume" in sys.argv
     copied_resume = "--copied-resume" in sys.argv
     paginated_resume = "--paginated-resume" in sys.argv
+    human_resume = "--human-resume" in sys.argv
     root = pathlib.Path(tempfile.mkdtemp(prefix="b90-", dir="/tmp"))
     state, home = root / "state", root / "home"
     state.mkdir(mode=0o700)
@@ -92,7 +93,7 @@ def main():
     receipts = []
     transcript = bytearray()
     query_counts = {}
-    deadline = time.monotonic() + (180 if live else 80)
+    deadline = time.monotonic() + (180 if live or human_resume else 80)
 
     def tick(enforce_deadline=True):
         if enforce_deadline and time.monotonic() >= deadline:
@@ -204,6 +205,8 @@ def main():
                 seed.wait(timeout=5)
                 seed_path.unlink(missing_ok=True)
         wrapper_args = [bridget, "codex", "--agent-id", "90000000-0000-4000-8000-000000000001", "--no-alt-screen"]
+        if human_resume:
+            wrapper_args = [bridget, "codex", "--name", "gui-coder", "--yolo", "--no-alt-screen"]
         if initial_resume or copied_resume or paginated_resume:
             wrapper_args += ["--name", "coder-recette-090", "--yolo", "resume", resume_id]
         if copied_resume:
@@ -236,6 +239,107 @@ def main():
         print("same_thread", thread_id, flush=True)
         until(lambda: (b"gpt-5.6-luna" if live else b"fixture") in transcript
             and (b"context" in transcript or b"shortcuts" in transcript), "TUI configurée (pas seulement l'écran Resuming) prête à saisir")
+        if human_resume:
+            original = next(a for a in json.loads(cli("agents", "--json")) if a["display_name"] == "gui-coder")
+            original_id = original["agent_id"]
+
+            def resolve_wire(frame):
+                with socket.socket(socket.AF_UNIX) as connection:
+                    connection.settimeout(3)
+                    connection.connect(str(state / "bridget.sock"))
+                    connection.sendall((json.dumps(frame, separators=(",", ":")) + "\n").encode())
+                    with connection.makefile("rb") as reader:
+                        return json.loads(reader.readline())
+
+            resolution_request = {"type": "display_name_resolve", "request": {"version": 1, "display_name": "gui-coder"}}
+            assert resolve_wire(resolution_request) == {"type": "display_name_resolution",
+                "outcome": {"status": "found", "agent_id": original_id, "active": True}}
+            # Mutation : supprimer le contrôle canonique accepterait ce champ
+            # inconnu via les defaults Serde et ferait échouer cet oracle.
+            rejected = resolve_wire({**resolution_request, "future": True})
+            assert rejected["outcome"]["status"] == "rejected", rejected
+            assert resolve_wire({"type": "display_name_resolve", "request": {"version": 2, "display_name": "gui-coder"}})["outcome"]["status"] == "rejected"
+
+            def refused_launch(arguments, expected):
+                # Vrai second terminal, mais refus exigé AVANT tout app-server.
+                sockets_before = set(state.glob("c-*.sock"))
+                with sqlite3.connect(state / "bridget.db") as database:
+                    profiles_before = database.execute("SELECT agent_id, display_name FROM agent_profiles ORDER BY agent_id").fetchall()
+                reject_master, reject_slave = os.openpty()
+                child = subprocess.Popen([bridget, "codex", *arguments], env=environment, cwd=root,
+                    stdin=reject_slave, stdout=reject_slave, stderr=subprocess.PIPE)
+                try:
+                    _, stderr = child.communicate(timeout=8)
+                    assert child.returncode != 0 and expected in stderr.decode(), stderr.decode()
+                    assert set(state.glob("c-*.sock")) == sockets_before, "second fournisseur démarré malgré refus"
+                    with sqlite3.connect(state / "bridget.db") as database:
+                        assert database.execute("SELECT agent_id, display_name FROM agent_profiles ORDER BY agent_id").fetchall() == profiles_before
+                finally:
+                    if child.poll() is None:
+                        subprocess.run(["/bin/ps", "-p", str(child.pid), "-o", "pid=,comm="], check=False)
+                        child.terminate()
+                        child.wait(timeout=5)
+                    os.close(reject_master)
+                    os.close(reject_slave)
+
+            refused_launch(["--name", "gui-coder", "--yolo", "resume", thread_id], "déjà actif")
+            assert wrapper.poll() is None
+            os.write(master, b"\x1b[200~HUMAN-RESUME-090\x1b[201~")
+            until(lambda: b"HUMAN-RESUME-090" in transcript, "saisie historique")
+            os.write(master, b"\r")
+            until(lambda: b"OK-090" in transcript, "réponse historique")
+            for restart_mode in ["name-and-thread", "thread-only", "name-new-thread"]:
+                observer.socket.close()
+                observer = None
+                os.write(master, b"\x03\x03")
+                until(lambda: wrapper.poll() is not None, "sortie avant reprise humaine")
+                tick()
+                assert terminal_restored() and not socket_path.exists()
+                assert "Reprendre : bridget codex" in terminal_text() and "resume " + thread_id in terminal_text()
+                wrapper = None
+                # Le daemon ne conserve plus aucune présence en mémoire : la
+                # résolution doit réellement lire le profil durable.
+                subprocess.run(["/bin/ps", "-p", str(daemon.pid), "-o", "pid=,comm="], check=True)
+                daemon.terminate()
+                daemon.wait(timeout=5)
+                daemon = subprocess.Popen([bridget, "daemon"], env=environment, cwd=root,
+                    stdin=subprocess.DEVNULL, stdout=daemon_log, stderr=daemon_log)
+                until(lambda: (state / "bridget.sock").exists(), "daemon repris")
+                if restart_mode == "name-and-thread":
+                    refused_launch(["--name", "autre-nom", "--agent-id", "90000000-0000-4000-8000-000000000099", "resume", thread_id], "identités différentes")
+                os.close(master)
+                os.close(slave)
+                master, slave = os.openpty()
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
+                transcript.clear()
+                query_counts.clear()
+                arguments = [bridget, "codex", "--yolo", "--no-alt-screen"]
+                if restart_mode != "thread-only":
+                    arguments += ["--name", "gui-coder"]
+                if restart_mode != "name-new-thread":
+                    arguments += ["resume", thread_id]
+                wrapper = subprocess.Popen([sys.executable, __file__, "--terminal-host", str(root), *arguments],
+                    env=environment, cwd=root, stdin=slave, stdout=slave, stderr=slave, preexec_fn=own_terminal)
+                until(lambda: b"Bridget :" in transcript and b"fixture" in transcript
+                    and (b"context" in transcript or b"shortcuts" in transcript), "reprise réelle sans UUID Bridget : " + restart_mode)
+                socket_path = next(state.glob("c-*.sock"))
+                observer = probe.Client(str(socket_path))
+                loaded = observer.rpc("thread/loaded/list", {})["result"]["data"]
+                agent = next(a for a in json.loads(cli("agents", "--json")) if a["state"] == "connected")
+                assert agent["agent_id"] == original_id and agent["display_name"] == "gui-coder", agent
+                if restart_mode == "name-new-thread":
+                    assert loaded != [thread_id]
+                    thread_id = loaded[0]
+                else:
+                    assert loaded == [thread_id], loaded
+                    history = observer.rpc("thread/read", {"threadId": thread_id, "includeTurns": True})["result"]
+                    assert "HUMAN-RESUME-090" in json.dumps(history), "historique perdu"
+                assert probe.Fixture.count == 1, "prompt rejoué implicitement"
+            os.write(master, b"\x03\x03")
+            until(lambda: wrapper.poll() is not None, "sortie finale")
+            assert terminal_restored() and not socket_path.exists()
+            print("human_resume_same_identity_and_history_active_refused_restart_durable", flush=True)
+            return
         if copied_resume or paginated_resume:
             agent = next(a for a in json.loads(cli("agents", "--json"))
                 if a.get("agent_id") == "90000000-0000-4000-8000-000000000001")

@@ -71,6 +71,10 @@ native_recipe!(
 );
 native_recipe!(reprise_absente_refusee_avant_presence, "--missing-resume");
 native_recipe!(
+    reprise_humaine_par_nom_et_fil_sans_uuid_bridget,
+    "--human-resume"
+);
+native_recipe!(
     reprise_historique_pagine_rendu_par_la_tui_native,
     "--paginated-resume"
 );
