@@ -55,7 +55,7 @@ depuis la session propriétaire ; les retries, l'instance et l'historique resten
 liés à la même identité. Un nom de fournisseur ou un champ `--from` ne permet
 pas d'usurper cette identité.
 
-Les outils MCP `bridget_who`, `bridget_send` et `bridget_ledger` utilisent la
+Les outils MCP `bridget_who`, `bridget_send`, `bridget_cancel` et `bridget_ledger` utilisent la
 même socket. Avec MCP, répondre avec `to`, `body` et `in_reply_to`.
 La [skill livrée](skills/bridget/SKILL.md) contient les exemples et la conduite de
 reprise ; elle n'est pas installée dans les profils globaux automatiquement.
@@ -124,7 +124,16 @@ explicitement sandbox et approbations Codex ; il n'est jamais ajouté par défau
 |---|---|
 | `bridget codex` | Interaction native au premier plan ; quitter ferme cette session. |
 | `bridget spawn codex --persistent …` | Agent supervisé, indépendant du terminal. |
-| `bridget attach <uuid>` | Lecture/suivi du journal, pas reprise de la TUI Codex. |
+| `bridget attach <uuid>` | Journal et saisie de messages, pas reprise de la TUI Codex. |
+
+Pour confier du développement à un nouveau Codex, l'humain lance depuis son
+terminal `bridget spawn codex --persistent --cwd "$PWD" --posture development`.
+Ce profil autorise l'écriture dans ce répertoire, pas le réseau ni une extension
+automatique des droits. Il est limité à cet ordre et exige une entrée/sortie TTY.
+Sans `--posture`, la politique globale reste applicable ; `--posture discovery`
+impose la lecture seule. `relaunch` conserve les droits figés de l'ancien agent :
+il ne transforme pas un agent découverte en développeur. Aucun réglage global
+n'est nécessaire pour ce lancement individuel.
 
 Le daemon Bridget peut se reconnecter sans recréer le fil. Le socket Bridget
 configuré peut être celui d'un tunnel SSH ; l'app-server Codex reste local,
@@ -168,6 +177,29 @@ indisponible ; le ledger expose une vue bornée, pas un total prétendument exha
 un curseur devenu indisponible annonce une lacune (`Gap`). Source inaccessible,
 fin de flux et rattrapage terminé sont distincts. Ni un journal frais ni une
 connexion vivante ne prouvent qu'un agent travaille.
+
+**Parler dans attach :** taper un message puis Entrée l'envoie à l'agent ;
+Ctrl-C quitte la vue sans arrêter l'équipier. Ce n'est pas une reprise de la TUI
+fournisseur ni un écran permettant d'accorder des permissions. La ligne de statut
+du terminal affiche client/type, modèle, effort et état depuis le même annuaire
+que `who`. Elle devient indisponible sans renouvellement ; le fournisseur réel
+n'est jamais déduit de « Claude » ou « Codex ». Les commandes et demandes
+d'autorisation Codex sont rendues comme des faits, avec sortie neutralisée.
+
+### Skill, MCP ou CLI ?
+
+La skill est le mode d'emploi ; MCP exécute les outils structurés de communication.
+Les agents privilégient MCP pour envoyer, répondre, consulter et annuler leurs
+demandes. Si les outils sont différés, ils découvrent le catalogue avant de passer
+au shell. Un refus de socket dans le shell sandboxé n'est pas une preuve de panne
+MCP. Les réponses finales des équipiers gérés peuvent être relayées par le wrapper ;
+la TUI humaine, elle, exige une réponse liée explicite. Ne pas doubler les deux.
+
+Le lancement, l'arrêt et la relance restent des commandes CLI explicitement
+autorisées, pas des outils MCP de supervision. Toujours lire le reçu et le profil
+effectif : connecté ne signifie pas autorisé à écrire. Les outils Maicie encore
+annoncés sont une façade vers un service extérieur, non une dépendance pour
+communiquer. Les artefacts restent inertes et n'ouvrent aucune interface graphique.
 
 Les contenus référencés conservent bytes, provenance et accès. Un document HTML
 est du contenu inerte : aucun rendu, script ou navigateur dans le noyau.

@@ -50,7 +50,7 @@ target and correlation are safer when several requests coexist.
 An address is a UUID. `bridget rename "Team B"` changes only its display name from
 the owning session. Neither a provider name nor `--from` grants another identity.
 
-MCP tools `bridget_who`, `bridget_send`, `bridget_ledger` use the same socket.
+MCP tools `bridget_who`, `bridget_send`, `bridget_cancel`, `bridget_ledger` use the same socket.
 Reply with `to`, `body` and `in_reply_to`. The packaged
 [skill](skills/bridget/SKILL.md) provides examples and retry guidance; global
 profiles are never modified automatically.
@@ -114,7 +114,15 @@ disables Codex sandbox and approvals and is never added by default.
 |---|---|
 | `bridget codex` | Foreground native interaction; quitting closes this session. |
 | `bridget spawn codex --persistent …` | Supervised agent independent of the terminal. |
-| `bridget attach <uuid>` | Journal replay/follow, not a native TUI resume. |
+| `bridget attach <uuid>` | Journal replay/follow and message input, not a native TUI resume. |
+
+To assign development to a new Codex, the human runs in their terminal:
+`bridget spawn codex --persistent --cwd "$PWD" --posture development`.
+This profile permits writes in that directory, not network access or automatic
+permission escalation. It applies only to this order and requires TTY input/output.
+Without `--posture`, the global policy applies; `--posture discovery` selects
+read-only access. `relaunch` preserves the old agent's frozen permissions: it
+cannot turn a discovery agent into a developer. No global policy change is needed.
 
 A Bridget daemon reconnect preserves the thread and identity. The configured
 Bridget socket may be SSH-forwarded; the Codex app-server remains local and
@@ -157,6 +165,27 @@ explicitly unavailable. A bounded ledger view must not be presented as that tota
 `attach` replays then follows the journal with continuous sequences or an explicit
 `Gap`. An unavailable source, end of stream and completed catch-up are distinct.
 Connection or freshness does not prove task activity or completion.
+
+**Talk from attach:** type a message and press Enter to send it; Ctrl-C closes
+the view without stopping the agent. This is neither a provider TUI resume nor
+a permission approval screen. The terminal status line shows client/type, model,
+effort and state from the same inventory as `who`. Without refreshed data it becomes
+unavailable. The actual provider is never inferred from “Claude” or “Codex”.
+Native Codex commands and approval requests are rendered as sanitized facts.
+
+### Skill, MCP or CLI?
+
+The skill is the operating guide; MCP executes structured communication tools.
+Agents prefer MCP for messages, linked replies, inventory and request cancellation.
+Discover deferred tools before falling back to the shell. A sandboxed shell socket
+refusal is not evidence of an MCP failure. Managed wrappers may relay final answers
+automatically; human interactive sessions require an explicit linked reply. Do not
+send the same answer through both paths.
+
+Spawn, stop and relaunch remain explicitly authorized CLI operations, not MCP
+supervision tools. Check the receipt and effective profile: connected does not mean
+writable. Remaining Maicie tools target an external service, not a communication
+dependency. Artifacts stay inert and do not open a graphical interface.
 
 Referenced content retains bytes, provenance and access controls. HTML is inert
 data: no rendering, JavaScript or browser is part of the core.

@@ -33,6 +33,8 @@ const MAX_TURN_RENDERED_CHARS: usize = 2 * MAX_TURN_BLOCK_BYTES;
 const DEFAULT_TERMINAL_COLUMNS: usize = 80;
 const DEFAULT_TERMINAL_ROWS: usize = 24;
 const UNATTESTED_SENDER_LABEL: &str = "émetteur non attesté";
+const PRESENCE_REFRESH: Duration = Duration::from_secs(2);
+const PRESENCE_EXPIRY: Duration = Duration::from_secs(6);
 
 /// Garde minimale du terminal d'entrée. Le mode désactive le traitement des
 /// signaux afin que Ctrl-C arrive comme l'octet `0x03` à la boucle de saisie.
@@ -916,10 +918,105 @@ fn journal_render_record(bytes: &[u8], agent: &str) -> Option<JournalRenderRecor
 enum RendererCommand {
     Event(AttachEvent),
     InputChanged(Vec<u8>),
+    Presence(Option<Box<AgentInfo>>, Instant),
 }
 
 enum RendererControl {
     Stop,
+}
+
+fn unavailable_presence() -> String {
+    "[statut] annuaire indisponible — modèle/effort/état inconnus".to_string()
+}
+
+fn presence_line(agent: &AgentInfo) -> String {
+    let field =
+        |value: Option<&str>| sanitize_inline(value.filter(|s| !s.is_empty()).unwrap_or("inconnu"));
+    // Le type et le protocole ne prouvent pas le fournisseur commercial :
+    // Claude Code peut notamment servir GLM. Pas de table de déduction ici.
+    let client = match agent.transport.as_str() {
+        "codex_app_server" => "Codex",
+        "claude_stream_json" => "Claude Code",
+        _ => &agent.agent_type,
+    };
+    format!(
+        "{} | modèle {} | effort {} | {} | {} | fournisseur inconnu",
+        field(Some(client)),
+        field(agent.model.as_deref()),
+        field(agent.effort.as_deref()),
+        field(Some(&agent.state)),
+        field(Some(&agent.display_name)),
+    )
+}
+
+/// Métadonnées facultatives sur une connexion distincte : un annuaire trop
+/// volumineux ou un ancien daemon ne doit jamais couper le flux du journal.
+fn query_presence(socket: &Path, agent: &str) -> Option<AgentInfo> {
+    use bridget_transport::jsonl::{LineDeadline, connect_nonblocking, read_unix_line};
+    let deadline = Instant::now() + Duration::from_millis(750);
+    let stream = connect_nonblocking(socket, deadline).ok()?;
+    let mut reader = BufReader::new(stream.try_clone().ok()?);
+    let mut writer = BufWriter::new(stream);
+    for request in [
+        WrapperToDaemon::RoleHandshake {
+            role: ConnectionRole::Attach,
+        },
+        WrapperToDaemon::ListAgents,
+    ] {
+        let remaining = deadline.checked_duration_since(Instant::now())?;
+        writer.get_ref().set_write_timeout(Some(remaining)).ok()?;
+        write_plain_message(&mut writer, &request).ok()?;
+        let bytes = read_unix_line(
+            &mut reader,
+            MAX_ATTACH_SERIALIZED_FRAME_BYTES,
+            LineDeadline::Absolute(deadline),
+        )
+        .ok()??;
+        let message: DaemonToWrapper = serde_json::from_slice(&bytes).ok()?;
+        match (request, message) {
+            (
+                WrapperToDaemon::RoleHandshake { .. },
+                DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Attach,
+                },
+            ) => {}
+            (WrapperToDaemon::ListAgents, DaemonToWrapper::AgentList { agents }) => {
+                return agents.into_iter().find(|info| info.agent_id == agent);
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+struct PresenceReader {
+    stop: mpsc::Sender<()>,
+    handle: thread::JoinHandle<()>,
+}
+
+impl PresenceReader {
+    fn spawn(socket: &Path, agent: &str, renderer: RendererSender) -> Self {
+        let socket = socket.to_path_buf();
+        let agent = agent.to_owned();
+        let (stop, stopped) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            loop {
+                renderer.presence(query_presence(&socket, &agent));
+                if !matches!(
+                    stopped.recv_timeout(PRESENCE_REFRESH),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    break;
+                }
+            }
+        });
+        Self { stop, handle }
+    }
+
+    fn stop(self) {
+        let _ = self.stop.send(());
+        let _ = self.handle.join();
+    }
 }
 
 #[derive(Clone)]
@@ -933,6 +1030,15 @@ struct RendererSender {
 impl RendererSender {
     fn event(&self, event: AttachEvent) {
         let _ = self.commands.send(RendererCommand::Event(event));
+    }
+
+    fn presence(&self, agent: Option<AgentInfo>) {
+        if self.tty_output {
+            let _ = self.commands.try_send(RendererCommand::Presence(
+                agent.map(Box::new),
+                Instant::now(),
+            ));
+        }
     }
 
     fn input_changed(&self, legacy_bytes: &[u8]) {
@@ -1031,6 +1137,7 @@ fn renderer_loop(
             renderer.refresh_geometry(output);
             renderer.redraw(&input_snapshot(&input), output);
         }
+        renderer.expire_presence(Instant::now(), &input_snapshot(&input), output);
     }
     renderer.finish(&input_snapshot(&input), output);
 }
@@ -1055,11 +1162,24 @@ struct BlockRenderer {
     rendered_lines: Vec<String>,
     defer_redraw: bool,
     redraw_pending: bool,
+    presence_line: Option<String>,
+    presence_received: Option<Instant>,
     #[cfg(test)]
     redraw_count: usize,
 }
 
 impl BlockRenderer {
+    fn expire_presence(&mut self, now: Instant, input: &str, output: &mut impl Write) {
+        if self
+            .presence_received
+            .is_some_and(|at| now.saturating_duration_since(at) >= PRESENCE_EXPIRY)
+        {
+            self.presence_received = None;
+            self.presence_line = Some(unavailable_presence());
+            self.redraw(input, output);
+        }
+    }
+
     fn new(agent: String, raw_terminal: bool, tty_output: bool) -> Self {
         let terminal_fd = tty_output.then_some(libc::STDOUT_FILENO);
         let (terminal_columns, terminal_rows) = terminal_fd
@@ -1078,6 +1198,8 @@ impl BlockRenderer {
             rendered_lines: Vec::new(),
             defer_redraw: false,
             redraw_pending: false,
+            presence_line: None,
+            presence_received: None,
             #[cfg(test)]
             redraw_count: 0,
         }
@@ -1110,6 +1232,18 @@ impl BlockRenderer {
         self.refresh_geometry(output);
         match command {
             RendererCommand::Event(event) => self.render_event(&event, &input, output),
+            RendererCommand::Presence(agent, received_at) => {
+                if self.tty_output {
+                    let agent = agent.filter(|_| received_at.elapsed() < PRESENCE_EXPIRY);
+                    self.presence_received = agent.as_ref().map(|_| received_at);
+                    self.presence_line = Some(
+                        agent
+                            .as_deref()
+                            .map_or_else(unavailable_presence, presence_line),
+                    );
+                    self.redraw(&input, output);
+                }
+            }
             RendererCommand::InputChanged(_bytes) if self.tty_output => self.redraw(&input, output),
             RendererCommand::InputChanged(bytes) => {
                 let _ = output.write_all(&bytes);
@@ -1243,13 +1377,7 @@ impl BlockRenderer {
         let remaining = &rows[self.committed_rows.min(rows.len())..];
         write_terminal_lines(output, remaining);
         self.committed_rows = 0;
-        if self.raw_terminal {
-            let _ = write!(output, "> {input}");
-            self.rendered_rows = visual_rows(&[format!("> {input}")], self.terminal_columns);
-            self.rendered_lines = wrap_visual_rows(&[format!("> {input}")], self.terminal_columns);
-        } else {
-            self.rendered_lines.clear();
-        }
+        self.draw_active(input, output);
         let _ = output.flush();
     }
 
@@ -1282,7 +1410,8 @@ impl BlockRenderer {
         if let Some(block) = self.current.as_ref() {
             let lines = block.lines(&self.agent);
             let rows = wrap_visual_rows(&lines, self.terminal_columns);
-            let viewport_rows = self.terminal_rows.saturating_sub(2).max(1);
+            let reserved = 2 + usize::from(self.presence_line.is_some());
+            let viewport_rows = self.terminal_rows.saturating_sub(reserved).max(1);
             let overflow_end = rows.len().saturating_sub(viewport_rows);
             if overflow_end > self.committed_rows {
                 write_terminal_lines(output, &rows[self.committed_rows..overflow_end]);
@@ -1292,6 +1421,19 @@ impl BlockRenderer {
             write_visual_lines(output, &visible_rows);
         }
         let mut rendered_lines = visible_rows;
+        if let Some(status) = &self.presence_line {
+            // Une seule ligne visuelle, même sur terminal étroit. Les valeurs
+            // passent par sanitize_inline avant ce point (aucun ANSI entrant).
+            let row = wrap_visual_rows(std::slice::from_ref(status), self.terminal_columns)
+                .into_iter()
+                .next()
+                .unwrap_or_default();
+            if !rendered_lines.is_empty() {
+                let _ = output.write_all(b"\r\n");
+            }
+            let _ = output.write_all(row.as_bytes());
+            rendered_lines.push(row);
+        }
         if self.raw_terminal {
             if !rendered_lines.is_empty() {
                 let _ = output.write_all(b"\r\n");
@@ -1416,6 +1558,9 @@ fn drive_interactive(
     let renderer =
         RendererThread::spawn(input.clone(), agent.to_string(), raw_terminal, tty_output);
     let renderer_sender = renderer.sender();
+    renderer_sender.presence(None);
+    let presence_reader =
+        tty_output.then(|| PresenceReader::spawn(socket_path, agent, renderer_sender.clone()));
     let (status_tx, status_rx) = mpsc::channel();
     let reader_handle = spawn_attach_reader(
         reader,
@@ -1527,6 +1672,10 @@ fn drive_interactive(
 
     close_attach_socket(&writer);
     let _ = reader_handle.join();
+    if let Some(presence_reader) = presence_reader {
+        presence_reader.stop();
+    }
+    renderer_sender.presence(None);
     renderer.stop();
     let mut recovered = Arc::try_unwrap(shared_state)
         .map_err(|_| "état attach encore partagé à la fermeture".to_string())?
@@ -1869,11 +2018,47 @@ fn render_journal_event(bytes: &[u8], agent: &str) -> String {
                     .to_string(),
             )
         }
+        "update" if payload.get("kind").and_then(serde_json::Value::as_str) == Some("command") => {
+            let command = payload
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("commande inconnue");
+            let state = payload
+                .get("state")
+                .or_else(|| payload.get("status"))
+                .or_else(|| payload.get("detail"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("état inconnu");
+            let exit = payload
+                .get("exit_code")
+                .and_then(serde_json::Value::as_i64)
+                .map(|code| format!(" · code {code}"))
+                .unwrap_or_default();
+            let tail = payload
+                .get("output_tail")
+                .and_then(serde_json::Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(|text| format!("\n{text}"))
+                .unwrap_or_default();
+            (
+                "[commande]".to_string(),
+                format!("{command}\n{state}{exit}{tail}"),
+            )
+        }
+        "update" if payload.get("kind").and_then(serde_json::Value::as_str) == Some("approval") => {
+            let method = payload
+                .get("text")
+                .or_else(|| payload.get("detail"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("type inconnu");
+            ("[autorisation demandée]".to_string(), method.to_string())
+        }
         "permission" => (
             format!(
                 "[permission] {}",
                 payload
                     .get("tool")
+                    .or_else(|| payload.get("method"))
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("outil inconnu")
             ),
@@ -1895,9 +2080,7 @@ fn render_journal_event(bytes: &[u8], agent: &str) -> String {
         ),
         "turn_end" => ("[fin]".to_string(), turn_end_summary(payload)),
         "error" => ("[erreur]".to_string(), error_summary(payload)),
-        // Laissé volontairement brut : tout autre `event` (et tout `update` dont
-        // le `kind` n'est ni text, tool, ni tool_call). Aucun autre type
-        // n'apparaît aujourd'hui dans les journaux de production.
+        // Les extensions inconnues sont signalées, jamais interprétées.
         _ => (
             format!("[événement] {event}"),
             "payload v1 non pris en charge".to_string(),
@@ -1937,6 +2120,13 @@ fn prompt_dispatched_parts(payload: &serde_json::Value) -> (String, String) {
 }
 
 fn permission_summary(payload: &serde_json::Value) -> String {
+    if let Some(decision) = payload.get("decision").and_then(serde_json::Value::as_str) {
+        return match decision {
+            "accept" | "acceptForSession" => "autorisation accordée".to_string(),
+            "decline" | "cancel" => "autorisation refusée".to_string(),
+            other => format!("décision non reconnue : {other}"),
+        };
+    }
     match payload
         .pointer("/decision/outcome")
         .and_then(serde_json::Value::as_str)
@@ -2392,6 +2582,207 @@ mod tests {
     use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
     use std::sync::mpsc;
+
+    #[test]
+    fn spec091_evenements_codex_reels_rendus_sans_faux_inconnu() {
+        let fixture =
+            include_str!("../../../specs/091-communication-agent-ux/fixtures/codex-events.jsonl");
+        let rendered = fixture
+            .lines()
+            .map(|line| render_journal_event(line.as_bytes(), "agent"))
+            .collect::<Vec<_>>();
+        // Mutant : retirer command/approval du match remet le symptôme réel.
+        assert!(
+            rendered
+                .iter()
+                .all(|line| !line.contains("non pris en charge"))
+        );
+        assert!(rendered[0].contains("[commande] cargo check"));
+        assert!(rendered[0].contains("item/started"));
+        assert!(rendered[1].contains("code 0"));
+        assert!(rendered[1].contains("Finished dev profile"));
+        assert!(rendered[2].contains("[autorisation demandée]"));
+        assert!(rendered[3].contains("autorisation refusée"));
+        let hostile = journal_record(
+            5,
+            "update",
+            json!({"kind":"command", "text":"echo \u{1b}[2J", "output_tail":"\u{1b}]52;c;secret\u{7}"}),
+        );
+        let safe = render_journal_event(&hostile, "agent");
+        assert!(!safe.contains('\u{1b}'));
+        assert!(!safe.contains('\u{7}'));
+    }
+
+    fn presence_fixture() -> AgentInfo {
+        serde_json::from_value(json!({
+            "agent_id":"550e8400-e29b-41d4-a716-446655440003", "display_name":"communication-091",
+            "agent_type":"claude", "connection_id":"fixture", "host":"local", "transport":"claude_stream_json",
+            "state":"busy", "last_seen_secs":0, "reconnect_count":0,
+            "model":"glm-exemple", "effort":"medium"
+        })).unwrap()
+    }
+
+    #[test]
+    fn spec091_annuaire_separe_borne_et_compatible_avec_un_daemon_ancien() {
+        for scenario in ["present", "absent", "ancien", "trop_grand", "muet"] {
+            let socket =
+                Path::new("/tmp").join(format!("bg091-{}.sock", uuid::Uuid::new_v4().simple()));
+            let listener = UnixListener::bind(&socket).unwrap();
+            let (release, released) = mpsc::channel();
+            let server = thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(
+                    decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
+                    WrapperToDaemon::RoleHandshake {
+                        role: ConnectionRole::Attach
+                    }
+                ));
+                writeln!(
+                    writer,
+                    "{}",
+                    encode(&DaemonToWrapper::RoleAccepted {
+                        role: ConnectionRole::Attach
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                writer.flush().unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(
+                    decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
+                    WrapperToDaemon::ListAgents
+                ));
+                match scenario {
+                    "present" | "absent" => {
+                        let agents = if scenario == "present" {
+                            vec![presence_fixture()]
+                        } else {
+                            vec![]
+                        };
+                        writeln!(
+                            writer,
+                            "{}",
+                            encode(&DaemonToWrapper::AgentList { agents }).unwrap()
+                        )
+                        .unwrap();
+                        writer.flush().unwrap();
+                    }
+                    // Un ancien daemon peut fermer/refuser cette consultation :
+                    // c'est une perte de métadonnées, pas de l'abonnement journal.
+                    "ancien" => {
+                        writeln!(
+                            writer,
+                            "{{\"type\":\"RoleRejected\",\"reason\":\"unsupported\"}}"
+                        )
+                        .unwrap();
+                        writer.flush().unwrap();
+                    }
+                    "trop_grand" => {
+                        let bytes = vec![b' '; MAX_ATTACH_SERIALIZED_FRAME_BYTES + 2];
+                        // La fermeture du lecteur à la borne peut interrompre l'écriture.
+                        let _ = writer.write_all(&bytes).and_then(|_| writer.flush());
+                    }
+                    "muet" => {
+                        let _ = released.recv_timeout(Duration::from_secs(3));
+                    }
+                    _ => unreachable!(),
+                }
+            });
+            let started = Instant::now();
+            let presence = query_presence(&socket, &presence_fixture().agent_id);
+            assert_eq!(presence.is_some(), scenario == "present", "{scenario}");
+            if let Some(presence) = presence {
+                assert_eq!(presence.model.as_deref(), Some("glm-exemple"));
+            }
+            // Mutant : supprimer l'échéance ferait attendre les 3 s du pair muet.
+            assert!(started.elapsed() < Duration::from_secs(2), "{scenario}");
+            let _ = release.send(());
+            server.join().unwrap();
+            fs::remove_file(socket).unwrap();
+        }
+    }
+
+    #[test]
+    fn spec091_statut_atteste_sans_inference_fournisseur_et_sans_souvenir() {
+        let mut agent = presence_fixture();
+        let line = presence_line(&agent);
+        assert!(line.contains("Claude Code"));
+        assert!(line.contains("modèle glm-exemple"));
+        assert!(line.contains("effort medium"));
+        assert!(line.contains("fournisseur inconnu"));
+        assert!(!line.contains("Anthropic"));
+        agent.model = None;
+        agent.effort = None;
+        agent.display_name = "hostile\u{1b}[2J\rnom".into();
+        let line = presence_line(&agent);
+        assert!(line.contains("modèle inconnu"));
+        assert!(line.contains("effort inconnu"));
+        assert!(!line.contains('\u{1b}'));
+        assert!(!line.contains('\r'));
+    }
+
+    #[test]
+    fn spec091_statut_expire_preserve_saisie_et_ne_pollue_pas_les_pipes() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        for byte in b"ma question" {
+            input.lock().unwrap().push(*byte);
+        }
+        let mut renderer = BlockRenderer::new("agent".into(), true, true);
+        renderer.terminal_fd = None;
+        renderer.terminal_columns = 180;
+        let mut output = Vec::new();
+        renderer.apply(
+            RendererCommand::Presence(Some(Box::new(presence_fixture())), Instant::now()),
+            &input,
+            &mut output,
+        );
+        assert_eq!(renderer.rendered_lines.len(), 2);
+        assert_eq!(renderer.rendered_lines[1], "> ma question");
+        assert!(renderer.rendered_lines[0].contains("glm-exemple"));
+        let at = renderer.presence_received.unwrap();
+        renderer.expire_presence(at + PRESENCE_EXPIRY, "ma question", &mut output);
+        assert!(renderer.rendered_lines[0].contains("annuaire indisponible"));
+        assert!(!renderer.rendered_lines[0].contains("glm-exemple"));
+        assert_eq!(renderer.rendered_lines[1], "> ma question");
+        assert_eq!(input_snapshot(&input), "ma question");
+        renderer.apply(
+            RendererCommand::Presence(Some(Box::new(presence_fixture())), at - PRESENCE_EXPIRY),
+            &input,
+            &mut output,
+        );
+        assert!(
+            renderer.presence_received.is_none(),
+            "une file retardée ne renouvelle pas la fraîcheur"
+        );
+        renderer.terminal_columns = 80;
+        renderer.apply(
+            RendererCommand::Presence(Some(Box::new(presence_fixture())), Instant::now()),
+            &input,
+            &mut output,
+        );
+        assert!(renderer.rendered_lines[0].contains("effort medium"));
+        assert!(renderer.rendered_lines[0].contains("busy"));
+        renderer.terminal_columns = 12;
+        renderer.redraw("x", &mut output);
+        assert_eq!(renderer.rendered_lines.len(), 2);
+        assert!(renderer.rendered_lines[0].chars().count() <= 12);
+        let mut pipe = BlockRenderer::new("agent".into(), false, false);
+        let mut plain = Vec::new();
+        pipe.apply(
+            RendererCommand::Presence(Some(Box::new(presence_fixture())), Instant::now()),
+            &input,
+            &mut plain,
+        );
+        assert!(plain.is_empty());
+    }
 
     fn test_renderer_sender(raw_terminal: bool, tty_output: bool) -> RendererSender {
         let (commands, _command_rx) = mpsc::sync_channel(RENDER_COMMAND_CAPACITY);
@@ -3931,11 +4322,25 @@ mod tests {
             .unwrap();
             writer.flush().unwrap();
 
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            let message = decode::<WrapperToDaemon>(line.trim_end()).unwrap();
-            sent_tx.send(()).unwrap();
-            message
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                let message = decode::<WrapperToDaemon>(line.trim_end()).unwrap();
+                if matches!(message, WrapperToDaemon::ListAgents) {
+                    // La métadonnée de statut n'est pas le Send attendu :
+                    // l'oracle de dernière ligne reste strictement inchangé.
+                    writeln!(
+                        writer,
+                        "{}",
+                        encode(&DaemonToWrapper::AgentList { agents: vec![] }).unwrap()
+                    )
+                    .unwrap();
+                    writer.flush().unwrap();
+                    continue;
+                }
+                sent_tx.send(()).unwrap();
+                break message;
+            }
         });
 
         let (mut input_writer, input_reader) = UnixStream::pair().unwrap();

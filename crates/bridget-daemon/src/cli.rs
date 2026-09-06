@@ -600,7 +600,7 @@ fn print_usage() {
          Daemon & client :\n  \
            daemon                 Lance le daemon\n  \
            mcp                    Lance le serveur MCP sur stdio\n  \
-           attach <N>             Suit un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
+           attach <UUID>          Observe et écrit à un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID]\n  \
            stop <N>               Arrête un équipier géré\n  \
            relaunch <N>           Relance un équipier géré arrêté\n  \
@@ -656,7 +656,7 @@ fn cmd_attach(args: &[String]) {
     let (agent, window) = match parse_attach_args(args) {
         Ok(parsed) => parsed,
         Err(error) => {
-            eprintln!("usage: bridget attach <nom> [--from-seq N | --date AAAA-MM-JJ]");
+            eprintln!("usage: bridget attach <UUID> [--from-seq N | --date AAAA-MM-JJ]");
             eprintln!("erreur: {error}");
             std::process::exit(2);
         }
