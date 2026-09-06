@@ -718,6 +718,7 @@ mod tests {
 
     fn order(root: &Path, id: &str, name: &str) -> SpawnOrder {
         SpawnOrder {
+            posture: None,
             agent_type: "fixture".to_string(),
             requested_name: Some(name.to_string()),
             cwd: root.to_path_buf(),

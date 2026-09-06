@@ -20,6 +20,30 @@ fn run_cli(home: &Path, args: &[&str]) -> Output {
     run_cli_as(home, args, Some("89000000-0000-4000-8000-000000000701"))
 }
 
+#[test]
+fn spec_091_development_requires_real_human_terminal_even_on_retry() {
+    let root = fixture_root("scoped-posture");
+    let first = run_cli(
+        &root,
+        &[
+            "spawn",
+            "codex",
+            "--persistent",
+            "--command-id",
+            "scoped-cli-091",
+            "--posture",
+            "development",
+        ],
+    );
+    assert!(!first.status.success());
+    assert!(String::from_utf8_lossy(&first.stderr).contains("terminal interactif uniquement"));
+    let replay = run_cli(&root, &["spawn", "codex", "--command-id", "scoped-cli-091"]);
+    assert!(!replay.status.success());
+    assert!(String::from_utf8_lossy(&replay.stderr).contains("terminal interactif uniquement"));
+    assert!(!root.join("state/bridget.sock").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn run_cli_as(home: &Path, args: &[&str], agent_name: Option<&str>) -> Output {
     bridget_daemon::environment::ensure_private_directory(&home.join("state")).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));

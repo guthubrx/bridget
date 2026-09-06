@@ -216,6 +216,7 @@ fn spawn_order(command_id: &str) -> WrapperToDaemon {
         .unwrap()
         .as_secs() as i64;
     WrapperToDaemon::SpawnOrder {
+        posture: None,
         agent_type: "fixture".to_string(),
         project: None,
         agent_id: Some("89000000-0000-4000-8000-000000000201".to_string()),

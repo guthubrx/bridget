@@ -195,6 +195,7 @@ fn refus_de_lancement(socket: &Path, cwd: &Path) -> SpawnRefusal {
         .expect("horloge")
         .as_secs() as i64;
     let ordre = WrapperToDaemon::SpawnOrder {
+        posture: None,
         agent_type: "fixture".to_string(),
         project: None,
         agent_id: Some("89000000-0000-4000-8000-000000000902".to_string()),

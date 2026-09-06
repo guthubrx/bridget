@@ -311,6 +311,7 @@ fn projet_refuse_et_session_hote_spawn_send_attach_stop_sans_docker() {
         .unwrap()
         .as_secs() as i64;
     let mut order = WrapperToDaemon::SpawnOrder {
+        posture: None,
         agent_type: "fixture".into(),
         project: Some(ProjectReference {
             project_id: "missing-binding".into(),

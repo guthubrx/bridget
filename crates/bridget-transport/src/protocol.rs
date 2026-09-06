@@ -1955,6 +1955,14 @@ mod base64_bytes {
     }
 }
 
+/// Choix local à un ordre, distinct de la posture globale du référent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpawnPosture {
+    Discovery,
+    Development,
+}
+
 /// Contexte de propriété transmis avec une création d'équipier. Bridget le
 /// persiste comme un fait runtime sans en déduire de transition métier.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2289,6 +2297,8 @@ pub enum WrapperToDaemon {
         event_id: String,
     },
     SpawnOrder {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        posture: Option<SpawnPosture>,
         agent_type: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         project: Option<ProjectReference>,
@@ -3408,7 +3418,10 @@ impl WrapperToDaemon {
     /// daemon n'enregistre le rôle de la connexion.
     pub fn attach_refusal(&self) -> Option<AttachRefusal> {
         match self {
-            Self::Subscribe { .. } | Self::Unsubscribe { .. } | Self::Heartbeat => None,
+            Self::Subscribe { .. }
+            | Self::Unsubscribe { .. }
+            | Self::Heartbeat
+            | Self::ListAgents => None,
             Self::Send(message) if !message.reply => None,
             Self::Send(_) => Some(AttachRefusal::ReplyNotAllowed),
             _ => Some(AttachRefusal::MessageOutsideAttachRole),
@@ -3432,6 +3445,7 @@ impl DaemonToWrapper {
                 | Self::JournalReadError { .. }
                 | Self::End { .. }
                 | Self::AttachRejected { .. }
+                | Self::AgentList { .. }
                 | Self::Ack { .. }
                 | Self::Nack { .. }
                 | Self::DeliveryRejected { .. }
@@ -4943,6 +4957,7 @@ mod tests {
     #[test]
     fn lifecycle_messages_roundtrip_and_stay_outside_attach() {
         let spawn = WrapperToDaemon::SpawnOrder {
+            posture: None,
             agent_type: "codex".to_string(),
             project: Some(ProjectReference {
                 project_id: "project-1".to_string(),
@@ -5327,6 +5342,8 @@ mod tests {
 
     #[test]
     fn role_attach_refuse_les_messages_wrapper_et_reply_suivi() {
+        assert!(WrapperToDaemon::ListAgents.attach_refusal().is_none());
+        assert!(DaemonToWrapper::AgentList { agents: vec![] }.allowed_for_attach());
         let wrapper_only = WrapperToDaemon::Runtime {
             agent: "codex-1".to_string(),
             model: "gpt-5.5".to_string(),

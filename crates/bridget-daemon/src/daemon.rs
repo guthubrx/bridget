@@ -3655,6 +3655,7 @@ fn reserve_managed_recoveries(
             continue;
         };
         let order = FleetSpawnOrder {
+            posture: None,
             agent_type: equipier.agent_type,
             requested_name: Some(name.clone()),
             cwd: equipier.cwd,
@@ -8830,6 +8831,9 @@ fn handle_wrapper_message(
                 {
                     Some(ClientRefusal::CapabilityNotNegotiated)
                 }
+                WrapperToDaemon::SpawnOrder {
+                    posture: Some(_), ..
+                } => None, // Attribution humaine et capacité contrôlées au puits.
                 // MATRICE EXHAUSTIVE — aucun `_`, et c'est délibéré.
                 //
                 // Le tiret bas précédent classait trois variantes et renvoyait
@@ -10220,6 +10224,7 @@ fn handle_wrapper_message(
             }
         }
         WrapperToDaemon::SpawnOrder {
+            posture,
             agent_type,
             project,
             agent_id,
@@ -10232,6 +10237,7 @@ fn handle_wrapper_message(
         } => {
             let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
             let order = FleetSpawnOrder {
+                posture,
                 agent_type,
                 requested_name: agent_id,
                 cwd: PathBuf::from(cwd),
@@ -10268,8 +10274,54 @@ fn handle_wrapper_message(
                     },
                 });
             }
-            // SPEC-088 : la posture des agents est un droit du référent.
-            let order = match resolve_spawn_agent_type_for_posture(&st, &order.agent_type) {
+            // La capacité seule ne vaut pas attribution humaine. Le choix de
+            // développement est autorisé sur cette connexion et cet ordre,
+            // jamais en modifiant l'état global du référent.
+            if posture == Some(bridget_transport::protocol::SpawnPosture::Development)
+                && !(st.connection_roles.get(conn_id) == Some(&ConnectionRole::Client)
+                    && control_client_actor(&st, conn_id).is_some()
+                    && st.client_negotiations.get(conn_id).is_some_and(|client| {
+                        client.version == CLIENT_CONTRACT_VERSION
+                            && client
+                                .capabilities
+                                .contains(&ClientCapability::ControlStateV1)
+                    }))
+            {
+                return Some(DaemonToWrapper::SpawnRejected {
+                    command_id,
+                    reason: SpawnRefusal::UnsupportedCapability {
+                        agent_type: order.agent_type,
+                        model: String::new(),
+                        capability: "posture_development_human_principal_required".to_string(),
+                    },
+                });
+            }
+            let scoped_registry = match posture {
+                // Le canon et la définition durable sont l'autorité du rejeu,
+                // même si le registre a changé depuis le premier envoi.
+                Some(_) if st.fleet.knows_command(&command_id) => None,
+                Some(posture) => match st.registry.for_spawn_posture(&order.agent_type, posture) {
+                    Ok(registry) => Some(registry),
+                    Err(detail) => {
+                        return Some(DaemonToWrapper::SpawnRejected {
+                            command_id,
+                            reason: SpawnRefusal::UnsupportedCapability {
+                                agent_type: order.agent_type,
+                                model: String::new(),
+                                capability: detail,
+                            },
+                        });
+                    }
+                },
+                None => None,
+            };
+            // Sans choix explicite, conserver la politique globale existante.
+            let resolved_type = if posture.is_some() {
+                Ok(order.agent_type.clone())
+            } else {
+                resolve_spawn_agent_type_for_posture(&st, &order.agent_type)
+            };
+            let order = match resolved_type {
                 Ok(agent_type) => FleetSpawnOrder {
                     agent_type,
                     ..order
@@ -10280,7 +10332,7 @@ fn handle_wrapper_message(
             };
             let decision = crate::lifecycle::submit_spawn(
                 &st.fleet,
-                &st.registry,
+                scoped_registry.as_ref().unwrap_or(&st.registry),
                 &st.source_env,
                 &order,
                 unix_timestamp(),
@@ -10464,6 +10516,7 @@ fn handle_wrapper_message(
             };
             let now = unix_timestamp();
             let order = FleetSpawnOrder {
+                posture: None,
                 agent_type: entry.agent_type.clone(),
                 requested_name: Some(name.clone()),
                 cwd: entry.cwd.clone(),
@@ -12054,6 +12107,7 @@ mod matrice_roles_tests {
         let response = handle_wrapper_message(
             "docker-spawn",
             WrapperToDaemon::SpawnOrder {
+                posture: None,
                 agent_type: "fixture".to_string(),
                 project: Some(bridget_transport::protocol::ProjectReference {
                     project_id: "project-066".to_string(),
@@ -12107,6 +12161,7 @@ mod matrice_roles_tests {
                 .conn_instances
                 .insert("wrapper-parent".to_string(), parent_instance_id.clone());
             let order = FleetSpawnOrder {
+                posture: None,
                 agent_type: "fixture".to_string(),
                 requested_name: Some("6b0c0eb7-f494-4f4a-a280-6a5f0d13c410".to_string()),
                 cwd: PathBuf::from("/tmp"),
@@ -14204,6 +14259,7 @@ mod presence_tests {
         definition: &bridget_transport::ResolvedAgentDefinition,
     ) -> SpawnLease {
         let order = FleetSpawnOrder {
+            posture: None,
             agent_type: "fixture".to_string(),
             requested_name: Some(name.to_string()),
             cwd: PathBuf::from("/tmp"),
@@ -15205,6 +15261,7 @@ mod presence_tests {
         let accepted = daemon_request(
             &config.socket_path,
             WrapperToDaemon::SpawnOrder {
+                posture: None,
                 agent_type: "fixture".to_string(),
                 agent_id: Some("89000000-0000-4000-8000-000000000129".to_string()),
                 cwd: root.to_string_lossy().to_string(),
@@ -15340,6 +15397,7 @@ mod presence_tests {
             daemon_request(
                 &config.socket_path,
                 WrapperToDaemon::SpawnOrder {
+                    posture: None,
                     agent_type: "fixture".to_string(),
                     agent_id: Some("89000000-0000-4000-8000-000000000129".to_string()),
                     cwd: root.to_string_lossy().to_string(),
@@ -18369,6 +18427,7 @@ mod presence_tests {
         let definition = state.registry.resolved_definition("codex-terra").unwrap();
         let now = unix_timestamp();
         let order = FleetSpawnOrder {
+            posture: None,
             agent_type: "codex-terra".to_string(),
             requested_name: Some("89000000-0000-4000-8000-000000000110".to_string()),
             cwd: PathBuf::from("/tmp"),
@@ -18443,6 +18502,7 @@ mod presence_tests {
         let definition = state.registry.resolved_definition("cursor").unwrap();
         let now = unix_timestamp();
         let order = FleetSpawnOrder {
+            posture: None,
             agent_type: "cursor".to_string(),
             requested_name: Some("89000000-0000-4000-8000-000000000111".to_string()),
             cwd: PathBuf::from("/tmp"),
@@ -20518,6 +20578,142 @@ mod presence_tests {
         let _ = std::fs::remove_file(config.db_path);
     }
 
+    #[test]
+    fn spec_091_scoped_spawn_requires_human_and_preserves_global_discovery() {
+        use bridget_transport::protocol::{AgentPosture, SpawnPosture};
+        let (mut state, config) = spec_087_state("spec-091-scoped-spawn");
+        state.registry = AgentRegistry::from_json(
+            r#"{"agents":{"codex":{"command":"/bin/sh","args":["app-server"],"protocol":"codex_app_server","capabilities":{"execution_paths":["codex_app_server"],"models":{}}}}}"#,
+            "/tmp/registry-091.json",
+        ).unwrap();
+        let (tx, rx) = mpsc::channel();
+        state.managed_tx = tx;
+        let initial = crate::referent_control::read(state.store.connection()).unwrap();
+        assert_eq!(initial.agent_posture, Some(AgentPosture::Discovery));
+        let shared = Arc::new(Mutex::new(state));
+        let order = WrapperToDaemon::SpawnOrder {
+            posture: Some(SpawnPosture::Development),
+            agent_type: "codex".to_string(),
+            project: None,
+            ownership: None,
+            agent_id: Some(uuid::Uuid::new_v4().to_string()),
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+            persistent: false,
+            command_id: "scoped-development-091".to_string(),
+            issued_at: unix_timestamp(),
+            deadline_at: unix_timestamp() + 60,
+        };
+        for (conn, issuer, capabilities) in [
+            (
+                "untrusted",
+                "agent-091",
+                vec![ClientCapability::ControlStateV1],
+            ),
+            ("no-capability", "bridget-control-cli", vec![]),
+            (
+                "human",
+                "bridget-control-cli",
+                vec![ClientCapability::ControlStateV1],
+            ),
+        ] {
+            assert!(matches!(
+                handle_wrapper_message(
+                    conn,
+                    WrapperToDaemon::RoleHandshake {
+                        role: ConnectionRole::Client
+                    },
+                    &shared
+                ),
+                Some(DaemonToWrapper::RoleAccepted { .. })
+            ));
+            assert!(matches!(
+                handle_wrapper_message(
+                    conn,
+                    WrapperToDaemon::ClientHello {
+                        contract_version: CLIENT_CONTRACT_VERSION,
+                        issuer_scope: crate::communication::issuer_scope(issuer),
+                        capabilities,
+                    },
+                    &shared
+                ),
+                Some(DaemonToWrapper::ClientWelcome { .. })
+            ));
+            let result = handle_wrapper_message(conn, order.clone(), &shared);
+            if conn != "human" {
+                assert!(
+                    matches!(result, Some(DaemonToWrapper::SpawnRejected { reason: SpawnRefusal::UnsupportedCapability { capability, .. }, .. }) if capability == "posture_development_human_principal_required")
+                );
+                assert!(rx.try_recv().is_err());
+            } else {
+                assert!(result.is_none(), "{result:?}");
+            }
+        }
+        let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
+            panic!("spawn attendu")
+        };
+        assert_eq!(prepared.resolved_definition.permissions, "deny");
+        assert!(
+            prepared
+                .resolved_definition
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--sandbox", "workspace-write"])
+        );
+        let original_registry = shared.lock().unwrap().registry.clone();
+        shared.lock().unwrap().registry = AgentRegistry::from_json(
+            r#"{"agents":{"codex":{"command":"/bin/sh","protocol":"acp"}}}"#,
+            "/tmp/registry-changed-091.json",
+        )
+        .unwrap();
+        assert!(handle_wrapper_message("human", order.clone(), &shared).is_none());
+        assert!(
+            rx.try_recv().is_err(),
+            "le rejeu ne crée pas un second processus"
+        );
+        let mut divergent = order.clone();
+        if let WrapperToDaemon::SpawnOrder { posture, .. } = &mut divergent {
+            *posture = Some(SpawnPosture::Discovery);
+        }
+        assert!(matches!(
+            handle_wrapper_message("human", divergent, &shared),
+            Some(DaemonToWrapper::IdempotencyResult {
+                issue: IdempotencyIssue::EnvelopeMismatch,
+                ..
+            })
+        ));
+        shared.lock().unwrap().registry = original_registry;
+        let mut ordinary = order;
+        if let WrapperToDaemon::SpawnOrder {
+            posture,
+            command_id,
+            agent_id,
+            ..
+        } = &mut ordinary
+        {
+            *posture = None;
+            *command_id = "ordinary-091".to_string();
+            *agent_id = Some(uuid::Uuid::new_v4().to_string());
+        }
+        assert!(handle_wrapper_message("wrapper", ordinary, &shared).is_none());
+        let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
+            panic!("spawn ordinaire attendu")
+        };
+        assert_eq!(prepared.agent_type, "project-discovery-codex");
+        assert!(
+            prepared
+                .resolved_definition
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--sandbox", "read-only"])
+        );
+        assert_eq!(
+            crate::referent_control::read(shared.lock().unwrap().store.connection()).unwrap(),
+            initial
+        );
+        drop(shared);
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
     /// SPEC-088 T015 : posture découverte ⇒ définition de découverte ; type
     /// sans définition attestée ⇒ refus explicite, jamais de repli complet.
     #[test]
@@ -21587,6 +21783,7 @@ mod presence_tests {
             )
             .unwrap();
         let order = FleetSpawnOrder {
+            posture: None,
             agent_type: "fixture".to_string(),
             requested_name: Some(agent_id.to_string()),
             cwd: PathBuf::from("/srv/projects/artifact"),
@@ -22070,6 +22267,7 @@ mod presence_tests {
     ) -> (SpawnLease, Arc<ManagedStopControl>) {
         let now = unix_timestamp();
         let order = FleetSpawnOrder {
+            posture: None,
             agent_type: "fixture".to_string(),
             requested_name: Some("89000000-0000-4000-8000-000000000102".to_string()),
             cwd: PathBuf::from("/tmp"),

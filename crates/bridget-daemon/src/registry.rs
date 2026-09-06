@@ -187,6 +187,79 @@ impl AgentRegistry {
         self.agents.contains_key(&candidate).then_some(candidate)
     }
 
+    /// O(log n + a), n types et a arguments : le registre temporaire contient
+    /// le seul type demandé. La saga fige sa définition et son digest.
+    pub fn for_spawn_posture(
+        &self,
+        agent_type: &str,
+        posture: bridget_transport::protocol::SpawnPosture,
+    ) -> Result<Self, String> {
+        use bridget_transport::protocol::SpawnPosture;
+        let source = self.get(agent_type)?;
+        let definition = match posture {
+            SpawnPosture::Discovery => {
+                let mut definition = project_discovery_definition(source)
+                    .ok_or_else(|| "posture découverte non prise en charge".to_string())?;
+                if definition.protocol == "codex_app_server" {
+                    definition.args.extend(
+                        [
+                            "-c",
+                            "sandbox_mode=\"read-only\"",
+                            "-c",
+                            "approval_policy=\"never\"",
+                        ]
+                        .map(str::to_string),
+                    );
+                }
+                definition
+            }
+            SpawnPosture::Development => {
+                if source.protocol != "codex_app_server" {
+                    return Err("posture développement réservée à Codex app-server".to_string());
+                }
+                let mut definition = source.clone();
+                // Les demandes d'extension sont refusées par le pilote. Le
+                // droit d'écrire dans cwd vient uniquement du sandbox Codex.
+                definition.permissions = "deny".to_string();
+                strip_codex_discovery_unsafe_arguments(&mut definition.args);
+                insert_before_subcommand(
+                    &mut definition.args,
+                    "app-server",
+                    &[
+                        "--sandbox",
+                        "workspace-write",
+                        "--ask-for-approval",
+                        "never",
+                    ],
+                );
+                // Placés après les arguments source, ces réglages gagnent
+                // aussi contre un -c fourni après la sous-commande.
+                definition.args.extend(
+                    [
+                        "-c",
+                        "sandbox_mode=\"workspace-write\"",
+                        "-c",
+                        "approval_policy=\"never\"",
+                        "-c",
+                        "sandbox_workspace_write.network_access=false",
+                        "-c",
+                        "sandbox_workspace_write.writable_roots=[]",
+                        "-c",
+                        "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+                        "-c",
+                        "sandbox_workspace_write.exclude_slash_tmp=true",
+                    ]
+                    .map(str::to_string),
+                );
+                definition
+            }
+        };
+        Ok(Self {
+            agents: BTreeMap::from([(agent_type.to_string(), definition)]),
+            source: self.source.clone(),
+        })
+    }
+
     /// Reconstruit un registre à une seule entrée depuis la définition figée
     /// par la saga. Le digest est revérifié avant tout lancement : le wrapper
     /// géré ne consulte donc jamais le registre utilisateur courant.
@@ -1157,14 +1230,20 @@ fn strip_codex_discovery_unsafe_arguments(args: &mut Vec<String>) {
     while index < args.len() {
         if matches!(
             args[index].as_str(),
-            "--yolo" | "--dangerously-bypass-approvals-and-sandbox"
-        ) {
+            "--yolo"
+                | "--dangerously-bypass-approvals-and-sandbox"
+                | "--full-auto"
+                | "--approve-for-me"
+        ) || args[index].starts_with("--sandbox=")
+            || args[index].starts_with("--ask-for-approval=")
+            || args[index].starts_with("--add-dir=")
+        {
             index += 1;
             continue;
         }
         if matches!(
             args[index].as_str(),
-            "--sandbox" | "-s" | "--ask-for-approval" | "-a"
+            "--sandbox" | "-s" | "--ask-for-approval" | "-a" | "--add-dir"
         ) {
             index += 2;
             continue;
@@ -1228,6 +1307,93 @@ fn default_agents() -> Result<BTreeMap<String, AgentDefinition>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spec_091_development_is_scoped_and_denies_extension() {
+        use bridget_transport::protocol::SpawnPosture;
+        let registry =
+            AgentRegistry::from_json(r#"{"agents":{}}"#, "/tmp/registry-091.json").unwrap();
+        let original = registry.resolved_definition("codex").unwrap();
+        let scoped = registry
+            .for_spawn_posture("codex", SpawnPosture::Development)
+            .unwrap();
+        let definition = scoped.get("codex").unwrap();
+        assert_eq!(definition.permissions, "deny");
+        assert!(
+            definition
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--sandbox", "workspace-write"])
+        );
+        assert!(
+            definition
+                .args
+                .iter()
+                .any(|arg| arg == "sandbox_workspace_write.network_access=false")
+        );
+        assert!(!definition.args.iter().any(|arg| arg.contains("bypass")));
+        assert_eq!(registry.resolved_definition("codex").unwrap(), original);
+        assert!(
+            registry
+                .for_spawn_posture("claude", SpawnPosture::Development)
+                .is_err()
+        );
+        let frozen = scoped.resolved_definition("codex").unwrap();
+        assert_eq!(
+            AgentRegistry::from_resolved("codex", &frozen)
+                .unwrap()
+                .resolved_definition("codex")
+                .unwrap(),
+            frozen
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    #[ignore = "recette avec le bac à sable du binaire Codex installé"]
+    fn spec_091_native_development_writes_only_cwd_without_network() {
+        use bridget_transport::protocol::SpawnPosture;
+        let root =
+            std::env::temp_dir().join(format!("bridget-sandbox-091-{}", uuid::Uuid::new_v4()));
+        let cwd = root.join("work");
+        let codex_home = root.join("codex");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(&codex_home).unwrap();
+        // Un profil utilisateur permissif ne doit pas agrandir l'ordre.
+        std::fs::write(codex_home.join("config.toml"), "sandbox_mode = \"danger-full-access\"\napproval_policy = \"never\"\n[sandbox_workspace_write]\nnetwork_access = true\nwritable_roots = [\"/tmp\"]\n").unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let registry =
+            AgentRegistry::from_json(r#"{"agents":{}}"#, root.join("agents.json")).unwrap();
+        let scoped = registry
+            .for_spawn_posture("codex", SpawnPosture::Development)
+            .unwrap();
+        let definition = scoped.get("codex").unwrap();
+        let mut args = definition.args.clone();
+        args.retain(|arg| arg != "app-server");
+        let script = format!(
+            "touch inside && if touch ../outside; then exit 91; fi; if /usr/bin/curl --noproxy '*' --connect-timeout 2 --max-time 2 http://{}/; then exit 92; fi",
+            listener.local_addr().unwrap()
+        );
+        let output = std::process::Command::new(&definition.command)
+            .args(args)
+            .args(["sandbox", "/bin/sh", "-c", &script])
+            .current_dir(&cwd)
+            .env("CODEX_HOME", &codex_home)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(cwd.join("inside").exists());
+        assert!(!root.join("outside").exists());
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
     use std::os::unix::fs::symlink;
 
     fn test_root(label: &str) -> PathBuf {

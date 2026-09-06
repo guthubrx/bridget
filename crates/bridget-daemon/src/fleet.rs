@@ -234,6 +234,7 @@ fn suggested_fleet_quota(quota: usize) -> usize {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpawnOrder {
+    pub posture: Option<bridget_transport::protocol::SpawnPosture>,
     pub agent_type: String,
     pub project: Option<ProjectReference>,
     pub requested_name: Option<String>,
@@ -1660,6 +1661,8 @@ fn ownership_from_desired(equipier: &DesiredEquipier) -> Option<SpawnOwnership> 
 }
 #[derive(Serialize)]
 struct CanonicalSpawnOrder<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    posture: Option<bridget_transport::protocol::SpawnPosture>,
     command_id: &'a str,
     agent_type: &'a str,
     requested_name: &'a Option<String>,
@@ -1679,6 +1682,7 @@ fn canonical_order(order: &SpawnOrder) -> Result<Vec<u8>, FleetError> {
         .to_str()
         .ok_or(FleetError::InvalidOrder("cwd non UTF-8"))?;
     serde_json::to_vec(&CanonicalSpawnOrder {
+        posture: order.posture,
         command_id: &order.command_id,
         agent_type: &order.agent_type,
         requested_name: &order.requested_name,
@@ -1883,6 +1887,7 @@ mod tests {
 
     fn order(command_id: &str, name: Option<&str>, persistent: bool) -> SpawnOrder {
         SpawnOrder {
+            posture: None,
             agent_type: "codex".to_string(),
             requested_name: name.map(str::to_string),
             cwd: PathBuf::from("/tmp"),

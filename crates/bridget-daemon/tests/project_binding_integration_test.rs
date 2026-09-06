@@ -50,6 +50,7 @@ fn rebind_n_arrete_pas_la_generation_deja_admise_et_ne_double_pas_l_audit() {
     let lease = match fleet
         .request_spawn(
             &SpawnOrder {
+                posture: None,
                 agent_type: "fixture".to_string(),
                 project: Some(project.clone()),
                 requested_name: Some("89000000-0000-4000-8000-000000000401".to_string()),

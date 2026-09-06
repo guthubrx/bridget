@@ -1004,6 +1004,7 @@ fn stop_managed(control: &mut Peer, name: &str, run: usize) {
 fn spawn_managed(control: &mut Peer, root: &Path, name: &str, command_id: &str, persistent: bool) {
     let now = unix_now();
     control.send(&WrapperToDaemon::SpawnOrder {
+        posture: None,
         agent_type: "parity".to_string(),
         agent_id: Some(agent_id_for(name)),
         cwd: root.to_string_lossy().into_owned(),
@@ -1167,6 +1168,7 @@ fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
         let mut control = Peer::register(&daemon.socket, &format!("spawn-client-{run}"));
         let now = unix_now();
         control.send(&WrapperToDaemon::SpawnOrder {
+            posture: None,
             agent_type: "parity".to_string(),
             agent_id: Some(agent_id_for(&managed_name)),
             cwd: root.to_string_lossy().into_owned(),
@@ -1234,6 +1236,7 @@ fn matrice_fr008_compare_la_garde_de_facturation() {
     let mut control = Peer::register(&daemon.socket, "billing-client");
     let now = unix_now();
     control.send(&WrapperToDaemon::SpawnOrder {
+        posture: None,
         agent_type: "parity".to_string(),
         agent_id: Some(agent_id_for("billing-managed")),
         cwd: root.to_string_lossy().into_owned(),
@@ -1281,6 +1284,7 @@ fn sc001_vingt_spawns_survivent_a_la_fermeture_du_client_et_repondent() {
         let mut ordering_terminal =
             Peer::register(&daemon.socket, &format!("sc001-orderer-{index}"));
         ordering_terminal.send(&WrapperToDaemon::SpawnOrder {
+            posture: None,
             agent_type: "parity".to_string(),
             agent_id: Some(agent_id_for(&name)),
             cwd: root.to_string_lossy().into_owned(),

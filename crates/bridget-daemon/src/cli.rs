@@ -690,6 +690,7 @@ const SPAWN_SURVIE_CONTRADICTOIRE: &str =
 
 #[derive(Debug)]
 struct ParsedSpawnArgs {
+    posture: Option<bridget_transport::protocol::SpawnPosture>,
     agent_type: String,
     agent_id: Option<String>,
     cwd: Option<std::path::PathBuf>,
@@ -704,7 +705,7 @@ fn cmd_spawn(args: &[String]) {
     let parsed = parse_spawn_args(args).unwrap_or_else(|error| {
         eprintln!(
             "usage: bridget spawn <type> (--persistent | --no-persistent) [--agent-id UUID] \
-             [--cwd CHEMIN] [--timeout S] [--command-id ID]"
+             [--cwd CHEMIN] [--timeout S] [--command-id ID] [--posture discovery|development]"
         );
         eprintln!("erreur: {error}");
         std::process::exit(2);
@@ -736,8 +737,29 @@ fn cmd_spawn(args: &[String]) {
         WrapperToDaemon::SpawnOrder { command_id, .. } => command_id.clone(),
         _ => unreachable!("resolve_spawn_order ne produit qu'un SpawnOrder"),
     };
+    let development = matches!(
+        order,
+        WrapperToDaemon::SpawnOrder {
+            posture: Some(bridget_transport::protocol::SpawnPosture::Development),
+            ..
+        }
+    );
+    if development && !require_interactive_terminal("spawn --posture development") {
+        std::process::exit(1);
+    }
     println!("command_id: {command_id}");
-    match send_control_to_daemon(order) {
+    let response = if matches!(
+        order,
+        WrapperToDaemon::SpawnOrder {
+            posture: Some(_),
+            ..
+        }
+    ) {
+        send_control_request(order)
+    } else {
+        send_control_to_daemon(order)
+    };
+    match response {
         Ok(DaemonToWrapper::SpawnAccepted { .. }) => {
             println!("Équipier connecté.");
         }
@@ -960,6 +982,7 @@ fn parse_spawn_args(args: &[String]) -> Result<ParsedSpawnArgs, String> {
         .ok_or_else(|| "type d'agent manquant".to_string())?;
     validate_technical_label(&agent_type)?;
     let mut parsed = ParsedSpawnArgs {
+        posture: None,
         agent_type,
         agent_id: None,
         cwd: None,
@@ -988,12 +1011,24 @@ fn parse_spawn_args(args: &[String]) -> Result<ParsedSpawnArgs, String> {
                 parsed.persistent_was_set = true;
                 index += 1;
             }
-            "--agent-id" | "--cwd" | "--command-id" | "--timeout" => {
+            "--agent-id" | "--cwd" | "--command-id" | "--timeout" | "--posture" => {
                 let option = args[index].as_str();
                 let value = args
                     .get(index + 1)
                     .ok_or_else(|| format!("valeur manquante pour {option}"))?;
                 match option {
+                    "--posture" => {
+                        if parsed.posture.is_some() {
+                            return Err("--posture doit être choisi une seule fois".to_string());
+                        }
+                        parsed.posture = Some(match value.as_str() {
+                            "discovery" => bridget_transport::protocol::SpawnPosture::Discovery,
+                            "development" => bridget_transport::protocol::SpawnPosture::Development,
+                            _ => {
+                                return Err("--posture attend discovery ou development".to_string());
+                            }
+                        });
+                    }
                     "--agent-id" => {
                         validate_agent_id(value)?;
                         parsed.agent_id = Some(value.clone());
@@ -1076,6 +1111,7 @@ fn resolve_spawn_order(
         return Err("--cwd doit être absolu".to_string());
     }
     let order = WrapperToDaemon::SpawnOrder {
+        posture: parsed.posture,
         agent_type: parsed.agent_type.clone(),
         project: None,
         agent_id: Some(
@@ -1274,6 +1310,7 @@ fn validate_retry_options(
     stored: &WrapperToDaemon,
 ) -> Result<(), String> {
     let WrapperToDaemon::SpawnOrder {
+        posture,
         agent_type,
         agent_id: name,
         cwd,
@@ -1284,6 +1321,7 @@ fn validate_retry_options(
         return Err("le command_id mémorisé n'est pas un ordre spawn".to_string());
     };
     if &parsed.agent_type != agent_type
+        || parsed.posture.is_some_and(|value| Some(value) != *posture)
         || parsed
             .agent_id
             .as_ref()
@@ -5422,6 +5460,59 @@ mod hook_tests {
     }
 
     #[test]
+    fn spec_091_posture_replay_is_exact_and_divergence_refused() {
+        let root = PathBuf::from("/tmp").join(format!("bg091-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let private_root = crate::environment::root_for_home(&root).unwrap();
+        std::fs::create_dir_all(&private_root).unwrap();
+        std::fs::set_permissions(&private_root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let args = [
+            "codex",
+            "--persistent",
+            "--command-id",
+            "scoped-091",
+            "--posture",
+            "development",
+        ]
+        .map(str::to_string);
+        let first =
+            resolve_spawn_order(&parse_spawn_args(&args).unwrap(), 100, &root, &root).unwrap();
+        let retry = ["codex", "--command-id", "scoped-091"].map(str::to_string);
+        let replay = resolve_spawn_order(
+            &parse_spawn_args(&retry).unwrap(),
+            200,
+            Path::new("/different"),
+            &root,
+        )
+        .unwrap();
+        assert_eq!(encode(&first).unwrap(), encode(&replay).unwrap());
+        let divergent = [
+            "codex",
+            "--command-id",
+            "scoped-091",
+            "--posture",
+            "discovery",
+        ]
+        .map(str::to_string);
+        assert!(
+            resolve_spawn_order(&parse_spawn_args(&divergent).unwrap(), 200, &root, &root)
+                .unwrap_err()
+                .contains("divergentes")
+        );
+        for value in ["complete", "allow", "", "workspace-write"] {
+            assert!(
+                parse_spawn_args(&[
+                    "codex".to_string(),
+                    "--posture".to_string(),
+                    value.to_string()
+                ])
+                .is_err()
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn spawn_roundtrip_rejoue_la_meme_issue_apres_reponse_perdue() {
         let socket = PathBuf::from(format!(
             "/tmp/bg-t905-{}-{}.sock",
@@ -5486,6 +5577,7 @@ mod hook_tests {
             observed
         });
         let order = WrapperToDaemon::SpawnOrder {
+            posture: None,
             agent_type: "codex".to_string(),
             agent_id: Some("codex-managed".to_string()),
             cwd: "/tmp".to_string(),
