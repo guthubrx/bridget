@@ -485,15 +485,10 @@ impl CodexAppServerTransport {
                 options.model.as_deref(),
                 interactive_socket.is_some(),
             );
-            if interactive_socket.is_some()
-                && matches!(
-                    options.thread_bootstrap,
-                    CodexThreadBootstrap::Resume { .. }
-                )
-            {
+            if !matches!(options.thread_bootstrap, CodexThreadBootstrap::Start) {
                 // Le serveur résout lui-même profils et -c. Sans projection
                 // de SES réglages effectifs, resume restaure l'ancien choix
-                // d'approbation et neutralise notamment le --yolo explicite.
+                // d'approbation/sandbox, y compris pour un équipier restreint.
                 // Aucun parsing TOML ni défaut permissif parallèle à Codex.
                 let config = request(
                     &writer,
@@ -513,7 +508,15 @@ impl CodexAppServerTransport {
                         .filter(|value| !value.is_null())
                     {
                         thread_params[field] = value.clone();
+                    } else if interactive_socket.is_none() {
+                        return Err(TransportError::DeliveryFailed(format!(
+                            "reprise gérée refusée : configuration effective {key} absente"
+                        )));
                     }
+                }
+                if interactive_socket.is_none() {
+                    // Le worktree contrôlé du processus prime sur le cwd historique.
+                    thread_params["cwd"] = json!(cwd);
                 }
             }
             if interactive_socket.is_some()
@@ -6528,6 +6531,96 @@ mod tests {
             validate_thread_bootstrap(&Some(fork_incompatible), &fork),
             Err(TransportError::DeliveryFailed(reason)) if reason.contains("thread/fork")
         ));
+    }
+
+    #[test]
+    fn reprise_geree_projette_les_restrictions_effectives_ou_refuse_avant_le_fil() {
+        for sandbox in ["read-only", "workspace-write", "missing"] {
+            for bootstrap in [
+                CodexThreadBootstrap::Start,
+                CodexThreadBootstrap::Resume {
+                    thread_id: "thread-native".into(),
+                },
+                CodexThreadBootstrap::Fork {
+                    thread_id: "thread-native".into(),
+                },
+            ] {
+                let root = root("resume-policy");
+                let trace = root.join("trace.jsonl");
+                let is_start = matches!(bootstrap, CodexThreadBootstrap::Start);
+                let mut options = fake_options(&trace);
+                options.permissions = "deny".into();
+                options.thread_bootstrap = bootstrap;
+                options.provider_observation = Some(ProviderObservation {
+                    binary_path: "/fixtures/codex".into(),
+                    binary_version: "fixture".into(),
+                    binary_digest: "0".repeat(64),
+                    contract_version: "codex-app-server-fixture-v1".into(),
+                    operations: vec![ProviderOperation::Resume, ProviderOperation::Fork],
+                });
+                options.args = vec!["-c".into(), r#"
+                    while IFS= read -r line; do
+                        printf '%s\n' "$line" >> "$BRIDGET_CODEX_TRACE"
+                        id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
+                        case "$line" in
+                            *'"method":"initialize"'*) printf '%s\n' '{"id":1,"result":{"userAgent":"fake","codexHome":"/tmp","platformFamily":"unix","platformOs":"macos"}}' ;;
+                            *'"method":"config/read"'*)
+                                if [ "$POLICY_SANDBOX" = missing ]; then
+                                    printf '{"id":%s,"result":{"config":{}}}\n' "$id"
+                                else
+                                    printf '{"id":%s,"result":{"config":{"approval_policy":"never","sandbox_mode":"%s"}}}\n' "$id" "$POLICY_SANDBOX"
+                                fi ;;
+                            *'"method":"thread/start"'*|*'"method":"thread/resume"'*|*'"method":"thread/fork"'*) printf '{"id":%s,"result":{"thread":{"id":"thread-native"}}}\n' "$id" ;;
+                            *'"method":"account/rateLimits/read"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
+                        esac
+                    done
+                "#.into()];
+                let result = CodexAppServerTransport::spawn_with_environment(
+                    options,
+                    &[
+                        (
+                            "BRIDGET_CODEX_TRACE".into(),
+                            trace.to_string_lossy().into_owned(),
+                        ),
+                        ("POLICY_SANDBOX".into(), sandbox.into()),
+                    ],
+                    false,
+                );
+                if sandbox == "missing" && !is_start {
+                    assert!(
+                        matches!(result, Err(TransportError::DeliveryFailed(ref reason)) if reason.contains("configuration effective approval_policy absente"))
+                    );
+                } else {
+                    result.expect("transport restreint").stop();
+                }
+                let frames: Vec<Value> = fs::read_to_string(&trace)
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect();
+                let thread = frames.iter().find(|frame| {
+                    frame["method"]
+                        .as_str()
+                        .is_some_and(|method| method.starts_with("thread/"))
+                });
+                if sandbox == "missing" && !is_start {
+                    assert!(
+                        thread.is_none(),
+                        "aucun fil ne démarre sans politique attestée"
+                    );
+                } else {
+                    let params = &thread.unwrap()["params"];
+                    assert_eq!(params["cwd"], json!(std::env::current_dir().unwrap()));
+                    if is_start {
+                        assert!(!frames.iter().any(|frame| frame["method"] == "config/read"));
+                    } else {
+                        assert_eq!(params["sandbox"], sandbox);
+                        assert_eq!(params["approvalPolicy"], "never");
+                    }
+                }
+                fs::remove_dir_all(root).unwrap();
+            }
+        }
     }
     #[test]
     fn consigne_privee_preserve_le_corps_visible_du_message() {
