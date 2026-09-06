@@ -387,7 +387,10 @@ def main():
             if json.loads(line).get("message_id") == "request-090"
             and json.loads(line).get("event") == "update"
             and json.loads(line).get("payload", {}).get("kind") == "text"]
-        assert "".join(text_deltas) == "OK-090", text_deltas
+        # Un vrai modèle peut commenter avant l'appel MCP : ce texte doit aussi
+        # être visible dans attach. Seul le fournisseur synthétique est figé.
+        rendered_answer = "".join(text_deltas).strip()
+        assert (rendered_answer.endswith("OK-090") if live else rendered_answer == "OK-090"), text_deltas
         until(lambda: all(delta.encode() in attached[attached_before:] for delta in text_deltas)
             and b"[fin]" in attached[attached_before:], "attach réel suit les deltas et le terminal interagent")
         print("attach_replay_then_live", flush=True)

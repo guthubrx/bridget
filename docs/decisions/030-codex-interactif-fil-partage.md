@@ -1,6 +1,6 @@
 # ADR 030 — Interface Codex native sur le même fil que Bridget
 
-Date : 2026-09-05. Statut : validé techniquement par les gates 090 ; adoption non effectuée.
+Date : 2026-09-05. Statut : validé par les gates 090 ; adopté sur demande le 2026-09-06.
 
 ## Contexte
 

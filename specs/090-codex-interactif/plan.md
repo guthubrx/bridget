@@ -1,6 +1,6 @@
 # Plan 090 — réutiliser le noyau de session
 
-Statut : implémenté et validé par les tests, non déployé. Rust 1.92 / trois crates existants.
+Statut : implémenté, validé et adopté le 2026-09-06. Rust 1.92 / trois crates existants.
 
 ## Architecture et réutilisation
 

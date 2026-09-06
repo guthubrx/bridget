@@ -1,4 +1,4 @@
-# Implémentation 090 — Implemented, non déployée
+# Implémentation 090 — Implemented, adoptée le 2026-09-06
 
 Début : 2026-09-05 19:46 CEST. ETA initiale : 125–240 min.
 Branche session-090-codex-interactif, base 6cfbc4d33ca7, production inchangée.
@@ -172,3 +172,33 @@ leur contenu sans dupliquer les fichiers. Les suites complètes ci-dessus resten
 applicables au code inchangé ; formatage et recette native release rejoués pour
 l'adoption. Le reçu opérationnel et le retour arrière sont conservés dans
 /Users/moi/.cache/bridget-adoptions/ (hors Git, aucun secret versionné).
+
+### Résultat de l'adoption
+
+Code e06d5c9531b7 intégré dans main par fast-forward, release construite avec
+`cargo build --locked --offline --release -p bridget-daemon` : PASS, 41,42 s.
+Ancien daemon arrêté gracieusement, annuaire vide vérifié juste avant ; binaire
+remplacé atomiquement après copie de sauvegarde, plist et namespace inchangés.
+Daemon neuf réellement en ligne, build-id identique au client, base quick_check
+OK et entrée ledger préexistante conservée. Aucun agent personnel arrêté.
+Les trois liens de skills (Codex/Claude/agents) lisent bien le nouveau contenu.
+
+Recettes du binaire release : parcours complet humain actif/FIFO/reconnexion/
+MCP/answered/retry/attach/nettoyage PASS ; EOF en permission = 1,047 s, PASS.
+Le premier re-jeu abonnement via le binaire installé a révélé un oracle trop
+strict : le vrai modèle a écrit une introduction avant OK-090. La réponse liée
+et le rejeu étaient déjà corrects ; seul le test de texte exact échouait.
+Correction test-only : le modèle réel doit finir par la sentinelle, le modèle
+synthétique reste comparé strictement ; chaque delta réel doit toujours apparaître
+dans attach après l'abonnement et avant la fin. Pas de correction de production.
+Second essai abonnement gpt-5.6-luna PASS, y compris attach, termios et socket ;
+parcours synthétique strict rejoué PASS. Les copies privées d'authentification
+ont été effacées par le harnais, y compris après le premier échec.
+
+Preuves et retour arrière :
+/Users/moi/.cache/bridget-adoptions/090-20260906.6xAQvh/
+(release-recette.log, release-eof.log, installed-subscription.log,
+installed-subscription-final.log, installed-synthetic-final.log).
+Ancien binaire 6cfbc4d33ca7, base arrêtée et plist conservés dans ce répertoire
+0700 ; aucun secret/version utilisateur envoyé à Git. Les suites complètes du
+05 restent valides pour le code de production inchangé. Aucun push distant.

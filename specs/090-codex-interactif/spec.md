@@ -1,6 +1,6 @@
 # 090 — Codex interactif natif, connecté à Bridget sans tmux
 
-Date : 2026-09-05. Statut : Implemented (non déployé).
+Date : 2026-09-05. Statut : Implemented ; adoption autorisée et exécutée le 2026-09-06.
 Branche : session-090-codex-interactif. Dépendance : noyau 089.
 
 ## Besoin et périmètre
