@@ -14,6 +14,7 @@ import re
 import resource
 import select
 import signal
+import shutil
 import socket
 import sqlite3
 import struct
@@ -52,6 +53,8 @@ def main():
     bridget, codex = sys.argv[1:3]
     live = "--subscription" in sys.argv
     initial_resume = "--initial-resume" in sys.argv
+    copied_resume = "--copied-resume" in sys.argv
+    paginated_resume = "--paginated-resume" in sys.argv
     root = pathlib.Path(tempfile.mkdtemp(prefix="b90-", dir="/tmp"))
     state, home = root / "state", root / "home"
     state.mkdir(mode=0o700)
@@ -165,17 +168,27 @@ def main():
                 f'[projects."{root}"]\ntrust_level="trusted"\n')
         until(lambda: (state / "bridget.sock").exists(), "daemon prêt")
         resume_id = None
-        if "--resume-thread" in sys.argv or initial_resume:
+        if copied_resume:
+            # Opt-in diagnostic : copie privée, aucun auth.json ni écriture
+            # dans le fil source. Aucun tour n'est envoyé depuis cette copie.
+            source = pathlib.Path(os.environ["BRIDGET_CODEX_090_ROLLOUT"])
+            destination = home / "sessions" / "2026" / "01" / "01" / source.name
+            destination.parent.mkdir(parents=True)
+            shutil.copyfile(source, destination)
+            with destination.open() as rollout:
+                resume_id = json.loads(rollout.readline())["payload"]["id"]
+        if "--resume-thread" in sys.argv or initial_resume or paginated_resume:
             seed_path = root / "seed.sock"
             seed = subprocess.Popen([codex, "app-server", "--listen", "unix://" + str(seed_path)], env=environment,
                 cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
                 until(seed_path.exists, "serveur de création historique réel prêt")
                 client = probe.Client(str(seed_path))
-                started = client.rpc("thread/start", {"cwd": str(root), "historyMode": "legacy"})
+                started = client.rpc("thread/start", {"cwd": str(root),
+                    "historyMode": "paginated" if paginated_resume else "legacy"})
                 resume_id = started["result"]["thread"]["id"]
                 assert "result" in client.rpc("thread/name/set", {"threadId": resume_id, "name": "HISTORIQUE-090"})
-                if initial_resume:
+                if initial_resume or paginated_resume:
                     assert "result" in client.rpc("turn/start", {"threadId": resume_id,
                         "input": [{"type": "text", "text": "HISTORIQUE-A-CONSERVER-090"}]})
                     seed_deadline = time.monotonic() + 10
@@ -191,8 +204,10 @@ def main():
                 seed.wait(timeout=5)
                 seed_path.unlink(missing_ok=True)
         wrapper_args = [bridget, "codex", "--agent-id", "90000000-0000-4000-8000-000000000001", "--no-alt-screen"]
-        if initial_resume:
+        if initial_resume or copied_resume or paginated_resume:
             wrapper_args += ["--name", "coder-recette-090", "--yolo", "resume", resume_id]
+        if copied_resume:
+            wrapper_args += ["-m", "fixture"]
         if "--missing-resume" in sys.argv:
             wrapper_args += ["resume", "90000000-0000-4000-8000-000000000099"]
         if live:
@@ -216,11 +231,28 @@ def main():
         threads = observer.rpc("thread/loaded/list", {})["result"]["data"]
         assert len(threads) == 1, threads
         thread_id = threads[0]
-        if initial_resume:
+        if initial_resume or copied_resume or paginated_resume:
             assert thread_id == resume_id, "un nouveau fil a remplacé la reprise demandée"
         print("same_thread", thread_id, flush=True)
         until(lambda: (b"gpt-5.6-luna" if live else b"fixture") in transcript
             and (b"context" in transcript or b"shortcuts" in transcript), "TUI configurée (pas seulement l'écran Resuming) prête à saisir")
+        if copied_resume or paginated_resume:
+            agent = next(a for a in json.loads(cli("agents", "--json"))
+                if a.get("agent_id") == "90000000-0000-4000-8000-000000000001")
+            assert agent["display_name"] == "coder-recette-090"
+            assert probe.Fixture.count == 0, "tour fournisseur indésirable à la reprise"
+            if paginated_resume:
+                until(lambda: b"HISTORIQUE-A-CONSERVER-090" in transcript, "historique paginé rendu par la TUI native")
+            assert not termios.tcgetattr(slave)[3] & termios.ICANON
+            mark = len(transcript)
+            os.write(master, b"\x1b[200~SAISIE-REPRISE-090\x1b[201~")
+            until(lambda: b"SAISIE-REPRISE-090" in transcript[mark:], "saisie rendue par la TUI reprise, sans validation du prompt")
+            os.write(master, b"\x03\x03")
+            until(lambda: wrapper.poll() is not None, "sortie après reprise de copie")
+            assert terminal_restored() and not socket_path.exists()
+            assert probe.Fixture.count == 0
+            print("paginated_or_copied_resume_real_tui_ready_without_prompt", flush=True)
+            return
         prompt = "HUMAN-090 : pour ce premier tour seulement, reponds OK-090. Les prochains tours pourront demander des outils MCP." if live else "HUMAN-090"
         os.write(master, b"\x1b[200~" + prompt.encode() + b"\x1b[201~")
         until(lambda: b"HUMAN-090" in transcript, "texte humain rendu avant validation")

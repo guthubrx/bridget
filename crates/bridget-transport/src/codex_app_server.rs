@@ -444,8 +444,12 @@ impl CodexAppServerTransport {
             write_notification(&writer, "initialized", json!({}))?;
             let cwd =
                 std::env::current_dir().map_err(|error| TransportError::Io(error.to_string()))?;
-            let (thread_method, mut thread_params) =
-                thread_bootstrap_request(&options.thread_bootstrap, &cwd, options.model.as_deref());
+            let (thread_method, mut thread_params) = thread_bootstrap_request(
+                &options.thread_bootstrap,
+                &cwd,
+                options.model.as_deref(),
+                interactive_socket.is_some(),
+            );
             if interactive_socket.is_some()
                 && matches!(
                     options.thread_bootstrap,
@@ -489,15 +493,18 @@ impl CodexAppServerTransport {
                 .map_err(|error| {
                     TransportError::DeliveryFailed(format!("{thread_method}: {error}"))
                 })?;
-            if interactive_socket.is_some()
-                && thread
-                    .value
-                    .pointer("/thread/historyMode")
-                    .and_then(Value::as_str)
-                    != Some("legacy")
-            {
+            let history_mode = thread
+                .value
+                .pointer("/thread/historyMode")
+                .and_then(Value::as_str);
+            let compatible_history = history_mode == Some("legacy")
+                || (matches!(
+                    options.thread_bootstrap,
+                    CodexThreadBootstrap::Resume { .. }
+                ) && history_mode == Some("paginated"));
+            if interactive_socket.is_some() && !compatible_history {
                 return Err(TransportError::DeliveryFailed(
-                    "Codex incompatible : historique legacy partagé non attesté".into(),
+                    "Codex incompatible : mode d'historique partagé non attesté".into(),
                 ));
             }
             if let Some((model, effort)) = runtime_from_thread_start(&thread.value) {
@@ -2250,7 +2257,7 @@ fn validate_endpoint_bootstrap(
     interactive: bool,
 ) -> Result<(), TransportError> {
     // La reprise HUMAINE explicite est négociée avec le serveur privé avant
-    // toute présence : RPC réussie, UUID identique et historique legacy exigés.
+    // toute présence : RPC réussie, UUID identique et historique reconnu exigés.
     // Ce n'est pas une reprise automatique gérée : son attestation figée reste
     // obligatoire, et aucune observation fournisseur n'est fabriquée ici.
     if interactive
@@ -2268,6 +2275,7 @@ fn thread_bootstrap_request(
     bootstrap: &CodexThreadBootstrap,
     cwd: &Path,
     model: Option<&str>,
+    interactive: bool,
 ) -> (&'static str, Value) {
     match bootstrap {
         CodexThreadBootstrap::Start => {
@@ -2279,6 +2287,12 @@ fn thread_bootstrap_request(
         }
         CodexThreadBootstrap::Resume { thread_id } => {
             let mut params = json!({ "threadId": thread_id });
+            if interactive {
+                // Le contrôleur ne consomme aucun ancien tour. Codex garde
+                // l'historique et la TUI le lit par son propre client natif.
+                // Une reprise réelle peut sinon répondre avec > 79 Mo.
+                params["excludeTurns"] = json!(true);
+            }
             if let Some(model) = model {
                 params["model"] = json!(model);
             }
@@ -2426,8 +2440,19 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
         // acte `refusal` n'est écrit qu'à la fin en ÉCHEC du même item.
         let mut sandbox_lines_by_item: HashMap<String, String> = HashMap::new();
         let mut refusals_recorded: HashSet<(String, String)> = HashSet::new();
+        let mut termination = "flux Codex fermé".to_string();
         for line in lines {
-            let Ok(line) = line else { break };
+            let line = match line {
+                Ok(line) => line,
+                Err(error) => {
+                    termination = format!(
+                        "lecture Codex impossible ({:?}): {}",
+                        error.kind(),
+                        error.to_string().chars().take(512).collect::<String>()
+                    );
+                    break;
+                }
+            };
             let raw = line.as_bytes().to_vec();
             let Ok(value) = serde_json::from_str::<Value>(&line) else {
                 push_source(
@@ -3147,7 +3172,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
         let pending =
             std::mem::take(&mut *waiters.lock().unwrap_or_else(|poison| poison.into_inner()));
         for (_, waiter) in pending {
-            let _ = waiter.send(Err("stdout Codex fermé".to_string()));
+            let _ = waiter.send(Err(termination.clone()));
         }
         observations.1.notify_all();
     })
@@ -3339,11 +3364,12 @@ mod tests {
             )
             .unwrap(),
         )));
-        let (tx, rx) = mpsc::channel::<String>();
+        let (tx, rx) = mpsc::channel::<std::io::Result<String>>();
+        let waiters = Arc::new(Mutex::new(HashMap::new()));
         let reader = spawn_reader(
-            Box::new(rx.into_iter().map(Ok)),
+            Box::new(rx.into_iter()),
             ReaderContext {
-                waiters: Arc::new(Mutex::new(HashMap::new())),
+                waiters: waiters.clone(),
                 observations: observations.clone(),
                 alive: alive.clone(),
                 journal: journal.clone(),
@@ -3361,9 +3387,9 @@ mod tests {
         );
         let serial = AtomicU64::new(0);
         let barrier = |raw: &str| {
-            tx.send(raw.into()).unwrap();
+            tx.send(Ok(raw.into())).unwrap();
             let sentinel = json!({"method": "test/barrier", "params": {"n": serial.fetch_add(1, AtomicOrdering::SeqCst)}}).to_string();
-            tx.send(sentinel.clone()).unwrap();
+            tx.send(Ok(sentinel.clone())).unwrap();
             let deadline = Instant::now() + Duration::from_secs(3);
             let mut state = observations.0.lock().unwrap();
             while !state
@@ -3540,6 +3566,23 @@ mod tests {
             queue.0.lock().unwrap().external_turn.as_deref(),
             Some("next-human")
         );
+        let (result_tx, result_rx) = mpsc::channel();
+        waiters.lock().unwrap().insert(999, result_tx);
+        tx.send(Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Space limit exceeded: message too long",
+        )))
+        .unwrap();
+        // Une erreur de lecture ne doit plus se transformer en un faux EOF.
+        let error = result_rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            error.contains("InvalidData") && error.contains("message too long"),
+            "{error}"
+        );
+        assert!(!error.contains("stdout Codex fermé"));
         drop(tx);
         reader.join().unwrap();
         assert!(!alive.load(Ordering::SeqCst));
@@ -6288,8 +6331,8 @@ mod tests {
         assert!(validate_endpoint_bootstrap(&interactive, true).is_ok());
         assert!(validate_endpoint_bootstrap(&interactive, false).is_err());
         assert_eq!(
-            thread_bootstrap_request(&resume, cwd, Some("explicite")).1,
-            json!({"threadId": "thread-parent", "model": "explicite"})
+            thread_bootstrap_request(&resume, cwd, Some("explicite"), true).1,
+            json!({"threadId": "thread-parent", "model": "explicite", "excludeTurns": true})
         );
         let fork = CodexThreadBootstrap::Fork {
             thread_id: "thread-parent".to_string(),
@@ -6297,11 +6340,11 @@ mod tests {
         assert!(validate_thread_bootstrap(&Some(compatible.clone()), &resume).is_ok());
         assert!(validate_thread_bootstrap(&Some(compatible.clone()), &fork).is_ok());
         assert_eq!(
-            thread_bootstrap_request(&resume, cwd, None),
+            thread_bootstrap_request(&resume, cwd, None, false),
             ("thread/resume", json!({ "threadId": "thread-parent" }))
         );
         assert_eq!(
-            thread_bootstrap_request(&fork, cwd, None),
+            thread_bootstrap_request(&fork, cwd, None, false),
             ("thread/fork", json!({ "threadId": "thread-parent" }))
         );
         assert!(matches!(

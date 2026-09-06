@@ -70,3 +70,7 @@ native_recipe!(
     "--initial-resume"
 );
 native_recipe!(reprise_absente_refusee_avant_presence, "--missing-resume");
+native_recipe!(
+    reprise_historique_pagine_rendu_par_la_tui_native,
+    "--paginated-resume"
+);

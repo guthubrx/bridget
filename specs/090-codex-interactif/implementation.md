@@ -1,12 +1,54 @@
 # Implémentation 090 — Implemented, adoptée le 2026-09-06
 
+## Correctif utilisateur du 2026-09-06 : reprise d'un historique volumineux
+
+Branche `fix/090-codex-history`, base `264597c44c32`. Cause mesurée sur une
+copie privée d'un rollout de 338 072 566 octets : `thread/resume` renvoie une
+trame de 79 814 612 octets, rejetée par la borne WebSocket Bridget de 16 Mio.
+Le serveur reste vivant ; le reader effaçait l'erreur de lecture en annonçant
+faussement `stdout Codex fermé`. Avec `excludeTurns: true`, la réponse de la
+sonde est de 2 653 octets. Paramètre vérifié dans le schéma généré du Codex
+installé 0.153.4, aucune nouvelle dépendance ni augmentation de la borne.
+
+Le contrôleur demande les métadonnées sans récupérer les anciens tours. Codex
+conserve l'historique et sa TUI le consulte nativement. Reprise explicite :
+`legacy` ET `paginated` acceptés, mode inconnu refusé ; nouveau fil : garde
+legacy inchangée. UUID, nom Bridget, projection yolo et attestations du chemin
+géré restent inchangés. Une erreur I/O restitue désormais sa cause bornée.
+
+Contre-épreuve exécutée : même copie, ancien binaire installé = rouge avec le
+message utilisateur exact ; corrigé = même UUID, nom attesté, TUI réellement
+en raw mode affichant une saisie non validée, zéro prompt fournisseur, puis
+termios restauré et socket supprimée. HOME/CODEX_HOME isolés, aucun secret
+copié, fournisseur HTTP local, aucun fichier du fil utilisateur modifié.
+Logs privés : `/tmp/b90-history-copy-old-red.log` et
+`/tmp/b90-history-copy-final.log`. Reproduction opt-in : fixture
+`crates/bridget-daemon/tests/fixtures/codex_interactive_090.py`, option
+`--copied-resume`, source fournie par `BRIDGET_CODEX_090_ROLLOUT` et copiée.
+
+Recettes natives automatisées : **10/10, 35,19 s**, dont historique paginé
+réel rendu et reprise legacy avec message interagent/ACK/retry. Le test de
+construction de la requête verrouille `excludeTurns` uniquement pour la
+reprise interactive ; le test du reader vérifie la conservation de l'erreur
+de lecture. Logs : `/tmp/b90-history-native-final.log`.
+Le premier essai de fixture volumineuse artificielle a été retiré : ajouter
+des tours au rollout seul ne modifie pas l'index paginé du fournisseur et ne
+constitue donc pas un oracle de longueur. La copie réelle fournit cette preuve.
+Clippy workspace/all-targets -D warnings et fmt --all --check : PASS.
+Gate unitaire finale, `cargo test --workspace --lib -- --test-threads=1`,
+sous HOME/BRIDGET_HOME/TMPDIR privés et courts, `umask 077` : **1 010 succès,
+0 échec, 8 ignorés**, plus deux sous-tests enfants verts ; 60,16 s de tests
+hors compilation. Log : `/tmp/b90-history-units.log`. Pas de nouvelle passe
+des intégrations sans rapport avec ce correctif ; les dix recettes natives
+couvrent la couture modifiée.
+
 ## Correctif utilisateur du 2026-09-06 : yolo / resume / name
 
 Branche `fix/090-codex-options`, base `cd0ec467d870`. La commande complète
 `bridget codex --name <nom> --yolo resume <UUID>` est traitée, pas seulement
 l'alias. Le nom utilise le service durable partagé, distinct de l'UUID.
 La reprise privée négocie réellement `thread/resume` avant Register, vérifie
-l'UUID retourné et l'historique legacy et ne renomme pas le titre existant.
+l'UUID retourné et l'historique reconnu et ne renomme pas le titre existant.
 La garde de reprise automatique gérée reste inchangée.
 
 La première recette a réellement échoué : l'ancien `approval_policy=on-request`
