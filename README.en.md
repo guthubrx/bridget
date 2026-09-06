@@ -118,8 +118,9 @@ disables Codex sandbox and approvals and is never added by default.
 
 To assign development to a new Codex, the human runs in their terminal:
 `bridget spawn codex --persistent --cwd "$PWD" --posture development`.
-This profile permits writes in that directory, not network access or automatic
-permission escalation. It applies only to this order and requires TTY input/output.
+This profile permits writes in that directory, not shell-command network access
+or automatic permission escalation. Declared MCP tools remain a separate access
+path. It applies only to this order and requires TTY input/output.
 Without `--posture`, the global policy applies; `--posture discovery` selects
 read-only access. `relaunch` preserves the old agent's frozen permissions: it
 cannot turn a discovery agent into a developer. No global policy change is needed.

@@ -601,7 +601,7 @@ fn print_usage() {
            daemon                 Lance le daemon\n  \
            mcp                    Lance le serveur MCP sur stdio\n  \
            attach <UUID>          Observe et écrit à un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
-           spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID]\n  \
+           spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID] [--posture discovery|development]\n  \
            stop <N>               Arrête un équipier géré\n  \
            relaunch <N>           Relance un équipier géré arrêté\n  \
            decommission <N>       Retire un équipier de la flotte visible\n  \
@@ -1193,12 +1193,12 @@ mod spawn_executor_tests {
 
     #[test]
     fn spawn_cli_laisse_l_executant_refuser_le_cwd_absent_et_garde_le_cas_valide() {
-        let root = std::env::temp_dir().join(format!(
-            "bridget-cli-cwd-executor-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
+        let root = PathBuf::from("/tmp").join(format!("bgcwd-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&root).expect("racine de test");
+        crate::environment::ensure_private_directory(
+            &crate::environment::root_for_home(&root).unwrap(),
+        )
+        .unwrap();
         let cwd_absent = root.join("absent-sur-le-client");
         assert!(!cwd_absent.exists(), "précondition : cwd client absent");
         // Le registre d'ordres appartient au namespace, pas au cwd. Deux
@@ -5280,13 +5280,13 @@ mod hook_tests {
     /// n'existant plus nulle part une fois connecté.
     #[test]
     fn spawn_neuf_refuse_de_partir_sans_choix_de_survie() {
-        let root = std::env::temp_dir().join(format!(
-            "bridget-garde-survie-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
+        let root = PathBuf::from("/tmp").join(format!("bgsurv-{}", uuid::Uuid::new_v4().simple()));
         let cwd = root.join("work");
         std::fs::create_dir_all(&cwd).unwrap();
+        crate::environment::ensure_private_directory(
+            &crate::environment::root_for_home(&root).unwrap(),
+        )
+        .unwrap();
         let neuf = |options: &[&str]| {
             let mut args = vec!["codex".to_string()];
             args.extend(options.iter().map(|option| option.to_string()));
@@ -5348,13 +5348,13 @@ mod hook_tests {
     /// bloquerait ce rappel bloquerait un lancement légitime.
     #[test]
     fn rejeu_d_un_ordre_memorise_n_exige_pas_de_redeclarer_la_survie() {
-        let root = std::env::temp_dir().join(format!(
-            "bridget-garde-survie-rejeu-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
+        let root = PathBuf::from("/tmp").join(format!("bgretry-{}", uuid::Uuid::new_v4().simple()));
         let cwd = root.join("work");
         std::fs::create_dir_all(&cwd).unwrap();
+        crate::environment::ensure_private_directory(
+            &crate::environment::root_for_home(&root).unwrap(),
+        )
+        .unwrap();
         let premier = resolve_spawn_order(
             &parse_spawn_args(&[
                 "codex".to_string(),
@@ -5406,13 +5406,13 @@ mod hook_tests {
 
     #[test]
     fn spawn_cli_rejoue_l_enveloppe_memorisee_octet_pour_octet() {
-        let root = std::env::temp_dir().join(format!(
-            "bridget-cli-t905-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
+        let root = PathBuf::from("/tmp").join(format!("bgcanon-{}", uuid::Uuid::new_v4().simple()));
         let cwd = root.join("work");
         std::fs::create_dir_all(&cwd).unwrap();
+        crate::environment::ensure_private_directory(
+            &crate::environment::root_for_home(&root).unwrap(),
+        )
+        .unwrap();
         let args = vec![
             "codex".to_string(),
             "--agent-id".to_string(),
@@ -5893,13 +5893,14 @@ mod hook_tests {
     /// en fin de test. Jamais la production.
     #[test]
     fn statusline_attribue_ses_faits_sans_se_declarer() {
-        let unique = format!("{}-{}", std::process::id(), line!());
-        let socket = std::env::temp_dir().join(format!("bridget-statusline-{unique}.sock"));
-        let db_path = std::env::temp_dir().join(format!("bridget-statusline-{unique}.db"));
+        let root = PathBuf::from("/tmp").join(format!("bgsl-{}", uuid::Uuid::new_v4().simple()));
+        crate::environment::ensure_private_directory(&root).unwrap();
+        let socket = root.join("bridget.sock");
+        let db_path = root.join("bridget.db");
         let config = crate::daemon::DaemonConfig {
             socket_path: socket.clone(),
             db_path: db_path.clone(),
-            log_path: std::env::temp_dir().join(format!("bridget-statusline-{unique}.log")),
+            log_path: root.join("daemon.log"),
             ..Default::default()
         };
         let daemon_socket = socket.clone();
@@ -6025,16 +6026,13 @@ mod idempotency_projection_tests {
         ))
     }
 
-    fn temporary_database_path() -> std::path::PathBuf {
-        let counter = SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("bridget-t1208-{}-{counter}.db", std::process::id()))
-    }
-
     fn start_real_daemon() -> (std::path::PathBuf, std::path::PathBuf) {
-        let socket_path = temporary_socket_path();
-        let db_path = temporary_database_path();
-        let _ = std::fs::remove_file(&socket_path);
-        let _ = std::fs::remove_file(&db_path);
+        // Le namespace du daemon est privé : ne jamais valider/réutiliser
+        // l'ensemble du répertoire temporaire partagé comme son état.
+        let root = PathBuf::from("/tmp").join(format!("bgcanon-{}", uuid::Uuid::new_v4().simple()));
+        crate::environment::ensure_private_directory(&root).unwrap();
+        let socket_path = root.join("bridget.sock");
+        let db_path = root.join("bridget.db");
         let config = DaemonConfig {
             socket_path: socket_path.clone(),
             db_path: db_path.clone(),

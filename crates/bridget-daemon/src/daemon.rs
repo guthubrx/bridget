@@ -15142,7 +15142,7 @@ mod presence_tests {
             &Uuid::new_v4().simple().to_string()[..8]
         ));
         let config = recovery_daemon_config(&root);
-        std::fs::create_dir_all(config.db_path.parent().unwrap()).unwrap();
+        crate::environment::ensure_private_directory(config.db_path.parent().unwrap()).unwrap();
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(
             Command::new("git")
@@ -22882,7 +22882,7 @@ mod presence_tests {
         let cache = root.join(".state");
         let registry_path = root.join(".state/agents.json");
         let adapter = root.join("adapter.sh");
-        std::fs::create_dir_all(&cache).unwrap();
+        crate::environment::ensure_private_directory(&cache).unwrap();
         std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
         std::fs::write(
             &adapter,

@@ -49,7 +49,8 @@ profil effectif avant de lui promettre qu'il peut modifier des fichiers. Ne pas
 changer la posture globale pour débloquer un seul lancement.
 
 `spawn --posture development` autorise Codex à écrire dans son répertoire de
-travail pour cet ordre seulement (réseau et extensions de droits refusés).
+travail pour cet ordre seulement (réseau du shell et extensions de droits refusés,
+outils MCP déclarés distincts du shell).
 Cette attribution exige un terminal humain en entrée ET sortie : si elle est
 refusée dans l'outil shell, donner la commande à l'utilisateur, ne pas fabriquer
 de pseudo-terminal pour contourner la garde. `--posture discovery` reste en

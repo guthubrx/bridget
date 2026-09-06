@@ -128,8 +128,9 @@ explicitement sandbox et approbations Codex ; il n'est jamais ajouté par défau
 
 Pour confier du développement à un nouveau Codex, l'humain lance depuis son
 terminal `bridget spawn codex --persistent --cwd "$PWD" --posture development`.
-Ce profil autorise l'écriture dans ce répertoire, pas le réseau ni une extension
-automatique des droits. Il est limité à cet ordre et exige une entrée/sortie TTY.
+Ce profil autorise l'écriture dans ce répertoire, pas le réseau des commandes
+shell ni une extension automatique des droits. Les outils MCP déclarés restent
+un accès distinct. Il est limité à cet ordre et exige une entrée/sortie TTY.
 Sans `--posture`, la politique globale reste applicable ; `--posture discovery`
 impose la lecture seule. `relaunch` conserve les droits figés de l'ancien agent :
 il ne transforme pas un agent découverte en développeur. Aucun réglage global
