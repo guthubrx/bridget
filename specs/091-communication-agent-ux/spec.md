@@ -24,6 +24,26 @@ de communication Bridget, sans autoriser par défaut les autres outils MCP ni
 
 ## Acceptation
 
+## Complément validé — référence colorée et modèle dynamique
+
+- FR-07 : saisie sur fond gris pleine largeur, hauteur calculée sur ses lignes
+  et replis ; statut coloré immédiatement dessous. Redimensionnement, effacement,
+  journal intercalé et sortie ne laissent aucun fond résiduel. NO_COLOR et TERM=dumb
+  désactivent les couleurs. Une recette visuelle en terminal est obligatoire.
+- FR-08 : `/model <modèle> <effort>` dans attach choisit les paramètres des
+  prochains tours du même fil Codex géré, sans prompt caché ni redémarrage.
+  Les valeurs sont validées contre model/list du processus cible ; aucune
+  substitution de modèle/effort. Le tour déjà parti reste inchangé.
+- FR-09 : le reçu annonce un réglage pour le prochain tour, pas un modèle
+  effectivement servi. L'annuaire reste fondé sur les événements fournisseur.
+  Réglage limité à la session vivante, pas mutation de la définition de relance.
+  Fournisseur non compatible, modèle/effort absent et connexion perdue = refus
+  explicite. Pas de nouveau contrôle MCP ni modification de droits du shell.
+
+Oracles : sélection sans turn/start, deux vrais tours du même fil portant les
+réglages successifs exacts ; refus sans mutation ; fermeture/timeout bornés ;
+contrôle attach corrélé au seul wrapper visé, jamais une instruction au modèle.
+
 - Agent réel : mission reçue, écriture dans le répertoire autorisé, réponse MCP liée, journal observable. Refus hors droits et posture globale inchangée.
 - Rendu de fixtures extraites du journal réel : commande commencée/terminée, autorisation demandée/refusée, extension inconnue ; aucun message générique pour les événements connus.
 - Statut : changement modèle/effort, données manquantes, déconnexion, neutralisation des contrôles et terminal étroit ; saisie préservée.

@@ -23,7 +23,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -453,9 +453,9 @@ impl CodexAppServerTransport {
             let mut initialization = json!({
                 "clientInfo": { "name": "bridget", "version": env!("CARGO_PKG_VERSION") }
             });
-            if interactive_socket.is_some() {
-                initialization["capabilities"] = json!({"experimentalApi": true});
-            }
+            // thread/settings/update (091) est explicitement négocié ; aucune
+            // permission supplémentaire n'est accordée par cette capacité filaire.
+            initialization["capabilities"] = json!({"experimentalApi": true});
             let initialize = request(&writer, &waiters, &next_id, "initialize", initialization)?;
             for required in ["userAgent", "codexHome", "platformFamily", "platformOs"] {
                 if initialize.value.get(required).is_none() {
@@ -912,6 +912,91 @@ impl Transport for CodexAppServerTransport {
 }
 
 impl ManagedSession for CodexAppServerTransport {
+    fn select_runtime(
+        &mut self,
+        selection: crate::protocol::RuntimeSelection,
+    ) -> crate::protocol::RuntimeSelectionOutcome {
+        use crate::protocol::{
+            RuntimeSelectionOutcome as Outcome, RuntimeSelectionRefusal as Refusal,
+        };
+        let refuse = |reason| Outcome::Refused { reason };
+        if self.interactive_socket.is_some() {
+            return refuse(Refusal::Unsupported); // La TUI native reste propriétaire de ses réglages.
+        }
+        if !selection.valid() {
+            return refuse(Refusal::InvalidSelection);
+        }
+        if !self.alive.load(Ordering::SeqCst) {
+            return refuse(Refusal::TargetUnavailable);
+        }
+        // O(n), au plus 4 pages de 100 modèles, une échéance ABSOLUE de 2 s.
+        // Ce catalogue autorise le choix humain, jamais le bootstrap/rejeu figé.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut cursor = Value::Null;
+        for _ in 0..4 {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return refuse(Refusal::CatalogueUnavailable);
+            };
+            let Ok(response) = request_with_timeout(
+                &self.writer,
+                &self.waiters,
+                &self.next_id,
+                "model/list",
+                json!({"cursor":cursor,"limit":100,"includeHidden":false}),
+                remaining,
+            ) else {
+                return refuse(Refusal::CatalogueUnavailable);
+            };
+            let Some(models) = response.value.get("data").and_then(Value::as_array) else {
+                return refuse(Refusal::CatalogueUnavailable);
+            };
+            if let Some(model) = models.iter().find(|model| {
+                model.get("model").and_then(Value::as_str) == Some(selection.model.as_str())
+            }) {
+                let supported = model
+                    .get("supportedReasoningEfforts")
+                    .and_then(Value::as_array)
+                    .is_some_and(|efforts| {
+                        efforts.iter().any(|effort| {
+                            effort.get("reasoningEffort").and_then(Value::as_str)
+                                == Some(selection.effort.as_str())
+                        })
+                    });
+                if !supported {
+                    return refuse(Refusal::EffortUnavailable);
+                }
+                let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                    return refuse(Refusal::CatalogueUnavailable);
+                };
+                // Le fournisseur détient déjà les réglages du fil. Ne pas en
+                // créer un double Bridget, ni un turn/start vide de convenance.
+                return match request_with_timeout(
+                    &self.writer,
+                    &self.waiters,
+                    &self.next_id,
+                    "thread/settings/update",
+                    json!({"threadId":self.thread_id,
+                    "model":selection.model,"effort":selection.effort}),
+                    remaining,
+                ) {
+                    Ok(_) => Outcome::Selected { selection },
+                    Err(error) if error.to_string().contains("-32601") => {
+                        refuse(Refusal::Unsupported)
+                    }
+                    Err(_) => Outcome::OutcomeUnknown {},
+                };
+            }
+            cursor = response
+                .value
+                .get("nextCursor")
+                .cloned()
+                .unwrap_or(Value::Null);
+            if cursor.is_null() {
+                return refuse(Refusal::ModelUnavailable);
+            }
+        }
+        refuse(Refusal::CatalogueUnavailable)
+    }
     fn set_private_profile_instructions(
         &mut self,
         instructions: &str,
@@ -1230,17 +1315,18 @@ fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<St
     // L'enveloppe est une projection fournisseur ; le corps durable reste intact.
     let body = communication_prompt(message, worker.interactive);
     let prompt = private_prompt(instructions.as_deref(), &body);
+    let params = json!({
+        "threadId": worker.thread_id,
+        "clientUserMessageId": message.id,
+        "input": [{ "type": "text", "text": &prompt }],
+    });
     for attempt in 0..=SATURATION_RETRIES {
         match request(
             &worker.writer,
             &worker.waiters,
             &worker.next_id,
             "turn/start",
-            json!({
-                "threadId": worker.thread_id,
-                "clientUserMessageId": message.id,
-                "input": [{ "type": "text", "text": &prompt }],
-            }),
+            params.clone(),
         ) {
             Ok(result) => {
                 return result
@@ -2445,8 +2531,16 @@ fn request_with_timeout(
             .remove(&id);
         return Err(error);
     }
-    receiver
-        .recv_timeout(timeout)
+    let result = receiver.recv_timeout(timeout);
+    // Un fournisseur muet ne doit pas accumuler un waiter à chaque contrôle.
+    // La réponse tardive reste ignorée, jamais réattribuée au contrôle suivant.
+    if result.is_err() {
+        waiters
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(&id);
+    }
+    result
         .map_err(|_| TransportError::DeliveryFailed(format!("échéance Codex sur {method}")))?
         .map_err(TransportError::DeliveryFailed)
 }
@@ -2689,6 +2783,31 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 // les octets sources que la frontière commune conserve.
                 // (A) Retranscription : chaque delta → journal `update` avec
                 // le CONTENU exact. `forward_managed_events` ignore Update.
+                Some("thread/settings/updated") => {
+                    let selected = selected_thread
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
+                    if value.pointer("/params/threadId").and_then(Value::as_str)
+                        == selected.as_deref()
+                        && let Some(model) = value
+                            .pointer("/params/threadSettings/model")
+                            .and_then(Value::as_str)
+                    {
+                        let effort = value
+                            .pointer("/params/threadSettings/effort")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                        push_source(
+                            &observations,
+                            raw,
+                            ManagedEventKind::RuntimeObserved {
+                                model: model.to_string(),
+                                effort,
+                            },
+                        );
+                    }
+                }
                 Some("item/agentMessage/delta" | "agentMessage/delta") => {
                     if let (Some(turn_id), Some(delta)) = (
                         value.pointer("/params/turnId").and_then(Value::as_str),
@@ -3434,6 +3553,30 @@ mod tests {
     static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
 
     #[test]
+    fn spec091_catalogue_muet_expire_sans_accumuler_de_reponses_en_attente() {
+        let writer: Writer = Arc::new(Mutex::new(Some(Box::new(Vec::<u8>::new()))));
+        let waiters: Waiters = Arc::new(Mutex::new(HashMap::new()));
+        let next_id = Arc::new(AtomicU64::new(1));
+        let start = Instant::now();
+        for _ in 0..3 {
+            assert!(
+                request_with_timeout(
+                    &writer,
+                    &waiters,
+                    &next_id,
+                    "model/list",
+                    json!({"limit":100}),
+                    Duration::from_millis(1)
+                )
+                .is_err()
+            );
+            assert!(waiters.lock().unwrap().is_empty());
+        }
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert_eq!(next_id.load(AtomicOrdering::SeqCst), 4);
+    }
+
+    #[test]
     fn catalogue_reprise_pagine_sans_ignorer_la_borne_ni_un_curseur_invalide() {
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut count = 0;
@@ -4154,6 +4297,143 @@ mod tests {
             writer.stop();
         }
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn spec091_selection_reelle_du_prochain_tour_sans_prompt_cache_ni_perte_du_fil() {
+        use crate::protocol::{
+            RuntimeSelection, RuntimeSelectionOutcome as Outcome,
+            RuntimeSelectionRefusal as Refusal,
+        };
+        let root = root("runtime091");
+        let trace = root.join("wire.jsonl");
+        let mut options = fake_options(&trace);
+        options.command = "/usr/bin/python3".into();
+        options.args = vec!["-u".into(), "-c".into(), r#"
+import json, sys
+settings = {'model':'first','effort':'low'}
+for line in sys.stdin:
+    with open(sys.argv[1], 'a') as trace: trace.write(line)
+    value = json.loads(line); method = value.get('method'); params = value.get('params', {})
+    result = {}
+    if method == 'initialize': result = {'userAgent':'fixture091','codexHome':'/tmp','platformFamily':'unix','platformOs':'macos'}
+    if method == 'thread/start': result = {'thread':{'id':'same-thread'},'model':'first','reasoningEffort':'low'}
+    if method == 'model/list': result = {'data':[{'model':m,'supportedReasoningEfforts':[{'reasoningEffort':e} for e in ['low','high']]} for m in ['first','second']], 'nextCursor':None}
+    if method == 'thread/settings/update': settings = {'model':params['model'],'effort':params['effort']}
+    if method == 'turn/start': result = {'turn':{'id':str(value['id'])}}
+    if 'id' in value: print(json.dumps({'id':value['id'],'result':result}), flush=True)
+    if method == 'thread/settings/update':
+        print(json.dumps({'method':'thread/settings/updated','params':{'threadId':params['threadId'],'threadSettings':settings}}), flush=True)
+    if method == 'turn/start':
+        print(json.dumps({'method':'turn/completed','params':{'threadId':params['threadId'],'turn':{'id':str(value['id']),'status':'completed'}}}), flush=True)
+"#.into(), trace.to_string_lossy().into_owned()];
+        let mut session = CodexAppServerTransport::spawn(options).unwrap();
+        let requested = RuntimeSelection {
+            model: "second".into(),
+            effort: "high".into(),
+        };
+        assert_eq!(
+            session.select_runtime(requested.clone()),
+            Outcome::Selected {
+                selection: requested
+            }
+        );
+        let before = fs::read_to_string(&trace).unwrap();
+        assert!(
+            !before.contains("turn/start"),
+            "la sélection ne doit pas lancer de prompt"
+        );
+        assert_eq!(
+            session.select_runtime(RuntimeSelection {
+                model: "absent".into(),
+                effort: "high".into()
+            }),
+            Outcome::Refused {
+                reason: Refusal::ModelUnavailable
+            }
+        );
+        assert_eq!(
+            session.select_runtime(RuntimeSelection {
+                model: "first".into(),
+                effort: "invented".into()
+            }),
+            Outcome::Refused {
+                reason: Refusal::EffortUnavailable
+            }
+        );
+        for (id, model, effort) in [("change-1", "second", "high"), ("change-2", "first", "low")] {
+            if id == "change-2" {
+                assert!(matches!(
+                    session.select_runtime(RuntimeSelection {
+                        model: model.into(),
+                        effort: effort.into()
+                    }),
+                    Outcome::Selected { .. }
+                ));
+            }
+            session.deliver(&message(id)).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut finished = false;
+            let mut observed = false;
+            while Instant::now() < deadline && !(finished && observed) {
+                for event in session.drain_events() {
+                    if let ManagedEventKind::RuntimeObserved {
+                        model: actual,
+                        effort: actual_effort,
+                    } = &event.kind
+                        && actual == model
+                        && actual_effort.as_deref() == Some(effort)
+                    {
+                        assert_eq!(
+                            event.origin,
+                            crate::managed_session::ManagedEventOrigin::SourceLine
+                        );
+                        assert!(
+                            String::from_utf8_lossy(&event.raw).contains("thread/settings/updated")
+                        );
+                        observed = true;
+                    }
+                    finished |= matches!(event.kind, ManagedEventKind::TurnFinished { .. });
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            assert!(
+                finished && observed,
+                "tour et réglages doivent être attestés"
+            );
+        }
+        session.stop();
+        let frames: Vec<Value> = fs::read_to_string(trace)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let turns: Vec<_> = frames
+            .iter()
+            .filter(|frame| frame["method"] == "turn/start")
+            .collect();
+        assert_eq!(turns.len(), 2);
+        let updates: Vec<_> = frames
+            .iter()
+            .filter(|frame| frame["method"] == "thread/settings/update")
+            .collect();
+        assert_eq!(updates.len(), 2);
+        for (update, model, effort) in
+            [(updates[0], "second", "high"), (updates[1], "first", "low")]
+        {
+            assert_eq!(
+                update["params"],
+                json!({"threadId":"same-thread","model":model,"effort":effort})
+            );
+        }
+        assert!(
+            turns
+                .iter()
+                .all(|turn| turn["params"]["threadId"] == "same-thread"
+                    && turn["params"].get("model").is_none())
+        );
+        // Mutation : retirer la commande native settings/update casse cet oracle ;
+        // remplacer RuntimeObserved par une déclaration synthétique le casse aussi.
     }
 
     fn fake_options(_trace: &std::path::Path) -> CodexAppServerOptions {

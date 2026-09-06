@@ -187,6 +187,22 @@ que `who`. Elle devient indisponible sans renouvellement ; le fournisseur réel
 n'est jamais déduit de « Claude » ou « Codex ». Les commandes et demandes
 d'autorisation Codex sont rendues comme des faits, avec sortie neutralisée.
 
+La saisie a un fond gris sur toute la largeur, ajusté aux lignes saisies ; le
+statut coloré reste en dessous. `Alt+Entrée` (ou `Échap`, puis `Entrée`) ajoute
+une ligne ; `Entrée` envoie. Le redimensionnement conserve le texte entier.
+`NO_COLOR` ou `TERM=dumb` désactive les couleurs, et une sortie redirigée reste sobre.
+
+Dans attach sur un **Codex géré**, `/model gpt-5.6-terra medium` choisit le modèle
+et l'effort pour les prochains tours du **même fil** : aucun redémarrage, aucune
+mission cachée, aucun historique supprimé. Les deux valeurs sont obligatoires
+et doivent être annoncées ensemble par le catalogue du Codex installé. Un refus
+ne change rien ; une issue inconnue n'est pas une confirmation. Le statut reflète
+ensuite le réglage attesté par Codex. Ce contrôle nécessite daemon et wrapper à
+jour et Codex avec `thread/settings/update` (recette : 0.153.4). Il ne modifie pas
+la définition de lancement figée : une relance Bridget recharge celle-ci.
+Pour une session **interactive** `bridget codex`, utiliser le `/model` de la TUI
+Codex elle-même ; les autres pilotes refusent explicitement ce contrôle attach.
+
 ### Skill, MCP ou CLI ?
 
 La skill est le mode d'emploi ; MCP exécute les outils structurés de communication.

@@ -707,6 +707,13 @@ struct DaemonState {
     view_closed_tx: Sender<String>,
     view_closed_rx: Receiver<String>,
     pending_attach_sends: HashMap<String, PendingAttachSend>,
+    pending_runtime_selections: HashMap<
+        String,
+        (
+            String,
+            std::sync::mpsc::Sender<bridget_transport::protocol::RuntimeSelectionOutcome>,
+        ),
+    >,
     presences: HashMap<String, Presence>,
     conn_counter: u64,
     /// Messages --reply en attente de réponse : (msg_id, from, to, expire_at, target_conn)
@@ -2868,6 +2875,7 @@ impl DaemonState {
             view_closed_tx,
             view_closed_rx,
             pending_attach_sends: HashMap::new(),
+            pending_runtime_selections: HashMap::new(),
             presences: HashMap::new(),
             conn_counter: 0,
             pending_replies: Vec::new(),
@@ -8405,6 +8413,74 @@ fn handle_human_inbox_close(
 }
 
 /// Traite un message wrapper et retourne une réponse optionnelle.
+/// Contrôle attach borné, sans verrou d'état pendant l'I/O fournisseur.
+/// O(n) sur les abonnements bornés. Le token est généré ici et attaché à la
+/// connexion cible : ni nom mutable ni token fourni par le client ne fait foi.
+fn select_runtime_from_attach(
+    state: &Arc<Mutex<DaemonState>>,
+    conn_id: &str,
+    agent: &str,
+    selection: bridget_transport::protocol::RuntimeSelection,
+) -> DaemonToWrapper {
+    use bridget_transport::protocol::{
+        RuntimeSelectionOutcome as Outcome, RuntimeSelectionRefusal as Refusal,
+    };
+    let refuse = |reason| DaemonToWrapper::RuntimeSelectionResult {
+        outcome: Outcome::Refused { reason },
+    };
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let token = uuid::Uuid::new_v4().to_string();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let writer = {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        if st.connection_roles.get(conn_id) != Some(&ConnectionRole::Attach) {
+            return refuse(Refusal::AttachRequired);
+        }
+        if !selection.valid() {
+            return refuse(Refusal::InvalidSelection);
+        }
+        if st.pending_runtime_selections.len() >= 64 {
+            return refuse(Refusal::Busy);
+        }
+        let Some(target) = st
+            .attach_subscriptions
+            .values()
+            .find(|sub| sub.attach_conn == conn_id && sub.agent == agent)
+            .map(|sub| sub.wrapper_conn.clone())
+        else {
+            return refuse(Refusal::TargetUnavailable);
+        };
+        let Some(writer) = st.connections.get(&target).cloned() else {
+            return refuse(Refusal::TargetUnavailable);
+        };
+        st.pending_runtime_selections
+            .insert(token.clone(), (target, sender));
+        writer
+    };
+    let dispatched = push_control_message_until(
+        &writer,
+        &DaemonToWrapper::SelectRuntime {
+            token: token.clone(),
+            selection,
+        },
+        deadline,
+    );
+    let outcome = if dispatched.is_ok() {
+        receiver
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap_or(Outcome::OutcomeUnknown {})
+    } else {
+        // Une écriture partielle peut avoir été reçue : aucune fausse certitude.
+        Outcome::OutcomeUnknown {}
+    };
+    state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .pending_runtime_selections
+        .remove(&token);
+    DaemonToWrapper::RuntimeSelectionResult { outcome }
+}
+
 fn handle_wrapper_message(
     conn_id: &str,
     msg: WrapperToDaemon,
@@ -8517,6 +8593,7 @@ fn handle_wrapper_message(
         );
         match st.connection_roles.get(conn_id) {
             Some(ConnectionRole::Service) => match &msg {
+                WrapperToDaemon::SelectRuntime { .. } | WrapperToDaemon::RuntimeSelectionReported { .. } => Some(ServiceRefusal::MessageOutsideServiceRole),
                 WrapperToDaemon::HumanInboxDeposit { .. }
                 | WrapperToDaemon::ControlFocusPublish { .. }
                 | WrapperToDaemon::HumanInboxDecisions { .. }
@@ -8726,6 +8803,7 @@ fn handle_wrapper_message(
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         match st.connection_roles.get(conn_id) {
             Some(ConnectionRole::Client) => match &msg {
+                WrapperToDaemon::SelectRuntime { .. } | WrapperToDaemon::RuntimeSelectionReported { .. } => Some(ClientRefusal::MessageOutsideClientRole),
                 WrapperToDaemon::ClientHello { .. }
                     if st.client_negotiations.contains_key(conn_id) =>
                 {
@@ -11267,6 +11345,22 @@ fn handle_wrapper_message(
             None
         }
 
+        WrapperToDaemon::SelectRuntime { agent, selection } => Some(select_runtime_from_attach(
+            state, conn_id, &agent, selection,
+        )),
+        WrapperToDaemon::RuntimeSelectionReported { token, outcome } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            // Un wrapper voisin ou un client MCP ne peut pas forger le reçu.
+            if st
+                .pending_runtime_selections
+                .get(&token)
+                .is_some_and(|(target, _)| target == conn_id)
+                && let Some((_, sender)) = st.pending_runtime_selections.remove(&token)
+            {
+                let _ = sender.send(outcome);
+            }
+            None
+        }
         WrapperToDaemon::Send(mut bridge_msg) => {
             eprintln!(
                 "[BRIDGET] Send de {}: to={}, body={}",
@@ -19182,6 +19276,75 @@ mod presence_tests {
         }
         assert!(state.pending_attach_sends.is_empty());
         let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn spec091_selection_autorisee_seulement_depuis_attach_et_recue_du_bon_wrapper() {
+        use bridget_transport::protocol::{RuntimeSelection, RuntimeSelectionOutcome as Outcome};
+        let (mut state, _config) = state_with_registered_agent("selection091");
+        let selection = RuntimeSelection {
+            model: "model-test".into(),
+            effort: "high".into(),
+        };
+        let (writer, mut reader) = control_socket("selection091");
+        state.connections.insert("conn-1".into(), writer);
+        state
+            .connection_roles
+            .insert("viewer".into(), ConnectionRole::Attach);
+        state.attach_subscriptions.insert(
+            "subscription091".into(),
+            AttachSubscription {
+                agent: "target".into(),
+                attach_conn: "viewer".into(),
+                wrapper_conn: "conn-1".into(),
+                caught_up: true,
+            },
+        );
+        let shared = Arc::new(Mutex::new(state));
+        let forbidden =
+            select_runtime_from_attach(&shared, "not-attach", "target", selection.clone());
+        assert!(matches!(
+            forbidden,
+            DaemonToWrapper::RuntimeSelectionResult {
+                outcome: Outcome::Refused { .. }
+            }
+        ));
+        assert!(shared.lock().unwrap().pending_runtime_selections.is_empty());
+        let worker_state = shared.clone();
+        let requested = selection.clone();
+        let worker = thread::spawn(move || {
+            select_runtime_from_attach(&worker_state, "viewer", "target", requested)
+        });
+        let DaemonToWrapper::SelectRuntime {
+            token,
+            selection: dispatched,
+        } = read_control(&mut reader)
+        else {
+            panic!("ordre réel attendu");
+        };
+        assert_eq!(dispatched, selection);
+        // L'observation simultanée doit rester possible pendant l'attente du reçu.
+        assert!(shared.try_lock().is_ok());
+        let report = WrapperToDaemon::RuntimeSelectionReported {
+            token: token.clone(),
+            outcome: Outcome::Selected {
+                selection: selection.clone(),
+            },
+        };
+        handle_wrapper_message("other-wrapper", report.clone(), &shared);
+        assert!(
+            shared
+                .lock()
+                .unwrap()
+                .pending_runtime_selections
+                .contains_key(&token),
+            "mutation suppression du contrôle propriétaire doit casser cet assert"
+        );
+        handle_wrapper_message("conn-1", report, &shared);
+        assert!(
+            matches!(worker.join().unwrap(), DaemonToWrapper::RuntimeSelectionResult { outcome:Outcome::Selected { selection:got } } if got == selection)
+        );
+        assert!(shared.lock().unwrap().pending_runtime_selections.is_empty());
     }
 
     #[test]

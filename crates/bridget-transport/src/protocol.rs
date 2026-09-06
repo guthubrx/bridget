@@ -2524,6 +2524,16 @@ pub enum WrapperToDaemon {
     /// de plus sur `ClientWelcome` : aucune construction existante à modifier,
     /// donc aucun fichier tiers touché.
     DaemonIdentityRequest,
+    /// Contrôle humain de session ; ne devient jamais un message au modèle.
+    SelectRuntime {
+        agent: String,
+        selection: RuntimeSelection,
+    },
+    /// Réponse corrélée au wrapper réellement ciblé, jamais une déclaration libre.
+    RuntimeSelectionReported {
+        token: String,
+        outcome: RuntimeSelectionOutcome,
+    },
     /// Rapporter le modèle et le niveau d'effort courants d'un agent.
     ///
     /// `agent` désigne l'agent observé, et non la connexion émettrice : le hook
@@ -2943,9 +2953,13 @@ pub enum DaemonToWrapper {
         environment_epoch: u64,
     },
     #[serde(rename = "runtime_ingress_rejected")]
-    RuntimeIngressRejected { reason: RuntimeIngressRefusal },
+    RuntimeIngressRejected {
+        reason: RuntimeIngressRefusal,
+    },
     /// Le rôle demandé est accepté pour cette connexion.
-    RoleAccepted { role: ConnectionRole },
+    RoleAccepted {
+        role: ConnectionRole,
+    },
     #[serde(rename = "artifact_read_result")]
     ArtifactReadResult {
         version: u8,
@@ -2978,7 +2992,9 @@ pub enum DaemonToWrapper {
         capabilities: Vec<ClientCapability>,
     },
     /// Refus motivé de la négociation ou de la matrice client.
-    ClientRejected { reason: ClientRefusal },
+    ClientRejected {
+        reason: ClientRefusal,
+    },
     /// Contrat et capacité réellement négociés avec un service Maicie.
     ServiceWelcome {
         version: u16,
@@ -2987,27 +3003,41 @@ pub enum DaemonToWrapper {
         capabilities: Vec<ServiceCapability>,
     },
     /// Refus motivé de la négociation ou de la matrice de service.
-    ServiceRejected { reason: ServiceRefusal },
+    ServiceRejected {
+        reason: ServiceRefusal,
+    },
     /// Issue terminale du registre local, corrélée à la commande Maicie.
     #[serde(rename = "project_registry_outcome")]
-    ProjectRegistryOutcome { outcome: ProjectBindOutcome },
+    ProjectRegistryOutcome {
+        outcome: ProjectBindOutcome,
+    },
     /// Issue corrélée d'une lecture ou mutation administrative du registre.
     #[serde(rename = "project_registry_admin_outcome")]
-    ProjectRegistryAdminOutcome { outcome: ProjectAdminOutcome },
+    ProjectRegistryAdminOutcome {
+        outcome: ProjectAdminOutcome,
+    },
     #[serde(rename = "project_system_outcome")]
-    ProjectSystemOutcome { outcome: ProjectSystemOutcome },
+    ProjectSystemOutcome {
+        outcome: ProjectSystemOutcome,
+    },
     /// Issue locale de la politique de ronde par projet.
     #[serde(rename = "project_round_outcome")]
-    ProjectRoundOutcome { outcome: ProjectRoundOutcome },
+    ProjectRoundOutcome {
+        outcome: ProjectRoundOutcome,
+    },
     #[serde(rename = "project_round_dispatch_outcome")]
     ProjectRoundDispatchOutcome {
         outcome: ProjectRoundDispatchOutcome,
     },
     #[serde(rename = "project_profile_outcome")]
-    ProjectProfileOutcome { outcome: ProjectProfileOutcome },
+    ProjectProfileOutcome {
+        outcome: ProjectProfileOutcome,
+    },
     /// Issue bornée d'une opération locale d'environnement Docker.
     #[serde(rename = "project_runtime_outcome")]
-    ProjectRuntimeOutcome { outcome: ProjectRuntimeOutcome },
+    ProjectRuntimeOutcome {
+        outcome: ProjectRuntimeOutcome,
+    },
     /// Issue durable ou calculée d'une opération du guichet.
     #[serde(rename = "guichet_result")]
     GuichetResult {
@@ -3134,12 +3164,21 @@ pub enum DaemonToWrapper {
     },
     /// Fait runtime durable à convertir en notification système non intrusive.
     #[serde(rename = "delegated_runtime_event")]
-    DelegatedRuntimeEvent { event: DelegatedRuntimeEventFrame },
+    DelegatedRuntimeEvent {
+        event: DelegatedRuntimeEventFrame,
+    },
     ///
     /// Cette trame ne franchit jamais la frontière client publique.
     ControlExecutionDispatch {
         issuer_scope: String,
         command: ExecutionControlCommand,
+    },
+    SelectRuntime {
+        token: String,
+        selection: RuntimeSelection,
+    },
+    RuntimeSelectionResult {
+        outcome: RuntimeSelectionOutcome,
     },
     /// Succès d'un spawn, émis seulement après le `Register` réel.
     SpawnAccepted {
@@ -3191,9 +3230,13 @@ pub enum DaemonToWrapper {
         window: AttachWindow,
     },
     /// Désabonnement relayé au wrapper.
-    Unsubscribe { subscription_id: String },
+    Unsubscribe {
+        subscription_id: String,
+    },
     /// Confirmation d'abonnement envoyée à la vue après acceptation wrapper.
-    Subscribed { subscription_id: String },
+    Subscribed {
+        subscription_id: String,
+    },
     /// Fragment d'événement relayé à la vue attachée.
     JournalFragment {
         subscription_id: String,
@@ -3246,7 +3289,9 @@ pub enum DaemonToWrapper {
         location: Option<String>,
     },
     /// Confirmation d'enregistrement avec l'identifiant stable.
-    Registered { agent_id: String },
+    Registered {
+        agent_id: String,
+    },
     /// Livrer un message à l'agent.
     Deliver(BridgetMessage),
     /// Livrer un travail dont l'exécution durable a déjà été admise.
@@ -3261,21 +3306,38 @@ pub enum DaemonToWrapper {
         revision: u64,
     },
     /// Retirer un message de la file du transport, sans l'injecter.
-    CancelDelivery { id: String, reason: String },
+    CancelDelivery {
+        id: String,
+        reason: String,
+    },
     /// Acquittement d'un envoi.
-    Ack { id: String },
+    Ack {
+        id: String,
+    },
     /// Refus d'un envoi avec raison.
-    Nack { id: String, reason: String },
+    Nack {
+        id: String,
+        reason: String,
+    },
     /// Échec terminal différé d'un envoi attach déjà acquitté.
-    DeliveryRejected { id: String, reason: String },
+    DeliveryRejected {
+        id: String,
+        reason: String,
+    },
     /// Le daemon s'éteint.
     Disconnect,
     /// Réponse à ListAgents.
-    AgentList { agents: Vec<AgentInfo> },
+    AgentList {
+        agents: Vec<AgentInfo>,
+    },
     #[serde(rename = "display_name_result")]
-    DisplayNameResult { outcome: DisplayNameOutcome },
+    DisplayNameResult {
+        outcome: DisplayNameOutcome,
+    },
     #[serde(rename = "display_name_resolution")]
-    DisplayNameResolved { outcome: DisplayNameResolution },
+    DisplayNameResolved {
+        outcome: DisplayNameResolution,
+    },
     /// Machine, base et instance attestées par le daemon lui-même.
     ///
     /// `instance_id` est renouvelé à chaque démarrage : contrairement à
@@ -3294,9 +3356,14 @@ pub enum DaemonToWrapper {
         aggregate: Option<UsageAggregate>,
     },
     /// État final d'une annulation.
-    RequestCancelled { id: String, state: String },
+    RequestCancelled {
+        id: String,
+        state: String,
+    },
     /// Liste des demandes suivies accessibles à l'agent courant.
-    RequestList { requests: Vec<RequestInfo> },
+    RequestList {
+        requests: Vec<RequestInfo>,
+    },
     /// Projection bornée du ledger, indépendante de tout rendu CLI.
     LedgerProjection {
         messages: Vec<LedgerMessage>,
@@ -3316,9 +3383,13 @@ pub enum DaemonToWrapper {
         focus: Option<ControlFocusFrame>,
     },
     #[serde(rename = "control_history")]
-    ControlHistory { events: Vec<ControlEventFrame> },
+    ControlHistory {
+        events: Vec<ControlEventFrame>,
+    },
     #[serde(rename = "control_state_rejected")]
-    ControlStateRejected { reason: ControlStateRefusal },
+    ControlStateRejected {
+        reason: ControlStateRefusal,
+    },
     /// Reçu d'un dépôt dans la boîte : `created` distingue un item neuf d'une
     /// occurrence rattachée à un item déjà ouvert.
     #[serde(rename = "human_inbox_deposited")]
@@ -3333,15 +3404,23 @@ pub enum DaemonToWrapper {
         open_count: u32,
     },
     #[serde(rename = "human_inbox_rejected")]
-    HumanInboxRejected { reason: HumanInboxRefusal },
+    HumanInboxRejected {
+        reason: HumanInboxRefusal,
+    },
     #[serde(rename = "human_inbox_decisions_batch")]
     HumanInboxDecisionsBatch {
         decisions: Vec<HumanInboxPendingDecision>,
     },
     #[serde(rename = "human_inbox_acked")]
-    HumanInboxAcked { decision_id: String, acked_at: i64 },
+    HumanInboxAcked {
+        decision_id: String,
+        acked_at: i64,
+    },
     #[serde(rename = "human_inbox_closed")]
-    HumanInboxClosed { item_id: String, closed: bool },
+    HumanInboxClosed {
+        item_id: String,
+        closed: bool,
+    },
 }
 
 fn unknown_build_id() -> String {
@@ -3412,6 +3491,47 @@ pub struct LedgerMessage {
     pub delivery_status: Option<LedgerDeliveryStatus>,
 }
 
+/// Réglages opaques : aucune substitution ni modification de permissions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeSelection {
+    pub model: String,
+    pub effort: String,
+}
+impl RuntimeSelection {
+    pub fn valid(&self) -> bool {
+        [&self.model, &self.effort].iter().all(|s| {
+            !s.is_empty()
+                && s.len() <= 128
+                && s.chars().all(|c| !c.is_control() && !c.is_whitespace())
+        })
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeSelectionRefusal {
+    Unsupported,
+    InvalidSelection,
+    ModelUnavailable,
+    EffortUnavailable,
+    CatalogueUnavailable,
+    TargetUnavailable,
+    AttachRequired,
+    Busy,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RuntimeSelectionOutcome {
+    /// Réglage accepté par le fil natif pour ses prochains tours, PAS une inférence attestée.
+    Selected {
+        selection: RuntimeSelection,
+    },
+    Refused {
+        reason: RuntimeSelectionRefusal,
+    },
+    OutcomeUnknown {},
+}
+
 impl WrapperToDaemon {
     /// Vérifie la matrice fermée d'une connexion déjà négociée comme attach.
     /// Le handshake est volontairement exclu : il n'est admis qu'avant que le
@@ -3421,6 +3541,7 @@ impl WrapperToDaemon {
             Self::Subscribe { .. }
             | Self::Unsubscribe { .. }
             | Self::Heartbeat
+            | Self::SelectRuntime { .. }
             | Self::ListAgents => None,
             Self::Send(message) if !message.reply => None,
             Self::Send(_) => Some(AttachRefusal::ReplyNotAllowed),
@@ -3446,6 +3567,7 @@ impl DaemonToWrapper {
                 | Self::End { .. }
                 | Self::AttachRejected { .. }
                 | Self::AgentList { .. }
+                | Self::RuntimeSelectionResult { .. }
                 | Self::Ack { .. }
                 | Self::Nack { .. }
                 | Self::DeliveryRejected { .. }
@@ -3728,6 +3850,46 @@ pub struct RequestInfo {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spec091_selection_fermee_bornee_et_sans_permissions() {
+        use super::{RuntimeSelection, RuntimeSelectionOutcome};
+        let source = r#"{"model":"gpt-5.6-terra","effort":"medium"}"#;
+        let selection: RuntimeSelection = serde_json::from_str(source).unwrap();
+        assert!(selection.valid());
+        assert_eq!(serde_json::to_string(&selection).unwrap(), source);
+        for source in [
+            r#"{"model":"x","effort":"high","approval":"never"}"#,
+            r#"{"model":"x"}"#,
+        ] {
+            assert!(serde_json::from_str::<RuntimeSelection>(source).is_err());
+        }
+        for model in [
+            String::new(),
+            "x".repeat(129),
+            "x\u{1b}[2J".into(),
+            "x y".into(),
+        ] {
+            assert!(
+                !RuntimeSelection {
+                    model,
+                    effort: "high".into()
+                }
+                .valid()
+            );
+        }
+        assert!(
+            serde_json::from_str::<RuntimeSelectionOutcome>(
+                r#"{"status":"refused","reason":"unknown"}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<RuntimeSelectionOutcome>(
+                r#"{"status":"outcome_unknown","applied":true}"#
+            )
+            .is_err()
+        );
+    }
     use super::*;
 
     #[test]

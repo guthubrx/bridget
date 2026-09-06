@@ -192,3 +192,59 @@ même fil, historique et nom, --yolo demandé attesté (modèle HTTP synthétiqu
 aucune consommation de forfait). Log : `/tmp/bridget-091-reprise-native-final.log`.
 Le daemon n'a pas été redémarré pour ces changements de CLI/wrapper ; seule la
 nouvelle vue attach et l'équipier de recette chargent le nouveau binaire.
+
+## Référence visuelle et sélection native à chaud — 2026-09-06
+
+Le rendu reprend la référence demandée : saisie à fond gris 256 couleurs sur
+toute la largeur, multiligne (Alt+Entrée ou Échap puis Entrée), statut coloré
+SOUS la saisie. La fenêtre visible est bornée sans tronquer le tampon ; le curseur
+revient après le texte et non après le padding. Les sorties sans TTY restent
+inchangées, NO_COLOR/TERM=dumb retirent les SGR, pas les commandes de curseur.
+
+Recette visuelle : vrai binaire attach connecté à l'agent vivant
+a4d12c75-5994-4c02-9acc-2db07ba817af dans un pseudo-terminal 120×18 ; deux lignes
+saisies, aucun message envoyé. Le flux ANSI réel a été interprété par pyte 0.8.2,
+puis inspecté en image. Fond 303030 attesté sur les 120 cellules des deux lignes,
+statut juste dessous, couleurs distinctes, coordonnées du curseur exactes.
+Ce n'est pas une capture d'iTerm : son automatisation est indisponible dans cet
+environnement. Capture de recette : `/tmp/b91-model.DzNs/attach-091-visuel.png`.
+
+Le contrôle `/model <modèle> <effort>` ne devient jamais un Send. Il exige une
+connexion Attach déjà abonnée à la cible, possède un reçu corrélé à la connexion
+wrapper réelle, et refuse un reçu forgé par un autre wrapper. Le pilote interroge
+au plus quatre pages model/list (100 modèles/page), valide les deux valeurs sans
+substitution puis utilise thread/settings/update du Codex 0.153.4 installé.
+La négociation experimentalApi expose cette méthode, sans changer les permissions.
+L'échéance de dialogue fournisseur est 2 s, celle de réponse daemon 4 s ; toute
+issue ambiguë reste inconnue. Un fournisseur muet ne laisse pas de waiters résiduels.
+Le réglage est détenu par le fil natif, jamais dupliqué dans Bridget ni persisté
+dans la définition de lancement. Pas de nouveau fil, pas de message caché.
+
+La recette versionnée `runtime_selection_integration_test` utilise vrai daemon,
+vrai wrapper et vrai Codex avec HOME privé et fournisseur HTTP synthétique :
+sélection pendant le premier tour arrêté à une barrière HTTP, premier tour
+inchangé, deuxième tour avec nouveau modèle ET effort, sentinelle du premier
+tour présente dans le second, un seul rollout. Les modèles viennent du catalogue
+installé (Astra puis Sol dans cette recette), pas d'un nom inventé par l'oracle.
+Les deux refus modèle/effort ne modifient rien ; exactement deux requêtes HTTP.
+La recette ne consomme aucun abonnement et ne contacte pas le fournisseur réel.
+
+Validations (PATH=/Users/moi/.cargo/bin, TMPDIR privé court /tmp/b91.1cRe,
+umask 077, target partagé du dépôt actif) :
+
+- `cargo test --workspace` : 1 203 succès, zéro échec, 47 ignorés, avant les deux
+  derniers oracles de fermeture/expiration. Les cibles finales touchées ont été
+  rejouées après eux, sans relancer les bancs lourds étrangers à leur diff.
+- `cargo test -p bridget-transport` final : 263 unitaires verts, puis intégrations
+  et doctests verts ; le reçu outcome_unknown refuse aussi les champs inconnus.
+- `cargo test -p bridget-daemon --lib attach::tests` : 67/67, parallèle, 0,88 s.
+- `cargo test -p bridget-daemon --lib spec091_selection_autorisee` : 1/1.
+- `cargo clippy --workspace --all-targets --features test-support -- -D warnings` : vert.
+- `cargo test -p bridget-daemon --test runtime_selection_integration_test -- --ignored --nocapture` : 1/1, 2,03 s.
+- `cargo fmt --all --check` et `git diff --check` : verts.
+
+Installation et reprise de production restent à constater pour T10, pas déduites
+des recettes privées. Le fichier de preuve d'écriture antérieur reste hors commit.
+Les deux répertoires temporaires de compilation de l'équipier ont été déplacés,
+sans suppression, sous `/tmp/b91-model.DzNs/agent-build-Gd83Re` et
+`/tmp/b91-model.DzNs/agent-build-XdMxR8` pour conserver le worktree propre.

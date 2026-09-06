@@ -35,6 +35,13 @@ const DEFAULT_TERMINAL_ROWS: usize = 24;
 const UNATTESTED_SENDER_LABEL: &str = "émetteur non attesté";
 const PRESENCE_REFRESH: Duration = Duration::from_secs(2);
 const PRESENCE_EXPIRY: Duration = Duration::from_secs(6);
+// Les séquences SGR du TUI sont toutes ancrées ici : aucune donnée du journal
+// ou de l'annuaire ne peut en fournir une.
+const SGR_RESET: &str = "\x1b[0m";
+const SGR_INPUT: &str = "\x1b[48;5;236m\x1b[38;5;255m";
+const SGR_CLIENT: &str = "\x1b[38;5;45m";
+const SGR_LABEL: &str = "\x1b[38;5;245m";
+const SGR_VALUE: &str = "\x1b[38;5;255m";
 
 /// Garde minimale du terminal d'entrée. Le mode désactive le traitement des
 /// signaux afin que Ctrl-C arrive comme l'octet `0x03` à la boucle de saisie.
@@ -124,6 +131,8 @@ fn with_raw_terminal<T>(
 /// renderer sécurisé de ce module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AttachEvent {
+    RuntimeSelection(bridget_transport::protocol::RuntimeSelectionOutcome),
+    RuntimeSelectionPending,
     Subscribed {
         subscription_id: String,
     },
@@ -372,6 +381,9 @@ impl AttachClientState {
                     delayed: true,
                     reason,
                 });
+            }
+            DaemonToWrapper::RuntimeSelectionResult { outcome: result } => {
+                outcome.events.push(AttachEvent::RuntimeSelection(result));
             }
             DaemonToWrapper::Disconnect => outcome.reconnect = true,
             message if message.allowed_for_attach() => {}
@@ -696,11 +708,16 @@ enum ReaderStatus {
 #[derive(Debug, Default)]
 struct InputBuffer {
     bytes: Vec<u8>,
+    alt_prefix: bool,
 }
 
 impl InputBuffer {
     fn push(&mut self, byte: u8) {
         self.bytes.push(byte);
+    }
+
+    fn push_newline(&mut self) {
+        self.bytes.push(b'\n');
     }
 
     fn erase_last(&mut self) -> bool {
@@ -1153,6 +1170,7 @@ struct BlockRenderer {
     agent: String,
     raw_terminal: bool,
     tty_output: bool,
+    color: bool,
     terminal_fd: Option<RawFd>,
     terminal_columns: usize,
     terminal_rows: usize,
@@ -1165,6 +1183,7 @@ struct BlockRenderer {
     presence_line: Option<String>,
     presence_received: Option<Instant>,
     cursor_above_footer: bool,
+    footer_rows: usize,
     #[cfg(test)]
     redraw_count: usize,
 }
@@ -1190,6 +1209,9 @@ impl BlockRenderer {
             agent,
             raw_terminal,
             tty_output,
+            color: tty_output
+                && std::env::var_os("NO_COLOR").is_none()
+                && std::env::var("TERM").map_or(true, |term| term != "dumb"),
             terminal_columns,
             terminal_rows,
             terminal_fd,
@@ -1202,6 +1224,7 @@ impl BlockRenderer {
             presence_line: None,
             presence_received: None,
             cursor_above_footer: false,
+            footer_rows: 0,
             #[cfg(test)]
             redraw_count: 0,
         }
@@ -1408,11 +1431,40 @@ impl BlockRenderer {
     }
 
     fn draw_active(&mut self, input: &str, output: &mut impl Write) {
+        let mut input_rows = if self.raw_terminal {
+            wrap_visual_rows(&[format!("> {input}")], self.terminal_columns)
+        } else {
+            Vec::new()
+        };
+        let mut status_rows = self.presence_line.as_ref().map_or_else(Vec::new, |status| {
+            wrap_visual_rows(std::slice::from_ref(status), self.terminal_columns)
+        });
+        // Le tampon reste entier ; seule sa fenêtre visible est bornée. Garder
+        // une ligne pour le journal et une pour la saisie, même après resize.
+        let footer_budget = self.terminal_rows.saturating_sub(2);
+        if status_rows.len() > footer_budget {
+            status_rows.truncate(footer_budget);
+            if let Some(last) = status_rows.last_mut() {
+                while display_width(last) > self.terminal_columns.saturating_sub(1) {
+                    last.pop();
+                }
+                last.push('…');
+            }
+        }
+        let input_budget = self
+            .terminal_rows
+            .saturating_sub(status_rows.len() + 1)
+            .max(1);
+        if input_rows.len() > input_budget {
+            input_rows.drain(..input_rows.len() - input_budget);
+        }
         let mut visible_rows = Vec::new();
         if let Some(block) = self.current.as_ref() {
             let lines = block.lines(&self.agent);
             let rows = wrap_visual_rows(&lines, self.terminal_columns);
-            let reserved = 2 + usize::from(self.presence_line.is_some());
+            // Marge de scroll conservée : le dernier saut ne doit pas pousser
+            // une ligne encore effaçable hors de la fenêtre du terminal.
+            let reserved = input_rows.len().saturating_add(status_rows.len()) + 1;
             let viewport_rows = self.terminal_rows.saturating_sub(reserved).max(1);
             let overflow_end = rows.len().saturating_sub(viewport_rows);
             if overflow_end > self.committed_rows {
@@ -1427,38 +1479,29 @@ impl BlockRenderer {
             if !rendered_lines.is_empty() {
                 let _ = output.write_all(b"\r\n");
             }
-            let _ = write!(output, "> {input}");
-            rendered_lines.extend(wrap_visual_rows(
-                &[format!("> {input}")],
-                self.terminal_columns,
-            ));
+            self.write_input_rows(output, &input_rows);
+            rendered_lines.extend(input_rows);
         }
-        if let Some(status) = &self.presence_line {
-            // Le footer suit l'invite : la saisie reste le point d'ancrage
-            // visuel de la TUI. Une seule ligne visuelle, même sur terminal
-            // étroit ; les valeurs ont déjà été neutralisées.
-            let row = wrap_visual_rows(std::slice::from_ref(status), self.terminal_columns)
-                .into_iter()
-                .next()
-                .unwrap_or_default();
+        self.footer_rows = status_rows.len();
+        if !status_rows.is_empty() {
             if !rendered_lines.is_empty() {
                 let _ = output.write_all(b"\r\n");
             }
-            let _ = output.write_all(row.as_bytes());
-            rendered_lines.push(row);
+            self.write_status_rows(output, &status_rows);
+            rendered_lines.extend(status_rows);
         }
-        self.cursor_above_footer = self.raw_terminal && self.presence_line.is_some();
+        self.cursor_above_footer = self.raw_terminal && self.footer_rows > 0;
         if self.cursor_above_footer {
-            // Le footer est peint après la saisie, mais la frappe suivante doit
-            // rester ancrée à la fin de sa dernière ligne. Le footer est borné
-            // à une ligne : remonter d'une ligne suffit, même si la saisie a
-            // elle-même été repliée.
-            let input_row = rendered_lines
-                .get(rendered_lines.len().saturating_sub(2))
-                .cloned()
-                .unwrap_or_default();
-            let _ = output.write_all(b"\r\x1b[1A");
-            let _ = output.write_all(input_row.as_bytes());
+            let _ = write!(output, "\r\x1b[{}A", self.footer_rows);
+            if let Some(input_row) = rendered_lines.get(rendered_lines.len() - self.footer_rows - 1)
+            {
+                self.write_input_rows(output, std::slice::from_ref(input_row));
+                self.position_cursor_after_input_row(output, input_row);
+            }
+        } else if self.raw_terminal
+            && let Some(input_row) = rendered_lines.last()
+        {
+            self.position_cursor_after_input_row(output, input_row);
         }
         self.rendered_rows = rendered_lines.len();
         self.rendered_lines = rendered_lines;
@@ -1484,7 +1527,9 @@ impl BlockRenderer {
         if self.cursor_above_footer && self.rendered_rows > 0 {
             // draw_active a replacé le curseur dans la saisie ; revenir au
             // footer permet de l'effacer avec toutes les lignes actives.
-            let _ = output.write_all(b"\r\n");
+            for _ in 0..self.footer_rows {
+                let _ = output.write_all(b"\r\n");
+            }
         }
         self.cursor_above_footer = false;
         for index in 0..self.rendered_rows {
@@ -1495,6 +1540,7 @@ impl BlockRenderer {
         }
         self.rendered_rows = 0;
         self.rendered_lines.clear();
+        self.footer_rows = 0;
     }
 
     fn finish(&mut self, input: &str, output: &mut impl Write) {
@@ -1504,14 +1550,82 @@ impl BlockRenderer {
                 // Le curseur est resté dans la saisie, juste au-dessus du
                 // footer : le premier saut rejoint le footer, le second rend
                 // la main au shell sous toute la zone active.
-                let _ = output.write_all(b"\r\n");
+                for _ in 0..self.footer_rows {
+                    let _ = output.write_all(b"\r\n");
+                }
             }
             let _ = output.write_all(b"\r\n");
             self.rendered_rows = 0;
             self.rendered_lines.clear();
             self.cursor_above_footer = false;
+            self.footer_rows = 0;
         }
         let _ = output.flush();
+    }
+
+    fn write_input_rows(&self, output: &mut impl Write, rows: &[String]) {
+        for (index, row) in rows.iter().enumerate() {
+            if index > 0 {
+                let _ = output.write_all(b"\r\n");
+            }
+            if self.color {
+                let padding = self.terminal_columns.saturating_sub(display_width(row));
+                let _ = write!(
+                    output,
+                    "{SGR_INPUT}{row}{}{}",
+                    " ".repeat(padding),
+                    SGR_RESET
+                );
+            } else {
+                let _ = output.write_all(row.as_bytes());
+            }
+        }
+    }
+
+    fn position_cursor_after_input_row(&self, output: &mut impl Write, row: &str) {
+        let width = display_width(row).min(self.terminal_columns);
+        // À la marge droite, le terminal est en état d'auto-wrap différé : ne
+        // pas avancer d'une colonne inexistante. Hors marge, CR + CUA place le
+        // curseur après le texte, et non après le padding de fond.
+        if width < self.terminal_columns {
+            let _ = output.write_all(b"\r");
+            if width > 0 {
+                let _ = write!(output, "\x1b[{width}C");
+            }
+        }
+    }
+
+    fn write_status_rows(&self, output: &mut impl Write, rows: &[String]) {
+        for (index, row) in rows.iter().enumerate() {
+            if index > 0 {
+                let _ = output.write_all(b"\r\n");
+            }
+            if self.color {
+                self.write_colored_status_row(output, row);
+            } else {
+                let _ = output.write_all(row.as_bytes());
+            }
+        }
+    }
+
+    fn write_colored_status_row(&self, output: &mut impl Write, row: &str) {
+        // La chaîne est produite et assainie localement par `presence_line`.
+        // Les styles restent néanmoins constants, jamais interpolés.
+        let mut fields = row.split(" | ");
+        if let Some(client) = fields.next() {
+            let _ = write!(output, "{SGR_CLIENT}{client}{SGR_RESET}");
+        }
+        for field in fields {
+            let (label, value) = field.split_once(' ').unwrap_or(("", field));
+            if matches!(label, "modèle" | "effort" | "fournisseur") {
+                let _ = write!(
+                    output,
+                    " {SGR_LABEL}| {label} {SGR_VALUE}{value}{SGR_RESET}"
+                );
+            } else {
+                let _ = write!(output, " {SGR_LABEL}| {SGR_VALUE}{field}{SGR_RESET}");
+            }
+        }
     }
 }
 
@@ -1539,6 +1653,13 @@ fn visual_rows(lines: &[String], columns: usize) -> usize {
     wrap_visual_rows(lines, columns).len()
 }
 
+fn display_width(value: &str) -> usize {
+    value
+        .chars()
+        .map(|character| UnicodeWidthChar::width(character).unwrap_or(0))
+        .sum()
+}
+
 fn wrap_visual_rows(lines: &[String], columns: usize) -> Vec<String> {
     let columns = columns.max(1);
     let mut rows = Vec::new();
@@ -1546,6 +1667,11 @@ fn wrap_visual_rows(lines: &[String], columns: usize) -> Vec<String> {
         let mut row = String::new();
         let mut width = 0usize;
         for character in line.chars() {
+            if character == '\n' {
+                rows.push(std::mem::take(&mut row));
+                width = 0;
+                continue;
+            }
             let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
             if width > 0 && width.saturating_add(character_width) > columns {
                 rows.push(std::mem::take(&mut row));
@@ -1824,6 +1950,29 @@ fn handle_input_byte(
     writer: &Arc<Mutex<BufWriter<UnixStream>>>,
     agent: &str,
 ) -> Result<bool, String> {
+    let alt_newline = {
+        let mut input = input
+            .lock()
+            .map_err(|_| "saisie attach empoisonnée".to_string())?;
+        let pending = std::mem::take(&mut input.alt_prefix);
+        if pending && matches!(byte, b'\r' | b'\n') {
+            input.push_newline();
+            true
+        } else {
+            false
+        }
+    };
+    if alt_newline {
+        renderer.input_changed(b"\r\n");
+        return Ok(true);
+    }
+    if byte == 0x1b {
+        input
+            .lock()
+            .map_err(|_| "saisie attach empoisonnée".to_string())?
+            .alt_prefix = true;
+        return Ok(true);
+    }
     match byte {
         0x03 => return Ok(false),
         0x04 => {
@@ -1846,6 +1995,18 @@ fn handle_input_byte(
             }
             let body = String::from_utf8(bytes)
                 .map_err(|_| "saisie invalide : UTF-8 attendu".to_string())?;
+            if let Some(selection) = parse_runtime_command(&body) {
+                match selection {
+                    Ok(selection) => {
+                        write_socket_message(writer, &WrapperToDaemon::SelectRuntime { agent: agent.to_string(), selection })?;
+                        renderer.event(AttachEvent::RuntimeSelectionPending);
+                    }
+                    Err(()) => renderer.event(AttachEvent::RuntimeSelection(bridget_transport::protocol::RuntimeSelectionOutcome::Refused {
+                        reason: bridget_transport::protocol::RuntimeSelectionRefusal::InvalidSelection,
+                    })),
+                }
+                return Ok(true);
+            }
             let message = BridgetMessage::new("humain", agent, body.clone());
             let message_id = message.id.clone();
             {
@@ -1881,6 +2042,27 @@ fn handle_input_byte(
         _ => {}
     }
     Ok(true)
+}
+
+fn parse_runtime_command(
+    body: &str,
+) -> Option<Result<bridget_transport::protocol::RuntimeSelection, ()>> {
+    let fields: Vec<_> = body.split_whitespace().collect();
+    if fields.first().copied() != Some("/model") {
+        return None;
+    }
+    if fields.len() != 3 {
+        return Some(Err(()));
+    }
+    let selection = bridget_transport::protocol::RuntimeSelection {
+        model: fields[1].into(),
+        effort: fields[2].into(),
+    };
+    Some(if selection.valid() {
+        Ok(selection)
+    } else {
+        Err(())
+    })
 }
 
 fn render_expired_sends(state: &Arc<Mutex<AttachClientState>>, renderer: &RendererSender) {
@@ -1941,6 +2123,28 @@ fn drive_connection(
 /// renderer lui-même, jamais au contenu reçu.
 fn render_attach_event(event: &AttachEvent, agent: &str) -> String {
     match event {
+        AttachEvent::RuntimeSelectionPending => {
+            "attach: réglage demandé — attente de confirmation ; tour courant inchangé".into()
+        }
+        AttachEvent::RuntimeSelection(outcome) => {
+            use bridget_transport::protocol::{
+                RuntimeSelectionOutcome as Outcome, RuntimeSelectionRefusal as Refusal,
+            };
+            match outcome {
+                Outcome::Selected { selection } => format!("attach: prochain tour : modèle {} | effort {} — même fil, sans redémarrage", sanitize_inline(&selection.model), sanitize_inline(&selection.effort)),
+                Outcome::OutcomeUnknown {} => "attach: issue du réglage inconnue (connexion/délai) ; aucune relance automatique".into(),
+                Outcome::Refused { reason } => format!("attach: réglage refusé — {}", match reason {
+                    Refusal::InvalidSelection => "usage : /model <modèle> <effort>",
+                    Refusal::Unsupported => "ce pilote ne permet pas ce contrôle ; pour une TUI Codex interactive, utiliser son /model natif",
+                    Refusal::ModelUnavailable => "modèle absent du catalogue Codex de cette session",
+                    Refusal::EffortUnavailable => "effort non accepté pour ce modèle (aucune substitution)",
+                    Refusal::CatalogueUnavailable => "catalogue fournisseur indisponible ou incomplet",
+                    Refusal::TargetUnavailable => "agent non abonné ou indisponible",
+                    Refusal::AttachRequired => "contrôle réservé à la connexion attach",
+                    Refusal::Busy => "trop de contrôles en attente",
+                }),
+            }
+        }
         AttachEvent::Subscribed { .. } => "attach: abonnement actif".to_string(),
         AttachEvent::Journal { bytes, .. } => render_journal_event(bytes, agent),
         AttachEvent::SnapshotCaughtUp {
@@ -2833,9 +3037,17 @@ mod tests {
         assert!(renderer.rendered_lines[1].contains("busy"));
         renderer.terminal_columns = 12;
         renderer.redraw("x", &mut output);
-        assert_eq!(renderer.rendered_lines.len(), 2);
+        assert!(
+            renderer.rendered_lines.len() > 2,
+            "le statut se replie sans perdre ses valeurs"
+        );
         assert_eq!(renderer.rendered_lines[0], "> x");
-        assert!(renderer.rendered_lines[1].chars().count() <= 12);
+        assert!(
+            renderer.rendered_lines[1..]
+                .iter()
+                .all(|row| display_width(row) <= 12)
+        );
+        assert!(renderer.rendered_lines[1..].join("").contains("effort"));
         let mut pipe = BlockRenderer::new("agent".into(), false, false);
         let mut plain = Vec::new();
         pipe.apply(
@@ -2850,6 +3062,7 @@ mod tests {
     fn spec091_footer_statut_suit_linvite_de_saisie() {
         let input = Arc::new(Mutex::new(InputBuffer {
             bytes: b"demande en cours".to_vec(),
+            ..InputBuffer::default()
         }));
         let mut renderer = BlockRenderer::new("agent".into(), true, true);
         renderer.terminal_fd = None;
@@ -2868,9 +3081,144 @@ mod tests {
     }
 
     #[test]
+    fn spec091_tui_coloree_ancre_son_fond_et_reinitialise_chaque_ligne() {
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: b"abc".to_vec(),
+            ..InputBuffer::default()
+        }));
+        let mut renderer = BlockRenderer::new("agent".into(), true, true);
+        renderer.terminal_fd = None;
+        renderer.terminal_columns = 12;
+        renderer.color = true;
+        let mut output = Vec::new();
+        renderer.apply(
+            RendererCommand::Presence(Some(Box::new(presence_fixture())), Instant::now()),
+            &input,
+            &mut output,
+        );
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(rendered.contains(SGR_INPUT));
+        assert!(rendered.contains(SGR_CLIENT));
+        assert!(rendered.contains(SGR_RESET));
+        assert!(rendered.contains(&format!("{SGR_INPUT}> abc{}{}", " ".repeat(7), SGR_RESET)));
+        assert!(
+            rendered.contains("\r\x1b[5C"),
+            "le curseur revient après `> abc`, pas après le padding : {rendered:?}"
+        );
+        assert!(
+            !rendered.contains("\r\x1b[12C"),
+            "aucun déplacement ne dépasse la dernière colonne : {rendered:?}"
+        );
+        assert!(rendered.matches(SGR_RESET).count() >= renderer.rendered_rows);
+        assert!(rendered.find(SGR_CLIENT).unwrap() < rendered.find("Claude Code").unwrap());
+    }
+
+    #[test]
+    fn spec091_tui_sans_couleur_ne_produit_aucun_sgr() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new("agent".into(), true, true);
+        renderer.terminal_fd = None;
+        renderer.color = false;
+        let mut output = Vec::new();
+        renderer.apply(
+            RendererCommand::Presence(Some(Box::new(presence_fixture())), Instant::now()),
+            &input,
+            &mut output,
+        );
+        // NO_COLOR interdit les styles SGR, pas les mouvements du curseur TTY.
+        let output = String::from_utf8(output).unwrap();
+        for sequence in output.split("\x1b[").skip(1) {
+            assert_ne!(
+                sequence.chars().find(|c| c.is_ascii_alphabetic()),
+                Some('m')
+            );
+        }
+    }
+
+    #[test]
+    fn spec091_saisie_multiligne_bornee_sans_perdre_le_tampon() {
+        let body = "a\nb\nc\nd\ne\nf\ng";
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: body.as_bytes().to_vec(),
+            ..InputBuffer::default()
+        }));
+        let mut renderer = BlockRenderer::new("agent".into(), true, true);
+        renderer.terminal_fd = None;
+        renderer.terminal_columns = 20;
+        renderer.terminal_rows = 6;
+        renderer.color = true;
+        let mut output = Vec::new();
+        renderer.apply(
+            RendererCommand::Presence(Some(Box::new(presence_fixture())), Instant::now()),
+            &input,
+            &mut output,
+        );
+        assert!(renderer.rendered_rows <= 5);
+        assert!(
+            renderer
+                .rendered_lines
+                .iter()
+                .all(|line| !line.contains('\n'))
+        );
+        assert!(renderer.rendered_lines.iter().any(|line| line == "g"));
+        assert_eq!(input.lock().unwrap().bytes, body.as_bytes());
+        assert_eq!(wrap_visual_rows(&["> a\nb".into()], 20), ["> a", "b"]);
+    }
+
+    #[test]
+    fn spec091_commande_modele_est_un_controle_pas_un_prompt() {
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let renderer = test_renderer_sender(true, false);
+        for byte in b"/model gpt-5.6-terra medium\r" {
+            handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1").unwrap();
+        }
+        let mut line = String::new();
+        BufReader::new(read_stream).read_line(&mut line).unwrap();
+        let WrapperToDaemon::SelectRuntime { agent, selection } = decode(line.trim_end()).unwrap()
+        else {
+            panic!("une sélection ne doit jamais être envoyée comme Send");
+        };
+        assert_eq!(agent, "codex-1");
+        assert_eq!(selection.model, "gpt-5.6-terra");
+        assert_eq!(selection.effort, "medium");
+        assert_eq!(parse_runtime_command("/model"), Some(Err(())));
+        assert_eq!(
+            parse_runtime_command("/model x medium extra"),
+            Some(Err(()))
+        );
+        assert_eq!(parse_runtime_command("question ordinaire"), None);
+    }
+
+    #[test]
+    fn alt_entree_ajoute_une_ligne_et_entree_envoie_le_corps_complet() {
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let renderer = test_renderer_sender(true, false);
+        for byte in b"premiere\x1b\rseconde\r" {
+            assert!(
+                handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1").unwrap()
+            );
+        }
+        let mut reader = BufReader::new(read_stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let WrapperToDaemon::Send(message) = decode(line.trim_end()).unwrap() else {
+            panic!("Send attendu après Entrée");
+        };
+        assert_eq!(message.body, "premiere\nseconde");
+        assert!(input.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn spec091_footer_rend_le_curseur_a_la_saisie_et_lefface_au_redessin() {
         let input = Arc::new(Mutex::new(InputBuffer {
             bytes: b"demande en cours".to_vec(),
+            ..InputBuffer::default()
         }));
         let mut renderer = BlockRenderer::new("agent".into(), true, true);
         renderer.terminal_fd = None;
@@ -2902,6 +3250,7 @@ mod tests {
     fn spec091_premiere_presence_ne_decale_pas_leffacement_dune_saisie_sans_footer() {
         let input = Arc::new(Mutex::new(InputBuffer {
             bytes: b"demande en cours".to_vec(),
+            ..InputBuffer::default()
         }));
         let mut renderer = BlockRenderer::new("agent".into(), true, true);
         renderer.terminal_fd = None;
@@ -2928,6 +3277,7 @@ mod tests {
     fn spec091_finish_rend_la_main_sous_le_footer_ou_la_saisie() {
         let input = Arc::new(Mutex::new(InputBuffer {
             bytes: b"demande en cours".to_vec(),
+            ..InputBuffer::default()
         }));
         let mut with_footer = BlockRenderer::new("agent".into(), true, true);
         with_footer.terminal_fd = None;
@@ -3473,6 +3823,7 @@ mod tests {
         };
         let input = Arc::new(Mutex::new(InputBuffer {
             bytes: b"frappe".to_vec(),
+            ..InputBuffer::default()
         }));
         let rendered = render_attach_event(&event, "codex-1");
 
@@ -4297,6 +4648,7 @@ mod tests {
     fn evenement_hostile_ne_modifie_jamais_la_saisie_partielle() {
         let input = Arc::new(Mutex::new(InputBuffer {
             bytes: b"r\xc3\xa9ponse en cours".to_vec(),
+            ..InputBuffer::default()
         }));
         let hostile = include_bytes!("../tests/fixtures/attach-hostile.jsonl");
         let event = AttachEvent::Journal {
@@ -4430,7 +4782,15 @@ mod tests {
                 "fragment absent après wrapping/resize : {fragment}"
             );
         }
-        assert!(rendered.ends_with(b"> commande partielle"));
+        assert!(
+            renderer
+                .rendered_lines
+                .ends_with(&["> commande partiel".into(), "le".into()])
+        );
+        assert!(
+            rendered.ends_with(b"\r\x1b[2C"),
+            "curseur après `le`, avant le padding"
+        );
     }
 
     #[test]
@@ -4561,6 +4921,7 @@ mod tests {
     fn retour_arriere_retire_un_scalaire_utf8_entier() {
         let mut input = InputBuffer {
             bytes: "réponse".as_bytes().to_vec(),
+            ..InputBuffer::default()
         };
         assert!(input.erase_last());
         assert_eq!(input.display(), "répons");

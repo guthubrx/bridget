@@ -174,6 +174,20 @@ effort and state from the same inventory as `who`. Without refreshed data it bec
 unavailable. The actual provider is never inferred from “Claude” or “Codex”.
 Native Codex commands and approval requests are rendered as sanitized facts.
 
+The input has a full-width grey background that follows its height, with the
+colored status underneath. `Alt+Enter` (or `Escape`, then `Enter`) inserts a
+newline; `Enter` sends. Resizing preserves the complete input. `NO_COLOR` or
+`TERM=dumb` disables colors; redirected output remains plain.
+
+For **managed Codex**, `/model gpt-5.6-terra medium` in attach selects the model
+and effort for subsequent turns of the **same thread**. No restart, hidden prompt
+or lost history. Both values must be advertised by the native model catalogue;
+rejections leave settings unchanged, and an unknown outcome is not confirmation.
+This requires updated daemon/wrapper and Codex `thread/settings/update` (tested:
+0.153.4). It does not modify the frozen launch definition, which is reloaded on
+a Bridget relaunch. For **interactive** `bridget codex`, use the native TUI's
+`/model` instead. Other drivers explicitly refuse this attach control.
+
 ### Skill, MCP or CLI?
 
 The skill is the operating guide; MCP executes structured communication tools.

@@ -275,6 +275,16 @@ fn continuation_fallback(
 /// exclusivement les opérations de session dont le wrapper a besoin. Il ne
 /// déclare ni modèle, ni quota, ni sémantique de protocole fournisseur.
 pub trait ManagedSession: Transport {
+    /// Choix explicite de session, sans tour caché. Le défaut refuse : aucun
+    /// adaptateur ne simule une commande de modèle par un prompt.
+    fn select_runtime(
+        &mut self,
+        _selection: crate::protocol::RuntimeSelection,
+    ) -> crate::protocol::RuntimeSelectionOutcome {
+        crate::protocol::RuntimeSelectionOutcome::Refused {
+            reason: crate::protocol::RuntimeSelectionRefusal::Unsupported,
+        }
+    }
     /// Consigne individuelle conservée uniquement par le pilote en mémoire.
     ///
     /// Elle ne devient jamais un `BridgetMessage`: les implémentations qui la

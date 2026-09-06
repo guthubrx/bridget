@@ -3738,6 +3738,13 @@ fn launch_session_with_status(
                         command,
                     );
                 }
+                Ok(DaemonToWrapper::SelectRuntime { token, selection }) => {
+                    let outcome = transport.select_runtime(selection);
+                    send_wrapper_message(
+                        &writer,
+                        WrapperToDaemon::RuntimeSelectionReported { token, outcome },
+                    );
+                }
                 Ok(DaemonToWrapper::CancelDelivery { id, reason }) => {
                     transport.cancel_delivery(&id, &reason);
                 }
