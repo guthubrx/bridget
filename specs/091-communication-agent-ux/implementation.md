@@ -88,6 +88,35 @@ Codex installé, sans mission modèle ni usage de la production.
 
 ## Recette humaine restant à exécuter
 
+### Complément observé le 2026-09-06 : approbation MCP
+
+L'agent `a4d12c75-5994-4c02-9acc-2db07ba817af` lancé explicitement en
+développement écrit et relit effectivement son fichier de preuve dans le cwd.
+En revanche, ses appels natifs who/send sont refusés par Codex 0.153.4 :
+`MCP tool call requires approval, but approval policy is never`.
+Le retour lié reçu par l'émetteur est le relais automatique du wrapper ; il ne
+constitue PAS une preuve d'appel MCP sortant réussi.
+
+Cause : la projection `-c mcp_servers.bridget=…` ne déclarait aucune politique
+d'outil. Codex `auto` exige une approbation lorsque les annotations ne permettent
+pas de l'éviter ; `never` interdit alors cet appel avant d'atteindre Bridget.
+Source primaire vérifiée à la version installée :
+https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/core/src/mcp_tool_call.rs
+(`requires_mcp_tool_approval_for_mode`, `request_mcp_tool_approval`).
+
+Correction : seules les opérations `bridget_who`, `bridget_send`,
+`bridget_ledger`, `bridget_cancel` reçoivent `approval_mode="approve"` dans la
+configuration éphémère du serveur Bridget. Les autres outils de ce serveur
+restent `prompt` ; aucun réglage des autres serveurs, du shell, des droits de
+fichiers, de la posture globale ou de la configuration utilisateur n'est changé.
+L'autorité identité/instance du daemon continue de contrôler chaque opération.
+
+Preuves : oracle exact de projection ; lecture de cette même projection par le
+vrai `codex app-server` installé (`config/read`, aucun appel modèle, HOME Codex
+temporaire). La mutation `bridget_who.approval_mode="auto"` échoue effectivement
+sur l'oracle. La re-recette de l'agent vivant reste nécessaire après installation
+et reprise explicite de son processus pour charger cette nouvelle projection.
+
 Le test sandbox natif n'est pas une preuve d'une nouvelle mission intellectuelle
 en production. La recette de bout en bout exige le lancement depuis le terminal
 humain d'un NOUVEL agent développement, puis mission écrite dans cwd, outil MCP
@@ -126,3 +155,14 @@ Après ces compléments : attach **58/58**, wrapper **59/59**, exécutés en par
 à l'intérieur de chaque cible ; `cargo clippy --workspace --all-targets --features
 test-support -- -D warnings`, fmt et diff-check réussis. Pas de répétition inutile
 des recettes lourdes des autres composants non modifiés.
+
+## Pied de page sous la saisie et fermeture de recette MCP
+
+À la demande de l'humain, l'équipier de développement a déplacé le statut sous
+l'invite et ajouté les oracles d'ordre, de retour du curseur, de première présence
+et de sortie propre. Le relecteur a exécuté les validations hors de son sandbox :
+**62/62 attach**, **60/60 wrapper** (et un test natif ignoré par défaut exécuté
+explicitement : **1/1**). Fmt, clippy workspace/all-targets/test-support et
+diff-check sont verts. La preuve d'écriture de l'équipier reste non versionnée.
+Le statut de la recette MCP de l'agent vivant est consigné séparément : un
+succès du parseur natif ne vaut pas encore un appel métier réussi.

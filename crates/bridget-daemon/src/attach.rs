@@ -1164,6 +1164,7 @@ struct BlockRenderer {
     redraw_pending: bool,
     presence_line: Option<String>,
     presence_received: Option<Instant>,
+    cursor_above_footer: bool,
     #[cfg(test)]
     redraw_count: usize,
 }
@@ -1200,6 +1201,7 @@ impl BlockRenderer {
             redraw_pending: false,
             presence_line: None,
             presence_received: None,
+            cursor_above_footer: false,
             #[cfg(test)]
             redraw_count: 0,
         }
@@ -1421,9 +1423,20 @@ impl BlockRenderer {
             write_visual_lines(output, &visible_rows);
         }
         let mut rendered_lines = visible_rows;
+        if self.raw_terminal {
+            if !rendered_lines.is_empty() {
+                let _ = output.write_all(b"\r\n");
+            }
+            let _ = write!(output, "> {input}");
+            rendered_lines.extend(wrap_visual_rows(
+                &[format!("> {input}")],
+                self.terminal_columns,
+            ));
+        }
         if let Some(status) = &self.presence_line {
-            // Une seule ligne visuelle, même sur terminal étroit. Les valeurs
-            // passent par sanitize_inline avant ce point (aucun ANSI entrant).
+            // Le footer suit l'invite : la saisie reste le point d'ancrage
+            // visuel de la TUI. Une seule ligne visuelle, même sur terminal
+            // étroit ; les valeurs ont déjà été neutralisées.
             let row = wrap_visual_rows(std::slice::from_ref(status), self.terminal_columns)
                 .into_iter()
                 .next()
@@ -1434,15 +1447,18 @@ impl BlockRenderer {
             let _ = output.write_all(row.as_bytes());
             rendered_lines.push(row);
         }
-        if self.raw_terminal {
-            if !rendered_lines.is_empty() {
-                let _ = output.write_all(b"\r\n");
-            }
-            let _ = write!(output, "> {input}");
-            rendered_lines.extend(wrap_visual_rows(
-                &[format!("> {input}")],
-                self.terminal_columns,
-            ));
+        self.cursor_above_footer = self.raw_terminal && self.presence_line.is_some();
+        if self.cursor_above_footer {
+            // Le footer est peint après la saisie, mais la frappe suivante doit
+            // rester ancrée à la fin de sa dernière ligne. Le footer est borné
+            // à une ligne : remonter d'une ligne suffit, même si la saisie a
+            // elle-même été repliée.
+            let input_row = rendered_lines
+                .get(rendered_lines.len().saturating_sub(2))
+                .cloned()
+                .unwrap_or_default();
+            let _ = output.write_all(b"\r\x1b[1A");
+            let _ = output.write_all(input_row.as_bytes());
         }
         self.rendered_rows = rendered_lines.len();
         self.rendered_lines = rendered_lines;
@@ -1465,6 +1481,12 @@ impl BlockRenderer {
     }
 
     fn clear(&mut self, output: &mut impl Write) {
+        if self.cursor_above_footer && self.rendered_rows > 0 {
+            // draw_active a replacé le curseur dans la saisie ; revenir au
+            // footer permet de l'effacer avec toutes les lignes actives.
+            let _ = output.write_all(b"\r\n");
+        }
+        self.cursor_above_footer = false;
         for index in 0..self.rendered_rows {
             let _ = output.write_all(b"\r\x1b[2K");
             if index + 1 < self.rendered_rows {
@@ -1478,9 +1500,16 @@ impl BlockRenderer {
     fn finish(&mut self, input: &str, output: &mut impl Write) {
         self.flush_incomplete(input, output);
         if self.rendered_rows > 0 {
+            if self.cursor_above_footer {
+                // Le curseur est resté dans la saisie, juste au-dessus du
+                // footer : le premier saut rejoint le footer, le second rend
+                // la main au shell sous toute la zone active.
+                let _ = output.write_all(b"\r\n");
+            }
             let _ = output.write_all(b"\r\n");
             self.rendered_rows = 0;
             self.rendered_lines.clear();
+            self.cursor_above_footer = false;
         }
         let _ = output.flush();
     }
@@ -2777,13 +2806,13 @@ mod tests {
             &mut output,
         );
         assert_eq!(renderer.rendered_lines.len(), 2);
-        assert_eq!(renderer.rendered_lines[1], "> ma question");
-        assert!(renderer.rendered_lines[0].contains("glm-exemple"));
+        assert_eq!(renderer.rendered_lines[0], "> ma question");
+        assert!(renderer.rendered_lines[1].contains("glm-exemple"));
         let at = renderer.presence_received.unwrap();
         renderer.expire_presence(at + PRESENCE_EXPIRY, "ma question", &mut output);
-        assert!(renderer.rendered_lines[0].contains("annuaire indisponible"));
-        assert!(!renderer.rendered_lines[0].contains("glm-exemple"));
-        assert_eq!(renderer.rendered_lines[1], "> ma question");
+        assert!(renderer.rendered_lines[1].contains("annuaire indisponible"));
+        assert!(!renderer.rendered_lines[1].contains("glm-exemple"));
+        assert_eq!(renderer.rendered_lines[0], "> ma question");
         assert_eq!(input_snapshot(&input), "ma question");
         renderer.apply(
             RendererCommand::Presence(Some(Box::new(presence_fixture())), at - PRESENCE_EXPIRY),
@@ -2800,12 +2829,13 @@ mod tests {
             &input,
             &mut output,
         );
-        assert!(renderer.rendered_lines[0].contains("effort medium"));
-        assert!(renderer.rendered_lines[0].contains("busy"));
+        assert!(renderer.rendered_lines[1].contains("effort medium"));
+        assert!(renderer.rendered_lines[1].contains("busy"));
         renderer.terminal_columns = 12;
         renderer.redraw("x", &mut output);
         assert_eq!(renderer.rendered_lines.len(), 2);
-        assert!(renderer.rendered_lines[0].chars().count() <= 12);
+        assert_eq!(renderer.rendered_lines[0], "> x");
+        assert!(renderer.rendered_lines[1].chars().count() <= 12);
         let mut pipe = BlockRenderer::new("agent".into(), false, false);
         let mut plain = Vec::new();
         pipe.apply(
@@ -2814,6 +2844,112 @@ mod tests {
             &mut plain,
         );
         assert!(plain.is_empty());
+    }
+
+    #[test]
+    fn spec091_footer_statut_suit_linvite_de_saisie() {
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: b"demande en cours".to_vec(),
+        }));
+        let mut renderer = BlockRenderer::new("agent".into(), true, true);
+        renderer.terminal_fd = None;
+        renderer.terminal_columns = 180;
+        let mut output = Vec::new();
+
+        renderer.apply(
+            RendererCommand::Presence(Some(Box::new(presence_fixture())), Instant::now()),
+            &input,
+            &mut output,
+        );
+
+        assert_eq!(renderer.rendered_lines[0], "> demande en cours");
+        assert!(renderer.rendered_lines[1].contains("modèle glm-exemple"));
+        assert!(renderer.rendered_lines[1].contains("fournisseur inconnu"));
+    }
+
+    #[test]
+    fn spec091_footer_rend_le_curseur_a_la_saisie_et_lefface_au_redessin() {
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: b"demande en cours".to_vec(),
+        }));
+        let mut renderer = BlockRenderer::new("agent".into(), true, true);
+        renderer.terminal_fd = None;
+        renderer.terminal_columns = 180;
+        let mut output = Vec::new();
+
+        renderer.apply(
+            RendererCommand::Presence(Some(Box::new(presence_fixture())), Instant::now()),
+            &input,
+            &mut output,
+        );
+        let rendered = String::from_utf8(output).unwrap();
+        let footer = "fournisseur inconnu";
+        let footer_end = rendered.find(footer).unwrap() + footer.len();
+        assert!(
+            rendered[footer_end..].contains("\r\x1b[1A> demande en cours"),
+            "le curseur doit revenir à la saisie après le footer : {rendered:?}"
+        );
+
+        let mut redraw = Vec::new();
+        renderer.redraw("demande en cours", &mut redraw);
+        assert!(
+            redraw.starts_with(b"\r\n\r\x1b[2K"),
+            "le redraw doit d'abord rejoindre puis effacer le footer : {redraw:?}"
+        );
+    }
+
+    #[test]
+    fn spec091_premiere_presence_ne_decale_pas_leffacement_dune_saisie_sans_footer() {
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: b"demande en cours".to_vec(),
+        }));
+        let mut renderer = BlockRenderer::new("agent".into(), true, true);
+        renderer.terminal_fd = None;
+        renderer.terminal_columns = 180;
+        let mut initial = Vec::new();
+        renderer.redraw("demande en cours", &mut initial);
+        assert!(!renderer.cursor_above_footer);
+
+        let mut first_presence = Vec::new();
+        renderer.apply(
+            RendererCommand::Presence(Some(Box::new(presence_fixture())), Instant::now()),
+            &input,
+            &mut first_presence,
+        );
+
+        assert!(
+            first_presence.starts_with(b"\r\x1b[2K"),
+            "une première présence ne doit pas descendre sous une saisie sans footer : {first_presence:?}"
+        );
+        assert!(renderer.cursor_above_footer);
+    }
+
+    #[test]
+    fn spec091_finish_rend_la_main_sous_le_footer_ou_la_saisie() {
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: b"demande en cours".to_vec(),
+        }));
+        let mut with_footer = BlockRenderer::new("agent".into(), true, true);
+        with_footer.terminal_fd = None;
+        with_footer.terminal_columns = 180;
+        let mut footer_output = Vec::new();
+        with_footer.apply(
+            RendererCommand::Presence(Some(Box::new(presence_fixture())), Instant::now()),
+            &input,
+            &mut footer_output,
+        );
+        let footer_before_finish = footer_output.len();
+        with_footer.finish("demande en cours", &mut footer_output);
+        assert_eq!(&footer_output[footer_before_finish..], b"\r\n\r\n");
+
+        let mut without_footer = BlockRenderer::new("agent".into(), true, true);
+        without_footer.terminal_fd = None;
+        without_footer.terminal_columns = 180;
+        let mut input_output = Vec::new();
+        without_footer.redraw("demande en cours", &mut input_output);
+        let input_before_finish = input_output.len();
+        without_footer.finish("demande en cours", &mut input_output);
+        assert_eq!(&input_output[input_before_finish..], b"\r\n");
     }
 
     fn test_renderer_sender(raw_terminal: bool, tty_output: bool) -> RendererSender {

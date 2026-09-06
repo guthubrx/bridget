@@ -15,6 +15,13 @@ L'humain lance un équipier pour développer, lui parle et observe son travail s
 - FR-05 : attach conserve la saisie (Entrée envoie, Ctrl-C quitte la vue), l'ordre du journal, ses lacunes et ses bornes. Aucun octet de contrôle injecté par les données ; sorties non-TTY stables hors correction explicite des événements.
 - FR-06 : skill, aide et README distinguent MCP/CLI, géré/interactif, droits/saisie et persistance. Ajouter cancel en MCP seulement via le contrôle d'identité existant. Ne pas exposer de supervision MCP sans autorisation adéquate ; ne pas retirer Maicie/artefacts sans revue de compatibilité.
 
+Complément de recette validé le 6 septembre : dans attach, la ligne de statut se
+place sous l'invite de saisie, comme pied de page compact. Le curseur reste à la
+fin de la saisie ; rafraîchissement, première présence et sortie rendent le
+terminal propre. La projection Codex autorise explicitement les quatre outils
+de communication Bridget, sans autoriser par défaut les autres outils MCP ni
+élargir les droits du shell.
+
 ## Acceptation
 
 - Agent réel : mission reçue, écriture dans le répertoire autorisé, réponse MCP liée, journal observable. Refus hors droits et posture globale inchangée.

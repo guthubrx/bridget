@@ -4400,8 +4400,21 @@ fn codex_mcp_override(server: &serde_json::Value) -> Result<String, Box<dyn std:
         .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?
         .join(",");
     let environment = format!("{{{environment}}}");
+    // Codex `auto` sollicite une approbation pour un outil sans annotations.
+    // Avec approval_policy=never (équipier), cela interdit même bridget_who.
+    // Le lancement Bridget autorise ces quatre opérations de communication,
+    // pas tous les outils présents/futurs du serveur (Maicie, artefacts, etc.).
+    // `approve`, et non `auto`, est le mode explicite Codex 0.153.4.
+    let tools = [
+        "bridget_who",
+        "bridget_send",
+        "bridget_ledger",
+        "bridget_cancel",
+    ]
+    .map(|name| format!("{name}={{approval_mode=\"approve\"}}"))
+    .join(",");
     Ok(format!(
-        "mcp_servers.bridget={{command={command:?},args=[\"mcp\"],env={environment}}}"
+        "mcp_servers.bridget={{command={command:?},args=[\"mcp\"],env={environment},default_tools_approval_mode=\"prompt\",tools={{{tools}}}}}"
     ))
 }
 
@@ -6652,6 +6665,52 @@ mod reconnect_tests {
         );
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec091_mcp_autorise_seulement_les_quatre_outils_de_communication() {
+        let server = serde_json::json!({
+            "command": "/tmp/bridget-test", "env": {
+                "HOME": "/tmp/home", "BRIDGET_HOME": "/tmp/state",
+                "BRIDGET_SOCKET": "/tmp/state/bridget.sock"
+            }
+        });
+        // Oracle indépendant : omettre cette politique reproduit le refus
+        // réel avec approval_policy=never ; `auto` n'est PAS une autorisation.
+        assert_eq!(
+            codex_mcp_override(&server).unwrap(),
+            concat!(
+                "mcp_servers.bridget={command=\"/tmp/bridget-test\",args=[\"mcp\"],",
+                "env={HOME=\"/tmp/home\",BRIDGET_HOME=\"/tmp/state\",BRIDGET_SOCKET=\"/tmp/state/bridget.sock\"},",
+                "default_tools_approval_mode=\"prompt\",tools={",
+                "bridget_who={approval_mode=\"approve\"},",
+                "bridget_send={approval_mode=\"approve\"},",
+                "bridget_ledger={approval_mode=\"approve\"},",
+                "bridget_cancel={approval_mode=\"approve\"}}}"
+            )
+        );
+    }
+
+    #[test]
+    #[ignore = "requiert le binaire Codex installé ; config/read réel, sans appel modèle"]
+    fn spec091_codex_lit_la_politique_mcp_injectee() {
+        let server = serde_json::json!({
+            "command": "/nonexistent/bridget-test", "env": {
+                "HOME": "/tmp/home", "BRIDGET_HOME": "/tmp/state",
+                "BRIDGET_SOCKET": "/tmp/state/bridget.sock"
+            }
+        });
+        let output = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(include_str!("../tests/fixtures/codex_mcp_policy_091.py"))
+            .arg(codex_mcp_override(&server).unwrap())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
