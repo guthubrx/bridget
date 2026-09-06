@@ -26,6 +26,7 @@ entries=(
   scripts/package-089-core.sh scripts/federate-ssh.sh scripts/deploy-remote.sh
   scripts/tests/federation_089_test.sh scripts/tests/package_089_test.sh
   specs/089-communication-core
+  specs/090-codex-interactif
   specs/015-guichet-maicie/contracts/fixtures
   specs/016-coordination-active/contracts/fixtures
   specs/010-mcp/spike/fake-mcp-server.py

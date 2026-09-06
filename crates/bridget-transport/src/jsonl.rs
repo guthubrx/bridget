@@ -3,11 +3,133 @@
 //! de lecture d'une trame : un wrapper peut rester légitimement inactif.
 
 use std::io::{self, BufRead, BufReader};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 pub const MAX_DAEMON_FRAME_BYTES: usize = 16 * 1024 * 1024;
+
+pub fn validate_unix_socket_path(socket: &Path) -> io::Result<()> {
+    let path = socket.as_os_str().as_bytes();
+    let address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    if path.is_empty() || path.contains(&0) || path.len() >= address.sun_path.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "chemin socket Unix vide, NUL ou trop long",
+        ));
+    }
+    Ok(())
+}
+
+/// Connexion Unix sous échéance absolue, partagée par les clients et pilotes.
+pub fn connect_nonblocking(socket: &Path, deadline: Instant) -> io::Result<UnixStream> {
+    if deadline <= Instant::now() {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "budget connexion dépassé",
+        ));
+    }
+    let path = socket.as_os_str().as_bytes();
+    validate_unix_socket_path(socket)?;
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        address.sun_len = (std::mem::size_of::<libc::sa_family_t>() + path.len() + 1) as u8;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            path.as_ptr().cast(),
+            address.sun_path.as_mut_ptr(),
+            path.len(),
+        );
+    }
+    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // Propriétaire dès l'ouverture : toute sortie par ? ferme le descripteur,
+    // y compris l'expiration entre connect et poll (ancien chemin de fuite).
+    let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+    let fd = owned.as_raw_fd();
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let result = unsafe {
+        libc::connect(
+            fd,
+            (&address as *const libc::sockaddr_un).cast(),
+            std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t,
+        )
+    };
+    if result < 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EINPROGRESS) {
+            return Err(error);
+        }
+        let mut pollfd = libc::pollfd {
+            fd,
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|d| !d.is_zero())
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::TimedOut, "budget connexion dépassé")
+                })?;
+            let timeout = remaining.as_millis().max(1).min(i32::MAX as u128) as libc::c_int;
+            let ready = unsafe { libc::poll(&mut pollfd, 1, timeout) };
+            if ready > 0 {
+                break;
+            }
+            if ready < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "connexion daemon expirée",
+            ));
+        }
+        let mut so_error: libc::c_int = 0;
+        let mut length = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        if unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_ERROR,
+                (&mut so_error as *mut libc::c_int).cast(),
+                &mut length,
+            )
+        } < 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        if so_error != 0 {
+            return Err(io::Error::from_raw_os_error(so_error));
+        }
+    }
+    if Instant::now() >= deadline {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "budget connexion dépassé",
+        ));
+    }
+    let stream = UnixStream::from(owned);
+    stream.set_nonblocking(false)?;
+    Ok(stream)
+}
 
 #[derive(Clone, Copy)]
 pub enum LineDeadline {

@@ -19,13 +19,21 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn stop_interactive_server(child: &mut Child, socket: &Path) -> std::io::Result<()> {
+    crate::managed_session::stop_owned_child(child, true, Duration::from_secs(4))?;
+    match std::fs::remove_file(socket) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
 /// Un pilotage humain ne doit pas rester suspendu derrière un RPC silencieux.
 /// Cette borne ne constitue pas une preuve de remise : elle laisse ensuite la
 /// FIFO reprendre le message ou déclenche l'interruption de repli.
@@ -45,7 +53,8 @@ const SATURATION_RETRIES: u32 = 4;
 const CODEX_SATURATED_REASON: &str = "saturation Codex";
 const COMMAND_EXECUTION_APPROVAL_METHOD: &str = "item/commandExecution/requestApproval";
 
-type Writer = Arc<Mutex<Option<ChildStdin>>>;
+type Writer = Arc<Mutex<Option<Box<dyn Write + Send>>>>;
+type SourceLines = Box<dyn Iterator<Item = std::io::Result<String>> + Send>;
 type Waiters = Arc<Mutex<HashMap<u64, mpsc::Sender<Result<ServerResponse, String>>>>>;
 type Journal = Arc<Mutex<Option<JournalWriter>>>;
 type PendingRequest = Arc<Mutex<Option<PendingProviderRequest>>>;
@@ -114,6 +123,9 @@ struct QueueState {
     /// derrière les messages à restituer, au lieu de pouvoir les doubler.
     steering_open: bool,
     closed: bool,
+    /// Tour réellement observé en interactif (humain OU remise Bridget),
+    /// indépendant de la réservation RPC du worker.
+    external_turn: Option<String>,
 }
 
 struct PendingProviderRequest {
@@ -156,6 +168,8 @@ struct CodexTurnDetail {
     thread_id: String,
     turn_id: Option<String>,
     provider_item_id: Option<String>,
+    input_seen: bool,
+    prompt_dispatched: bool,
     /// Nombre d'updates texte déjà journalisés (deltas ou repli
     /// `item/completed` agentMessage). Sert d'anti-doublon pour B.
     text_updates: usize,
@@ -210,6 +224,8 @@ struct ReaderContext {
     dynamic_tool_handler: Option<DynamicToolHandler>,
     /// SPEC-088 : posture de lancement, lue une fois dans les arguments.
     sandbox_posture: &'static str,
+    interactive: bool,
+    selected_thread: Arc<Mutex<Option<String>>>,
 }
 
 /// `--sandbox read-only` (définition de découverte du registre) ⇒ découverte ;
@@ -235,6 +251,8 @@ pub struct CodexAppServerTransport {
     queue_capacity: usize,
     writer: Writer,
     thread_id: String,
+    next_id: Arc<AtomicU64>,
+    waiters: Waiters,
     child: Arc<Mutex<Child>>,
     observations: Arc<(Mutex<Observations>, Condvar)>,
     active_detail: ActiveTurnDetail,
@@ -242,6 +260,7 @@ pub struct CodexAppServerTransport {
     provider_observation: Option<ProviderObservation>,
     reader_handle: Mutex<Option<thread::JoinHandle<()>>>,
     worker_handle: Mutex<Option<thread::JoinHandle<()>>>,
+    interactive_socket: Option<std::path::PathBuf>,
 }
 
 impl CodexAppServerTransport {
@@ -260,6 +279,35 @@ impl CodexAppServerTransport {
         options: CodexAppServerOptions,
         environment: &[(String, String)],
         inherit_stderr: bool,
+    ) -> Result<Self, TransportError> {
+        Self::spawn_endpoint(options, environment, inherit_stderr, None)
+    }
+
+    /// Un app-server privé, partagé avec la TUI native. Aucun octet terminal
+    /// n'est injecté ; les deux clients utilisent le protocole fournisseur.
+    pub fn spawn_interactive(
+        options: CodexAppServerOptions,
+        environment: &[(String, String)],
+        socket: &Path,
+    ) -> Result<Self, TransportError> {
+        Self::spawn_endpoint(options, environment, false, Some(socket))
+    }
+
+    pub fn thread_id(&self) -> &str {
+        &self.thread_id
+    }
+
+    /// La durée de vie de la TUI borne celle de ce serveur privé. L'appelant
+    /// ne peut que fermer la session ; il ne peut pas inventer une présence.
+    pub fn interactive_lifetime(&self) -> Arc<AtomicBool> {
+        self.alive.clone()
+    }
+
+    fn spawn_endpoint(
+        options: CodexAppServerOptions,
+        environment: &[(String, String)],
+        inherit_stderr: bool,
+        interactive_socket: Option<&Path>,
     ) -> Result<Self, TransportError> {
         if options.queue_capacity == 0 {
             return Err(TransportError::DeliveryFailed(
@@ -282,19 +330,62 @@ impl CodexAppServerTransport {
             // fermeture d'un tour ne laisse donc jamais un sous-processus
             // Codex tenir stdout ou le journal ouverts.
             .process_group(0);
+        if let Some(socket) = interactive_socket {
+            crate::codex_socket::validate_private_path(socket)
+                .map_err(|error| TransportError::Io(error.to_string()))?;
+            command.args(["--listen", &format!("unix://{}", socket.display())]);
+            command.stdout(Stdio::null());
+        }
         let mut child = command.spawn().map_err(|error| {
             TransportError::Io(format!("impossible de lancer codex app-server: {error}"))
         })?;
         let pid = child.id();
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| TransportError::Io("stdin Codex absent".to_string()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| TransportError::Io("stdout Codex absent".to_string()))?;
-        let writer = Arc::new(Mutex::new(Some(stdin)));
+        let (lines, output): (SourceLines, Box<dyn Write + Send>) = if let Some(socket) =
+            interactive_socket
+        {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let connected = loop {
+                match crate::codex_socket::connect(socket, deadline) {
+                    Ok(pair) => break Ok(pair),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                        ) && std::time::Instant::now() < deadline =>
+                    {
+                        if let Ok(Some(_)) = child.try_wait() {
+                            break Err(error);
+                        }
+                        thread::sleep(Duration::from_millis(25));
+                    }
+                    Err(error) => break Err(error),
+                }
+            };
+            match connected {
+                Ok((lines, output)) => (Box::new(lines), Box::new(output)),
+                Err(error) => {
+                    stop_interactive_server(&mut child, socket).map_err(|stop| {
+                        TransportError::Io(format!(
+                            "connexion Codex interactive : {error} ; {stop}"
+                        ))
+                    })?;
+                    return Err(TransportError::Io(format!(
+                        "connexion Codex interactive : {error}"
+                    )));
+                }
+            }
+        } else {
+            let stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| TransportError::Io("stdin Codex absent".to_string()))?;
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| TransportError::Io("stdout Codex absent".to_string()))?;
+            (Box::new(BufReader::new(stdout).lines()), Box::new(stdin))
+        };
+        let writer: Writer = Arc::new(Mutex::new(Some(output)));
         let waiters = Arc::new(Mutex::new(HashMap::new()));
         let observations = Arc::new((Mutex::new(Observations::default()), Condvar::new()));
         let active_detail = Arc::new(Mutex::new(None));
@@ -309,12 +400,14 @@ impl CodexAppServerTransport {
                 active: None,
                 steering_open: false,
                 closed: false,
+                external_turn: None,
             }),
             Condvar::new(),
         ));
         let pending_request = Arc::new(Mutex::new(None));
+        let selected_thread = Arc::new(Mutex::new(None));
         let reader_handle = spawn_reader(
-            stdout,
+            lines,
             ReaderContext {
                 waiters: waiters.clone(),
                 observations: observations.clone(),
@@ -328,22 +421,19 @@ impl CodexAppServerTransport {
                 permissions: options.permissions.clone(),
                 dynamic_tool_handler: options.dynamic_tool_handler.clone(),
                 sandbox_posture: sandbox_posture_from_args(&options.args),
+                interactive: interactive_socket.is_some(),
+                selected_thread: selected_thread.clone(),
             },
         );
 
         let setup = (|| -> Result<String, TransportError> {
-            let initialize = request(
-                &writer,
-                &waiters,
-                &next_id,
-                "initialize",
-                json!({
-                    "clientInfo": {
-                        "name": "bridget",
-                        "version": env!("CARGO_PKG_VERSION"),
-                    },
-                }),
-            )?;
+            let mut initialization = json!({
+                "clientInfo": { "name": "bridget", "version": env!("CARGO_PKG_VERSION") }
+            });
+            if interactive_socket.is_some() {
+                initialization["capabilities"] = json!({"experimentalApi": true});
+            }
+            let initialize = request(&writer, &waiters, &next_id, "initialize", initialization)?;
             for required in ["userAgent", "codexHome", "platformFamily", "platformOs"] {
                 if initialize.value.get(required).is_none() {
                     return Err(TransportError::DeliveryFailed(format!(
@@ -354,9 +444,26 @@ impl CodexAppServerTransport {
             write_notification(&writer, "initialized", json!({}))?;
             let cwd =
                 std::env::current_dir().map_err(|error| TransportError::Io(error.to_string()))?;
-            let (thread_method, thread_params) =
+            let (thread_method, mut thread_params) =
                 thread_bootstrap_request(&options.thread_bootstrap, &cwd, options.model.as_deref());
+            if interactive_socket.is_some() {
+                // Contrat natif explicite : la TUI 0.153.4 ne peut reprendre
+                // un fil paginated vide (missing source rollout). legacy
+                // matérialise le journal sans tour ni prompt artificiel.
+                thread_params["historyMode"] = json!("legacy");
+            }
             let thread = request(&writer, &waiters, &next_id, thread_method, thread_params)?;
+            if interactive_socket.is_some()
+                && thread
+                    .value
+                    .pointer("/thread/historyMode")
+                    .and_then(Value::as_str)
+                    != Some("legacy")
+            {
+                return Err(TransportError::DeliveryFailed(
+                    "Codex incompatible : historique legacy partagé non attesté".into(),
+                ));
+            }
             if let Some((model, effort)) = runtime_from_thread_start(&thread.value) {
                 push_source(
                     &observations,
@@ -387,7 +494,7 @@ impl CodexAppServerTransport {
                     );
                 }
             }
-            thread
+            let thread_id = thread
                 .value
                 .pointer("/thread/id")
                 .and_then(Value::as_str)
@@ -396,7 +503,21 @@ impl CodexAppServerTransport {
                     TransportError::DeliveryFailed(
                         "thread/start Codex ne retourne pas thread.id".to_string(),
                     )
-                })
+                })?;
+            if interactive_socket.is_some() {
+                // 0.153.4 : rend le fil sans premier tour reprenable par la
+                // seconde connexion, sans envoyer de prompt d'amorçage.
+                request(
+                    &writer,
+                    &waiters,
+                    &next_id,
+                    "thread/name/set",
+                    json!({
+                        "threadId": thread_id, "name": "Bridget interactif"
+                    }),
+                )?;
+            }
+            Ok(thread_id)
         })();
         let thread_id = match setup {
             Ok(thread_id) => thread_id,
@@ -405,20 +526,25 @@ impl CodexAppServerTransport {
                     .lock()
                     .unwrap_or_else(|poison| poison.into_inner())
                     .take();
-                let mut child = child;
-                let _ = child.kill();
-                let _ = child.wait();
+                if let Some(socket) = interactive_socket {
+                    stop_interactive_server(&mut child, socket)
+                        .map_err(|stop| TransportError::Io(format!("{error} ; {stop}")))?;
+                } else {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
                 let _ = reader_handle.join();
                 return Err(error);
             }
         };
+        *selected_thread.lock().unwrap_or_else(|e| e.into_inner()) = Some(thread_id.clone());
         let child = Arc::new(Mutex::new(child));
         let busy = Arc::new(AtomicBool::new(false));
         let worker_handle = spawn_worker(Worker {
             queue: queue.clone(),
             writer: writer.clone(),
             waiters: waiters.clone(),
-            next_id,
+            next_id: next_id.clone(),
             observations: observations.clone(),
             alive: alive.clone(),
             busy: busy.clone(),
@@ -428,6 +554,7 @@ impl CodexAppServerTransport {
             active_detail: active_detail.clone(),
             pending_request,
             notify_timeout: Duration::from_secs(options.notify_timeout_secs),
+            interactive: interactive_socket.is_some(),
         });
 
         push_internal(
@@ -457,6 +584,8 @@ impl CodexAppServerTransport {
             queue_capacity: options.queue_capacity,
             writer,
             thread_id,
+            next_id,
+            waiters,
             child,
             provider_observation: options.provider_observation,
             observations,
@@ -464,6 +593,7 @@ impl CodexAppServerTransport {
             journal,
             reader_handle: Mutex::new(Some(reader_handle)),
             worker_handle: Mutex::new(Some(worker_handle)),
+            interactive_socket: interactive_socket.map(Path::to_path_buf),
         })
     }
 
@@ -534,6 +664,32 @@ impl CodexAppServerTransport {
         }
         wake.notify_all();
         drop(queue);
+        if self.interactive_socket.is_some() {
+            // app-server traite SIGTERM comme un drain gracieux. Une demande
+            // de permission encore affichée retiendrait donc Child::wait.
+            // Annuler le tour possédé AVANT de fermer son canal de contrôle.
+            let turn = self
+                .active_detail
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .and_then(|detail| {
+                    detail
+                        .turn_id
+                        .clone()
+                        .map(|turn| (detail.thread_id.clone(), turn))
+                });
+            if let Some((thread_id, turn_id)) = turn {
+                let _ = request_with_timeout(
+                    &self.writer,
+                    &self.waiters,
+                    &self.next_id,
+                    "turn/interrupt",
+                    json!({"threadId": thread_id, "turnId": turn_id}),
+                    INTERRUPT_REQUEST_TIMEOUT,
+                );
+            }
+        }
         self.writer
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
@@ -542,8 +698,18 @@ impl CodexAppServerTransport {
             .child
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let _ = unsafe { libc::kill(-(child.id() as i32), libc::SIGTERM) };
-        let _ = child.wait();
+        if let Some(socket) = &self.interactive_socket {
+            if let Err(error) = stop_interactive_server(&mut child, socket) {
+                // Garder le socket de récupération, jamais supprimer la seule
+                // référence d'un enfant dont l'arrêt n'est pas confirmé.
+                self.push_internal(ManagedEventKind::Error {
+                    detail: error.to_string(),
+                });
+            }
+        } else {
+            let _ = unsafe { libc::kill(-(child.id() as i32), libc::SIGTERM) };
+            let _ = child.wait();
+        }
         drop(child);
         if let Some(handle) = self
             .reader_handle
@@ -594,6 +760,14 @@ impl Transport for CodexAppServerTransport {
         let steering_requested = message.intent == Some(MessageIntent::SteerCurrent);
         let interrupt_requested = message.intent == Some(MessageIntent::InterruptAndStart)
             || (human_message && has_active_turn);
+        if self.interactive_socket.is_some() && (steering_requested || interrupt_requested) {
+            drop(queue);
+            self.push_internal(ManagedEventKind::DeliveryRejected {
+                message_id: message.id.clone(),
+                reason: "pilotage du tour interactif réservé à la TUI ; envoyer sans intention de contrôle pour la FIFO".into(),
+            });
+            return Ok(());
+        }
         if steering_requested && (queue.active.is_none() || !queue.steering_open) {
             drop(queue);
             self.push_internal(ManagedEventKind::DeliveryRejected {
@@ -751,10 +925,18 @@ impl ManagedSession for CodexAppServerTransport {
 
     fn is_busy(&self) -> bool {
         self.busy.load(Ordering::SeqCst)
+            || self
+                .queue
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .external_turn
+                .is_some()
     }
 }
 
 struct Worker {
+    interactive: bool,
     queue: Arc<(Mutex<QueueState>, Condvar)>,
     writer: Writer,
     waiters: Waiters,
@@ -776,7 +958,8 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
             let (message, cancel) = {
                 let (queue, wake) = &*worker.queue;
                 let mut queue = queue.lock().unwrap_or_else(|poison| poison.into_inner());
-                while queue.messages.is_empty() && !queue.closed {
+                while (queue.messages.is_empty() || queue.external_turn.is_some()) && !queue.closed
+                {
                     queue = wake
                         .wait(queue)
                         .unwrap_or_else(|poison| poison.into_inner());
@@ -805,52 +988,56 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                 continue;
             }
             worker.busy.store(true, Ordering::SeqCst);
-            push_internal(
-                &worker.observations,
-                ManagedEventKind::TurnStarted {
+            if !worker.interactive {
+                push_internal(
+                    &worker.observations,
+                    ManagedEventKind::TurnStarted {
+                        message_id: message.id.clone(),
+                    },
+                );
+                record_or_terminal(
+                    &worker.journal,
+                    &worker.observations,
+                    "turn_start",
+                    Some(&message.id),
+                    json!({
+                        "from": &message.from,
+                        "body": message.body,
+                    }),
+                );
+                *worker
+                    .active_detail
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner()) = Some(CodexTurnDetail {
                     message_id: message.id.clone(),
-                },
-            );
-            record_or_terminal(
-                &worker.journal,
-                &worker.observations,
-                "turn_start",
-                Some(&message.id),
-                json!({
-                    "from": &message.from,
-                    "body": message.body,
-                }),
-            );
-            *worker
-                .active_detail
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner()) = Some(CodexTurnDetail {
-                message_id: message.id.clone(),
-                thread_id: worker.thread_id.clone(),
-                ..CodexTurnDetail::default()
-            });
+                    thread_id: worker.thread_id.clone(),
+                    ..CodexTurnDetail::default()
+                });
+            }
             let started = SystemTime::now();
             let result = start_turn_with_retry(&worker, &message);
             let turn_started = result.is_ok();
             let event = match result {
                 Ok(turn_id) => {
-                    set_active_turn_id(&worker.active_detail, &message.id, &turn_id);
-                    push_internal(
-                        &worker.observations,
-                        ManagedEventKind::PromptDispatched {
-                            message_id: message.id.clone(),
-                        },
-                    );
-                    record_or_terminal(
-                        &worker.journal,
-                        &worker.observations,
-                        "prompt_dispatched",
-                        Some(&message.id),
-                        json!({
-                            "from": &message.from,
-                            "body": &message.body,
-                        }),
-                    );
+                    if !worker.interactive {
+                        set_active_turn_id(&worker.active_detail, &message.id, &turn_id);
+                        push_internal(
+                            &worker.observations,
+                            ManagedEventKind::PromptDispatched {
+                                message_id: message.id.clone(),
+                            },
+                        );
+                        record_or_terminal(
+                            &worker.journal,
+                            &worker.observations,
+                            "prompt_dispatched",
+                            Some(&message.id),
+                            json!({
+                                "from": &message.from,
+                                "body": &message.body,
+                            }),
+                        );
+                    }
                     wait_for_turn(&worker, &message, &turn_id, &cancel, started)
                 }
                 Err(reason) => ManagedEventKind::DeliveryRejected {
@@ -858,7 +1045,7 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                     reason,
                 },
             };
-            if turn_started {
+            if !worker.interactive && turn_started {
                 let reasoning = finish_reasoning(&worker.active_detail, &message.id);
                 record_or_terminal(
                     &worker.journal,
@@ -867,7 +1054,7 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
                     Some(&message.id),
                     reasoning,
                 );
-            } else {
+            } else if !worker.interactive {
                 worker
                     .active_detail
                     .lock()
@@ -878,7 +1065,9 @@ fn spawn_worker(worker: Worker) -> thread::JoinHandle<()> {
             // L'échéance (DeliveryRejected « échéance Codex dépassée ») n'écrit
             // PAS de turn_end : c'est une cause distincte du « inconnu » Claude
             // (succès + payload vide). Ne pas fusionner les deux.
-            if let ManagedEventKind::TurnFinished { terminal, .. } = &event {
+            if let ManagedEventKind::TurnFinished { terminal, .. } = &event
+                && !worker.interactive
+            {
                 let stop_reason = match terminal {
                     ManagedTerminal::Completed => "completed".to_string(),
                     ManagedTerminal::Cancelled => "cancelled".to_string(),
@@ -935,7 +1124,19 @@ fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<St
     // Les outils exposent leurs capacités ; le pilote ne promet ni interface
     // de rendu ni disponibilité du sandbox et ne transforme pas un document
     // HTML en ordre de publication ou d'exécution.
-    let prompt = private_prompt(instructions.as_deref(), &message.body);
+    let body = if worker.interactive {
+        // Métadonnées de transport distinctes du corps : le message durable,
+        // son canon et ses octets ne sont jamais réécrits. La réponse appartient
+        // au seul outil MCP, pas à la réponse finale de l'interface humaine.
+        format!(
+            "[Message Bridget : {}]\n{}\n\n[Réponse Bridget]\nSi reply=true, réponds une seule fois par l'outil bridget_send avec to=from et in_reply_to=id ci-dessus. La réponse finale à l'écran n'est pas envoyée à cet agent.",
+            json!({"from": message.from, "to": message.to, "id": message.id, "reply": message.reply}),
+            message.body
+        )
+    } else {
+        message.body.clone()
+    };
+    let prompt = private_prompt(instructions.as_deref(), &body);
     for attempt in 0..=SATURATION_RETRIES {
         match request(
             &worker.writer,
@@ -1322,7 +1523,7 @@ fn record(
         .unwrap_or_else(|poison| poison.into_inner())
         .as_ref()
         .map_or(Ok(()), |journal| {
-            journal.enqueue(event, message_id, payload)
+            journal.enqueue(event, message_id.filter(|id| !id.is_empty()), payload)
         })
 }
 
@@ -2135,7 +2336,7 @@ fn write_value(writer: &Writer, value: Value) -> Result<(), TransportError> {
         .map_err(|error| TransportError::Io(error.to_string()))
 }
 
-fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHandle<()> {
+fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandle<()> {
     let ReaderContext {
         waiters,
         observations,
@@ -2149,13 +2350,15 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
         permissions,
         dynamic_tool_handler,
         sandbox_posture,
+        interactive,
+        selected_thread,
     } = context;
     thread::spawn(move || {
         // SPEC-088 : lignes de sandbox reconnues, par item de commande. Un
         // acte `refusal` n'est écrit qu'à la fin en ÉCHEC du même item.
         let mut sandbox_lines_by_item: HashMap<String, String> = HashMap::new();
         let mut refusals_recorded: HashSet<(String, String)> = HashSet::new();
-        for line in BufReader::new(stdout).lines() {
+        for line in lines {
             let Ok(line) = line else { break };
             let raw = line.as_bytes().to_vec();
             let Ok(value) = serde_json::from_str::<Value>(&line) else {
@@ -2188,6 +2391,32 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                 continue;
             }
             let method = value.get("method").and_then(Value::as_str);
+            if interactive {
+                let selected = selected_thread
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                let incoming_thread = value
+                    .pointer("/params/threadId")
+                    .or_else(|| value.pointer("/params/thread/id"))
+                    .and_then(Value::as_str);
+                if let (Some(selected), Some(incoming)) = (selected.as_deref(), incoming_thread)
+                    && selected != incoming
+                {
+                    // Serveur privé neuf : aucun autre fil ne peut rester
+                    // chargé, même un sous-agent. Une reprise d'un fil déjà
+                    // chargé n'émettrait ensuite aucun signal de navigation.
+                    // Le cold resume 0.153.4 ne publie pas thread/started,
+                    // mais son chargement publie globalement le statut Idle.
+                    if matches!(method, Some("thread/started" | "thread/status/changed")) {
+                        push_source(&observations, raw, ManagedEventKind::Error {
+                            detail: "changement de fil Codex : relancer bridget codex pour une nouvelle session".into()
+                        });
+                        break;
+                    }
+                    continue;
+                }
+            }
             if let (Some(method), Some(request_id)) = (method, value.get("id"))
                 && let Err(detail) = record_provider_request(
                     &journal,
@@ -2196,6 +2425,7 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                     method,
                     request_id,
                     &value,
+                    interactive.then_some(&active_detail),
                 )
             {
                 push_source(
@@ -2208,7 +2438,51 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                     },
                 );
             }
+            // La TUI est l'unique répondante aux requêtes du serveur. Cela
+            // couvre aussi les nouvelles méthodes, sans refus automatique ni
+            // acceptation concurrente cachée du client Bridget.
+            if interactive && value.get("id").is_some() && method.is_some() {
+                push_source(
+                    &observations,
+                    raw,
+                    ManagedEventKind::Update {
+                        detail: "requête Codex réservée à la TUI native".into(),
+                    },
+                );
+                continue;
+            }
             match method {
+                Some("turn/started") if interactive => {
+                    if let Some(turn_id) = value.pointer("/params/turn/id").and_then(Value::as_str)
+                    {
+                        let mut state = queue.0.lock().unwrap_or_else(|e| e.into_inner());
+                        // Le tour OBSERVÉ est indépendant de la réservation
+                        // d'un RPC Bridget, y compris pendant sa finalisation.
+                        state.external_turn = Some(turn_id.into());
+                        *active_detail.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some(CodexTurnDetail {
+                                thread_id: value
+                                    .pointer("/params/threadId")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .into(),
+                                turn_id: Some(turn_id.into()),
+                                ..CodexTurnDetail::default()
+                            });
+                        push_source(
+                            &observations,
+                            raw.clone(),
+                            ManagedEventKind::ActivityObserved { in_progress: true },
+                        );
+                    }
+                    push_source(
+                        &observations,
+                        raw,
+                        ManagedEventKind::Update {
+                            detail: "turn/started Codex".into(),
+                        },
+                    );
+                }
                 // Le schéma produit par `codex app-server` 0.149.0 publie
                 // `item/agentMessage/delta`. La forme sans préfixe reste
                 // tolérée pour les traces antérieures à v2, sans modifier
@@ -2248,6 +2522,40 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                 // sans flux partiel). `item/completed` type agentMessage.
                 Some("item/completed") => {
                     let item = value.pointer("/params/item");
+                    if interactive
+                        && item.and_then(|i| i.get("type")).and_then(Value::as_str)
+                            == Some("userMessage")
+                        && let Some(client_id) =
+                            item.and_then(|i| i.get("clientId")).and_then(Value::as_str)
+                    {
+                        let active = queue.0.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut detail = active_detail.lock().unwrap_or_else(|e| e.into_inner());
+                        if let Some(detail) = detail.as_mut().filter(|d| {
+                            source_matches_active_turn(d, &value)
+                                && d.message_id == client_id
+                                && !d.prompt_dispatched
+                        }) && active
+                            .active
+                            .as_ref()
+                            .is_some_and(|a| a.message_id == client_id)
+                        {
+                            detail.prompt_dispatched = true;
+                            push_source(
+                                &observations,
+                                raw.clone(),
+                                ManagedEventKind::PromptDispatched {
+                                    message_id: client_id.into(),
+                                },
+                            );
+                            record_or_terminal(
+                                &journal,
+                                &observations,
+                                "prompt_dispatched",
+                                Some(client_id),
+                                json!({"provider_turn_id": value.pointer("/params/turnId")}),
+                            );
+                        }
+                    }
                     // SPEC-088 : fin d'une commande. Journalisée avec son état
                     // réel ; un signalement de sandbox n'existe qu'ici, et
                     // seulement si la commande a échoué.
@@ -2311,6 +2619,49 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                 // Les outputDelta ne portent que la sortie — ce n'est pas le nom.
                 Some("item/started") => {
                     let item = value.pointer("/params/item").unwrap_or(&Value::Null);
+                    if interactive
+                        && item.get("type").and_then(Value::as_str) == Some("userMessage")
+                    {
+                        let state = queue.0.lock().unwrap_or_else(|e| e.into_inner());
+                        let client_id = item.get("clientId").and_then(Value::as_str).filter(|id| {
+                            state.active.as_ref().is_some_and(|a| a.message_id == *id)
+                        });
+                        let mut active = active_detail.lock().unwrap_or_else(|e| e.into_inner());
+                        if let Some(detail) = active
+                            .as_mut()
+                            .filter(|a| source_matches_active_turn(a, &value))
+                        {
+                            // Un ajout humain (steer depuis la TUI) n'efface
+                            // jamais le propriétaire du tour déjà démarré.
+                            if !detail.input_seen {
+                                detail.message_id = client_id.unwrap_or_default().into();
+                            }
+                            // Projection texte du contenu attesté, sans perdre
+                            // les autres éléments natifs conservés dans input.
+                            let body: String = item
+                                .get("content")
+                                .and_then(Value::as_array)
+                                .into_iter()
+                                .flatten()
+                                .filter(|part| {
+                                    part.get("type").and_then(Value::as_str) == Some("text")
+                                })
+                                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                                .collect();
+                            record_or_terminal(
+                                &journal,
+                                &observations,
+                                if detail.input_seen {
+                                    "user_message"
+                                } else {
+                                    "turn_start"
+                                },
+                                client_id,
+                                json!({"from": if client_id.is_some() { "bridget" } else { "human" }, "body": body, "provider_turn_id": detail.turn_id, "input": item.get("content")}),
+                            );
+                            detail.input_seen = true;
+                        }
+                    }
                     observe_provider_item_id(&active_detail, &value);
                     if item.get("type").and_then(Value::as_str) == Some("userMessage") {
                         observe_steered_user_message_visibility(
@@ -2561,6 +2912,56 @@ fn spawn_reader(stdout: ChildStdout, context: ReaderContext) -> thread::JoinHand
                     let turn_id = value.pointer("/params/turn/id").and_then(Value::as_str);
                     let status = value.pointer("/params/turn/status").and_then(Value::as_str);
                     if let (Some(turn_id), Some(status)) = (turn_id, status) {
+                        if interactive {
+                            let mut state = queue.0.lock().unwrap_or_else(|e| e.into_inner());
+                            if state.external_turn.as_deref() != Some(turn_id) {
+                                // Un ancien terminal ou sa répétition ne peut
+                                // ni clore le tour courant ni remplir la table.
+                                continue;
+                            }
+                            if state.external_turn.as_deref() == Some(turn_id) {
+                                let message_id = active_detail
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .as_ref()
+                                    .map(|a| a.message_id.clone())
+                                    .unwrap_or_default();
+                                let reasoning = finish_reasoning(&active_detail, &message_id);
+                                record_or_terminal(
+                                    &journal,
+                                    &observations,
+                                    "reasoning",
+                                    Some(&message_id),
+                                    reasoning,
+                                );
+                                record_or_terminal(
+                                    &journal,
+                                    &observations,
+                                    "turn_end",
+                                    Some(&message_id),
+                                    json!({"provider_turn_id": turn_id, "stop_reason": status}),
+                                );
+                                *active_detail.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                                state.external_turn = None;
+                                push_source(
+                                    &observations,
+                                    raw.clone(),
+                                    ManagedEventKind::ActivityObserved { in_progress: false },
+                                );
+                                queue.1.notify_all();
+                                // Aucun worker n'attend ce tour humain : ne pas
+                                // conserver un terminal orphelin sans borne.
+                                if message_id.is_empty() {
+                                    observations
+                                        .0
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner())
+                                        .response_by_turn
+                                        .remove(turn_id);
+                                    continue;
+                                }
+                            }
+                        }
                         let terminal = match status {
                             "completed" => ManagedTerminal::Completed,
                             "interrupted" => ManagedTerminal::Cancelled,
@@ -2707,6 +3108,7 @@ fn record_provider_request(
     method: &str,
     request_id: &Value,
     frame: &Value,
+    interactive_detail: Option<&ActiveTurnDetail>,
 ) -> Result<(), String> {
     // La réception est linéarisée par ce verrou : dès qu'un lecteur l'a pris,
     // le worker terminal attendra que le fait soit mis en file avant de lire
@@ -2714,13 +3116,22 @@ fn record_provider_request(
     let mut pending = pending_request
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    let message_id = queue
-        .0
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .active
-        .as_ref()
-        .map(|active| active.message_id.clone());
+    let message_id = if let Some(detail) = interactive_detail {
+        detail
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .filter(|d| source_matches_active_turn(d, frame) && !d.message_id.is_empty())
+            .map(|d| d.message_id.clone())
+    } else {
+        queue
+            .0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .active
+            .as_ref()
+            .map(|active| active.message_id.clone())
+    };
     let request = PendingProviderRequest {
         message_id,
         method: project_provider_method(method),
@@ -2821,6 +3232,272 @@ mod tests {
     use std::time::Instant;
 
     static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn lecteur_interactif_ne_repond_jamais_pour_humain_et_conserve_raw() {
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let observations = Arc::new((Mutex::new(Observations::default()), Condvar::new()));
+        let queue = Arc::new((
+            Mutex::new(QueueState {
+                messages: VecDeque::new(),
+                steer: VecDeque::new(),
+                active: None,
+                steering_open: false,
+                closed: false,
+                external_turn: None,
+            }),
+            Condvar::new(),
+        ));
+        let alive = Arc::new(AtomicBool::new(true));
+        let detail = Arc::new(Mutex::new(None));
+        let pending_request = Arc::new(Mutex::new(None));
+        let journal_root = root("interactive-reader");
+        let journal = Arc::new(Mutex::new(Some(
+            JournalWriter::start(
+                &journal_root,
+                "interactive",
+                "thread",
+                Arc::new(Mutex::new(crate::acp::AcpEventQueue::default())),
+            )
+            .unwrap(),
+        )));
+        let (tx, rx) = mpsc::channel::<String>();
+        let reader = spawn_reader(
+            Box::new(rx.into_iter().map(Ok)),
+            ReaderContext {
+                waiters: Arc::new(Mutex::new(HashMap::new())),
+                observations: observations.clone(),
+                alive: alive.clone(),
+                journal: journal.clone(),
+                queue: queue.clone(),
+                pending_request: pending_request.clone(),
+                pinned_model: None,
+                active_detail: detail.clone(),
+                writer: Arc::new(Mutex::new(Some(Box::new(Capture(output.clone()))))),
+                permissions: "allow".into(),
+                dynamic_tool_handler: None,
+                sandbox_posture: "complete",
+                interactive: true,
+                selected_thread: Arc::new(Mutex::new(Some("thread".into()))),
+            },
+        );
+        let serial = AtomicU64::new(0);
+        let barrier = |raw: &str| {
+            tx.send(raw.into()).unwrap();
+            let sentinel = json!({"method": "test/barrier", "params": {"n": serial.fetch_add(1, AtomicOrdering::SeqCst)}}).to_string();
+            tx.send(sentinel.clone()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut state = observations.0.lock().unwrap();
+            while !state
+                .events
+                .iter()
+                .any(|event| event.raw == sentinel.as_bytes())
+            {
+                let remaining = deadline
+                    .checked_duration_since(Instant::now())
+                    .expect("événement reader attendu");
+                state = observations.1.wait_timeout(state, remaining).unwrap().0;
+            }
+        };
+        barrier(
+            r#"{ "method":"turn/started", "params":{"threadId":"thread","turn":{"id":"t","status":"inProgress"}} }"#,
+        );
+        assert_eq!(queue.0.lock().unwrap().external_turn.as_deref(), Some("t"));
+        for raw in [
+            r#"{ "id":7, "method":"item/commandExecution/requestApproval", "params":{"threadId":"thread","turnId":"t","future":42} }"#,
+            r#"{ "id":"eight", "method":"mcpServer/elicitation/request", "params":{"serverName":"bridget","mode":"form","requestedSchema":{}} }"#,
+            r#"{  "id":9, "method":"future/request", "params": {"unknown": true}  }"#,
+        ] {
+            barrier(raw);
+        }
+        // Mutation : appeler les réponses automatiques managed (allow), y
+        // compris celle de refus inconnu, rendrait cette assertion rouge.
+        assert!(output.lock().unwrap().is_empty());
+        barrier(
+            r#"{"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"t","status":"completed"}}}"#,
+        );
+        assert!(queue.0.lock().unwrap().external_turn.is_none());
+        let state = observations.0.lock().unwrap();
+        assert!(state.events.iter().any(|e| matches!(
+            e.kind,
+            ManagedEventKind::ActivityObserved { in_progress: true }
+        )));
+        assert!(state.events.iter().any(|e| matches!(
+            e.kind,
+            ManagedEventKind::ActivityObserved { in_progress: false }
+        )));
+        assert!(
+            !state
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, ManagedEventKind::PromptDispatched { .. }))
+        );
+        assert!(state.terminal_by_turn.is_empty());
+        drop(state);
+
+        // Mutation : tester queue.active.is_none() au lieu du tour observé
+        // perd le tour humain arrivé pendant une réservation Bridget.
+        let (cancel, _receiver) = mpsc::channel();
+        queue.0.lock().unwrap().active = Some(ActiveTurn {
+            message_id: "pending".into(),
+            cancel,
+        });
+        barrier(
+            r#"{"method":"turn/started","params":{"threadId":"thread","turn":{"id":"human-race","status":"inProgress"}}}"#,
+        );
+        barrier(
+            r#"{"method":"item/started","params":{"threadId":"thread","turnId":"human-race","item":{"type":"userMessage","clientId":"human","content":[]}}}"#,
+        );
+        assert_eq!(
+            queue.0.lock().unwrap().external_turn.as_deref(),
+            Some("human-race")
+        );
+        assert_eq!(detail.lock().unwrap().as_ref().unwrap().message_id, "");
+        barrier(
+            r#"{"id":10,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread","turnId":"human-race"}}"#,
+        );
+        assert!(
+            pending_request
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .message_id
+                .is_none(),
+            "la réservation n'est pas l'auteur de la permission humaine"
+        );
+        assert!(!source_matches_active_turn(
+            detail.lock().unwrap().as_ref().unwrap(),
+            &json!({"params":{"threadId":"thread","turnId":"different"}})
+        ));
+        barrier(
+            r#"{"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"human-race","status":"completed"}}}"#,
+        );
+        barrier(
+            r#"{"method":"turn/started","params":{"threadId":"thread","turn":{"id":"owned","status":"inProgress"}}}"#,
+        );
+        barrier(
+            r#"{"method":"item/started","params":{"threadId":"thread","turnId":"owned","item":{"type":"userMessage","clientId":"pending","content":[]}}}"#,
+        );
+        assert_eq!(
+            detail.lock().unwrap().as_ref().unwrap().message_id,
+            "pending"
+        );
+        assert!(
+            !observations
+                .0
+                .lock()
+                .unwrap()
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, ManagedEventKind::PromptDispatched { .. })),
+            "pas d'ACK avant consommation"
+        );
+        barrier(
+            r#"{"method":"item/completed","params":{"threadId":"thread","turnId":"ancien","item":{"type":"userMessage","clientId":"pending","content":[]}}}"#,
+        );
+        assert!(
+            !observations
+                .0
+                .lock()
+                .unwrap()
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, ManagedEventKind::PromptDispatched { .. })),
+            "ancien tour : aucun ACK malgré le bon clientId"
+        );
+        barrier(
+            r#"{"method":"item/completed","params":{"threadId":"thread","turnId":"owned","item":{"type":"userMessage","clientId":"pending","content":[]}}}"#,
+        );
+        barrier(
+            r#"{"method":"item/completed","params":{"threadId":"thread","turnId":"owned","item":{"type":"userMessage","clientId":"pending","content":[]}}}"#,
+        );
+        assert_eq!(observations.0.lock().unwrap().events.iter().filter(|e| matches!(&e.kind, ManagedEventKind::PromptDispatched { message_id } if message_id == "pending")).count(), 1);
+        barrier(
+            r#"{"method":"item/started","params":{"threadId":"thread","turnId":"owned","item":{"type":"userMessage","clientId":"human-steer","content":[{"type":"text","text":"AJOUT HUMAIN"}]}}}"#,
+        );
+        assert_eq!(
+            detail.lock().unwrap().as_ref().unwrap().message_id,
+            "pending",
+            "l'ajout humain ne vole pas la corrélation du tour"
+        );
+        barrier(
+            r#"{"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"owned","status":"completed"}}}"#,
+        );
+        assert!(
+            observations
+                .0
+                .lock()
+                .unwrap()
+                .terminal_by_turn
+                .contains_key("owned"),
+            "le worker doit recevoir son terminal malgré l'ajout humain"
+        );
+        // Le worker n'a PAS encore libéré sa réservation. Le lecteur doit
+        // pourtant attester le tour suivant et clear_active ne peut l'effacer.
+        barrier(
+            r#"{"method":"turn/started","params":{"threadId":"thread","turn":{"id":"next-human","status":"inProgress"}}}"#,
+        );
+        clear_active(&queue);
+        assert_eq!(
+            queue.0.lock().unwrap().external_turn.as_deref(),
+            Some("next-human")
+        );
+        assert_eq!(
+            detail.lock().unwrap().as_ref().unwrap().turn_id.as_deref(),
+            Some("next-human")
+        );
+        barrier(
+            r#"{"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"ancien","status":"completed"}}}"#,
+        );
+        assert!(
+            !observations
+                .0
+                .lock()
+                .unwrap()
+                .terminal_by_turn
+                .contains_key("ancien")
+        );
+        assert_eq!(
+            queue.0.lock().unwrap().external_turn.as_deref(),
+            Some("next-human")
+        );
+        drop(tx);
+        reader.join().unwrap();
+        assert!(!alive.load(Ordering::SeqCst));
+        assert!(
+            !observations
+                .0
+                .lock()
+                .unwrap()
+                .events
+                .iter()
+                .any(|event| matches!(event.kind, ManagedEventKind::JournalFailed { .. })),
+            "une saisie supplémentaire doit traverser la vraie garde du journal"
+        );
+        journal.lock().unwrap().take().unwrap().stop();
+        let logs: String = fs::read_dir(journal_root.join("interactive"))
+            .unwrap()
+            .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect();
+        assert!(
+            logs.lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .any(|entry| entry["event"] == "user_message"
+                    && entry["payload"]["body"] == "AJOUT HUMAIN"
+                    && entry["payload"]["from"] == "human")
+        );
+    }
 
     fn root(label: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(

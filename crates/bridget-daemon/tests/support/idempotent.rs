@@ -4,6 +4,7 @@
 use bridget_core::BridgetMessage;
 use bridget_daemon::registry::AgentRegistry;
 use bridget_daemon::store::Store;
+#[cfg(feature = "test-support")]
 use bridget_daemon::test_sync::DIRECTORY_ENV;
 use bridget_transport::protocol::{
     CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue, decode, encode,
@@ -514,11 +515,21 @@ pub fn spawn_daemon(root: &Path, sync: Option<&Path>) -> DaemonProcess {
         .env("RUST_LOG", "info")
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
-    if let Some(sync) = sync {
-        command.env(DIRECTORY_ENV, sync);
-    } else {
-        command.env_remove(DIRECTORY_ENV);
+    #[cfg(feature = "test-support")]
+    {
+        if let Some(sync) = sync {
+            command.env(DIRECTORY_ENV, sync);
+        } else {
+            command.env_remove(DIRECTORY_ENV);
+        }
     }
+    // Les tests sans barrière fonctionnent aussi avec le build normal.
+    // Ne jamais prétendre armer une barrière absente du binaire testé.
+    #[cfg(not(feature = "test-support"))]
+    assert!(
+        sync.is_none(),
+        "une barrière nécessite la feature test-support"
+    );
     spawn_daemon_command(command)
 }
 

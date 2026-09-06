@@ -2439,6 +2439,10 @@ pub enum WrapperToDaemon {
     /// Le pilote a ouvert son journal append-only pour cette connexion. Ce
     /// signal distinct du Register évite de déduire attach du mode ACP.
     JournalReady,
+    /// La session native a démarré dans un terminal qui possède son cycle de
+    /// vie. Fait lié à la connexion, à réannoncer après chaque reconnexion.
+    /// Ne se déduit ni du protocole fournisseur ni de la présence d'un journal.
+    TerminalSessionReady,
     /// Fait fournisseur corrélé à une exécution. Les versions anciennes ne
     /// l'émettent pas, ce qui laisse le contexte explicitement absent.
     ExecutionProviderObserved {
@@ -3696,6 +3700,14 @@ pub struct RequestInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_session_ready_contrat_filaire() {
+        let bytes = r#"{"type":"TerminalSessionReady"}"#;
+        let decoded: WrapperToDaemon = decode(bytes).unwrap();
+        assert!(matches!(decoded, WrapperToDaemon::TerminalSessionReady));
+        assert_eq!(encode(&decoded).unwrap(), bytes);
+    }
 
     const SERVICE_NEGOTIATION_FIXTURE: &str = include_str!(
         "../../../specs/015-guichet-maicie/contracts/fixtures/service-negotiation-v1.jsonl"

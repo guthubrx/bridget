@@ -55,6 +55,43 @@ Reply with `to`, `body` and `in_reply_to`. The packaged
 [skill](skills/bridget/SKILL.md) provides examples and retry guidance; global
 profiles are never modified automatically.
 
+## Native interactive Codex, without tmux (session 090)
+
+From a real terminal, in the intended working directory:
+
+```sh
+bridget codex
+bridget codex -m gpt-5.6-terra
+```
+
+This branch opens the **official Codex TUI** against a private local app-server.
+Human input and Bridget messages share one thread. The UUID printed at startup
+is the session address. Codex replies using `bridget_send` with `in_reply_to`;
+its final on-screen answer is **not automatically forwarded** to the sender.
+
+Ordinary messages queue behind an active human turn. Native permissions stay
+under human control; managed-session permissive defaults are never inherited.
+Explicit model/profile/configuration, sandbox and approval options are forwarded.
+
+Verified contract: Codex **0.153.4**, experimental Unix remote connection and
+`legacy` history. One thread per launch: `/new`, `/resume` to another thread,
+forks and internal Codex subagents loading a second thread end the integration
+instead of leaving the address bound to an old thread. Other Bridget agents
+remain independent and reachable. Quit and relaunch to change directory.
+This first version rejects `--cd`, images, local providers and old-thread resume;
+unsupported options are rejected rather than silently ignored.
+
+| Command | Purpose and lifetime |
+|---|---|
+| `bridget codex` | Foreground native interaction; quitting closes this session. |
+| `bridget spawn codex --persistent …` | Supervised agent independent of the terminal. |
+| `bridget attach <uuid>` | Journal replay/follow, not a native TUI resume. |
+
+A Bridget daemon reconnect preserves the thread and identity. The configured
+Bridget socket may be SSH-forwarded; the Codex app-server remains local and
+private. No new HTTP server or browser access. Building this branch does not
+replace or install the running binary automatically.
+
 ## Interpret outcomes literally
 
 | Status | Meaning |

@@ -10,7 +10,7 @@ dans la session 089 ; un paquet construit n'est pas une validation de compte.
 Depuis le chantier actuel :
 
 ```sh
-cd /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core
+cd /Users/moi/Nextcloud/10.Scripts/64.bridget
 package_parent=$(mktemp -d /tmp/bgpackage.XXXXXX)
 package_parent=$(cd "$package_parent" && pwd -P)
 bash scripts/package-089-core.sh "$package_parent/source"
@@ -67,6 +67,53 @@ runtime de projet, pas les droits ni les contrôles de facturation. Un refus est
 à instruire, jamais à transformer automatiquement en lancement permissif.
 La skill fournie reste un fichier à installer volontairement dans le profil
 choisi, pas une écriture automatique dans tous les profils.
+
+## Codex interactif (090)
+
+Les sources de cette évolution se trouvent dans
+`/Users/moi/Nextcloud/10.Scripts/64.bridget`.
+Pour construire un binaire de test sans remplacer l'installation release :
+
+```sh
+cd /Users/moi/Nextcloud/10.Scripts/64.bridget
+PATH=/Users/moi/.cargo/bin:$PATH cargo build --locked -p bridget-daemon
+```
+
+Employer ensuite ce binaire avec le daemon privé et les variables de la section 2.
+Dans un vrai terminal, depuis le répertoire de travail choisi :
+
+```sh
+/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/bridget codex
+```
+
+Le Codex déclaré doit prendre en charge `app-server --listen unix://…` et
+`resume --remote unix://…` ; la recette porte sur 0.153.4. Le registre choisit
+le chemin du binaire ; l'utilisateur garde son HOME et son abonnement. Les
+permissions viennent de sa configuration native et de ses options explicites,
+pas des arguments permissifs du mode géré. Une racine Bridget privée et courte
+est nécessaire pour la socket de contrôle locale. Aucun service public ajouté.
+
+Cette session n'est pas persistante : quitter ferme la TUI, le serveur privé
+et sa présence. `spawn --persistent` reste le parcours d'arrière-plan. Une
+commande de navigation vers un autre fil doit fermer l'intégration, jamais
+laisser les prochains messages arriver invisiblement dans l'ancien fil.
+Lancer une autre session explicitement pour changer de fil.
+
+Après adoption de la release, la commande habituelle est simplement
+`bridget codex`, depuis le répertoire de travail souhaité. Le lien
+`/Users/moi/.local/bin/bridget` vise
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget`.
+Les skills Codex, Claude et agents partagent la source canonique
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/skills/bridget/SKILL.md`.
+
+L'adoption explicitement demandée le 2026-09-06 sauvegarde la release et l'état
+du daemon sous `/Users/moi/.cache/bridget-adoptions/` avant remplacement.
+L'arrêt gracieux de com.bridget.daemon n'est permis qu'après vérification de
+l'annuaire ; aucune session active ne doit être interrompue implicitement.
+Le reçu d'adoption local indique les chemins exacts, versions et vérifications.
+Le retour arrière de cette adoption consiste à arrêter le seul daemon, restaurer
+le binaire sauvegardé (et l'état arrêté sauvegardé si nécessaire), puis relancer
+son plist inchangé. Ce n'est pas la procédure d'installation isolée ci-dessous.
 
 ## 4. Fédération SSH
 

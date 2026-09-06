@@ -1,5 +1,5 @@
 <!-- SPECKIT START -->
-Plan actif : specs/089-communication-core/plan.md.
+Plan actif : specs/090-codex-interactif/plan.md (socle : session 089).
 Périmètre : communication inter-agents, observation et fédération SSH.
 Ne pas lancer de daemon, wrapper ou script de déploiement avant configuration
 explicite d'un home/socket isolé. L'installation historique reste hors périmètre.

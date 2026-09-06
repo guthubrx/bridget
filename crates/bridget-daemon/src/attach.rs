@@ -1828,7 +1828,7 @@ fn render_journal_event(bytes: &[u8], agent: &str) -> String {
         .unwrap_or("inconnu");
     let payload = value.get("payload").unwrap_or(&serde_json::Value::Null);
     let (label, content) = match event {
-        "turn_start" => inbound_message_parts(payload),
+        "turn_start" | "user_message" => inbound_message_parts(payload),
         // Même forme que `turn_start` quand le pilote a consignés from/body ;
         // payload vide (journaux réels Codex/Claude) → accusé lisible, pas un
         // « non pris en charge ».

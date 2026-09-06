@@ -11,6 +11,50 @@ use crate::transport::{Transport, TransportError};
 use bridget_core::BridgetMessage;
 use std::path::Path;
 
+/// Arrêt borné d'un enfant DÉTENU depuis son lancement. Le groupe n'est
+/// utilisable que si l'appelant l'a créé avec process_group(0). Aucun SIGKILL,
+/// aucun succès inventé : un survivant reste identifié dans l'erreur.
+pub fn stop_owned_child(
+    child: &mut std::process::Child,
+    process_group: bool,
+    budget: std::time::Duration,
+) -> std::io::Result<()> {
+    let pid = child.id() as i32;
+    let target = if process_group { -pid } else { pid };
+    let started = std::time::Instant::now();
+    for (index, signal) in [libc::SIGTERM, libc::SIGINT].into_iter().enumerate() {
+        let exited = child.try_wait()?.is_some();
+        if exited
+            && (!process_group
+                || unsafe { libc::kill(target, 0) } < 0
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH))
+        {
+            return Ok(());
+        }
+        if unsafe { libc::kill(target, signal) } < 0
+            && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        let deadline = started + budget.mul_f64((index + 1) as f64 / 2.0);
+        while std::time::Instant::now() < deadline {
+            let exited = child.try_wait()?.is_some();
+            if exited
+                && (!process_group
+                    || unsafe { libc::kill(target, 0) } < 0
+                        && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH))
+            {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        format!("arrêt non confirmé du processus/groupe détenu {pid} après TERM et INT"),
+    ))
+}
+
 /// Source attestée d'un événement de session.
 ///
 /// La v1 ne contient que la source déjà réellement consommée par Bridget.
@@ -102,6 +146,10 @@ impl ManagedEvent {
 
 #[derive(Debug, Clone)]
 pub enum ManagedEventKind {
+    /// Activité attestée sans message Bridget (tour humain natif).
+    ActivityObserved {
+        in_progress: bool,
+    },
     TurnStarted {
         message_id: String,
     },
@@ -296,6 +344,33 @@ pub trait ManagedSession: Transport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enfant_reel_ignore_term_puis_int_ferme_le_groupe_sous_borne() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+        let mut child = Command::new("/usr/bin/python3").args(["-c",
+            "import signal,sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); signal.signal(signal.SIGINT, lambda *_: sys.exit(0)); print('READY',flush=True); signal.pause()"])
+            .stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0).spawn().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let _ = tx.send(BufReader::new(stdout).lines().next());
+        });
+        let ready = rx.recv_timeout(Duration::from_secs(3));
+        let started = Instant::now();
+        let result = stop_owned_child(&mut child, true, Duration::from_secs(2));
+        reader.join().unwrap();
+        assert_eq!(ready.unwrap().unwrap().unwrap(), "READY");
+        result.unwrap();
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(child.try_wait().unwrap().is_some());
+        // Mutation : TERM seul laisserait ce véritable enfant vivant ;
+        // wait() sans borne immobiliserait ce test au lieu de confirmer INT.
+        assert!(unsafe { libc::kill(-(child.id() as i32), 0) } < 0);
+    }
 
     #[test]
     fn contexte_fournisseur_et_attente_restent_deux_faits_distincts() {

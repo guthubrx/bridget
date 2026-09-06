@@ -529,19 +529,8 @@ fn interactive_bridget_prompt(name: &str, mcp_enabled: bool) -> String {
     )
 }
 
-/// Amorçage ajouté au prompt d'une reprise Codex.
-///
-/// Les appels MCP dynamiques ne sont pas supportés par `functions.exec` dans
-/// les sessions app-server gérées. Le binaire Bridget reste disponible dans le
-/// `PATH` du wrapper et évite ainsi qu'un tour attende une réponse impossible.
-fn codex_resume_bootstrap(name: &str) -> String {
-    format!(
-        "Tu reprends la session de l'agent Bridget \"{name}\". Utilise uniquement le binaire `bridget` disponible dans PATH pour envoyer, consulter ou répondre aux messages Bridget. N'essaie pas de rechercher ni d'appeler `mcp__bridget__*` via `functions.exec` ou `ALL_TOOLS` : ce mécanisme n'est pas disponible dans cette session app-server."
-    )
-}
-
 /// Options Codex qui consomment exactement la valeur suivante.
-fn codex_option_takes_value(argument: &str) -> bool {
+pub(crate) fn codex_option_takes_value(argument: &str) -> bool {
     matches!(
         argument,
         "-c" | "--config"
@@ -564,93 +553,6 @@ fn codex_option_takes_value(argument: &str) -> bool {
             | "-a"
             | "--ask-for-approval"
     )
-}
-
-/// Rend les indices des arguments positionnels, sans confondre la valeur
-/// d'une option avec un prompt.
-fn codex_positionals(arguments: &[String], from: usize) -> Vec<usize> {
-    let mut positionals = Vec::new();
-    let mut index = from;
-    let mut after_separator = false;
-    while index < arguments.len() {
-        let argument = &arguments[index];
-        if after_separator {
-            positionals.push(index);
-            index += 1;
-            continue;
-        }
-        if argument == "--" {
-            after_separator = true;
-            index += 1;
-            continue;
-        }
-        if matches!(argument.as_str(), "-i" | "--image") {
-            // Clap accepte une ou plusieurs images : aucune de leurs valeurs
-            // ne constitue SESSION_ID ou PROMPT.
-            index += 1;
-            while index < arguments.len() && !arguments[index].starts_with('-') {
-                index += 1;
-            }
-            continue;
-        }
-        if codex_option_takes_value(argument) {
-            index = (index + 2).min(arguments.len());
-            continue;
-        }
-        if argument.starts_with('-') {
-            index += 1;
-            continue;
-        }
-        positionals.push(index);
-        index += 1;
-    }
-    positionals
-}
-
-/// Prépare les arguments utilisateur Codex sans prendre `resume`, son
-/// identifiant de session ni les valeurs d'options pour un prompt.
-///
-/// Lors d'une reprise nommée (ou `--last`), l'amorçage est toujours présent :
-/// il devient le prompt s'il n'y en a pas, ou préfixe le prompt explicite.
-fn prepare_codex_agent_args(agent_args: &[String], name: &str, mcp_enabled: bool) -> Vec<String> {
-    let mut prepared = agent_args.to_vec();
-    let top_level_positionals = codex_positionals(agent_args, 0);
-    let Some(resume_index) = top_level_positionals
-        .first()
-        .copied()
-        .filter(|index| agent_args[*index] == "resume")
-    else {
-        if codex_positionals(agent_args, 0).is_empty() {
-            prepared.push(interactive_bridget_prompt(name, mcp_enabled));
-        }
-        return prepared;
-    };
-
-    let positionals = codex_positionals(agent_args, resume_index + 1);
-    let uses_last = agent_args[resume_index + 1..]
-        .iter()
-        .any(|argument| argument == "--last");
-    let prompt_index = if uses_last {
-        positionals.first().copied()
-    } else {
-        positionals.get(1).copied()
-    };
-    let has_selector = uses_last || !positionals.is_empty();
-    if !has_selector {
-        // `codex resume` ouvre le sélecteur interactif : un unique argument
-        // positionnel serait interprété comme SESSION_ID, pas comme PROMPT.
-        return prepared;
-    }
-
-    let bootstrap = codex_resume_bootstrap(name);
-    if let Some(prompt_index) = prompt_index {
-        prepared[prompt_index] = format!("{bootstrap}\n\n{}", prepared[prompt_index]);
-    } else {
-        // Toujours en dernière position : les options placées après le
-        // SESSION_ID restent des options, et l'amorçage occupe bien PROMPT.
-        prepared.push(bootstrap);
-    }
-    prepared
 }
 
 #[derive(Debug, Clone)]
@@ -1410,7 +1312,15 @@ fn connect_and_register_at(
     turn_in_progress: bool,
 ) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
     crate::environment::Namespace::from_environment()?;
-    let stream = UnixStream::connect(socket).map_err(|e| e.to_string())?;
+    let stream = bridget_transport::jsonl::connect_nonblocking(
+        socket,
+        Instant::now() + Duration::from_secs(1),
+    )
+    .map_err(|e| e.to_string())?;
+    // Un daemon qui ne lit plus ne doit pas posséder la fin de vie du terminal.
+    stream
+        .set_write_timeout(Some(Duration::from_secs(1)))
+        .map_err(|e| e.to_string())?;
     set_cloexec(&stream);
     let read_stream = stream.try_clone().map_err(|e| e.to_string())?;
     set_cloexec(&read_stream);
@@ -1518,6 +1428,25 @@ pub fn launch(
     let (equipier, agent_args) = split_equipier_flag(agent_args);
     if equipier {
         return launch_acp(agent_type, &agent_args, explicit_name);
+    }
+    if agent_type == "codex" {
+        crate::codex_interactive::Launch::check_terminal()?;
+        let interactive = crate::codex_interactive::Launch::parse(&agent_args)?;
+        let registry = crate::registry::AgentRegistry::load()?;
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or("HOME absent")?;
+        return launch_session_with_status(
+            agent_type,
+            &[],
+            explicit_name,
+            &registry,
+            &socket_path(),
+            &home,
+            None,
+            None,
+            Some(interactive),
+        );
     }
     // 1. Enregistrement initial — avec persistance du nom.
     // Si l'utilisateur a passé --name, on l'utilise.
@@ -1650,23 +1579,7 @@ pub fn launch(
         "none" | "unsupported" => false,
         _ => return Err("configuration MCP interactive inconnue dans le registre".into()),
     };
-    if agent_type == "codex" {
-        // Vérifier si l'utilisateur n'a pas déjà passé --yolo ou le bypass
-        let already_bypassed = agent_args
-            .iter()
-            .any(|a| a == "--yolo" || a == "--dangerously-bypass-approvals-and-sandbox")
-            || final_args
-                .iter()
-                .any(|a| a == "--yolo" || a == "--dangerously-bypass-approvals-and-sandbox");
-        if !already_bypassed {
-            ensure_codex_approval_bypass(&mut final_args);
-        }
-
-        // Ne PAS utiliser --cd : ça change le working directory de l'agent.
-        // Les instructions bridget viennent du prompt initial ci-dessous.
-        // Le prompt initial est persistant dans le transcript et survive
-        // le compaction de contexte (contrairement à un message système).
-    } else if agent_type == "claude" {
+    if agent_type == "claude" {
         // Pour Claude Code (claude et gclaude)
         let already_bypassed = agent_args
             .iter()
@@ -1679,23 +1592,15 @@ pub fn launch(
         }
     }
 
-    if agent_type == "codex" {
-        final_args.extend(prepare_codex_agent_args(
-            &agent_args,
-            &my_display_name,
-            mcp_enabled,
-        ));
-    } else {
-        // Claude n'a pas de sous-commande `resume` dans la forme pilotée ici.
-        // Conserver son contrat historique et placer le prompt avant les args.
-        let has_prompt = agent_args
-            .iter()
-            .any(|argument| !argument.starts_with("--"));
-        if !has_prompt && agent_type == "claude" {
-            final_args.push(interactive_bridget_prompt(&my_display_name, mcp_enabled));
-        }
-        final_args.extend(agent_args.iter().cloned());
+    // Codex emprunte déjà la TUI native plus haut. Le prompt des autres
+    // fournisseurs reste inchangé.
+    let has_prompt = agent_args
+        .iter()
+        .any(|argument| !argument.starts_with("--"));
+    if !has_prompt && agent_type == "claude" {
+        final_args.push(interactive_bridget_prompt(&my_display_name, mcp_enabled));
     }
+    final_args.extend(agent_args.iter().cloned());
 
     // L'autorisation est déclarative : un type absent du registre est refusé
     // avant le spawn, avec les types disponibles et le fichier concerné.
@@ -3324,8 +3229,33 @@ fn launch_acp_with_status(
     registry: &crate::registry::AgentRegistry,
     socket: &std::path::Path,
     home: &std::path::Path,
+    managed_reporter: Option<&mut crate::managed_process::ManagedStatusReporter>,
+    frozen_definition_digest: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    launch_session_with_status(
+        agent_type,
+        agent_args,
+        explicit_name,
+        registry,
+        socket,
+        home,
+        managed_reporter,
+        frozen_definition_digest,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_session_with_status(
+    agent_type: &str,
+    agent_args: &[String],
+    explicit_name: Option<&str>,
+    registry: &crate::registry::AgentRegistry,
+    socket: &Path,
+    home: &Path,
     mut managed_reporter: Option<&mut crate::managed_process::ManagedStatusReporter>,
     frozen_definition_digest: Option<&str>,
+    interactive: Option<crate::codex_interactive::Launch>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Les API injectables ne peuvent envoyer le wrapper sur un socket et ses
     // outils MCP sur un autre. Refus avant création d'état ou fournisseur.
@@ -3347,6 +3277,9 @@ fn launch_acp_with_status(
         return Err("le mode --equipier n'accepte pas d'arguments d'agent".into());
     }
     let definition = registry.get(agent_type)?;
+    if interactive.is_some() && definition.protocol != "codex_app_server" {
+        return Err("Codex interactif requiert le pilote natif codex_app_server".into());
+    }
     if !matches!(
         definition.protocol.as_str(),
         "acp" | "claude_stream_json" | "codex_app_server"
@@ -3408,7 +3341,12 @@ fn launch_acp_with_status(
         .transpose()?
         .into_iter()
         .collect();
-    let mut native_args = definition.args.clone();
+    // La définition gérée peut contenir un bypass. Une session humaine part
+    // de SES réglages Codex et des seuls arguments explicitement demandés.
+    let mut native_args = interactive.as_ref().map_or_else(
+        || definition.args.clone(),
+        |launch| launch.server_args.clone(),
+    );
     let _ephemeral_mcp_config = apply_managed_mcp(
         definition.protocol.as_str(),
         definition.mcp.interactive.as_str(),
@@ -3420,24 +3358,51 @@ fn launch_acp_with_status(
     // application, managed-wrapper ignore permissions et n'injecte aucun
     // drapeau de contournement — la question d'autorisation arrive alors
     // alors que le réglage allow aurait dû l'éviter.
-    apply_managed_permission_policy(
-        definition.protocol.as_str(),
-        definition.permissions.as_str(),
-        &mut native_args,
-    );
+    if interactive.is_none() {
+        apply_managed_permission_policy(
+            definition.protocol.as_str(),
+            definition.permissions.as_str(),
+            &mut native_args,
+        );
+    }
     let inherit_stderr = managed_reporter.is_some();
-    let mut transport: Box<dyn ManagedSession> = spawn_managed_session_transport(
-        agent_type,
-        definition,
-        &native_args,
-        &mcp_environment,
-        mcp_servers.clone(),
-        inherit_stderr,
-        home,
-        effective_name.clone(),
-        &instance_id,
-        socket,
-    )?;
+    let codex_socket = state_root.join(format!("c-{}.sock", &instance_id[..12]));
+    let mut tui_binding = None;
+    let mut transport: Box<dyn ManagedSession> = if let Some(launch) = &interactive {
+        let native = bridget_transport::CodexAppServerTransport::spawn_interactive(
+            bridget_transport::CodexAppServerOptions {
+                command: definition.command.clone(),
+                args: native_args.clone(),
+                queue_capacity: definition.queue_capacity,
+                notify_timeout_secs: definition.notify_timeout_secs,
+                model: launch.model.clone(),
+                permissions: "interactive".into(),
+                provider_observation: None,
+                thread_bootstrap: bridget_transport::codex_app_server::CodexThreadBootstrap::Start,
+                dynamic_tool_handler: None,
+            },
+            &string_environment(&mcp_environment),
+            &codex_socket,
+        )?;
+        tui_binding = Some((
+            native.thread_id().to_string(),
+            native.interactive_lifetime(),
+        ));
+        Box::new(native)
+    } else {
+        spawn_managed_session_transport(
+            agent_type,
+            definition,
+            &native_args,
+            &mcp_environment,
+            mcp_servers.clone(),
+            inherit_stderr,
+            home,
+            effective_name.clone(),
+            &instance_id,
+            socket,
+        )?
+    };
     let descriptor = transport.descriptor();
     let channel = connection_channel();
     let (mut reader, initial_writer, mut my_name) = match connect_and_register_at(
@@ -3509,10 +3474,32 @@ fn launch_acp_with_status(
     if let Some(reporter) = managed_reporter.as_mut() {
         reporter.startup_succeeded();
     }
+    // Après Register, identité durable et activation du journal : aucun
+    // premier tour humain ne peut précéder l'abonnement Bridget au même fil.
+    let mut native_tui = if let (Some(launch), Some((thread_id, alive))) =
+        (&interactive, tui_binding)
+    {
+        eprintln!(
+            "Bridget : {my_name} — Codex interactif, un fil par lancement (quitter pour changer de fil)."
+        );
+        Some(crate::codex_interactive::NativeTui::start(
+            &definition.command,
+            launch,
+            &codex_socket,
+            &thread_id,
+            &mcp_environment,
+            alive,
+        )?)
+    } else {
+        None
+    };
 
     // Même discipline que le wrapper interactif : sans heartbeat, un long tour
     // `busy` laisse `last_seen` geler ; le retain daemon (300 s) jette alors la
     // présence alors que le nom reste au routeur — fantôme unix/connected.
+    if native_tui.is_some() {
+        send_wrapper_message(&writer, WrapperToDaemon::TerminalSessionReady);
+    }
     let mut last_heartbeat = Instant::now();
     let mut last_provider_spawn = Instant::now();
     let mut consecutive_fast_failures = 0_u32;
@@ -3533,9 +3520,9 @@ fn launch_acp_with_status(
             &mut execution_bindings,
             &mut redaction_lease,
             Some(&profile_ledger_path(socket)),
+            interactive.is_none(),
         );
         if journal_failed {
-            transport.stop();
             break;
         }
         let mut line = String::new();
@@ -3555,6 +3542,7 @@ fn launch_acp_with_status(
                     &os,
                     &instance_id,
                     &my_name,
+                    interactive.is_some(),
                 ) else {
                     break;
                 };
@@ -3722,15 +3710,8 @@ fn launch_acp_with_status(
                 ) =>
             {
                 if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
-                    let heartbeat = encode(&WrapperToDaemon::Heartbeat).unwrap_or_default();
-                    if let Some(out) = writer.lock().unwrap().as_mut() {
-                        match writeln!(out, "{heartbeat}").and_then(|_| out.flush()) {
-                            Ok(()) => last_heartbeat = Instant::now(),
-                            Err(send_error) => {
-                                warn!("heartbeat ACP échoué: {send_error}");
-                            }
-                        }
-                    }
+                    send_wrapper_message(&writer, WrapperToDaemon::Heartbeat);
+                    last_heartbeat = Instant::now();
                 }
             }
             Err(error) => {
@@ -3749,6 +3730,7 @@ fn launch_acp_with_status(
                     &os,
                     &instance_id,
                     &my_name,
+                    interactive.is_some(),
                 ) else {
                     break;
                 };
@@ -3768,12 +3750,13 @@ fn launch_acp_with_status(
                 &mut execution_bindings,
                 &mut redaction_lease,
                 Some(&profile_ledger_path(socket)),
+                interactive.is_none(),
             );
             if terminal_journal_failed {
-                transport.stop();
                 break;
             }
-            let persistent_relaunch = std::env::var_os("BRIDGET_MANAGED_PERSISTENT").is_some();
+            let persistent_relaunch =
+                interactive.is_none() && std::env::var_os("BRIDGET_MANAGED_PERSISTENT").is_some();
             if !persistent_relaunch {
                 break;
             }
@@ -3905,6 +3888,12 @@ fn launch_acp_with_status(
         }
     }
     relay.shutdown();
+    let tui_result = native_tui
+        .as_ref()
+        .map(crate::codex_interactive::NativeTui::result);
+    // Fermer le client natif avant le drain du serveur : une élicitation
+    // ouverte appartient à cette connexion, pas au worker Bridget.
+    let tui_stopped = native_tui.as_mut().map(|tui| tui.close());
     transport.stop();
     // L'EOF peut fermer le transport entre deux itérations : vider une dernière
     // fois les événements terminaux avant Unregister afin que le daemon voie
@@ -3917,9 +3906,25 @@ fn launch_acp_with_status(
         &mut execution_bindings,
         &mut redaction_lease,
         Some(&profile_ledger_path(socket)),
+        interactive.is_none(),
     );
     send_wrapper_message(&writer, WrapperToDaemon::TurnState { in_progress: false });
     send_wrapper_message(&writer, WrapperToDaemon::Unregister);
+    if let Some(result) = tui_result {
+        result?;
+    }
+    if let Some(result) = tui_stopped {
+        result.map_err(|error| error.to_string())?;
+    }
+    // Le pilote garde sa socket si la disparition de son groupe n'est pas
+    // confirmée. Ne pas transformer ce diagnostic de récupération en exit 0.
+    if interactive.is_some() && codex_socket.try_exists().map_err(|e| e.to_string())? {
+        return Err(format!(
+            "nettoyage du serveur Codex non confirmé ; socket conservée : {}",
+            codex_socket.display()
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -4289,13 +4294,18 @@ fn send_wrapper_message(
     let Ok(json) = encode(&message) else {
         return;
     };
+    let mut writer = writer.lock().unwrap_or_else(|err| err.into_inner());
     let write_result = writer
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
         .as_mut()
         .map(|writer| writeln!(writer, "{}", json).and_then(|_| writer.flush()));
     if let Some(Err(error)) = write_result {
         warn!("envoi wrapper géré impossible: {}", error);
+        // Fermer aussi le lecteur déclenche la reconnexion. Une écriture
+        // partielle ne doit jamais être rejouée implicitement par BufWriter.
+        if let Some(writer) = writer.as_ref() {
+            let _ = writer.get_ref().shutdown(std::net::Shutdown::Both);
+        }
+        *writer = None;
     }
 }
 
@@ -4329,10 +4339,23 @@ fn reconnect_managed_session(
     os: &str,
     instance_id: &str,
     fallback_name: &str,
+    terminal_session: bool,
 ) -> Option<(BufReader<UnixStream>, String)> {
     let mut attempts = 0_u32;
     while transport.is_alive() {
-        thread::sleep(reconnect_delay(attempts));
+        // Une TUI peut se fermer pendant une panne prolongée du daemon.
+        // Le backoff réseau ne doit pas retenir son terminal jusqu'à 36 s.
+        let retry_at = Instant::now() + reconnect_delay(attempts);
+        while Instant::now() < retry_at && transport.is_alive() {
+            thread::sleep(
+                retry_at
+                    .saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(50)),
+            );
+        }
+        if !transport.is_alive() {
+            return None;
+        }
         attempts = attempts.saturating_add(1);
         let wanted_name = resolve_current_name(name_state_path, fallback_name);
         let busy = transport.is_busy();
@@ -4356,6 +4379,9 @@ fn reconnect_managed_session(
                 // même journal local reste actif, il doit donc être annoncé de
                 // nouveau sur la nouvelle connexion.
                 send_wrapper_message(writer, WrapperToDaemon::JournalReady);
+                if terminal_session {
+                    send_wrapper_message(writer, WrapperToDaemon::TerminalSessionReady);
+                }
                 // Même motif que JournalReady : le wrapper détient le fait
                 // « tour ouvert » (is_busy). Register porte déjà
                 // turn_in_progress, et TurnState le ré-atteste sur le writer
@@ -4818,6 +4844,7 @@ fn forward_managed_events(
         bindings,
         &mut None,
         None,
+        true,
     )
 }
 
@@ -4832,6 +4859,7 @@ fn redact_managed_text(
     String::from_utf8_lossy(&lease.redact(channel, value.as_bytes(), true)).into_owned()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn forward_managed_events_with_redaction(
     writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
     my_name: &str,
@@ -4840,6 +4868,7 @@ fn forward_managed_events_with_redaction(
     bindings: &mut HashMap<String, ManagedExecutionBinding>,
     redaction: &mut Option<OutputRedactionLease>,
     profile_db_path: Option<&Path>,
+    automatic_reply: bool,
 ) -> bool {
     let mut journal_failed = false;
     for event in events {
@@ -4858,6 +4887,9 @@ fn forward_managed_events_with_redaction(
             raw.len()
         );
         match kind {
+            ManagedEventKind::ActivityObserved { in_progress } => {
+                send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress });
+            }
             ManagedEventKind::TurnStarted { message_id } => {
                 if !bindings.is_empty() && !bindings.contains_key(&message_id) {
                     warn!("événement de tour ignoré: message hors exécution active");
@@ -4867,7 +4899,9 @@ fn forward_managed_events_with_redaction(
                     binding.approval_requests = 0;
                     binding.last_approval_request = None;
                 }
-                send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: true });
+                if automatic_reply {
+                    send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: true });
+                }
                 publish_execution_transition(
                     writer,
                     bindings,
@@ -4891,7 +4925,9 @@ fn forward_managed_events_with_redaction(
                     warn!("terminal fournisseur ignoré: message hors exécution active");
                     continue;
                 }
-                send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
+                if automatic_reply {
+                    send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress: false });
+                }
 
                 if message.reply && message.origin != Some(bridget_core::MessageOrigin::System) {
                     match &terminal {
@@ -4933,13 +4969,15 @@ fn forward_managed_events_with_redaction(
                 };
                 publish_execution_transition(writer, bindings, &message_id, next_state, reason);
                 match terminal {
-                    ManagedTerminal::Completed if message.reply && !response.is_empty() => {
+                    ManagedTerminal::Completed
+                        if automatic_reply && message.reply && !response.is_empty() =>
+                    {
                         let mut reply =
                             bridget_core::BridgetMessage::new(my_name, &message.from, response);
                         reply.in_reply_to = Some(message.id);
                         send_wrapper_message(writer, WrapperToDaemon::Send(reply));
                     }
-                    ManagedTerminal::Completed if message.reply => {
+                    ManagedTerminal::Completed if automatic_reply && message.reply => {
                         send_wrapper_message(
                             writer,
                             WrapperToDaemon::DeliveryRejected {
@@ -5204,9 +5242,8 @@ fn codex_model_from_args(args: &[String]) -> Option<String> {
 #[cfg(test)]
 mod prompt_tests {
     use super::{
-        RESUME_CARD_MAX_CHARS, bounded_resume_card, codex_resume_bootstrap,
-        interactive_bridget_prompt, is_protected_principal_checkout, managed_resume_context,
-        prepare_codex_agent_args,
+        RESUME_CARD_MAX_CHARS, bounded_resume_card, interactive_bridget_prompt,
+        is_protected_principal_checkout, managed_resume_context,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -5559,107 +5596,6 @@ mod prompt_tests {
         );
         fs::remove_dir_all(root).unwrap();
     }
-
-    #[test]
-    fn reprise_nommee_conserve_overrides_et_place_l_amorcage_apres_les_options() {
-        let override_ = "mcp_servers.bridget.command=\"/tmp/bridget\"";
-        let args = [
-            "--yolo",
-            "resume",
-            "bridget-prospective",
-            "--cd",
-            "/tmp/projet",
-        ]
-        .map(str::to_string);
-
-        // Rejoue la panne du 2026-08-23 : l'override MCP est construit par le
-        // wrapper, puis les arguments utilisateur demandent une reprise.
-        let mut prepared = vec!["-c".to_string(), override_.to_string()];
-        prepared.extend(prepare_codex_agent_args(&args, "prospective", true));
-
-        assert_eq!(&prepared[..2], &["-c", override_]);
-        assert_eq!(&prepared[2..2 + args.len()], &args);
-        assert_eq!(
-            prepared.last().unwrap(),
-            &codex_resume_bootstrap("prospective")
-        );
-        assert!(prepared.last().unwrap().contains("binaire `bridget`"));
-        assert!(prepared.last().unwrap().contains("N'essaie pas"));
-        assert!(
-            !prepared
-                .last()
-                .unwrap()
-                .contains("tools.mcp__bridget__bridget_send")
-        );
-    }
-
-    #[test]
-    fn reprise_avec_prompt_prefixe_l_amorcage_sans_prendre_une_valeur_d_option() {
-        let args = [
-            "resume",
-            "session-123",
-            "--model",
-            "gpt-5.6",
-            "Continue le diagnostic",
-        ]
-        .map(str::to_string);
-
-        let prepared = prepare_codex_agent_args(&args, "cxbridget", true);
-
-        assert_eq!(prepared[2], "--model");
-        assert_eq!(prepared[3], "gpt-5.6");
-        assert_eq!(
-            prepared[4],
-            format!(
-                "{}\n\nContinue le diagnostic",
-                codex_resume_bootstrap("cxbridget")
-            )
-        );
-    }
-
-    #[test]
-    fn reprise_last_sans_prompt_recoit_l_amorcage_en_derniere_position() {
-        let args = ["resume", "--last", "--cd", "/tmp/projet"].map(str::to_string);
-
-        let prepared = prepare_codex_agent_args(&args, "cxbridget", true);
-
-        assert_eq!(&prepared[..args.len()], &args);
-        assert_eq!(
-            prepared.last().unwrap(),
-            &codex_resume_bootstrap("cxbridget")
-        );
-    }
-
-    #[test]
-    fn valeurs_d_options_et_images_ne_sont_jamais_prises_pour_la_sous_commande_ou_le_prompt() {
-        let args = [
-            "-c",
-            "resume",
-            "resume",
-            "session-123",
-            "--image",
-            "/tmp/a.png",
-            "/tmp/b.png",
-            "--model",
-            "gpt-5.6",
-        ]
-        .map(str::to_string);
-
-        let prepared = prepare_codex_agent_args(&args, "cxbridget", true);
-
-        assert_eq!(&prepared[..args.len()], &args);
-        assert_eq!(
-            prepared.last().unwrap(),
-            &codex_resume_bootstrap("cxbridget")
-        );
-    }
-
-    #[test]
-    fn lancement_hors_reprise_conserve_le_prompt_historique() {
-        let prepared = prepare_codex_agent_args(&[], "agent-fixture", false);
-
-        assert_eq!(prepared, vec![BEFORE.trim_end_matches('\n').to_string()]);
-    }
 }
 
 #[cfg(test)]
@@ -5878,6 +5814,7 @@ mod reconnect_tests {
             &mut HashMap::new(),
             &mut redaction,
             None,
+            true,
         ));
         let mut line = String::new();
         BufReader::new(reader_stream).read_line(&mut line).unwrap();
@@ -5935,6 +5872,7 @@ mod reconnect_tests {
             uuid::Uuid::new_v4()
         ));
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let (release, stalled) = std::sync::mpsc::channel();
         let server = std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
@@ -5970,9 +5908,12 @@ mod reconnect_tests {
                         && fact.free_bytes > 0
                         && fact.observed_at_unix > 0
             ));
+            // Plus aucune lecture : le buffer noyau doit se remplir réellement.
+            // Watchdog du pair, pas une attente de synchronisation arbitraire.
+            let _ = stalled.recv_timeout(Duration::from_secs(5));
         });
 
-        let (_, _, name) = connect_and_register_at(
+        let (_, writer, name) = connect_and_register_at(
             &socket,
             "codex",
             Some("lab-agent"),
@@ -5988,6 +5929,25 @@ mod reconnect_tests {
         )
         .unwrap();
         assert_eq!(name, "lab-agent");
+        assert_eq!(
+            writer.get_ref().write_timeout().unwrap(),
+            Some(Duration::from_secs(1))
+        );
+        let writer = Arc::new(Mutex::new(Some(writer)));
+        let started = Instant::now();
+        send_wrapper_message(
+            &writer,
+            WrapperToDaemon::Send(bridget_core::BridgetMessage::new(
+                "lab-agent",
+                "peer",
+                "x".repeat(4 * 1024 * 1024),
+            )),
+        );
+        // Mutation : sans timeout le pair ne ferme qu'à son watchdog (5 s).
+        // Sans invalidation, le flush de cleanup répéterait l'attente.
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(writer.lock().unwrap().is_none());
+        release.send(()).unwrap();
         server.join().unwrap();
         let _ = std::fs::remove_file(socket);
     }

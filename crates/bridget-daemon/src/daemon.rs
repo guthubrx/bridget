@@ -689,6 +689,7 @@ struct DaemonState {
     /// Les clients attach négocient ce rôle explicite ; l'absence d'entrée
     /// reste un wrapper pour préserver les agents 007 déjà connectés.
     connection_roles: HashMap<String, ConnectionRole>,
+    terminal_sessions: HashSet<String>,
     /// Une négociation appartient à la connexion, tandis que le scope peut
     /// volontairement être partagé par plusieurs retries coopératifs.
     client_negotiations: HashMap<String, NegotiatedClient>,
@@ -2857,6 +2858,7 @@ impl DaemonState {
             conn_instances: HashMap::new(),
             auxiliary_connections: HashSet::new(),
             connection_roles: HashMap::new(),
+            terminal_sessions: HashSet::new(),
             client_negotiations: HashMap::new(),
             service_negotiations: HashMap::new(),
             peer_uids: HashMap::new(),
@@ -2883,6 +2885,12 @@ impl DaemonState {
     /// donc laissés à systemd, puis recréés depuis le fleet persistant au boot.
     /// `Disconnect` reste réservé aux wrappers externes et aux arrêts explicites.
     fn notify_wrapper_on_daemon_shutdown(&self, conn_id: &str) -> bool {
+        // 090 : la TUI appartient au terminal, pas au daemon. Un arrêt de
+        // Bridget ferme le lien et déclenche sa reconnexion, pas son Codex.
+        // Un Disconnect explicite (stop) conserve sa sémantique d'arrêt.
+        if self.terminal_sessions.contains(conn_id) {
+            return false;
+        }
         !self
             .conn_instances
             .get(conn_id)
@@ -2890,6 +2898,7 @@ impl DaemonState {
     }
 
     fn mark_unreachable(&mut self, conn_id: &str) {
+        self.terminal_sessions.remove(conn_id);
         if self.auxiliary_connections.remove(conn_id) {
             self.conn_instances.remove(conn_id);
             return;
@@ -4724,6 +4733,7 @@ fn handle_connection(
         st.conn_hosts.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
+        st.terminal_sessions.remove(&conn_id);
         st.client_negotiations.remove(&conn_id);
         st.service_negotiations.remove(&conn_id);
         st.peer_uids.remove(&conn_id);
@@ -8661,6 +8671,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::Register { .. }
                 | WrapperToDaemon::DiskSpace { .. }
                 | WrapperToDaemon::JournalReady
+                | WrapperToDaemon::TerminalSessionReady
                 | WrapperToDaemon::Unregister
                 | WrapperToDaemon::Send { .. }
                 | WrapperToDaemon::DeliveryRejected { .. }
@@ -8867,6 +8878,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::Register { .. }
                 | WrapperToDaemon::DiskSpace { .. }
                 | WrapperToDaemon::JournalReady
+                | WrapperToDaemon::TerminalSessionReady
                 | WrapperToDaemon::Unregister
                 | WrapperToDaemon::Send { .. }
                 | WrapperToDaemon::DeliveryRejected { .. }
@@ -11152,6 +11164,23 @@ fn handle_wrapper_message(
             None
         }
 
+        WrapperToDaemon::TerminalSessionReady => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            if st.auxiliary_connections.contains(conn_id)
+                || !st
+                    .conn_instances
+                    .get(conn_id)
+                    .is_some_and(|id| st.presences.contains_key(id))
+            {
+                return Some(DaemonToWrapper::Nack {
+                    id: "terminal-session-ready".into(),
+                    reason: "session terminal annoncée sans wrapper enregistré".into(),
+                });
+            }
+            st.terminal_sessions.insert(conn_id.to_string());
+            None
+        }
+
         WrapperToDaemon::Unregister => {
             let (controls, views) = {
                 let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -11162,6 +11191,7 @@ fn handle_wrapper_message(
                 st.conn_hosts.remove(conn_id);
                 st.conn_operating_systems.remove(conn_id);
                 st.service_negotiations.remove(conn_id);
+                st.terminal_sessions.remove(conn_id);
                 (controls, views)
             };
             let _ = execute_controls(controls);
@@ -13516,6 +13546,40 @@ mod presence_tests {
         assert!(
             !state.notify_wrapper_on_daemon_shutdown("conn-1"),
             "un équipier géré et running doit rester reprenable au prochain boot"
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn redemarrage_daemon_preserve_seulement_la_session_terminal_attestee() {
+        let (mut state, config) = state_with_registered_agent("restart-native-tui");
+        let presence = state.presences.get_mut("instance-1").unwrap();
+        presence.mode = Some(PresenceMode::Cli);
+        presence.agent_type = "codex".into();
+        presence.transport = "codex_app_server".into();
+        // Même descripteur qu'un Codex géré : jamais d'inférence par élimination.
+        assert!(state.notify_wrapper_on_daemon_shutdown("conn-1"));
+        let shared = Arc::new(Mutex::new(state));
+        assert!(matches!(
+            handle_wrapper_message("unknown", WrapperToDaemon::TerminalSessionReady, &shared),
+            Some(DaemonToWrapper::Nack { .. })
+        ));
+        assert!(
+            handle_wrapper_message("conn-1", WrapperToDaemon::TerminalSessionReady, &shared)
+                .is_none()
+        );
+        assert!(
+            !shared
+                .lock()
+                .unwrap()
+                .notify_wrapper_on_daemon_shutdown("conn-1")
+        );
+        shared.lock().unwrap().mark_unreachable("conn-1");
+        assert!(
+            shared
+                .lock()
+                .unwrap()
+                .notify_wrapper_on_daemon_shutdown("conn-1")
         );
         let _ = std::fs::remove_file(config.db_path);
     }

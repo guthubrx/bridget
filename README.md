@@ -60,6 +60,46 @@ même socket. Avec MCP, répondre avec `to`, `body` et `in_reply_to`.
 La [skill livrée](skills/bridget/SKILL.md) contient les exemples et la conduite de
 reprise ; elle n'est pas installée dans les profils globaux automatiquement.
 
+## Codex interactif, sans tmux (session 090)
+
+Depuis un vrai terminal, dans le répertoire de travail souhaité :
+
+```sh
+bridget codex
+bridget codex -m gpt-5.6-terra
+```
+
+Le binaire de cette branche ouvre la **TUI officielle Codex**, reliée à un
+app-server local privé. La saisie humaine et les messages Bridget arrivent dans
+le même fil. L'UUID affiché au lancement est l'adresse de cette session ; Codex
+répond aux autres agents par `bridget_send` avec `in_reply_to`. Une réponse finale
+à l'écran n'est **pas** envoyée automatiquement au correspondant.
+
+Les messages ordinaires attendent la fin d'un tour humain. Les permissions restent
+dans la TUI : aucun accord automatique ajouté par Bridget. Modèle, profil,
+configurations `-c`, sandbox et politique d'approbation explicitement demandés
+sont relayés ; aucune option permissive du registre géré n'est réutilisée.
+
+Contrat vérifié sur Codex **0.153.4** : connexion distante Unix expérimentale,
+historique `legacy`, un fil par lancement. `/new`, `/resume` vers un autre fil,
+fork et sous-agents internes Codex qui chargent un second fil terminent
+l'intégration au lieu de conserver une identité pointant vers l'ancien fil.
+Les autres agents Bridget restent indépendants et joignables. Pour changer de répertoire,
+quitter puis relancer depuis ce répertoire ; `--cd`, images, fournisseur local
+et reprise d'un ancien fil ne sont pas proposés par cette première version.
+Une option non prise en charge est refusée, jamais ignorée.
+
+| Commande | Durée de vie et usage |
+|---|---|
+| `bridget codex` | Interaction native au premier plan ; quitter ferme cette session. |
+| `bridget spawn codex --persistent …` | Agent supervisé, indépendant du terminal. |
+| `bridget attach <uuid>` | Lecture/suivi du journal, pas reprise de la TUI Codex. |
+
+Le daemon Bridget peut se reconnecter sans recréer le fil. Le socket Bridget
+configuré peut être celui d'un tunnel SSH ; l'app-server Codex reste local,
+dans un répertoire privé. Aucun nouveau serveur HTTP ou accès navigateur.
+Cette évolution n'installe ni ne remplace automatiquement le binaire en service.
+
 ## Ce que signifie un reçu
 
 | Fait | Ce qu'il autorise à dire |
