@@ -3378,7 +3378,12 @@ fn launch_session_with_status(
                 model: launch.model.clone(),
                 permissions: "interactive".into(),
                 provider_observation: None,
-                thread_bootstrap: bridget_transport::codex_app_server::CodexThreadBootstrap::Start,
+                thread_bootstrap: launch.resume_thread.as_ref().map_or(
+                    bridget_transport::codex_app_server::CodexThreadBootstrap::Start,
+                    |thread_id| bridget_transport::codex_app_server::CodexThreadBootstrap::Resume {
+                        thread_id: thread_id.clone(),
+                    },
+                ),
                 dynamic_tool_handler: None,
             },
             &string_environment(&mcp_environment),
@@ -3424,6 +3429,28 @@ fn launch_session_with_status(
             transport.stop();
             return Err(error.into());
         }
+    };
+    let display_name = if let Some(name) = interactive
+        .as_ref()
+        .and_then(|launch| launch.display_name.as_deref())
+    {
+        match crate::communication::client::rename_display_name(
+            &my_name,
+            &instance_id,
+            socket,
+            name,
+        ) {
+            Ok(DaemonToWrapper::DisplayNameResult {
+                outcome:
+                    bridget_transport::protocol::DisplayNameOutcome::Applied { display_name, .. },
+            }) => Some(display_name),
+            result => {
+                transport.stop();
+                return Err(format!("--name : changement de nom refusé : {result:?}").into());
+            }
+        }
+    } else {
+        None
     };
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
     let mut idempotent_deliveries = IdempotentDeliveryTracker::open(home, &instance_id)?;
@@ -3479,8 +3506,11 @@ fn launch_session_with_status(
     let mut native_tui = if let (Some(launch), Some((thread_id, alive))) =
         (&interactive, tui_binding)
     {
+        let label = display_name
+            .as_ref()
+            .map_or_else(|| my_name.clone(), |name| format!("{name} [{my_name}]"));
         eprintln!(
-            "Bridget : {my_name} — Codex interactif, un fil par lancement (quitter pour changer de fil)."
+            "Bridget : {label} — Codex interactif, un fil par lancement (quitter pour changer de fil)."
         );
         Some(crate::codex_interactive::NativeTui::start(
             &definition.command,

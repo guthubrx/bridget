@@ -69,6 +69,12 @@ reconstruire soi-même cette dérivation ni convertir une clé d'une autre insta
 
 ## Session Codex interactive native
 
+`bridget codex --name <nom> resume <UUID-Codex>` sélectionne le nom d'affichage
+et un fil existant ; le nom n'est pas l'adresse UUID Bridget. Pour changer ton
+nom ensuite, `bridget rename <nom>` utilise le même service durable. Un nom
+déjà attribué est refusé : ne réutilise pas l'identité d'un autre agent.
+`--yolo` est le bypass natif explicite ; ne l'ajoute jamais de ta propre initiative.
+
 Si l'humain a lancé `bridget codex` (session 090), tu es dans SA TUI et le
 même fil reçoit ses saisies et les messages interagents. Le wrapper ne tape
 aucune touche, ne valide aucune permission et n'envoie PAS ta réponse finale

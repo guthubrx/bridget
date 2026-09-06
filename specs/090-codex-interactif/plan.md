@@ -4,6 +4,13 @@ Statut : implémenté, validé et adopté le 2026-09-06. Rust 1.92 / trois crate
 
 ## Architecture et réutilisation
 
+Amendement du 2026-09-06 : `Launch` distingue nom Bridget, alias explicite et
+UUID de reprise. Le wrapper appelle le client partagé `rename_display_name`
+après Register et avant la TUI. Le pilote réutilise `CodexThreadBootstrap::Resume`
+et négocie réellement le fil privé avant présence ; la reprise automatique gérée
+conserve sa garde d'attestation figée. Ni DTO de reprise bis ni écriture client
+dans la base des profils. Le harnais PTY existant fournit la preuve de couture.
+
 1. `wrapper::launch` dirige Codex interactif vers la boucle de session existante,
    avant tout enregistrement tmux. `--equipier` et les autres types inchangés.
 2. `codex_interactive.rs` dans le daemon porte uniquement le cycle de vie TUI et

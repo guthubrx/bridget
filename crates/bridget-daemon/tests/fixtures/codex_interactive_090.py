@@ -51,6 +51,7 @@ def terminal_host():
 def main():
     bridget, codex = sys.argv[1:3]
     live = "--subscription" in sys.argv
+    initial_resume = "--initial-resume" in sys.argv
     root = pathlib.Path(tempfile.mkdtemp(prefix="b90-", dir="/tmp"))
     state, home = root / "state", root / "home"
     state.mkdir(mode=0o700)
@@ -164,7 +165,7 @@ def main():
                 f'[projects."{root}"]\ntrust_level="trusted"\n')
         until(lambda: (state / "bridget.sock").exists(), "daemon prêt")
         resume_id = None
-        if "--resume-thread" in sys.argv:
+        if "--resume-thread" in sys.argv or initial_resume:
             seed_path = root / "seed.sock"
             seed = subprocess.Popen([codex, "app-server", "--listen", "unix://" + str(seed_path)], env=environment,
                 cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -174,6 +175,15 @@ def main():
                 started = client.rpc("thread/start", {"cwd": str(root), "historyMode": "legacy"})
                 resume_id = started["result"]["thread"]["id"]
                 assert "result" in client.rpc("thread/name/set", {"threadId": resume_id, "name": "HISTORIQUE-090"})
+                if initial_resume:
+                    assert "result" in client.rpc("turn/start", {"threadId": resume_id,
+                        "input": [{"type": "text", "text": "HISTORIQUE-A-CONSERVER-090"}]})
+                    seed_deadline = time.monotonic() + 10
+                    while not any(event.get("method") == "turn/completed" for event in client.events):
+                        client.socket.settimeout(max(0.001, seed_deadline - time.monotonic()))
+                        client.events.append(client.receive())
+                        assert time.monotonic() < seed_deadline
+                    probe.Fixture.count = 0
                 client.socket.close()
             finally:
                 subprocess.run(["/bin/ps", "-p", str(seed.pid), "-o", "pid=,comm="], check=False)
@@ -181,11 +191,24 @@ def main():
                 seed.wait(timeout=5)
                 seed_path.unlink(missing_ok=True)
         wrapper_args = [bridget, "codex", "--agent-id", "90000000-0000-4000-8000-000000000001", "--no-alt-screen"]
+        if initial_resume:
+            wrapper_args += ["--name", "coder-recette-090", "--yolo", "resume", resume_id]
+        if "--missing-resume" in sys.argv:
+            wrapper_args += ["resume", "90000000-0000-4000-8000-000000000099"]
         if live:
             wrapper_args += ["-m", "gpt-5.6-luna"]
         wrapper = subprocess.Popen([sys.executable, __file__, "--terminal-host", str(root), *wrapper_args],
             env=environment, cwd=root, stdin=slave, stdout=slave, stderr=slave,
             preexec_fn=own_terminal)
+        if "--missing-resume" in sys.argv:
+            until(lambda: wrapper.poll() is not None, "fil absent refusé avant présence")
+            assert wrapper.returncode != 0
+            assert not json.loads(cli("agents", "--json")), "présence fabriquée après échec de reprise"
+            assert not list(state.glob("c-*.sock")), "socket privée survivante"
+            assert terminal_restored()
+            assert b"thread/resume" in transcript, transcript.decode(errors="replace")
+            print("missing_resume_refused_without_presence_or_socket", flush=True)
+            return
         until(lambda: bool(list(state.glob("c-*.sock"))), "socket Codex")
         until(lambda: b"Bridget :" in transcript, "inscription et journal prêts")
         socket_path = next(state.glob("c-*.sock"))
@@ -193,6 +216,8 @@ def main():
         threads = observer.rpc("thread/loaded/list", {})["result"]["data"]
         assert len(threads) == 1, threads
         thread_id = threads[0]
+        if initial_resume:
+            assert thread_id == resume_id, "un nouveau fil a remplacé la reprise demandée"
         print("same_thread", thread_id, flush=True)
         until(lambda: (b"gpt-5.6-luna" if live else b"fixture") in transcript
             and (b"context" in transcript or b"shortcuts" in transcript), "TUI configurée (pas seulement l'écran Resuming) prête à saisir")
@@ -218,6 +243,38 @@ def main():
         agent = next(a for a in agents if a.get("agent_id") == "90000000-0000-4000-8000-000000000001")
         assert agent.get("mode") != "tmux", agent
         print("human_turn_native", probe.Fixture.count, "presence", agent, flush=True)
+        if initial_resume:
+            assert agent["display_name"] == "coder-recette-090", agent
+            assert agent["agent_id"] == "90000000-0000-4000-8000-000000000001"
+            history = observer.rpc("thread/read", {"threadId": thread_id, "includeTurns": True})["result"]["thread"]
+            assert history["name"] == "HISTORIQUE-090", "titre historique écrasé par Bridget"
+            assert "HISTORIQUE-A-CONSERVER-090" in json.dumps(history)
+            assert "HUMAN-090" in json.dumps(history)
+            contexts = [json.loads(line)["payload"] for path in home.rglob("rollout*.jsonl")
+                if resume_id in path.name for line in path.read_bytes().splitlines()
+                if json.loads(line).get("type") == "turn_context"]
+            assert contexts, "aucun contexte fournisseur attesté"
+            assert contexts[-1]["approval_policy"] == "never", contexts[-1]
+            assert contexts[-1]["sandbox_policy"]["type"] == "danger-full-access", contexts[-1]
+            issued_at = str(int(time.time()))
+            send = ("send", "--to", agent["agent_id"], "--id", "after-resume-090",
+                "--issued-at", issued_at, "--issuer-scope", "fixture_090_resume_scope", "APRES-REPRISE-090")
+            cli(*send)
+            until(lambda: any(json.loads(line).get("event") == "turn_end" and json.loads(line).get("message_id") == "after-resume-090"
+                for p in (state / "sessions").rglob("*.jsonl") for line in p.read_bytes().splitlines()), "tour Bridget consommé après reprise")
+            def accepted_after_resume():
+                with sqlite3.connect(state / "bridget.db") as database:
+                    return database.execute("SELECT public_result_kind FROM idempotency_records WHERE idempotency_key='after-resume-090'").fetchall() == [("accepted",)]
+            until(accepted_after_resume, "ACK durable après reprise (distinct du journal de tour)")
+            assert "accepted" in cli(*send).lower()
+            history = observer.rpc("thread/read", {"threadId": thread_id, "includeTurns": True})["result"]["thread"]
+            assert "APRES-REPRISE-090" in json.dumps(history), "message remis à un autre fil"
+            assert probe.Fixture.count == 2, "retry injecté deux fois après reprise"
+            print("initial_resume_preserves_history_name_and_uuid_yolo_attested", flush=True)
+            os.write(master, b"\x03\x03")
+            until(lambda: wrapper.poll() is not None, "sortie après reprise explicite")
+            assert terminal_restored() and not socket_path.exists()
+            return
         if "--reconnect" in sys.argv:
             count_before = probe.Fixture.count
             subprocess.run(["/bin/ps", "-p", str(daemon.pid), "-o", "pid=,comm="], check=True)

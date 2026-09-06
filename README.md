@@ -67,6 +67,7 @@ Depuis un vrai terminal, dans le répertoire de travail souhaité :
 ```sh
 bridget codex
 bridget codex -m gpt-5.6-terra
+bridget codex --name coderBridget --yolo resume <UUID-du-fil-Codex>
 ```
 
 Le binaire de cette branche ouvre la **TUI officielle Codex**, reliée à un
@@ -86,8 +87,16 @@ fork et sous-agents internes Codex qui chargent un second fil terminent
 l'intégration au lieu de conserver une identité pointant vers l'ancien fil.
 Les autres agents Bridget restent indépendants et joignables. Pour changer de répertoire,
 quitter puis relancer depuis ce répertoire ; `--cd`, images, fournisseur local
-et reprise d'un ancien fil ne sont pas proposés par cette première version.
+ne sont pas proposés par cette première version.
 Une option non prise en charge est refusée, jamais ignorée.
+
+`resume <UUID>` choisit le fil initial et conserve son historique et son titre.
+`--name` choisit uniquement le nom d'affichage Bridget (80 caractères maximum,
+nom déjà attribué refusé) ; `--agent-id <UUID>` conserve une identité Bridget
+existante. Sans `--name`, le nom existant n'est pas changé. L'agent peut ensuite
+se renommer avec `bridget rename <nom>`, sans changer son UUID.
+`--yolo` est l'alias de `--dangerously-bypass-approvals-and-sandbox` : il désactive
+explicitement sandbox et approbations Codex ; il n'est jamais ajouté par défaut.
 
 | Commande | Durée de vie et usage |
 |---|---|

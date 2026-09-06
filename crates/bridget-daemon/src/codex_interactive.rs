@@ -13,6 +13,8 @@ pub(crate) struct Launch {
     pub server_args: Vec<String>,
     pub tui_args: Vec<String>,
     pub model: Option<String>,
+    pub resume_thread: Option<String>,
+    pub display_name: Option<String>,
 }
 
 impl Launch {
@@ -20,6 +22,8 @@ impl Launch {
         let mut server_args = Vec::new();
         let mut tui_args = Vec::new();
         let mut model = None;
+        let mut resume_thread = None;
+        let mut display_name = None;
         let mut index = 0;
         let mut prompt = None;
         while index < args.len() {
@@ -30,12 +34,13 @@ impl Launch {
             match option {
                 "--remote" | "--remote-auth-token-env" | "--last" | "--all" =>
                     return Err(format!("{option} incompatible : Bridget possède le serveur et le fil de cette session")),
-                "--dangerously-bypass-approvals-and-sandbox" | "--search" => {
+                "--dangerously-bypass-approvals-and-sandbox" | "--yolo" | "--search" => {
+                    if inline.is_some() { return Err(format!("{option} ne prend pas de valeur")); }
                     // Seulement les choix EXPLICITES de l'humain, jamais ceux
                     // de la définition gérée, ne changent ses permissions.
-                    tui_args.push(arg.clone());
+                    tui_args.push(if option == "--yolo" { "--dangerously-bypass-approvals-and-sandbox".into() } else { arg.clone() });
                     match option {
-                        "--dangerously-bypass-approvals-and-sandbox" => server_args.extend(["-c".into(), "approval_policy=\"never\"".into(), "-c".into(), "sandbox_mode=\"danger-full-access\"".into()]),
+                        "--dangerously-bypass-approvals-and-sandbox" | "--yolo" => server_args.extend(["-c".into(), "approval_policy=\"never\"".into(), "-c".into(), "sandbox_mode=\"danger-full-access\"".into()]),
                         _ => server_args.extend(["-c".into(), "web_search=\"live\"".into()]),
                     }
                 }
@@ -61,8 +66,28 @@ impl Launch {
                 }
                 "-C" | "--cd" | "--add-dir" | "-i" | "--image" | "--oss" | "--local-provider" =>
                     return Err(format!("{option} non pris en charge dans cette première session partagée ; lancez depuis le répertoire voulu")),
-                "resume" | "fork" | "app-server" | "exec" =>
-                    return Err("un fil neuf par lancement ; les sous-commandes Codex ne sont pas des prompts implicites".into()),
+                "--name" => {
+                    let value = match inline {
+                        Some(value) => value.to_owned(),
+                        None => { index += 1; args.get(index).cloned().ok_or("valeur manquante pour --name")? }
+                    };
+                    if value.trim().is_empty() || value.chars().any(char::is_control)
+                        || value.chars().count() > crate::agent_profile::MAX_DISPLAY_NAME_CHARS {
+                        return Err("--name : nom non vide, sans caractère de contrôle, limité à 80 caractères".into());
+                    }
+                    if display_name.replace(value).is_some() { return Err("--name ne peut apparaître qu'une fois".into()); }
+                }
+                "resume" => {
+                    if resume_thread.is_some() || prompt.is_some() || inline.is_some() {
+                        return Err("resume <UUID> doit précéder le prompt et ne peut apparaître qu'une fois".into());
+                    }
+                    index += 1;
+                    let value = args.get(index).ok_or("resume exige l'UUID explicite du fil Codex")?;
+                    let id = uuid::Uuid::parse_str(value).map_err(|_| "resume exige l'UUID explicite du fil Codex")?;
+                    resume_thread = Some(id.to_string());
+                }
+                "fork" | "app-server" | "exec" =>
+                    return Err("sous-commande non prise en charge ; utilisez resume <UUID> pour choisir le fil initial".into()),
                 _ if arg.starts_with('-') => return Err(format!("option Codex non prise en charge : {arg}")),
                 _ => {
                     if prompt.replace(arg.clone()).is_some() { return Err("un seul prompt initial est accepté (entre guillemets)".into()); }
@@ -78,6 +103,8 @@ impl Launch {
             server_args,
             tui_args,
             model,
+            resume_thread,
+            display_name,
         })
     }
 
@@ -254,6 +281,35 @@ mod tests {
         );
         assert_eq!(parsed.tui_args.last().unwrap(), "bonjour");
         assert_eq!(Launch::parse(&[]).unwrap().server_args, ["app-server"]);
+    }
+    #[test]
+    fn yolo_resume_et_nom_bridget_ne_sont_pas_des_arguments_perdus() {
+        let id = "01a027a9-046e-7cf1-9e75-c689c3bdf451";
+        for values in [
+            vec!["--name", "coderBridget", "--yolo", "resume", id],
+            vec!["resume", id, "--name=coderBridget", "--yolo"],
+        ] {
+            let parsed = Launch::parse(&args(&values)).unwrap();
+            assert_eq!(parsed.resume_thread.as_deref(), Some(id));
+            assert_eq!(parsed.display_name.as_deref(), Some("coderBridget"));
+            let long =
+                Launch::parse(&args(&["--dangerously-bypass-approvals-and-sandbox"])).unwrap();
+            assert_eq!(parsed.server_args, long.server_args);
+            assert_eq!(parsed.tui_args, long.tui_args);
+        }
+        assert!(Launch::parse(&[]).unwrap().display_name.is_none());
+        assert!(Launch::parse(&[]).unwrap().resume_thread.is_none());
+        for values in [
+            vec!["resume"],
+            vec!["--name"],
+            vec!["--name", " "],
+            vec!["--name", "nom\nmenteur"],
+            vec!["--yolo=false"],
+            vec!["--name", "a", "--name", "b"],
+            vec!["resume", id, "resume", id],
+        ] {
+            assert!(Launch::parse(&args(&values)).is_err(), "{values:?}");
+        }
     }
     #[test]
     fn option_non_relayee_et_changement_de_fil_refuses() {

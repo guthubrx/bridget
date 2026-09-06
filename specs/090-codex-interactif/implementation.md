@@ -1,5 +1,50 @@
 # Implémentation 090 — Implemented, adoptée le 2026-09-06
 
+## Correctif utilisateur du 2026-09-06 : yolo / resume / name
+
+Branche `fix/090-codex-options`, base `cd0ec467d870`. La commande complète
+`bridget codex --name <nom> --yolo resume <UUID>` est traitée, pas seulement
+l'alias. Le nom utilise le service durable partagé, distinct de l'UUID.
+La reprise privée négocie réellement `thread/resume` avant Register, vérifie
+l'UUID retourné et l'historique legacy et ne renomme pas le titre existant.
+La garde de reprise automatique gérée reste inchangée.
+
+La première recette a réellement échoué : l'ancien `approval_policy=on-request`
+survivait à `--yolo` malgré le sandbox désactivé. Correction : `config/read`
+fournit les réglages effectifs du serveur (profils/-c compris), projetés dans
+`thread/resume` sans parseur TOML concurrent ni valeur permissive inventée.
+Le contexte durable Codex prouve désormais `never` + `danger-full-access`.
+Schémas vérifiés sur le binaire 0.153.4 via `generate-json-schema --experimental` :
+`ConfigReadParams/Response` et `ThreadResumeParams/Response`.
+Documentation officielle : https://learn.chatgpt.com/docs/app-server et
+https://learn.chatgpt.com/docs/developer-commands?surface=cli.
+
+Recettes natives : 9/9, 31,58 s, vraie TUI/app-server/daemon/CLI/MCP,
+fournisseur HTTP local déterministe, pas de compte ni fil utilisateur touché.
+Nouvel oracle : historique antérieur et titre conservés, UUID inchangé,
+nom affiché, permissions attestées, message Bridget dans le fil repris,
+ACK durable attendu avant retry (un terminal de tour n'est pas encore cet ACK),
+retry sans seconde injection, termios et socket nettoyés. Fil inexistant :
+refus explicite `thread/resume`, zéro présence et zéro socket résiduelle.
+Log : `/tmp/bridget-090-options-native.log`.
+
+Les premières passes unitaires n'utilisaient pas complètement l'environnement
+de validation 090 : TMPDIR macOS trop long puis créations non privées. Les
+gardes ont refusé ces fixtures ; aucun assouplissement de production effectué.
+La passe privée parallèle a ensuite donné 712 succès, 1 échec dans la couture
+MCP T1208 (daemon fermé sans réponse), 7 ignorés. Contre-passe sérialisée exécutée,
+avec `umask 077`, env vide, HOME/BRIDGET_HOME/TMPDIR privés et courts :
+`cargo test --workspace --lib -- --test-threads=1`, 39 core + 713 daemon +
+258 transport = 1 010 succès, 0 échec, 8 ignorés (et deux sous-tests enfants
+rapportés séparément, verts). Temps de tests 59,02 s, hors compilation.
+Logs : `/tmp/bridget-090-options-serial-lib.log` ; namespace `/tmp/b90s.BiAY`.
+Le rouge parallèle reste documenté, sans modifier un oracle MCP hors de ce lot.
+Clippy workspace/all-targets -D warnings et fmt --all --check : PASS.
+Les tests complets d'intégration non liés à cet amendement ne sont pas relancés
+à chaque modification : la précédente recette globale reste consignée ci-dessous.
+L'adoption suit le commit ; binaire précédent et reçu externe conservés sous
+`/Users/moi/.cache/bridget-adoptions/090-options-20260906.YwSxn3`.
+
 Début : 2026-09-05 19:46 CEST. ETA initiale : 125–240 min.
 Branche session-090-codex-interactif, base 6cfbc4d33ca7, production inchangée.
 

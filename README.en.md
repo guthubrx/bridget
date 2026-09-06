@@ -62,6 +62,7 @@ From a real terminal, in the intended working directory:
 ```sh
 bridget codex
 bridget codex -m gpt-5.6-terra
+bridget codex --name coderBridget --yolo resume <Codex-thread-UUID>
 ```
 
 This branch opens the **official Codex TUI** against a private local app-server.
@@ -78,8 +79,16 @@ Verified contract: Codex **0.153.4**, experimental Unix remote connection and
 forks and internal Codex subagents loading a second thread end the integration
 instead of leaving the address bound to an old thread. Other Bridget agents
 remain independent and reachable. Quit and relaunch to change directory.
-This first version rejects `--cd`, images, local providers and old-thread resume;
+This first version rejects `--cd`, images and local providers;
 unsupported options are rejected rather than silently ignored.
+
+`resume <UUID>` selects the initial thread, preserving its history and title.
+`--name` sets the Bridget display name only (80 characters maximum; already
+assigned names are rejected); `--agent-id <UUID>` retains an existing Bridget
+identity. Omitting `--name` leaves the existing name unchanged. The agent can
+later use `bridget rename <name>` without changing its UUID.
+`--yolo` aliases `--dangerously-bypass-approvals-and-sandbox`: it explicitly
+disables Codex sandbox and approvals and is never added by default.
 
 | Command | Purpose and lifetime |
 |---|---|

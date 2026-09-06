@@ -1,5 +1,21 @@
 # 090 — Codex interactif natif, connecté à Bridget sans tmux
 
+## Amendement 2026-09-06 — options et reprise initiale
+
+- `bridget codex --yolo resume <UUID>` reprend explicitement ce fil ; `--yolo`
+  est l'alias exact de `--dangerously-bypass-approvals-and-sandbox`. Sans option
+  explicite, aucun contournement n'est activé. La TUI reste l'autorité des décisions.
+- `--name <nom>` définit le nom d'affichage Bridget via le service de renommage
+  existant, sans changer l'UUID (`--agent-id`). Nom invalide ou déjà attribué :
+  refus explicite, jamais réussite affichée. Le nom n'est pas transmis à Codex.
+- La reprise conserve UUID, historique et titre du fil fournisseur. Un fil absent,
+  incompatible ou remplacé par une réponse serveur différente est refusé avant
+  présence. Le choix initial ne permet toujours pas de changer de fil en cours.
+- Oracles : alias long/court identiques ; vraie TUI + daemon isolés reprennent un
+  historique réel, ajoutent un tour, publient le nom demandé sous le même UUID
+  Bridget et attestent les permissions dans le contexte durable Codex.
+- Claude interactif sans tmux est hors de cet amendement ; le mode géré existe.
+
 Date : 2026-09-05. Statut : Implemented ; adoption autorisée et exécutée le 2026-09-06.
 Branche : session-090-codex-interactif. Dépendance : noyau 089.
 

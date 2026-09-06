@@ -34,6 +34,14 @@
 
 ## Dépendances et exécution
 
+## Amendement demandé le 2026-09-06
+
+- [x] T015 Alias `--yolo`, `resume <UUID>` et `--name` : tests positifs et refus ; aucun bypass implicite ni nom confondu avec l'identité.
+- [x] T016 Réutiliser reprise native et renommage partagé ; vraie TUI/daemon, historique et titre préservés, permissions explicites attestées, UUID/nom cohérents.
+- [x] T017 Rejouer les tests pertinents des deux crates, les recettes natives de non-régression, fmt/clippy ; documenter la correction vérifiée. L'adoption du binaire suit le commit, avec reçu et sauvegarde externes.
+
+## Ordre historique
+
 T001→T002→T003→T004→T005→T006→T007 ; T008/T009 prolongent le même pilote
 séquentiellement ; T010/T011 après assemblage ; T012→T013→T014 en clôture.
 Pas de couloir d'écriture parallèle sur wrapper/pilote. Les lectures/revues peuvent

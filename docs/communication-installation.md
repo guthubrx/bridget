@@ -99,6 +99,16 @@ commande de navigation vers un autre fil doit fermer l'intégration, jamais
 laisser les prochains messages arriver invisiblement dans l'ancien fil.
 Lancer une autre session explicitement pour changer de fil.
 
+Pour reprendre dès le lancement un fil identifié et nommer sa présence :
+
+```sh
+bridget codex --name coderBridget resume <UUID-du-fil-Codex>
+```
+
+Ajouter `--yolo` uniquement si le contournement natif des approbations et du
+sandbox est voulu. Le nom passe par le service partagé de profils ; l'identité
+reste l'UUID Bridget, réutilisable explicitement avec `--agent-id`.
+
 Après adoption de la release, la commande habituelle est simplement
 `bridget codex`, depuis le répertoire de travail souhaité. Le lien
 `/Users/moi/.local/bin/bridget` vise

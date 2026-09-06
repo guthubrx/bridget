@@ -65,3 +65,8 @@ native_recipe!(
     reprise_historique_retire_l_ancienne_presence,
     "--resume-thread"
 );
+native_recipe!(
+    reprise_initiale_yolo_nom_et_historique_reels,
+    "--initial-resume"
+);
+native_recipe!(reprise_absente_refusee_avant_presence, "--missing-resume");

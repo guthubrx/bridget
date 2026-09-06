@@ -315,7 +315,7 @@ impl CodexAppServerTransport {
             ));
         }
         let mut command = Command::new(&options.command);
-        validate_thread_bootstrap(&options.provider_observation, &options.thread_bootstrap)?;
+        validate_endpoint_bootstrap(&options, interactive_socket.is_some())?;
         command
             .args(&options.args)
             .envs(environment.iter().cloned())
@@ -446,13 +446,49 @@ impl CodexAppServerTransport {
                 std::env::current_dir().map_err(|error| TransportError::Io(error.to_string()))?;
             let (thread_method, mut thread_params) =
                 thread_bootstrap_request(&options.thread_bootstrap, &cwd, options.model.as_deref());
-            if interactive_socket.is_some() {
+            if interactive_socket.is_some()
+                && matches!(
+                    options.thread_bootstrap,
+                    CodexThreadBootstrap::Resume { .. }
+                )
+            {
+                // Le serveur résout lui-même profils et -c. Sans projection
+                // de SES réglages effectifs, resume restaure l'ancien choix
+                // d'approbation et neutralise notamment le --yolo explicite.
+                // Aucun parsing TOML ni défaut permissif parallèle à Codex.
+                let config = request(
+                    &writer,
+                    &waiters,
+                    &next_id,
+                    "config/read",
+                    json!({"includeLayers": false, "cwd": cwd}),
+                )?;
+                for (key, field) in [
+                    ("approval_policy", "approvalPolicy"),
+                    ("sandbox_mode", "sandbox"),
+                ] {
+                    if let Some(value) = config
+                        .value
+                        .get("config")
+                        .and_then(|config| config.get(key))
+                        .filter(|value| !value.is_null())
+                    {
+                        thread_params[field] = value.clone();
+                    }
+                }
+            }
+            if interactive_socket.is_some()
+                && matches!(options.thread_bootstrap, CodexThreadBootstrap::Start)
+            {
                 // Contrat natif explicite : la TUI 0.153.4 ne peut reprendre
                 // un fil paginated vide (missing source rollout). legacy
                 // matérialise le journal sans tour ni prompt artificiel.
                 thread_params["historyMode"] = json!("legacy");
             }
-            let thread = request(&writer, &waiters, &next_id, thread_method, thread_params)?;
+            let thread = request(&writer, &waiters, &next_id, thread_method, thread_params)
+                .map_err(|error| {
+                    TransportError::DeliveryFailed(format!("{thread_method}: {error}"))
+                })?;
             if interactive_socket.is_some()
                 && thread
                     .value
@@ -504,7 +540,16 @@ impl CodexAppServerTransport {
                         "thread/start Codex ne retourne pas thread.id".to_string(),
                     )
                 })?;
-            if interactive_socket.is_some() {
+            if matches!(&options.thread_bootstrap,
+                CodexThreadBootstrap::Resume { thread_id: requested } if requested != &thread_id)
+            {
+                return Err(TransportError::DeliveryFailed(
+                    "thread/resume Codex retourne un autre fil que celui demandé".into(),
+                ));
+            }
+            if interactive_socket.is_some()
+                && matches!(options.thread_bootstrap, CodexThreadBootstrap::Start)
+            {
                 // 0.153.4 : rend le fil sans premier tour reprenable par la
                 // seconde connexion, sans envoyer de prompt d'amorçage.
                 request(
@@ -2200,6 +2245,25 @@ fn validate_thread_bootstrap(
     )))
 }
 
+fn validate_endpoint_bootstrap(
+    options: &CodexAppServerOptions,
+    interactive: bool,
+) -> Result<(), TransportError> {
+    // La reprise HUMAINE explicite est négociée avec le serveur privé avant
+    // toute présence : RPC réussie, UUID identique et historique legacy exigés.
+    // Ce n'est pas une reprise automatique gérée : son attestation figée reste
+    // obligatoire, et aucune observation fournisseur n'est fabriquée ici.
+    if interactive
+        && matches!(
+            options.thread_bootstrap,
+            CodexThreadBootstrap::Resume { .. }
+        )
+    {
+        return Ok(());
+    }
+    validate_thread_bootstrap(&options.provider_observation, &options.thread_bootstrap)
+}
+
 fn thread_bootstrap_request(
     bootstrap: &CodexThreadBootstrap,
     cwd: &Path,
@@ -2214,7 +2278,11 @@ fn thread_bootstrap_request(
             ("thread/start", params)
         }
         CodexThreadBootstrap::Resume { thread_id } => {
-            ("thread/resume", json!({ "threadId": thread_id }))
+            let mut params = json!({ "threadId": thread_id });
+            if let Some(model) = model {
+                params["model"] = json!(model);
+            }
+            ("thread/resume", params)
         }
         CodexThreadBootstrap::Fork { thread_id } => {
             ("thread/fork", json!({ "threadId": thread_id }))
@@ -6215,6 +6283,14 @@ mod tests {
         let resume = CodexThreadBootstrap::Resume {
             thread_id: "thread-parent".to_string(),
         };
+        let mut interactive = fake_options(Path::new("/tmp/non-execute"));
+        interactive.thread_bootstrap = resume.clone();
+        assert!(validate_endpoint_bootstrap(&interactive, true).is_ok());
+        assert!(validate_endpoint_bootstrap(&interactive, false).is_err());
+        assert_eq!(
+            thread_bootstrap_request(&resume, cwd, Some("explicite")).1,
+            json!({"threadId": "thread-parent", "model": "explicite"})
+        );
         let fork = CodexThreadBootstrap::Fork {
             thread_id: "thread-parent".to_string(),
         };

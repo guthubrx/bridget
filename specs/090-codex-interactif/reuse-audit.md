@@ -2,6 +2,12 @@
 
 ## Decision
 
+Amendement 2026-09-06 : réemploi de `CodexThreadBootstrap::Resume`,
+`thread_bootstrap_request`, `communication::client::rename_display_name` et du
+harnais PTY 090. L'alias court est normalisé vers le chemin long existant.
+La négociation interactive explicite n'invente aucune `ProviderObservation`
+pour débloquer la politique de reprise automatique gérée, qui reste inchangée.
+
 Statut: PASS
 Date: 2026-09-05
 Feature dir: specs/090-codex-interactif
