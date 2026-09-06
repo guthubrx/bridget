@@ -177,3 +177,18 @@ ajoute la projection MCP. Cela conserve également modèle/effort et le bypass
 explicitement demandé par un humain, sans en créer un. Le test natif consomme
 maintenant les arguments du VRAI registre development passés au VRAI assembleur
 wrapper ; les arguments anciens observés en production font échouer ce test.
+
+Installation de b42aeb48 et reprise du SEUL équipier de recette (génération 443) :
+who MCP natif réussit ; send MCP natif enregistre `RECETTE-091-MCP-OK` sous
+`mcp-66627-6a9d386f-1`, livraison `3d6faeac-164d-470c-9519-260d43bd34b1`.
+La demande de recette `mcp-30942-6a9d3867-7` est answered. Le message MCP distinct
+reste en_vol au dernier relevé, le destinataire étant occupé : ne pas assimiler
+son dépôt à un accusé final ni le réémettre sous une nouvelle clé. L'écriture
+effective dans le cwd a été constatée avant reprise ; les droits sont conservés.
+
+Validation finale du wrapper : **62/62**, test Codex natif inclus, en parallèle.
+La recette TUI native 090 `--initial-resume` passe aussi sur le binaire installé :
+même fil, historique et nom, --yolo demandé attesté (modèle HTTP synthétique,
+aucune consommation de forfait). Log : `/tmp/bridget-091-reprise-native-final.log`.
+Le daemon n'a pas été redémarré pour ces changements de CLI/wrapper ; seule la
+nouvelle vue attach et l'équipier de recette chargent le nouveau binaire.
