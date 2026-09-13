@@ -16,7 +16,11 @@ use std::{
 };
 
 fn start_mcp(root: &Path, instance: &str) -> McpProcess {
-    let mut mcp = McpProcess::start(root, ACTOR, instance);
+    start_mcp_as(root, ACTOR, instance)
+}
+
+fn start_mcp_as(root: &Path, agent: &str, instance: &str) -> McpProcess {
+    let mut mcp = McpProcess::start(root, agent, instance);
     assert!(
         mcp.request(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}))
             .get("error")
@@ -28,7 +32,7 @@ fn start_mcp(root: &Path, instance: &str) -> McpProcess {
     assert!(
         who["result"]["structuredContent"]["agents"]
             .as_array()
-            .is_some_and(|agents| agents.iter().any(|agent| agent["agent_id"] == ACTOR)),
+            .is_some_and(|agents| agents.iter().any(|entry| entry["agent_id"] == agent)),
         "{who}"
     );
     mcp
@@ -312,4 +316,113 @@ fn deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance() {
     assert_eq!(wrapper.join(), Ok(()));
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(registry_root).unwrap();
+}
+
+#[test]
+fn spec094_mcp_modifie_uniquement_sa_propre_presence() {
+    let root = test_root("spec094-mcp-self");
+    let daemon = spawn_daemon(&root, None);
+    let mut mcp = start_mcp(&root, "spec094-instance");
+    let mut other = start_mcp_as(&root, ACP_AGENT, "spec094-other-instance");
+    let reserved = other.request(json!({"jsonrpc":"2.0","id":8,"method":"tools/call",
+        "params":{"name":"bridget_rename","arguments":{"display_name":"Nom réservé 094"}}}));
+    assert_eq!(reserved["result"]["structuredContent"]["status"], "applied");
+    other.stop();
+    fs::write(root.join("state/mcp-agent-name"), ACTOR).unwrap();
+    let conflict = mcp.request(json!({"jsonrpc":"2.0","id":9,"method":"tools/call",
+        "params":{"name":"bridget_rename","arguments":{"display_name":"Nom réservé 094"}}}));
+    assert_eq!(
+        conflict["result"]["structuredContent"]["status"],
+        "rejected"
+    );
+    let calls = [
+        json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{
+            "name":"bridget_rename","arguments":{"display_name":"Agent 094"}}}),
+        json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{
+            "name":"bridget_dnd","arguments":{"mode":"on","duration":"1m"}}}),
+        json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{
+            "name":"bridget_domain","arguments":{"domain":"coherence-094"}}}),
+        json!({"jsonrpc":"2.0","id":13,"method":"tools/call","params":{
+            "name":"bridget_runtime","arguments":{"model":"gpt-5.6-sol","effort":"high"}}}),
+    ];
+    let mut responses = calls
+        .into_iter()
+        .map(|request| mcp.request(request))
+        .collect::<Vec<_>>();
+    for request in [
+        json!({"jsonrpc":"2.0","id":20,"method":"tools/call","params":{
+            "name":"bridget_dnd","arguments":{"mode":"off"}}}),
+        json!({"jsonrpc":"2.0","id":21,"method":"tools/call","params":{
+            "name":"bridget_dnd","arguments":{"mode":"on","duration":"1m"}}}),
+        json!({"jsonrpc":"2.0","id":22,"method":"tools/call","params":{
+            "name":"bridget_domain","arguments":{"reset":true}}}),
+        json!({"jsonrpc":"2.0","id":23,"method":"tools/call","params":{
+            "name":"bridget_domain","arguments":{"domain":"coherence-094"}}}),
+    ] {
+        responses.push(mcp.request(request));
+    }
+    let who = mcp.request(json!({"jsonrpc":"2.0","id":14,"method":"tools/call",
+        "params":{"name":"bridget_who","arguments":{}}}));
+    let status = mcp.request(json!({"jsonrpc":"2.0","id":15,"method":"tools/call",
+        "params":{"name":"bridget_status","arguments":{}}}));
+    let control = mcp.request(json!({"jsonrpc":"2.0","id":16,"method":"tools/call",
+        "params":{"name":"bridget_control_status","arguments":{"history_limit":2}}}));
+    mcp.stop();
+    assert_eq!(
+        fs::read_to_string(root.join("state/agent-domains").join(ACTOR)).unwrap(),
+        "coherence-094"
+    );
+    let mut resumed = start_mcp(&root, "spec094-instance");
+    let after_reconnect = resumed.request(json!({"jsonrpc":"2.0","id":17,"method":"tools/call",
+        "params":{"name":"bridget_who","arguments":{}}}));
+    resumed.stop();
+
+    for response in responses {
+        assert!(
+            response.get("error").is_none(),
+            "appel 094 refusé : {response}"
+        );
+        assert_ne!(
+            response["result"]["isError"], true,
+            "appel 094 en erreur : {response}"
+        );
+    }
+    let actor = who["result"]["structuredContent"]["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["agent_id"] == ACTOR)
+        .expect("appelant MCP encore présent");
+    assert_eq!(actor["display_name"], "Agent 094");
+    assert_eq!(actor["state"], "dnd");
+    assert_eq!(actor["domain"], "coherence-094");
+    assert_eq!(actor["model"], "gpt-5.6-sol");
+    assert_eq!(actor["effort"], "high");
+    let status = &status["result"]["structuredContent"];
+    assert_eq!(status["running"], true);
+    assert!(status.get("agents_inventory_available").is_some());
+    assert!(status.get("agent_count").is_some());
+    for secret in ["socket", "socket_path", "db", "db_path", "instance_id"] {
+        assert!(
+            status.get(secret).is_none(),
+            "champ sensible publié : {secret}"
+        );
+    }
+    let control = &control["result"]["structuredContent"];
+    assert!(control.get("state").is_some());
+    assert!(control["inbox_open_count"].is_u64());
+    assert!(control["history"].as_array().unwrap().len() <= 2);
+    let reconnected_actor = after_reconnect["result"]["structuredContent"]["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["agent_id"] == ACTOR)
+        .expect("même identité revenue après reconnexion MCP");
+    assert_eq!(reconnected_actor["display_name"], "Agent 094");
+    assert_eq!(reconnected_actor["state"], "dnd");
+    assert_eq!(reconnected_actor["domain"], "coherence-094");
+    assert_eq!(reconnected_actor["model"], "gpt-5.6-sol");
+
+    daemon.stop();
+    fs::remove_dir_all(&root).unwrap();
 }

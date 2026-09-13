@@ -845,32 +845,6 @@ fn derive_domain_at(directory: &Path) -> Option<String> {
         .filter(|name| !name.is_empty())
 }
 
-/// Chemin du domaine surchargé d'un agent, en miroir de `agent-names/`.
-fn domain_state_path(agent: &str) -> PathBuf {
-    socket_path()
-        .parent()
-        .unwrap()
-        .join("agent-domains")
-        .join(agent)
-}
-
-/// Domaine effectif d'un agent : la surcharge si elle existe, le dérivé sinon.
-///
-/// Relu à chaque enregistrement, y compris après une reconnexion, pour la même
-/// raison que le nom : seule la trace sur disque connaît l'intention de
-/// l'utilisateur.
-fn effective_domain(agent: &str) -> Option<String> {
-    effective_domain_at(&domain_state_path(agent))
-}
-
-fn effective_domain_at(path: &Path) -> Option<String> {
-    std::fs::read_to_string(path)
-        .map(|domain| domain.trim().to_string())
-        .ok()
-        .filter(|domain| !domain.is_empty())
-        .or_else(derive_domain)
-}
-
 /// Nom d'OS stable et lisible pour l'annuaire Bridget.
 fn operating_system() -> String {
     match std::env::consts::OS {
@@ -1281,10 +1255,9 @@ fn connect_and_register(
     location: Option<&str>,
     os: &str,
     instance_id: &str,
-    domain: Option<&str>,
     turn_in_progress: bool,
 ) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
-    connect_and_register_at(
+    connect_and_register_with_domain_at(
         &socket_path(),
         agent_type,
         agent_id,
@@ -1295,9 +1268,86 @@ fn connect_and_register(
         location,
         os,
         instance_id,
-        domain,
         turn_in_progress,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn connect_and_register_with_domain_at(
+    socket: &std::path::Path,
+    agent_type: &str,
+    agent_id: Option<&str>,
+    host: &str,
+    protocol: &str,
+    channel: Option<&str>,
+    mode: PresenceMode,
+    location: Option<&str>,
+    os: &str,
+    instance_id: &str,
+    turn_in_progress: bool,
+) -> Result<(BufReader<UnixStream>, BufWriter<UnixStream>, String), String> {
+    let derived_domain = derive_domain();
+    let Some(identity) =
+        agent_id.filter(|value| bridget_core::router::validate_agent_id(value).is_ok())
+    else {
+        return connect_and_register_at(
+            socket,
+            agent_type,
+            agent_id,
+            host,
+            protocol,
+            channel,
+            mode,
+            location,
+            os,
+            instance_id,
+            derived_domain.as_deref(),
+            turn_in_progress,
+        );
+    };
+    let domain_lock = crate::communication::client::acquire_domain_lock(
+        socket,
+        identity,
+        crate::communication::client::DAEMON_BUDGET,
+    )
+    .map_err(|error| error.to_string())?;
+    let domain_override = crate::communication::client::read_domain_override(&domain_lock)
+        .map_err(|error| error.to_string())?;
+    let connection = connect_and_register_at(
+        socket,
+        agent_type,
+        Some(identity),
+        host,
+        protocol,
+        channel,
+        mode,
+        location,
+        os,
+        instance_id,
+        derived_domain.as_deref(),
+        turn_in_progress,
+    )?;
+    if connection.2 != identity {
+        return Err("enregistrement sous une identité inattendue".to_string());
+    }
+    if let Some(domain) = domain_override {
+        match crate::communication::client::set_domain_with_lock(
+            &domain_lock,
+            identity,
+            instance_id,
+            socket,
+            Some(domain),
+        )
+        .map_err(|error| error.to_string())?
+        {
+            DaemonToWrapper::Ack { .. } => {}
+            DaemonToWrapper::Nack { reason, .. } => {
+                return Err(format!("réapplication du domaine refusée : {reason}"));
+            }
+            _ => return Err("réponse domaine inattendue pendant la reconnexion".to_string()),
+        }
+    }
+    Ok(connection)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1472,13 +1522,6 @@ pub fn launch(
             (String::new(), None)
         }
     };
-    // Au premier enregistrement, le nom définitif n'est pas encore connu : si
-    // l'utilisateur en a demandé un, sa surcharge de domaine est déjà lisible,
-    // sinon on part du domaine dérivé.
-    let initial_domain = match effective_name.as_deref() {
-        Some(name) => effective_domain(name),
-        None => derive_domain(),
-    };
     let (reader, initial_writer, my_name) = connect_and_register(
         agent_type,
         effective_name.as_deref(),
@@ -1489,7 +1532,6 @@ pub fn launch(
         tmux_location.as_deref(),
         &os,
         &instance_id,
-        initial_domain.as_deref(),
         false,
     )?;
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
@@ -1577,6 +1619,7 @@ pub fn launch(
                 "--mcp-config".to_string(),
                 config.path().display().to_string(),
             ]);
+            append_claude_allowed_tools(&mut final_args);
             ephemeral_mcp_config = Some(config);
             true
         }
@@ -1833,7 +1876,6 @@ pub fn launch(
                         tmux_location_for_thread.as_deref(),
                         &os_for_thread,
                         &instance_id_for_thread,
-                        effective_domain(&wanted_name).as_deref(),
                         false,
                     ) {
                         Ok((new_reader, new_writer, registered_name)) => {
@@ -2036,7 +2078,6 @@ pub fn launch(
                             tmux_location_for_thread.as_deref(),
                             &os_for_thread,
                             &instance_id_for_thread,
-                            effective_domain(&wanted_name).as_deref(),
                             false,
                         ) {
                             Ok((new_reader, new_writer, registered_name))
@@ -3429,11 +3470,7 @@ fn launch_session_with_status(
     };
     let descriptor = transport.descriptor();
     let channel = connection_channel();
-    let initial_domain = effective_name
-        .as_deref()
-        .and_then(effective_domain)
-        .or_else(derive_domain);
-    let (mut reader, initial_writer, mut my_name) = match connect_and_register_at(
+    let (mut reader, initial_writer, mut my_name) = match connect_and_register_with_domain_at(
         socket,
         agent_type,
         effective_name.as_deref(),
@@ -3444,7 +3481,6 @@ fn launch_session_with_status(
         descriptor.location.as_deref(),
         &os,
         &instance_id,
-        initial_domain.as_deref(),
         false,
     ) {
         Ok(connection) => connection,
@@ -4144,6 +4180,7 @@ fn apply_managed_mcp(
                 "--mcp-config".to_string(),
                 config.path().display().to_string(),
             ]);
+            append_claude_allowed_tools(args);
             Ok(Some(config))
         }
         // Le pilote app-server relit bien les serveurs déclarés dans la
@@ -4239,6 +4276,30 @@ fn ensure_claude_permission_bypass(args: &mut Vec<String>) {
         args.push("--permission-mode".to_string());
         args.push("bypassPermissions".to_string());
     }
+}
+
+const BRIDGET_SAFE_MCP_TOOLS: [&str; 12] = [
+    "bridget_who",
+    "bridget_send",
+    "bridget_ledger",
+    "bridget_cancel",
+    "bridget_read_artifact",
+    "bridget_publish_artifact",
+    "bridget_rename",
+    "bridget_dnd",
+    "bridget_domain",
+    "bridget_runtime",
+    "bridget_status",
+    "bridget_control_status",
+];
+
+fn append_claude_allowed_tools(args: &mut Vec<String>) {
+    args.push("--allowedTools".to_string());
+    args.push(
+        BRIDGET_SAFE_MCP_TOOLS
+            .map(|name| format!("mcp__bridget__{name}"))
+            .join(","),
+    );
 }
 
 fn strip_claude_permission_bypass(args: &mut Vec<String>) {
@@ -4436,17 +4497,12 @@ fn codex_mcp_override(server: &serde_json::Value) -> Result<String, Box<dyn std:
     let environment = format!("{{{environment}}}");
     // Codex `auto` sollicite une approbation pour un outil sans annotations.
     // Avec approval_policy=never (équipier), cela interdit même bridget_who.
-    // Le lancement Bridget autorise ces quatre opérations de communication,
-    // pas tous les outils présents/futurs du serveur (Maicie, artefacts, etc.).
+    // Le lancement Bridget autorise seulement la surface sûre et fermée,
+    // pas tous les outils présents ou futurs du serveur (Maicie notamment).
     // `approve`, et non `auto`, est le mode explicite Codex 0.153.4.
-    let tools = [
-        "bridget_who",
-        "bridget_send",
-        "bridget_ledger",
-        "bridget_cancel",
-    ]
-    .map(|name| format!("{name}={{approval_mode=\"approve\"}}"))
-    .join(",");
+    let tools = BRIDGET_SAFE_MCP_TOOLS
+        .map(|name| format!("{name}={{approval_mode=\"approve\"}}"))
+        .join(",");
     Ok(format!(
         "mcp_servers.bridget={{command={command:?},args=[\"mcp\"],env={environment},default_tools_approval_mode=\"prompt\",tools={{{tools}}}}}"
     ))
@@ -4542,7 +4598,7 @@ fn reconnect_managed_session(
         attempts = attempts.saturating_add(1);
         let wanted_name = resolve_current_name(name_state_path, fallback_name);
         let busy = transport.is_busy();
-        match connect_and_register_at(
+        match connect_and_register_with_domain_at(
             socket,
             agent_type,
             Some(&wanted_name),
@@ -4553,7 +4609,6 @@ fn reconnect_managed_session(
             descriptor.location.as_deref(),
             os,
             instance_id,
-            effective_domain(&wanted_name).as_deref(),
             busy,
         ) {
             Ok((reader, new_writer, registered_name)) if registered_name == wanted_name => {
@@ -6755,7 +6810,7 @@ mod reconnect_tests {
     }
 
     #[test]
-    fn spec091_mcp_autorise_seulement_les_quatre_outils_de_communication() {
+    fn spec091_politique_mcp_reste_octet_pour_octet_stable() {
         let server = serde_json::json!({
             "command": "/tmp/bridget-test", "env": {
                 "HOME": "/tmp/home", "BRIDGET_HOME": "/tmp/state",
@@ -6773,9 +6828,49 @@ mod reconnect_tests {
                 "bridget_who={approval_mode=\"approve\"},",
                 "bridget_send={approval_mode=\"approve\"},",
                 "bridget_ledger={approval_mode=\"approve\"},",
-                "bridget_cancel={approval_mode=\"approve\"}}}"
+                "bridget_cancel={approval_mode=\"approve\"},",
+                "bridget_read_artifact={approval_mode=\"approve\"},",
+                "bridget_publish_artifact={approval_mode=\"approve\"},",
+                "bridget_rename={approval_mode=\"approve\"},",
+                "bridget_dnd={approval_mode=\"approve\"},",
+                "bridget_domain={approval_mode=\"approve\"},",
+                "bridget_runtime={approval_mode=\"approve\"},",
+                "bridget_status={approval_mode=\"approve\"},",
+                "bridget_control_status={approval_mode=\"approve\"}}}"
             )
         );
+    }
+
+    #[test]
+    fn spec094_codex_autorise_exactement_les_outils_de_communication_surs() {
+        let server = serde_json::json!({
+            "command": "/tmp/bridget-test", "env": {
+                "HOME": "/tmp/home", "BRIDGET_HOME": "/tmp/state",
+                "BRIDGET_SOCKET": "/tmp/state/bridget.sock"
+            }
+        });
+        let policy = codex_mcp_override(&server).unwrap();
+        for name in [
+            "bridget_who",
+            "bridget_send",
+            "bridget_ledger",
+            "bridget_cancel",
+            "bridget_read_artifact",
+            "bridget_publish_artifact",
+            "bridget_rename",
+            "bridget_dnd",
+            "bridget_domain",
+            "bridget_runtime",
+            "bridget_status",
+            "bridget_control_status",
+        ] {
+            assert!(
+                policy.contains(&format!("{name}={{approval_mode=\"approve\"}}")),
+                "autorisation Codex absente : {name} dans {policy}"
+            );
+        }
+        assert!(policy.contains("default_tools_approval_mode=\"prompt\""));
+        assert!(!policy.contains("maicie_delegate={approval_mode=\"approve\"}"));
     }
 
     #[test]
@@ -7486,21 +7581,317 @@ mod reconnect_tests {
     }
 
     #[test]
-    fn le_domaine_surcharge_prime_sur_le_derive() {
-        // Un UUID ne suffit pas à isoler un test : domain_state_path viserait
-        // encore le HOME réel et y créerait agent-domains. Injecter le fichier
-        // dans le même lecteur utilisé en production, sans mutation d'env.
-        let root =
-            PathBuf::from("/tmp").join(format!("bgdomain-{}", uuid::Uuid::new_v4().simple()));
+    fn spec094_reconnexion_enregistre_le_derive_puis_reapplique_l_override_sans_perdre_le_reader() {
+        let root = PathBuf::from("/tmp").join(format!(
+            "bgdomain-reconnect-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         crate::environment::ensure_private_directory(&root).unwrap();
-        let path = root.join("domain");
-        std::fs::write(&path, "revue-croisee\n").unwrap();
-        assert_eq!(effective_domain_at(&path).as_deref(), Some("revue-croisee"));
+        let socket = root.join("daemon.sock");
+        let identity = "89000000-0000-4000-8000-000000000394";
+        let instance_id = "instance-domain-094";
+        bridget_transport::fsutil::write_private_file_atomic(
+            &root.join("agent-domains").join(identity),
+            b"revue-croisee",
+        )
+        .unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let expected_derived = derive_domain();
+        let expected_derived_for_server = expected_derived.clone();
+        let server = std::thread::spawn(move || {
+            let (mut primary, _) = listener.accept().unwrap();
+            let mut primary_reader = BufReader::new(primary.try_clone().unwrap());
+            let mut line = String::new();
+            primary_reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode(line.trim()).unwrap(),
+                WrapperToDaemon::Register { agent_id, domain, .. }
+                    if agent_id == identity && domain == expected_derived_for_server
+            ));
+            writeln!(
+                primary,
+                "{}",
+                encode(&DaemonToWrapper::Registered {
+                    agent_id: identity.to_string(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writeln!(primary, "{}", encode(&DaemonToWrapper::Disconnect).unwrap()).unwrap();
+            primary.flush().unwrap();
 
-        // Sans trace disque, on retombe sur le domaine dérivé.
-        std::fs::remove_file(&path).unwrap();
-        assert_eq!(effective_domain_at(&path), derive_domain());
-        std::fs::remove_dir(root).unwrap();
+            let (mut auxiliary, _) = listener.accept().unwrap();
+            let mut auxiliary_reader = BufReader::new(auxiliary.try_clone().unwrap());
+            line.clear();
+            auxiliary_reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode(line.trim()).unwrap(),
+                WrapperToDaemon::Register { agent_id, .. } if agent_id == identity
+            ));
+            writeln!(
+                auxiliary,
+                "{}",
+                encode(&DaemonToWrapper::Registered {
+                    agent_id: identity.to_string(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            auxiliary.flush().unwrap();
+            line.clear();
+            auxiliary_reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode(line.trim()).unwrap(),
+                WrapperToDaemon::Domain { agent, domain: Some(domain) }
+                    if agent == identity && domain == "revue-croisee"
+            ));
+            writeln!(
+                auxiliary,
+                "{}",
+                encode(&DaemonToWrapper::Ack {
+                    id: "domain".to_string(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            auxiliary.flush().unwrap();
+        });
+
+        let (mut reader, _writer, registered_name) = connect_and_register_with_domain_at(
+            &socket,
+            "codex",
+            Some(identity),
+            "hote-094",
+            INTERACTIVE_AGENT_PROTOCOL,
+            None,
+            PresenceMode::Cli,
+            None,
+            "Linux",
+            instance_id,
+            false,
+        )
+        .unwrap();
+        assert_eq!(registered_name, identity);
+        let mut deferred = String::new();
+        reader.read_line(&mut deferred).unwrap();
+        assert!(matches!(
+            decode(deferred.trim()).unwrap(),
+            DaemonToWrapper::Disconnect
+        ));
+        server.join().unwrap();
+        assert!(
+            root.join("agent-domains")
+                .join(format!(".{identity}.lock"))
+                .exists()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec094_reconnexion_attend_la_persistance_concurrente_avant_de_lire_l_override() {
+        let _observer_guard = crate::communication::client::lock_domain_test_observers();
+        let root = PathBuf::from("/tmp").join(format!(
+            "bgdomain-reconnect-race-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        crate::environment::ensure_private_directory(&root).unwrap();
+        let socket = root.join("daemon.sock");
+        let identity = "89000000-0000-4000-8000-000000000494";
+        let instance_id = "instance-domain-race-094";
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let expected_derived = derive_domain();
+        let (seen_tx, seen_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut setter, _) = listener.accept().unwrap();
+            let mut setter_reader = BufReader::new(setter.try_clone().unwrap());
+            let mut line = String::new();
+            setter_reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode(line.trim()).unwrap(),
+                WrapperToDaemon::Register { agent_id, .. } if agent_id == identity
+            ));
+            writeln!(
+                setter,
+                "{}",
+                encode(&DaemonToWrapper::Registered {
+                    agent_id: identity.to_string(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            setter.flush().unwrap();
+            line.clear();
+            setter_reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode(line.trim()).unwrap(),
+                WrapperToDaemon::Domain { agent, domain: Some(domain) }
+                    if agent == identity && domain == "nouveau"
+            ));
+            seen_tx.send("setter").unwrap();
+            writeln!(
+                setter,
+                "{}",
+                encode(&DaemonToWrapper::Ack {
+                    id: "domain".to_string(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            setter.flush().unwrap();
+
+            let (mut primary, _) = listener.accept().unwrap();
+            let mut primary_reader = BufReader::new(primary.try_clone().unwrap());
+            line.clear();
+            primary_reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode(line.trim()).unwrap(),
+                WrapperToDaemon::Register { agent_id, domain, .. }
+                    if agent_id == identity && domain == expected_derived
+            ));
+            seen_tx.send("primary").unwrap();
+            writeln!(
+                primary,
+                "{}",
+                encode(&DaemonToWrapper::Registered {
+                    agent_id: identity.to_string(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writeln!(primary, "{}", encode(&DaemonToWrapper::Disconnect).unwrap()).unwrap();
+            primary.flush().unwrap();
+
+            let (mut auxiliary, _) = listener.accept().unwrap();
+            let mut auxiliary_reader = BufReader::new(auxiliary.try_clone().unwrap());
+            line.clear();
+            auxiliary_reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode(line.trim()).unwrap(),
+                WrapperToDaemon::Register { agent_id, .. } if agent_id == identity
+            ));
+            writeln!(
+                auxiliary,
+                "{}",
+                encode(&DaemonToWrapper::Registered {
+                    agent_id: identity.to_string(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            auxiliary.flush().unwrap();
+            line.clear();
+            auxiliary_reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode(line.trim()).unwrap(),
+                WrapperToDaemon::Domain { agent, domain: Some(domain) }
+                    if agent == identity && domain == "nouveau"
+            ));
+            seen_tx.send("override").unwrap();
+            writeln!(
+                auxiliary,
+                "{}",
+                encode(&DaemonToWrapper::Ack {
+                    id: "domain".to_string(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            auxiliary.flush().unwrap();
+        });
+
+        let (blocked_tx, blocked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+        let release_rx_for_hook = Arc::clone(&release_rx);
+        crate::communication::client::replace_domain_after_ack_observer(Some(Arc::new(
+            move |observed_identity| {
+                if observed_identity == identity {
+                    blocked_tx.send(()).unwrap();
+                    release_rx_for_hook.lock().unwrap().recv().unwrap();
+                }
+            },
+        )));
+        let (contended_tx, contended_rx) = mpsc::channel();
+        let contention_seen = Arc::new(AtomicBool::new(false));
+        let contention_seen_for_hook = Arc::clone(&contention_seen);
+        crate::communication::client::replace_domain_lock_contention_observer(Some(Arc::new(
+            move |observed_identity| {
+                if observed_identity == identity
+                    && !contention_seen_for_hook.swap(true, Ordering::SeqCst)
+                {
+                    contended_tx.send(()).unwrap();
+                }
+            },
+        )));
+
+        let setter_socket = socket.clone();
+        let setter = std::thread::spawn(move || {
+            crate::communication::client::set_domain(
+                identity,
+                instance_id,
+                &setter_socket,
+                Some("nouveau".to_string()),
+            )
+        });
+        assert_eq!(
+            seen_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            "setter"
+        );
+        blocked_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+        let reconnect_socket = socket.clone();
+        let reconnect = std::thread::spawn(move || {
+            let (mut reader, _writer, registered_name) = connect_and_register_with_domain_at(
+                &reconnect_socket,
+                "codex",
+                Some(identity),
+                "hote-094",
+                INTERACTIVE_AGENT_PROTOCOL,
+                None,
+                PresenceMode::Cli,
+                None,
+                "Linux",
+                instance_id,
+                false,
+            )?;
+            let mut deferred = String::new();
+            reader
+                .read_line(&mut deferred)
+                .map_err(|error| error.to_string())?;
+            if !matches!(
+                decode(deferred.trim()).map_err(|error| error.to_string())?,
+                DaemonToWrapper::Disconnect
+            ) {
+                return Err("trame différée principale perdue".to_string());
+            }
+            Ok::<_, String>(registered_name)
+        });
+        contended_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("la reconnexion doit rencontrer le verrou du setter");
+        assert!(
+            seen_rx.try_recv().is_err(),
+            "la reconnexion a lu le domaine avant sa persistance"
+        );
+        release_tx.send(()).unwrap();
+        assert!(setter.join().unwrap().is_ok());
+        assert_eq!(reconnect.join().unwrap().unwrap(), identity);
+        assert_eq!(
+            seen_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            "primary"
+        );
+        assert_eq!(
+            seen_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            "override"
+        );
+        server.join().unwrap();
+        crate::communication::client::replace_domain_after_ack_observer(None);
+        crate::communication::client::replace_domain_lock_contention_observer(None);
+        assert_eq!(
+            std::fs::read_to_string(root.join("agent-domains").join(identity)).unwrap(),
+            "nouveau"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

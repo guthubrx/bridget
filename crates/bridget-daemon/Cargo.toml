@@ -30,6 +30,7 @@ signal-hook = "0.3"
 libc.workspace = true
 # Le renderer doit compter les cellules du terminal (CJK/emoji), pas les scalaires Unicode.
 unicode-width = "0.2"
+pulldown-cmark = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 bridget-core = { path = "../bridget-core" }

@@ -465,6 +465,14 @@ fn execute_tool_at_with_scope(
         }
         "bridget_who" => execute_who(identity, instance_id, arguments, socket),
         "bridget_ledger" => execute_ledger(identity, instance_id, arguments, socket),
+        "bridget_rename" => execute_rename(identity, instance_id, arguments, socket),
+        "bridget_dnd" => execute_dnd(identity, instance_id, arguments, socket),
+        "bridget_domain" => execute_domain(identity, instance_id, arguments, socket),
+        "bridget_runtime" => execute_runtime(identity, instance_id, arguments, socket),
+        "bridget_status" => execute_status(arguments, socket),
+        "bridget_control_status" => {
+            execute_control_status(identity, instance_id, arguments, socket)
+        }
         "maicie_delegate" => execute_maicie_delegate(identity, instance_id, arguments, socket),
         "maicie_registre_add" => {
             execute_maicie_registre_add(identity, instance_id, arguments, socket)
@@ -674,6 +682,187 @@ fn execute_cancel(
         }
         other => unexpected_response(other),
     }
+}
+
+fn execute_rename(
+    identity: &str,
+    instance_id: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    reject_unknown_arguments(arguments, &["display_name"])?;
+    let display_name = required_non_empty_string(arguments, "display_name")?;
+    match crate::communication::client::rename_display_name(
+        identity,
+        instance_id,
+        socket,
+        &display_name,
+    )? {
+        DaemonToWrapper::DisplayNameResult { outcome } => {
+            serde_json::to_value(outcome).map_err(|error| ToolError::Technical {
+                code: "daemon_protocol",
+                message: format!("reçu de renommage non sérialisable : {error}"),
+            })
+        }
+        response => unexpected_response(response),
+    }
+}
+
+fn execute_dnd(
+    identity: &str,
+    instance_id: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    reject_unknown_arguments(arguments, &["mode", "duration"])?;
+    let mode = required_non_empty_string(arguments, "mode")?;
+    let duration_secs = match mode.as_str() {
+        "on" => Some(match optional_non_empty_string(arguments, "duration")? {
+            Some(duration) => crate::communication::client::parse_dnd_duration_secs(&duration)?,
+            None => crate::communication::client::DND_DEFAULT_SECS,
+        }),
+        "off" if !arguments.contains_key("duration") => None,
+        "off" => {
+            return Err(ToolError::InvalidParams(
+                "duration est interdite lorsque mode vaut off".to_string(),
+            ));
+        }
+        _ => {
+            return Err(ToolError::InvalidParams(
+                "mode doit valoir on ou off".to_string(),
+            ));
+        }
+    };
+    match crate::communication::client::set_dnd(identity, instance_id, socket, duration_secs)? {
+        DaemonToWrapper::Ack { .. } => Ok(json!({
+            "status": "applied",
+            "mode": mode,
+            "duration_seconds": duration_secs,
+        })),
+        DaemonToWrapper::Nack { reason, .. } => Ok(json!({"status": "rejected", "reason": reason})),
+        response => unexpected_response(response),
+    }
+}
+
+fn execute_domain(
+    identity: &str,
+    instance_id: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    reject_unknown_arguments(arguments, &["domain", "reset"])?;
+    let domain = match (arguments.get("domain"), arguments.get("reset")) {
+        (Some(domain), None) => Some(
+            domain
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    ToolError::InvalidParams("domain doit être une chaîne non vide".to_string())
+                })?
+                .to_string(),
+        ),
+        (None, Some(Value::Bool(true))) => None,
+        (None, Some(_)) => {
+            return Err(ToolError::InvalidParams(
+                "reset doit valoir true".to_string(),
+            ));
+        }
+        _ => {
+            return Err(ToolError::InvalidParams(
+                "fournir exactement domain ou reset:true".to_string(),
+            ));
+        }
+    };
+    match crate::communication::client::set_domain(identity, instance_id, socket, domain.clone())? {
+        DaemonToWrapper::Ack { .. } => {
+            let reset = domain.is_none();
+            Ok(json!({
+                "status": "applied",
+                "domain": domain,
+                "reset": reset,
+            }))
+        }
+        DaemonToWrapper::Nack { reason, .. } => Ok(json!({"status": "rejected", "reason": reason})),
+        response => unexpected_response(response),
+    }
+}
+
+fn execute_runtime(
+    identity: &str,
+    instance_id: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    reject_unknown_arguments(arguments, &["model", "effort"])?;
+    let model = required_non_empty_string(arguments, "model")?;
+    let effort = optional_non_empty_string(arguments, "effort")?;
+    match crate::communication::client::declare_runtime(
+        identity,
+        instance_id,
+        socket,
+        model.clone(),
+        effort.clone(),
+    )? {
+        DaemonToWrapper::Ack { .. } => Ok(json!({
+            "status": "declared",
+            "model": model,
+            "effort": effort,
+            "source": "declared",
+            "selected": false,
+        })),
+        DaemonToWrapper::Nack { reason, .. } => Ok(json!({"status": "rejected", "reason": reason})),
+        response => unexpected_response(response),
+    }
+}
+
+fn execute_status(
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    reject_unknown_arguments(arguments, &[])?;
+    let config = crate::daemon::DaemonConfig {
+        socket_path: socket.to_path_buf(),
+        ..Default::default()
+    };
+    let status = crate::daemon::get_status(&config).map_err(|message| ToolError::Technical {
+        code: "daemon_status_unavailable",
+        message,
+    })?;
+    Ok(json!({
+        "running": status.running,
+        "agents_inventory_available": status.agents_inventory_available,
+        "agent_count": status.agents_inventory_available.then_some(status.agents.len()),
+        "build_id": status.build_id,
+        "daemon_host": status.daemon_host,
+    }))
+}
+
+fn execute_control_status(
+    identity: &str,
+    instance_id: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    reject_unknown_arguments(arguments, &["history_limit"])?;
+    let history_limit = match arguments.get("history_limit") {
+        Some(value) => value.as_u64().filter(|limit| *limit <= 50).ok_or_else(|| {
+            ToolError::InvalidParams(
+                "history_limit doit être un entier compris entre 0 et 50".to_string(),
+            )
+        })? as u32,
+        None => 0,
+    };
+    let (state, inbox_open_count, history) = crate::communication::client::read_control_status(
+        identity,
+        instance_id,
+        socket,
+        history_limit,
+    )?;
+    Ok(json!({
+        "state": state,
+        "inbox_open_count": inbox_open_count,
+        "history": history,
+    }))
 }
 
 fn execute_who(
@@ -1552,6 +1741,80 @@ fn tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "bridget_rename",
+            "description": "Modifier le nom d’affichage du seul agent appelant. L’UUID, l’instance et l’historique restent inchangés.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "display_name": { "type": "string", "minLength": 1, "maxLength": crate::agent_profile::MAX_DISPLAY_NAME_CHARS }
+                },
+                "required": ["display_name"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "bridget_dnd",
+            "description": "Activer ou lever le mode ne pas déranger du seul agent appelant. Durée par défaut : 60 minutes ; maximum : 7 jours.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "mode": { "enum": ["on", "off"] },
+                    "duration": { "type": "string", "description": "Entier en minutes ou durée suffixée s, m ou h ; uniquement avec mode=on." }
+                },
+                "required": ["mode"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "bridget_domain",
+            "description": "Définir le domaine propre de l’agent ou revenir au domaine dérivé. La sauvegarde locale est confirmée séparément de l’application en mémoire.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "domain": { "type": "string", "minLength": 1, "maxLength": 100 },
+                    "reset": { "const": true }
+                },
+                "oneOf": [
+                    { "required": ["domain"] },
+                    { "required": ["reset"] }
+                ],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "bridget_runtime",
+            "description": "Déclarer le modèle et l’effort du seul agent appelant. Cette observation ne sélectionne aucun modèle fournisseur.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "model": { "type": "string", "minLength": 1, "maxLength": 100 },
+                    "effort": { "type": "string", "minLength": 1, "maxLength": 100 }
+                },
+                "required": ["model"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "bridget_status",
+            "description": "Lire la projection assainie du daemon sans exposer socket, base de données ni instance.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "bridget_control_status",
+            "description": "Lire l’état de contrôle et, sur demande, son historique borné. Cet outil ne peut effectuer aucune mutation de pilotage.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "history_limit": { "type": "integer", "minimum": 0, "maximum": 50, "default": 0 }
+                },
+                "additionalProperties": false
+            }
+        }),
+        json!({
             "name": "maicie_delegate",
             "description": "Créer une délégation dans le greffe Maicie central. Une réponse queued exige maicie_request_status.",
             "inputSchema": {
@@ -1699,7 +1962,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    10
+                    16
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -1725,10 +1988,16 @@ mod tests {
             .collect::<BTreeSet<_>>();
         let expected = [
             "bridget_cancel",
+            "bridget_control_status",
+            "bridget_dnd",
+            "bridget_domain",
             "bridget_ledger",
             "bridget_publish_artifact",
             "bridget_read_artifact",
+            "bridget_rename",
+            "bridget_runtime",
             "bridget_send",
+            "bridget_status",
             "bridget_who",
             "maicie_delegate",
             "maicie_objective_close",
@@ -1743,6 +2012,142 @@ mod tests {
             assert!(
                 names.iter().all(|name| !name.contains(forbidden)),
                 "l'action humaine {forbidden} ne doit jamais être un outil MCP"
+            );
+        }
+    }
+
+    #[test]
+    fn spec094_catalogue_expose_les_six_outils_sans_cible_libre() {
+        let catalogue = tools();
+        let expected = [
+            "bridget_rename",
+            "bridget_dnd",
+            "bridget_domain",
+            "bridget_runtime",
+            "bridget_status",
+            "bridget_control_status",
+        ];
+        for name in expected {
+            let tool = catalogue
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("outil 094 absent du catalogue : {name}"));
+            let schema = &tool["inputSchema"];
+            assert_eq!(
+                schema["additionalProperties"], false,
+                "schéma ouvert : {name}"
+            );
+            let properties = schema["properties"]
+                .as_object()
+                .expect("propriétés de schéma présentes");
+            for forbidden in [
+                "from",
+                "agent",
+                "agent_id",
+                "instance_id",
+                "source",
+                "socket",
+                "path",
+            ] {
+                assert!(
+                    !properties.contains_key(forbidden),
+                    "{name} expose une autorité libre : {forbidden}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn spec094_parametres_invalides_sont_refuses_avant_connexion() {
+        let socket = test_socket("spec094-invalid");
+        let cases = [
+            (
+                "bridget_rename",
+                json!({"display_name":"Agent", "agent_id":"autre"}),
+            ),
+            ("bridget_dnd", json!({"mode":"on", "duration":"0s"})),
+            ("bridget_dnd", json!({"mode":"on", "duration":"169h"})),
+            (
+                "bridget_dnd",
+                json!({"mode":"on", "duration":"18446744073709551615h"}),
+            ),
+            ("bridget_dnd", json!({"mode":"off", "duration":"1m"})),
+            ("bridget_domain", json!({"domain":"a", "reset":true})),
+            ("bridget_domain", json!({"reset":false})),
+            ("bridget_domain", json!({"domain":"avec espace"})),
+            ("bridget_domain", json!({"domain":"avec/slash"})),
+            ("bridget_domain", json!({"domain":"équipe"})),
+            ("bridget_runtime", json!({"model":"m", "source":"observed"})),
+            ("bridget_runtime", json!({"model":"   "})),
+            ("bridget_runtime", json!({"model":"m", "effort":"   "})),
+            ("bridget_status", json!({"socket":"/tmp/interdit"})),
+            ("bridget_control_status", json!({"history_limit":51})),
+            ("bridget_control_status", json!({"paused":true})),
+        ];
+        for (name, arguments) in cases {
+            assert!(
+                matches!(
+                    execute_tool_at(
+                        "89000000-0000-4000-8000-000000000194",
+                        name,
+                        arguments.as_object().unwrap(),
+                        &socket,
+                    ),
+                    Err(ToolError::InvalidParams(_))
+                ),
+                "{name} a dépassé sa validation locale : {arguments}"
+            );
+        }
+    }
+
+    #[test]
+    fn spec094_inventaire_documente_toutes_les_commandes_du_repartiteur() {
+        const CLI: &str = include_str!("cli.rs");
+        const INVENTORY: &str = include_str!("../../../skills/bridget/references/commandes.md");
+
+        let dispatch = CLI
+            .split("// --- Sous-commandes daemon / client ---")
+            .nth(1)
+            .expect("marqueur du répartiteur CLI")
+            .split("        _ => {")
+            .next()
+            .expect("bras fermés du répartiteur");
+        let mut commands = BTreeSet::new();
+        for line in dispatch.lines().filter(|line| line.contains("=>")) {
+            let left = line.split("=>").next().unwrap();
+            for quoted in left.split('"').skip(1).step_by(2) {
+                commands.insert(quoted);
+            }
+        }
+        commands.insert("--");
+        for alias in ["codex", "claude", "gemini", "gclaude"] {
+            commands.insert(alias);
+        }
+
+        let documented = INVENTORY
+            .lines()
+            .filter_map(|line| line.strip_prefix("| `"))
+            .filter_map(|line| line.split('`').next())
+            .collect::<BTreeSet<_>>();
+        let missing = commands
+            .difference(&documented)
+            .copied()
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "commandes sans décision 094 : {missing:?}"
+        );
+        for retired in [
+            "ui",
+            "cleanup",
+            "managed-runtime-wrapper",
+            "managed-runtime-stop",
+            "project-runtime",
+            "project-round",
+        ] {
+            assert!(
+                INVENTORY.contains(&format!("`{retired}`")),
+                "commande retirée non expliquée : {retired}"
             );
         }
     }
@@ -3240,19 +3645,22 @@ mod tests {
                 let (stream, _) = listener.accept().unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut writer = BufWriter::new(stream);
-                match read_command(&mut reader) {
+                let registered_agent = match read_command(&mut reader) {
                     WrapperToDaemon::Register {
                         identity_version: 2,
                         agent_id: name,
                         instance_id: Some(instance_id),
                         ..
-                    } => principals_tx.send((name, instance_id)).unwrap(),
+                    } => {
+                        principals_tx.send((name.clone(), instance_id)).unwrap();
+                        name
+                    }
                     other => panic!("Register MCP attendu: {other:?}"),
-                }
+                };
                 write_command(
                     &mut writer,
                     DaemonToWrapper::Registered {
-                        agent_id: "mcp".to_string(),
+                        agent_id: registered_agent,
                     },
                 );
             }
@@ -3423,13 +3831,18 @@ mod tests {
             let read_stream = stream.try_clone().unwrap();
             let mut reader = BufReader::new(read_stream);
             let mut writer = BufWriter::new(stream);
-            assert!(
-                matches!(read_command(&mut reader), WrapperToDaemon::Register { agent_type, .. } if agent_type == "mcp")
-            );
+            let registered_agent = match read_command(&mut reader) {
+                WrapperToDaemon::Register {
+                    agent_type,
+                    agent_id,
+                    ..
+                } if agent_type == "mcp" => agent_id,
+                other => panic!("Register MCP attendu: {other:?}"),
+            };
             write_command(
                 &mut writer,
                 DaemonToWrapper::Registered {
-                    agent_id: "mcp-test".to_string(),
+                    agent_id: registered_agent,
                 },
             );
             assert!(matches!(

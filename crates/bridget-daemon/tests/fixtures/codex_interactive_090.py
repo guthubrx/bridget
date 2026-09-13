@@ -477,16 +477,74 @@ def main():
             assert observer.rpc("thread/loaded/list", {})["result"]["data"] == [thread_id]
             assert probe.Fixture.count == count_before, "prompt de reconstruction caché"
             print("daemon_restarted_identity_and_thread_unchanged", flush=True)
-        if "--new-thread" in sys.argv or resume_id:
+        if "--new-thread" in sys.argv or "--resume-thread" in sys.argv:
+            secondary_body = None
+            if "--new-thread" in sys.argv:
+                started = observer.rpc("thread/start", {"cwd": str(root), "historyMode": "legacy"})
+                assert "result" in started, started
+                navigated_thread = started["result"]["thread"]["id"]
+                secondary_body = "TOUR-DU-SECOND-FIL-090"
+                secondary_turn = observer.rpc("turn/start", {"threadId": navigated_thread,
+                    "input": [{"type": "text", "text": secondary_body}]})
+                assert "result" in secondary_turn, secondary_turn
+                secondary_deadline = time.monotonic() + 10
+                while not any(event.get("method") == "turn/completed"
+                    and event.get("params", {}).get("threadId") == navigated_thread
+                    for event in observer.events):
+                    observer.socket.settimeout(max(0.001, secondary_deadline - time.monotonic()))
+                    observer.events.append(observer.receive())
+                    assert time.monotonic() < secondary_deadline
+            else:
+                mark = len(transcript)
+                navigation = ("/resume " + resume_id).encode()
+                os.write(master, navigation)
+                until(lambda: navigation.decode() in terminal_text(mark), "commande de navigation affichée")
+                os.write(master, b"\r")
+                navigated_thread = resume_id
+
+            def navigation_loaded():
+                loaded = observer.rpc("thread/loaded/list", {})["result"]["data"]
+                return thread_id in loaded and len(loaded) >= 2
+
+            until(navigation_loaded, "second fil réellement chargé par l'app-server")
+            loaded = observer.rpc("thread/loaded/list", {})["result"]["data"]
+            assert navigated_thread != thread_id and navigated_thread in loaded, loaded
+            assert wrapper.poll() is None and socket_path.exists(), "notification globale devenue destructive"
+            connected = [entry for entry in json.loads(cli("agents", "--json"))
+                if entry.get("agent_id") == agent["agent_id"] and entry.get("state") == "connected"]
+            assert len(connected) == 1 and connected[0]["connection_id"] == agent["connection_id"], connected
+
+            message_id = "after-foreign-thread-090"
+            message_body = "BRIDGET-RESTE-SUR-LE-PARENT-090"
+            issued_at = str(int(time.time()))
+            cli("send", "--to", agent["agent_id"], "--id", message_id,
+                "--issued-at", issued_at, "--issuer-scope", "fixture_090_foreign_thread", message_body)
+            until(lambda: any(json.loads(line).get("event") == "turn_end"
+                and json.loads(line).get("message_id") == message_id
+                for path in (state / "sessions").rglob("*.jsonl")
+                for line in path.read_bytes().splitlines()), "message Bridget terminé après chargement du fil tiers")
+            parent_read = observer.rpc("thread/read", {"threadId": thread_id, "includeTurns": True})
+            assert "result" in parent_read, parent_read
+            navigated_read = observer.rpc("thread/read", {"threadId": navigated_thread, "includeTurns": True})
+            assert "result" in navigated_read, navigated_read
+            parent_history = parent_read["result"]["thread"]
+            navigated_history = navigated_read["result"]["thread"]
+            assert message_body in json.dumps(parent_history), "remise Bridget détournée du fil principal"
+            assert message_body not in json.dumps(navigated_history), "remise Bridget attribuée au fil navigué"
+            if secondary_body:
+                assert secondary_body in json.dumps(navigated_history), "tour secondaire non matérialisé"
+                assert secondary_body not in json.dumps(parent_history), "tour secondaire attribué au parent"
+                journal = b"".join(path.read_bytes() for path in (state / "sessions").rglob("*.jsonl"))
+                assert secondary_body.encode() not in journal, "tour secondaire journalisé par Bridget sur le parent"
+            assert wrapper.poll() is None, "fin du tour parent a fermé la TUI"
+            print("foreign_thread_non_destructive_parent_thread_still_targeted",
+                thread_id, navigated_thread, flush=True)
             mark = len(transcript)
-            navigation = ("/resume " + resume_id if resume_id else "/new").encode()
-            os.write(master, navigation)
-            until(lambda: navigation.decode() in terminal_text(mark), "commande de navigation affichée")
+            os.write(master, b"/quit")
+            until(lambda: b"/quit" in transcript[mark:], "commande de sortie native rendue")
             os.write(master, b"\r")
-            until(lambda: wrapper.poll() is not None, "nouveau fil refusé sans conserver une ancienne présence")
-            assert not socket_path.exists()
-            assert terminal_restored()
-            print("thread_switch_stops_old_identity", flush=True)
+            until(lambda: wrapper.poll() is not None, "sortie explicite après chargement du fil tiers")
+            assert not socket_path.exists() and terminal_restored()
             return
         sender_id = "90000000-0000-4000-8000-000000000002"
         peer = socket.socket(socket.AF_UNIX)

@@ -50,15 +50,42 @@ lie une réponse à CETTE demande. Ne pas raccourcir l'identifiant. `bridget rep
 est une commodité visant le dernier expéditeur : pour plusieurs demandes
 concurrentes, préférer le destinataire et la corrélation explicites ci-dessus.
 
-L'adresse est l'UUID. `bridget rename "Équipe B"` change seulement le nom affiché
-depuis la session propriétaire ; les retries, l'instance et l'historique restent
-liés à la même identité. Un nom de fournisseur ou un champ `--from` ne permet
-pas d'usurper cette identité.
+L'adresse est l'UUID. `bridget rename "Équipe B"` ou `bridget_rename` change
+seulement le nom affiché depuis la session propriétaire ; les rejeux, l'instance
+et l'historique restent liés à la même identité. Un nom de fournisseur ou un
+champ `--from` ne permet pas d'usurper cette identité.
 
-Les outils MCP `bridget_who`, `bridget_send`, `bridget_cancel` et `bridget_ledger` utilisent la
-même socket. Avec MCP, répondre avec `to`, `body` et `in_reply_to`.
-La [skill livrée](skills/bridget/SKILL.md) contient les exemples et la conduite de
-reprise ; elle n'est pas installée dans les profils globaux automatiquement.
+Le contrat 094 décrit une liste fermée de douze outils Bridget :
+`bridget_who`, `bridget_send`, `bridget_cancel`, `bridget_ledger`, les deux outils
+d'artefacts et les six ajouts `bridget_rename`, `bridget_dnd`, `bridget_domain`,
+`bridget_runtime`, `bridget_status`, `bridget_control_status`. Ils utilisent la
+même autorité ; ce catalogue n'est ni une approbation MCP globale, ni une
+autorisation automatique des outils Maicie. Avec MCP, répondre avec `to`, `body`
+et `in_reply_to`. La [skill livrée](skills/bridget/SKILL.md) contient les exemples
+et la conduite de reprise ; son
+[inventaire 094](skills/bridget/references/commandes.md) classe chaque commande
+CLI. Ces fichiers ne prouvent ni l'installation du binaire, ni le catalogue
+d'une session MCP déjà ouverte, et aucun profil global n'est modifié automatiquement.
+
+## Administrer une fédération SSH
+
+Le binaire 096 embarque le gestionnaire de fédération : aucun chemin de dépôt
+ou de script n'est nécessaire pour l'usage humain courant.
+
+```sh
+bridget federate ssh://cartae.app -p 2222
+bridget federate status
+bridget federate remove ssh://cartae.app -p 2222 --label cartae-core
+```
+
+La première commande réutilise sans mutation une installation attestée lorsque
+le nom DNS correspond à son IP enregistrée. Le DNS ne remplace jamais la cible
+SSH ni le fichier `known_hosts`. `status` inventorie localement, sans SSH. Pour
+un retrait trouvé par alias DNS, un appel non interactif exige `--label`; un
+double terminal peut confirmer le label, l'hôte enregistré et le port affichés.
+Une nouvelle destination demande les paramètres manquants seulement avec stdin
+et stdout sur un terminal ; ailleurs, elle affiche les options requises et échoue.
+Voir [le guide des services de fédération](docs/federation-services.md).
 
 ## Codex interactif, sans tmux (session 090)
 
@@ -84,9 +111,11 @@ configurations `-c`, sandbox et politique d'approbation explicitement demandés
 sont relayés ; aucune option permissive du registre géré n'est réutilisée.
 
 Contrat vérifié sur Codex **0.153.4** : connexion distante Unix expérimentale,
-historique `legacy`, un fil par lancement. `/new`, `/resume` vers un autre fil,
-fork et sous-agents internes Codex qui chargent un second fil terminent
-l'intégration au lieu de conserver une identité pointant vers l'ancien fil.
+historique `legacy`, une identité Bridget liée au fil initial. Les sous-agents
+internes restent gérés par Codex : leur création/reprise ne ferme pas la session
+et ne crée aucune identité Bridget. Les notifications d'autres fils ne changent
+pas la cible des messages. L'intégration ne suit pas implicitement `/new` ou
+`/resume` vers un autre fil : relancer Bridget pour joindre cette conversation.
 Les autres agents Bridget restent indépendants et joignables. Pour changer de répertoire,
 quitter puis relancer depuis ce répertoire ; `--cd`, images, fournisseur local
 ne sont pas proposés par cette première version.
@@ -187,10 +216,40 @@ que `who`. Elle devient indisponible sans renouvellement ; le fournisseur réel
 n'est jamais déduit de « Claude » ou « Codex ». Les commandes et demandes
 d'autorisation Codex sont rendues comme des faits, avec sortie neutralisée.
 
+La vue terminal présente les réponses en Markdown : titres, listes, emphase,
+citations et code distinct visuellement, sous un en-tête compact séparé. Le nom
+affiché reste cosmétique : l'adresse de communication est toujours l'UUID.
+Les raisonnements et fins de tour ordinaires réussies sont masqués dans cette
+vue seulement ; commandes, permissions, refus, erreurs et lacunes restent
+visibles. La sortie non-TTY conserve le diagnostic technique, et le journal
+source n'est pas modifié. Les blocs de code sont stylés, sans coloration lexicale
+spécifique à chaque langage ni lien terminal actif.
+
+Changer la largeur replie la réponse en cours ou la dernière réponse encore
+gérée à l'écran, sans frappe supplémentaire, ainsi que la saisie et le statut.
+Le préfixe déjà remis au scrollback appartient au terminal : Bridget ne réécrit
+pas tout l'historique. Le prochain tour libère la réponse précédente retenue.
+
 La saisie a un fond gris sur toute la largeur, ajusté aux lignes saisies ; le
-statut coloré reste en dessous. `Alt+Entrée` (ou `Échap`, puis `Entrée`) ajoute
-une ligne ; `Entrée` envoie. Le redimensionnement conserve le texte entier.
-`NO_COLOR` ou `TERM=dumb` désactive les couleurs, et une sortie redirigée reste sobre.
+statut coloré reste en dessous. Dans le TTY interactif (entrée et sortie terminal),
+`Entrée` (CR) envoie, tandis que le LF distinct produit par `Shift+Entrée` ou
+Ctrl-J insère une ligne à la position du curseur. `Option+Entrée` ainsi que
+`Échap`, puis `Entrée` sont ignorés. Gauche/Droite se déplacent d'un caractère
+UTF-8 entier et Option+Gauche/Droite d'un mot (suite non blanche). Ctrl-A/E vont
+au début/à la fin de la ligne logique ; Ctrl-U/K effacent jusqu'à ces limites sans
+supprimer le LF. Ctrl-W ou Option+Retour arrière effacent le mot précédent,
+Option-D le suivant, et Ctrl-Y réinsère le dernier fragment ainsi supprimé. Le
+retour arrière ordinaire efface seulement le caractère précédent et ne remplace
+pas ce registre. Hors double-TTY, CR et LF gardent l'envoi historique et ces
+nouveaux contrôles d'édition sont inertes. Haut/Bas rappelle les saisies émises
+avec succès, place le curseur à leur fin et restaure le texte et la position du
+brouillon courant après la plus récente. Le mode clavier enrichi est temporaire ;
+sa désactivation sous `TERM=dumb` n'empêche pas la distinction CR/LF du double-TTY.
+Cet historique est volatile, limité à l'ouverture attach courante, à 100 entrées
+et à 1 Mio ; il est vide après réouverture. Le redimensionnement conserve le texte
+entier de la saisie. `NO_COLOR` ou `TERM=dumb` désactive les couleurs ; `TERM=dumb` conserve
+aussi le clavier traditionnel sans activation enrichie, et une sortie redirigée
+reste sobre.
 
 Dans attach sur un **Codex géré**, `/model gpt-5.6-terra medium` choisit le modèle
 et l'effort pour les prochains tours du **même fil** : aucun redémarrage, aucune
@@ -212,11 +271,38 @@ au shell. Un refus de socket dans le shell sandboxé n'est pas une preuve de pan
 MCP. Les réponses finales des équipiers gérés peuvent être relayées par le wrapper ;
 la TUI humaine, elle, exige une réponse liée explicite. Ne pas doubler les deux.
 
+En 094, un agent peut agir sur **son propre état** par MCP, sans champ cible :
+renommer son affichage (jamais son UUID), activer DND de 1 seconde à 7 jours
+(`60m` par défaut) ou le lever, changer/réinitialiser son domaine et déclarer son
+runtime. Seul `off` lève DND ; une échéance déjà expirée est refusée sans mutation
+ni prolongation inventée. Une réponse corrélée valide reste livrable pendant DND.
+Le domaine applique le même canon technique ASCII que le CLI ; son reset revient
+au domaine réellement dérivé, y compris après redémarrage. La persistance
+du domaine est confirmée séparément de son application en mémoire : une erreur
+`domain_persistence_failed` interdit d'annoncer une durabilité ou un rollback.
+`bridget_runtime` déclare un modèle/effort avec source `Declared` ; contrairement
+à `/model` dans attach ou la TUI, il ne sélectionne rien chez le fournisseur.
+
+`bridget_status` expose une santé assainie ; un inventaire indisponible donne un
+compte inconnu, pas zéro. `bridget_control_status` lit l'état, le compte de
+décisions ouvertes et, sur demande, 0 à 50 événements. Une panne du store reste
+une indisponibilité. La portée technique d'un client ne constitue pas à elle
+seule une authentification du daemon.
+
 Le lancement, l'arrêt et la relance restent des commandes CLI explicitement
 autorisées, pas des outils MCP de supervision. Toujours lire le reçu et le profil
 effectif : connecté ne signifie pas autorisé à écrire. Les outils Maicie encore
 annoncés sont une façade vers un service extérieur, non une dépendance pour
 communiquer. Les artefacts restent inertes et n'ouvrent aucune interface graphique.
+
+Les opérations de flotte, les décisions `control`/`inbox`, les hooks, la migration,
+`reprise`, `reaper`, le daemon et le terminal restent humaines ou internes, avec
+leur motif précis dans l'[inventaire exhaustif](skills/bridget/references/commandes.md).
+Un ancien serveur MCP vivant conserve son binaire et son catalogue : utiliser le
+mécanisme natif du client s'il est connu, sinon faire rouvrir la session par
+l'humain. Les garanties de domaine exigent aussi que client et wrapper
+coopératifs soient réellement chargés. Ne pas inventer de commande de
+rechargement ni interrompre une conversation pour actualiser les outils.
 
 Les contenus référencés conservent bytes, provenance et accès. Un document HTML
 est du contenu inerte : aucun rendu, script ou navigateur dans le noyau.

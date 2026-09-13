@@ -19,6 +19,7 @@ pub mod execution_store;
 pub use execution_store::{
     ConditionalTransition, ExecutionSnapshot, ExecutionStore, QueuedSubmission,
 };
+pub mod federate;
 pub mod fleet;
 pub mod greffe_policy_refresh;
 pub mod human_inbox;

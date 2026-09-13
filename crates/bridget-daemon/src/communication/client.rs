@@ -1,10 +1,12 @@
 //! Client Unix partagé : une seule inscription auxiliaire et un seul budget CLI/MCP.
 //! Aucune logique de présentation ni accès client au stockage du daemon.
 
-use bridget_transport::protocol::{PresenceMode, decode, encode};
+use bridget_transport::protocol::{
+    CLIENT_CONTRACT_VERSION, CONTROL_STATE_CONTRACT_VERSION, ClientCapability, ConnectionRole,
+    ControlEventFrame, ControlStateFrame, PresenceMode, RuntimeSource, decode, encode,
+};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{self, BufReader, Write};
-#[cfg(test)]
 use std::os::fd::AsRawFd;
 #[cfg(test)]
 use std::os::unix::ffi::OsStrExt;
@@ -12,7 +14,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-const DAEMON_BUDGET: Duration = Duration::from_secs(10);
+pub(crate) const DAEMON_BUDGET: Duration = Duration::from_secs(10);
 
 pub(crate) fn cancel_request(
     identity: &str,
@@ -49,6 +51,7 @@ pub(crate) fn rename_display_name(
     socket: &Path,
     name: &str,
 ) -> Result<DaemonToWrapper, ClientError> {
+    let expected_name = name.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut connection = registered_connection(identity, instance_id, socket)?;
     let response = connection.send_then_wait(&WrapperToDaemon::DisplayNameSet {
         request: bridget_transport::protocol::DisplayNameRequest {
@@ -58,13 +61,433 @@ pub(crate) fn rename_display_name(
     })?;
     match &response {
         DaemonToWrapper::DisplayNameResult {
-            outcome: bridget_transport::protocol::DisplayNameOutcome::Applied { agent_id, .. },
-        } if agent_id == identity => Ok(response),
+            outcome:
+                bridget_transport::protocol::DisplayNameOutcome::Applied {
+                    agent_id,
+                    display_name,
+                    ..
+                },
+        } if agent_id == identity && display_name == &expected_name => Ok(response),
         DaemonToWrapper::DisplayNameResult {
             outcome: bridget_transport::protocol::DisplayNameOutcome::Rejected { .. },
         } => Ok(response),
         _ => unexpected_response(response),
     }
+}
+
+pub(crate) const DND_DEFAULT_SECS: u64 = 60 * 60;
+pub(crate) const DND_MAX_SECS: u64 = 7 * 24 * 60 * 60;
+
+pub(crate) fn parse_dnd_duration_secs(value: &str) -> Result<u64, ClientError> {
+    let value = value.trim();
+    let (digits, multiplier) = match value.chars().last() {
+        Some('s') => (&value[..value.len() - 1], 1_u64),
+        Some('m') => (&value[..value.len() - 1], 60),
+        Some('h') => (&value[..value.len() - 1], 60 * 60),
+        Some(last) if last.is_ascii_digit() => (value, 60),
+        _ => {
+            return Err(ClientError::InvalidParams(
+                "durée attendue sous la forme 90s, 30m ou 2h".to_string(),
+            ));
+        }
+    };
+    let amount = digits.parse::<u64>().map_err(|_| {
+        ClientError::InvalidParams("durée attendue sous la forme 90s, 30m ou 2h".to_string())
+    })?;
+    let seconds = amount
+        .checked_mul(multiplier)
+        .ok_or_else(|| ClientError::InvalidParams("durée supérieure à 7 jours".to_string()))?;
+    if !(1..=DND_MAX_SECS).contains(&seconds) {
+        return Err(ClientError::InvalidParams(
+            "durée comprise entre 1 seconde et 7 jours requise".to_string(),
+        ));
+    }
+    Ok(seconds)
+}
+
+fn self_mutation(
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+    command: WrapperToDaemon,
+    expected_id: &str,
+) -> Result<DaemonToWrapper, ClientError> {
+    self_mutation_until(
+        identity,
+        instance_id,
+        socket,
+        command,
+        expected_id,
+        Instant::now() + DAEMON_BUDGET,
+    )
+}
+
+fn self_mutation_until(
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+    command: WrapperToDaemon,
+    expected_id: &str,
+    deadline: Instant,
+) -> Result<DaemonToWrapper, ClientError> {
+    let mut connection = registered_connection_until(identity, instance_id, socket, deadline)?;
+    let response = connection.send_then_wait(&command)?;
+    match &response {
+        DaemonToWrapper::Ack { id } | DaemonToWrapper::Nack { id, .. } if id == expected_id => {
+            Ok(response)
+        }
+        _ => unexpected_response(response),
+    }
+}
+
+pub(crate) fn set_dnd(
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+    duration_secs: Option<u64>,
+) -> Result<DaemonToWrapper, ClientError> {
+    let until_secs = duration_secs
+        .map(|seconds| {
+            if !(1..=DND_MAX_SECS).contains(&seconds) {
+                return Err(ClientError::InvalidParams(
+                    "durée comprise entre 1 seconde et 7 jours requise".to_string(),
+                ));
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|_| ClientError::Technical {
+                    code: "clock_unavailable",
+                    message: "horloge système antérieure à l'époque Unix".to_string(),
+                })?
+                .as_secs();
+            now.checked_add(seconds)
+                .ok_or_else(|| ClientError::InvalidParams("échéance DND hors plage".to_string()))
+        })
+        .transpose()?;
+    self_mutation(
+        identity,
+        instance_id,
+        socket,
+        WrapperToDaemon::Availability {
+            agent: identity.to_string(),
+            until_secs,
+        },
+        "availability",
+    )
+}
+
+fn domain_state_path(socket: &Path, identity: &str) -> Result<std::path::PathBuf, ClientError> {
+    let root = socket.parent().ok_or_else(|| ClientError::Technical {
+        code: "domain_persistence_failed",
+        message: "domaine appliqué en mémoire, mais racine de persistance absente".to_string(),
+    })?;
+    Ok(root.join("agent-domains").join(identity))
+}
+
+pub(crate) struct DomainLock {
+    _file: std::fs::File,
+    identity: String,
+    state_path: std::path::PathBuf,
+    deadline: Instant,
+}
+
+#[cfg(test)]
+type DomainLockContentionObserver = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
+#[cfg(test)]
+static DOMAIN_LOCK_CONTENTION_OBSERVER: std::sync::Mutex<Option<DomainLockContentionObserver>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+static DOMAIN_TEST_OBSERVER_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn lock_domain_test_observers() -> std::sync::MutexGuard<'static, ()> {
+    DOMAIN_TEST_OBSERVER_MUTEX
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+#[cfg(test)]
+pub(crate) fn replace_domain_lock_contention_observer(
+    observer: Option<DomainLockContentionObserver>,
+) {
+    *DOMAIN_LOCK_CONTENTION_OBSERVER
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = observer;
+}
+
+fn acquire_domain_lock_until(
+    socket: &Path,
+    identity: &str,
+    deadline: Instant,
+) -> Result<DomainLock, ClientError> {
+    let state_path = domain_state_path(socket, identity)?;
+    let lock_path = state_path
+        .parent()
+        .ok_or_else(|| ClientError::Technical {
+            code: "domain_lock_failed",
+            message: "répertoire de verrou domaine absent".to_string(),
+        })?
+        .join(format!(".{identity}.lock"));
+    let file = bridget_transport::fsutil::open_private_file(&lock_path).map_err(|error| {
+        ClientError::Technical {
+            code: "domain_lock_failed",
+            message: format!("verrou domaine indisponible : {error}"),
+        }
+    })?;
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(DomainLock {
+                _file: file,
+                identity: identity.to_string(),
+                state_path,
+                deadline,
+            });
+        }
+        let error = io::Error::last_os_error();
+        if !matches!(
+            error.raw_os_error(),
+            Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+        ) {
+            return Err(ClientError::Technical {
+                code: "domain_lock_failed",
+                message: format!("verrou domaine impossible : {error}"),
+            });
+        }
+        #[cfg(test)]
+        if let Some(observer) = DOMAIN_LOCK_CONTENTION_OBSERVER.lock().unwrap().clone() {
+            observer(identity);
+        }
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(|| ClientError::Technical {
+                code: "domain_lock_timeout",
+                message: "verrou domaine indisponible avant la fin du budget".to_string(),
+            })?;
+        std::thread::sleep(remaining.min(Duration::from_millis(10)));
+    }
+}
+
+pub(crate) fn acquire_domain_lock(
+    socket: &Path,
+    identity: &str,
+    budget: Duration,
+) -> Result<DomainLock, ClientError> {
+    acquire_domain_lock_until(socket, identity, Instant::now() + budget)
+}
+
+pub(crate) fn read_domain_override(lock: &DomainLock) -> Result<Option<String>, ClientError> {
+    match std::fs::read_to_string(&lock.state_path) {
+        Ok(domain) => {
+            let domain = domain.trim().to_string();
+            bridget_core::router::validate_technical_label(&domain)
+                .map_err(ClientError::InvalidParams)?;
+            Ok(Some(domain))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(ClientError::Technical {
+            code: "domain_persistence_failed",
+            message: format!("lecture du domaine persistant impossible : {error}"),
+        }),
+    }
+}
+
+fn persist_domain(socket: &Path, identity: &str, domain: Option<&str>) -> Result<(), ClientError> {
+    let path = domain_state_path(socket, identity)?;
+    let result = match domain {
+        Some(domain) => {
+            bridget_transport::fsutil::write_private_file_atomic(&path, domain.as_bytes())
+        }
+        None => match std::fs::remove_file(&path) {
+            Ok(()) => path
+                .parent()
+                .map(std::fs::File::open)
+                .transpose()
+                .and_then(|directory| directory.map_or(Ok(()), |file| file.sync_all())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        },
+    };
+    result.map_err(|error| ClientError::Technical {
+        code: "domain_persistence_failed",
+        message: format!("domaine appliqué en mémoire, mais persistance non confirmée : {error}"),
+    })
+}
+
+#[cfg(test)]
+type DomainAfterAckObserver = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
+#[cfg(test)]
+static DOMAIN_AFTER_ACK_OBSERVER: std::sync::Mutex<Option<DomainAfterAckObserver>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn replace_domain_after_ack_observer(observer: Option<DomainAfterAckObserver>) {
+    *DOMAIN_AFTER_ACK_OBSERVER
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = observer;
+}
+
+#[cfg(test)]
+fn observe_domain_after_ack(identity: &str) {
+    let observer = DOMAIN_AFTER_ACK_OBSERVER.lock().unwrap().clone();
+    if let Some(observer) = observer {
+        observer(identity);
+    }
+}
+
+pub(crate) fn set_domain(
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+    domain: Option<String>,
+) -> Result<DaemonToWrapper, ClientError> {
+    if let Some(domain) = domain.as_deref() {
+        bridget_core::router::validate_technical_label(domain)
+            .map_err(ClientError::InvalidParams)?;
+    }
+    let deadline = Instant::now() + DAEMON_BUDGET;
+    let lock = acquire_domain_lock_until(socket, identity, deadline)?;
+    let response = set_domain_with_lock(&lock, identity, instance_id, socket, domain.clone())?;
+    if matches!(&response, DaemonToWrapper::Ack { .. }) {
+        #[cfg(test)]
+        observe_domain_after_ack(identity);
+        persist_domain(socket, identity, domain.as_deref())?;
+    }
+    Ok(response)
+}
+
+pub(crate) fn set_domain_with_lock(
+    lock: &DomainLock,
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+    domain: Option<String>,
+) -> Result<DaemonToWrapper, ClientError> {
+    if lock.identity != identity {
+        return Err(ClientError::InvalidParams(
+            "verrou domaine d'une autre identité".to_string(),
+        ));
+    }
+    if let Some(domain) = domain.as_deref() {
+        bridget_core::router::validate_technical_label(domain)
+            .map_err(ClientError::InvalidParams)?;
+    }
+    self_mutation_until(
+        identity,
+        instance_id,
+        socket,
+        WrapperToDaemon::Domain {
+            agent: identity.to_string(),
+            domain,
+        },
+        "domain",
+        lock.deadline,
+    )
+}
+
+pub(crate) fn declare_runtime(
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+    model: String,
+    effort: Option<String>,
+) -> Result<DaemonToWrapper, ClientError> {
+    for (label, value) in [
+        ("model", Some(model.as_str())),
+        ("effort", effort.as_deref()),
+    ] {
+        if let Some(value) = value
+            && (value.trim().is_empty()
+                || value.chars().count() > 100
+                || value.chars().any(bridget_core::is_disallowed_control))
+        {
+            return Err(ClientError::InvalidParams(format!(
+                "{label} runtime invalide"
+            )));
+        }
+    }
+    self_mutation(
+        identity,
+        instance_id,
+        socket,
+        WrapperToDaemon::Runtime {
+            agent: identity.to_string(),
+            model,
+            effort,
+            source: RuntimeSource::Declared,
+        },
+        "runtime",
+    )
+}
+
+pub(crate) fn read_control_status(
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+    history_limit: u32,
+) -> Result<(ControlStateFrame, u32, Vec<ControlEventFrame>), ClientError> {
+    if history_limit > 50 {
+        return Err(ClientError::InvalidParams(
+            "history_limit doit être compris entre 0 et 50".to_string(),
+        ));
+    }
+    // La portée Client reste une lecture, mais elle n'invente pas son instance :
+    // l'inscription auxiliaire doit d'abord l'attester auprès du même daemon.
+    drop(registered_connection(identity, instance_id, socket)?);
+    let mut connection = DaemonConnection::connect(socket)?;
+    match connection.exchange(&WrapperToDaemon::RoleHandshake {
+        role: ConnectionRole::Client,
+    })? {
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client,
+        } => {}
+        response => return unexpected_response(response),
+    }
+    match connection.exchange(&WrapperToDaemon::ClientHello {
+        contract_version: CLIENT_CONTRACT_VERSION,
+        issuer_scope: crate::communication::issuer_scope(instance_id),
+        capabilities: vec![ClientCapability::Lookup],
+    })? {
+        DaemonToWrapper::ClientWelcome { capabilities, .. }
+            if capabilities == vec![ClientCapability::Lookup] => {}
+        response => return unexpected_response(response),
+    }
+    let (state, inbox_open_count) =
+        match connection.exchange(&WrapperToDaemon::ControlStateRead {
+            version: CONTROL_STATE_CONTRACT_VERSION,
+        })? {
+            DaemonToWrapper::ControlState {
+                state,
+                inbox_open_count,
+            } => (state, inbox_open_count),
+            DaemonToWrapper::ControlStateRejected { reason } => {
+                return Err(ClientError::Technical {
+                    code: "control_status_unavailable",
+                    message: format!("état de contrôle indisponible : {reason:?}"),
+                });
+            }
+            response => return unexpected_response(response),
+        };
+    let history = if history_limit == 0 {
+        Vec::new()
+    } else {
+        match connection.exchange(&WrapperToDaemon::ControlHistory {
+            version: CONTROL_STATE_CONTRACT_VERSION,
+            limit: history_limit,
+        })? {
+            DaemonToWrapper::ControlHistory { events } => events,
+            DaemonToWrapper::ControlStateRejected { reason } => {
+                return Err(ClientError::Technical {
+                    code: "control_status_unavailable",
+                    message: format!("historique de contrôle indisponible : {reason:?}"),
+                });
+            }
+            response => return unexpected_response(response),
+        }
+    };
+    Ok((state, inbox_open_count, history))
 }
 
 /// La portée vient de l'inscription auxiliaire attestée, jamais des arguments.
@@ -328,7 +751,21 @@ pub(crate) fn registered_connection(
     instance_id: &str,
     socket: &Path,
 ) -> Result<DaemonConnection, ClientError> {
-    let mut connection = DaemonConnection::connect(socket)?;
+    registered_connection_until(
+        identity,
+        instance_id,
+        socket,
+        Instant::now() + DAEMON_BUDGET,
+    )
+}
+
+fn registered_connection_until(
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+    deadline: Instant,
+) -> Result<DaemonConnection, ClientError> {
+    let mut connection = DaemonConnection::connect_until(socket, deadline)?;
     let registration = WrapperToDaemon::Register {
         agent_type: "mcp".to_string(),
         identity_version: 2,
@@ -345,7 +782,7 @@ pub(crate) fn registered_connection(
         journal_available: None,
     };
     match connection.exchange(&registration)? {
-        DaemonToWrapper::Registered { .. } => Ok(connection),
+        DaemonToWrapper::Registered { agent_id } if agent_id == identity => Ok(connection),
         other => unexpected_response(other),
     }
 }
@@ -360,6 +797,13 @@ pub(crate) fn unexpected_response<T>(_response: DaemonToWrapper) -> Result<T, Cl
 #[cfg(test)]
 mod security_tests {
     use super::*;
+    use std::io::BufRead;
+    use std::os::unix::net::UnixListener;
+    use std::sync::mpsc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
     use std::thread;
 
     fn pair(budget: Duration) -> (DaemonConnection, UnixStream) {
@@ -373,6 +817,398 @@ mod security_tests {
             },
             peer,
         )
+    }
+
+    fn registered_server(
+        path: &Path,
+        response: DaemonToWrapper,
+    ) -> (thread::JoinHandle<()>, mpsc::Receiver<WrapperToDaemon>) {
+        let listener = UnixListener::bind(path).unwrap();
+        let (seen_tx, seen_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let WrapperToDaemon::Register { agent_id, .. } = decode(line.trim()).unwrap() else {
+                panic!("Register attendu");
+            };
+            writeln!(
+                stream,
+                "{}",
+                encode(&DaemonToWrapper::Registered { agent_id }).unwrap()
+            )
+            .unwrap();
+            stream.flush().unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            seen_tx.send(decode(line.trim()).unwrap()).unwrap();
+            writeln!(stream, "{}", encode(&response).unwrap()).unwrap();
+            stream.flush().unwrap();
+        });
+        (server, seen_rx)
+    }
+
+    #[test]
+    fn spec094_rename_confirme_uuid_et_nom_normalise_sans_accepter_une_substitution() {
+        use bridget_transport::protocol::DisplayNameOutcome;
+
+        let identity = "89000000-0000-4000-8000-000000000194";
+        for (returned_name, accepted) in [("Agent Vingt Trois", true), ("Autre agent", false)] {
+            let path =
+                std::env::temp_dir().join(format!("b94-rename-{}", uuid::Uuid::new_v4().simple()));
+            let response = DaemonToWrapper::DisplayNameResult {
+                outcome: DisplayNameOutcome::Applied {
+                    agent_id: identity.to_string(),
+                    display_name: returned_name.to_string(),
+                    revision: 2,
+                },
+            };
+            let (server, seen) = registered_server(&path, response);
+            let result =
+                rename_display_name(identity, "instance-094", &path, "Agent   Vingt Trois");
+            assert_eq!(result.is_ok(), accepted, "réponse={returned_name}");
+            assert!(matches!(
+                seen.recv().unwrap(),
+                WrapperToDaemon::DisplayNameSet { .. }
+            ));
+            server.join().unwrap();
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn spec094_domaine_distingue_ack_memoire_et_echec_de_persistance() {
+        let root =
+            std::env::temp_dir().join(format!("b94-domain-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("daemon.sock");
+        let (server, seen) = registered_server(
+            &path,
+            DaemonToWrapper::Ack {
+                id: "domain".to_string(),
+            },
+        );
+        let identity = "89000000-0000-4000-8000-000000000194";
+        // Le répertoire des domaines doit rester accessible au préflight du
+        // verrou. Seule la cible finale est rendue impropre à un remplacement,
+        // afin de prouver l'échec durable APRES l'ACK mémoire.
+        std::fs::create_dir_all(root.join("agent-domains").join(identity)).unwrap();
+        let result = set_domain(
+            identity,
+            "instance-094",
+            &path,
+            Some("documentation".to_string()),
+        );
+        assert!(matches!(
+            result,
+            Err(ClientError::Technical {
+                code: "domain_persistence_failed",
+                ref message,
+            }) if message.contains("appliqué en mémoire")
+                && message.contains("persistance non confirmée")
+        ));
+        assert!(matches!(
+            seen.recv_timeout(Duration::from_secs(2)).unwrap(),
+            WrapperToDaemon::Domain {
+                domain: Some(domain), ..
+            } if domain == "documentation"
+        ));
+        server.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec094_deux_domaines_concurrents_gardent_le_meme_ordre_en_memoire_et_sur_disque() {
+        let _observer_guard = lock_domain_test_observers();
+        let root = std::env::temp_dir().join(format!(
+            "b94-domain-order-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("daemon.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let (seen_tx, seen_rx) = mpsc::channel();
+        let memory_domain = Arc::new(std::sync::Mutex::new(None));
+        let memory_domain_for_server = Arc::clone(&memory_domain);
+        let server = thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let WrapperToDaemon::Register { agent_id, .. } = decode(line.trim()).unwrap()
+                else {
+                    panic!("Register attendu");
+                };
+                writeln!(
+                    stream,
+                    "{}",
+                    encode(&DaemonToWrapper::Registered { agent_id }).unwrap()
+                )
+                .unwrap();
+                stream.flush().unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                let WrapperToDaemon::Domain {
+                    domain: Some(domain),
+                    ..
+                } = decode(line.trim()).unwrap()
+                else {
+                    panic!("Domain attendu");
+                };
+                *memory_domain_for_server.lock().unwrap() = Some(domain.clone());
+                seen_tx.send(domain).unwrap();
+                writeln!(
+                    stream,
+                    "{}",
+                    encode(&DaemonToWrapper::Ack {
+                        id: "domain".to_string(),
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                stream.flush().unwrap();
+            }
+        });
+
+        let identity = "89000000-0000-4000-8000-000000000294";
+        let first_observed = Arc::new(AtomicBool::new(false));
+        let first_observed_for_hook = Arc::clone(&first_observed);
+        let (blocked_tx, blocked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (contended_tx, contended_rx) = mpsc::channel();
+        let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+        let release_rx_for_hook = Arc::clone(&release_rx);
+        let identity_for_hook = identity.to_string();
+        replace_domain_after_ack_observer(Some(Arc::new(move |observed_identity| {
+            if observed_identity == identity_for_hook
+                && !first_observed_for_hook.swap(true, Ordering::SeqCst)
+            {
+                blocked_tx.send(()).unwrap();
+                release_rx_for_hook.lock().unwrap().recv().unwrap();
+            }
+        })));
+        let contention_reported = Arc::new(AtomicBool::new(false));
+        let contention_reported_for_hook = Arc::clone(&contention_reported);
+        let identity_for_contention = identity.to_string();
+        replace_domain_lock_contention_observer(Some(Arc::new(move |observed_identity| {
+            if observed_identity == identity_for_contention
+                && !contention_reported_for_hook.swap(true, Ordering::SeqCst)
+            {
+                contended_tx.send(()).unwrap();
+            }
+        })));
+
+        let first_path = path.clone();
+        let first = thread::spawn(move || {
+            set_domain(
+                identity,
+                "instance-094",
+                &first_path,
+                Some("premier".to_string()),
+            )
+        });
+        assert_eq!(seen_rx.recv().unwrap(), "premier");
+        blocked_rx.recv().unwrap();
+        let second_path = path.clone();
+        let second = thread::spawn(move || {
+            set_domain(
+                identity,
+                "instance-094",
+                &second_path,
+                Some("second".to_string()),
+            )
+        });
+        contended_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("le second appel doit rencontrer le verrou réellement tenu");
+        let second_reached_daemon_while_first_blocked = seen_rx.try_recv().is_ok();
+        release_tx.send(()).unwrap();
+        assert!(first.join().unwrap().is_ok());
+        assert!(second.join().unwrap().is_ok());
+        assert_eq!(
+            seen_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            "second"
+        );
+        server.join().unwrap();
+        replace_domain_after_ack_observer(None);
+        replace_domain_lock_contention_observer(None);
+
+        assert!(
+            !second_reached_daemon_while_first_blocked,
+            "le second domaine a dépassé le premier avant sa persistance"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("agent-domains").join(identity)).unwrap(),
+            "second"
+        );
+        assert_eq!(memory_domain.lock().unwrap().as_deref(), Some("second"));
+        let _ = std::fs::remove_file(path);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec094_control_status_negocie_lookup_borne_a_l_instance_sans_mutation() {
+        use bridget_transport::protocol::ControlStateRefusal;
+
+        let path =
+            std::env::temp_dir().join(format!("b94-control-{}", uuid::Uuid::new_v4().simple()));
+        let listener = UnixListener::bind(&path).unwrap();
+        let (hello_tx, hello_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut registration, _) = listener.accept().unwrap();
+            let mut registration_reader = BufReader::new(registration.try_clone().unwrap());
+            let mut line = String::new();
+            registration_reader.read_line(&mut line).unwrap();
+            let WrapperToDaemon::Register { agent_id, .. } = decode(line.trim()).unwrap() else {
+                panic!("Register attendu avant la lecture Client");
+            };
+            writeln!(
+                registration,
+                "{}",
+                encode(&DaemonToWrapper::Registered { agent_id }).unwrap()
+            )
+            .unwrap();
+            registration.flush().unwrap();
+            drop(registration_reader);
+            drop(registration);
+
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode(line.trim()).unwrap(),
+                WrapperToDaemon::RoleHandshake {
+                    role: ConnectionRole::Client
+                }
+            ));
+            writeln!(
+                stream,
+                "{}",
+                encode(&DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Client,
+                })
+                .unwrap()
+            )
+            .unwrap();
+            stream.flush().unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            let hello = decode(line.trim()).unwrap();
+            hello_tx.send(hello).unwrap();
+            writeln!(
+                stream,
+                "{}",
+                encode(&DaemonToWrapper::ClientWelcome {
+                    version: CLIENT_CONTRACT_VERSION,
+                    build_id: "test-094".to_string(),
+                    horizon_secs: 60,
+                    issued_at_tolerance_secs: 5,
+                    capabilities: vec![ClientCapability::Lookup],
+                })
+                .unwrap()
+            )
+            .unwrap();
+            stream.flush().unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode(line.trim()).unwrap(),
+                WrapperToDaemon::ControlStateRead { .. }
+            ));
+            writeln!(
+                stream,
+                "{}",
+                encode(&DaemonToWrapper::ControlStateRejected {
+                    reason: ControlStateRefusal::StoreUnavailable,
+                })
+                .unwrap()
+            )
+            .unwrap();
+            stream.flush().unwrap();
+        });
+        assert!(
+            read_control_status(
+                "89000000-0000-4000-8000-000000000194",
+                "instance-094",
+                &path,
+                0,
+            )
+            .is_err()
+        );
+        match hello_rx.recv().unwrap() {
+            WrapperToDaemon::ClientHello {
+                issuer_scope,
+                capabilities,
+                ..
+            } => {
+                assert_eq!(
+                    issuer_scope,
+                    crate::communication::issuer_scope("instance-094")
+                );
+                assert_eq!(capabilities, vec![ClientCapability::Lookup]);
+                assert!(!capabilities.contains(&ClientCapability::ControlStateV1));
+            }
+            other => panic!("ClientHello attendu, reçu {other:?}"),
+        }
+        server.join().unwrap();
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn spec094_control_status_stoppe_si_l_attestation_auxiliaire_est_perimee() {
+        let path = std::env::temp_dir().join(format!(
+            "b94-control-stale-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let listener = UnixListener::bind(&path).unwrap();
+        let (check_tx, check_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode(line.trim()).unwrap(),
+                WrapperToDaemon::Register {
+                    instance_id: Some(instance_id), ..
+                } if instance_id == "instance-perimee"
+            ));
+            writeln!(
+                stream,
+                "{}",
+                encode(&DaemonToWrapper::Nack {
+                    id: "register".to_string(),
+                    reason: "instance remplacée".to_string(),
+                })
+                .unwrap()
+            )
+            .unwrap();
+            stream.flush().unwrap();
+            check_rx.recv().unwrap();
+            listener.set_nonblocking(true).unwrap();
+            assert!(
+                matches!(
+                    listener.accept(),
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock
+                ),
+                "une connexion Client a contourné l'attestation refusée"
+            );
+        });
+        assert!(
+            read_control_status(
+                "89000000-0000-4000-8000-000000000194",
+                "instance-perimee",
+                &path,
+                0,
+            )
+            .is_err()
+        );
+        check_tx.send(()).unwrap();
+        server.join().unwrap();
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

@@ -2376,7 +2376,9 @@ fn collect_thread_pages(
         let response = fetch(
             json!({
                 "cursor": cursor, "limit": 100, "sortKey": "updated_at", "modelProviders": [],
-                "sourceKinds": ["cli", "vscode", "appServer"]
+                "sourceKinds": ["cli", "vscode", "appServer"],
+                // Évite le scan/réparation des rollouts sur le chemin interactif borné.
+                "useStateDbOnly": true
             }),
             remaining,
         )?;
@@ -2697,17 +2699,11 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 if let (Some(selected), Some(incoming)) = (selected.as_deref(), incoming_thread)
                     && selected != incoming
                 {
-                    // Serveur privé neuf : aucun autre fil ne peut rester
-                    // chargé, même un sous-agent. Une reprise d'un fil déjà
-                    // chargé n'émettrait ensuite aucun signal de navigation.
-                    // Le cold resume 0.153.4 ne publie pas thread/started,
-                    // mais son chargement publie globalement le statut Idle.
-                    if matches!(method, Some("thread/started" | "thread/status/changed")) {
-                        push_source(&observations, raw, ManagedEventKind::Error {
-                            detail: "changement de fil Codex : relancer bridget codex pour une nouvelle session".into()
-                        });
-                        break;
-                    }
+                    // L'app-server publie globalement les événements de ses
+                    // autres fils, notamment les sous-agents internes Codex.
+                    // Leur présence ne prouve aucune navigation humaine : ne
+                    // rien projeter dans le fil sélectionné, son journal ou
+                    // ses réponses de permission.
                     continue;
                 }
             }
@@ -3608,6 +3604,55 @@ mod tests {
     }
 
     #[test]
+    fn spec090_catalogue_interactif_utilise_state_db_seul_a_chaque_page() {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let expected_ids = [uuid::Uuid::new_v4(), uuid::Uuid::new_v4()];
+        let mut page = 0;
+
+        let threads = collect_thread_pages(deadline, |params, remaining| {
+            assert!(!remaining.is_zero());
+            assert_eq!(
+                params.get("useStateDbOnly"),
+                Some(&Value::Bool(true)),
+                "sans la projection state DB, Codex rescane et répare les rollouts avant de répondre"
+            );
+            assert_eq!(
+                params.get("searchTerm"),
+                None,
+                "le menu et la détection des noms ambigus exigent toujours le catalogue complet"
+            );
+            assert_eq!(
+                params["cursor"],
+                if page == 0 {
+                    Value::Null
+                } else {
+                    json!("page-2")
+                }
+            );
+            let response = json!({
+                "data": [{
+                    "id": expected_ids[page].to_string(),
+                    "name": "horizon-calliope",
+                    "cwd": "/Users/moi/Nextcloud/10.Scripts/63.studio-horizon"
+                }],
+                "nextCursor": if page == 0 { json!("page-2") } else { Value::Null }
+            });
+            page += 1;
+            Ok(response)
+        })
+        .expect("le catalogue public complet doit rester disponible sous la borne existante");
+
+        assert_eq!(page, 2, "le drapeau doit accompagner toutes les pages");
+        assert_eq!(
+            threads.len(),
+            2,
+            "les doublons de nom restent visibles au sélecteur"
+        );
+        assert_eq!(threads[0].name.as_deref(), Some("horizon-calliope"));
+        assert_eq!(threads[1].name.as_deref(), Some("horizon-calliope"));
+    }
+
+    #[test]
     fn lecteur_interactif_ne_repond_jamais_pour_humain_et_conserve_raw() {
         struct Capture(Arc<Mutex<Vec<u8>>>);
         impl Write for Capture {
@@ -3889,6 +3934,159 @@ mod tests {
                     && entry["payload"]["body"] == "AJOUT HUMAIN"
                     && entry["payload"]["from"] == "human")
         );
+    }
+
+    #[test]
+    fn spec093_lecteur_interactif_ignore_les_fils_codex_tiers_sans_fermer_le_parent() {
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let observations = Arc::new((Mutex::new(Observations::default()), Condvar::new()));
+        let queue = Arc::new((
+            Mutex::new(QueueState {
+                messages: VecDeque::new(),
+                steer: VecDeque::new(),
+                active: None,
+                steering_open: false,
+                closed: false,
+                external_turn: None,
+            }),
+            Condvar::new(),
+        ));
+        let alive = Arc::new(AtomicBool::new(true));
+        let detail = Arc::new(Mutex::new(None));
+        let pending_request = Arc::new(Mutex::new(None));
+        let journal_root = root("foreign-codex-threads");
+        let journal = Arc::new(Mutex::new(Some(
+            JournalWriter::start(
+                &journal_root,
+                "interactive",
+                "parent-thread",
+                Arc::new(Mutex::new(crate::acp::AcpEventQueue::default())),
+            )
+            .unwrap(),
+        )));
+        let (tx, rx) = mpsc::channel::<std::io::Result<String>>();
+        let waiters = Arc::new(Mutex::new(HashMap::new()));
+        let reader = spawn_reader(
+            Box::new(rx.into_iter()),
+            ReaderContext {
+                waiters: waiters.clone(),
+                observations: observations.clone(),
+                alive: alive.clone(),
+                journal: journal.clone(),
+                queue: queue.clone(),
+                pending_request: pending_request.clone(),
+                pinned_model: None,
+                active_detail: detail.clone(),
+                writer: Arc::new(Mutex::new(Some(Box::new(Capture(output.clone()))))),
+                permissions: "allow".into(),
+                dynamic_tool_handler: None,
+                sandbox_posture: "complete",
+                interactive: true,
+                selected_thread: Arc::new(Mutex::new(Some("parent-thread".into()))),
+            },
+        );
+        let send_and_wait = |raw: &str| {
+            tx.send(Ok(raw.into())).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut state = observations.0.lock().unwrap();
+            while alive.load(Ordering::SeqCst)
+                && !state.events.iter().any(|event| event.raw == raw.as_bytes())
+            {
+                let remaining = deadline
+                    .checked_duration_since(Instant::now())
+                    .expect("événement parent attendu avant échéance");
+                state = observations.1.wait_timeout(state, remaining).unwrap().0;
+            }
+            assert!(
+                state.events.iter().any(|event| event.raw == raw.as_bytes()),
+                "le reader doit traiter l'événement parent suivant"
+            );
+        };
+
+        send_and_wait(
+            r#"{"method":"turn/started","params":{"threadId":"parent-thread","turn":{"id":"parent-turn","status":"inProgress"}}}"#,
+        );
+        send_and_wait(
+            r#"{"method":"item/started","params":{"threadId":"parent-thread","turnId":"parent-turn","item":{"type":"userMessage","content":[{"type":"text","text":"MESSAGE PARENT"}]}}}"#,
+        );
+        for raw in [
+            r#"{"method":"thread/started","params":{"thread":{"id":"child-one","parentThreadId":"parent-thread","status":{"type":"active"}}}}"#,
+            r#"{"method":"turn/started","params":{"threadId":"child-one","turn":{"id":"child-turn","status":"inProgress"}}}"#,
+            r#"{"method":"thread/status/changed","params":{"threadId":"child-one","status":{"type":"idle"}}}"#,
+            r#"{"method":"thread/status/changed","params":{"threadId":"resumed-child","status":{"type":"active"}}}"#,
+            r#"{"method":"item/agentMessage/delta","params":{"threadId":"child-one","turnId":"child-turn","itemId":"child-answer","delta":"NE PAS ATTRIBUER"}}"#,
+            r#"{"id":71,"method":"item/permissions/requestApproval","params":{"threadId":"child-one","turnId":"child-turn","permissions":{}}}"#,
+        ] {
+            tx.send(Ok(raw.into())).unwrap();
+        }
+        send_and_wait(
+            r#"{"method":"item/agentMessage/delta","params":{"threadId":"parent-thread","turnId":"parent-turn","itemId":"parent-answer","delta":"PARENT TOUJOURS ACTIF"}}"#,
+        );
+
+        assert!(alive.load(Ordering::SeqCst));
+        assert_eq!(
+            queue.0.lock().unwrap().external_turn.as_deref(),
+            Some("parent-turn")
+        );
+        {
+            let active = detail.lock().unwrap();
+            let active = active.as_ref().expect("tour parent conservé");
+            assert_eq!(active.thread_id, "parent-thread");
+            assert_eq!(active.turn_id.as_deref(), Some("parent-turn"));
+        }
+        assert!(pending_request.lock().unwrap().is_none());
+        assert!(output.lock().unwrap().is_empty());
+        assert_eq!(
+            observations
+                .0
+                .lock()
+                .unwrap()
+                .response_by_turn
+                .get("parent-turn")
+                .map(String::as_str),
+            Some("PARENT TOUJOURS ACTIF")
+        );
+        assert!(
+            !observations
+                .0
+                .lock()
+                .unwrap()
+                .response_by_turn
+                .contains_key("child-turn")
+        );
+
+        let (result_tx, result_rx) = mpsc::channel();
+        waiters.lock().unwrap().insert(993, result_tx);
+        drop(tx);
+        reader.join().unwrap();
+        assert!(!alive.load(Ordering::SeqCst));
+        assert_eq!(
+            result_rx
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                .unwrap_err(),
+            "flux Codex fermé"
+        );
+
+        journal.lock().unwrap().take().unwrap().stop();
+        let logs: String = fs::read_dir(journal_root.join("interactive"))
+            .unwrap()
+            .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect();
+        assert!(logs.contains("parent-turn"));
+        assert!(!logs.contains("child-one"));
+        assert!(!logs.contains("resumed-child"));
     }
 
     fn root(label: &str) -> std::path::PathBuf {

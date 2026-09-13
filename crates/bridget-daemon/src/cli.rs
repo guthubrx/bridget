@@ -131,7 +131,7 @@ pub fn run() {
 
     if !matches!(
         cmd.as_str(),
-        "version" | "--version" | "-v" | "help" | "--help" | "-h"
+        "federate" | "version" | "--version" | "-v" | "help" | "--help" | "-h"
     ) && let Err(error) = crate::environment::initialize_process()
     {
         exit_argument_error(&error);
@@ -169,6 +169,7 @@ pub fn run() {
     // --- Sous-commandes daemon / client ---
     match cmd.as_str() {
         "daemon" => cmd_daemon(&args[2..]),
+        "federate" => crate::federate::run(&args[2..]),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
         "mcp" => cmd_mcp(),
@@ -599,6 +600,7 @@ fn print_usage() {
            -- <CMD> [ARGS...]     Agent personnalisé\n\n\
          Daemon & client :\n  \
            daemon                 Lance le daemon\n  \
+           federate <OP>          Gère les liaisons SSH persistantes (--help)\n  \
            mcp                    Lance le serveur MCP sur stdio\n  \
            attach <UUID>          Observe et écrit à un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID] [--posture discovery|development]\n  \
@@ -1490,14 +1492,7 @@ fn cmd_rename(args: &[String]) {
     {
         exit_argument_error("nom affiché invalide (80 caractères maximum, sans contrôle)");
     }
-    let identity = crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
-        eprintln!(
-            "bridget rename : {} : {}",
-            error.code(),
-            error.remediation()
-        );
-        std::process::exit(1);
-    });
+    let identity = resolve_command_identity("rename");
     match crate::communication::client::rename_display_name(
         &identity.name,
         &identity.instance_id,
@@ -1529,6 +1524,17 @@ fn cmd_rename(args: &[String]) {
             std::process::exit(1);
         }
     }
+}
+
+fn resolve_command_identity(command: &str) -> crate::mcp_identity::ResolvedIdentity {
+    crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
+        eprintln!(
+            "bridget {command} : {} : {}",
+            error.code(),
+            error.remediation()
+        );
+        std::process::exit(1);
+    })
 }
 
 fn current_agent_id() -> String {
@@ -2729,13 +2735,14 @@ fn cmd_runtime(args: &[String]) {
         std::process::exit(2);
     };
 
-    let agent = current_agent_id();
-    if agent == "human" {
-        eprintln!("runtime indisponible hors d'un agent Bridget");
-        std::process::exit(1);
-    }
-
-    match send_runtime_to_daemon(&agent, &model, effort.as_deref(), RuntimeSource::Declared) {
+    let identity = resolve_command_identity("runtime");
+    match crate::communication::client::declare_runtime(
+        &identity.name,
+        &identity.instance_id,
+        &socket_path(),
+        model.clone(),
+        effort.clone(),
+    ) {
         Ok(DaemonToWrapper::Ack { .. }) => match effort {
             Some(effort) => println!("Runtime déclaré : {} (effort: {})", model, effort),
             None => println!("Runtime déclaré : {} (effort: —)", model),
@@ -3252,15 +3259,6 @@ fn timestamp() -> String {
     }
 }
 
-/// Chemin du domaine surchargé d'un agent, en miroir de `agent-names/`.
-fn domain_state_path(agent: &str) -> std::path::PathBuf {
-    socket_path()
-        .parent()
-        .unwrap()
-        .join("agent-domains")
-        .join(agent)
-}
-
 fn parse_domain_args(args: &[String]) -> Result<Option<String>, String> {
     match args {
         [option] if option == "--reset" => Ok(None),
@@ -3283,38 +3281,24 @@ fn cmd_domain(args: &[String]) {
         std::process::exit(2);
     });
 
-    let agent = current_agent_id();
-    if agent == "human" {
-        eprintln!("domain indisponible hors d'un agent Bridget");
-        std::process::exit(1);
-    }
-
-    let message = WrapperToDaemon::Domain {
-        agent: agent.clone(),
-        domain: domain.clone(),
-    };
-    match send_control_to_daemon(message) {
-        Ok(DaemonToWrapper::Ack { .. }) => {
-            // La trace disque porte l'intention : elle survit au redémarrage du
-            // daemon et est relue par le wrapper à chaque reconnexion.
-            let path = domain_state_path(&agent);
-            match &domain {
-                Some(domain) => {
-                    if let Some(parent) = path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    let _ = std::fs::write(&path, domain);
-                    println!("Domaine de « {} » : {}", agent, domain);
-                }
-                None => {
-                    let _ = std::fs::remove_file(&path);
-                    println!(
-                        "Domaine de « {} » réinitialisé sur le dépôt courant.",
-                        agent
-                    );
-                }
+    let identity = resolve_command_identity("domain");
+    match crate::communication::client::set_domain(
+        &identity.name,
+        &identity.instance_id,
+        &socket_path(),
+        domain.clone(),
+    ) {
+        Ok(DaemonToWrapper::Ack { .. }) => match &domain {
+            Some(domain) => {
+                println!("Domaine de « {} » : {}", identity.name, domain);
             }
-        }
+            None => {
+                println!(
+                    "Domaine de « {} » réinitialisé sur le dépôt courant.",
+                    identity.name
+                );
+            }
+        },
         Ok(DaemonToWrapper::Nack { reason, .. }) => {
             eprintln!("REJET: {}", reason);
             std::process::exit(1);
@@ -3331,25 +3315,16 @@ fn cmd_domain(args: &[String]) {
 }
 
 /// Durée de sécurité appliquée à un « ne pas déranger » sans échéance précisée.
-const DND_DEFAULT_MINUTES: u64 = 60;
+const DND_DEFAULT_MINUTES: u64 = crate::communication::client::DND_DEFAULT_SECS / 60;
 
 /// Interprète une durée de la forme `90s`, `30m` ou `2h`.
 fn parse_duration(value: &str) -> Result<Duration, String> {
-    let value = value.trim();
-    let (digits, multiplier) = match value.chars().last() {
-        Some('s') => (&value[..value.len() - 1], 1),
-        Some('m') => (&value[..value.len() - 1], 60),
-        Some('h') => (&value[..value.len() - 1], 3600),
-        Some(last) if last.is_ascii_digit() => (value, 60), // sans unité : minutes
-        _ => return Err("durée attendue sous la forme 90s, 30m ou 2h".to_string()),
-    };
-    let amount: u64 = digits
-        .parse()
-        .map_err(|_| "durée attendue sous la forme 90s, 30m ou 2h".to_string())?;
-    if amount == 0 {
-        return Err("durée nulle".to_string());
-    }
-    Ok(Duration::from_secs(amount * multiplier))
+    crate::communication::client::parse_dnd_duration_secs(value)
+        .map(Duration::from_secs)
+        .map_err(|error| match error {
+            crate::communication::client::ClientError::InvalidParams(reason) => reason,
+            crate::communication::client::ClientError::Technical { message, .. } => message,
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3388,39 +3363,36 @@ fn cmd_dnd(args: &[String]) {
         DndArgs::Disable => (true, None),
     };
 
-    let agent = current_agent_id();
-    if agent == "human" {
-        eprintln!("dnd indisponible hors d'un agent Bridget");
-        std::process::exit(1);
-    }
-
-    let until_secs = if lift {
+    let duration_secs = if lift {
         None
     } else {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|since| since.as_secs())
-            .unwrap_or(0);
-        let window = duration.unwrap_or(Duration::from_secs(DND_DEFAULT_MINUTES * 60));
-        Some(now + window.as_secs())
+        Some(
+            duration
+                .unwrap_or(Duration::from_secs(
+                    crate::communication::client::DND_DEFAULT_SECS,
+                ))
+                .as_secs(),
+        )
     };
 
-    let message = WrapperToDaemon::Availability {
-        agent: agent.clone(),
-        until_secs,
-    };
-    match send_control_to_daemon(message) {
-        Ok(DaemonToWrapper::Ack { .. }) => match until_secs {
+    let identity = resolve_command_identity("dnd");
+    match crate::communication::client::set_dnd(
+        &identity.name,
+        &identity.instance_id,
+        &socket_path(),
+        duration_secs,
+    ) {
+        Ok(DaemonToWrapper::Ack { .. }) => match duration_secs {
             Some(_) => {
                 let minutes = duration
                     .map(|d| d.as_secs().div_ceil(60))
                     .unwrap_or(DND_DEFAULT_MINUTES);
                 println!(
                     "« {} » ne sera pas dérangé pendant {} min. Levée : bridget dnd off",
-                    agent, minutes
+                    identity.name, minutes
                 );
             }
-            None => println!("« {} » est à nouveau joignable.", agent),
+            None => println!("« {} » est à nouveau joignable.", identity.name),
         },
         Ok(DaemonToWrapper::Nack { reason, .. }) => {
             eprintln!("REJET: {}", reason);

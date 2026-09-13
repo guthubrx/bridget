@@ -18,6 +18,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthChar;
 
+#[path = "attach_renderer.rs"]
+mod attach_renderer;
+
 const MAX_REASSEMBLY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RENDERED_EVENT_CHARS: usize = 16 * 1024;
 const MAX_RENDERED_LABEL_CHARS: usize = 160;
@@ -27,6 +30,9 @@ const RETIRED_SUBSCRIPTIONS_LIMIT: usize = 64;
 const SEND_ISSUE_TIMEOUT: Duration = Duration::from_secs(60);
 const INPUT_POLL_TIMEOUT_MILLIS: i32 = 100;
 const RENDER_COMMAND_CAPACITY: usize = 64;
+const MAX_KEY_SEQUENCE_BYTES: usize = 32;
+const INPUT_HISTORY_MAX_ENTRIES: usize = 100;
+const INPUT_HISTORY_MAX_BYTES: usize = 1024 * 1024;
 const MAX_TURN_BLOCK_BYTES: usize = 64 * 1024;
 const MAX_TURN_BLOCK_LINES: usize = 400;
 const MAX_TURN_RENDERED_CHARS: usize = 2 * MAX_TURN_BLOCK_BYTES;
@@ -35,6 +41,7 @@ const DEFAULT_TERMINAL_ROWS: usize = 24;
 const UNATTESTED_SENDER_LABEL: &str = "émetteur non attesté";
 const PRESENCE_REFRESH: Duration = Duration::from_secs(2);
 const PRESENCE_EXPIRY: Duration = Duration::from_secs(6);
+const PRESENCE_LABELS_LIMIT: usize = 256;
 // Les séquences SGR du TUI sont toutes ancrées ici : aucune donnée du journal
 // ou de l'annuaire ne peut en fournir une.
 const SGR_RESET: &str = "\x1b[0m";
@@ -42,6 +49,8 @@ const SGR_INPUT: &str = "\x1b[48;5;236m\x1b[38;5;255m";
 const SGR_CLIENT: &str = "\x1b[38;5;45m";
 const SGR_LABEL: &str = "\x1b[38;5;245m";
 const SGR_VALUE: &str = "\x1b[38;5;255m";
+const KEYBOARD_PROTOCOL_PUSH: &[u8] = b"\x1b[>1u";
+const KEYBOARD_PROTOCOL_POP: &[u8] = b"\x1b[<u";
 
 /// Garde minimale du terminal d'entrée. Le mode désactive le traitement des
 /// signaux afin que Ctrl-C arrive comme l'octet `0x03` à la boucle de saisie.
@@ -50,12 +59,34 @@ const SGR_VALUE: &str = "\x1b[38;5;255m";
 struct RawTerminal {
     fd: RawFd,
     original: libc::termios,
+    keyboard_fd: Option<RawFd>,
     restored: bool,
 }
 
 #[allow(dead_code)] // API utilisée par la boucle T806b et les pseudo-TTY de T806a.
 impl RawTerminal {
     fn enable_for_fd(fd: RawFd) -> Result<Option<Self>, String> {
+        Self::enable_for_fds(fd, fd)
+    }
+
+    fn enable_for_fd_with_keyboard(
+        fd: RawFd,
+        keyboard_protocol: bool,
+    ) -> Result<Option<Self>, String> {
+        Self::enable_for_fds_with_keyboard(fd, fd, keyboard_protocol)
+    }
+
+    fn enable_for_fds(input_fd: RawFd, output_fd: RawFd) -> Result<Option<Self>, String> {
+        let keyboard_protocol =
+            is_terminal(output_fd) && std::env::var("TERM").map_or(true, |term| term != "dumb");
+        Self::enable_for_fds_with_keyboard(input_fd, output_fd, keyboard_protocol)
+    }
+
+    fn enable_for_fds_with_keyboard(
+        fd: RawFd,
+        keyboard_fd: RawFd,
+        keyboard_protocol: bool,
+    ) -> Result<Option<Self>, String> {
         let is_tty = unsafe { libc::isatty(fd) };
         if is_tty == 0 {
             return Ok(None);
@@ -78,6 +109,10 @@ impl RawTerminal {
         let mut raw = original;
         let disabled = (libc::ICANON | libc::ECHO | libc::ISIG) as libc::tcflag_t;
         raw.c_lflag &= !disabled;
+        if is_terminal(keyboard_fd) {
+            let converted = (libc::ICRNL | libc::INLCR | libc::IGNCR) as libc::tcflag_t;
+            raw.c_iflag &= !converted;
+        }
         raw.c_cc[libc::VMIN] = 1;
         raw.c_cc[libc::VTIME] = 0;
         if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
@@ -86,9 +121,24 @@ impl RawTerminal {
                 std::io::Error::last_os_error()
             ));
         }
+        if keyboard_protocol
+            && let Err(error) = write_terminal_control(keyboard_fd, KEYBOARD_PROTOCOL_PUSH)
+        {
+            let _ = write_terminal_control(keyboard_fd, KEYBOARD_PROTOCOL_POP);
+            if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &original) } != 0 {
+                return Err(format!(
+                    "activation du protocole clavier impossible: {error}; restauration termios impossible: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            return Err(format!(
+                "activation du protocole clavier impossible: {error}"
+            ));
+        }
         Ok(Some(Self {
             fd,
             original,
+            keyboard_fd: keyboard_protocol.then_some(keyboard_fd),
             restored: false,
         }))
     }
@@ -97,15 +147,52 @@ impl RawTerminal {
         if self.restored {
             return Ok(());
         }
-        if unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &self.original) } != 0 {
-            return Err(format!(
-                "restauration termios impossible: {}",
-                std::io::Error::last_os_error()
+        let keyboard_result = if let Some(keyboard_fd) = self.keyboard_fd.take() {
+            write_terminal_control(keyboard_fd, KEYBOARD_PROTOCOL_POP)
+                .map_err(|error| format!("restauration du protocole clavier impossible: {error}"))
+        } else {
+            Ok(())
+        };
+        let terminal_result =
+            if unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &self.original) } != 0 {
+                Err(format!(
+                    "restauration termios impossible: {}",
+                    std::io::Error::last_os_error()
+                ))
+            } else {
+                self.restored = true;
+                Ok(())
+            };
+        terminal_result.and(keyboard_result)
+    }
+}
+
+fn write_terminal_control(fd: RawFd, bytes: &[u8]) -> Result<(), std::io::Error> {
+    let mut written = 0;
+    while written < bytes.len() {
+        let count = unsafe {
+            libc::write(
+                fd,
+                bytes[written..].as_ptr().cast::<libc::c_void>(),
+                bytes.len() - written,
+            )
+        };
+        if count > 0 {
+            written += count as usize;
+            continue;
+        }
+        if count == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "écriture terminal interrompue",
             ));
         }
-        self.restored = true;
-        Ok(())
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
     }
+    Ok(())
 }
 
 impl Drop for RawTerminal {
@@ -116,10 +203,11 @@ impl Drop for RawTerminal {
 
 #[allow(dead_code)] // Le mode dégradé sera appelé par la boucle T806b.
 fn with_raw_terminal<T>(
-    fd: RawFd,
+    input_fd: RawFd,
+    output_fd: RawFd,
     operation: impl FnOnce(bool) -> Result<T, String>,
 ) -> Result<T, String> {
-    let mut terminal = RawTerminal::enable_for_fd(fd)?;
+    let mut terminal = RawTerminal::enable_for_fds(input_fd, output_fd)?;
     let result = operation(terminal.is_some());
     if let Some(raw) = terminal.as_mut() {
         raw.restore()?;
@@ -636,10 +724,10 @@ fn discard_until_newline(reader: &mut BufReader<UnixStream>) -> Result<(), Strin
     }
 }
 
-/// Lance une vue attach persistante. La mémoire croît au plus comme un
-/// événement réassemblé (4 Mio) plus la petite table des envois de l'invocation.
+/// Lance une vue attach persistante. La mémoire croît au plus comme un événement
+/// réassemblé (4 Mio), l'historique local (1 Mio) et les envois de l'invocation.
 pub fn run(agent: &str, initial_window: AttachWindow, socket_path: &Path) -> Result<(), String> {
-    with_raw_terminal(libc::STDIN_FILENO, |raw_terminal| {
+    with_raw_terminal(libc::STDIN_FILENO, libc::STDOUT_FILENO, |raw_terminal| {
         run_with_input(
             agent,
             initial_window,
@@ -664,6 +752,7 @@ fn run_with_input(
     tty_output: bool,
 ) -> Result<(), String> {
     let mut state = AttachClientState::new(initial_window);
+    let input = Arc::new(Mutex::new(InputBuffer::default()));
     let mut connected_once = false;
 
     loop {
@@ -687,9 +776,12 @@ fn run_with_input(
             &mut state,
             agent,
             socket_path,
-            input_fd,
-            raw_terminal,
-            tty_output,
+            InteractiveInput {
+                fd: input_fd,
+                buffer: &input,
+                raw_terminal,
+                tty_output,
+            },
         )? {
             return Ok(());
         }
@@ -706,32 +798,527 @@ enum ReaderStatus {
 }
 
 #[derive(Debug, Default)]
+enum KeySequence {
+    #[default]
+    Ground,
+    Escape,
+    Csi(Vec<u8>),
+    Ss3(Vec<u8>),
+    Ignoring,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputKey {
+    Text(u8),
+    Submit,
+    LineFeed,
+    InsertNewline,
+    Backspace,
+    CursorLeft,
+    CursorRight,
+    WordLeft,
+    WordRight,
+    LineStart,
+    LineEnd,
+    KillLineBefore,
+    KillLineAfter,
+    KillWordBefore,
+    KillWordAfter,
+    Yank,
+    HistoryPrevious,
+    HistoryNext,
+    CtrlC,
+    CtrlD,
+    EscapePrefix,
+}
+
+enum DecodeProgress {
+    Pending,
+    Key(InputKey),
+    Ignored,
+}
+
+#[derive(Debug, Default)]
+struct InputDecoder {
+    sequence: KeySequence,
+    escape_prefix: bool,
+}
+
+impl InputDecoder {
+    fn feed(&mut self, byte: u8) -> Option<InputKey> {
+        if matches!(byte, 0x03 | 0x04) {
+            self.sequence = KeySequence::Ground;
+            self.escape_prefix = false;
+            return Some(if byte == 0x03 {
+                InputKey::CtrlC
+            } else {
+                InputKey::CtrlD
+            });
+        }
+
+        let state = std::mem::take(&mut self.sequence);
+        let progress = match state {
+            KeySequence::Ground => self.feed_ground(byte),
+            KeySequence::Escape => match byte {
+                b'[' => {
+                    self.sequence = KeySequence::Csi(vec![0x1b, b'[']);
+                    DecodeProgress::Pending
+                }
+                b'O' => {
+                    self.sequence = KeySequence::Ss3(vec![0x1b, b'O']);
+                    DecodeProgress::Pending
+                }
+                b'\r' | b'\n' => DecodeProgress::Ignored,
+                b'b' => DecodeProgress::Key(InputKey::WordLeft),
+                b'f' => DecodeProgress::Key(InputKey::WordRight),
+                b'd' => DecodeProgress::Key(InputKey::KillWordAfter),
+                0x08 | 0x7f => DecodeProgress::Key(InputKey::KillWordBefore),
+                0x1b => {
+                    self.escape_prefix = true;
+                    self.sequence = KeySequence::Escape;
+                    DecodeProgress::Pending
+                }
+                _ => self.feed_ground(byte),
+            },
+            KeySequence::Csi(sequence) => self.feed_sequence(sequence, byte, true),
+            KeySequence::Ss3(sequence) => self.feed_sequence(sequence, byte, false),
+            KeySequence::Ignoring => {
+                if byte == 0x1b {
+                    self.sequence = KeySequence::Escape;
+                    DecodeProgress::Pending
+                } else if is_key_sequence_final(byte) {
+                    DecodeProgress::Ignored
+                } else {
+                    self.sequence = KeySequence::Ignoring;
+                    DecodeProgress::Pending
+                }
+            }
+        };
+
+        match progress {
+            DecodeProgress::Pending => None,
+            DecodeProgress::Key(InputKey::EscapePrefix) => {
+                self.escape_prefix = true;
+                None
+            }
+            DecodeProgress::Key(InputKey::Submit | InputKey::LineFeed) if self.escape_prefix => {
+                self.escape_prefix = false;
+                None
+            }
+            DecodeProgress::Key(key) => {
+                self.escape_prefix = false;
+                Some(key)
+            }
+            DecodeProgress::Ignored => {
+                self.escape_prefix = false;
+                None
+            }
+        }
+    }
+
+    fn feed_ground(&mut self, byte: u8) -> DecodeProgress {
+        match byte {
+            0x1b => {
+                self.sequence = KeySequence::Escape;
+                DecodeProgress::Pending
+            }
+            b'\r' => DecodeProgress::Key(InputKey::Submit),
+            b'\n' => DecodeProgress::Key(InputKey::LineFeed),
+            0x01 => DecodeProgress::Key(InputKey::LineStart),
+            0x05 => DecodeProgress::Key(InputKey::LineEnd),
+            0x0b => DecodeProgress::Key(InputKey::KillLineAfter),
+            0x15 => DecodeProgress::Key(InputKey::KillLineBefore),
+            0x17 => DecodeProgress::Key(InputKey::KillWordBefore),
+            0x19 => DecodeProgress::Key(InputKey::Yank),
+            0x08 | 0x7f => DecodeProgress::Key(InputKey::Backspace),
+            byte if byte >= 0x20 => DecodeProgress::Key(InputKey::Text(byte)),
+            _ => DecodeProgress::Ignored,
+        }
+    }
+
+    fn feed_sequence(&mut self, mut sequence: Vec<u8>, byte: u8, csi: bool) -> DecodeProgress {
+        if byte == 0x1b {
+            self.sequence = KeySequence::Escape;
+            return DecodeProgress::Pending;
+        }
+        if sequence.len() == MAX_KEY_SEQUENCE_BYTES {
+            if !is_key_sequence_final(byte) {
+                self.sequence = KeySequence::Ignoring;
+                return DecodeProgress::Pending;
+            }
+            return DecodeProgress::Ignored;
+        }
+        sequence.push(byte);
+        if !is_key_sequence_final(byte) {
+            self.sequence = if csi {
+                KeySequence::Csi(sequence)
+            } else {
+                KeySequence::Ss3(sequence)
+            };
+            return DecodeProgress::Pending;
+        }
+        decode_key_sequence(&sequence, csi)
+            .map(DecodeProgress::Key)
+            .unwrap_or(DecodeProgress::Ignored)
+    }
+}
+
+fn is_key_sequence_final(byte: u8) -> bool {
+    (0x40..=0x7e).contains(&byte)
+}
+
+fn decode_key_sequence(sequence: &[u8], csi: bool) -> Option<InputKey> {
+    let (&final_byte, prefix_and_parameters) = sequence.split_last()?;
+    let parameters = prefix_and_parameters.get(2..)?;
+    if !csi {
+        return match final_byte {
+            b'A' if parameters.is_empty() => Some(InputKey::HistoryPrevious),
+            b'B' if parameters.is_empty() => Some(InputKey::HistoryNext),
+            b'D' if parameters.is_empty() => Some(InputKey::CursorLeft),
+            b'C' if parameters.is_empty() => Some(InputKey::CursorRight),
+            _ => None,
+        };
+    }
+    match final_byte {
+        b'A' if parameters.is_empty() || parameters == b"1" || parameters == b"1;1" => {
+            Some(InputKey::HistoryPrevious)
+        }
+        b'B' if parameters.is_empty() || parameters == b"1" || parameters == b"1;1" => {
+            Some(InputKey::HistoryNext)
+        }
+        b'D' if parameters.is_empty() || parameters == b"1" || parameters == b"1;1" => {
+            Some(InputKey::CursorLeft)
+        }
+        b'C' if parameters.is_empty() || parameters == b"1" || parameters == b"1;1" => {
+            Some(InputKey::CursorRight)
+        }
+        b'D' if parameters == b"1;3" => Some(InputKey::WordLeft),
+        b'C' if parameters == b"1;3" => Some(InputKey::WordRight),
+        b'u' => decode_csi_u(parameters),
+        b'~' if parameters == b"27;2;13" => Some(InputKey::InsertNewline),
+        _ => None,
+    }
+}
+
+fn decode_csi_u(parameters: &[u8]) -> Option<InputKey> {
+    let parameters = std::str::from_utf8(parameters).ok()?;
+    let mut fields = parameters.split(';');
+    let codepoint = fields.next()?.parse::<u32>().ok()?;
+    let modifier_and_event = fields.next();
+    if fields.next().is_some() {
+        return None;
+    }
+    let (modifier, event) = modifier_and_event.map_or(Some((1, 1)), |field| {
+        let mut parts = field.split(':');
+        let modifier = parts.next()?.parse::<u8>().ok()?;
+        let event = parts
+            .next()
+            .map_or(Some(1), |event| event.parse::<u8>().ok())?;
+        (parts.next().is_none()).then_some((modifier, event))
+    })?;
+    if !matches!(event, 1 | 2) {
+        return None;
+    }
+    match (codepoint, modifier) {
+        (13, 1) => Some(InputKey::Submit),
+        (13, 2) => Some(InputKey::InsertNewline),
+        (27, 1) => Some(InputKey::EscapePrefix),
+        (97, 5) => Some(InputKey::LineStart),
+        (99, 5) => Some(InputKey::CtrlC),
+        (100, 3) => Some(InputKey::KillWordAfter),
+        (100, 5) => Some(InputKey::CtrlD),
+        (101, 5) => Some(InputKey::LineEnd),
+        (107, 5) => Some(InputKey::KillLineAfter),
+        (117, 5) => Some(InputKey::KillLineBefore),
+        (119, 5) => Some(InputKey::KillWordBefore),
+        (121, 5) => Some(InputKey::Yank),
+        (127, 1) => Some(InputKey::Backspace),
+        (127, 3) => Some(InputKey::KillWordBefore),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct InputDraft {
+    bytes: Vec<u8>,
+    cursor: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum WordDirection {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Default)]
 struct InputBuffer {
     bytes: Vec<u8>,
-    alt_prefix: bool,
+    cursor: Option<usize>,
+    pending_utf8: Vec<u8>,
+    last_deleted: Vec<u8>,
+    decoder: InputDecoder,
+    history: VecDeque<Vec<u8>>,
+    history_bytes: usize,
+    history_index: Option<usize>,
+    navigation_draft: Option<InputDraft>,
 }
 
 impl InputBuffer {
-    fn push(&mut self, byte: u8) {
-        self.bytes.push(byte);
+    fn decode(&mut self, byte: u8) -> Option<InputKey> {
+        if byte < 0x20 || byte == 0x7f {
+            self.pending_utf8.clear();
+        }
+        self.decoder.feed(byte)
     }
 
-    fn push_newline(&mut self) {
-        self.bytes.push(b'\n');
-    }
-
-    fn erase_last(&mut self) -> bool {
-        let Some(last_start) = std::str::from_utf8(&self.bytes)
-            .ok()
-            .and_then(|text| text.char_indices().next_back().map(|(index, _)| index))
-        else {
-            return self.bytes.pop().is_some();
+    fn push(&mut self, byte: u8) -> bool {
+        if self.pending_utf8.is_empty() {
+            match utf8_sequence_len(byte) {
+                Some(1) => {
+                    self.insert_bytes(&[byte]);
+                    return true;
+                }
+                Some(2..=4) => {
+                    self.pending_utf8.push(byte);
+                    return false;
+                }
+                _ => return false,
+            }
+        }
+        if !(0x80..=0xbf).contains(&byte) {
+            self.pending_utf8.clear();
+            return self.push(byte);
+        }
+        self.pending_utf8.push(byte);
+        let Some(expected) = utf8_sequence_len(self.pending_utf8[0]) else {
+            self.pending_utf8.clear();
+            return false;
         };
-        self.bytes.truncate(last_start);
+        if self.pending_utf8.len() < expected {
+            return false;
+        }
+        let completed = std::mem::take(&mut self.pending_utf8);
+        if std::str::from_utf8(&completed).is_err() {
+            return false;
+        }
+        self.insert_bytes(&completed);
         true
     }
 
+    fn insert_bytes(&mut self, bytes: &[u8]) {
+        self.leave_navigation();
+        let cursor = self.cursor_index();
+        self.bytes.splice(cursor..cursor, bytes.iter().copied());
+        if self.cursor.is_some() {
+            self.cursor = Some(cursor + bytes.len());
+        }
+    }
+
+    fn push_newline(&mut self) {
+        self.pending_utf8.clear();
+        self.insert_bytes(b"\n");
+    }
+
+    fn erase_before_cursor(&mut self) -> bool {
+        if !self.pending_utf8.is_empty() {
+            self.pending_utf8.clear();
+            return true;
+        }
+        self.leave_navigation();
+        let cursor = self.cursor_index();
+        let Some(previous) = std::str::from_utf8(&self.bytes[..cursor])
+            .ok()
+            .and_then(|text| text.char_indices().next_back().map(|(index, _)| index))
+        else {
+            if cursor == 0 {
+                return false;
+            }
+            self.bytes.remove(cursor - 1);
+            if self.cursor.is_some() {
+                self.cursor = Some(cursor - 1);
+            }
+            return true;
+        };
+        self.bytes.drain(previous..cursor);
+        if self.cursor.is_some() {
+            self.cursor = Some(previous);
+        }
+        true
+    }
+
+    fn move_left(&mut self) -> bool {
+        self.pending_utf8.clear();
+        let cursor = self.cursor_index();
+        let Some(previous) = previous_char_boundary(&self.bytes, cursor) else {
+            return false;
+        };
+        self.cursor = Some(previous);
+        true
+    }
+
+    fn move_right(&mut self) -> bool {
+        self.pending_utf8.clear();
+        let cursor = self.cursor_index();
+        let Some(next) = next_char_boundary(&self.bytes, cursor) else {
+            return false;
+        };
+        self.cursor = (next < self.bytes.len()).then_some(next);
+        true
+    }
+
+    fn move_word_left(&mut self) -> bool {
+        self.pending_utf8.clear();
+        let original = self.cursor_index();
+        let Some(cursor) = self.word_boundary(original, WordDirection::Left) else {
+            return false;
+        };
+        self.cursor = (cursor < self.bytes.len()).then_some(cursor);
+        cursor != original
+    }
+
+    fn move_word_right(&mut self) -> bool {
+        self.pending_utf8.clear();
+        let original = self.cursor_index();
+        let Some(cursor) = self.word_boundary(original, WordDirection::Right) else {
+            return false;
+        };
+        self.cursor = (cursor < self.bytes.len()).then_some(cursor);
+        cursor != original
+    }
+
+    fn word_boundary(&self, original: usize, direction: WordDirection) -> Option<usize> {
+        let Ok(text) = std::str::from_utf8(&self.bytes) else {
+            return None;
+        };
+        match direction {
+            WordDirection::Left => {
+                let prefix = text.get(..original)?;
+                let mut cursor = original;
+                let mut word_started = false;
+                for (index, character) in prefix.char_indices().rev() {
+                    if word_started && character.is_whitespace() {
+                        break;
+                    }
+                    if !character.is_whitespace() {
+                        word_started = true;
+                    }
+                    cursor = index;
+                }
+                Some(cursor)
+            }
+            WordDirection::Right => {
+                let suffix = text.get(original..)?;
+                let mut cursor = original;
+                let mut word_started = false;
+                for (offset, character) in suffix.char_indices() {
+                    if word_started && character.is_whitespace() {
+                        break;
+                    }
+                    if !character.is_whitespace() {
+                        word_started = true;
+                    }
+                    cursor = original + offset + character.len_utf8();
+                }
+                Some(cursor)
+            }
+        }
+    }
+
+    fn move_line_start(&mut self) -> bool {
+        self.pending_utf8.clear();
+        let original = self.cursor_index();
+        let cursor = self.bytes[..original]
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |index| index + 1);
+        self.cursor = (cursor < self.bytes.len()).then_some(cursor);
+        cursor != original
+    }
+
+    fn move_line_end(&mut self) -> bool {
+        self.pending_utf8.clear();
+        let original = self.cursor_index();
+        let cursor = self.bytes[original..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(self.bytes.len(), |offset| original + offset);
+        self.cursor = (cursor < self.bytes.len()).then_some(cursor);
+        cursor != original
+    }
+
+    fn kill_line_before(&mut self) -> bool {
+        self.pending_utf8.clear();
+        let cursor = self.cursor_index();
+        let start = self.bytes[..cursor]
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |index| index + 1);
+        self.delete_and_remember(start, cursor)
+    }
+
+    fn kill_line_after(&mut self) -> bool {
+        self.pending_utf8.clear();
+        let cursor = self.cursor_index();
+        let end = self.bytes[cursor..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(self.bytes.len(), |offset| cursor + offset);
+        self.delete_and_remember(cursor, end)
+    }
+
+    fn kill_word_before(&mut self) -> bool {
+        self.pending_utf8.clear();
+        let cursor = self.cursor_index();
+        let Some(start) = self.word_boundary(cursor, WordDirection::Left) else {
+            return false;
+        };
+        self.delete_and_remember(start, cursor)
+    }
+
+    fn kill_word_after(&mut self) -> bool {
+        self.pending_utf8.clear();
+        let cursor = self.cursor_index();
+        let Some(end) = self.word_boundary(cursor, WordDirection::Right) else {
+            return false;
+        };
+        self.delete_and_remember(cursor, end)
+    }
+
+    fn yank(&mut self) -> bool {
+        self.pending_utf8.clear();
+        if self.last_deleted.is_empty() {
+            return false;
+        }
+        let fragment = self.last_deleted.clone();
+        self.insert_bytes(&fragment);
+        true
+    }
+
+    fn delete_and_remember(&mut self, start: usize, end: usize) -> bool {
+        if start >= end || end > self.bytes.len() {
+            return false;
+        }
+        self.leave_navigation();
+        self.last_deleted = self.bytes[start..end].to_vec();
+        self.bytes.drain(start..end);
+        self.cursor = (start < self.bytes.len()).then_some(start);
+        true
+    }
+
+    fn move_to_end(&mut self) {
+        self.cursor = None;
+    }
+
+    fn cursor_index(&self) -> usize {
+        self.cursor
+            .unwrap_or(self.bytes.len())
+            .min(self.bytes.len())
+    }
+
     fn take(&mut self) -> Vec<u8> {
+        self.leave_navigation();
+        self.pending_utf8.clear();
+        self.cursor = None;
         std::mem::take(&mut self.bytes)
     }
 
@@ -741,6 +1328,106 @@ impl InputBuffer {
 
     fn display(&self) -> String {
         String::from_utf8_lossy(&self.bytes).into_owned()
+    }
+
+    fn history_previous(&mut self) -> bool {
+        self.pending_utf8.clear();
+        if self.history.is_empty() {
+            return false;
+        }
+        let next_index = match self.history_index {
+            Some(0) => return false,
+            Some(index) => index - 1,
+            None => {
+                self.navigation_draft = Some(InputDraft {
+                    bytes: self.bytes.clone(),
+                    cursor: self.cursor,
+                });
+                self.history.len() - 1
+            }
+        };
+        self.history_index = Some(next_index);
+        self.bytes.clone_from(&self.history[next_index]);
+        self.cursor = None;
+        true
+    }
+
+    fn history_next(&mut self) -> bool {
+        self.pending_utf8.clear();
+        let Some(index) = self.history_index else {
+            return false;
+        };
+        if index + 1 < self.history.len() {
+            let next_index = index + 1;
+            self.history_index = Some(next_index);
+            self.bytes.clone_from(&self.history[next_index]);
+            self.cursor = None;
+        } else {
+            self.history_index = None;
+            let draft = self.navigation_draft.take().unwrap_or_default();
+            self.bytes = draft.bytes;
+            self.cursor = draft.cursor;
+        }
+        true
+    }
+
+    fn remember(&mut self, bytes: Vec<u8>) {
+        if bytes.is_empty() || bytes.len() > INPUT_HISTORY_MAX_BYTES {
+            return;
+        }
+        while self.history.len() >= INPUT_HISTORY_MAX_ENTRIES
+            || self.history_bytes.saturating_add(bytes.len()) > INPUT_HISTORY_MAX_BYTES
+        {
+            let Some(evicted) = self.history.pop_front() else {
+                break;
+            };
+            self.history_bytes -= evicted.len();
+        }
+        self.history_bytes += bytes.len();
+        self.history.push_back(bytes);
+    }
+
+    fn leave_navigation(&mut self) {
+        self.history_index = None;
+        self.navigation_draft = None;
+    }
+}
+
+fn utf8_sequence_len(byte: u8) -> Option<usize> {
+    match byte {
+        0x00..=0x7f => Some(1),
+        0xc2..=0xdf => Some(2),
+        0xe0..=0xef => Some(3),
+        0xf0..=0xf4 => Some(4),
+        _ => None,
+    }
+}
+
+fn previous_char_boundary(bytes: &[u8], cursor: usize) -> Option<usize> {
+    std::str::from_utf8(bytes.get(..cursor)?)
+        .ok()?
+        .char_indices()
+        .next_back()
+        .map(|(index, _)| index)
+}
+
+fn next_char_boundary(bytes: &[u8], cursor: usize) -> Option<usize> {
+    let text = std::str::from_utf8(bytes.get(cursor..)?).ok()?;
+    let character = text.chars().next()?;
+    Some(cursor + character.len_utf8())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InputSnapshot {
+    text: String,
+    cursor_byte: usize,
+}
+
+impl InputSnapshot {
+    fn at_end(text: impl Into<String>) -> Self {
+        let text = text.into();
+        let cursor_byte = text.len();
+        Self { text, cursor_byte }
     }
 }
 
@@ -847,23 +1534,32 @@ impl TurnBlock {
         }
     }
 
-    fn lines(&self, agent: &str) -> Vec<String> {
-        let mut lines = self.header.clone();
-        let mut response_truncated = false;
+    fn rendered_lines(
+        &self,
+        agent_label: &str,
+        columns: usize,
+    ) -> Vec<attach_renderer::StyledLine> {
+        let mut lines = attach_renderer::plain_lines(&self.header, columns);
         if !self.response.is_empty() {
-            let rendered = render_prefixed_with_limit(
-                &format!("{agent} →"),
-                &self.response,
-                MAX_TURN_RENDERED_CHARS,
-            );
-            response_truncated = rendered.contains("… [affichage tronqué]");
-            lines.extend(rendered.lines().map(str::to_owned));
+            lines.extend(attach_renderer::agent_header(agent_label, columns));
+            lines.extend(attach_renderer::render_markdown(&self.response, columns));
         }
-        lines.extend(self.details.iter().cloned());
-        if self.omitted_lines > 0 && !response_truncated {
-            lines.push(format!("… tronqué, {} ligne(s)", self.omitted_lines));
+        lines.extend(attach_renderer::plain_lines(&self.details, columns));
+        if self.omitted_lines > 0 {
+            lines.extend(attach_renderer::plain_lines(
+                &[format!("… tronqué, {} ligne(s)", self.omitted_lines)],
+                columns,
+            ));
         }
         lines
+    }
+
+    #[cfg(test)]
+    fn lines(&self, agent_label: &str) -> Vec<String> {
+        self.rendered_lines(agent_label, DEFAULT_TERMINAL_COLUMNS)
+            .iter()
+            .map(attach_renderer::StyledLine::plain)
+            .collect()
     }
 }
 
@@ -877,6 +1573,8 @@ struct JournalRenderRecord {
     /// `prompt_dispatched` sans corps : accusé transport, pas un message.
     ack_only: bool,
     sender_attested: bool,
+    reasoning: bool,
+    ordinary_turn_end: bool,
     rendered: String,
 }
 
@@ -916,6 +1614,8 @@ fn journal_render_record(bytes: &[u8], agent: &str) -> Option<JournalRenderRecor
             .get("from")
             .and_then(serde_json::Value::as_str)
             .is_some_and(|sender| !sender.is_empty());
+    let reasoning = event == "reasoning";
+    let ordinary_turn_end = event == "turn_end" && ordinary_turn_end(payload);
     Some(JournalRenderRecord {
         key,
         event,
@@ -928,18 +1628,62 @@ fn journal_render_record(bytes: &[u8], agent: &str) -> Option<JournalRenderRecor
             .unwrap_or(false),
         ack_only,
         sender_attested,
+        reasoning,
+        ordinary_turn_end,
         rendered: render_journal_event(bytes, agent),
     })
+}
+
+fn ordinary_turn_end(payload: &serde_json::Value) -> bool {
+    matches!(
+        payload
+            .get("stop_reason")
+            .and_then(serde_json::Value::as_str),
+        Some("completed" | "complete" | "end_turn")
+    )
 }
 
 enum RendererCommand {
     Event(AttachEvent),
     InputChanged(Vec<u8>),
+    // Variante conservée pour les tests historiques ciblant un AgentInfo.
+    #[cfg(test)]
     Presence(Option<Box<AgentInfo>>, Instant),
+    DirectoryPresence(Option<Box<DirectoryPresence>>, Instant),
 }
 
 enum RendererControl {
     Stop,
+}
+
+struct DirectoryPresence {
+    selected: Option<AgentInfo>,
+    labels: HashMap<String, String>,
+}
+
+impl DirectoryPresence {
+    fn from_agents(agent: &str, agents: Vec<AgentInfo>) -> Option<Self> {
+        let selected = agents.iter().find(|info| info.agent_id == agent).cloned()?;
+        let mut labels = agents
+            .iter()
+            .take(PRESENCE_LABELS_LIMIT)
+            .map(|info| (info.agent_id.clone(), attested_agent_label(info)))
+            .collect::<HashMap<_, _>>();
+        labels.insert(selected.agent_id.clone(), attested_agent_label(&selected));
+        Some(Self {
+            selected: Some(selected),
+            labels,
+        })
+    }
+
+    #[cfg(test)]
+    fn selected(agent: AgentInfo) -> Self {
+        let labels = HashMap::from([(agent.agent_id.clone(), attested_agent_label(&agent))]);
+        Self {
+            selected: Some(agent),
+            labels,
+        }
+    }
 }
 
 fn unavailable_presence() -> String {
@@ -966,9 +1710,47 @@ fn presence_line(agent: &AgentInfo) -> String {
     )
 }
 
+fn compact_agent_label(agent: &str) -> String {
+    let sanitized = sanitize_inline(agent);
+    let fallback = uuid::Uuid::parse_str(agent)
+        .ok()
+        .map(|id| id.simple().to_string())
+        .and_then(|id| id.get(..8).map(str::to_owned))
+        .unwrap_or(sanitized);
+    truncate_cells(&fallback, 24)
+}
+
+fn attested_agent_label(agent: &AgentInfo) -> String {
+    let display_name = sanitize_inline(&agent.display_name);
+    if display_name.is_empty() {
+        compact_agent_label(&agent.agent_id)
+    } else {
+        truncate_cells(&display_name, 24)
+    }
+}
+
+fn truncate_cells(value: &str, max_cells: usize) -> String {
+    if display_width(value) <= max_cells {
+        return value.to_string();
+    }
+    let content_cells = max_cells.saturating_sub(1);
+    let mut rendered = String::new();
+    let mut cells = 0usize;
+    for character in value.chars() {
+        let width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if cells.saturating_add(width) > content_cells {
+            break;
+        }
+        rendered.push(character);
+        cells += width;
+    }
+    rendered.push('…');
+    rendered
+}
+
 /// Métadonnées facultatives sur une connexion distincte : un annuaire trop
 /// volumineux ou un ancien daemon ne doit jamais couper le flux du journal.
-fn query_presence(socket: &Path, agent: &str) -> Option<AgentInfo> {
+fn query_presence(socket: &Path, agent: &str) -> Option<DirectoryPresence> {
     use bridget_transport::jsonl::{LineDeadline, connect_nonblocking, read_unix_line};
     let deadline = Instant::now() + Duration::from_millis(750);
     let stream = connect_nonblocking(socket, deadline).ok()?;
@@ -998,7 +1780,7 @@ fn query_presence(socket: &Path, agent: &str) -> Option<AgentInfo> {
                 },
             ) => {}
             (WrapperToDaemon::ListAgents, DaemonToWrapper::AgentList { agents }) => {
-                return agents.into_iter().find(|info| info.agent_id == agent);
+                return DirectoryPresence::from_agents(agent, agents);
             }
             _ => return None,
         }
@@ -1049,10 +1831,10 @@ impl RendererSender {
         let _ = self.commands.send(RendererCommand::Event(event));
     }
 
-    fn presence(&self, agent: Option<AgentInfo>) {
+    fn presence(&self, presence: Option<DirectoryPresence>) {
         if self.tty_output {
-            let _ = self.commands.try_send(RendererCommand::Presence(
-                agent.map(Box::new),
+            let _ = self.commands.try_send(RendererCommand::DirectoryPresence(
+                presence.map(Box::new),
                 Instant::now(),
             ));
         }
@@ -1150,8 +1932,9 @@ fn renderer_loop(
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        if input_dirty.swap(false, Ordering::AcqRel) && renderer.tty_output {
-            renderer.refresh_geometry(output);
+        let geometry_changed = renderer.refresh_geometry(output);
+        let input_changed = input_dirty.swap(false, Ordering::AcqRel);
+        if renderer.tty_output && (geometry_changed || input_changed) {
             renderer.redraw(&input_snapshot(&input), output);
         }
         renderer.expire_presence(Instant::now(), &input_snapshot(&input), output);
@@ -1159,15 +1942,20 @@ fn renderer_loop(
     renderer.finish(&input_snapshot(&input), output);
 }
 
-fn input_snapshot(input: &Arc<Mutex<InputBuffer>>) -> String {
-    input
-        .lock()
-        .map(|input| input.display())
-        .unwrap_or_default()
+fn input_snapshot(input: &Arc<Mutex<InputBuffer>>) -> InputSnapshot {
+    input.lock().map_or_else(
+        |_| InputSnapshot::at_end(String::new()),
+        |input| InputSnapshot {
+            text: input.display(),
+            cursor_byte: input.cursor_index(),
+        },
+    )
 }
 
 struct BlockRenderer {
     agent: String,
+    agent_label: String,
+    attested_labels: HashMap<String, String>,
     raw_terminal: bool,
     tty_output: bool,
     color: bool,
@@ -1175,7 +1963,9 @@ struct BlockRenderer {
     terminal_columns: usize,
     terminal_rows: usize,
     current: Option<TurnBlock>,
-    committed_rows: usize,
+    retained: Option<TurnBlock>,
+    committed_units: usize,
+    frozen_agent_label: Option<String>,
     rendered_rows: usize,
     rendered_lines: Vec<String>,
     defer_redraw: bool,
@@ -1183,13 +1973,14 @@ struct BlockRenderer {
     presence_line: Option<String>,
     presence_received: Option<Instant>,
     cursor_above_footer: bool,
+    cursor_rows_below: usize,
     footer_rows: usize,
     #[cfg(test)]
     redraw_count: usize,
 }
 
 impl BlockRenderer {
-    fn expire_presence(&mut self, now: Instant, input: &str, output: &mut impl Write) {
+    fn expire_presence(&mut self, now: Instant, input: &InputSnapshot, output: &mut impl Write) {
         if self
             .presence_received
             .is_some_and(|at| now.saturating_duration_since(at) >= PRESENCE_EXPIRY)
@@ -1206,7 +1997,9 @@ impl BlockRenderer {
             .and_then(terminal_geometry)
             .unwrap_or((DEFAULT_TERMINAL_COLUMNS, DEFAULT_TERMINAL_ROWS));
         Self {
+            agent_label: compact_agent_label(&agent),
             agent,
+            attested_labels: HashMap::new(),
             raw_terminal,
             tty_output,
             color: tty_output
@@ -1216,7 +2009,9 @@ impl BlockRenderer {
             terminal_rows,
             terminal_fd,
             current: None,
-            committed_rows: 0,
+            retained: None,
+            committed_units: 0,
+            frozen_agent_label: None,
             rendered_rows: 0,
             rendered_lines: Vec::new(),
             defer_redraw: false,
@@ -1224,6 +2019,7 @@ impl BlockRenderer {
             presence_line: None,
             presence_received: None,
             cursor_above_footer: false,
+            cursor_rows_below: 0,
             footer_rows: 0,
             #[cfg(test)]
             redraw_count: 0,
@@ -1254,20 +2050,18 @@ impl BlockRenderer {
         output: &mut impl Write,
     ) {
         let input = input_snapshot(input);
-        self.refresh_geometry(output);
+        let geometry_changed = self.refresh_geometry(output);
         match command {
             RendererCommand::Event(event) => self.render_event(&event, &input, output),
-            RendererCommand::Presence(agent, received_at) => {
-                if self.tty_output {
-                    let agent = agent.filter(|_| received_at.elapsed() < PRESENCE_EXPIRY);
-                    self.presence_received = agent.as_ref().map(|_| received_at);
-                    self.presence_line = Some(
-                        agent
-                            .as_deref()
-                            .map_or_else(unavailable_presence, presence_line),
-                    );
-                    self.redraw(&input, output);
-                }
+            #[cfg(test)]
+            RendererCommand::Presence(agent, received_at) => self.apply_directory_presence(
+                agent.map(|agent| Box::new(DirectoryPresence::selected(*agent))),
+                received_at,
+                &input,
+                output,
+            ),
+            RendererCommand::DirectoryPresence(presence, received_at) => {
+                self.apply_directory_presence(presence, received_at, &input, output)
             }
             RendererCommand::InputChanged(_bytes) if self.tty_output => self.redraw(&input, output),
             RendererCommand::InputChanged(bytes) => {
@@ -1275,16 +2069,54 @@ impl BlockRenderer {
                 let _ = output.flush();
             }
         }
+        if geometry_changed && self.tty_output {
+            self.redraw(&input, output);
+        }
     }
 
-    fn render_event(&mut self, event: &AttachEvent, input: &str, output: &mut impl Write) {
+    fn apply_directory_presence(
+        &mut self,
+        presence: Option<Box<DirectoryPresence>>,
+        received_at: Instant,
+        input: &InputSnapshot,
+        output: &mut impl Write,
+    ) {
+        if !self.tty_output {
+            return;
+        }
+        let presence = presence.filter(|_| received_at.elapsed() < PRESENCE_EXPIRY);
+        if let Some(presence) = presence {
+            let DirectoryPresence { selected, labels } = *presence;
+            self.attested_labels = labels;
+            self.presence_received = selected.as_ref().map(|_| received_at);
+            if let Some(label) = self.attested_labels.get(&self.agent) {
+                self.agent_label.clone_from(label);
+            }
+            self.presence_line = Some(
+                selected
+                    .as_ref()
+                    .map_or_else(unavailable_presence, presence_line),
+            );
+        } else {
+            self.presence_received = None;
+            self.presence_line = Some(unavailable_presence());
+        }
+        self.redraw(input, output);
+    }
+
+    fn render_event(
+        &mut self,
+        event: &AttachEvent,
+        input: &InputSnapshot,
+        output: &mut impl Write,
+    ) {
         if !self.tty_output {
             if self.raw_terminal {
                 let _ = output.write_all(b"\r\n");
             }
             let _ = writeln!(output, "{}", render_attach_event(event, &self.agent));
             if self.raw_terminal {
-                let _ = write!(output, "> {input}");
+                let _ = write!(output, "> {}", input.text);
             }
             let _ = output.flush();
             return;
@@ -1310,12 +2142,36 @@ impl BlockRenderer {
         }
     }
 
-    fn render_journal(&mut self, bytes: &[u8], live: bool, input: &str, output: &mut impl Write) {
+    fn render_journal(
+        &mut self,
+        bytes: &[u8],
+        live: bool,
+        input: &InputSnapshot,
+        output: &mut impl Write,
+    ) {
         let Some(record) = journal_render_record(bytes, &self.agent) else {
             self.flush_incomplete(input, output);
             self.emit_standalone(&render_journal_event(bytes, &self.agent), input, output);
             return;
         };
+        // Le journal reste intact : seule la projection conversationnelle TTY
+        // masque les raisonnements, quels que soient leurs détails.
+        if record.reasoning {
+            return;
+        }
+        if record.ordinary_turn_end {
+            let correlated = record
+                .key
+                .as_ref()
+                .is_some_and(|key| self.current.as_ref().map(|block| &block.key) == Some(key));
+            if correlated {
+                self.flush_complete(input, output, live);
+            } else {
+                self.flush_incomplete(input, output);
+                self.emit_standalone(&record.rendered, input, output);
+            }
+            return;
+        }
         let Some(key) = record.key else {
             self.flush_incomplete(input, output);
             self.emit_standalone(&record.rendered, input, output);
@@ -1324,6 +2180,7 @@ impl BlockRenderer {
         let starts_block = self.current.as_ref().map(|block| &block.key) != Some(&key);
         if starts_block {
             self.flush_incomplete(input, output);
+            self.commit_retained(input, output);
             let header = if record.event == "turn_start"
                 || (record.event == "prompt_dispatched" && !record.ack_only)
             {
@@ -1350,6 +2207,7 @@ impl BlockRenderer {
         if record.event == "prompt_dispatched" {
             if !record.ack_only
                 && record.sender_attested
+                && self.committed_units == 0
                 && let Some(block) = self.current.as_mut()
                 && !block.header_sender_attested
             {
@@ -1380,33 +2238,54 @@ impl BlockRenderer {
             }
         }
         if record.event == "turn_end" || record.terminal {
-            self.flush_complete(input, output);
+            self.flush_complete(input, output, live);
         } else if live {
             self.redraw(input, output);
         }
     }
 
-    fn flush_incomplete(&mut self, input: &str, output: &mut impl Write) {
+    fn flush_incomplete(&mut self, input: &InputSnapshot, output: &mut impl Write) {
         if let Some(block) = self.current.as_mut() {
             block.append_detail("[tour incomplet]");
         }
-        self.flush_complete(input, output);
+        self.flush_complete(input, output, true);
     }
 
-    fn flush_complete(&mut self, input: &str, output: &mut impl Write) {
+    fn flush_complete(&mut self, input: &InputSnapshot, output: &mut impl Write, retain: bool) {
         let Some(block) = self.current.take() else {
             return;
         };
+        debug_assert!(self.retained.is_none());
+        self.retained = Some(block);
+        if retain {
+            self.redraw(input, output);
+        } else {
+            self.commit_retained(input, output);
+        }
+        let _ = output.flush();
+    }
+
+    fn commit_retained(&mut self, input: &InputSnapshot, output: &mut impl Write) {
+        let Some(block) = self.retained.take() else {
+            return;
+        };
         self.clear(output);
-        let rows = wrap_visual_rows(&block.lines(&self.agent), self.terminal_columns);
-        let remaining = &rows[self.committed_rows.min(rows.len())..];
-        write_terminal_lines(output, remaining);
-        self.committed_rows = 0;
+        let agent_label = self
+            .frozen_agent_label
+            .as_deref()
+            .unwrap_or(&self.agent_label)
+            .to_string();
+        let rows = block.rendered_lines(&agent_label, self.terminal_columns);
+        let remaining = attach_renderer::skip_visible_prefix(&rows, self.committed_units);
+        self.write_terminal_lines(output, &remaining);
+        self.committed_units = 0;
+        self.frozen_agent_label = None;
         self.draw_active(input, output);
         let _ = output.flush();
     }
 
-    fn emit_standalone(&mut self, rendered: &str, input: &str, output: &mut impl Write) {
+    fn emit_standalone(&mut self, rendered: &str, input: &InputSnapshot, output: &mut impl Write) {
+        self.commit_retained(input, output);
         self.clear(output);
         write_terminal_lines(
             output,
@@ -1416,7 +2295,7 @@ impl BlockRenderer {
         let _ = output.flush();
     }
 
-    fn redraw(&mut self, input: &str, output: &mut impl Write) {
+    fn redraw(&mut self, input: &InputSnapshot, output: &mut impl Write) {
         if self.defer_redraw {
             self.redraw_pending = true;
             return;
@@ -1430,11 +2309,11 @@ impl BlockRenderer {
         let _ = output.flush();
     }
 
-    fn draw_active(&mut self, input: &str, output: &mut impl Write) {
-        let mut input_rows = if self.raw_terminal {
-            wrap_visual_rows(&[format!("> {input}")], self.terminal_columns)
+    fn draw_active(&mut self, input: &InputSnapshot, output: &mut impl Write) {
+        let (mut input_rows, mut input_cursor_row, input_cursor_column) = if self.raw_terminal {
+            input_visual_rows(input, self.terminal_columns)
         } else {
-            Vec::new()
+            (Vec::new(), 0, 0)
         };
         let mut status_rows = self.presence_line.as_ref().map_or_else(Vec::new, |status| {
             wrap_visual_rows(std::slice::from_ref(status), self.terminal_columns)
@@ -1456,25 +2335,44 @@ impl BlockRenderer {
             .saturating_sub(status_rows.len() + 1)
             .max(1);
         if input_rows.len() > input_budget {
-            input_rows.drain(..input_rows.len() - input_budget);
+            let max_start = input_rows.len() - input_budget;
+            let start = input_cursor_row
+                .saturating_sub(input_budget / 2)
+                .min(max_start);
+            input_rows = input_rows[start..start + input_budget].to_vec();
+            input_cursor_row -= start;
         }
         let mut visible_rows = Vec::new();
-        if let Some(block) = self.current.as_ref() {
-            let lines = block.lines(&self.agent);
-            let rows = wrap_visual_rows(&lines, self.terminal_columns);
+        if let Some(block) = self.current.as_ref().or(self.retained.as_ref()) {
+            let agent_label = self
+                .frozen_agent_label
+                .as_deref()
+                .unwrap_or(&self.agent_label)
+                .to_string();
+            let rows = block.rendered_lines(&agent_label, self.terminal_columns);
+            let remaining = attach_renderer::skip_visible_prefix(&rows, self.committed_units);
             // Marge de scroll conservée : le dernier saut ne doit pas pousser
             // une ligne encore effaçable hors de la fenêtre du terminal.
             let reserved = input_rows.len().saturating_add(status_rows.len()) + 1;
             let viewport_rows = self.terminal_rows.saturating_sub(reserved).max(1);
-            let overflow_end = rows.len().saturating_sub(viewport_rows);
-            if overflow_end > self.committed_rows {
-                write_terminal_lines(output, &rows[self.committed_rows..overflow_end]);
-                self.committed_rows = overflow_end;
+            let overflow_end = remaining.len().saturating_sub(viewport_rows);
+            if overflow_end > 0 {
+                if self.committed_units == 0 {
+                    self.frozen_agent_label = Some(agent_label);
+                }
+                self.write_terminal_lines(output, &remaining[..overflow_end]);
+                self.committed_units = self
+                    .committed_units
+                    .saturating_add(attach_renderer::visible_units(&remaining[..overflow_end]));
             }
-            visible_rows.extend_from_slice(&rows[self.committed_rows.min(rows.len())..]);
-            write_visual_lines(output, &visible_rows);
+            visible_rows.extend_from_slice(&remaining[overflow_end..]);
+            attach_renderer::write_lines(output, &visible_rows, self.color);
         }
-        let mut rendered_lines = visible_rows;
+        let mut rendered_lines = visible_rows
+            .iter()
+            .map(attach_renderer::StyledLine::plain)
+            .collect::<Vec<_>>();
+        let input_row_count = input_rows.len();
         if self.raw_terminal {
             if !rendered_lines.is_empty() {
                 let _ = output.write_all(b"\r\n");
@@ -1490,26 +2388,40 @@ impl BlockRenderer {
             self.write_status_rows(output, &status_rows);
             rendered_lines.extend(status_rows);
         }
-        self.cursor_above_footer = self.raw_terminal && self.footer_rows > 0;
+        self.cursor_rows_below = if self.raw_terminal {
+            input_row_count.saturating_sub(input_cursor_row + 1)
+        } else {
+            0
+        };
+        self.cursor_above_footer =
+            self.raw_terminal && (self.footer_rows > 0 || self.cursor_rows_below > 0);
         if self.cursor_above_footer {
-            let _ = write!(output, "\r\x1b[{}A", self.footer_rows);
-            if let Some(input_row) = rendered_lines.get(rendered_lines.len() - self.footer_rows - 1)
-            {
+            let rows_up = self.footer_rows + self.cursor_rows_below;
+            let _ = write!(output, "\r\x1b[{rows_up}A");
+            let input_start = rendered_lines.len() - self.footer_rows - input_row_count;
+            if let Some(input_row) = rendered_lines.get(input_start + input_cursor_row) {
                 self.write_input_rows(output, std::slice::from_ref(input_row));
-                self.position_cursor_after_input_row(output, input_row);
+                self.position_cursor_at_column(output, input_cursor_column);
             }
         } else if self.raw_terminal
             && let Some(input_row) = rendered_lines.last()
         {
-            self.position_cursor_after_input_row(output, input_row);
+            self.position_cursor_at_column(output, display_width(input_row));
         }
         self.rendered_rows = rendered_lines.len();
         self.rendered_lines = rendered_lines;
     }
 
-    fn refresh_geometry(&mut self, output: &mut impl Write) {
+    fn write_terminal_lines(&self, output: &mut impl Write, lines: &[attach_renderer::StyledLine]) {
+        attach_renderer::write_lines(output, lines, self.color);
+        if !lines.is_empty() {
+            let _ = output.write_all(b"\r\n");
+        }
+    }
+
+    fn refresh_geometry(&mut self, output: &mut impl Write) -> bool {
         let Some((columns, rows)) = self.terminal_fd.and_then(terminal_geometry) else {
-            return;
+            return false;
         };
         if columns != self.terminal_columns || rows != self.terminal_rows {
             if columns != self.terminal_columns {
@@ -1520,18 +2432,21 @@ impl BlockRenderer {
             self.clear(output);
             self.terminal_columns = columns;
             self.terminal_rows = rows;
+            return true;
         }
+        false
     }
 
     fn clear(&mut self, output: &mut impl Write) {
         if self.cursor_above_footer && self.rendered_rows > 0 {
             // draw_active a replacé le curseur dans la saisie ; revenir au
             // footer permet de l'effacer avec toutes les lignes actives.
-            for _ in 0..self.footer_rows {
+            for _ in 0..self.footer_rows + self.cursor_rows_below {
                 let _ = output.write_all(b"\r\n");
             }
         }
         self.cursor_above_footer = false;
+        self.cursor_rows_below = 0;
         for index in 0..self.rendered_rows {
             let _ = output.write_all(b"\r\x1b[2K");
             if index + 1 < self.rendered_rows {
@@ -1543,14 +2458,14 @@ impl BlockRenderer {
         self.footer_rows = 0;
     }
 
-    fn finish(&mut self, input: &str, output: &mut impl Write) {
+    fn finish(&mut self, input: &InputSnapshot, output: &mut impl Write) {
         self.flush_incomplete(input, output);
         if self.rendered_rows > 0 {
             if self.cursor_above_footer {
                 // Le curseur est resté dans la saisie, juste au-dessus du
                 // footer : le premier saut rejoint le footer, le second rend
                 // la main au shell sous toute la zone active.
-                for _ in 0..self.footer_rows {
+                for _ in 0..self.footer_rows + self.cursor_rows_below {
                     let _ = output.write_all(b"\r\n");
                 }
             }
@@ -1558,6 +2473,7 @@ impl BlockRenderer {
             self.rendered_rows = 0;
             self.rendered_lines.clear();
             self.cursor_above_footer = false;
+            self.cursor_rows_below = 0;
             self.footer_rows = 0;
         }
         let _ = output.flush();
@@ -1582,8 +2498,8 @@ impl BlockRenderer {
         }
     }
 
-    fn position_cursor_after_input_row(&self, output: &mut impl Write, row: &str) {
-        let width = display_width(row).min(self.terminal_columns);
+    fn position_cursor_at_column(&self, output: &mut impl Write, column: usize) {
+        let width = column.min(self.terminal_columns);
         // À la marge droite, le terminal est en état d'auto-wrap différé : ne
         // pas avancer d'une colonne inexistante. Hors marge, CR + CUA place le
         // curseur après le texte, et non après le padding de fond.
@@ -1660,6 +2576,44 @@ fn display_width(value: &str) -> usize {
         .sum()
 }
 
+fn input_visual_rows(input: &InputSnapshot, columns: usize) -> (Vec<String>, usize, usize) {
+    let columns = columns.max(1);
+    let mut value = String::with_capacity(input.text.len() + 2);
+    value.push_str("> ");
+    value.push_str(&input.text);
+    let cursor_byte = (input.cursor_byte.min(input.text.len()) + 2).min(value.len());
+    let mut rows = Vec::new();
+    let mut row = String::new();
+    let mut width = 0usize;
+    let mut cursor = None;
+    for (byte_index, character) in value.char_indices() {
+        if character == '\n' {
+            if byte_index == cursor_byte {
+                cursor = Some((rows.len(), width));
+            }
+            rows.push(std::mem::take(&mut row));
+            width = 0;
+            continue;
+        }
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if width > 0 && width.saturating_add(character_width) > columns {
+            rows.push(std::mem::take(&mut row));
+            width = 0;
+        }
+        if byte_index == cursor_byte {
+            cursor = Some((rows.len(), width));
+        }
+        row.push(character);
+        width = width.saturating_add(character_width);
+    }
+    if cursor_byte == value.len() {
+        cursor = Some((rows.len(), width));
+    }
+    rows.push(row);
+    let (cursor_row, cursor_column) = cursor.unwrap_or((rows.len() - 1, width));
+    (rows, cursor_row, cursor_column)
+}
+
 fn wrap_visual_rows(lines: &[String], columns: usize) -> Vec<String> {
     let columns = columns.max(1);
     let mut rows = Vec::new();
@@ -1695,23 +2649,37 @@ fn write_terminal_lines(output: &mut impl Write, lines: &[String]) {
 /// Maintient la saisie locale pendant qu'un seul lecteur socket traite le flux
 /// attach. Le writer reste partagé et sérialisé avec les resouscriptions du
 /// lecteur ; ainsi `Send` et les issues différées passent par la même connexion.
+struct InteractiveInput<'a> {
+    fd: RawFd,
+    buffer: &'a Arc<Mutex<InputBuffer>>,
+    raw_terminal: bool,
+    tty_output: bool,
+}
+
 fn drive_interactive(
     connection: AttachConnection,
     client_state: &mut AttachClientState,
     agent: &str,
     socket_path: &Path,
-    input_fd: RawFd,
-    raw_terminal: bool,
-    tty_output: bool,
+    input: InteractiveInput<'_>,
 ) -> Result<bool, String> {
+    let InteractiveInput {
+        fd: input_fd,
+        buffer: input,
+        raw_terminal,
+        tty_output,
+    } = input;
     let AttachConnection { reader, writer } = connection;
     let shared_state = Arc::new(Mutex::new(std::mem::replace(
         client_state,
         AttachClientState::new(AttachWindow::Today),
     )));
-    let input = Arc::new(Mutex::new(InputBuffer::default()));
-    let renderer =
-        RendererThread::spawn(input.clone(), agent.to_string(), raw_terminal, tty_output);
+    let renderer = RendererThread::spawn(
+        Arc::clone(input),
+        agent.to_string(),
+        raw_terminal,
+        tty_output,
+    );
     let renderer_sender = renderer.sender();
     renderer_sender.presence(None);
     let presence_reader =
@@ -1786,14 +2754,8 @@ fn drive_interactive(
                     }
                     break;
                 }
-                if !handle_input_byte(
-                    byte,
-                    &shared_state,
-                    &input,
-                    &renderer_sender,
-                    &writer,
-                    agent,
-                )? {
+                if !handle_input_byte(byte, &shared_state, input, &renderer_sender, &writer, agent)?
+                {
                     reconnect = false;
                     break;
                 }
@@ -1950,32 +2912,24 @@ fn handle_input_byte(
     writer: &Arc<Mutex<BufWriter<UnixStream>>>,
     agent: &str,
 ) -> Result<bool, String> {
-    let alt_newline = {
+    let key = {
         let mut input = input
             .lock()
             .map_err(|_| "saisie attach empoisonnée".to_string())?;
-        let pending = std::mem::take(&mut input.alt_prefix);
-        if pending && matches!(byte, b'\r' | b'\n') {
-            input.push_newline();
-            true
-        } else {
-            false
-        }
+        input.decode(byte)
     };
-    if alt_newline {
-        renderer.input_changed(b"\r\n");
+    let Some(key) = key else {
         return Ok(true);
-    }
-    if byte == 0x1b {
-        input
-            .lock()
-            .map_err(|_| "saisie attach empoisonnée".to_string())?
-            .alt_prefix = true;
-        return Ok(true);
-    }
-    match byte {
-        0x03 => return Ok(false),
-        0x04 => {
+    };
+    let double_tty = renderer.raw_terminal && renderer.tty_output;
+    let key = if key == InputKey::LineFeed && !double_tty {
+        InputKey::Submit
+    } else {
+        key
+    };
+    match key {
+        InputKey::CtrlC => return Ok(false),
+        InputKey::CtrlD => {
             if input
                 .lock()
                 .map_err(|_| "saisie attach empoisonnée".to_string())?
@@ -1984,7 +2938,7 @@ fn handle_input_byte(
                 return Ok(false);
             }
         }
-        b'\r' | b'\n' => {
+        InputKey::Submit => {
             let bytes = input
                 .lock()
                 .map_err(|_| "saisie attach empoisonnée".to_string())?
@@ -1999,6 +2953,10 @@ fn handle_input_byte(
                 match selection {
                     Ok(selection) => {
                         write_socket_message(writer, &WrapperToDaemon::SelectRuntime { agent: agent.to_string(), selection })?;
+                        input
+                            .lock()
+                            .map_err(|_| "saisie attach empoisonnée".to_string())?
+                            .remember(body.into_bytes());
                         renderer.event(AttachEvent::RuntimeSelectionPending);
                     }
                     Err(()) => renderer.event(AttachEvent::RuntimeSelection(bridget_transport::protocol::RuntimeSelectionOutcome::Refused {
@@ -2013,7 +2971,7 @@ fn handle_input_byte(
                 let mut state = state
                     .lock()
                     .map_err(|_| "état attach empoisonné".to_string())?;
-                state.track_send(message_id.clone(), body, Instant::now());
+                state.track_send(message_id.clone(), body.clone(), Instant::now());
             }
             if let Err(error) = write_socket_message(writer, &WrapperToDaemon::Send(message)) {
                 let _ = state
@@ -2021,25 +2979,118 @@ fn handle_input_byte(
                     .map(|mut state| state.remove_pending_send(&message_id));
                 return Err(error);
             }
-            return Ok(true);
-        }
-        0x08 | 0x7f => {
-            let erased = input
+            input
                 .lock()
                 .map_err(|_| "saisie attach empoisonnée".to_string())?
-                .erase_last();
+                .remember(body.into_bytes());
+            return Ok(true);
+        }
+        InputKey::LineFeed | InputKey::InsertNewline => {
+            let mut input = input
+                .lock()
+                .map_err(|_| "saisie attach empoisonnée".to_string())?;
+            if !renderer.raw_terminal || !renderer.tty_output {
+                input.move_to_end();
+            }
+            input.push_newline();
+            renderer.input_changed(b"\r\n");
+        }
+        InputKey::Backspace => {
+            let erased = {
+                let mut input = input
+                    .lock()
+                    .map_err(|_| "saisie attach empoisonnée".to_string())?;
+                if !renderer.raw_terminal || !renderer.tty_output {
+                    input.move_to_end();
+                }
+                input.erase_before_cursor()
+            };
             if erased {
                 renderer.input_changed(b"\x08 \x08");
             }
         }
-        byte if byte >= 0x20 => {
-            input
-                .lock()
-                .map_err(|_| "saisie attach empoisonnée".to_string())?
-                .push(byte);
-            renderer.input_changed(&[byte]);
+        InputKey::CursorLeft | InputKey::CursorRight | InputKey::WordLeft | InputKey::WordRight => {
+            if !double_tty {
+                return Ok(true);
+            }
+            let changed = {
+                let mut input = input
+                    .lock()
+                    .map_err(|_| "saisie attach empoisonnée".to_string())?;
+                match key {
+                    InputKey::CursorLeft => input.move_left(),
+                    InputKey::CursorRight => input.move_right(),
+                    InputKey::WordLeft => input.move_word_left(),
+                    InputKey::WordRight => input.move_word_right(),
+                    _ => unreachable!(),
+                }
+            };
+            if changed {
+                renderer.input_changed(b"");
+            }
         }
-        _ => {}
+        InputKey::LineStart
+        | InputKey::LineEnd
+        | InputKey::KillLineBefore
+        | InputKey::KillLineAfter
+        | InputKey::KillWordBefore
+        | InputKey::KillWordAfter
+        | InputKey::Yank => {
+            if !double_tty {
+                return Ok(true);
+            }
+            let changed = {
+                let mut input = input
+                    .lock()
+                    .map_err(|_| "saisie attach empoisonnée".to_string())?;
+                match key {
+                    InputKey::LineStart => input.move_line_start(),
+                    InputKey::LineEnd => input.move_line_end(),
+                    InputKey::KillLineBefore => input.kill_line_before(),
+                    InputKey::KillLineAfter => input.kill_line_after(),
+                    InputKey::KillWordBefore => input.kill_word_before(),
+                    InputKey::KillWordAfter => input.kill_word_after(),
+                    InputKey::Yank => input.yank(),
+                    _ => unreachable!(),
+                }
+            };
+            if changed {
+                renderer.input_changed(b"");
+            }
+        }
+        InputKey::HistoryPrevious | InputKey::HistoryNext => {
+            if !double_tty {
+                return Ok(true);
+            }
+            let changed = {
+                let mut input = input
+                    .lock()
+                    .map_err(|_| "saisie attach empoisonnée".to_string())?;
+                if key == InputKey::HistoryPrevious {
+                    input.history_previous()
+                } else {
+                    input.history_next()
+                }
+            };
+            if changed {
+                renderer.input_changed(b"");
+            }
+        }
+        InputKey::Text(byte) => {
+            let changed = {
+                let mut input = input
+                    .lock()
+                    .map_err(|_| "saisie attach empoisonnée".to_string())?;
+                if !renderer.raw_terminal || !renderer.tty_output {
+                    input.move_to_end();
+                }
+                input.push(byte)
+            };
+            if changed || !renderer.tty_output {
+                renderer.input_changed(&[byte]);
+            }
+        }
+        InputKey::EscapePrefix => unreachable!("le décodeur conserve ce préfixe"),
     }
     Ok(true)
 }
@@ -2276,6 +3327,26 @@ fn render_journal_event(bytes: &[u8], agent: &str) -> String {
             (
                 "[commande]".to_string(),
                 format!("{command}\n{state}{exit}{tail}"),
+            )
+        }
+        "update" if payload.get("kind").and_then(serde_json::Value::as_str) == Some("refusal") => {
+            let reason = payload
+                .get("text")
+                .or_else(|| payload.get("raw"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|reason| !reason.is_empty())
+                .unwrap_or("refus sans motif");
+            let layer = payload
+                .get("layer")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("couche inconnue");
+            let evidence = payload
+                .get("evidence")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("preuve inconnue");
+            (
+                "[refus Bridget]".to_string(),
+                format!("{reason}\ncouche {layer} · preuve {evidence}"),
             )
         }
         "update" if payload.get("kind").and_then(serde_json::Value::as_str) == Some("approval") => {
@@ -2878,6 +3949,31 @@ mod tests {
         assert!(!safe.contains('\u{7}'));
     }
 
+    /// Retire les séquences SGR `ESC [ … m` et conserve les autres
+    /// séquences (déplacements, effacements) : O(n) sur le texte rendu.
+    fn strip_sgr(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(start) = rest.find("\x1b[") {
+            let (head, tail) = rest.split_at(start);
+            out.push_str(head);
+            let body = &tail[2..];
+            match body.find(|c: char| c.is_ascii_alphabetic()) {
+                Some(end) if body.as_bytes()[end] == b'm' => rest = &body[end + 1..],
+                Some(end) => {
+                    out.push_str(&tail[..end + 3]);
+                    rest = &body[end + 1..];
+                }
+                None => {
+                    out.push_str(tail);
+                    rest = "";
+                }
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
     fn presence_fixture() -> AgentInfo {
         serde_json::from_value(json!({
             "agent_id":"550e8400-e29b-41d4-a716-446655440003", "display_name":"communication-091",
@@ -2965,7 +4061,13 @@ mod tests {
             let presence = query_presence(&socket, &presence_fixture().agent_id);
             assert_eq!(presence.is_some(), scenario == "present", "{scenario}");
             if let Some(presence) = presence {
-                assert_eq!(presence.model.as_deref(), Some("glm-exemple"));
+                assert_eq!(
+                    presence
+                        .selected
+                        .as_ref()
+                        .and_then(|agent| agent.model.as_deref()),
+                    Some("glm-exemple")
+                );
             }
             // Mutant : supprimer l'échéance ferait attendre les 3 s du pair muet.
             assert!(started.elapsed() < Duration::from_secs(2), "{scenario}");
@@ -3013,11 +4115,15 @@ mod tests {
         assert_eq!(renderer.rendered_lines[0], "> ma question");
         assert!(renderer.rendered_lines[1].contains("glm-exemple"));
         let at = renderer.presence_received.unwrap();
-        renderer.expire_presence(at + PRESENCE_EXPIRY, "ma question", &mut output);
+        renderer.expire_presence(
+            at + PRESENCE_EXPIRY,
+            &InputSnapshot::at_end("ma question"),
+            &mut output,
+        );
         assert!(renderer.rendered_lines[1].contains("annuaire indisponible"));
         assert!(!renderer.rendered_lines[1].contains("glm-exemple"));
         assert_eq!(renderer.rendered_lines[0], "> ma question");
-        assert_eq!(input_snapshot(&input), "ma question");
+        assert_eq!(input_snapshot(&input).text, "ma question");
         renderer.apply(
             RendererCommand::Presence(Some(Box::new(presence_fixture())), at - PRESENCE_EXPIRY),
             &input,
@@ -3036,7 +4142,7 @@ mod tests {
         assert!(renderer.rendered_lines[1].contains("effort medium"));
         assert!(renderer.rendered_lines[1].contains("busy"));
         renderer.terminal_columns = 12;
-        renderer.redraw("x", &mut output);
+        renderer.redraw(&InputSnapshot::at_end("x"), &mut output);
         assert!(
             renderer.rendered_lines.len() > 2,
             "le statut se replie sans perdre ses valeurs"
@@ -3193,7 +4299,7 @@ mod tests {
     }
 
     #[test]
-    fn alt_entree_ajoute_une_ligne_et_entree_envoie_le_corps_complet() {
+    fn alt_entree_est_ignore_et_entree_envoie_le_corps_complet() {
         let (write_stream, read_stream) = UnixStream::pair().unwrap();
         let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
         let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
@@ -3210,8 +4316,1004 @@ mod tests {
         let WrapperToDaemon::Send(message) = decode(line.trim_end()).unwrap() else {
             panic!("Send attendu après Entrée");
         };
-        assert_eq!(message.body, "premiere\nseconde");
+        assert_eq!(message.body, "premiereseconde");
         assert!(input.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn spec092_shift_entree_csi_u_et_modify_other_keys_inserent_des_lf_sans_envoyer() {
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        read_stream.set_nonblocking(true).unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let renderer = test_renderer_sender(true, false);
+
+        for byte in b"premiere\x1b[13;2useconde\x1b[27;2;13~troisieme" {
+            assert!(
+                handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1").unwrap()
+            );
+        }
+        let mut reader = BufReader::new(read_stream);
+        let mut line = String::new();
+        assert_eq!(
+            reader.read_line(&mut line).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "Shift+Entrée ne doit rien envoyer"
+        );
+        reader.get_mut().set_nonblocking(false).unwrap();
+
+        assert!(handle_input_byte(b'\r', &state, &input, &renderer, &writer, "codex-1").unwrap());
+        reader.read_line(&mut line).unwrap();
+        let WrapperToDaemon::Send(message) = decode(line.trim_end()).unwrap() else {
+            panic!("Send attendu après Entrée simple");
+        };
+        assert_eq!(message.body, "premiere\nseconde\ntroisieme");
+    }
+
+    #[test]
+    fn spec092_haut_bas_restaurent_le_brouillon_sans_envoyer() {
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let renderer = test_renderer_sender(true, true);
+
+        for byte in b"A\rB\rbrouillon\x1b[A\x1b[A\x1b[A\x1b[B\x1b[B\x1b[B" {
+            assert!(
+                handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1").unwrap()
+            );
+        }
+        assert_eq!(input.lock().unwrap().display(), "brouillon");
+
+        let mut reader = BufReader::new(read_stream);
+        for expected in ["A", "B"] {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let WrapperToDaemon::Send(message) = decode(line.trim_end()).unwrap() else {
+                panic!("Send attendu pour {expected}");
+            };
+            assert_eq!(message.body, expected);
+        }
+        reader.get_mut().set_nonblocking(true).unwrap();
+        let mut line = String::new();
+        assert_eq!(
+            reader.read_line(&mut line).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "la navigation ne doit pas envoyer"
+        );
+    }
+
+    #[test]
+    fn spec092_decode_controles_enrichis_et_ignore_sequences_inconnues_ou_trop_longues() {
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let renderer = test_renderer_sender(true, false);
+
+        let mut bytes = b"d\xc3\xa9but\x1b[999~".to_vec();
+        bytes.extend_from_slice(b"\x1b[");
+        bytes.extend(std::iter::repeat_n(b'1', MAX_KEY_SEQUENCE_BYTES + 5));
+        bytes.extend_from_slice(b"~\x1b[27u\x1b[13ufin\x1b[13;2:3u\x1b[13;2:4u\r");
+        for byte in bytes {
+            assert!(
+                handle_input_byte(byte, &state, &input, &renderer, &writer, "codex-1").unwrap()
+            );
+        }
+
+        let mut line = String::new();
+        BufReader::new(read_stream).read_line(&mut line).unwrap();
+        let WrapperToDaemon::Send(message) = decode(line.trim_end()).unwrap() else {
+            panic!("Send attendu");
+        };
+        assert_eq!(message.body, "débutfin");
+
+        for byte in b"x\x1b[127u" {
+            assert!(
+                handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1").unwrap()
+            );
+        }
+        assert!(input.lock().unwrap().is_empty());
+        for byte in b"\x1b[12;" {
+            assert!(
+                handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1").unwrap()
+            );
+        }
+        assert!(!handle_input_byte(0x03, &state, &input, &renderer, &writer, "codex-1").unwrap());
+    }
+
+    #[test]
+    fn spec092_controles_csi_entree_ctrl_c_ctrl_d_et_echap_gardent_leur_contrat() {
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let renderer = test_renderer_sender(true, false);
+        for byte in b"a\x1b[27;1u\x1b[13;1ub\x1b\x1b[13uc\x1b[13u" {
+            assert!(
+                handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1").unwrap()
+            );
+        }
+        let mut line = String::new();
+        BufReader::new(read_stream).read_line(&mut line).unwrap();
+        let WrapperToDaemon::Send(message) = decode(line.trim_end()).unwrap() else {
+            panic!("Send attendu");
+        };
+        assert_eq!(message.body, "abc");
+
+        for byte in b"reste\x1b[100;5u" {
+            assert!(
+                handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1").unwrap()
+            );
+        }
+        assert_eq!(input.lock().unwrap().display(), "reste");
+        input.lock().unwrap().bytes.clear();
+        for (sequence, expected) in [(b"\x1b[100;5u".as_slice(), false), (b"\x1b[99;5u", false)] {
+            let mut running = true;
+            for byte in sequence {
+                running = handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1")
+                    .unwrap();
+            }
+            assert_eq!(running, expected);
+        }
+    }
+
+    #[test]
+    fn spec092_navigation_csi_ss3_est_saturante_et_edition_preserve_les_entrees() {
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let renderer = test_renderer_sender(true, true);
+        for byte in b"A\rB\rbrouillon" {
+            handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1").unwrap();
+        }
+        let mut reader = BufReader::new(read_stream);
+        for expected in ["A", "B"] {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(matches!(
+                decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
+                WrapperToDaemon::Send(message) if message.body == expected
+            ));
+        }
+
+        for (sequence, expected) in [
+            (b"\x1b[A".as_slice(), "B"),
+            (b"\x1bOA", "A"),
+            (b"\x1b[1;1A", "A"),
+            (b"\x1bOB", "B"),
+            (b"\x1b[B", "brouillon"),
+            (b"\x1b[1;1B", "brouillon"),
+        ] {
+            for byte in sequence {
+                handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1").unwrap();
+            }
+            assert_eq!(input.lock().unwrap().display(), expected);
+        }
+
+        for byte in b"\x1b[A\xc3\xa9\x1b[13;2usuite" {
+            handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1").unwrap();
+        }
+        assert_eq!(input.lock().unwrap().display(), "Bé\nsuite");
+        for byte in b"\x1b[A" {
+            handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1").unwrap();
+        }
+        assert_eq!(input.lock().unwrap().display(), "B");
+        for byte in b"\x1b[B" {
+            handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1").unwrap();
+        }
+        let input = input.lock().unwrap();
+        assert_eq!(input.display(), "Bé\nsuite");
+        assert_eq!(
+            input.history,
+            VecDeque::from([b"A".to_vec(), b"B".to_vec()])
+        );
+    }
+
+    #[test]
+    fn spec092_us4_gauche_droite_editent_des_caracteres_utf8_entiers() {
+        for (left, right) in [
+            (b"\x1b[D".as_slice(), b"\x1b[C".as_slice()),
+            (b"\x1bOD", b"\x1bOC"),
+            (b"\x1b[1;1D", b"\x1b[1;1C"),
+        ] {
+            let (write_stream, read_stream) = UnixStream::pair().unwrap();
+            let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+            let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+            let input = Arc::new(Mutex::new(InputBuffer::default()));
+            let renderer = test_renderer_sender(true, true);
+
+            feed_input_bytes(b"ab", &state, &input, &renderer, &writer);
+            feed_input_bytes(left, &state, &input, &renderer, &writer);
+            feed_input_bytes(b"X", &state, &input, &renderer, &writer);
+            feed_input_bytes(right, &state, &input, &renderer, &writer);
+            feed_input_bytes(b"Y\r", &state, &input, &renderer, &writer);
+            assert_eq!(read_sent_body(read_stream), "aXbY");
+        }
+
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let renderer = test_renderer_sender(true, true);
+        feed_input_bytes("a界🙂b".as_bytes(), &state, &input, &renderer, &writer);
+        feed_input_bytes(
+            b"\x1bOD\x1b[D\x1bOC\x7f\r",
+            &state,
+            &input,
+            &renderer,
+            &writer,
+        );
+        assert_eq!(read_sent_body(read_stream), "a界b");
+    }
+
+    #[test]
+    fn spec092_us4_option_gauche_droite_sautent_des_mots_non_blancs() {
+        for (left, right) in [
+            (b"\x1b[1;3D".as_slice(), b"\x1b[1;3C".as_slice()),
+            (b"\x1bb", b"\x1bf"),
+        ] {
+            let (write_stream, read_stream) = UnixStream::pair().unwrap();
+            let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+            let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+            let input = Arc::new(Mutex::new(InputBuffer::default()));
+            let renderer = test_renderer_sender(true, true);
+
+            feed_input_bytes(b"un  deux,trois fin", &state, &input, &renderer, &writer);
+            feed_input_bytes(left, &state, &input, &renderer, &writer);
+            feed_input_bytes(left, &state, &input, &renderer, &writer);
+            feed_input_bytes(right, &state, &input, &renderer, &writer);
+            feed_input_bytes(b"X\r", &state, &input, &renderer, &writer);
+            assert_eq!(read_sent_body(read_stream), "un  deux,troisX fin");
+        }
+    }
+
+    #[test]
+    fn spec092_us4_deplacements_par_mot_saturent_selon_le_contrat() {
+        let text = b"un  deux trois";
+        for (start, expected_left, expected_right) in [
+            (0, 0, 2),
+            (2, 0, 8),
+            (3, 0, 8),
+            (4, 0, 8),
+            (6, 4, 8),
+            (8, 4, 14),
+            (9, 4, 14),
+            (14, 9, 14),
+        ] {
+            let cursor = (start < text.len()).then_some(start);
+            let mut left = InputBuffer {
+                bytes: text.to_vec(),
+                cursor,
+                ..InputBuffer::default()
+            };
+            let mut right = InputBuffer {
+                bytes: text.to_vec(),
+                cursor,
+                ..InputBuffer::default()
+            };
+            left.move_word_left();
+            right.move_word_right();
+            assert_eq!(left.cursor_index(), expected_left, "gauche depuis {start}");
+            assert_eq!(
+                right.cursor_index(),
+                expected_right,
+                "droite depuis {start}"
+            );
+        }
+    }
+
+    #[test]
+    fn spec092_us4_shift_entree_seul_insere_un_lf_au_curseur() {
+        for shift_enter in [b"\x1b[13;2u".as_slice(), b"\x1b[13;2:2u", b"\x1b[27;2;13~"] {
+            let (write_stream, read_stream) = UnixStream::pair().unwrap();
+            let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+            let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+            let input = Arc::new(Mutex::new(InputBuffer::default()));
+            let renderer = test_renderer_sender(true, true);
+
+            feed_input_bytes(b"abcd\x1b[D\x1b[D", &state, &input, &renderer, &writer);
+            feed_input_bytes(shift_enter, &state, &input, &renderer, &writer);
+            assert_eq!(input.lock().unwrap().display(), "ab\ncd");
+            feed_input_bytes(b"\r", &state, &input, &renderer, &writer);
+            assert_eq!(read_sent_body(read_stream), "ab\ncd");
+        }
+    }
+
+    #[test]
+    fn spec092_us4_option_entree_et_echap_entree_sont_ignores() {
+        for ignored in [
+            b"\x1b\r".as_slice(),
+            b"\x1b[13;3u",
+            b"\x1b[27;3;13~",
+            b"\x1b[27u\x1b[13u",
+        ] {
+            let (write_stream, read_stream) = UnixStream::pair().unwrap();
+            let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+            let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+            let input = Arc::new(Mutex::new(InputBuffer::default()));
+            let renderer = test_renderer_sender(true, true);
+
+            feed_input_bytes(b"abc", &state, &input, &renderer, &writer);
+            feed_input_bytes(ignored, &state, &input, &renderer, &writer);
+            assert_eq!(input.lock().unwrap().display(), "abc");
+            feed_input_bytes(b"\r", &state, &input, &renderer, &writer);
+            assert_eq!(read_sent_body(read_stream), "abc");
+        }
+    }
+
+    #[test]
+    fn spec092_us4_historique_restaure_texte_et_position_du_brouillon() {
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        input.lock().unwrap().remember(b"ancien".to_vec());
+        let renderer = test_renderer_sender(true, true);
+
+        feed_input_bytes(b"abcd\x1b[D\x1b[D", &state, &input, &renderer, &writer);
+        feed_input_bytes(b"\x1b[A", &state, &input, &renderer, &writer);
+        assert_eq!(input.lock().unwrap().cursor_index(), "ancien".len());
+        feed_input_bytes(b"\x1b[BX\r", &state, &input, &renderer, &writer);
+        assert_eq!(read_sent_body(read_stream), "abXcd");
+        assert_eq!(
+            input.lock().unwrap().history.front().unwrap().as_slice(),
+            b"ancien",
+            "éditer le brouillon restauré ne modifie pas l’entrée rappelée"
+        );
+    }
+
+    #[test]
+    fn spec092_us4_utf8_fragmente_est_insere_atomiquement_au_curseur() {
+        let mut input = InputBuffer::default();
+        for byte in b"ab" {
+            assert!(input.push(*byte));
+        }
+        assert!(input.move_left());
+        let before = InputSnapshot {
+            text: "ab".into(),
+            cursor_byte: 1,
+        };
+        for byte in &"界".as_bytes()[..2] {
+            assert!(!input.push(*byte));
+            assert_eq!(input.display(), before.text);
+            assert_eq!(input.cursor_index(), before.cursor_byte);
+        }
+        assert!(input.push("界".as_bytes()[2]));
+        assert_eq!(input.display(), "a界b");
+        assert_eq!(input.cursor_index(), 4);
+
+        let mut invalid = InputBuffer::default();
+        assert!(!invalid.push(0xe7));
+        assert!(invalid.push(b'X'));
+        assert_eq!(invalid.display(), "X");
+        assert!(invalid.pending_utf8.is_empty());
+
+        let mut invalid_starts = InputBuffer::default();
+        for byte in [0x80, 0xbf, 0xc0, 0xc1, 0xf5, 0xff] {
+            assert!(!invalid_starts.push(byte));
+        }
+        assert!(invalid_starts.push(b'Y'));
+        assert_eq!(invalid_starts.display(), "Y");
+        assert_eq!(invalid_starts.cursor_index(), 1);
+
+        let mut interrupted = InputBuffer {
+            bytes: b"ab".to_vec(),
+            cursor: Some(1),
+            ..InputBuffer::default()
+        };
+        assert!(!interrupted.push(0xe7));
+        assert!(interrupted.move_right());
+        assert!(interrupted.push(b'X'));
+        assert_eq!(interrupted.display(), "abX");
+    }
+
+    #[test]
+    fn spec092_us4_controle_interrompt_un_utf8_incomplet_sans_le_deplacer() {
+        let (write_stream, _) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let renderer = test_renderer_sender(true, true);
+
+        feed_input_bytes(b"ab\x1b[D", &state, &input, &renderer, &writer);
+        assert!(handle_input_byte(0xe7, &state, &input, &renderer, &writer, "codex-1").unwrap());
+        assert_eq!(input_snapshot(&input).text, "ab");
+        assert!(!handle_input_byte(0x03, &state, &input, &renderer, &writer, "codex-1").unwrap());
+        let snapshot = input_snapshot(&input);
+        assert_eq!(snapshot.text, "ab");
+        assert_eq!(snapshot.cursor_byte, 1);
+        assert!(input.lock().unwrap().pending_utf8.is_empty());
+    }
+
+    #[test]
+    fn spec092_us4_renderer_garde_curseur_unicode_et_statut_dans_la_fenetre() {
+        let snapshot = InputSnapshot {
+            text: "ab\n界🙂cd".into(),
+            cursor_byte: "ab\n界".len(),
+        };
+        let (rows, cursor_row, cursor_column) = input_visual_rows(&snapshot, 8);
+        assert_eq!(rows, ["> ab", "界🙂cd"]);
+        assert_eq!((cursor_row, cursor_column), (1, 2));
+
+        let exact_edge = InputSnapshot::at_end("🙂");
+        assert_eq!(
+            input_visual_rows(&exact_edge, 4),
+            (vec!["> 🙂".into()], 0, 4)
+        );
+        let before_wrapped_character = InputSnapshot {
+            text: "abc".into(),
+            cursor_byte: 2,
+        };
+        assert_eq!(
+            input_visual_rows(&before_wrapped_character, 4),
+            (vec!["> ab".into(), "c".into()], 1, 0)
+        );
+        let final_lf = InputSnapshot::at_end("a\n");
+        assert_eq!(input_visual_rows(&final_lf, 8).0, ["> a", ""]);
+
+        let mut renderer = BlockRenderer::new("agent".into(), true, true);
+        renderer.terminal_fd = None;
+        renderer.terminal_columns = 8;
+        renderer.terminal_rows = 5;
+        renderer.presence_line = Some("connecté".into());
+        let mut output = Vec::new();
+        renderer.redraw(&snapshot, &mut output);
+        assert_eq!(
+            renderer.rendered_lines.last().map(String::as_str),
+            Some("connecté")
+        );
+        assert!(
+            renderer
+                .rendered_lines
+                .iter()
+                .any(|row| row.contains("界🙂cd"))
+        );
+        assert!(output.ends_with(b"\r\x1b[2C"));
+
+        let windowed = InputSnapshot {
+            text: "l0\nl1\nl2\nl3\nl4".into(),
+            cursor_byte: "l0\nl1\nl2".len(),
+        };
+        renderer.terminal_rows = 4;
+        let mut window_output = Vec::new();
+        renderer.redraw(&windowed, &mut window_output);
+        assert_eq!(
+            &renderer.rendered_lines[..2],
+            ["l1", "l2"],
+            "la fenêtre se place autour du curseur plutôt qu'à la fin du tampon"
+        );
+        assert_eq!(
+            renderer.rendered_lines.last().map(String::as_str),
+            Some("connecté")
+        );
+    }
+
+    #[test]
+    fn spec092_us4_hors_double_tty_les_fleches_n_editent_pas_au_milieu() {
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let renderer = test_renderer_sender(true, false);
+
+        feed_input_bytes(b"abc\x1b[DX\r", &state, &input, &renderer, &writer);
+        assert_eq!(read_sent_body(read_stream), "abcX");
+    }
+
+    #[test]
+    fn spec092_us5_cr_envoie_et_lf_insere_uniquement_en_double_tty() {
+        let (write_stream, mut read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let renderer = test_renderer_sender(true, true);
+
+        feed_input_bytes(b"ab\ncd", &state, &input, &renderer, &writer);
+        assert_eq!(
+            input_snapshot(&input),
+            InputSnapshot {
+                text: "ab\ncd".into(),
+                cursor_byte: 5,
+            }
+        );
+        read_stream.set_nonblocking(true).unwrap();
+        let mut unexpected = [0_u8; 1];
+        assert_eq!(
+            read_stream.read(&mut unexpected).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "LF ne doit écrire aucune trame avant le CR"
+        );
+        read_stream.set_nonblocking(false).unwrap();
+        feed_input_bytes(b"\r", &state, &input, &renderer, &writer);
+        assert_eq!(read_sent_body(read_stream), "ab\ncd");
+
+        for option_enter in [b"\x1b\n".as_slice(), b"\x1b[27u\n"] {
+            let (write_stream, read_stream) = UnixStream::pair().unwrap();
+            let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+            let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+            let input = Arc::new(Mutex::new(InputBuffer::default()));
+            let renderer = test_renderer_sender(true, true);
+            feed_input_bytes(b"option", &state, &input, &renderer, &writer);
+            feed_input_bytes(option_enter, &state, &input, &renderer, &writer);
+            assert_eq!(input_snapshot(&input).text, "option");
+            feed_input_bytes(b"\r", &state, &input, &renderer, &writer);
+            assert_eq!(read_sent_body(read_stream), "option");
+        }
+
+        for (stdin_tty, stdout_tty) in [(true, false), (false, true), (false, false)] {
+            let (write_stream, read_stream) = UnixStream::pair().unwrap();
+            let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+            let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+            let input = Arc::new(Mutex::new(InputBuffer::default()));
+            let renderer = test_renderer_sender(stdin_tty, stdout_tty);
+
+            feed_input_bytes(b"mode degrade\n", &state, &input, &renderer, &writer);
+            assert_eq!(read_sent_body(read_stream), "mode degrade");
+        }
+    }
+
+    #[test]
+    fn spec092_us5_ctrl_a_e_u_k_bruts_et_csi_u_respectent_les_lignes_logiques() {
+        let cases: &[(&[u8], &[u8], &str)] = &[
+            (b"\x01", b"X", "ab\nXcdEF\ngh"),
+            (b"\x1b[97;5u", b"X", "ab\nXcdEF\ngh"),
+            (b"\x05", b"X", "ab\ncdEFX\ngh"),
+            (b"\x1b[101;5u", b"X", "ab\ncdEFX\ngh"),
+            (b"\x15", b"", "ab\nEF\ngh"),
+            (b"\x1b[117;5u", b"", "ab\nEF\ngh"),
+            (b"\x1b[117;5:2u", b"", "ab\nEF\ngh"),
+            (b"\x0b", b"", "ab\ncd\ngh"),
+            (b"\x1b[107;5u", b"", "ab\ncd\ngh"),
+        ];
+        for (sequence, inserted, expected) in cases {
+            let (write_stream, read_stream) = UnixStream::pair().unwrap();
+            let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+            let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+            let input = Arc::new(Mutex::new(InputBuffer {
+                bytes: b"ab\ncdEF\ngh".to_vec(),
+                cursor: Some(5),
+                ..InputBuffer::default()
+            }));
+            let renderer = test_renderer_sender(true, true);
+
+            feed_input_bytes(sequence, &state, &input, &renderer, &writer);
+            feed_input_bytes(inserted, &state, &input, &renderer, &writer);
+            feed_input_bytes(b"\r", &state, &input, &renderer, &writer);
+            assert_eq!(
+                read_sent_body(read_stream),
+                *expected,
+                "séquence {sequence:?}"
+            );
+        }
+
+        for (cursor, sequence) in [(3, b"\x15".as_slice()), (5, b"\x0b".as_slice())] {
+            let (write_stream, read_stream) = UnixStream::pair().unwrap();
+            let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+            let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+            let input = Arc::new(Mutex::new(InputBuffer {
+                bytes: b"ab\ncd\nef".to_vec(),
+                cursor: Some(cursor),
+                ..InputBuffer::default()
+            }));
+            let renderer = test_renderer_sender(true, true);
+
+            feed_input_bytes(sequence, &state, &input, &renderer, &writer);
+            feed_input_bytes(b"\r", &state, &input, &renderer, &writer);
+            assert_eq!(
+                read_sent_body(read_stream),
+                "ab\ncd\nef",
+                "une suppression vide ne mange jamais le LF"
+            );
+        }
+
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: b"ab\ncd".to_vec(),
+            cursor: Some(4),
+            ..InputBuffer::default()
+        }));
+        let renderer = test_renderer_sender(true, true);
+        feed_input_bytes(
+            b"\x1b[97;5:3u\x1b[101;5:4u\x1b[117;5:3u\x1b[107;5:4u\r",
+            &state,
+            &input,
+            &renderer,
+            &writer,
+        );
+        assert_eq!(
+            read_sent_body(read_stream),
+            "ab\ncd",
+            "release et événements CSI-u inconnus restent sans effet"
+        );
+    }
+
+    #[test]
+    fn spec092_us5_suppressions_mot_et_ctrl_y_reutilisent_les_bornes_us4() {
+        for delete_left in [
+            b"\x17".as_slice(),
+            b"\x1b[119;5u",
+            b"\x1b\x08",
+            b"\x1b\x7f",
+            b"\x1b[127;3u",
+        ] {
+            let (write_stream, read_stream) = UnixStream::pair().unwrap();
+            let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+            let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+            let input = Arc::new(Mutex::new(InputBuffer {
+                bytes: "un  deux,trois fin".as_bytes().to_vec(),
+                cursor: Some(14),
+                ..InputBuffer::default()
+            }));
+            let renderer = test_renderer_sender(true, true);
+
+            feed_input_bytes(delete_left, &state, &input, &renderer, &writer);
+            assert_eq!(input_snapshot(&input).text, "un   fin");
+            feed_input_bytes(b"\x19\r", &state, &input, &renderer, &writer);
+            assert_eq!(
+                read_sent_body(read_stream),
+                "un  deux,trois fin",
+                "suppression gauche puis Ctrl-Y pour {delete_left:?}"
+            );
+        }
+
+        for delete_right in [b"\x1bd".as_slice(), b"\x1b[100;3u"] {
+            let (write_stream, read_stream) = UnixStream::pair().unwrap();
+            let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+            let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+            let input = Arc::new(Mutex::new(InputBuffer {
+                bytes: "un  deux,trois fin".as_bytes().to_vec(),
+                cursor: Some(4),
+                ..InputBuffer::default()
+            }));
+            let renderer = test_renderer_sender(true, true);
+
+            feed_input_bytes(delete_right, &state, &input, &renderer, &writer);
+            assert_eq!(input_snapshot(&input).text, "un   fin");
+            feed_input_bytes(b"\x1b[121;5u\r", &state, &input, &renderer, &writer);
+            assert_eq!(
+                read_sent_body(read_stream),
+                "un  deux,trois fin",
+                "suppression droite puis Ctrl-Y CSI-u pour {delete_right:?}"
+            );
+        }
+
+        let unicode = "pré  界🙂, fin";
+        let cursor = unicode.find(" fin").unwrap();
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: unicode.as_bytes().to_vec(),
+            cursor: Some(cursor),
+            ..InputBuffer::default()
+        }));
+        let renderer = test_renderer_sender(true, true);
+        feed_input_bytes(b"\x17\x19\r", &state, &input, &renderer, &writer);
+        assert_eq!(
+            read_sent_body(read_stream),
+            unicode,
+            "un mot Unicode avec ponctuation est supprimé et réinséré entier"
+        );
+    }
+
+    #[test]
+    fn spec092_us5_registre_suppression_survit_noop_backspace_historique_et_envoi() {
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: b"alpha beta".to_vec(),
+            cursor: None,
+            ..InputBuffer::default()
+        }));
+        input.lock().unwrap().remember(b"historique".to_vec());
+        let renderer = test_renderer_sender(true, true);
+
+        feed_input_bytes(b"\x17", &state, &input, &renderer, &writer);
+        assert_eq!(input_snapshot(&input).text, "alpha ");
+        feed_input_bytes(b"\x05\x0b", &state, &input, &renderer, &writer);
+        feed_input_bytes(b"\x7f\x19\x19", &state, &input, &renderer, &writer);
+        assert_eq!(input_snapshot(&input).text, "alphabetabeta");
+        feed_input_bytes(b"\x1b[A\x1b[B\r", &state, &input, &renderer, &writer);
+        assert_eq!(read_sent_body(read_stream), "alphabetabeta");
+
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        feed_input_bytes(b">\x19\r", &state, &input, &renderer, &writer);
+        assert_eq!(
+            read_sent_body(read_stream),
+            ">beta",
+            "le registre reste dans InputBuffer après l'envoi, comme après reconnexion"
+        );
+    }
+
+    #[test]
+    fn spec092_us5_ctrl_u_k_remplacent_le_registre_par_des_fragments_unicode_sans_lf() {
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: b"ancien".to_vec(),
+            ..InputBuffer::default()
+        }));
+        let renderer = test_renderer_sender(true, true);
+
+        feed_input_bytes(b"\x17", &state, &input, &renderer, &writer);
+        feed_input_bytes(
+            "pré界 milieu\nsuite".as_bytes(),
+            &state,
+            &input,
+            &renderer,
+            &writer,
+        );
+        input.lock().unwrap().cursor = Some("pré界".len());
+
+        feed_input_bytes(b"\x15", &state, &input, &renderer, &writer);
+        {
+            let input = input.lock().unwrap();
+            assert_eq!(input.display(), " milieu\nsuite");
+            assert_eq!(input.last_deleted.as_slice(), "pré界".as_bytes());
+        }
+        feed_input_bytes(b"\x19", &state, &input, &renderer, &writer);
+        assert_eq!(input_snapshot(&input).text, "pré界 milieu\nsuite");
+
+        feed_input_bytes(b"\x0b", &state, &input, &renderer, &writer);
+        {
+            let input = input.lock().unwrap();
+            assert_eq!(input.display(), "pré界\nsuite");
+            assert_eq!(input.last_deleted.as_slice(), b" milieu");
+        }
+        feed_input_bytes(b"\x19\r", &state, &input, &renderer, &writer);
+        assert_eq!(read_sent_body(read_stream), "pré界 milieu\nsuite");
+    }
+
+    #[test]
+    fn spec092_us5_controles_editeur_sont_inertes_hors_double_tty() {
+        let controls: &[&[u8]] = &[
+            b"\x01",
+            b"\x05",
+            b"\x15",
+            b"\x0b",
+            b"\x17",
+            b"\x19",
+            b"\x1b\x08",
+            b"\x1b\x7f",
+            b"\x1bd",
+            b"\x1b[97;5u",
+            b"\x1b[101;5u",
+            b"\x1b[117;5u",
+            b"\x1b[107;5u",
+            b"\x1b[119;5u",
+            b"\x1b[121;5u",
+            b"\x1b[127;3u",
+            b"\x1b[100;3u",
+        ];
+        for (stdin_tty, stdout_tty) in [(true, false), (false, true), (false, false)] {
+            for control in controls {
+                let (write_stream, read_stream) = UnixStream::pair().unwrap();
+                let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+                let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+                let input = Arc::new(Mutex::new(InputBuffer {
+                    bytes: b"abcd".to_vec(),
+                    cursor: Some(2),
+                    ..InputBuffer::default()
+                }));
+                let renderer = test_renderer_sender(stdin_tty, stdout_tty);
+
+                feed_input_bytes(control, &state, &input, &renderer, &writer);
+                assert_eq!(input_snapshot(&input).text, "abcd");
+                feed_input_bytes(b"\r", &state, &input, &renderer, &writer);
+                assert_eq!(read_sent_body(read_stream), "abcd");
+            }
+        }
+    }
+
+    #[test]
+    fn spec092_fleches_hors_double_tty_sont_consommees_sans_effet_renderer() {
+        for (stdin_tty, stdout_tty) in [(true, false), (false, true), (false, false)] {
+            let (commands, command_rx) = mpsc::sync_channel(RENDER_COMMAND_CAPACITY);
+            let renderer = RendererSender {
+                commands,
+                input_dirty: Arc::new(AtomicBool::new(false)),
+                raw_terminal: stdin_tty,
+                tty_output: stdout_tty,
+            };
+            let (write_stream, _) = UnixStream::pair().unwrap();
+            let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+            let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+            let input = Arc::new(Mutex::new(InputBuffer {
+                bytes: b"brouillon".to_vec(),
+                ..InputBuffer::default()
+            }));
+            input.lock().unwrap().remember(b"ancien".to_vec());
+
+            for byte in b"\x1b[A\x1bOB" {
+                handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1").unwrap();
+            }
+
+            assert_eq!(input.lock().unwrap().display(), "brouillon");
+            assert!(matches!(
+                command_rx.try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ));
+        }
+    }
+
+    #[test]
+    fn spec092_historique_borne_conserve_les_doublons_et_refuse_une_entree_geante() {
+        let mut input = InputBuffer::default();
+        for index in 0..=INPUT_HISTORY_MAX_ENTRIES {
+            input.remember(index.to_string().into_bytes());
+        }
+        assert_eq!(input.history.len(), INPUT_HISTORY_MAX_ENTRIES);
+        assert_eq!(input.history.front().unwrap().as_slice(), b"1");
+        assert_eq!(input.history.back().unwrap().as_slice(), b"100");
+        assert_eq!(
+            input.history_bytes,
+            input.history.iter().map(Vec::len).sum::<usize>()
+        );
+
+        input.remember(b"100".to_vec());
+        assert_eq!(input.history.back().unwrap().as_slice(), b"100");
+        assert_eq!(input.history[input.history.len() - 2].as_slice(), b"100");
+        let before = input.history.clone();
+        input.remember(vec![b'x'; INPUT_HISTORY_MAX_BYTES + 1]);
+        assert_eq!(input.history, before, "l'entrée géante n'évince rien");
+
+        let mut byte_bounded = InputBuffer::default();
+        byte_bounded.remember(vec![b'a'; 600_000]);
+        byte_bounded.remember(vec![b'b'; 600_000]);
+        assert_eq!(byte_bounded.history.len(), 1);
+        assert_eq!(byte_bounded.history_bytes, 600_000);
+    }
+
+    #[test]
+    fn spec092_memoire_suit_uniquement_les_ecritures_reussies() {
+        let (write_stream, mut read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let renderer = test_renderer_sender(true, false);
+        for byte in b"/model gpt-5.6-sol high\r/model incomplet\r\r" {
+            handle_input_byte(*byte, &state, &input, &renderer, &writer, "codex-1").unwrap();
+        }
+        let mut line = String::new();
+        BufReader::new(&mut read_stream)
+            .read_line(&mut line)
+            .unwrap();
+        assert!(matches!(
+            decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
+            WrapperToDaemon::SelectRuntime { .. }
+        ));
+        assert_eq!(
+            input.lock().unwrap().history,
+            VecDeque::from([b"/model gpt-5.6-sol high".to_vec()])
+        );
+
+        let (failed_stream, failed_peer) = UnixStream::pair().unwrap();
+        drop(failed_peer);
+        let failed_writer = Arc::new(Mutex::new(BufWriter::new(failed_stream)));
+        let failed_input = Arc::new(Mutex::new(InputBuffer {
+            bytes: b"non memorise".to_vec(),
+            ..InputBuffer::default()
+        }));
+        assert!(
+            handle_input_byte(
+                b'\r',
+                &state,
+                &failed_input,
+                &renderer,
+                &failed_writer,
+                "codex-1",
+            )
+            .is_err()
+        );
+        assert!(failed_input.lock().unwrap().history.is_empty());
+        assert!(InputBuffer::default().history.is_empty());
+    }
+
+    #[test]
+    fn spec092_message_geant_est_envoye_sans_evincer_l_historique() {
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let reader = thread::spawn(move || {
+            let mut line = String::new();
+            BufReader::new(read_stream).read_line(&mut line).unwrap();
+            decode::<WrapperToDaemon>(line.trim_end()).unwrap()
+        });
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: vec![b'x'; INPUT_HISTORY_MAX_BYTES + 1],
+            ..InputBuffer::default()
+        }));
+        input.lock().unwrap().remember(b"precedent".to_vec());
+        let renderer = test_renderer_sender(false, false);
+
+        assert!(handle_input_byte(b'\r', &state, &input, &renderer, &writer, "codex-1").unwrap());
+        let WrapperToDaemon::Send(message) = reader.join().unwrap() else {
+            panic!("Send attendu");
+        };
+        assert_eq!(message.body.len(), INPUT_HISTORY_MAX_BYTES + 1);
+        assert_eq!(
+            input.lock().unwrap().history,
+            VecDeque::from([b"precedent".to_vec()])
+        );
+    }
+
+    #[test]
+    fn spec092_drive_reutilise_l_historique_apres_reconnexion_et_nouvelle_invocation_est_vide() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut state = AttachClientState::new(AttachWindow::Today);
+
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let connection = AttachConnection {
+            reader: BufReader::new(client_stream.try_clone().unwrap()),
+            writer: Arc::new(Mutex::new(BufWriter::new(client_stream))),
+        };
+        let server = thread::spawn(move || {
+            let mut line = String::new();
+            BufReader::new(server_stream).read_line(&mut line).unwrap();
+            decode::<WrapperToDaemon>(line.trim_end()).unwrap()
+        });
+        let (mut first_input_writer, first_input_reader) = UnixStream::pair().unwrap();
+        first_input_writer.write_all(b"A\r").unwrap();
+        first_input_writer.flush().unwrap();
+        assert!(
+            drive_interactive(
+                connection,
+                &mut state,
+                "codex-1",
+                Path::new("/tmp/bridget-attach-092-reconnect-unused.sock"),
+                InteractiveInput {
+                    fd: first_input_reader.as_raw_fd(),
+                    buffer: &input,
+                    raw_terminal: true,
+                    tty_output: true,
+                },
+            )
+            .unwrap(),
+            "la fermeture du daemon demande une reconnexion"
+        );
+        assert!(matches!(
+            server.join().unwrap(),
+            WrapperToDaemon::Send(message) if message.body == "A"
+        ));
+        assert_eq!(
+            input.lock().unwrap().history,
+            VecDeque::from([b"A".to_vec()])
+        );
+
+        let (client_stream, _server_stream) = UnixStream::pair().unwrap();
+        let connection = AttachConnection {
+            reader: BufReader::new(client_stream.try_clone().unwrap()),
+            writer: Arc::new(Mutex::new(BufWriter::new(client_stream))),
+        };
+        let (mut second_input_writer, second_input_reader) = UnixStream::pair().unwrap();
+        second_input_writer.write_all(b"\x1b[A\x03").unwrap();
+        second_input_writer.flush().unwrap();
+        assert!(
+            !drive_interactive(
+                connection,
+                &mut state,
+                "codex-1",
+                Path::new("/tmp/bridget-attach-092-reconnect-unused.sock"),
+                InteractiveInput {
+                    fd: second_input_reader.as_raw_fd(),
+                    buffer: &input,
+                    raw_terminal: true,
+                    tty_output: true,
+                },
+            )
+            .unwrap(),
+            "Ctrl-C termine la seconde connexion"
+        );
+        assert_eq!(input.lock().unwrap().display(), "A");
+        assert!(InputBuffer::default().history.is_empty());
     }
 
     #[test]
@@ -3231,15 +5333,18 @@ mod tests {
             &mut output,
         );
         let rendered = String::from_utf8(output).unwrap();
+        // L'oracle porte sur le texte et les mouvements de curseur : les
+        // couleurs SGR du footer et de l'invite sont retirées avant comparaison.
+        let sans_sgr = strip_sgr(&rendered);
         let footer = "fournisseur inconnu";
-        let footer_end = rendered.find(footer).unwrap() + footer.len();
+        let footer_end = sans_sgr.find(footer).unwrap() + footer.len();
         assert!(
-            rendered[footer_end..].contains("\r\x1b[1A> demande en cours"),
+            sans_sgr[footer_end..].contains("\r\x1b[1A> demande en cours"),
             "le curseur doit revenir à la saisie après le footer : {rendered:?}"
         );
 
         let mut redraw = Vec::new();
-        renderer.redraw("demande en cours", &mut redraw);
+        renderer.redraw(&InputSnapshot::at_end("demande en cours"), &mut redraw);
         assert!(
             redraw.starts_with(b"\r\n\r\x1b[2K"),
             "le redraw doit d'abord rejoindre puis effacer le footer : {redraw:?}"
@@ -3256,7 +5361,7 @@ mod tests {
         renderer.terminal_fd = None;
         renderer.terminal_columns = 180;
         let mut initial = Vec::new();
-        renderer.redraw("demande en cours", &mut initial);
+        renderer.redraw(&InputSnapshot::at_end("demande en cours"), &mut initial);
         assert!(!renderer.cursor_above_footer);
 
         let mut first_presence = Vec::new();
@@ -3289,16 +5394,25 @@ mod tests {
             &mut footer_output,
         );
         let footer_before_finish = footer_output.len();
-        with_footer.finish("demande en cours", &mut footer_output);
+        with_footer.finish(
+            &InputSnapshot::at_end("demande en cours"),
+            &mut footer_output,
+        );
         assert_eq!(&footer_output[footer_before_finish..], b"\r\n\r\n");
 
         let mut without_footer = BlockRenderer::new("agent".into(), true, true);
         without_footer.terminal_fd = None;
         without_footer.terminal_columns = 180;
         let mut input_output = Vec::new();
-        without_footer.redraw("demande en cours", &mut input_output);
+        without_footer.redraw(
+            &InputSnapshot::at_end("demande en cours"),
+            &mut input_output,
+        );
         let input_before_finish = input_output.len();
-        without_footer.finish("demande en cours", &mut input_output);
+        without_footer.finish(
+            &InputSnapshot::at_end("demande en cours"),
+            &mut input_output,
+        );
         assert_eq!(&input_output[input_before_finish..], b"\r\n");
     }
 
@@ -3310,6 +5424,27 @@ mod tests {
             raw_terminal,
             tty_output,
         }
+    }
+
+    fn feed_input_bytes(
+        bytes: &[u8],
+        state: &Arc<Mutex<AttachClientState>>,
+        input: &Arc<Mutex<InputBuffer>>,
+        renderer: &RendererSender,
+        writer: &Arc<Mutex<BufWriter<UnixStream>>>,
+    ) {
+        for byte in bytes {
+            assert!(handle_input_byte(*byte, state, input, renderer, writer, "codex-1").unwrap());
+        }
+    }
+
+    fn read_sent_body(stream: UnixStream) -> String {
+        let mut line = String::new();
+        BufReader::new(stream).read_line(&mut line).unwrap();
+        let WrapperToDaemon::Send(message) = decode(line.trim_end()).unwrap() else {
+            panic!("Send attendu");
+        };
+        message.body
     }
 
     struct PseudoTerminal {
@@ -3370,6 +5505,22 @@ mod tests {
             unsafe { File::from_raw_fd(fd) }
         }
 
+        fn slave_reader(&self) -> File {
+            let path = unsafe { libc::ttyname(self.slave) };
+            assert!(
+                !path.is_null(),
+                "ttyname: {}",
+                std::io::Error::last_os_error()
+            );
+            let fd = unsafe { libc::open(path, libc::O_RDONLY | libc::O_NOCTTY) };
+            assert!(
+                fd >= 0,
+                "ouverture en lecture seule du slave: {}",
+                std::io::Error::last_os_error()
+            );
+            unsafe { File::from_raw_fd(fd) }
+        }
+
         fn read_available(&self) -> Vec<u8> {
             let fd = unsafe { libc::dup(self.master) };
             assert!(fd >= 0, "dup master: {}", std::io::Error::last_os_error());
@@ -3409,6 +5560,7 @@ mod tests {
         // après une lecture. Les seuls bits mutés par notre garde doivent
         // donc retrouver leur valeur initiale ; ils prouvent la restauration.
         let raw_bits = (libc::ICANON | libc::ECHO | libc::ISIG) as libc::tcflag_t;
+        assert_eq!(after.c_iflag, before.c_iflag);
         assert_eq!(after.c_lflag & raw_bits, before.c_lflag & raw_bits);
         assert_eq!(after.c_cc[libc::VMIN], before.c_cc[libc::VMIN]);
         assert_eq!(after.c_cc[libc::VTIME], before.c_cc[libc::VTIME]);
@@ -3777,7 +5929,7 @@ mod tests {
             );
         }
         assert!(
-            renderer.committed_rows > 0,
+            renderer.committed_units > 0,
             "les lignes sorties doivent être figées dans le scrollback"
         );
     }
@@ -3886,11 +6038,12 @@ mod tests {
         );
 
         assert!(renderer.current.is_none());
+        assert!(renderer.retained.is_some());
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("Question"));
         assert!(output.contains("Réponse live"));
         assert!(output.contains("historique rattrapé jusqu’à 1"));
-        assert!(output.contains("tour terminé : end_turn"));
+        assert!(!output.contains("tour terminé : end_turn"));
     }
 
     #[test]
@@ -4283,6 +6436,538 @@ mod tests {
     }
 
     #[test]
+    fn spec093_tty_rend_markdown_sous_un_label_atteste_sans_indent_uuid() {
+        let agent_id = "550e8400-e29b-41d4-a716-446655440003";
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new(agent_id.to_string(), true, true);
+        renderer.terminal_fd = None;
+        renderer.terminal_columns = 80;
+        renderer.terminal_rows = 40;
+        renderer.color = true;
+        let mut output = Vec::new();
+        renderer.apply(
+            RendererCommand::Presence(Some(Box::new(presence_fixture())), Instant::now()),
+            &input,
+            &mut output,
+        );
+        for (seq, event, payload) in [
+            (
+                1,
+                "turn_start",
+                json!({"from":"humain","body":"Montre-moi"}),
+            ),
+            (
+                2,
+                "update",
+                json!({"kind":"text","content":"# Titre\n\n- **un**\n- *deux*\n\n```rust\nlet x = 1;\n```"}),
+            ),
+        ] {
+            renderer.apply(
+                RendererCommand::Event(AttachEvent::Journal {
+                    seq,
+                    bytes: journal_record(seq, event, payload),
+                    live: true,
+                }),
+                &input,
+                &mut output,
+            );
+        }
+
+        assert_eq!(
+            renderer.agent, agent_id,
+            "l'identité de routage ne change pas"
+        );
+        assert!(
+            renderer
+                .rendered_lines
+                .iter()
+                .any(|line| line == "communication-091 ›")
+        );
+        assert!(renderer.rendered_lines.iter().any(|line| line == "Titre"));
+        assert!(renderer.rendered_lines.iter().any(|line| line == "• un"));
+        assert!(renderer.rendered_lines.iter().any(|line| line == "• deux"));
+        assert!(
+            renderer
+                .rendered_lines
+                .iter()
+                .any(|line| line == "  let x = 1;")
+        );
+        assert!(
+            renderer
+                .rendered_lines
+                .iter()
+                .all(|line| !line.contains("```"))
+        );
+        assert!(
+            renderer
+                .rendered_lines
+                .iter()
+                .all(|line| !line.starts_with(&" ".repeat(37)))
+        );
+        assert!(output.windows(2).any(|bytes| bytes == b"\x1b["));
+    }
+
+    #[test]
+    fn spec093_label_inconnu_reste_un_uuid_court_cosmetique() {
+        let agent_id = "550e8400-e29b-41d4-a716-446655440003";
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new(agent_id.to_string(), false, true);
+        renderer.terminal_fd = None;
+        renderer.terminal_rows = 20;
+        let mut output = Vec::new();
+        for (seq, event, payload) in [
+            (1, "turn_start", json!({"from":"humain","body":"Question"})),
+            (2, "update", json!({"kind":"text","content":"réponse"})),
+        ] {
+            renderer.apply(
+                RendererCommand::Event(AttachEvent::Journal {
+                    seq,
+                    bytes: journal_record(seq, event, payload),
+                    live: true,
+                }),
+                &input,
+                &mut output,
+            );
+        }
+        assert!(
+            renderer
+                .rendered_lines
+                .iter()
+                .any(|line| line == "550e8400 ›")
+        );
+        assert!(
+            renderer
+                .rendered_lines
+                .iter()
+                .all(|line| !line.contains(agent_id))
+        );
+        assert_eq!(
+            renderer.agent, agent_id,
+            "le label ne devient jamais une adresse"
+        );
+    }
+
+    #[test]
+    fn spec093_tty_masque_reasoning_et_fin_reussie_mais_garde_les_echecs() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), false, true);
+        renderer.terminal_fd = None;
+        renderer.terminal_rows = 40;
+        let mut output = Vec::new();
+        for (seq, event, payload) in [
+            (1, "turn_start", json!({"from":"humain","body":"Question"})),
+            (
+                2,
+                "reasoning",
+                json!({"available":true,"summary":"secret de raisonnement"}),
+            ),
+            (
+                3,
+                "update",
+                json!({
+                    "kind":"refusal",
+                    "text":"sandbox interdit",
+                    "layer":"provider_sandbox",
+                    "evidence":"output_and_exit"
+                }),
+            ),
+            (4, "update", json!({"kind":"text","content":"Réponse"})),
+            (5, "turn_end", json!({"stop_reason":"completed"})),
+        ] {
+            renderer.apply(
+                RendererCommand::Event(AttachEvent::Journal {
+                    seq,
+                    bytes: journal_record(seq, event, payload),
+                    live: true,
+                }),
+                &input,
+                &mut output,
+            );
+        }
+        assert!(renderer.current.is_none());
+        let retained = renderer
+            .retained
+            .as_ref()
+            .expect("dernière réponse retenue");
+        assert!(
+            retained
+                .details
+                .iter()
+                .all(|line| !line.contains("raisonnement"))
+        );
+        assert!(
+            retained.details.iter().any(|line| {
+                line.contains("[refus Bridget]") && line.contains("sandbox interdit")
+            })
+        );
+        let visible = String::from_utf8_lossy(&output);
+        assert!(!visible.contains("secret de raisonnement"));
+        assert!(!visible.contains("tour terminé : completed"));
+
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 6,
+                bytes: journal_record(6, "turn_end", json!({"stop_reason":"interrupted"})),
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+        assert!(String::from_utf8_lossy(&output).contains("interrupted"));
+
+        let mut diagnostic = BlockRenderer::new("codex-1".to_string(), false, false);
+        let mut diagnostic_output = Vec::new();
+        diagnostic.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 7,
+                bytes: journal_record(
+                    7,
+                    "reasoning",
+                    json!({"available":true,"summary":"diagnostic conservé"}),
+                ),
+                live: true,
+            }),
+            &input,
+            &mut diagnostic_output,
+        );
+        assert!(String::from_utf8_lossy(&diagnostic_output).contains("diagnostic conservé"));
+    }
+
+    #[test]
+    fn spec093_fin_reussie_non_correlee_reste_visible_et_evacue_le_tour_incomplet() {
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), false, true);
+        renderer.terminal_fd = None;
+        renderer.terminal_rows = 40;
+        let mut output = Vec::new();
+        for (seq, event, payload) in [
+            (1, "turn_start", json!({"from":"humain","body":"Question"})),
+            (
+                2,
+                "update",
+                json!({"kind":"text","content":"Réponse partielle"}),
+            ),
+        ] {
+            renderer.apply(
+                RendererCommand::Event(AttachEvent::Journal {
+                    seq,
+                    bytes: journal_record(seq, event, payload),
+                    live: true,
+                }),
+                &input,
+                &mut output,
+            );
+        }
+        let uncorrelated = serde_json::to_vec(&json!({
+            "v": 1,
+            "seq": 3,
+            "ts": "2026-08-23T09:07:00Z",
+            "event": "turn_end",
+            "payload": {"stop_reason":"completed"},
+        }))
+        .unwrap();
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 3,
+                bytes: uncorrelated,
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 4,
+                bytes: journal_record_for_turn(
+                    4,
+                    "session-2",
+                    "message-2",
+                    "turn_start",
+                    json!({"from":"humain","body":"Suite"}),
+                ),
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+
+        let visible = String::from_utf8_lossy(&output);
+        assert!(visible.contains("tour incomplet"));
+        assert!(visible.contains("completed"));
+        assert_eq!(
+            renderer
+                .current
+                .as_ref()
+                .map(|block| block.key.session_id.as_str()),
+            Some("session-2")
+        );
+    }
+
+    #[test]
+    fn spec093_resize_sans_evenement_replie_derniere_reponse_et_preserve_footer() {
+        let pseudo_tty = PseudoTerminal::open();
+        pseudo_tty.set_size(30, 100);
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: b"brouillon intact".to_vec(),
+            ..InputBuffer::default()
+        }));
+        let mut renderer = BlockRenderer::new(
+            "550e8400-e29b-41d4-a716-446655440003".to_string(),
+            true,
+            true,
+        );
+        renderer.terminal_fd = Some(pseudo_tty.slave);
+        renderer.terminal_columns = 100;
+        renderer.terminal_rows = 30;
+        renderer.color = true;
+        let mut output = Vec::new();
+        renderer.apply(
+            RendererCommand::Presence(Some(Box::new(presence_fixture())), Instant::now()),
+            &input,
+            &mut output,
+        );
+        let response = format!("# Largeur\n\n{}", "mot ".repeat(35));
+        for (seq, event, payload) in [
+            (1, "turn_start", json!({"from":"humain","body":"Question"})),
+            (2, "update", json!({"kind":"text","content":response})),
+            (3, "turn_end", json!({"stop_reason":"end_turn"})),
+        ] {
+            renderer.apply(
+                RendererCommand::Event(AttachEvent::Journal {
+                    seq,
+                    bytes: journal_record(seq, event, payload),
+                    live: true,
+                }),
+                &input,
+                &mut output,
+            );
+        }
+        assert!(renderer.retained.is_some());
+        let wide_rows = renderer.rendered_lines.len();
+
+        pseudo_tty.set_size(30, 45);
+        assert!(renderer.refresh_geometry(&mut output));
+        renderer.redraw(&input_snapshot(&input), &mut output);
+        let narrow_rows = renderer.rendered_lines.len();
+        assert!(narrow_rows > wide_rows);
+        assert!(
+            renderer
+                .rendered_lines
+                .iter()
+                .all(|line| display_width(line) <= 45)
+        );
+        assert!(
+            renderer
+                .rendered_lines
+                .iter()
+                .any(|line| line.contains("brouillon intact"))
+        );
+        assert!(
+            renderer
+                .rendered_lines
+                .iter()
+                .any(|line| line.contains("modèle glm-exemple"))
+        );
+
+        pseudo_tty.set_size(30, 100);
+        assert!(renderer.refresh_geometry(&mut output));
+        renderer.redraw(&input_snapshot(&input), &mut output);
+        assert_eq!(input.lock().unwrap().display(), "brouillon intact");
+        assert!(renderer.retained.is_some());
+        assert!(renderer.rendered_lines.len() < narrow_rows);
+
+        pseudo_tty.set_size(30, 45);
+        assert!(renderer.refresh_geometry(&mut output));
+        renderer.redraw(&input_snapshot(&input), &mut output);
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 4,
+                bytes: journal_record(4, "turn_start", json!({"from":"humain","body":"Suite"})),
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 5,
+                bytes: journal_record(
+                    5,
+                    "update",
+                    json!({"kind":"text","content":"nouveau ".repeat(12)}),
+                ),
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+        assert!(renderer.current.is_some());
+        assert!(renderer.retained.is_none());
+        assert!(
+            renderer
+                .rendered_lines
+                .iter()
+                .all(|line| display_width(line) <= 45)
+        );
+    }
+
+    #[test]
+    fn spec093_bloc_deja_evacue_fige_label_et_header_logiques() {
+        let agent_id = "550e8400-e29b-41d4-a716-446655440003";
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let mut renderer = BlockRenderer::new(agent_id.to_string(), false, true);
+        renderer.terminal_fd = None;
+        renderer.terminal_columns = 32;
+        renderer.terminal_rows = 5;
+        let mut output = Vec::new();
+        for (seq, event, payload) in [
+            (1, "turn_start", json!({})),
+            (
+                2,
+                "update",
+                json!({"kind":"text","content":"sentinelle ".repeat(40)}),
+            ),
+        ] {
+            renderer.apply(
+                RendererCommand::Event(AttachEvent::Journal {
+                    seq,
+                    bytes: journal_record(seq, event, payload),
+                    live: true,
+                }),
+                &input,
+                &mut output,
+            );
+        }
+        assert!(renderer.committed_units > 0);
+        let frozen = renderer
+            .frozen_agent_label
+            .clone()
+            .expect("label figé au premier débordement");
+        let logical_before = renderer
+            .current
+            .as_ref()
+            .unwrap()
+            .rendered_lines(&frozen, renderer.terminal_columns);
+
+        let mut presence = presence_fixture();
+        presence.display_name = "nom-attesté-beaucoup-plus-long".to_string();
+        renderer.apply(
+            RendererCommand::Presence(Some(Box::new(presence)), Instant::now()),
+            &input,
+            &mut output,
+        );
+        let mut presence = presence_fixture();
+        presence.display_name = "court".to_string();
+        renderer.apply(
+            RendererCommand::Presence(Some(Box::new(presence)), Instant::now()),
+            &input,
+            &mut output,
+        );
+        renderer.apply(
+            RendererCommand::Event(AttachEvent::Journal {
+                seq: 3,
+                bytes: journal_record(
+                    3,
+                    "prompt_dispatched",
+                    json!({"from":"humain","body":"en-tête attesté tardif"}),
+                ),
+                live: true,
+            }),
+            &input,
+            &mut output,
+        );
+
+        assert_eq!(
+            renderer.frozen_agent_label.as_deref(),
+            Some(frozen.as_str())
+        );
+        assert_eq!(renderer.agent_label, "court");
+        assert_eq!(
+            renderer
+                .current
+                .as_ref()
+                .unwrap()
+                .rendered_lines(&frozen, renderer.terminal_columns),
+            logical_before,
+            "la queue logique ne doit pas se décaler après engagement"
+        );
+    }
+
+    #[test]
+    fn spec093_renderer_loop_reagit_au_resize_sans_commande_ni_frappe() {
+        let pseudo_tty = PseudoTerminal::open();
+        pseudo_tty.set_size(12, 100);
+        let mut output = pseudo_tty.slave_writer();
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let dirty = Arc::new(AtomicBool::new(false));
+        let (commands, command_rx) = mpsc::sync_channel(RENDER_COMMAND_CAPACITY);
+        let (control, control_rx) = mpsc::channel();
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), true, true);
+        renderer.terminal_fd = Some(pseudo_tty.slave);
+        renderer.terminal_columns = 100;
+        renderer.terminal_rows = 12;
+        let handle = thread::spawn(move || {
+            renderer_loop(&mut output, renderer, input, dirty, command_rx, control_rx);
+        });
+
+        for (seq, event, payload) in [
+            (1, "turn_start", json!({"from":"humain","body":"Question"})),
+            (
+                2,
+                "update",
+                json!({"kind":"text","content":"réponse redimensionnable ".repeat(6)}),
+            ),
+        ] {
+            commands
+                .send(RendererCommand::Event(AttachEvent::Journal {
+                    seq,
+                    bytes: journal_record(seq, event, payload),
+                    live: true,
+                }))
+                .unwrap();
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut initial = Vec::new();
+        while !initial
+            .windows("réponse redimensionnable".len())
+            .any(|bytes| bytes == "réponse redimensionnable".as_bytes())
+        {
+            initial.extend(pseudo_tty.read_available());
+            assert!(Instant::now() < deadline, "rendu initial absent du PTY");
+            thread::yield_now();
+        }
+        initial.extend(pseudo_tty.read_available());
+
+        // À partir d'ici, TIOCSWINSZ est la seule entrée avant l'observation.
+        pseudo_tty.set_size(12, 45);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut resized = Vec::new();
+        while !(resized.windows(4).any(|bytes| bytes == b"\x1b[2K")
+            && resized
+                .windows("réponse".len())
+                .any(|bytes| bytes == "réponse".as_bytes()))
+        {
+            resized.extend(pseudo_tty.read_available());
+            assert!(
+                Instant::now() < deadline,
+                "aucun repaint autonome après resize"
+            );
+            thread::yield_now();
+        }
+        assert!(
+            resized
+                .windows("réponse".len())
+                .any(|bytes| bytes == "réponse".as_bytes()),
+            "le repaint doit reprojeter la réponse, pas seulement effacer; octets réels: {resized:?}; texte lossy: {:?}",
+            String::from_utf8_lossy(&resized)
+        );
+
+        control.send(RendererControl::Stop).unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
     fn bloc_borne_affiche_sa_troncature() {
         let mut block = TurnBlock::new(
             TurnKey {
@@ -4332,20 +7017,24 @@ mod tests {
         sender.input_changed(b"x");
         assert!(dirty.load(Ordering::Acquire));
 
-        with_raw_terminal(pseudo_terminal.slave, |raw_terminal| {
-            assert!(raw_terminal);
-            let (write_stream, _) = UnixStream::pair().unwrap();
-            let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
-            let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
-            let input = Arc::new(Mutex::new(InputBuffer::default()));
-            assert!(!handle_input_byte(
-                0x03, &state, &input, &sender, &writer, "codex-1",
-            )?);
-            let (control_tx, control_rx) = mpsc::channel();
-            control_tx.send(RendererControl::Stop).unwrap();
-            assert!(matches!(control_rx.try_recv(), Ok(RendererControl::Stop)));
-            Ok(())
-        })
+        with_raw_terminal(
+            pseudo_terminal.slave,
+            pseudo_terminal.slave,
+            |raw_terminal| {
+                assert!(raw_terminal);
+                let (write_stream, _) = UnixStream::pair().unwrap();
+                let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+                let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+                let input = Arc::new(Mutex::new(InputBuffer::default()));
+                assert!(!handle_input_byte(
+                    0x03, &state, &input, &sender, &writer, "codex-1",
+                )?);
+                let (control_tx, control_rx) = mpsc::channel();
+                control_tx.send(RendererControl::Stop).unwrap();
+                assert!(matches!(control_rx.try_recv(), Ok(RendererControl::Stop)));
+                Ok(())
+            },
+        )
         .unwrap();
         assert_terminal_restored(&before, &pseudo_terminal.attrs());
         assert!(matches!(
@@ -4794,6 +7483,71 @@ mod tests {
     }
 
     #[test]
+    fn spec092_rappel_redessine_le_tampon_tty_avec_statut_et_curseur() {
+        let pseudo_tty = PseudoTerminal::open();
+        pseudo_tty.set_size(8, 40);
+        let mut output = pseudo_tty.slave_writer();
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: b"brouillon".to_vec(),
+            ..InputBuffer::default()
+        }));
+        {
+            let mut input = input.lock().unwrap();
+            input.remember(b"A".to_vec());
+            input.remember("réponse\nsuite".as_bytes().to_vec());
+        }
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let (socket, _) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(socket)));
+        let (commands, command_rx) = mpsc::sync_channel(RENDER_COMMAND_CAPACITY);
+        let sender = RendererSender {
+            commands,
+            input_dirty: Arc::new(AtomicBool::new(false)),
+            raw_terminal: true,
+            tty_output: true,
+        };
+        let mut renderer = BlockRenderer::new("codex-1".to_string(), true, true);
+        renderer.terminal_fd = Some(pseudo_tty.slave);
+        (renderer.terminal_columns, renderer.terminal_rows) =
+            terminal_geometry(pseudo_tty.slave).unwrap();
+        renderer.color = true;
+        renderer.apply(
+            RendererCommand::Presence(Some(Box::new(presence_fixture())), Instant::now()),
+            &input,
+            &mut output,
+        );
+        let _ = pseudo_tty.read_available();
+
+        for byte in b"\x1b[A" {
+            handle_input_byte(*byte, &state, &input, &sender, &writer, "codex-1").unwrap();
+        }
+        while let Ok(command) = command_rx.try_recv() {
+            renderer.apply(command, &input, &mut output);
+        }
+        let rendered = pseudo_tty.read_available();
+        assert_eq!(input.lock().unwrap().display(), "réponse\nsuite");
+        assert!(
+            renderer
+                .rendered_lines
+                .iter()
+                .any(|line| line == "> réponse")
+        );
+        assert!(renderer.rendered_lines.iter().any(|line| line == "suite"));
+        assert!(
+            renderer
+                .rendered_lines
+                .iter()
+                .any(|line| line.contains("Claude Code"))
+        );
+        assert!(
+            rendered
+                .windows(SGR_INPUT.len())
+                .any(|bytes| bytes == SGR_INPUT.as_bytes())
+        );
+        assert!(rendered.ends_with(b"\r\x1b[5C"));
+    }
+
+    #[test]
     fn expiration_d_un_envoi_est_terminale_et_affiche_son_motif() {
         let mut state = AttachClientState::new(AttachWindow::Today);
         let now = Instant::now();
@@ -4879,7 +7633,7 @@ mod tests {
             event_rendered_rx
                 .recv_timeout(Duration::from_secs(2))
                 .unwrap();
-            assert_eq!(input_writer.write(b"dernier envoi\n").unwrap(), 14);
+            assert_eq!(input_writer.write(b"dernier envoi\r").unwrap(), 14);
             input_writer.shutdown(Shutdown::Write).unwrap();
         });
         let mut state = AttachClientState::new(AttachWindow::Today);
@@ -4890,17 +7644,21 @@ mod tests {
                 subscription_id: "sub-pty".to_string(),
             })
             .unwrap();
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
 
-        let result = with_raw_terminal(pseudo_tty.slave, |raw_terminal| {
+        let result = with_raw_terminal(pseudo_tty.slave, pseudo_tty.slave, |raw_terminal| {
             input_start_tx.send(()).unwrap();
             drive_interactive(
                 connection,
                 &mut state,
                 "codex-1",
                 Path::new("/tmp/bridget-attach-pty-unused.sock"),
-                input_reader.as_raw_fd(),
-                raw_terminal,
-                true,
+                InteractiveInput {
+                    fd: input_reader.as_raw_fd(),
+                    buffer: &input,
+                    raw_terminal,
+                    tty_output: true,
+                },
             )
         });
         assert!(result.is_ok());
@@ -4923,7 +7681,7 @@ mod tests {
             bytes: "réponse".as_bytes().to_vec(),
             ..InputBuffer::default()
         };
-        assert!(input.erase_last());
+        assert!(input.erase_before_cursor());
         assert_eq!(input.display(), "répons");
     }
 
@@ -5619,10 +8377,223 @@ mod tests {
     }
 
     #[test]
-    fn raw_mode_lit_ctrl_c_comme_octet_et_restaure_le_pseudo_tty() {
+    fn spec092_mode_clavier_push_pop_est_symetrique_inerte_et_absent_en_mode_degrade() {
         let pseudo_tty = PseudoTerminal::open();
         let before = pseudo_tty.attrs();
-        let mut raw = RawTerminal::enable_for_fd(pseudo_tty.slave)
+        let mut raw = RawTerminal::enable_for_fd_with_keyboard(pseudo_tty.slave, true)
+            .unwrap()
+            .expect("pseudo-TTY détecté");
+        assert_eq!(pseudo_tty.read_available(), KEYBOARD_PROTOCOL_PUSH);
+        raw.restore().unwrap();
+        assert_eq!(pseudo_tty.read_available(), KEYBOARD_PROTOCOL_POP);
+        raw.restore().unwrap();
+        assert!(pseudo_tty.read_available().is_empty());
+        assert_terminal_restored(&before, &pseudo_tty.attrs());
+
+        let dumb_tty = PseudoTerminal::open();
+        let mut dumb = RawTerminal::enable_for_fd_with_keyboard(dumb_tty.slave, false)
+            .unwrap()
+            .expect("pseudo-TTY détecté");
+        assert!(dumb_tty.read_available().is_empty());
+        dumb.restore().unwrap();
+        assert!(dumb_tty.read_available().is_empty());
+
+        let mut pipe = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        assert!(
+            RawTerminal::enable_for_fd_with_keyboard(pipe[0], true)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(unsafe { libc::close(pipe[0]) }, 0);
+        assert_eq!(unsafe { libc::close(pipe[1]) }, 0);
+    }
+
+    #[test]
+    fn spec092_mode_clavier_exige_stdin_et_stdout_tty() {
+        let pseudo_tty = PseudoTerminal::open();
+        let before = pseudo_tty.attrs();
+        let mut output_pipe = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(output_pipe.as_mut_ptr()) }, 0);
+
+        let mut raw = RawTerminal::enable_for_fds(pseudo_tty.slave, output_pipe[1])
+            .unwrap()
+            .expect("stdin pseudo-TTY détecté");
+        assert!(pseudo_tty.read_available().is_empty());
+        raw.restore().unwrap();
+        assert!(pseudo_tty.read_available().is_empty());
+        assert_terminal_restored(&before, &pseudo_tty.attrs());
+        let flags = unsafe { libc::fcntl(output_pipe[0], libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe { libc::fcntl(output_pipe[0], libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0
+        );
+        let mut byte = 0_u8;
+        assert_eq!(
+            unsafe { libc::read(output_pipe[0], (&mut byte as *mut u8).cast(), 1) },
+            -1
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "stdout redirigé ne reçoit aucun contrôle clavier"
+        );
+
+        assert_eq!(unsafe { libc::close(output_pipe[0]) }, 0);
+        assert_eq!(unsafe { libc::close(output_pipe[1]) }, 0);
+    }
+
+    #[test]
+    fn spec092_us5_garde_double_tty_preserve_cr_lf_et_restaure_les_conversions() {
+        let pseudo_tty = PseudoTerminal::open();
+        let mut configured = pseudo_tty.attrs();
+        let conversions = (libc::ICRNL | libc::INLCR | libc::IGNCR) as libc::tcflag_t;
+        configured.c_iflag |= conversions;
+        assert_eq!(
+            unsafe { libc::tcsetattr(pseudo_tty.slave, libc::TCSANOW, &configured) },
+            0,
+            "préparation termios: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let mut raw =
+            RawTerminal::enable_for_fds_with_keyboard(pseudo_tty.slave, pseudo_tty.slave, false)
+                .unwrap()
+                .expect("double pseudo-TTY détecté sans dépendre du mode Kitty");
+        assert_eq!(
+            pseudo_tty.attrs().c_iflag & conversions,
+            0,
+            "la garde double-TTY doit neutraliser les trois conversions CR/LF"
+        );
+        assert_eq!(
+            unsafe { libc::write(pseudo_tty.master, b"\n\r".as_ptr().cast(), 2) },
+            2
+        );
+        let mut observed = [0_u8; 2];
+        let mut reader = pseudo_tty.slave_reader();
+        reader.read_exact(&mut observed).unwrap();
+        assert_eq!(observed, *b"\n\r");
+
+        let (write_stream, mut read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer {
+            bytes: b"pty".to_vec(),
+            ..InputBuffer::default()
+        }));
+        let renderer = test_renderer_sender(true, true);
+        assert!(
+            handle_input_byte(observed[0], &state, &input, &renderer, &writer, "codex-1").unwrap()
+        );
+        assert_eq!(input_snapshot(&input).text, "pty\n");
+        read_stream.set_nonblocking(true).unwrap();
+        let mut unexpected = [0_u8; 1];
+        assert_eq!(
+            read_stream.read(&mut unexpected).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        read_stream.set_nonblocking(false).unwrap();
+        assert!(
+            handle_input_byte(observed[1], &state, &input, &renderer, &writer, "codex-1").unwrap()
+        );
+        assert_eq!(read_sent_body(read_stream), "pty\n");
+        raw.restore().unwrap();
+        assert_eq!(pseudo_tty.attrs().c_iflag, configured.c_iflag);
+        assert_terminal_restored(&configured, &pseudo_tty.attrs());
+
+        let redirected = PseudoTerminal::open();
+        let mut redirected_configured = redirected.attrs();
+        redirected_configured.c_iflag |= conversions;
+        assert_eq!(
+            unsafe { libc::tcsetattr(redirected.slave, libc::TCSANOW, &redirected_configured,) },
+            0
+        );
+        let mut output_pipe = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(output_pipe.as_mut_ptr()) }, 0);
+        let mut redirected_raw = RawTerminal::enable_for_fds(redirected.slave, output_pipe[1])
+            .unwrap()
+            .expect("stdin TTY détecté avec stdout redirigé");
+        assert_eq!(redirected.attrs().c_iflag & conversions, conversions);
+        redirected_raw.restore().unwrap();
+        assert_eq!(redirected.attrs().c_iflag, redirected_configured.c_iflag);
+        assert_eq!(unsafe { libc::close(output_pipe[0]) }, 0);
+        assert_eq!(unsafe { libc::close(output_pipe[1]) }, 0);
+    }
+
+    #[test]
+    fn spec092_mode_clavier_ecrit_sur_stdout_et_restaure_apres_echec_activation() {
+        let pseudo_tty = PseudoTerminal::open();
+        let before = pseudo_tty.attrs();
+        let input = pseudo_tty.slave_reader();
+        let input_flags = unsafe { libc::fcntl(input.as_raw_fd(), libc::F_GETFL) };
+        assert!(input_flags >= 0);
+        assert_eq!(input_flags & libc::O_ACCMODE, libc::O_RDONLY);
+
+        let mut raw =
+            RawTerminal::enable_for_fds_with_keyboard(input.as_raw_fd(), pseudo_tty.slave, true)
+                .unwrap()
+                .expect("stdin pseudo-TTY en lecture seule détecté");
+        assert_eq!(pseudo_tty.read_available(), KEYBOARD_PROTOCOL_PUSH);
+        raw.restore().unwrap();
+        assert_eq!(pseudo_tty.read_available(), KEYBOARD_PROTOCOL_POP);
+        assert_terminal_restored(&before, &pseudo_tty.attrs());
+
+        let mut invalid_output = [-1; 2];
+        assert_eq!(unsafe { libc::pipe(invalid_output.as_mut_ptr()) }, 0);
+        let error =
+            RawTerminal::enable_for_fds_with_keyboard(pseudo_tty.slave, invalid_output[0], true)
+                .err()
+                .expect("le fd de lecture refuse l'écriture du push clavier");
+        assert!(error.contains("activation du protocole clavier impossible"));
+        assert_terminal_restored(&before, &pseudo_tty.attrs());
+        assert_eq!(unsafe { libc::close(invalid_output[0]) }, 0);
+        assert_eq!(unsafe { libc::close(invalid_output[1]) }, 0);
+    }
+
+    #[test]
+    fn spec092_pseudo_tty_livre_shift_entree_fragmente_au_vrai_handler() {
+        let pseudo_tty = PseudoTerminal::open();
+        let mut raw = RawTerminal::enable_for_fd_with_keyboard(pseudo_tty.slave, true)
+            .unwrap()
+            .expect("pseudo-TTY détecté");
+        assert_eq!(pseudo_tty.read_available(), KEYBOARD_PROTOCOL_PUSH);
+        let (write_stream, read_stream) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(write_stream)));
+        let state = Arc::new(Mutex::new(AttachClientState::new(AttachWindow::Today)));
+        let input = Arc::new(Mutex::new(InputBuffer::default()));
+        let renderer = test_renderer_sender(true, false);
+
+        for injected in b"premiere\x1b[13;2useconde\r" {
+            let injected = [*injected];
+            assert_eq!(
+                unsafe { libc::write(pseudo_tty.master, injected.as_ptr().cast(), 1) },
+                1
+            );
+            let mut observed = 0_u8;
+            assert_eq!(
+                unsafe { libc::read(pseudo_tty.slave, (&mut observed as *mut u8).cast(), 1) },
+                1
+            );
+            assert!(
+                handle_input_byte(observed, &state, &input, &renderer, &writer, "codex-1").unwrap()
+            );
+        }
+        let mut line = String::new();
+        BufReader::new(read_stream).read_line(&mut line).unwrap();
+        let WrapperToDaemon::Send(message) = decode(line.trim_end()).unwrap() else {
+            panic!("Send attendu");
+        };
+        assert_eq!(message.body, "premiere\nseconde");
+        raw.restore().unwrap();
+        assert_eq!(pseudo_tty.read_available(), KEYBOARD_PROTOCOL_POP);
+    }
+
+    #[test]
+    fn spec092_mode_clavier_lit_ctrl_c_et_restaure_push_pop() {
+        let pseudo_tty = PseudoTerminal::open();
+        let before = pseudo_tty.attrs();
+        let mut raw = RawTerminal::enable_for_fd_with_keyboard(pseudo_tty.slave, true)
             .unwrap()
             .expect("pseudo-TTY détecté");
         let active = pseudo_tty.attrs();
@@ -5641,10 +8612,14 @@ mod tests {
 
         raw.restore().unwrap();
         assert_terminal_restored(&before, &pseudo_tty.attrs());
+        assert_eq!(
+            pseudo_tty.read_available(),
+            [KEYBOARD_PROTOCOL_PUSH, KEYBOARD_PROTOCOL_POP].concat()
+        );
     }
 
     #[test]
-    fn raw_mode_restaure_le_terminal_apres_eof_du_pseudo_tty() {
+    fn spec092_mode_clavier_restaure_push_pop_apres_eof() {
         let pseudo_tty = PseudoTerminal::open();
         let before = pseudo_tty.attrs();
         let (write_stream, _) = UnixStream::pair().unwrap();
@@ -5653,8 +8628,10 @@ mod tests {
         let input = Arc::new(Mutex::new(InputBuffer::default()));
         let renderer = test_renderer_sender(true, false);
 
-        with_raw_terminal(pseudo_tty.slave, |raw_terminal| {
-            assert!(raw_terminal, "le pseudo-TTY doit activer le mode raw");
+        {
+            let _raw = RawTerminal::enable_for_fd_with_keyboard(pseudo_tty.slave, true)
+                .unwrap()
+                .expect("pseudo-TTY détecté");
             assert_eq!(
                 unsafe { libc::write(pseudo_tty.master, [0x04_u8].as_ptr().cast(), 1) },
                 1
@@ -5665,29 +8642,36 @@ mod tests {
                 1
             );
             assert_eq!(byte, 0x04, "Ctrl-D doit arriver à la boucle de saisie");
-            assert!(!handle_input_byte(
-                byte, &state, &input, &renderer, &writer, "codex-1",
-            )?);
-            Ok::<(), String>(())
-        })
-        .unwrap();
+            assert!(
+                !handle_input_byte(byte, &state, &input, &renderer, &writer, "codex-1",).unwrap()
+            );
+        }
         assert_terminal_restored(&before, &pseudo_tty.attrs());
+        assert_eq!(
+            pseudo_tty.read_available(),
+            [KEYBOARD_PROTOCOL_PUSH, KEYBOARD_PROTOCOL_POP].concat()
+        );
     }
 
     #[test]
-    fn garde_raw_restaure_le_terminal_sur_erreur_et_degrade_un_pipe() {
+    fn spec092_mode_clavier_restaure_push_pop_sur_erreur_et_degrade_un_pipe() {
         let pseudo_tty = PseudoTerminal::open();
         let before = pseudo_tty.attrs();
-        let result = with_raw_terminal(pseudo_tty.slave, |interactive| {
-            assert!(interactive);
+        let result = (|| {
+            let _raw = RawTerminal::enable_for_fd_with_keyboard(pseudo_tty.slave, true)?
+                .expect("pseudo-TTY détecté");
             Err::<(), _>("erreur de boucle simulée".to_string())
-        });
+        })();
         assert_eq!(result.unwrap_err(), "erreur de boucle simulée");
         assert_terminal_restored(&before, &pseudo_tty.attrs());
+        assert_eq!(
+            pseudo_tty.read_available(),
+            [KEYBOARD_PROTOCOL_PUSH, KEYBOARD_PROTOCOL_POP].concat()
+        );
 
         let mut pipe = [-1; 2];
         assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
-        let result = with_raw_terminal(pipe[0], |interactive| {
+        let result = with_raw_terminal(pipe[0], pipe[1], |interactive| {
             assert!(!interactive, "un pipe ne passe jamais en raw mode");
             Ok::<_, String>(())
         });
@@ -5701,9 +8685,11 @@ mod tests {
         let pseudo_tty = PseudoTerminal::open();
         let before = pseudo_tty.attrs();
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = with_raw_terminal(pseudo_tty.slave, |_interactive| -> Result<(), String> {
-                panic!("panic de boucle simulée")
-            });
+            let _ = with_raw_terminal(
+                pseudo_tty.slave,
+                pseudo_tty.slave,
+                |_interactive| -> Result<(), String> { panic!("panic de boucle simulée") },
+            );
         }));
         assert!(panic.is_err());
         assert_terminal_restored(&before, &pseudo_tty.attrs());

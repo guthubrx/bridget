@@ -47,13 +47,41 @@ Replace placeholders with identifiers from the directory and received message.
 Never shorten its ID. `bridget reply` targets the last remembered sender; explicit
 target and correlation are safer when several requests coexist.
 
-An address is a UUID. `bridget rename "Team B"` changes only its display name from
-the owning session. Neither a provider name nor `--from` grants another identity.
+An address is a UUID. `bridget rename "Team B"` or `bridget_rename` changes only
+the owning session's display name; retries, instance and history stay bound to
+the same identity. Neither a provider name nor `--from` grants another identity.
 
-MCP tools `bridget_who`, `bridget_send`, `bridget_cancel`, `bridget_ledger` use the same socket.
-Reply with `to`, `body` and `in_reply_to`. The packaged
-[skill](skills/bridget/SKILL.md) provides examples and retry guidance; global
-profiles are never modified automatically.
+The 094 contract documents a closed list of twelve Bridget tools:
+`bridget_who`, `bridget_send`, `bridget_cancel`, `bridget_ledger`, both artifact
+tools and the six additions `bridget_rename`, `bridget_dnd`, `bridget_domain`,
+`bridget_runtime`, `bridget_status`, `bridget_control_status`. They use the same
+authority; this list is neither global MCP approval nor automatic permission for
+Maicie tools. Reply with `to`, `body` and `in_reply_to`. The packaged
+[skill](skills/bridget/SKILL.md) provides examples and retry guidance, while its
+[094 command inventory](skills/bridget/references/commandes.md) classifies every
+CLI root. These files do not prove which binary is installed or which catalogue
+an already-running MCP session holds, and global profiles are never modified
+automatically.
+
+## Administer an SSH federation
+
+The 096 binary embeds the federation manager, so ordinary human use no longer
+depends on a repository or script path.
+
+```sh
+bridget federate ssh://cartae.app -p 2222
+bridget federate status
+bridget federate remove ssh://cartae.app -p 2222 --label cartae-core
+```
+
+The first command reuses an attested installation without mutation when the DNS
+name resolves to its recorded IP. DNS never replaces the stored SSH target or
+the explicit `known_hosts` file. `status` is a local inventory and performs no
+SSH operation. Removing a link found only through a DNS alias requires `--label`
+outside a double TTY; a double TTY may instead confirm the displayed label,
+recorded host and port. Missing values for a new destination are prompted only
+when both stdin and stdout are terminals; otherwise the command fails with the
+required flags. See [the federation service guide](docs/federation-services.md).
 
 ## Native interactive Codex, without tmux (session 090)
 
@@ -77,9 +105,11 @@ under human control; managed-session permissive defaults are never inherited.
 Explicit model/profile/configuration, sandbox and approval options are forwarded.
 
 Verified contract: Codex **0.153.4**, experimental Unix remote connection and
-`legacy` history. One thread per launch: `/new`, `/resume` to another thread,
-forks and internal Codex subagents loading a second thread end the integration
-instead of leaving the address bound to an old thread. Other Bridget agents
+`legacy` history. One Bridget identity is bound to the initial thread. Internal
+subagents belong to Codex: creating/resuming them neither closes the session nor
+registers another Bridget identity. Other-thread notifications do not change the
+message destination. The integration does not implicitly follow `/new` or
+`/resume` navigation: relaunch Bridget to address another conversation. Other Bridget agents
 remain independent and reachable. Quit and relaunch to change directory.
 This first version rejects `--cd`, images and local providers;
 unsupported options are rejected rather than silently ignored.
@@ -174,10 +204,38 @@ effort and state from the same inventory as `who`. Without refreshed data it bec
 unavailable. The actual provider is never inferred from “Claude” or “Codex”.
 Native Codex commands and approval requests are rendered as sanitized facts.
 
+The terminal view renders response Markdown: headings, lists, emphasis, quotes
+and visually distinct code below a separate compact header. The display name is
+cosmetic: communication addresses remain UUIDs. Reasoning and ordinary successful
+turn endings are hidden in this view only; commands, permissions, refusals,
+errors and gaps remain visible. Non-TTY output retains technical diagnostics,
+and the source journal is unchanged. Code blocks are styled, without
+language-specific lexical highlighting or active terminal hyperlinks.
+
+Resizing reflows the current response or the last response still managed on
+screen, plus the input and status, without another keystroke. Text already
+committed to terminal scrollback belongs to the terminal: Bridget does not
+rewrite the complete history. The next turn releases the retained response.
+
 The input has a full-width grey background that follows its height, with the
-colored status underneath. `Alt+Enter` (or `Escape`, then `Enter`) inserts a
-newline; `Enter` sends. Resizing preserves the complete input. `NO_COLOR` or
-`TERM=dumb` disables colors; redirected output remains plain.
+colored status underneath. With interactive TTY input and output, `Enter` (CR)
+sends while the distinct LF produced by `Shift+Enter` or Ctrl-J inserts a newline
+at the cursor. `Option+Enter` and `Escape`, then `Enter` are ignored. Left/Right
+moves by one complete UTF-8 character and Option+Left/Right by a word (a
+non-whitespace run). Ctrl-A/E moves to the logical line start/end; Ctrl-U/K
+deletes up to those boundaries without removing the LF. Ctrl-W or Option+Backspace
+deletes the previous word, Option-D the next one, and Ctrl-Y reinserts the latest
+fragment deleted by those commands. Ordinary Backspace removes only the previous
+character and does not replace that register. Outside double TTY, CR and LF keep
+the legacy send behavior and these new editing controls are inert. Up/Down recalls
+successfully emitted inputs with the cursor at the end and restores both the
+current draft and its cursor position after the newest entry. Enhanced keyboard
+mode is temporary; disabling it under `TERM=dumb` does not disable double-TTY
+CR/LF distinction. This history is
+volatile and limited to the current attach opening, 100 entries and 1 MiB;
+reopening starts empty. Resizing preserves the complete input. `NO_COLOR` or
+`TERM=dumb` disables colors; `TERM=dumb` also keeps legacy keyboard input without
+enhanced-mode activation, and redirected output remains plain.
 
 For **managed Codex**, `/model gpt-5.6-terra medium` in attach selects the model
 and effort for subsequent turns of the **same thread**. No restart, hidden prompt
@@ -197,10 +255,35 @@ refusal is not evidence of an MCP failure. Managed wrappers may relay final answ
 automatically; human interactive sessions require an explicit linked reply. Do not
 send the same answer through both paths.
 
+In 094, an agent may change **its own state** through MCP, without a target field:
+rename its display (never its UUID), enable DND for 1 second to 7 days (`60m` by
+default) or disable it, change/reset its domain, and declare its runtime. Only
+`off` disables DND; an already-expired deadline is rejected without mutation
+or an invented extension. A valid linked reply remains deliverable during DND.
+The domain follows the same technical ASCII canon as the CLI; reset restores the
+actually derived domain, including after a restart. Domain persistence is confirmed
+separately from its in-memory application: `domain_persistence_failed` rules out
+claiming durability or rollback. `bridget_runtime` declares model/effort with
+source `Declared`; unlike `/model` in attach or the provider TUI, it selects
+nothing at the provider.
+
+`bridget_status` exposes sanitized health; unavailable inventory yields an
+unknown count, not zero. `bridget_control_status` reads control state, the open
+decision count and, when requested, 0 to 50 events. A store failure remains an
+unavailability. A client's technical scope is not by itself daemon authentication.
+
 Spawn, stop and relaunch remain explicitly authorized CLI operations, not MCP
 supervision tools. Check the receipt and effective profile: connected does not mean
 writable. Remaining Maicie tools target an external service, not a communication
 dependency. Artifacts stay inert and do not open a graphical interface.
+
+Fleet operations, `control`/`inbox` decisions, hooks, migration, `reprise`,
+`reaper`, daemon and terminal remain human-only or internal, with concrete reasons
+in the [complete inventory](skills/bridget/references/commandes.md). A live older
+MCP server retains its binary and catalogue: use a native client reload mechanism
+only when known, otherwise have the human reopen the session. Domain guarantees
+also require the cooperating client and wrapper versions to be actually loaded.
+Never invent a reload command or interrupt a conversation merely to refresh tools.
 
 Referenced content retains bytes, provenance and access controls. HTML is inert
 data: no rendering, JavaScript or browser is part of the core.

@@ -8,6 +8,7 @@
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{PresenceMode, decode, encode};
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -356,6 +357,51 @@ fn claude_gere_recoit_mcp_identite_et_path() {
         Some(directory.as_str()),
         "PATH enfant sans préfixe du binaire courant: {path}"
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn spec094_claude_recoit_la_liste_fermee_des_outils_bridget_autorises() {
+    let (root, outcome) = run_mission_with(true, "claude");
+    outcome.expect("mission équipée");
+    let argv = fs::read_to_string(root.join("claude-argv.txt")).unwrap();
+    let arguments = argv.lines().collect::<Vec<_>>();
+    let allowed_at = arguments
+        .iter()
+        .position(|argument| *argument == "--allowedTools")
+        .unwrap_or_else(|| panic!("argv sans allowedTools: {argv}"));
+    let allowed = arguments
+        .get(allowed_at + 1)
+        .expect("valeur allowedTools")
+        .split(',')
+        .collect::<BTreeSet<_>>();
+    let expected = [
+        "bridget_who",
+        "bridget_send",
+        "bridget_ledger",
+        "bridget_cancel",
+        "bridget_read_artifact",
+        "bridget_publish_artifact",
+        "bridget_rename",
+        "bridget_dnd",
+        "bridget_domain",
+        "bridget_runtime",
+        "bridget_status",
+        "bridget_control_status",
+    ]
+    .map(|name| format!("mcp__bridget__{name}"))
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    let expected_refs = expected.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    assert_eq!(
+        allowed, expected_refs,
+        "allowlist Claude non fermée : {argv}"
+    );
+    assert!(
+        !argv.contains("mcp__bridget__*"),
+        "bypass global interdit: {argv}"
+    );
+    assert!(!argv.contains("mcp__bridget__maicie_delegate"));
     let _ = fs::remove_dir_all(root);
 }
 

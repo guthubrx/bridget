@@ -189,6 +189,108 @@ fn reprise_daemon_redelivre_les_octets_immuables_a_la_meme_instance() {
 }
 
 #[test]
+fn spec094_domaine_mcp_persiste_et_revient_par_la_vraie_reconnexion_wrapper() {
+    fn observed_domain(socket: &std::path::Path) -> Option<String> {
+        let mut observer = Client::connect(socket);
+        observer.send(WrapperToDaemon::ListAgents);
+        let agents = match observer.receive() {
+            DaemonToWrapper::AgentList { agents } => agents,
+            other => panic!("annuaire attendu, reçu {other:?}"),
+        };
+        agents
+            .into_iter()
+            .find(|agent| agent.agent_id == ACP_AGENT)
+            .and_then(|agent| agent.domain)
+    }
+
+    fn wait_for_domain(socket: &std::path::Path, expected: &str) {
+        let deadline = Instant::now() + GLOBAL_TIMEOUT;
+        loop {
+            let observed = observed_domain(socket);
+            if observed.as_deref() == Some(expected) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "domaine attendu {expected:?}, dernier observé {observed:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    let root = test_root("spec094-domain-reconnect");
+    let daemon = spawn_daemon(&root, None);
+    let (registry, registry_root, _counter) = registry_with_counting_acp_agent(1);
+    let wrapper = WrapperProcess::start(&root, &registry, ACP_AGENT);
+    let socket_path = socket(&root);
+    wait_for_registered_agent(&socket_path, ACP_AGENT);
+    let initial_domain = observed_domain(&socket_path).expect("domaine dérivé initial attesté");
+    assert_ne!(initial_domain, "reconnexion-094");
+    let instance_id = fs::read_dir(root.join("state/agent-names"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .find_map(|name| name.strip_prefix("instance-").map(str::to_string))
+        .expect("instance du vrai wrapper");
+
+    let mut mcp = McpProcess::start(&root, ACP_AGENT, &instance_id);
+    assert!(
+        mcp.request(serde_json::json!({
+            "jsonrpc":"2.0", "id":1, "method":"initialize", "params":{}
+        }))
+        .get("error")
+        .is_none()
+    );
+    mcp.notify(serde_json::json!({
+        "jsonrpc":"2.0", "method":"notifications/initialized"
+    }));
+    let changed = mcp.request(serde_json::json!({
+        "jsonrpc":"2.0", "id":2, "method":"tools/call", "params":{
+            "name":"bridget_domain", "arguments":{"domain":"reconnexion-094"}
+        }
+    }));
+    assert_eq!(changed["result"]["structuredContent"]["status"], "applied");
+    assert_eq!(
+        fs::read_to_string(root.join("state/agent-domains").join(ACP_AGENT)).unwrap(),
+        "reconnexion-094"
+    );
+    mcp.stop();
+
+    daemon.crash();
+    let restarted = spawn_daemon(&root, None);
+    wait_for_registered_agent(&socket_path, ACP_AGENT);
+    // Register principal atteste le dérivé avant que la connexion auxiliaire
+    // ait nécessairement reçu l'ACK de réapplication de l'override.
+    wait_for_domain(&socket_path, "reconnexion-094");
+
+    let mut resumed_mcp = McpProcess::start(&root, ACP_AGENT, &instance_id);
+    assert!(
+        resumed_mcp
+            .request(serde_json::json!({
+                "jsonrpc":"2.0", "id":3, "method":"initialize", "params":{}
+            }))
+            .get("error")
+            .is_none()
+    );
+    resumed_mcp.notify(serde_json::json!({
+        "jsonrpc":"2.0", "method":"notifications/initialized"
+    }));
+    let reset = resumed_mcp.request(serde_json::json!({
+        "jsonrpc":"2.0", "id":4, "method":"tools/call", "params":{
+            "name":"bridget_domain", "arguments":{"reset":true}
+        }
+    }));
+    assert_eq!(reset["result"]["structuredContent"]["status"], "applied");
+    assert!(!root.join("state/agent-domains").join(ACP_AGENT).exists());
+    resumed_mcp.stop();
+    wait_for_domain(&socket_path, &initial_domain);
+
+    restarted.stop();
+    assert_eq!(wrapper.join(), Ok(()));
+    fs::remove_dir_all(root).expect("nettoyage reconnexion 094");
+    fs::remove_dir_all(registry_root).expect("nettoyage registre 094");
+}
+
+#[test]
 fn destination_remplacee_reste_indeterminee_sans_reroutage() {
     let root = test_root("destination-remplacee");
     let daemon = spawn_daemon(&root, None);

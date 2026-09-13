@@ -56,7 +56,10 @@ with tempfile.TemporaryDirectory(prefix="b91-policy-", dir="/tmp") as root:
         assert bridget["default_tools_approval_mode"] == "prompt", bridget
         assert bridget["tools"] == {
             name: {"approval_mode": "approve"} for name in
-            ("bridget_who", "bridget_send", "bridget_ledger", "bridget_cancel")
+            ("bridget_who", "bridget_send", "bridget_ledger", "bridget_cancel",
+             "bridget_read_artifact", "bridget_publish_artifact",
+             "bridget_rename", "bridget_dnd", "bridget_domain", "bridget_runtime",
+             "bridget_status", "bridget_control_status")
         }, bridget
         assert config["mcp_servers"]["other"]["default_tools_approval_mode"] == "prompt"
         assert config["approval_policy"] == "never", config["approval_policy"]

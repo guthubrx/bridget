@@ -60,9 +60,12 @@ native_recipe!(
     "--hangup-permission"
 );
 native_recipe!(eof_fournisseur_pendant_permission_borne, "--provider-eof");
-native_recipe!(nouveau_fil_retire_l_ancienne_presence, "--new-thread");
 native_recipe!(
-    reprise_historique_retire_l_ancienne_presence,
+    nouveau_fil_reste_non_destructif_et_messages_bridget_ciblent_le_parent,
+    "--new-thread"
+);
+native_recipe!(
+    reprise_historique_reste_non_destructive_et_messages_bridget_ciblent_le_parent,
     "--resume-thread"
 );
 native_recipe!(

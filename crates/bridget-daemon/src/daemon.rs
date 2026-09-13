@@ -219,10 +219,13 @@ fn sleep_until_flag(total: Duration, flag: &AtomicBool) -> bool {
 #[cfg(test)]
 mod arret_tests {
     use super::{SHUTDOWN_POLL, SHUTDOWN_REQUESTED, sleep_until_flag, sleep_until_shutdown};
+    use std::process::Command;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
+
+    const ADAPTATEUR_CHILD_ENV: &str = "BRIDGET_SHUTDOWN_ADAPTER_CHILD";
 
     /// Sérialise les tests qui manipulent le drapeau GLOBAL d'arrêt.
     static VERROU_DRAPEAU: Mutex<()> = Mutex::new(());
@@ -291,9 +294,51 @@ mod arret_tests {
     /// meurent en affichant le délai mesuré.
     #[test]
     fn l_adaptateur_des_fils_de_fond_observe_le_drapeau_d_arret() {
-        // Le drapeau est global : un seul test à la fois le manipule. Aucun
-        // appel à `daemon::run` n'existe dans ce binaire de test, donc personne
-        // d'autre ne l'observe ni ne le remet à zéro sous nos pieds.
+        // D'autres tests appellent `daemon::run` dans ce même binaire. L'oracle
+        // qui positionne le drapeau global vit donc dans un processus dédié :
+        // il garde le vrai adaptateur sans arrêter les daemons des voisins.
+        let mut child = Command::new(std::env::current_exe().expect("binaire de test courant"))
+            .arg("--exact")
+            .arg("daemon::arret_tests::adaptateur_d_arret_child")
+            .arg("--ignored")
+            .arg("--nocapture")
+            .env(ADAPTATEUR_CHILD_ENV, "1")
+            .spawn()
+            .expect("lancer l'oracle d'arrêt isolé");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("attente oracle d'arrêt") {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let pid = child.id() as libc::pid_t;
+                let sent = unsafe { libc::kill(pid, libc::SIGTERM) };
+                let cleanup_deadline = Instant::now() + Duration::from_secs(2);
+                while child
+                    .try_wait()
+                    .expect("nettoyage oracle d'arrêt")
+                    .is_none()
+                    && Instant::now() < cleanup_deadline
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                assert_eq!(sent, 0, "TERM de l'oracle d'arrêt isolé a échoué");
+                panic!("l'oracle d'arrêt isolé a dépassé son budget de 5 s");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(
+            status.success(),
+            "l'oracle d'arrêt isolé a échoué: {status}"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn adaptateur_d_arret_child() {
+        if std::env::var(ADAPTATEUR_CHILD_ENV).ok().as_deref() != Some("1") {
+            return;
+        }
         let _ordre = VERROU_DRAPEAU
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -5970,7 +6015,7 @@ const MAX_RUNTIME_VALUE_LENGTH: usize = 100;
 /// Rejette une valeur trop longue ou porteuse de caractères de contrôle / format
 /// (bidi), qui casserait l'alignement de l'annuaire ou mentirait à l'affichage.
 fn validate_runtime_value(value: &str) -> Result<(), String> {
-    if value.is_empty() {
+    if value.trim().is_empty() {
         return Err("valeur vide".to_string());
     }
     if value.chars().count() > MAX_RUNTIME_VALUE_LENGTH {
@@ -6038,6 +6083,17 @@ fn handle_runtime(
     source: bridget_transport::protocol::RuntimeSource,
     state: &mut DaemonState,
 ) -> DaemonToWrapper {
+    handle_runtime_for_instance(agent, model, effort, source, None, state)
+}
+
+fn handle_runtime_for_instance(
+    agent: &str,
+    model: String,
+    effort: Option<String>,
+    source: bridget_transport::protocol::RuntimeSource,
+    instance_id: Option<&str>,
+    state: &mut DaemonState,
+) -> DaemonToWrapper {
     if let Err(reason) = validate_runtime_value(&model) {
         return DaemonToWrapper::Nack {
             id: "runtime".to_string(),
@@ -6051,7 +6107,14 @@ fn handle_runtime(
         };
     }
 
-    let Some(presence) = presence_of_agent(state, agent) else {
+    let presence = match instance_id {
+        Some(instance_id) => state
+            .presences
+            .get_mut(instance_id)
+            .filter(|presence| presence.name == agent),
+        None => presence_of_agent(state, agent),
+    };
+    let Some(presence) = presence else {
         return DaemonToWrapper::Nack {
             id: "runtime".to_string(),
             reason: format!("agent introuvable: {}", agent),
@@ -6523,14 +6586,34 @@ fn touch_message_sender_activity(state: &mut DaemonState, sender: &str) {
 }
 
 /// Remplace le domaine d'un agent, ou le ramène à son domaine dérivé.
+#[cfg(test)]
 fn handle_domain(agent: &str, domain: Option<String>, state: &mut DaemonState) -> DaemonToWrapper {
-    if let Some(Err(reason)) = domain.as_deref().map(validate_runtime_value) {
+    handle_domain_for_instance(agent, domain, None, state)
+}
+
+fn handle_domain_for_instance(
+    agent: &str,
+    domain: Option<String>,
+    instance_id: Option<&str>,
+    state: &mut DaemonState,
+) -> DaemonToWrapper {
+    if let Some(Err(reason)) = domain
+        .as_deref()
+        .map(bridget_core::router::validate_technical_label)
+    {
         return DaemonToWrapper::Nack {
             id: "domain".to_string(),
             reason: format!("domaine invalide: {}", reason),
         };
     }
-    let Some(presence) = presence_of_agent(state, agent) else {
+    let presence = match instance_id {
+        Some(instance_id) => state
+            .presences
+            .get_mut(instance_id)
+            .filter(|presence| presence.name == agent),
+        None => presence_of_agent(state, agent),
+    };
+    let Some(presence) = presence else {
         return DaemonToWrapper::Nack {
             id: "domain".to_string(),
             reason: format!("agent introuvable: {}", agent),
@@ -6548,28 +6631,70 @@ fn handle_domain(agent: &str, domain: Option<String>, state: &mut DaemonState) -
 }
 
 /// Déclare la disponibilité d'un agent.
+#[cfg(test)]
 fn handle_availability(
     agent: &str,
     until_secs: Option<u64>,
     state: &mut DaemonState,
 ) -> DaemonToWrapper {
-    let Some(presence) = presence_of_agent(state, agent) else {
+    handle_availability_for_instance(agent, until_secs, None, state)
+}
+
+fn handle_availability_for_instance(
+    agent: &str,
+    until_secs: Option<u64>,
+    instance_id: Option<&str>,
+    state: &mut DaemonState,
+) -> DaemonToWrapper {
+    const MAX_DND_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let remaining = match until_secs {
+        None => None,
+        Some(until) => match until.checked_sub(now).filter(|remaining| *remaining > 0) {
+            Some(remaining) => Some(remaining),
+            None => {
+                return DaemonToWrapper::Nack {
+                    id: "availability".to_string(),
+                    reason: "échéance DND déjà expirée".to_string(),
+                };
+            }
+        },
+    };
+    if remaining.is_some_and(|remaining| remaining > MAX_DND_WINDOW_SECS) {
+        return DaemonToWrapper::Nack {
+            id: "availability".to_string(),
+            reason: "durée DND supérieure à 7 jours".to_string(),
+        };
+    }
+    let deadline = match remaining {
+        Some(remaining) => match Instant::now().checked_add(Duration::from_secs(remaining)) {
+            Some(deadline) => Some(deadline),
+            None => {
+                return DaemonToWrapper::Nack {
+                    id: "availability".to_string(),
+                    reason: "échéance DND hors plage".to_string(),
+                };
+            }
+        },
+        None => None,
+    };
+    let presence = match instance_id {
+        Some(instance_id) => state
+            .presences
+            .get_mut(instance_id)
+            .filter(|presence| presence.name == agent),
+        None => presence_of_agent(state, agent),
+    };
+    let Some(presence) = presence else {
         return DaemonToWrapper::Nack {
             id: "availability".to_string(),
             reason: format!("agent introuvable: {}", agent),
         };
     };
-    presence.dnd_until = until_secs.and_then(|until| {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        // Une échéance déjà passée équivaut à une levée du statut.
-        until
-            .checked_sub(now)
-            .filter(|remaining| *remaining > 0)
-            .map(|remaining| Instant::now() + Duration::from_secs(remaining))
-    });
+    presence.dnd_until = deadline;
     log::debug!(
         "disponibilité de '{}' : dnd={}",
         presence.name,
@@ -7085,6 +7210,21 @@ fn live_connection_identity(st: &DaemonState, conn_id: &str) -> Option<(String, 
         return None;
     }
     Some((agent.clone(), instance.clone()))
+}
+
+fn self_mutation_instance(
+    st: &DaemonState,
+    conn_id: &str,
+    requested_agent: &str,
+    operation: &str,
+) -> Result<String, Box<DaemonToWrapper>> {
+    match live_connection_identity(st, conn_id) {
+        Some((agent, instance_id)) if agent == requested_agent => Ok(instance_id),
+        _ => Err(Box::new(DaemonToWrapper::Nack {
+            id: operation.to_string(),
+            reason: "identité ou instance de connexion indisponible".to_string(),
+        })),
+    }
 }
 
 fn artifact_access_scope(
@@ -7965,12 +8105,21 @@ fn handle_control_state_read(state: &Arc<Mutex<DaemonState>>, version: u16) -> D
     }
     let st = state.lock().unwrap_or_else(|e| e.into_inner());
     let conn = st.store.connection();
-    match crate::referent_control::read(conn) {
-        Ok(state) => DaemonToWrapper::ControlState {
+    match (
+        crate::referent_control::read(conn),
+        crate::human_inbox::open_count(conn),
+    ) {
+        (Ok(state), Ok(inbox_open_count)) => DaemonToWrapper::ControlState {
             state,
-            inbox_open_count: crate::human_inbox::open_count(conn).unwrap_or(0),
+            inbox_open_count,
         },
-        Err(error) => {
+        (Ok(_), Err(error)) => {
+            warn!("compteur de boîte humaine illisible: {error}");
+            DaemonToWrapper::ControlStateRejected {
+                reason: ControlStateRefusal::StoreUnavailable,
+            }
+        }
+        (Err(error), _) => {
             warn!("état de contrôle illisible: {error}");
             DaemonToWrapper::ControlStateRejected {
                 reason: ControlStateRefusal::StoreUnavailable,
@@ -11782,7 +11931,22 @@ fn handle_wrapper_message(
             source,
         } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            Some(handle_runtime(&agent, model, effort, source, &mut st))
+            if source == bridget_transport::protocol::RuntimeSource::Declared {
+                let instance_id = match self_mutation_instance(&st, conn_id, &agent, "runtime") {
+                    Ok(instance_id) => instance_id,
+                    Err(response) => return Some(*response),
+                };
+                Some(handle_runtime_for_instance(
+                    &agent,
+                    model,
+                    effort,
+                    source,
+                    Some(&instance_id),
+                    &mut st,
+                ))
+            } else {
+                Some(handle_runtime(&agent, model, effort, source, &mut st))
+            }
         }
 
         WrapperToDaemon::ServedModel { agent, model } => {
@@ -11849,12 +12013,30 @@ fn handle_wrapper_message(
 
         WrapperToDaemon::Domain { agent, domain } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            Some(handle_domain(&agent, domain, &mut st))
+            let instance_id = match self_mutation_instance(&st, conn_id, &agent, "domain") {
+                Ok(instance_id) => instance_id,
+                Err(response) => return Some(*response),
+            };
+            Some(handle_domain_for_instance(
+                &agent,
+                domain,
+                Some(&instance_id),
+                &mut st,
+            ))
         }
 
         WrapperToDaemon::Availability { agent, until_secs } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            Some(handle_availability(&agent, until_secs, &mut st))
+            let instance_id = match self_mutation_instance(&st, conn_id, &agent, "availability") {
+                Ok(instance_id) => instance_id,
+                Err(response) => return Some(*response),
+            };
+            Some(handle_availability_for_instance(
+                &agent,
+                until_secs,
+                Some(&instance_id),
+                &mut st,
+            ))
         }
 
         WrapperToDaemon::DeliveryRejected { id, reason } => {
@@ -19792,14 +19974,15 @@ mod presence_tests {
         assert!(presence.is_dnd());
         assert!(presence.dnd_minutes_left() <= 30);
 
-        // Une échéance déjà passée équivaut à une absence de statut : c'est ce
-        // qui rend l'expiration automatique, sans tâche de fond.
-        handle_availability(
+        // Une commande `on` arrivée expirée ne doit pas se transformer en `off`.
+        // L'expiration automatique reste portée par `is_dnd`, sans tâche de fond.
+        let expired = handle_availability(
             "89000000-0000-4000-8000-000000000102",
             Some(now - 10),
             &mut state,
         );
-        assert_eq!(state.agent_infos()[0].state, "connected");
+        assert!(matches!(expired, DaemonToWrapper::Nack { .. }));
+        assert_eq!(state.agent_infos()[0].state, "dnd");
 
         handle_availability(
             "89000000-0000-4000-8000-000000000102",
@@ -24225,6 +24408,389 @@ fn spec_068_enfant_sans_lien_ne_notifie_aucun_coordinateur() {
             .unwrap()
             .is_empty()
     );
+    drop(shared);
+    let _ = std::fs::remove_file(config.db_path);
+}
+
+#[cfg(test)]
+fn spec094_live_test_connection(state: &mut DaemonState, conn_id: &str) -> UnixStream {
+    let (daemon, peer) = UnixStream::pair().unwrap();
+    state.connections.insert(
+        conn_id.to_string(),
+        Arc::new(Mutex::new(BufWriter::new(daemon))),
+    );
+    peer
+}
+
+#[cfg(test)]
+#[test]
+fn spec094_mutations_propres_refusent_connexion_brute_cible_etrangere_et_ancienne_instance() {
+    use bridget_transport::protocol::RuntimeSource;
+
+    let mutations = |agent: &str, suffix: &str| {
+        [
+            WrapperToDaemon::Domain {
+                agent: agent.to_string(),
+                domain: Some(format!("domaine-{suffix}")),
+            },
+            WrapperToDaemon::Availability {
+                agent: agent.to_string(),
+                until_secs: Some(u64::MAX),
+            },
+            WrapperToDaemon::Runtime {
+                agent: agent.to_string(),
+                model: format!("modele-{suffix}"),
+                effort: None,
+                source: RuntimeSource::Declared,
+            },
+        ]
+    };
+
+    let (mut state, config) = presence_tests::state_with_registered_agent("spec094-authority");
+    let agent_a = "89000000-0000-4000-8000-000000000102";
+    let agent_b = "89000000-0000-4000-8000-000000000194";
+    let _peer_a = spec094_live_test_connection(&mut state, "conn-1");
+    state
+        .conn_names
+        .insert("conn-1".to_string(), agent_a.to_string());
+
+    let _peer_b = spec094_live_test_connection(&mut state, "conn-b");
+    let registered_b = handle_register_with_channel(
+        "conn-b",
+        2,
+        "fixture".to_string(),
+        agent_b.to_string(),
+        Some("fixture".to_string()),
+        Some("acp".to_string()),
+        ChannelReport::Known("unix".to_string()),
+        Some(PresenceMode::Cli),
+        None,
+        Some("test".to_string()),
+        Some("instance-b".to_string()),
+        None,
+        false,
+        Some(false),
+        &mut state,
+    );
+    assert!(matches!(registered_b, DaemonToWrapper::Registered { .. }));
+    let shared = Arc::new(Mutex::new(state));
+
+    for message in mutations(agent_a, "brut-interdit") {
+        assert!(matches!(
+            handle_wrapper_message("connexion-brute", message, &shared),
+            Some(DaemonToWrapper::Nack { .. })
+        ));
+    }
+
+    for message in mutations(agent_b, "usurpation") {
+        assert!(matches!(
+            handle_wrapper_message("conn-1", message, &shared),
+            Some(DaemonToWrapper::Nack { .. })
+        ));
+    }
+    assert_eq!(
+        shared
+            .lock()
+            .unwrap()
+            .presences
+            .get("instance-b")
+            .and_then(|presence| presence.domain.as_deref()),
+        None
+    );
+    {
+        let state = shared.lock().unwrap();
+        let presence = state.presences.get("instance-b").unwrap();
+        assert!(presence.model.is_none());
+        assert!(!presence.is_dnd());
+    }
+
+    let (_old_peer, _new_peer) = {
+        let mut state = shared.lock().unwrap();
+        let peer = spec094_live_test_connection(&mut state, "mcp-old");
+        let registered = handle_register_with_channel(
+            "mcp-old",
+            2,
+            "mcp".to_string(),
+            agent_a.to_string(),
+            None,
+            None,
+            ChannelReport::Unknown,
+            Some(PresenceMode::Cli),
+            None,
+            None,
+            Some("instance-1".to_string()),
+            None,
+            false,
+            None,
+            &mut state,
+        );
+        assert!(matches!(registered, DaemonToWrapper::Registered { .. }));
+        state.router.unregister_by_conn("conn-1");
+        state.mark_unreachable("conn-1");
+        let new_peer = spec094_live_test_connection(&mut state, "conn-new");
+        let reconnected = handle_register_with_channel(
+            "conn-new",
+            2,
+            "claude".to_string(),
+            agent_a.to_string(),
+            Some("macbook".to_string()),
+            Some("acp".to_string()),
+            ChannelReport::Known("unix".to_string()),
+            Some(PresenceMode::Acp),
+            None,
+            Some("macOS".to_string()),
+            Some("instance-new".to_string()),
+            None,
+            false,
+            Some(true),
+            &mut state,
+        );
+        assert!(matches!(reconnected, DaemonToWrapper::Registered { .. }));
+        (peer, new_peer)
+    };
+    for message in mutations(agent_a, "ancienne-instance") {
+        assert!(matches!(
+            handle_wrapper_message("mcp-old", message, &shared),
+            Some(DaemonToWrapper::Nack { .. })
+        ));
+    }
+    let _stale_retry_peer = {
+        let mut state = shared.lock().unwrap();
+        let peer = spec094_live_test_connection(&mut state, "mcp-retry-old");
+        let response = handle_register_with_channel(
+            "mcp-retry-old",
+            2,
+            "mcp".to_string(),
+            agent_a.to_string(),
+            None,
+            None,
+            ChannelReport::Unknown,
+            Some(PresenceMode::Cli),
+            None,
+            None,
+            Some("instance-1".to_string()),
+            None,
+            false,
+            None,
+            &mut state,
+        );
+        assert!(matches!(response, DaemonToWrapper::Nack { .. }));
+        peer
+    };
+    {
+        let state = shared.lock().unwrap();
+        let presence = state.presences.get("instance-new").unwrap();
+        assert!(presence.model.is_none());
+        assert!(!presence.is_dnd());
+    }
+
+    let _current_auxiliary_peer = {
+        let mut state = shared.lock().unwrap();
+        let peer = spec094_live_test_connection(&mut state, "mcp-new");
+        let registered = handle_register_with_channel(
+            "mcp-new",
+            2,
+            "mcp".to_string(),
+            agent_a.to_string(),
+            None,
+            None,
+            ChannelReport::Unknown,
+            Some(PresenceMode::Cli),
+            None,
+            None,
+            Some("instance-new".to_string()),
+            None,
+            false,
+            None,
+            &mut state,
+        );
+        assert!(matches!(registered, DaemonToWrapper::Registered { .. }));
+        peer
+    };
+    for invalid_domain in ["avec espace", "avec/slash", "équipe"] {
+        assert!(matches!(
+            handle_wrapper_message(
+                "mcp-new",
+                WrapperToDaemon::Domain {
+                    agent: agent_a.to_string(),
+                    domain: Some(invalid_domain.to_string()),
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::Nack { .. })
+        ));
+        assert_eq!(
+            shared
+                .lock()
+                .unwrap()
+                .presences
+                .get("instance-new")
+                .and_then(|presence| presence.domain.as_deref()),
+            None
+        );
+    }
+    for (model, effort) in [("   ", None), ("modele", Some("   "))] {
+        assert!(matches!(
+            handle_wrapper_message(
+                "mcp-new",
+                WrapperToDaemon::Runtime {
+                    agent: agent_a.to_string(),
+                    model: model.to_string(),
+                    effort: effort.map(str::to_string),
+                    source: RuntimeSource::Declared,
+                },
+                &shared,
+            ),
+            Some(DaemonToWrapper::Nack { .. })
+        ));
+        let state = shared.lock().unwrap();
+        let presence = state.presences.get("instance-new").unwrap();
+        assert!(presence.model.is_none());
+        assert!(presence.effort.is_none());
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    for message in [
+        WrapperToDaemon::Domain {
+            agent: agent_a.to_string(),
+            domain: Some("courant".to_string()),
+        },
+        WrapperToDaemon::Availability {
+            agent: agent_a.to_string(),
+            until_secs: Some(now + 60),
+        },
+        WrapperToDaemon::Runtime {
+            agent: agent_a.to_string(),
+            model: "modele-courant".to_string(),
+            effort: Some("high".to_string()),
+            source: RuntimeSource::Declared,
+        },
+    ] {
+        assert!(matches!(
+            handle_wrapper_message("mcp-new", message, &shared),
+            Some(DaemonToWrapper::Ack { .. })
+        ));
+    }
+    let before_expired_dnd = shared
+        .lock()
+        .unwrap()
+        .presences
+        .get("instance-new")
+        .unwrap()
+        .dnd_until;
+    assert!(before_expired_dnd.is_some());
+    assert!(matches!(
+        handle_wrapper_message(
+            "mcp-new",
+            WrapperToDaemon::Availability {
+                agent: agent_a.to_string(),
+                until_secs: Some(now),
+            },
+            &shared,
+        ),
+        Some(DaemonToWrapper::Nack { .. })
+    ));
+    assert_eq!(
+        shared
+            .lock()
+            .unwrap()
+            .presences
+            .get("instance-new")
+            .unwrap()
+            .dnd_until,
+        before_expired_dnd
+    );
+
+    assert!(matches!(
+        handle_wrapper_message(
+            "legacy-hook",
+            WrapperToDaemon::Runtime {
+                agent: agent_a.to_string(),
+                model: "modele-observe".to_string(),
+                effort: None,
+                source: RuntimeSource::ClaudeHook,
+            },
+            &shared,
+        ),
+        Some(DaemonToWrapper::Ack { .. })
+    ));
+
+    drop(shared);
+    let _ = std::fs::remove_file(config.db_path);
+}
+
+#[cfg(test)]
+#[test]
+fn spec094_panne_compteur_inbox_refuse_control_state_sans_inventer_zero() {
+    use bridget_transport::protocol::{CONTROL_STATE_CONTRACT_VERSION, ControlStateRefusal};
+
+    let (state, config) = presence_tests::state_with_registered_agent("spec094-control-count");
+    state
+        .store
+        .connection()
+        .execute("DROP TABLE human_inbox", [])
+        .unwrap();
+    let shared = Arc::new(Mutex::new(state));
+    assert!(matches!(
+        handle_control_state_read(&shared, CONTROL_STATE_CONTRACT_VERSION),
+        DaemonToWrapper::ControlStateRejected {
+            reason: ControlStateRefusal::StoreUnavailable
+        }
+    ));
+    drop(shared);
+    let _ = std::fs::remove_file(config.db_path);
+}
+
+#[cfg(test)]
+#[test]
+fn spec094_control_status_negocie_lookup_sans_autoriser_une_mutation() {
+    use bridget_transport::protocol::{CLIENT_CONTRACT_VERSION, ClientCapability, ClientRefusal};
+
+    let (state, config) = presence_tests::state_with_registered_agent("spec094-control-readonly");
+    let shared = Arc::new(Mutex::new(state));
+    assert!(matches!(
+        handle_wrapper_message(
+            "control-status",
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Client,
+            },
+            &shared,
+        ),
+        Some(DaemonToWrapper::RoleAccepted { .. })
+    ));
+    assert!(matches!(
+        handle_wrapper_message(
+            "control-status",
+            WrapperToDaemon::ClientHello {
+                contract_version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: crate::communication::issuer_scope("instance-094"),
+                capabilities: vec![ClientCapability::Lookup],
+            },
+            &shared,
+        ),
+        Some(DaemonToWrapper::ClientWelcome { .. })
+    ));
+    assert!(matches!(
+        handle_wrapper_message(
+            "control-status",
+            WrapperToDaemon::ControlStateSet {
+                version: 1,
+                command_id: "interdit-094".to_string(),
+                expected_generation: 0,
+                paused: Some(true),
+                auto_objectives_cap: None,
+                reason: None,
+                agent_posture: None,
+                auto_reassignment: None,
+            },
+            &shared,
+        ),
+        Some(DaemonToWrapper::ClientRejected {
+            reason: ClientRefusal::CapabilityNotNegotiated
+        })
+    ));
     drop(shared);
     let _ = std::fs::remove_file(config.db_path);
 }
