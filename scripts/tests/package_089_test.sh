@@ -12,7 +12,7 @@ bash "$root/scripts/package-089-core.sh" "$package" >/dev/null
 for absent in .git apps plugins infra node_modules; do
   [[ ! -e "$package/$absent" ]]
 done
-for required in README.md README.en.md BUILD_ID skills/bridget/SKILL.md docs/communication-installation.md scripts/federate-ssh.sh specs/010-mcp/spike/fake-mcp-server.py; do
+for required in README.md README.en.md BUILD_ID skills/bridget/SKILL.md docs/communication-installation.md scripts/federate-ssh.sh specs/010-mcp/spike/fake-mcp-server.py docs/federation-services.md scripts/tests/federation_095_test.sh scripts/tests/federation_095_roundtrip.py specs/095-federation-services/spec.md scripts/tests/federation_096_test.sh specs/096-federate-cli/spec.md; do
   [[ -f "$package/$required" ]]
 done
 before=$(shasum -a 256 "$package/Cargo.toml")

@@ -22,9 +22,14 @@ done
 entries=(
   Cargo.toml Cargo.lock rust-toolchain.toml LICENSE README.md README.en.md
   crates skills/bridget
-  docs/communication-installation.md
+  docs/communication-installation.md docs/federation-services.md
+  docs/decisions/031-services-federation-autonomes.md
   scripts/package-089-core.sh scripts/federate-ssh.sh scripts/deploy-remote.sh
   scripts/tests/federation_089_test.sh scripts/tests/package_089_test.sh
+  scripts/tests/federation_095_test.sh scripts/tests/federation_095_roundtrip.py
+  tests/features/095-federation-services.feature specs/095-federation-services
+  scripts/tests/federation_096_test.sh tests/features/096-federate-cli.feature
+  specs/096-federate-cli docs/decisions/032-federate-cli-embarque.md
   specs/089-communication-core
   specs/090-codex-interactif
   specs/015-guichet-maicie/contracts/fixtures
