@@ -1,5 +1,11 @@
 # Tâches 090 — Implemented
 
+## Correctif reprise par nom du 07/09 — installé
+
+- [x] T021 Mesurer le Codex installé : scan par défaut lent, searchTerm seul 46,993 s, catalogue sans réparation via useStateDbOnly 364 fils/1,811 s. Conserver les preuves externes et cadrer le delta minimal.
+- [x] T022 Oracle rouge au collecteur : un test exécuté, échec attendu None vs true avant correction ; deux pages de même nom doivent toutes être conservées avec le drapeau. Le silence du scan est attesté par la sonde réelle, pas simulé par un délai de test. Le vrai parcours 090 est rejoué en T023.
+- [x] T023 Ajouter le drapeau API seul, puis tests ciblés, recette native, revue du delta ; fmt/clippy et consolidation finale, release installé sans redémarrage de daemon/agents. Trois tests catalogue PASS ; recettes natives nom/menu/ambiguïté PASS, nom aussi sur release. Workspace : 1252 PASS / 0 FAIL / 47 ignorés. Release installé, empreinte e092f3044f48e87fdcc84b1b687ffada6815a80fc1e82f004755a72a3845a1d3. Preuves dans verification-reprise-catalogue.md.
+
 ## Phase 1 — Cadrage et sonde
 
 - [x] T001 Vérifier le contrat réel de fil partagé et d'approbation dans specs/090-codex-interactif/probe_shared_session.py et research.md ; même threadId, aucun prompt caché, décision du second client respectée.
@@ -47,3 +53,9 @@ séquentiellement ; T010/T011 après assemblage ; T012→T013→T014 en clôture
 Pas de couloir d'écriture parallèle sur wrapper/pilote. Les lectures/revues peuvent
 être indépendantes. Les tâches de test rédigent d'abord l'oracle puis le fix utile.
 US1 seule n'est PAS la livraison : toutes les phases sont requises.
+
+## Correctif sous-agents internes — arbitrage utilisateur du 2026-09-06
+
+- [x] T018 Dans crates/bridget-transport/src/codex_app_server.rs, test discriminant au lecteur réel : création puis reprise/statut d'un autre fil pendant un tour parent, traitement du prochain événement parent et reader toujours vivant ; zéro corrélation/journal/permission étrangère ; EOF réel terminal. Supprimer la fermeture déduite de ces seules notifications, sans ajouter de gestion d'enfants à Bridget.
+- [x] T019 Recette isolée utilisant le vrai app-server et le raccord interactif : chargement d'un second fil sans fermeture du parent ; conservation du fil initial et de son adressage. Aucun lancement de sous-agent dans la session de production avant adoption du correctif.
+- [x] T020 Aligner README FR/EN, skill et contrat ; tests ciblés, non-régression du raccord natif, fmt/clippy ; rebuild et adoption explicitement autorisés par le mandat utilisateur courant, sans redémarrage de la flotte. Distinguer preuve automatisée et recette humaine après reprise. Preuve : implementation.md, dont la recette permission optionnelle rouge également sur l'ancien binaire (avant injection EOF), distincte de ces deux recettes natives vertes.

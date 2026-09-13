@@ -2,6 +2,15 @@
 
 Statut : implémenté, validé et adopté le 2026-09-06. Rust 1.92 / trois crates existants.
 
+Correctif 07/09 autorisé : rester dans ce raccord, ajouter le drapeau natif
+`useStateDbOnly` à toutes les pages de `thread/list`. Ne pas étendre timeout,
+sélecteur, stockage, wrapper ou gestion des processus sans preuve indépendante.
+Auteur : transport codex_app_server.rs + oracles/fixture090 ; pilote : contrat,
+mesure réelle, validations, release et installation. WIP clavier/Markdown conservé.
+Mesure native : catalogue complet 364 entrées en quatre pages, somme 1,811 s,
+contre scan historique incompatible avec la borne globale 10 s. Même API,
+même catalogue public, sans les réparations de métadonnées au chemin critique.
+
 ## Architecture et réutilisation
 
 Complément reprise nom/menu : callback de sélection humaine avant le bootstrap

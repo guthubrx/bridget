@@ -1,5 +1,26 @@
 # 090 — Codex interactif natif, connecté à Bridget sans tmux
 
+## Correctif reprise par nom — 2026-09-07
+
+Incident : `resume horizon-calliope --name calliope` échoue sur `thread/list`
+avant reprise, puis l'arrêt du groupe est non confirmé dans les quatre secondes.
+La sonde du CLI 0.153.4 prouve que le mode par défaut rescane/répare les métadonnées
+JSONL : page 1 6,623 s, page 2 29,588 s, recherche filtrée seule 46,993 s.
+
+Le catalogue interactif doit demander `useStateDbOnly: true` par l'API publique
+Codex, sans accès direct de Bridget à sa base ni aux rollouts. Cela utilise la
+projection publiée par Codex, pas un cache client. Borne 1000 fils / 10 s,
+pagination complète, refus absent/ambigu et contrôle UUID conservés. Aucun
+scan/réparation implicite déclenché pour ouvrir le sélecteur ou résoudre un nom.
+Une ancienne conversation non publiée dans ce catalogue reste absente ; ne pas
+inventer de fil ni lancer une réparation de son propre chef.
+
+Acceptation : une fixture simulant le silence du scan historique rend le cas
+rouge sans ce drapeau ; avec lui, reprise par nom exacte jusqu'à la TUI sur le
+même fil. Vérifier le champ à chaque page, les refus et le nettoyage des seuls
+enfants détenus. Rejouer sur Codex installé avec le nom fourni, sans tour envoyé,
+sans démarrer une seconde session de travail ni couper les agents présents.
+
 ## Amendement 2026-09-06 — options et reprise initiale
 
 - Reprise humaine étendue : `resume <UUID|nom-Codex>` ou `resume` seul.
@@ -108,8 +129,14 @@ momentanément indisponible ne laissent pas une présence fausse ni un enfant ou
 Codex uniquement. Les paramètres natifs influant sur la session doivent être
 propagés ou explicitement refusés, jamais ignorés. Aucune promesse de survie à la
 fermeture du terminal : pour cela, le parcours spawn persistant reste distinct.
-Contrat vérifié sur Codex 0.153.4 : un fil par lancement. Les navigations natives
-`/new`, `/resume` vers un autre fil, fork et sous-agents internes chargeant un
-second fil ferment explicitement l'intégration ; aucune remise vers un ancien
-fil invisible. Les autres agents Bridget restent indépendants.
+Amendement utilisateur du 2026-09-06 : une identité Bridget reste liée au fil
+initial, mais le serveur Codex peut charger d'autres fils. Les sous-agents
+internes relèvent uniquement de Codex : ni inscription Bridget, ni supervision,
+ni arrêt du parent à leur création/reprise. Une notification globale concernant
+un autre fil n'atteste pas une navigation humaine et ne ferme pas la session.
+Les envois et observations Bridget restent corrélés au fil initial ; aucun
+événement ou acte de permission d'un autre fil ne lui est attribué. Bridget ne
+promet pas de suivre une navigation native `/new` ou `/resume` : utiliser un
+nouveau lancement pour joindre une autre conversation. Les autres agents Bridget
+restent indépendants.
 Aucun déploiement/commit automatique.

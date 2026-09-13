@@ -386,3 +386,75 @@ installed-subscription-final.log, installed-synthetic-final.log).
 Ancien binaire 6cfbc4d33ca7, base arrêtée et plist conservés dans ce répertoire
 0700 ; aucun secret/version utilisateur envoyé à Git. Les suites complètes du
 05 restent valides pour le code de production inchangé. Aucun push distant.
+
+## 2026-09-06 — coupure sur sous-agent interne (corrigée et installée)
+
+Arbitrage humain : l'équipe interne Codex reste hors administration Bridget.
+L'identité Bridget reste liée au fil principal ; créer/reprendre un autre fil
+ne prouve aucune navigation et ne doit pas interrompre le serveur.
+
+Diagnostic réel : enfant `/root/communication_mcp` créé à 13:10:30Z, puis
+reprise à 13:15:20.847Z et interruption du parent à 13:15:21.052Z. Le daemon
+principal est resté en vie. Le reader arrêtait explicitement la session sur
+`thread/started` ou `thread/status/changed` d'un autre fil ; son passage à
+`alive=false` déclenchait la fermeture du serveur et de la TUI par le wrapper.
+Les notifications secondaires sont désormais filtrées sans arrêter le reader.
+Ce changement corrige un contrat 090 trop restrictif, pas une panne fournisseur
+démontrée. La source de production antérieure reste conservée dans Git.
+
+Validation initiale pilote (équipier sandboxé, builds délégués au pilote) :
+
+- `PATH=/Users/moi/.cargo/bin:$PATH TMPDIR=/tmp/b92.LVqy1o CARGO_TARGET_DIR=/Users/moi/Nextcloud/10.Scripts/64.bridget/target cargo test -p bridget-transport spec093_lecteur_interactif -- --nocapture` : 1/1 vert, compilation 2,59 s. Le nom technique `spec093` identifie le test ajouté pendant la reprise ; il couvre T018 de cet amendement 090.
+- Mutation exécutée dans `/tmp/b090-mutant.heaSLg`, jamais dans le worktree : restauration du `break` sur les deux notifications étrangères ; même commande, 0/1, code 101, oracle « le reader doit traiter l'événement parent suivant ». Compilation 8,61 s. Cela prouve que le test refuse l'ancienne coupure.
+- Premier essai de compilation : assertion test `Result<ServerResponse, String>` non comparable (E0369), remplacée par comparaison de l'erreur. Warning `dropping_references` encore présent à cette première passe ; gate clippy non acquis à ce stade.
+
+Validation finale :
+
+- Filtre `codex_app_server` : 58/58 PASS, 3,06 s (compilation 8,14 s). Warning corrigé par bloc lexical, aucune modification du type de production pour satisfaire une assertion.
+- `BRIDGET_CODEX_090_BIN=/opt/homebrew/bin/codex cargo test -p bridget-daemon --test codex_interactive_090_test non_destruct -- --include-ignored --test-threads=1 --nocapture` (même PATH/TMPDIR/CARGO_TARGET_DIR) : 2/2 PASS, 8,53 s, compilation 2,28 s. Racines `/tmp/b90-vzasgbrq` et `/tmp/b90-v20wmg2y`.
+- Création secondaire via le vrai `thread/start` et un vrai tour secondaire, histoire legacy explicitement choisie ; reprise via `/resume` dans la vraie TUI. Même identité/connexion parent, message retrouvé exclusivement dans son histoire, corps secondaire absent du journal parent, sortie native `/quit`, socket nettoyée et terminal restauré. Le protocole des fils est réel ; les réponses modèle sont fournies par la fixture HTTP locale, sans dépense de modèle ni compte de production.
+- Deux corrections de harnais, après observation : `/new` utilise un historique dont `thread/read(includeTurns=true)` renvoie `-32601 list_turns is not supported yet` ; ne pas assimiler cette erreur à une histoire vide. La recette création emploie donc le bootstrap legacy pris en charge. Ctrl-C deux fois dans un seul bloc provoquait `no active turn to interrupt` après la fin native : sortie explicite `/quit` rendue avant Entrée, sans sleep de synchronisation.
+- `cargo test --workspace --quiet` : 1 219 PASS, 0 FAIL, 47 ignorés, somme des durées de suites 180,01 s ; les deux résumés de processus fils fsutil ne sont pas recomptés.
+- `cargo fmt --all --check` et `git diff --check` : PASS. `cargo clippy --workspace --all-targets -- -D warnings` : PASS, 7,98 s.
+- `cargo build --release -p bridget-daemon --bin bridget` avec target séparé du worktree : PASS, 31,82 s. Recettes `--new-thread` et `--resume-thread` rejouées directement avec ce release : 2/2 PASS, racines `/tmp/b90-ud72lnld` et `/tmp/b90-0ppyi8l2`.
+
+Limite explicitement conservée : la recette optionnelle historique
+`eof_fournisseur_pendant_permission_borne` reste rouge AVANT l'injection EOF :
+elle attend un écran de permission pour `bridget_send`, alors que cette opération
+fait désormais partie des outils MCP préapprouvés (091). Journal réel : le tour
+est terminé, aucune permission en attente. La même recette inchangée et le
+binaire installé ANTÉRIEUR reproduisent le dépassement du budget global :
+`/tmp/b90-pwrzxtlp` (candidat) et `/tmp/b90-j59173pe` (ancien release). Aucun
+assouplissement de production ni retrait de test pour masquer ce résultat ; le
+test lecteur ainsi que les tests transport EOF/stop restent verts. L'adaptation
+de cet ancien scénario permission est un suivi distinct.
+
+Adoption demandée par l'utilisateur : remplacement atomique du seul binaire
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget` après sauvegarde.
+SHA-256 release installé et raccourci `/Users/moi/.local/bin/bridget` identiques :
+`5e8383ea666a0043ddefedc13085427f0ecf749dd8f407b777b5279e14ee0ebc`.
+Ancien release : `43296aefe68aa137a97390c870292ec29c7800ada709e09e2f1f0aae6db1d1fa`,
+conservé dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/.install-codex-subagents.Gf9ONr/bridget.previous`.
+Le SHA attach 092 reste `acbc3e690457a27a933e3ab174d6a33dd278efca6894722fb9a881bec22e3f31` : aucun changement de ce lot.
+Le pilote Codex final est `2881ba0fb818688322b803d238d928a5ecd57ddf17f32fc6ad1657121e7d637b`.
+
+Skill canonique publiée également dans le dépôt actif, sans changer ses liens
+Codex/Claude/agents. `quick_validate.py` : PASS ; copie publiée identique à celle
+du worktree. Cette mise à jour étroite suit le guide skill-creator : retrait de
+la restriction, aucun nouveau mécanisme d'autorisation/gestion de sous-agents.
+Les README et artefacts versionnés restent dans le worktree avec le lot 092.
+Aucun redémarrage de production, aucun commit, aucune nouvelle identité Bridget
+ni aucun registre de sous-agents. Le daemon 73764, l'équipier 74282 et le wrapper
+humain 30818 ont conservé leurs PID. Le wrapper humain déjà chargé reste l'ancien
+code jusqu'à sa reprise volontaire ; aucun `spawn_agent` de recette n'a été tenté
+dans ce processus encore ancien.
+# Correctif reprise par nom — 07/09/2026, installé
+
+`thread/list` demande désormais `useStateDbOnly: true` sur toutes ses pages :
+lecture du catalogue public sans scan/réparation des historiques Codex. Cela
+conserve les bornes, le menu, la comparaison exacte et les refus d'ambiguïté.
+Le scan lent a été mesuré sur le CLI 0.153.4 ; le catalogue complet de 364 fils
+sans scan revient en 1,811 s. Aucun cache ni accès direct à la base depuis Bridget.
+Preuves dans `verification-reprise-catalogue.md` : rouge puis vert, vraie TUI
+nom/menu/refus, 1252 tests workspace réussis, fmt/clippy verts et release installé
+sans redémarrage de flotte. Les sections suivantes conservent les preuves historiques.

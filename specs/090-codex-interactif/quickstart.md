@@ -17,11 +17,12 @@ Une réponse finale à l'écran n'est PAS envoyée automatiquement à l'autre ag
 Codex 0.153.4 est la version réellement vérifiée. Le serveur et le fil sont
 privés à ce lancement. Le répertoire est celui du shell (`cd` avant lancement).
 La TUI conserve l'autorité des permissions ; aucun réglage global n'est écrit.
-Cette version lie UNE conversation : `/new`, `/resume` vers une autre conversation,
-fork et sous-agents internes qui chargent un second fil terminent l'intégration.
-Relancer `bridget codex` pour une autre conversation. Les autres agents Bridget,
-eux, restent indépendants et joignables. Le refus est une fermeture annoncée,
-pas une interception des touches de la TUI.
+Cette version lie UNE conversation Bridget, sans limiter les sous-agents internes
+de Codex. Leur création/reprise et les notifications d'autres fils ne ferment pas
+la session. Leur gestion reste native, sans inscription dans l'annuaire Bridget.
+L'adresse Bridget cible toujours le fil initial : elle ne suit pas implicitement
+une navigation `/new` ou `/resume` de la TUI. Relancer `bridget codex` pour rendre
+une autre conversation joignable. Les autres agents Bridget restent indépendants.
 
 Cette commande est interactive : quitter termine la session. Pour travailler
 après fermeture du terminal, conserver `bridget spawn ... --persistent` et attach.

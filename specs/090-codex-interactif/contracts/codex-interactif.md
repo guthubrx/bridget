@@ -33,10 +33,14 @@ la TUI lors d'un shutdown daemon ; un Disconnect explicite continue d'arrêter.
   journal v1 additif, from/body et input natif conservés, rendu par attach).
 - Le texte écran ne crée aucune réponse interagent implicite. La réponse liée
   passe par MCP et les transactions idempotentes existantes.
-- Serveur neuf, un seul fil chargé toléré. Tout `thread/started` OU
-  `thread/status/changed` étranger arrête la session, y compris sous-agent interne.
-  Le second signal couvre la reprise d'un historique : Codex 0.153.4 ne publie
-  pas `thread/started` sur cette voie. Pas de suivi silencieux d'un ancien fil.
+- Une identité Bridget est liée au fil initial, pas à l'ensemble des fils du
+  serveur. Les notifications `thread/started` et `thread/status/changed` d'un
+  autre fil sont non destructives : elles ne prouvent pas une navigation humaine.
+  Les sous-agents sont internes à Codex ; aucun registre d'enfants ni identité
+  Bridget supplémentaire. Les événements étrangers sont exclus des corrélations
+  du parent, y compris ACK, activité, journal et permissions ; les échanges du
+  parent continuent ensuite. Un EOF réel reste terminal. Un changement de vue
+  natif non attesté ne provoque aucune réaffectation implicite de l'identité.
 - Le parent possède TUI et groupe app-server : fermeture TUI d'abord (libère
   l'élicitation native), puis arrêt borné TERM/INT et suppression socket après
   disparition confirmée seulement. Survivant = erreur explicite, pas faux succès.
