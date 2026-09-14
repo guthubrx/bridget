@@ -316,7 +316,7 @@ fn install(paths: &Paths, with_service: bool) -> Result<(), String> {
             manifest.installation_id, manifest.label
         );
         if with_service && manifest.service_path.is_none() {
-            let service_path = service::install(paths)?;
+            let service_path = service::install()?;
             let manifest = Manifest {
                 service_path: Some(service_path),
                 ..manifest
@@ -369,7 +369,7 @@ fn install(paths: &Paths, with_service: bool) -> Result<(), String> {
         service_path: None,
     };
     if with_service {
-        match service::install(paths) {
+        match service::install() {
             Ok(path) => manifest.service_path = Some(path),
             Err(e) => {
                 // Retour arrière complet : rien ne reste d'une installation ratée.
@@ -536,7 +536,6 @@ fn status(paths: &Paths) -> Result<i32, String> {
 // ---------------------------------------------------------------------------
 
 mod service {
-    use super::Paths;
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -577,10 +576,22 @@ mod service {
         }
     }
 
-    pub(super) fn install(paths: &Paths) -> Result<String, String> {
+    /// Journal du service, volontairement HORS du namespace Bridget :
+    /// launchd crée ses fichiers de sortie en 0644, et le daemon refuse de
+    /// démarrer si un état non privé traîne dans son namespace.
+    pub(super) fn log_path(home: &str) -> PathBuf {
+        PathBuf::from(home)
+            .join("Library/Logs")
+            .join(format!("{LABEL}.log"))
+    }
+
+    pub(super) fn install() -> Result<String, String> {
         let bridget = std::env::current_exe().map_err(|e| e.to_string())?;
         let home = std::env::var("HOME").map_err(|_| "HOME absent".to_string())?;
-        let log = paths.dir.join("serve.log");
+        let log = log_path(&home);
+        if let Some(parent) = log.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{} : {e}", parent.display()))?;
+        }
         if cfg!(target_os = "macos") {
             let path = PathBuf::from(&home)
                 .join("Library/LaunchAgents")
@@ -1925,6 +1936,22 @@ mod tests {
                 &pending("uA", None)
             ),
             Correlation::Ambiguous
+        );
+    }
+
+    #[test]
+    fn spec098_journal_du_service_reste_hors_du_namespace() {
+        // launchd crée ses fichiers de sortie en 0644 ; un seul fichier non
+        // privé dans le namespace empêche le daemon Bridget de démarrer.
+        let home = "/Users/essai";
+        let log = service::log_path(home);
+        let namespace = crate::environment::root_for_home(std::path::Path::new(home))
+            .expect("racine du namespace");
+        assert!(
+            !log.starts_with(&namespace),
+            "journal {} sous le namespace {}",
+            log.display(),
+            namespace.display()
         );
     }
 
