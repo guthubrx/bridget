@@ -95,9 +95,9 @@ impl TmuxTransport {
     }
 }
 
-/// Valide le contenu destiné à tmux pour prévenir les injections
-/// Rejette les séquences de contrôle tmux dangereuses et limite la taille
-pub fn validate_tmux_content(content: &str) -> Result<(), TransportError> {
+/// Garde commune à toute injection dans un terminal (tmux, pseudo-terminal) :
+/// taille bornée et aucune séquence d'échappement. O(n) sur le contenu.
+pub fn validate_injection_content(content: &str) -> Result<(), TransportError> {
     // Limite de taille pour prévenir les attaques par mémoire
     const MAX_CONTENT_SIZE: usize = 100_000;
     if content.len() > MAX_CONTENT_SIZE {
@@ -107,6 +107,27 @@ pub fn validate_tmux_content(content: &str) -> Result<(), TransportError> {
             MAX_CONTENT_SIZE
         )));
     }
+
+    // Aucune séquence d'échappement ni caractère de contrôle : ESC seul
+    // (RIS, DCS, APC…), CR (soumission anticipée dans un PTY), autres C0 et
+    // DEL sont refusés ; seuls LF et TAB structurent un corps légitime
+    // (audit 097, SEC-001).
+    if content
+        .chars()
+        .any(|c| (c.is_control() && c != '\n' && c != '\t') || c == '\u{7f}')
+    {
+        return Err(TransportError::DeliveryFailed(
+            "Séquences de contrôle ou d'échappement détectées".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Valide le contenu destiné à tmux pour prévenir les injections :
+/// garde commune, puis rejet des commandes tmux dangereuses.
+pub fn validate_tmux_content(content: &str) -> Result<(), TransportError> {
+    validate_injection_content(content)?;
 
     // Séquences de contrôle tmux potentiellement dangereuses
     let dangerous_patterns = [
@@ -141,13 +162,6 @@ pub fn validate_tmux_content(content: &str) -> Result<(), TransportError> {
                 pattern
             )));
         }
-    }
-
-    // Vérifier les tentatives d'injection via caractères de contrôle
-    if content.contains('\x1b') && (content.contains('[') || content.contains(']')) {
-        return Err(TransportError::DeliveryFailed(
-            "Séquences ANSI ESC détectées".to_string(),
-        ));
     }
 
     Ok(())
@@ -394,6 +408,23 @@ mod tests {
         assert!(validate_tmux_content(content).is_err());
     }
 
+    #[test]
+    fn garde_commune_accepte_les_mots_tmux_mais_refuse_esc_et_taille() {
+        // La garde partagée ne connaît pas le vocabulaire tmux : `send-keys`
+        // passe, ESC et le dépassement de taille sont refusés.
+        assert!(validate_injection_content("Message avec send-keys").is_ok());
+        assert!(validate_injection_content("Message avec \x1b]52;c;x\x07").is_err());
+        assert!(
+            validate_injection_content("ESC nu \x1bc").is_err(),
+            "RIS sans crochet"
+        );
+        assert!(
+            validate_injection_content("retour\rchariot").is_err(),
+            "CR soumettrait"
+        );
+        assert!(validate_injection_content("ok\nligne\ttab").is_ok());
+        assert!(validate_injection_content(&"a".repeat(100_001)).is_err());
+    }
     #[test]
     fn test_validate_tmux_content_at_limit() {
         let content = "a".repeat(100_000);

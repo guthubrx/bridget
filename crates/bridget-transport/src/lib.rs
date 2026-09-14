@@ -15,6 +15,7 @@ pub mod journal;
 pub mod jsonl;
 pub mod managed_session;
 pub mod protocol;
+pub mod pty;
 pub mod refusals;
 pub mod tmux;
 pub mod transport;
@@ -38,5 +39,6 @@ pub use protocol::{
     MAX_ATTACH_SERIALIZED_FRAME_BYTES, ModelCapabilities, ResolvedAgentDefinition,
     ResolvedMcpDefinition, SpawnRefusal, StopOutcome, WrapperToDaemon,
 };
+pub use pty::PtyTransport;
 pub use tmux::TmuxTransport;
 pub use transport::{Transport, TransportError};
