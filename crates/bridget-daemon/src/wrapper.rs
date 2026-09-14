@@ -806,6 +806,43 @@ fn host_name() -> String {
 
 const INTERACTIVE_AGENT_PROTOCOL: &str = "tmux";
 
+/// Après une reconnexion au daemon, l'humain voit la reprise dans sa session ;
+/// la notification emprunte la même voie de remise que les messages.
+fn notify_reconnected(transport: &mut Option<Box<dyn Transport>>, agent_name: &str) {
+    if let Some(transport) = transport.as_mut()
+        && let Err(error) = transport.deliver(&bridget_core::BridgetMessage::new(
+            "bridget",
+            agent_name,
+            "🔄 Bridget: reconnecté au daemon",
+        ))
+    {
+        error!("Impossible d'afficher la notification de reconnexion: {error}");
+    }
+}
+
+/// Fournisseur interactif : hérité du terminal (voie tmux) ou lancé dans le
+/// pseudo-terminal possédé par le wrapper (Claude).
+enum InteractiveChild {
+    Inherited(std::process::Child),
+    Pty(crate::claude_interactive::PtySession),
+}
+
+impl InteractiveChild {
+    fn id(&self) -> u32 {
+        match self {
+            Self::Inherited(child) => child.id(),
+            Self::Pty(session) => session.child_id(),
+        }
+    }
+
+    fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        match self {
+            Self::Inherited(child) => child.wait(),
+            Self::Pty(session) => session.wait(),
+        }
+    }
+}
+
 fn connection_channel() -> Option<String> {
     crate::connection_channel::attested_connection_channel()
 }
@@ -1020,6 +1057,13 @@ struct ClaudeTranscriptLocator {
     directory: PathBuf,
     baseline: BTreeMap<PathBuf, SystemTime>,
     pinned: Option<PathBuf>,
+    /// Une reprise (`--resume`, `--continue`) écrit dans un transcript déjà
+    /// présent ; hors reprise, seul un fichier né après le lancement est le
+    /// nôtre : un voisin actif du même projet ne doit jamais être épinglé.
+    allow_preexisting: bool,
+    /// Transcript imposé par `--session-id` : aucune heuristique, aucun
+    /// voisin possible ; le fichier est attendu à ce chemin exact.
+    expected: Option<PathBuf>,
 }
 
 impl ClaudeTranscriptLocator {
@@ -1029,7 +1073,23 @@ impl ClaudeTranscriptLocator {
             directory,
             baseline,
             pinned: None,
+            allow_preexisting: false,
+            expected: None,
         }
+    }
+
+    fn expecting(mut self, path: PathBuf) -> Self {
+        self.expected = Some(path);
+        self
+    }
+
+    fn with_preexisting_allowed(mut self) -> Self {
+        self.allow_preexisting = true;
+        self
+    }
+
+    fn is_preexisting(&self, path: &Path) -> bool {
+        self.baseline.contains_key(path)
     }
 
     fn transcripts(directory: &Path) -> Vec<(PathBuf, SystemTime)> {
@@ -1050,6 +1110,9 @@ impl ClaudeTranscriptLocator {
     }
 
     fn resolve(&mut self) -> Option<PathBuf> {
+        if let Some(expected) = &self.expected {
+            return expected.is_file().then(|| expected.clone());
+        }
         if let Some(path) = &self.pinned {
             if path.is_file() {
                 return Some(path.clone());
@@ -1082,6 +1145,9 @@ impl ClaudeTranscriptLocator {
             .or_else(|| {
                 // Reprise sans nouveau fichier : dernière mtime parmi les
                 // transcripts déjà connus et modifiés depuis la photo.
+                if !self.allow_preexisting {
+                    return None;
+                }
                 changed
                     .into_iter()
                     .max_by_key(|(_, modified)| *modified)
@@ -1129,6 +1195,91 @@ struct RuntimeProbe {
     last_check: Instant,
     last_mtime: Option<SystemTime>,
     last_sent: Option<crate::runtime::RuntimeObservation>,
+    /// Octets du transcript déjà relus pour le journal (Claude seulement).
+    journal_offset: u64,
+}
+
+/// Événement de journal dérivé d'une ligne de transcript Claude.
+type TranscriptJournalEvent = (&'static str, Option<String>, serde_json::Value);
+
+fn transcript_text_blocks(content: &serde_json::Value) -> Vec<String> {
+    match content {
+        serde_json::Value::String(text) => vec![text.clone()],
+        serde_json::Value::Array(blocks) => blocks
+            .iter()
+            .filter(|block| block.get("type").and_then(serde_json::Value::as_str) == Some("text"))
+            .filter_map(|block| block.get("text").and_then(serde_json::Value::as_str))
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn bounded_transcript_text(text: &str) -> String {
+    text.chars().take(INJECTED_BODY_MAX_CHARS).collect()
+}
+
+/// Traduit une ligne du transcript Claude dans le vocabulaire déjà rendu par
+/// attach : `turn_start {from:"human"}` pour une saisie humaine, `update
+/// {kind:"text"}` pour le texte assistant, `turn_end` à la fin du tour. Les
+/// messages remis par Bridget (corps commençant par 💬) et les résultats
+/// d'outils ne sont pas rejoués : les premiers sont déjà journalisés à la
+/// remise, les seconds ne sont pas des tours. O(taille de la ligne).
+fn claude_transcript_journal_events(line: &str) -> Vec<TranscriptJournalEvent> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return Vec::new();
+    };
+    if value
+        .get("isSidechain")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Vec::new();
+    }
+    let message_id = value
+        .get("uuid")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let Some(message) = value.get("message") else {
+        return Vec::new();
+    };
+    let content = message.get("content").unwrap_or(&serde_json::Value::Null);
+    match value.get("type").and_then(serde_json::Value::as_str) {
+        Some("user") => {
+            let text = transcript_text_blocks(content).join("\n");
+            let text = text.trim();
+            if text.is_empty() || text.starts_with('💬') {
+                return Vec::new();
+            }
+            vec![(
+                "turn_start",
+                message_id,
+                serde_json::json!({"from": "human", "body": bounded_transcript_text(text)}),
+            )]
+        }
+        Some("assistant") => {
+            let mut events: Vec<TranscriptJournalEvent> = transcript_text_blocks(content)
+                .into_iter()
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| {
+                    (
+                        "update",
+                        message_id.clone(),
+                        serde_json::json!({"kind": "text", "text": bounded_transcript_text(&text)}),
+                    )
+                })
+                .collect();
+            if message
+                .get("stop_reason")
+                .and_then(serde_json::Value::as_str)
+                == Some("end_turn")
+            {
+                events.push(("turn_end", message_id, serde_json::json!({})));
+            }
+            events
+        }
+        _ => Vec::new(),
+    }
 }
 
 impl RuntimeProbe {
@@ -1149,6 +1300,7 @@ impl RuntimeProbe {
             last_check: Instant::now() - RUNTIME_PROBE_INTERVAL,
             last_mtime: None,
             last_sent: None,
+            journal_offset: 0,
         }
     }
 
@@ -1193,6 +1345,69 @@ impl RuntimeProbe {
         self.last_check = Instant::now() - RUNTIME_PROBE_INTERVAL;
     }
 
+    /// Point de départ du journal dans un transcript : un fichier né après le
+    /// lancement est relu depuis son début ; un transcript repris ne rejoue pas
+    /// son historique, seuls les tours de cette session sont journalisés.
+    fn journal_start_for(&self, path: Option<&Path>) -> u64 {
+        match (&self.kind, path) {
+            (RuntimeProbeKind::Claude { locator }, Some(path)) if locator.is_preexisting(path) => {
+                std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)
+            }
+            _ => 0,
+        }
+    }
+
+    /// Relit les lignes complètes du transcript Claude ajoutées depuis le
+    /// dernier appel et les traduit en événements de journal. Une ligne encore
+    /// incomplète attend le prochain tick. O(octets ajoutés).
+    fn drain_transcript_journal(&mut self) -> Vec<TranscriptJournalEvent> {
+        if !matches!(self.kind, RuntimeProbeKind::Claude { .. }) {
+            return Vec::new();
+        }
+        // Tant qu'aucun transcript n'est connu, une résolution par battement
+        // suffit (un `read_dir`) : le premier tour humain doit apparaître au
+        // journal en quelques secondes, pas après le rafraîchissement long.
+        if self.path.is_none() && self.path_resolved_at.elapsed() >= HEARTBEAT_INTERVAL {
+            self.path = self.resolve_path();
+            self.path_resolved_at = Instant::now();
+            self.last_mtime = None;
+            self.journal_offset = self.journal_start_for(self.path.clone().as_deref());
+        }
+        let Some(path) = self.path.as_ref() else {
+            return Vec::new();
+        };
+        // Lecture depuis l'offset seulement : un transcript long n'est pas
+        // relu en entier à chaque battement (audit 097, CPLX-001).
+        let tail = {
+            use std::io::{Read, Seek, SeekFrom};
+            let Ok(mut file) = std::fs::File::open(path) else {
+                return Vec::new();
+            };
+            let length = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+            if length < self.journal_offset {
+                // Fichier tronqué ou remplacé : repartir du début.
+                self.journal_offset = 0;
+            }
+            if file.seek(SeekFrom::Start(self.journal_offset)).is_err() {
+                return Vec::new();
+            }
+            let mut tail = Vec::new();
+            if file.read_to_end(&mut tail).is_err() {
+                return Vec::new();
+            }
+            tail
+        };
+        let complete = match tail.iter().rposition(|byte| *byte == b'\n') {
+            Some(index) => index + 1,
+            None => return Vec::new(),
+        };
+        self.journal_offset += complete as u64;
+        String::from_utf8_lossy(&tail[..complete])
+            .lines()
+            .flat_map(claude_transcript_journal_events)
+            .collect()
+    }
+
     /// Rend une observation à transmettre, ou `None` s'il n'y a rien de neuf.
     fn poll(&mut self) -> Option<crate::runtime::RuntimeObservation> {
         if self.last_check.elapsed() < RUNTIME_PROBE_INTERVAL {
@@ -1214,6 +1429,7 @@ impl RuntimeProbe {
             if resolved != self.path {
                 debug!("sonde runtime : fichier de session {:?}", resolved);
                 self.last_mtime = None;
+                self.journal_offset = self.journal_start_for(resolved.as_deref());
             }
             self.path = resolved;
             self.path_resolved_at = Instant::now();
@@ -1502,6 +1718,9 @@ pub fn launch(
             Some(interactive),
         );
     }
+    if agent_type == "claude" {
+        crate::claude_interactive::check_terminal()?;
+    }
     // 1. Enregistrement initial — avec persistance du nom.
     // Si l'utilisateur a passé --name, on l'utilise.
     // Sinon, si on fait un resume, on essaie de retrouver le nom précédent.
@@ -1515,20 +1734,34 @@ pub fn launch(
     let channel = connection_channel();
     let os = operating_system();
     let instance_id = uuid::Uuid::new_v4().to_string();
-    let (pane_id, tmux_location) = match get_current_tmux_context() {
-        Ok((pane_id, location)) => (pane_id, Some(location)),
-        Err(error) => {
-            warn!("contexte tmux indisponible: {}", error);
-            (String::new(), None)
+    // Claude possède son pseudo-terminal ; les autres types interactifs
+    // n'ont qu'une voie de remise, le pane tmux : sans pane, aucune présence
+    // n'est enregistrée plutôt qu'un agent affiché joignable en silence.
+    let (pane_id, tmux_location) = if agent_type == "claude" {
+        (String::new(), None)
+    } else {
+        match get_current_tmux_context() {
+            Ok((pane_id, location)) => (pane_id, Some(location)),
+            Err(error) => {
+                return Err(format!(
+                    "aucun pane tmux pour {agent_type} ({error}) ; lancez la session dans tmux ou utilisez bridget spawn {agent_type}"
+                )
+                .into());
+            }
         }
+    };
+    let (interactive_protocol, interactive_mode) = if agent_type == "claude" {
+        (crate::claude_interactive::PROTOCOL, PresenceMode::Cli)
+    } else {
+        (INTERACTIVE_AGENT_PROTOCOL, PresenceMode::Tmux)
     };
     let (reader, initial_writer, my_name) = connect_and_register(
         agent_type,
         effective_name.as_deref(),
         &host,
-        INTERACTIVE_AGENT_PROTOCOL,
+        interactive_protocol,
         channel.as_deref(),
-        PresenceMode::Tmux,
+        interactive_mode,
         tmux_location.as_deref(),
         &os,
         &instance_id,
@@ -1563,9 +1796,26 @@ pub fn launch(
         .map(PathBuf::from)
         .ok_or("HOME absent pour les reçus idempotents interactifs")?;
     let idempotent_deliveries = IdempotentDeliveryTracker::open(&home, &instance_id)?;
+    // Session neuve : imposer l'identifiant de session Claude Code rend le
+    // transcript déterministe (`<dir>/<uuid>.jsonl`) ; deux sessions lancées
+    // ensemble dans le même projet ne peuvent plus se confondre. Une reprise
+    // ou un identifiant choisi par l'humain conservent la résolution par date.
+    let resumes = agent_args
+        .iter()
+        .any(|argument| matches!(argument.as_str(), "--resume" | "-r" | "--continue" | "-c"));
+    let claude_session_id = (agent_type == "claude"
+        && !resumes
+        && !agent_args.iter().any(|argument| argument == "--session-id"))
+    .then(|| uuid::Uuid::new_v4().to_string());
     let claude_transcript_locator = (agent_type == "claude").then(|| {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        ClaudeTranscriptLocator::new(claude_transcript_directory(&home, &cwd))
+        let directory = claude_transcript_directory(&home, &cwd);
+        let locator = ClaudeTranscriptLocator::new(directory.clone());
+        match &claude_session_id {
+            Some(session_id) => locator.expecting(directory.join(format!("{session_id}.jsonl"))),
+            None if resumes => locator.with_preexisting_allowed(),
+            None => locator,
+        }
     });
 
     // Journal append-only interactif : Register annonce `false`, puis
@@ -1626,18 +1876,9 @@ pub fn launch(
         "none" | "unsupported" => false,
         _ => return Err("configuration MCP interactive inconnue dans le registre".into()),
     };
-    if agent_type == "claude" {
-        // Pour Claude Code (claude et gclaude)
-        let already_bypassed = agent_args
-            .iter()
-            .any(|a| a.contains("dangerously-skip-permissions") || a.contains("bypassPermissions"))
-            || final_args.iter().any(|a| {
-                a.contains("dangerously-skip-permissions") || a.contains("bypassPermissions")
-            });
-        if !already_bypassed {
-            ensure_claude_permission_bypass(&mut final_args);
-        }
-    }
+    // Claude interactif : l'humain est devant l'interface, les permissions
+    // natives restent sa décision. Aucun bypass n'est ajouté ; un bypass
+    // explicitement passé par l'utilisateur est relayé tel quel.
 
     // Codex emprunte déjà la TUI native plus haut. Le prompt des autres
     // fournisseurs reste inchangé.
@@ -1645,7 +1886,14 @@ pub fn launch(
         .iter()
         .any(|argument| !argument.starts_with("--"));
     if !has_prompt && agent_type == "claude" {
-        final_args.push(interactive_bridget_prompt(&my_display_name, mcp_enabled));
+        // En tête : `--allowedTools` est variadique chez Claude Code et
+        // avalerait un prompt positionnel placé après lui (constaté sur la
+        // vraie TUI : session muette, aucun transcript).
+        final_args.insert(0, interactive_bridget_prompt(&my_display_name, mcp_enabled));
+    }
+    if let Some(session_id) = &claude_session_id {
+        final_args.push("--session-id".to_string());
+        final_args.push(session_id.clone());
     }
     final_args.extend(agent_args.iter().cloned());
 
@@ -1662,17 +1910,25 @@ pub fn launch(
         final_args.join(" ")
     );
 
-    let mut child = match Command::new(agent_binary)
+    let mut command = Command::new(agent_binary);
+    command
         .args(&final_args)
         .env("BRIDGET_AGENT_ID", &my_name)
         .env("BRIDGET_AGENT_ID_FILE", &name_state_path)
         .env("BRIDGET_AGENT_DISPLAY_NAME", &my_display_name)
-        .env("BRIDGET_AGENT_INSTANCE_ID", &instance_id)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()
-    {
+        .env("BRIDGET_AGENT_INSTANCE_ID", &instance_id);
+    let spawned = if agent_type == "claude" {
+        crate::claude_interactive::PtySession::spawn(command).map(InteractiveChild::Pty)
+    } else {
+        command
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map(InteractiveChild::Inherited)
+            .map_err(|error| error.to_string())
+    };
+    let mut child = match spawned {
         Ok(child) => child,
         Err(error) => {
             relay.shutdown();
@@ -1682,6 +1938,18 @@ pub fn launch(
     };
 
     let agent_pid = child.id();
+    // La voie de remise est fixée avant tout enregistrement de marqueur :
+    // PTY possédé pour Claude, pane tmux attesté pour les autres types.
+    let transport: Option<Box<dyn Transport>> = match &child {
+        InteractiveChild::Pty(session) => Some(Box::new(
+            bridget_transport::PtyTransport::from_master(session.master_fd(), agent_pid)
+                .map_err(|error| error.to_string())?,
+        )),
+        InteractiveChild::Inherited(_) if !pane_id.is_empty() => {
+            Some(Box::new(TmuxTransport::new(pane_id.clone(), agent_pid)))
+        }
+        InteractiveChild::Inherited(_) => None,
+    };
     let marker_directory = socket_path().parent().unwrap().join("agent-pids");
     crate::mcp_identity::write_marker(
         &marker_directory,
@@ -1694,7 +1962,6 @@ pub fn launch(
     // 5. Thread d'écoute
     let writer_clone = writer.clone();
     let writer_for_listener = writer_clone.clone();
-    let pane_for_thread = pane_id.clone();
     let name_state_for_thread = name_state_path.clone();
     let agent_type_for_thread = agent_type.to_string();
     let mut my_name_for_thread = my_name.clone();
@@ -1709,11 +1976,7 @@ pub fn launch(
     let listener_handle = thread::spawn(move || {
         let mut listener = reader;
         let mut idempotent_deliveries = idempotent_deliveries;
-        let mut transport = if !pane_for_thread.is_empty() {
-            Some(TmuxTransport::new(pane_for_thread.clone(), agent_pid))
-        } else {
-            None
-        };
+        let mut transport = transport;
         let mut connected_since = Instant::now();
         let mut failed_attempts = 0_u32;
         let mut last_heartbeat = Instant::now();
@@ -1758,6 +2021,18 @@ pub fn launch(
                             }
                         } else {
                             error!("Impossible d'obtenir le writer pour heartbeat");
+                        }
+                    }
+
+                    // Journal des tours humain/assistant : même source que la
+                    // sonde (transcript de la session), même réveil.
+                    if let Some(probe) = runtime_probe.as_mut() {
+                        for (event, message_id, payload) in probe.drain_transcript_journal() {
+                            if let Err(detail) =
+                                journal.enqueue(event, message_id.as_deref(), payload)
+                            {
+                                warn!("journal transcript impossible: {detail}");
+                            }
                         }
                     }
 
@@ -1870,9 +2145,9 @@ pub fn launch(
                         &agent_type_for_thread,
                         Some(&wanted_name),
                         &host_for_thread,
-                        INTERACTIVE_AGENT_PROTOCOL,
+                        interactive_protocol,
                         channel_for_thread.as_deref(),
-                        PresenceMode::Tmux,
+                        interactive_mode,
                         tmux_location_for_thread.as_deref(),
                         &os_for_thread,
                         &instance_id_for_thread,
@@ -1912,21 +2187,7 @@ pub fn launch(
                                 my_name_for_thread
                             );
 
-                            // Notification visuelle à l'utilisateur (si tmux)
-                            if let Some(ref mut t) = transport {
-                                let notif = "🔄 Bridget: reconnecté au daemon".to_string();
-                                if let Err(e) = t.deliver(&bridget_core::BridgetMessage::new(
-                                    "bridget",
-                                    &my_name_for_thread,
-                                    &notif,
-                                )) {
-                                    error!(
-                                        "Impossible d'afficher la notification de reconnexion: {}",
-                                        e
-                                    );
-                                }
-                            }
-
+                            notify_reconnected(&mut transport, &my_name_for_thread);
                             continue 'connection;
                         }
                         Err(error) => {
@@ -2072,9 +2333,9 @@ pub fn launch(
                             &agent_type_for_thread,
                             Some(&wanted_name),
                             &host_for_thread,
-                            INTERACTIVE_AGENT_PROTOCOL,
+                            interactive_protocol,
                             channel_for_thread.as_deref(),
-                            PresenceMode::Tmux,
+                            interactive_mode,
                             tmux_location_for_thread.as_deref(),
                             &os_for_thread,
                             &instance_id_for_thread,
@@ -2096,6 +2357,7 @@ pub fn launch(
                                 if let Some(probe) = runtime_probe.as_mut() {
                                     probe.invalidate_after_reconnect();
                                 }
+                                notify_reconnected(&mut transport, &my_name_for_thread);
                                 continue 'connection;
                             }
                             Ok((_, _, registered_name)) => warn!(
@@ -2140,7 +2402,10 @@ pub fn launch(
     if let Some(code) = status.code() {
         std::process::exit(code);
     }
-    std::process::exit(0);
+    // Convention des shells : un fournisseur tué par un signal sort 128 + n,
+    // jamais 0 ; l'humain et les scripts voient la fin anormale.
+    let signal = std::os::unix::process::ExitStatusExt::signal(&status).unwrap_or(0);
+    std::process::exit(128 + signal);
 }
 
 fn split_equipier_flag(agent_args: &[String]) -> (bool, Vec<String>) {
@@ -5045,6 +5310,205 @@ fn delegated_runtime_message(
 /// l'identité réelle `humain`, puis le daemon perdait cette réponse.
 fn message_for_provider(message: &bridget_core::BridgetMessage) -> bridget_core::BridgetMessage {
     message.clone()
+}
+
+#[cfg(test)]
+mod transcript_journal_tests {
+    use super::*;
+
+    #[test]
+    fn saisie_humaine_texte_assistant_et_fin_de_tour_sont_traduits() {
+        let user = r#"{"type":"user","uuid":"u1","message":{"role":"user","content":"Question de l'humain"}}"#;
+        let bridget = r#"{"type":"user","uuid":"u2","message":{"role":"user","content":[{"type":"text","text":"💬 a → b (reply=no, id=x)\ncorps"}]}}"#;
+        let tool = r#"{"type":"user","uuid":"u3","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"sortie"}]}}"#;
+        let assistant = r#"{"type":"assistant","uuid":"a1","message":{"role":"assistant","model":"m","stop_reason":"end_turn","content":[{"type":"text","text":"Réponse"},{"type":"tool_use","id":"t","name":"Read","input":{}}]}}"#;
+        let sidechain = r#"{"type":"assistant","isSidechain":true,"uuid":"a2","message":{"role":"assistant","content":[{"type":"text","text":"sous-agent"}]}}"#;
+        let human = claude_transcript_journal_events(user);
+        assert_eq!(human.len(), 1);
+        assert_eq!(human[0].0, "turn_start");
+        assert_eq!(human[0].1.as_deref(), Some("u1"));
+        assert_eq!(human[0].2["from"], "human");
+        assert_eq!(human[0].2["body"], "Question de l'humain");
+        assert!(
+            claude_transcript_journal_events(bridget).is_empty(),
+            "remise Bridget déjà journalisée"
+        );
+        assert!(
+            claude_transcript_journal_events(tool).is_empty(),
+            "résultat d'outil : pas un tour"
+        );
+        let answer = claude_transcript_journal_events(assistant);
+        assert_eq!(answer.len(), 2);
+        assert_eq!(answer[0].0, "update");
+        assert_eq!(answer[0].2["kind"], "text");
+        assert_eq!(answer[0].2["text"], "Réponse");
+        assert_eq!(answer[1].0, "turn_end");
+        assert!(claude_transcript_journal_events(sidechain).is_empty());
+        assert!(claude_transcript_journal_events("pas du json").is_empty());
+    }
+
+    #[test]
+    fn hors_reprise_un_voisin_actif_n_est_jamais_epingle() {
+        // Cas réel du 2026-09-13 : une autre session Claude du même projet
+        // écrit en continu ; notre transcript n'existe pas encore au premier
+        // tick. Sans cette règle, le journal relayait la conversation du voisin.
+        let root = std::env::temp_dir().join(format!("bridget-097-voisin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let neighbour = root.join("voisin.jsonl");
+        let line = |id: &str, body: &str| {
+            format!(
+                "{{\"type\":\"user\",\"uuid\":\"{id}\",\"message\":{{\"content\":\"{body}\"}}}}
+"
+            )
+        };
+        std::fs::write(&neighbour, line("v1", "voisin")).unwrap();
+        let mut locator = ClaudeTranscriptLocator::new(root.clone());
+        let probe = RuntimeProbe::claude(ClaudeTranscriptLocator::new(root.clone()));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&neighbour, line("v2", "voisin encore")).unwrap();
+        assert_eq!(
+            locator.resolve(),
+            None,
+            "un préexistant modifié n'est pas le nôtre"
+        );
+        let ours = root.join("notre.jsonl");
+        std::fs::write(&ours, line("n1", "nous")).unwrap();
+        assert_eq!(locator.resolve(), Some(ours.clone()));
+        assert_eq!(
+            probe.journal_start_for(Some(&ours)),
+            0,
+            "né après : relu depuis le début"
+        );
+        // Reprise explicite : le préexistant est admis, son historique n'est pas rejoué.
+        let mut resumed = ClaudeTranscriptLocator::new(root.clone()).with_preexisting_allowed();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&neighbour, line("v3", "reprise")).unwrap();
+        assert_eq!(resumed.resolve(), Some(neighbour.clone()));
+        let probe = RuntimeProbe::claude(
+            ClaudeTranscriptLocator::new(root.clone()).with_preexisting_allowed(),
+        );
+        assert_eq!(
+            probe.journal_start_for(Some(&neighbour)),
+            std::fs::metadata(&neighbour).unwrap().len()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn deux_sessions_simultanees_ne_partagent_jamais_un_transcript() {
+        // Deux `bridget claude` lancés ensemble dans le même projet : chacun
+        // attend le transcript de SON identifiant de session, jamais le
+        // premier fichier né (règle qui confondait les sessions).
+        let root = std::env::temp_dir().join(format!("bridget-097-deux-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let mut a = ClaudeTranscriptLocator::new(root.clone()).expecting(root.join("aaaa.jsonl"));
+        let mut b = ClaudeTranscriptLocator::new(root.clone()).expecting(root.join("bbbb.jsonl"));
+        std::fs::write(
+            root.join("bbbb.jsonl"),
+            "{}
+",
+        )
+        .unwrap();
+        assert_eq!(
+            a.resolve(),
+            None,
+            "le transcript de l'autre session n'est pas le nôtre"
+        );
+        assert_eq!(b.resolve(), Some(root.join("bbbb.jsonl")));
+        std::fs::write(
+            root.join("aaaa.jsonl"),
+            "{}
+",
+        )
+        .unwrap();
+        assert_eq!(a.resolve(), Some(root.join("aaaa.jsonl")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn echec_d_injection_remonte_un_sort_indetermine_sans_accuse() {
+        let root =
+            std::env::temp_dir().join(format!("bridget-097-indetermine-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let instance_id = "instance_097_interactive";
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, instance_id).unwrap();
+        let message = bridget_core::BridgetMessage::new("expediteur", "destinataire", "corps");
+        let reports = deliver_idempotent_to_interactive(
+            &mut tracker,
+            "delivery-097".to_string(),
+            instance_id.to_string(),
+            7,
+            500,
+            message,
+            100,
+            |_| Err("maître PTY non accueillant".to_string()),
+        );
+        assert!(
+            matches!(
+                reports.as_slice(),
+                [WrapperToDaemon::DeliveryIndeterminate { delivery_id, .. }] if delivery_id == "delivery-097"
+            ),
+            "un échec d'écriture PTY ne vaut jamais un accusé : {reports:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn le_drainage_ne_consomme_que_les_lignes_completes() {
+        let root = std::env::temp_dir().join(format!("bridget-097-journal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("session.jsonl");
+        std::fs::write(&path, "").unwrap();
+        let mut probe = RuntimeProbe::claude(ClaudeTranscriptLocator::new(root.clone()));
+        probe.path = Some(path.clone());
+        std::fs::write(
+            &path,
+            r#"{"type":"user","uuid":"u1","message":{"content":"a"}}"#,
+        )
+        .unwrap();
+        assert!(
+            probe.drain_transcript_journal().is_empty(),
+            "ligne incomplète attendue"
+        );
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{{\"type\":\"user\",\"uuid\":\"u2\",\"message\":{{\"content\":\"b\"}}}}",
+                r#"{"type":"user","uuid":"u1","message":{"content":"a"}}"#
+            ),
+        )
+        .unwrap();
+        let first = probe.drain_transcript_journal();
+        assert_eq!(
+            first
+                .iter()
+                .map(|e| e.1.clone().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["u1"]
+        );
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{{\"type\":\"user\",\"uuid\":\"u2\",\"message\":{{\"content\":\"b\"}}}}\n",
+                r#"{"type":"user","uuid":"u1","message":{"content":"a"}}"#
+            ),
+        )
+        .unwrap();
+        let second = probe.drain_transcript_journal();
+        assert_eq!(
+            second
+                .iter()
+                .map(|e| e.1.clone().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["u2"]
+        );
+        assert!(probe.drain_transcript_journal().is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg(test)]

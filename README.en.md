@@ -83,6 +83,32 @@ recorded host and port. Missing values for a new destination are prompted only
 when both stdin and stdout are terminals; otherwise the command fails with the
 required flags. See [the federation service guide](docs/federation-services.md).
 
+## Native interactive Claude Code, without tmux (session 097)
+
+From a real terminal (iTerm, Terminal, remote shell), in the intended directory:
+
+```sh
+bridget claude
+bridget claude --resume
+bridget claude --name reviewer --model claude-opus-5
+```
+
+The wrapper owns a pseudo-terminal: Claude Code starts inside it with its
+native interface (colours, resizing, permissions), keystrokes and output are
+relayed verbatim, and Bridget messages are pasted into the conversation like
+human input (bracketed paste, then Enter). `who` shows `claude | claude_pty |
+cli`, never `tmux` without tmux. Without a terminal the launch is refused and
+`bridget spawn claude` is suggested. No permission bypass is added; an explicit
+bypass passed by the user is forwarded unchanged. The session journal relays
+human and assistant turns read from the Claude transcript, so `bridget attach
+<UUID>` works as for interactive Codex. Other interactive aliases (`gemini`,
+custom agents) still rely on tmux and are refused at launch without a pane.
+
+Managed Claude (`bridget spawn claude`) inherits the human's account session:
+the official CLI needs the real HOME and `USER`; no API key is read. The real
+recipe is recorded in
+[specs/097-claude-sans-tmux/implementation.md](specs/097-claude-sans-tmux/implementation.md).
+
 ## Native interactive Codex, without tmux (session 090)
 
 From a real terminal, in the intended working directory:

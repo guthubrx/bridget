@@ -87,6 +87,34 @@ Une nouvelle destination demande les paramètres manquants seulement avec stdin
 et stdout sur un terminal ; ailleurs, elle affiche les options requises et échoue.
 Voir [le guide des services de fédération](docs/federation-services.md).
 
+## Claude Code interactif, sans tmux (session 097)
+
+Depuis un vrai terminal (iTerm, Terminal, shell distant), dans le répertoire voulu :
+
+```sh
+bridget claude
+bridget claude --resume
+bridget claude --name relecteur --model claude-opus-5
+```
+
+Le wrapper possède un pseudo-terminal : Claude Code y démarre avec son
+interface native (couleurs, redimensionnement, permissions), la frappe et
+l'affichage sont relayés tels quels, et les messages Bridget sont collés dans
+la conversation comme une saisie humaine (collage encadré puis Entrée). La
+présence affichée par `who` est `claude | claude_pty | cli` : jamais `tmux`
+sans tmux. Sans terminal, le lancement est refusé avec l'alternative
+`bridget spawn claude`. Aucun bypass de permissions n'est ajouté ; un bypass
+explicitement passé par l'utilisateur est relayé tel quel. Le journal de
+session relaie les tours humain et assistant lus dans le transcript Claude ;
+`bridget attach <UUID>` fonctionne comme sur Codex interactif. Les autres
+alias interactifs (`gemini`, agents personnalisés) restent sur tmux et sont
+refusés au lancement s'ils n'ont aucun pane.
+
+Claude géré (`bridget spawn claude`) hérite de la connexion au compte de
+l'humain : HOME réel et `USER` sont nécessaires au CLI officiel ; aucune clé
+d'API n'est lue. Recette réelle consignée dans
+[specs/097-claude-sans-tmux/implementation.md](specs/097-claude-sans-tmux/implementation.md).
+
 ## Codex interactif, sans tmux (session 090)
 
 Depuis un vrai terminal, dans le répertoire de travail souhaité :

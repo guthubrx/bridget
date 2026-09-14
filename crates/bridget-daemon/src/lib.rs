@@ -7,6 +7,7 @@ pub mod artifact_types;
 pub mod attach;
 pub mod build_identity;
 pub mod build_info;
+mod claude_interactive;
 pub mod cli;
 mod codex_interactive;
 pub mod communication;
