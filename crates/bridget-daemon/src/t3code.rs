@@ -542,22 +542,30 @@ mod service {
     const LABEL: &str = "com.bridget.t3";
 
     fn env_pairs() -> Vec<(String, String)> {
-        [
-            "HOME",
-            "PATH",
-            "USER",
-            "BRIDGET_HOME",
-            "BRIDGET_SOCKET",
-            "T3CODE_HOME",
-            "BRIDGET_T3_BIN",
-        ]
-        .iter()
-        .filter_map(|key| {
-            std::env::var(key)
-                .ok()
-                .map(|value| (key.to_string(), value))
-        })
-        .collect()
+        // Sans niveau de journal, le service tourne muet et une panne du pont
+        // ne laisse aucune trace exploitable.
+        let mut pairs = vec![(
+            "RUST_LOG".to_string(),
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
+        )];
+        pairs.extend(
+            [
+                "HOME",
+                "PATH",
+                "USER",
+                "BRIDGET_HOME",
+                "BRIDGET_SOCKET",
+                "T3CODE_HOME",
+                "BRIDGET_T3_BIN",
+            ]
+            .iter()
+            .filter_map(|key| {
+                std::env::var(key)
+                    .ok()
+                    .map(|value| (key.to_string(), value))
+            }),
+        );
+        pairs
     }
 
     fn run(program: &str, args: &[&str]) -> Result<(), String> {
