@@ -24,6 +24,7 @@ de couverture.
 | `mcp` | Interne | Serveur stdio, pas outil auto-appelable | Point d'entrée lancé par le client MCP configuré. Il n'est ni un second daemon ni une permission globale. |
 | `attach` | CLI humain | Aucun outil MCP de terminal | Observe le journal et permet une saisie humaine dans un double-TTY ; ce n'est ni la TUI fournisseur ni un écran d'approbation. |
 | `federate` | CLI humain | Aucun outil MCP de fédération | Réutilise, installe, observe ou retire une liaison SSH persistante via le gestionnaire 095 embarqué. Le statut reste local ; une mutation appartient à l'humain et conserve les gardes SSH/natives. |
+| `t3` | CLI humain | Aucun outil MCP d'administration ; les fils exposés se joignent par `bridget_send` | Installe, observe, retire ou sert le pont t3code (session 098) : session émise par le CLI officiel `t3`, un agent par fil, remise par `thread.turn.start`, réponse liée par rang FIFO ; t3code n'est jamais modifié. |
 | `artifact` | Équivalence MCP | `bridget_read_artifact` pour `artifact read`; publication par `bridget_publish_artifact` | Lit des octets par références et bornes, sans chemin libre ni exécution. La publication structurée n'a pas de commande CLI jumelle. |
 | `spawn` | CLI humain | Aucun outil MCP de supervision | Crée un équipier géré avec persistance, répertoire et posture explicites ; l'autorité propriétaire n'est pas déléguée au modèle. |
 | `stop` | CLI humain | Aucun outil MCP de supervision | Arrête un équipier géré désigné ; effet de cycle de vie réservé à l'humain. |
@@ -202,6 +203,29 @@ global n'utilise ni DNS ni SSH. Le retrait par alias DNS demande `--label` hors
 double-TTY ; en double-TTY seulement, il peut exiger la confirmation littérale
 du label, de l'hôte enregistré et du port affichés. Une ambiguïté, une résolution
 hors budget ou des paramètres explicites divergents sont des refus sans mutation.
+
+## Adaptateur t3code (098)
+
+`bridget t3 install [--no-service]` émet une session dédiée par
+`t3 auth session issue --subject bridget --label bridget-<id> --ttl 30d --json`,
+la conserve en 0600 sous `<état Bridget>/t3code/`, et enregistre un
+LaunchAgent (`com.bridget.t3`) ou une unité `systemd --user` qui lance
+`bridget t3 serve`. `status` lit le serveur (`~/.t3/userdata/server-runtime.json`,
+boucle locale seule, PID vivant), la session, le service et le dernier état
+publié par le pont. `uninstall` retire le service, révoque la session par son
+identifiant (à défaut par son libellé) et efface l'état. Aucune de ces commandes
+n'écrit dans les fichiers de t3code.
+
+Le pont présente chaque fil vivant doté d'une session fournisseur comme un
+agent : identité stable dérivée de l'identifiant du fil, type = fournisseur
+(`claude`, `codex`, …), transport `t3code`, mode `cli`, nom humain = titre du
+fil (refusé si le nom existe déjà). Une remise attend un fil sans tour actif
+(borne `BRIDGET_T3_TURN_WAIT_SECS`, 120 s), envoie `thread.turn.start` avec
+`commandId` = identifiant du message Bridget (t3code déduplique), puis renvoie
+comme réponse liée le texte du tour de même rang que le message, une fois le
+tour clos. Un 401 déclenche un renouvellement unique ; un second 401 est un
+échec explicite (`auth_failed`) visible par `status`. Le journal du fil est
+projeté pour `attach` sans rejouer l'historique antérieur à l'installation.
 
 ## Version active et rechargement
 

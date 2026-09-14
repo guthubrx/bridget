@@ -51,6 +51,7 @@ d'artefacts et les limites de rechargement.
 | Reprendre une conversation humaine | `bridget codex … resume` ou `bridget claude --resume` |
 | Session Claude Code interactive joignable | `bridget claude` dans un terminal, sans tmux ; présence `claude_pty` |
 | Administrer une fédération SSH | CLI humain `bridget federate …`; jamais MCP ni repli automatique |
+| Joindre un fil t3code | `bridget_send` vers l'agent du fil (transport `t3code`) ; installation par l'humain avec `bridget t3 install` |
 
 La skill est le mode d'emploi, pas une alternative au MCP. Les outils Maicie
 éventuellement exposés parlent à un service extérieur ; leur présence ne prouve
@@ -88,6 +89,13 @@ une liaison connue : `bridget federate ssh://hôte -p PORT`, puis
 enregistrée ni `known_hosts`. Un retrait par alias DNS exige `--label` hors
 double-TTY, ou une confirmation affichant la cible enregistrée dans un vrai
 double-TTY. Ne jamais retirer ou recréer un tunnel pour contourner une panne MCP.
+
+Un fil t3code apparaît dans `bridget_who` avec le transport `t3code`, le mode
+`cli` et le titre du fil comme nom. Lui écrire démarre un tour dans
+l'application ; la réponse de ce tour revient comme réponse liée, sans que
+l'agent du fil dispose de Bridget. Le fil peut être occupé : la remise attend
+jusqu'à deux minutes, puis échoue nommément. L'installation, le statut et le
+retrait (`bridget t3 install|status|uninstall`) sont des actions humaines.
 
 ## Lancer → mission → observer → arrêter
 

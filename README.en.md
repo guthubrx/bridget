@@ -83,6 +83,32 @@ recorded host and port. Missing values for a new destination are prompted only
 when both stdin and stdout are terminals; otherwise the command fails with the
 required flags. See [the federation service guide](docs/federation-services.md).
 
+## Reaching t3code threads (session 098)
+
+The 098 binary embeds a bridge to [t3code](https://github.com/pingdotgg/t3code)
+that never modifies t3code: it reads the local server over loopback with a
+session issued by the official `t3` CLI and presents every open thread as a
+Bridget agent (`TYPE` = the thread provider, `TRANSPORT` t3code, `MODE` cli,
+display name = thread title).
+
+```sh
+bridget t3 install        # dedicated t3 session (t3 auth session issue) + bridge service
+bridget t3 status         # t3code server, session, service, exposed threads
+bridget send --to Alpha --reply -- 'Mission…'   # starts a turn in thread “Alpha”
+bridget t3 uninstall      # revokes the session, removes the service, wipes bridge state
+```
+
+Requirements: t3code running (the app or `t3 --mode web --no-browser`) and the
+`t3` CLI installed (`npm i -g t3`). A delivered message waits for the thread to
+be idle (two-minute bound), starts a turn with the message text, and the reply
+of that turn goes back to the sender as a linked reply: pairing follows the FIFO
+order of turns after the last turn closed at delivery time. The held session is
+administrative (t3code 0.0.40 issues no other kind) and lives only in a 0600
+file inside Bridget state; a 401 triggers one renewal, a second one is an
+explicit failure shown by `status`. The thread journal (`bridget attach`) never
+replays history older than the installation. An archived thread leaves the
+directory, never t3code. See [ADR 034](docs/decisions/034-adaptateur-t3code.md).
+
 ## Native interactive Claude Code, without tmux (session 097)
 
 From a real terminal (iTerm, Terminal, remote shell), in the intended directory:
