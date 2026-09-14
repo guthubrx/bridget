@@ -1697,7 +1697,7 @@ fn presence_line(agent: &AgentInfo) -> String {
     // Claude Code peut notamment servir GLM. Pas de table de déduction ici.
     let client = match agent.transport.as_str() {
         "codex_app_server" => "Codex",
-        "claude_stream_json" => "Claude Code",
+        "claude_stream_json" | "claude_pty" => "Claude Code",
         _ => &agent.agent_type,
     };
     format!(
@@ -2554,7 +2554,7 @@ fn write_visual_lines(output: &mut impl Write, lines: &[String]) {
     }
 }
 
-fn terminal_geometry(fd: RawFd) -> Option<(usize, usize)> {
+pub(crate) fn terminal_geometry(fd: RawFd) -> Option<(usize, usize)> {
     let mut size = MaybeUninit::<libc::winsize>::zeroed();
     if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, size.as_mut_ptr()) } != 0 {
         return None;
