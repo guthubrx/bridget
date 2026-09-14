@@ -14,6 +14,7 @@ import json
 import os
 import pathlib
 import secrets
+import signal
 import sys
 import threading
 import time
@@ -349,6 +350,22 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(log_dir):
+    # Devenir chef de groupe : le harnais nettoie ses enfants par `kill(-pid)`,
+    # qui n'atteint un processus que s'il dirige son propre groupe. Sans cela
+    # le faux serveur survit à son test et s'accumule.
+    try:
+        os.setsid()
+    except OSError:
+        pass
+
+    def watch_parent(initial):
+        while os.getppid() == initial:
+            time.sleep(0.5)
+        os._exit(0)
+
+    threading.Thread(target=watch_parent, args=(os.getppid(),), daemon=True).start()
+    for received in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(received, lambda *_: os._exit(0))
     Handler.state = State(log_dir)
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     port = server.server_address[1]
