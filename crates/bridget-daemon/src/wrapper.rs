@@ -569,7 +569,7 @@ enum PendingAcpDispatch {
 
 /// Raccorde l'observable ACP au reçu durable : aucun accusé n'est émis avant
 /// `PromptDispatched`, et tout état ambigu reste explicitement indéterminé.
-struct IdempotentDeliveryTracker {
+pub(crate) struct IdempotentDeliveryTracker {
     instance_id: String,
     receipts: ReceiptStore,
     pending: BTreeMap<String, VecDeque<PendingAcpDispatch>>,
@@ -585,13 +585,13 @@ enum IdempotentDeliveryAction {
 }
 
 impl IdempotentDeliveryTracker {
-    fn open(home: &std::path::Path, instance_id: &str) -> Result<Self, String> {
+    pub(crate) fn open(home: &std::path::Path, instance_id: &str) -> Result<Self, String> {
         let state_home = crate::environment::root_for_home(home)?.join("state");
         crate::environment::validate_existing_tree(&state_home)?;
         Self::open_at(&state_home, instance_id)
     }
 
-    fn open_at(state_home: &std::path::Path, instance_id: &str) -> Result<Self, String> {
+    pub(crate) fn open_at(state_home: &std::path::Path, instance_id: &str) -> Result<Self, String> {
         let receipts = ReceiptStore::open(state_home, instance_id, ReceiptQuota::default())
             .map_err(|error| format!("ouverture des reçus idempotents: {error}"))?;
         Ok(Self {
@@ -748,7 +748,7 @@ impl IdempotentDeliveryTracker {
 /// `PromptDispatched` pour une session interactive. L'accusé durable ne part
 /// donc qu'après l'injection effective dans le pane.
 #[allow(clippy::too_many_arguments)]
-fn deliver_idempotent_to_interactive(
+pub(crate) fn deliver_idempotent_to_interactive(
     tracker: &mut IdempotentDeliveryTracker,
     delivery_id: String,
     recipient_instance_id: String,
@@ -800,7 +800,7 @@ fn unix_now_secs() -> i64 {
 /// Source unique du nom de machine : l'annuaire, les refus de lancement et le
 /// contrôle de péremption doivent nommer la MÊME machine, sinon deux vues du
 /// même système désignent des hôtes différents.
-fn host_name() -> String {
+pub(crate) fn host_name() -> String {
     crate::build_info::local_host()
 }
 
@@ -883,7 +883,7 @@ fn derive_domain_at(directory: &Path) -> Option<String> {
 }
 
 /// Nom d'OS stable et lisible pour l'annuaire Bridget.
-fn operating_system() -> String {
+pub(crate) fn operating_system() -> String {
     match std::env::consts::OS {
         "macos" => "macOS".to_string(),
         "linux" => "Linux".to_string(),
@@ -1489,7 +1489,7 @@ fn connect_and_register(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn connect_and_register_with_domain_at(
+pub(crate) fn connect_and_register_with_domain_at(
     socket: &std::path::Path,
     agent_type: &str,
     agent_id: Option<&str>,
@@ -1567,7 +1567,7 @@ fn connect_and_register_with_domain_at(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn connect_and_register_at(
+pub(crate) fn connect_and_register_at(
     socket: &std::path::Path,
     agent_type: &str,
     agent_id: Option<&str>,
@@ -2594,7 +2594,7 @@ impl Default for AttachRelayHooks {
 /// déposer les commandes, tandis que ce worker traite chaque abonnement par
 /// petites tranches. Le contrôle coalescé vit dans un état borné partagé afin
 /// qu'un désabonnement ne soit jamais coincé derrière un rejeu volumineux.
-struct AttachRelayWorker {
+pub(crate) struct AttachRelayWorker {
     commands: mpsc::SyncSender<AttachRelayCommand>,
     stopped: Arc<AtomicBool>,
     control_state: Arc<Mutex<AttachRelayControlState>>,
@@ -2610,7 +2610,11 @@ type RelayEmitter = Arc<dyn Fn(WrapperToDaemon) + Send + Sync>;
 type RelayEvents = Arc<Mutex<Vec<WrapperToDaemon>>>;
 
 impl AttachRelayWorker {
-    fn start(directory: PathBuf, live_feed: JournalLiveFeed, emit: RelayEmitter) -> Self {
+    pub(crate) fn start(
+        directory: PathBuf,
+        live_feed: JournalLiveFeed,
+        emit: RelayEmitter,
+    ) -> Self {
         Self::start_with_clock(
             directory,
             Arc::new(current_host_date),
@@ -3021,7 +3025,7 @@ impl AttachRelayWorker {
         }
     }
 
-    fn subscribe(
+    pub(crate) fn subscribe(
         &self,
         subscription_id: String,
         window: AttachWindow,
@@ -3060,7 +3064,7 @@ impl AttachRelayWorker {
         result
     }
 
-    fn unsubscribe(&self, subscription_id: String) {
+    pub(crate) fn unsubscribe(&self, subscription_id: String) {
         let mut state = self
             .control_state
             .lock()
@@ -3073,7 +3077,7 @@ impl AttachRelayWorker {
         }
     }
 
-    fn reset_generation(&self) {
+    pub(crate) fn reset_generation(&self) {
         let mut state = self
             .control_state
             .lock()
@@ -3096,7 +3100,7 @@ impl AttachRelayWorker {
         }
     }
 
-    fn shutdown(&mut self) {
+    pub(crate) fn shutdown(&mut self) {
         if self.stopped.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -4791,7 +4795,7 @@ fn validate_wrapper_args(arguments: &[String]) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-fn send_wrapper_message(
+pub(crate) fn send_wrapper_message(
     writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>,
     message: WrapperToDaemon,
 ) {
@@ -4815,7 +4819,10 @@ fn send_wrapper_message(
 
 /// Consigne une livraison interactive dans le journal append-only. Le rendu
 /// attach réutilise le même événement `turn_start` que les pilotes gérés.
-fn record_interactive_turn(journal: &JournalWriter, message: &bridget_core::BridgetMessage) {
+pub(crate) fn record_interactive_turn(
+    journal: &JournalWriter,
+    message: &bridget_core::BridgetMessage,
+) {
     if let Err(detail) = journal.enqueue(
         "turn_start",
         Some(&message.id),
