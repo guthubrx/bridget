@@ -1100,6 +1100,9 @@ struct LinkWorker {
     relay: AttachRelayWorker,
     state_path: PathBuf,
     state: ThreadState,
+    /// Dernier titre publié comme nom humain. t3code régénère les titres et
+    /// l'humain les change : un nom figé à la connexion vieillirait aussitôt.
+    title: String,
     last_key: String,
     turn_wait: Duration,
 }
@@ -1133,22 +1136,8 @@ impl LinkWorker {
         send_wrapper_message(&writer, WrapperToDaemon::JournalReady);
         // Nom humain = titre du fil, pour que `who` et `send --to` parlent
         // la langue de t3code ; un refus (doublon) garde le nom attribué.
-        let title = summary
-            .title
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        if !title.is_empty() {
-            send_wrapper_message(
-                &writer,
-                WrapperToDaemon::DisplayNameSet {
-                    request: bridget_transport::protocol::DisplayNameRequest {
-                        version: 1,
-                        display_name: title.chars().take(48).collect::<String>(),
-                    },
-                },
-            );
-        }
+        let title = display_title(&summary.title);
+        publish_title(&writer, &title);
         let relay_writer = writer.clone();
         let relay = AttachRelayWorker::start(
             journal_root.join(&agent_id),
@@ -1168,6 +1157,7 @@ impl LinkWorker {
             relay,
             state_path,
             state,
+            title,
             last_key: String::new(),
             turn_wait: turn_wait(),
         })
@@ -1178,6 +1168,15 @@ impl LinkWorker {
             match inbox.recv_timeout(Duration::from_secs(30)) {
                 Ok(LinkEvent::Tick(summary)) => {
                     send_wrapper_message(&self.writer, WrapperToDaemon::Heartbeat);
+                    let title = display_title(&summary.title);
+                    if title != self.title {
+                        info!(
+                            "fil {} renommé « {} » → « {title} »",
+                            self.thread_id, self.title
+                        );
+                        publish_title(&self.writer, &title);
+                        self.title = title;
+                    }
                     let key = summary.change_key();
                     if key != self.last_key || !self.state.pending.is_empty() {
                         self.last_key = key;
@@ -1562,6 +1561,35 @@ impl LinkWorker {
             }
         }
     }
+}
+
+/// Titre présentable : espaces normalisés et longueur bornée, le daemon
+/// refusant les noms de contrôle ou démesurés.
+pub(crate) fn display_title(title: &str) -> String {
+    title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(48)
+        .collect()
+}
+
+/// Publie le nom humain du fil ; un titre vide laisse le nom attribué par le
+/// daemon, un doublon est refusé par lui sans conséquence pour la remise.
+fn publish_title(writer: &Arc<Mutex<Option<BufWriter<UnixStream>>>>, title: &str) {
+    if title.is_empty() {
+        return;
+    }
+    send_wrapper_message(
+        writer,
+        WrapperToDaemon::DisplayNameSet {
+            request: bridget_transport::protocol::DisplayNameRequest {
+                version: 1,
+                display_name: title.to_string(),
+            },
+        },
+    );
 }
 
 /// Identifiant déterministe de la réponse à une demande : deux envois issus

@@ -415,6 +415,32 @@ fn spec098_pont_expose_remet_repond_renouvelle_et_retire() {
         "{log}"
     );
 
+    // t3code régénère les titres et l'humain les change : le nom suit, sinon
+    // l'agent garderait un nom périmé que personne ne reconnaît.
+    harness.control(
+        "/__test/title",
+        serde_json::json!({"threadId": "thread-alpha", "title": "Alpha renommé"}),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let agents = harness.agents();
+        if agents
+            .iter()
+            .any(|a| a.transport == "t3code" && a.display_name == "Alpha renommé")
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "nom non resynchronisé : {:?}",
+            agents
+                .iter()
+                .map(|a| a.display_name.clone())
+                .collect::<Vec<_>>()
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+
     // La politique du fil peut changer entre deux sondages : le dispatch doit
     // reprendre celle du dernier snapshot, jamais une valeur figée à l'ouverture
     // du lien (t3code refuserait la commande, ou pire on figerait des droits).

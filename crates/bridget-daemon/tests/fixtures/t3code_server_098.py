@@ -325,6 +325,12 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self.state.next_sequence()
                 return self.reply(200, {"ok": True})
+            if url.path == "/__test/title":
+                thread = self.state.threads[payload["threadId"]]
+                thread["title"] = payload["title"]
+                thread["updatedAt"] = now()
+                self.state.next_sequence()
+                return self.reply(200, {"ok": True})
             if url.path == "/__test/policy":
                 thread = self.state.threads[payload["threadId"]]
                 thread["runtimeMode"] = payload["runtimeMode"]
