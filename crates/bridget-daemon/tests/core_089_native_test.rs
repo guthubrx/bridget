@@ -87,47 +87,46 @@ impl Drop for PrivateCredentials {
 
 #[cfg(target_os = "macos")]
 #[test]
-#[ignore = "requiert l'autorisation d'utiliser le compte Claude Max local"]
+#[ignore = "requiert l'autorisation d'utiliser le compte Claude local : BRIDGET_CLAUDE_NATIVE_GATE=1"]
 fn gate_reel_claude_stream_json_reponse_liee_et_attach() {
-    let service = std::env::var("BRIDGET_TEST_CLAUDE_KEYCHAIN_SERVICE")
-        .expect("service Keychain explicitement autorisé requis");
-    let executable = std::env::var("BRIDGET_TEST_CLAUDE_BIN").expect("CLI Claude local requis");
-    let keychain = std::env::var("BRIDGET_TEST_CLAUDE_KEYCHAIN_FILE")
-        .expect("trousseau local explicite requis sous HOME isolé");
-    // Lecture locale uniquement : aucun changement du trousseau, aucune clé API,
-    // aucun token dans argv, logs ou fichiers du test. Le CLI officiel consomme
-    // la session d'abonnement dans un HOME neuf sans config/plugins de l'utilisateur.
-    let secret = std::process::Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", &service, "-w", &keychain])
-        .output()
-        .expect("lecture du trousseau");
-    assert!(
-        secret.status.success(),
-        "session Claude locale indisponible"
+    assert_eq!(
+        std::env::var("BRIDGET_CLAUDE_NATIVE_GATE").as_deref(),
+        Ok("1"),
+        "gate réel Claude : opt-in explicite requis"
     );
-    let credentials: serde_json::Value =
-        serde_json::from_slice(&secret.stdout).expect("format de session Claude");
-    let token = credentials["claudeAiOauth"]["accessToken"]
-        .as_str()
-        .expect("jeton d'abonnement absent")
-        .to_owned();
+    let executable = std::env::var("BRIDGET_TEST_CLAUDE_BIN").expect("CLI Claude local requis");
+    // Session 097 : le CLI officiel retrouve sa session d'abonnement seulement
+    // avec le HOME réel ET `USER` (lecture du trousseau par compte). Aucune
+    // clé d'API, aucune lecture du trousseau par le test, aucun jeton dans
+    // l'environnement : l'état Bridget reste privé, l'authentification est
+    // celle de l'humain. La configuration utilisateur est neutralisée par les
+    // arguments (`--setting-sources ""`, `--strict-mcp-config`, `--tools ""`).
+    let provider_home =
+        std::env::var("BRIDGET_TEST_CLAUDE_HOME").expect("HOME réel explicite du compte Claude");
+    let provider_user =
+        std::env::var("BRIDGET_TEST_CLAUDE_USER").expect("USER explicite du compte Claude");
+    let model = std::env::var("BRIDGET_TEST_CLAUDE_MODEL")
+        .unwrap_or_else(|_| "claude-haiku-4-5-20251001".to_string());
     let root = root();
     fixture::private_write(&root.join("state/agents.json"), serde_json::to_vec(&serde_json::json!({
         "agents": {"claude": {
             "command": executable,
-            "args": ["--model", "claude-opus-5", "--effort", "low", "--tools", "", "--strict-mcp-config", "--setting-sources", ""],
+            "args": ["--model", &model, "--tools", "", "--strict-mcp-config", "--setting-sources", ""],
             "protocol": "claude_stream_json", "permissions": "deny", "notify_timeout_secs": 60,
-            "forbidden_env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
-            "pass_env": ["CLAUDE_CODE_OAUTH_TOKEN"],
+            "forbidden_env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
+            "pass_env": [],
             "mcp": {"interactive":"none", "acp_session":false},
-            "capabilities": {"execution_paths":["claude_stream_json"], "models":{"claude-opus-5":{"efforts":["low"]}}}
+            "capabilities": {"execution_paths":["claude_stream_json"], "models":{&model:{"efforts":[]}}}
         }}
     })).unwrap()).unwrap();
     let daemon = start_daemon(&root);
     let wrapper = start_wrapper(
         &root,
         "claude",
-        &[("CLAUDE_CODE_OAUTH_TOKEN".into(), token)],
+        &[
+            ("HOME".into(), provider_home),
+            ("USER".into(), provider_user),
+        ],
     );
     fixture::wait_for_registered_agent(&fixture::socket(&root), fixture::ACP_AGENT);
     let (mut reader, mut writer) = sender(&fixture::socket(&root));
@@ -185,16 +184,26 @@ fn gate_reel_claude_stream_json_reponse_liee_et_attach() {
             other => panic!("journal Claude : {other:?}"),
         }
     }
+    // Politique 091 : le modèle déclaré vient d'un ordre de lancement ; un
+    // équipier lancé à la main n'en a pas et la colonne reste « — ». Le pilote
+    // compare le modèle servi (`system/init`) au modèle épinglé par `--model`
+    // et publie l'écart éventuel : son absence est le verdict observable.
     write_frame(&mut writer, &WrapperToDaemon::ListAgents);
     let info = read_frame(&mut reader);
     assert!(
         matches!(info, DaemonToWrapper::AgentList { ref agents }
-        if agents.iter().any(|agent| agent.agent_id == fixture::ACP_AGENT && agent.model.as_deref() == Some("claude-opus-5"))),
-        "modèle réel non attesté : {info:?}"
+        if agents.iter().any(|agent| agent.agent_id == fixture::ACP_AGENT
+            && agent.transport == "claude_stream_json"
+            && agent.model_mismatch.is_none())),
+        "présence Claude gérée incohérente : {info:?}"
     );
     let who = fixture::run_isolated(&root, &["who"], false);
     assert!(who.status.success());
-    assert!(String::from_utf8_lossy(&who.stdout).contains("claude-opus-5"));
+    let who_text = String::from_utf8_lossy(&who.stdout);
+    assert!(
+        who_text.contains("claude_stream_json") && !who_text.contains('≠'),
+        "{who_text}"
+    );
     stop_session(daemon, wrapper);
     fs::remove_dir_all(root).unwrap();
 }

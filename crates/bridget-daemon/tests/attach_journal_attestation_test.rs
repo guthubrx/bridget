@@ -69,7 +69,13 @@ impl InteractiveWrapper {
             .env("HOME", root)
             .env("BRIDGET_HOME", root.join("state"))
             .env("BRIDGET_SOCKET", root.join("state/bridget.sock"))
-            .env("PATH", "/usr/bin:/bin")
+            // Session 097 : un type resté tmux exige un pane attesté par tmux
+            // lui-même ; la fixture fournit un tmux factice qui atteste un pane
+            // et accepte le collage, pour rester un stand-in interactif.
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin", root.join("bin").display()),
+            )
             .env("BRIDGET_TEST_NAME_FILE_PATH", &marker)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -172,6 +178,15 @@ fn prepare_interactive_fixture(root: &Path) -> PathBuf {
     )
     .expect("agent");
     std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).expect("bin");
+    let tmux = bin.join("tmux");
+    std::fs::write(
+        &tmux,
+        "#!/bin/sh\ncase \"$1\" in\n  display-message) printf '%%1\\tfixture:0.0\\n' ;;\n  load-buffer) cat >/dev/null ;;\n  show-buffer) exit 1 ;;\n  *) : ;;\nesac\nexit 0\n",
+    )
+    .expect("tmux factice");
+    std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o700)).expect("chmod tmux");
     let registry = serde_json::json!({
         "agents": {
             "fixture": {
