@@ -1,8 +1,8 @@
 # Spécification 097 — Claude natif et interactif sans tmux
 
-**Branche** : session-097-claude-sans-tmux · **Date** : 2026-09-13 · **Statut** : Validée par l'utilisateur (périmètre deux volets)
+**Branche** : session-097-claude-sans-tmux · **Date** : 2026-09-13 · **Statut** : In Progress — implémentation et gates verts (15/15 tâches), validation humaine SC-09706 en attente
 **Demande** : qu'un agent Claude Code, géré par le daemon ou lancé par l'humain dans son terminal habituel, reçoive réellement les messages Bridget sans serveur tmux, avec la même honnêteté de présence et de livraison que Codex depuis la session 090.
-**Tests** : à exécuter.
+**Tests** : workspace 1328/0/56 après audit v14 (note A-) ; recettes réelles Claude géré 3/3 et vraie TUI 1/1 (2026-09-13).
 
 ## Incident déclencheur
 

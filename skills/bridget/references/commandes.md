@@ -16,9 +16,9 @@ de couverture.
 | Commande racine | Décision 094 | Accès ou équivalence | Acteur, usage et motif |
 |---|---|---|---|
 | `codex` | CLI humain | Aucun outil MCP de lancement | Alias interactif annoncé par l'aide et résolu dans le registre actif ; ouvre la TUI fournisseur au premier plan. Sa présence dans l'aide ne garantit pas que le registre ou le fournisseur soit disponible. |
-| `claude` | CLI humain | Aucun outil MCP de lancement | Alias interactif annoncé par l'aide et résolu dans le registre actif ; les permissions restent humaines. Disponibilité non garantie par la documentation seule. |
-| `gemini` | CLI humain | Aucun outil MCP de lancement | Alias interactif annoncé par l'aide et résolu dans le registre actif ; disponibilité dépendante du registre et du fournisseur. |
-| `gclaude` | CLI humain | Aucun outil MCP de lancement | Alias interactif annoncé par l'aide et résolu dans le registre actif ; disponibilité dépendante du registre et du fournisseur. |
+| `claude` | CLI humain | Aucun outil MCP de lancement | Alias interactif résolu dans le registre actif ; session 097 : pseudo-terminal possédé par le wrapper, sans tmux, présence `claude_pty`, refus sans terminal ; les permissions restent humaines, aucun bypass implicite. |
+| `gemini` | CLI humain | Aucun outil MCP de lancement | Alias interactif résolu dans le registre actif ; voie tmux : un pane attesté est requis, sinon refus au lancement (session 097). |
+| `gclaude` | CLI humain | Aucun outil MCP de lancement | Alias interactif de type `claude` : même pseudo-terminal que `bridget claude` (session 097). |
 | `--` | CLI humain | Aucun outil MCP de lancement | Lance explicitement une commande d'agent personnalisée reconnue par le registre ; ne contourne ni le registre ni les permissions du fournisseur. |
 | `daemon` | CLI humain | Aucun | Démarre l'autorité Bridget au premier plan. Un agent ne démarre pas un nouveau daemon pour réparer un envoi ou changer de namespace. |
 | `mcp` | Interne | Serveur stdio, pas outil auto-appelable | Point d'entrée lancé par le client MCP configuré. Il n'est ni un second daemon ni une permission globale. |

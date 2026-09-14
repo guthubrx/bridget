@@ -48,7 +48,8 @@ d'artefacts et les limites de rechargement.
 | Lire/publier un artefact | MCP `bridget_read_artifact/publish_artifact`; contenu inerte, références exactes |
 | Lancer/arrêter/relancer un équipier | CLI explicite ; aucun outil MCP de supervision annoncé |
 | Observer et écrire à l'agent | `bridget attach <UUID>` dans un terminal |
-| Reprendre une conversation humaine | `bridget codex … resume` |
+| Reprendre une conversation humaine | `bridget codex … resume` ou `bridget claude --resume` |
+| Session Claude Code interactive joignable | `bridget claude` dans un terminal, sans tmux ; présence `claude_pty` |
 | Administrer une fédération SSH | CLI humain `bridget federate …`; jamais MCP ni repli automatique |
 
 La skill est le mode d'emploi, pas une alternative au MCP. Les outils Maicie
