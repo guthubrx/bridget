@@ -481,12 +481,20 @@ fn spec098_pont_expose_remet_repond_renouvelle_et_retire() {
         "{}",
         reply.body
     );
+    // Un fil rangé quitte l'annuaire comme un fil archivé : l'import
+    // d'historique de t3code en produit des centaines d'un coup.
+    harness.control(
+        "/__test/settle",
+        serde_json::json!({"threadId": "thread-beta"}),
+    );
+    let agents = harness.wait_t3_agents(1, Duration::from_secs(10));
+    assert_eq!(agents[0].agent_type, "claude", "seul le fil actif subsiste");
+
     harness.control(
         "/__test/archive",
         serde_json::json!({"threadId": "thread-alpha"}),
     );
-    let agents = harness.wait_t3_agents(1, Duration::from_secs(10));
-    assert_eq!(agents[0].agent_type, "codex");
+    harness.wait_t3_agents(0, Duration::from_secs(10));
 
     // Retrait : session révoquée, état effacé, second retrait inoffensif.
     let output = harness.run(&["t3", "uninstall"]);

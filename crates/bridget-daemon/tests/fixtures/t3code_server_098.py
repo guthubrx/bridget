@@ -124,6 +124,7 @@ class State:
             "worktreePath": "/tmp/projet-alpha/.worktrees/" + thread_id,
             "archivedAt": None,
             "deletedAt": None,
+            "settledOverride": None,
             "updatedAt": now(),
             "latestTurn": None,
             "session": {
@@ -311,6 +312,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.state.user_message(
                     payload["threadId"], "h-" + secrets.token_hex(4), payload["text"], "human"
                 )
+                return self.reply(200, {"ok": True})
+            if url.path == "/__test/settle":
+                self.state.threads[payload["threadId"]]["settledOverride"] = "settled"
+                self.state.next_sequence()
                 return self.reply(200, {"ok": True})
             if url.path == "/__test/archive":
                 self.state.threads[payload["threadId"]]["archivedAt"] = now()

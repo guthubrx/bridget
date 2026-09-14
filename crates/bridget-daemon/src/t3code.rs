@@ -1773,6 +1773,7 @@ mod tests {
             worktree_path: None,
             archived_at: None,
             deleted_at: None,
+            settled_override: None,
             updated_at: "2026-09-14T00:00:00Z".to_string(),
             latest_turn: latest.map(|(id, state)| LatestTurn {
                 turn_id: id.to_string(),
@@ -1986,6 +1987,19 @@ mod tests {
         assert_eq!(agent_type_for("antigravity"), "gemini");
         assert_eq!(agent_type_for("Gemini"), "gemini");
         assert_eq!(agent_type_for("autre"), "autre");
+    }
+
+    #[test]
+    fn spec098_fil_range_n_est_pas_un_agent() {
+        // t3code range les fils issus d'un import d'historique : les exposer
+        // noierait l'annuaire sous des centaines de conversations passées.
+        let mut range = summary(None);
+        range.settled_override = Some("settled".to_string());
+        assert!(!range.is_live());
+        let mut repris = summary(None);
+        repris.settled_override = Some("active".to_string());
+        assert!(repris.is_live());
+        assert!(summary(None).is_live());
     }
 
     #[test]

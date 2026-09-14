@@ -201,15 +201,22 @@ pub struct ThreadSummary {
     pub worktree_path: Option<String>,
     pub archived_at: Option<String>,
     pub deleted_at: Option<String>,
+    /// « settled » = conversation rangée par l'humain ou issue d'un import
+    /// d'historique. Ce n'est pas un agent joignable.
+    pub settled_override: Option<String>,
     pub updated_at: String,
     pub latest_turn: Option<LatestTurn>,
     pub session: Option<SessionSummary>,
 }
 
 impl ThreadSummary {
-    /// Un fil archivé ou supprimé n'est plus un agent.
+    /// Un fil archivé, supprimé ou rangé n'est plus un agent joignable.
+    /// L'import d'historique de t3code range ses fils : sans ce filtre, des
+    /// centaines de conversations passées apparaîtraient dans l'annuaire.
     pub fn is_live(&self) -> bool {
-        self.archived_at.is_none() && self.deleted_at.is_none()
+        self.archived_at.is_none()
+            && self.deleted_at.is_none()
+            && self.settled_override.as_deref() != Some("settled")
     }
     /// Empreinte de changement : t3code 0.0.40 n'expose pas de séquence par fil.
     pub fn change_key(&self) -> String {
@@ -304,6 +311,7 @@ pub fn parse_snapshot(text: &str) -> Result<Snapshot, ContractError> {
             worktree_path: opt_str(thread, "worktreePath"),
             archived_at: opt_str(thread, "archivedAt"),
             deleted_at: opt_str(thread, "deletedAt"),
+            settled_override: opt_str(thread, "settledOverride"),
             updated_at: str_field(thread, SRC, "threads[].updatedAt")?.to_string(),
             latest_turn: parse_latest_turn(thread.get("latestTurn"), SRC)?,
             session,
