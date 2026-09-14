@@ -50,12 +50,16 @@ const NAMESPACE_098: uuid::Uuid = uuid::Uuid::from_bytes([
 // Entrée CLI
 // ---------------------------------------------------------------------------
 
-const USAGE: &str = "Usage : bridget t3 <install [--no-service] | status | uninstall | serve>\n\n\
-  install    Émet une session t3 dédiée (`t3 auth session issue`), enregistre le service\n  \
-             de pont et n'écrit rien dans t3code. Idempotent.\n  \
-  status     Serveur t3code, session, service et fils exposés.\n  \
-  uninstall  Retire le service, révoque la session, efface l'état du pont.\n  \
-  serve      Lance le pont au premier plan (utilisé par le service).\n";
+const USAGE: &str = "Usage : bridget t3 <install [--no-service] | status | uninstall | serve>
+
+  install    Émet une session t3 dédiée (`t3 auth session issue`), enregistre
+             le service de pont, n'écrit rien dans t3code. Idempotent.
+  status     Serveur t3code, session, service et fils exposés.
+  uninstall  Retire le service, révoque la session, efface l'état du pont.
+  serve      Lance le pont au premier plan (utilisé par le service).
+
+Prérequis : t3code démarré et le CLI `t3` installé (npm i -g t3).
+";
 
 pub fn run(arguments: &[String]) -> ! {
     match invoke(arguments) {
