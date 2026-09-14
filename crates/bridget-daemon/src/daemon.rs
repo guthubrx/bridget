@@ -5796,15 +5796,14 @@ fn handle_register_with_channel(
                 let disk_space = previous
                     .as_ref()
                     .and_then(|presence| presence.disk_space.clone());
-                // Une reconnexion par un binaire antérieur au champ conserve
-                // l'observation déjà attestée ; une présence historique sans
-                // valeur reste volontairement inconnue.
-                let mode = managed_mode.or_else(|| {
-                    previous
-                        .as_ref()
-                        .and_then(|presence| presence.mode)
-                        .or(mode)
-                });
+                // Le mode annoncé par le wrapper prime : une identité déjà
+                // connue peut changer de voie (session 097 : tmux → PTY). Seule
+                // une reconnexion par un binaire antérieur au champ (mode
+                // absent) conserve l'observation déjà attestée ; une présence
+                // historique sans valeur reste volontairement inconnue.
+                let mode = managed_mode
+                    .or(mode)
+                    .or_else(|| previous.as_ref().and_then(|presence| presence.mode));
                 let location = match mode {
                     Some(PresenceMode::Tmux) => previous
                         .as_ref()
@@ -17367,6 +17366,84 @@ mod presence_tests {
             })
         ));
         let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn une_identite_connue_qui_change_de_voie_prend_le_mode_annonce() {
+        // Session 097 : une session Claude relancée avec le nouveau wrapper
+        // annonce `cli` + `claude_pty` ; l'ancien mode tmux mémorisé pour le
+        // même UUID ne doit pas lui coller à la peau. Un binaire ancien qui
+        // n'annonce aucun mode conserve, lui, l'observation précédente.
+        let (mut state, _config) = state_with_registered_agent("presence-changement-de-voie");
+        state.router.unregister_by_conn("conn-1");
+        state.conn_instances.remove("conn-1");
+        state.presences.clear();
+        let agent = "89000000-0000-4000-8000-000000000122";
+        let register = |state: &mut DaemonState,
+                        conn: &str,
+                        instance: &str,
+                        transport: &str,
+                        mode: Option<PresenceMode>,
+                        location: Option<&str>| {
+            assert!(matches!(
+                handle_register(
+                    conn,
+                    "claude".to_string(),
+                    Some(agent.to_string()),
+                    Some("local".to_string()),
+                    Some(transport.to_string()),
+                    mode,
+                    location.map(str::to_string),
+                    Some("test".to_string()),
+                    Some(instance.to_string()),
+                    None,
+                    false,
+                    None,
+                    state,
+                ),
+                DaemonToWrapper::Registered { .. }
+            ));
+        };
+        register(
+            &mut state,
+            "tmux-conn",
+            "instance-tmux",
+            "tmux",
+            Some(PresenceMode::Tmux),
+            Some("bridget:1.0"),
+        );
+        state.router.unregister_by_conn("tmux-conn");
+        state.conn_instances.remove("tmux-conn");
+        register(
+            &mut state,
+            "pty-conn",
+            "instance-pty",
+            "claude_pty",
+            Some(PresenceMode::Cli),
+            None,
+        );
+        let infos = state.agent_infos();
+        let info = infos.iter().find(|a| a.agent_id == agent).unwrap();
+        assert_eq!(info.mode, Some(PresenceMode::Cli));
+        assert_eq!(info.transport, "claude_pty");
+        assert_eq!(info.location, None);
+        state.router.unregister_by_conn("pty-conn");
+        state.conn_instances.remove("pty-conn");
+        register(
+            &mut state,
+            "ancien-conn",
+            "instance-ancienne",
+            "unix",
+            None,
+            None,
+        );
+        let infos = state.agent_infos();
+        let info = infos.iter().find(|a| a.agent_id == agent).unwrap();
+        assert_eq!(
+            info.mode,
+            Some(PresenceMode::Cli),
+            "un binaire sans champ mode garde l'observation précédente"
+        );
     }
 
     #[test]
