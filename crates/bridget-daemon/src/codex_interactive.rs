@@ -115,6 +115,26 @@ impl Launch {
         })
     }
 
+    /// Options passées à la TUI qui rejoint le fil distant. Les permissions
+    /// (bypass, politique d'approbation, sandbox) vivent déjà dans la config du
+    /// serveur privé ; Codex 0.154 refuse de les recevoir aussi sur
+    /// `resume --remote` (« Permission overrides are not supported when
+    /// resuming a remote task »). Elles sont donc retirées ici, sans changer
+    /// ce que le serveur applique ni la commande de reprise affichée à l'humain.
+    pub(crate) fn remote_tui_args(&self) -> Vec<String> {
+        let mut args = Vec::with_capacity(self.tui_args.len());
+        let mut index = 0;
+        while let Some(arg) = self.tui_args.get(index) {
+            match arg.as_str() {
+                "--dangerously-bypass-approvals-and-sandbox" => {}
+                "-a" | "--ask-for-approval" | "-s" | "--sandbox" => index += 1,
+                _ => args.push(arg.clone()),
+            }
+            index += 1;
+        }
+        args
+    }
+
     pub(crate) fn resume_command(&self, thread_id: &str) -> String {
         // Conserver les options explicites, jamais rejouer le prompt initial.
         let mut args = vec!["bridget".to_owned(), "codex".to_owned()];
@@ -321,7 +341,7 @@ impl NativeTui {
                 "--remote",
                 &format!("unix://{}", socket.display()),
             ])
-            .args(&launch.tui_args)
+            .args(launch.remote_tui_args())
             .envs(environment.iter().cloned())
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
@@ -553,6 +573,48 @@ mod tests {
             assert!(Launch::parse(&args(&values)).is_err(), "{values:?}");
         }
     }
+    #[test]
+    fn la_tui_distante_ne_recoit_plus_les_surcharges_de_permissions() {
+        // Codex 0.154 : « Permission overrides are not supported when resuming
+        // a remote task ». Le serveur privé garde la politique, la TUI ne la
+        // répète pas ; les autres options et le prompt restent relayés.
+        let parsed = Launch::parse(&args(&[
+            "--yolo",
+            "-a",
+            "never",
+            "-s",
+            "danger-full-access",
+            "-m",
+            "fixture",
+            "--no-alt-screen",
+            "resume",
+            "01a027a9-046e-7cf1-9e75-c689c3bdf451",
+        ]))
+        .unwrap();
+        assert!(
+            parsed
+                .server_args
+                .iter()
+                .any(|a| a == "approval_policy=\"never\"")
+        );
+        assert!(
+            parsed
+                .server_args
+                .iter()
+                .any(|a| a == "sandbox_mode=\"danger-full-access\"")
+        );
+        assert_eq!(
+            parsed.remote_tui_args(),
+            vec!["-m", "fixture", "--no-alt-screen"]
+        );
+        // La commande de reprise affichée à l'humain conserve son choix explicite.
+        assert!(
+            parsed
+                .resume_command("01a027a9-046e-7cf1-9e75-c689c3bdf451")
+                .contains("--dangerously-bypass-approvals-and-sandbox")
+        );
+    }
+
     #[test]
     fn option_non_relayee_et_changement_de_fil_refuses() {
         for values in [
