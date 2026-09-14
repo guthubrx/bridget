@@ -46,6 +46,8 @@ pub mod reprise;
 pub mod runtime;
 pub mod store;
 pub mod store_schema;
+pub mod t3code;
+pub mod t3code_contract;
 #[cfg(feature = "test-support")]
 pub mod test_sync;
 pub mod wrapper;

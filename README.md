@@ -87,6 +87,33 @@ Une nouvelle destination demande les paramètres manquants seulement avec stdin
 et stdout sur un terminal ; ailleurs, elle affiche les options requises et échoue.
 Voir [le guide des services de fédération](docs/federation-services.md).
 
+## Joindre les fils t3code (session 098)
+
+Le binaire 098 embarque un pont vers [t3code](https://github.com/pingdotgg/t3code)
+qui ne modifie jamais t3code : il lit son serveur local en boucle locale avec une
+session émise par le CLI officiel `t3`, et présente chaque fil ouvert comme un
+agent Bridget (`TYPE` = fournisseur du fil, `TRANSPORT` t3code, `MODE` cli, nom
+humain = titre du fil).
+
+```sh
+bridget t3 install        # session t3 dédiée (t3 auth session issue) + service de pont
+bridget t3 status         # serveur t3code, session, service, fils exposés
+bridget send --to Alpha --reply -- 'Mission…'   # un tour démarre dans le fil « Alpha »
+bridget t3 uninstall      # révoque la session, retire le service, efface l'état du pont
+```
+
+Prérequis : t3code démarré (application ou `t3 --mode web --no-browser`) et le
+CLI `t3` installé (`npm i -g t3`). Un message remis attend que le fil soit libre
+(borne de deux minutes), démarre un tour avec le texte du message, et la réponse
+de ce tour revient à l'expéditeur comme réponse liée : l'appariement suit
+l'ordre FIFO des tours après le dernier tour clos au moment de la remise. La
+session détenue est administrative (t3code 0.0.40 n'en émet pas d'autre) et
+vit uniquement dans un fichier 0600 de l'état Bridget ; un refus 401 déclenche
+un seul renouvellement, un second refus est un échec explicite dans `status`.
+Le journal du fil (`bridget attach`) ne rejoue pas l'historique antérieur à
+l'installation. Le fil archivé disparaît de l'annuaire, jamais de t3code.
+Voir [l'ADR 034](docs/decisions/034-adaptateur-t3code.md).
+
 ## Claude Code interactif, sans tmux (session 097)
 
 Depuis un vrai terminal (iTerm, Terminal, shell distant), dans le répertoire voulu :

@@ -170,6 +170,7 @@ pub fn run() {
     match cmd.as_str() {
         "daemon" => cmd_daemon(&args[2..]),
         "federate" => crate::federate::run(&args[2..]),
+        "t3" => crate::t3code::run(&args[2..]),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
         "mcp" => cmd_mcp(),
@@ -601,6 +602,7 @@ fn print_usage() {
          Daemon & client :\n  \
            daemon                 Lance le daemon\n  \
            federate <OP>          Gère les liaisons SSH persistantes (--help)\n  \
+           t3 <OP>                Expose les fils t3code comme agents (install|status|uninstall|serve)\n  \
            mcp                    Lance le serveur MCP sur stdio\n  \
            attach <UUID>          Observe et écrit à un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID] [--posture discovery|development]\n  \
