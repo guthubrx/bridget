@@ -821,6 +821,16 @@ fn poll_interval() -> Duration {
         .unwrap_or(DEFAULT_POLL)
 }
 
+/// Délai entre deux essais d'un nom refusé (nom déjà pris). Le daemon libère
+/// les présences au bout de cinq minutes ; on retente un peu au-delà.
+fn rename_retry() -> Duration {
+    std::env::var("BRIDGET_T3_RENAME_RETRY_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(330))
+}
+
 fn turn_wait() -> Duration {
     std::env::var("BRIDGET_T3_TURN_WAIT_SECS")
         .ok()
@@ -1122,6 +1132,9 @@ struct LinkWorker {
     /// Dernier titre publié comme nom humain. t3code régénère les titres et
     /// l'humain les change : un nom figé à la connexion vieillirait aussitôt.
     title: String,
+    /// Titre refusé par le daemon (nom déjà pris) et date du refus : on
+    /// retente à intervalle borné, car le nom peut se libérer plus tard.
+    title_refused_at: Option<Instant>,
     last_key: String,
     turn_wait: Duration,
 }
@@ -1177,6 +1190,7 @@ impl LinkWorker {
             state_path,
             state,
             title,
+            title_refused_at: None,
             last_key: String::new(),
             turn_wait: turn_wait(),
         })
@@ -1188,13 +1202,20 @@ impl LinkWorker {
                 Ok(LinkEvent::Tick(summary)) => {
                     send_wrapper_message(&self.writer, WrapperToDaemon::Heartbeat);
                     let title = display_title(&summary.title);
-                    if title != self.title {
-                        info!(
-                            "fil {} renommé « {} » → « {title} »",
-                            self.thread_id, self.title
-                        );
+                    let retry = self
+                        .title_refused_at
+                        .is_some_and(|since| since.elapsed() >= rename_retry());
+                    if title != self.title || retry {
+                        if title != self.title {
+                            info!(
+                                "fil {} renommé « {} » → « {title} »",
+                                self.thread_id, self.title
+                            );
+                        }
                         publish_title(&self.writer, &title);
                         self.title = title;
+                        // En attente du verdict : Applied efface, Rejected redate.
+                        self.title_refused_at = Some(Instant::now());
                     }
                     let key = summary.change_key();
                     if key != self.last_key || !self.state.pending.is_empty() {
@@ -1289,10 +1310,16 @@ impl LinkWorker {
                 use bridget_transport::protocol::DisplayNameOutcome;
                 match outcome {
                     DisplayNameOutcome::Applied { display_name, .. } => {
-                        info!("fil {} nommé « {display_name} »", self.thread_id)
+                        info!("fil {} nommé « {display_name} »", self.thread_id);
+                        self.title_refused_at = None;
                     }
                     DisplayNameOutcome::Rejected { reason } => {
-                        warn!("nom du fil {} refusé : {reason:?}", self.thread_id)
+                        warn!(
+                            "nom du fil {} refusé : {reason:?} ; nouvel essai dans {:?}",
+                            self.thread_id,
+                            rename_retry()
+                        );
+                        self.title_refused_at = Some(Instant::now());
                     }
                 }
             }
