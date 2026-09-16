@@ -1130,6 +1130,7 @@ fn spawn_reader(
         // permission qui porte le vrai nom). Chaque ligne du journal reste
         // autonome pour les consommateurs de replay.
         let mut tool_memory = HashMap::<String, ToolCallMemory>::new();
+        let mut tool_memory_message = None;
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else {
                 break;
@@ -1155,6 +1156,11 @@ fn spawn_reader(
                     );
                 continue;
             };
+            let current_message = active_message_id(&queue);
+            if current_message != tool_memory_message {
+                tool_memory.clear();
+                tool_memory_message = current_message;
+            }
             let rpc_result = rpc_response(&value);
             let waiter = rpc_result.as_ref().and_then(|(id, _)| {
                 waiters
@@ -1268,12 +1274,26 @@ fn spawn_reader(
                         Some("tool_call") | Some("tool_call_update")
                     ) {
                         let message_id = active_message_id(&queue);
+                        let payload = tool_call_journal_payload(&value, &mut tool_memory);
+                        if let Some(path) =
+                            payload.get("write_completed_path").and_then(Value::as_str)
+                            && let Ok(cwd) = std::env::current_dir()
+                            && let Some(file) = crate::journal::confirmed_write_payload(path, &cwd)
+                        {
+                            record_or_terminal(
+                                &journal,
+                                &events,
+                                "update",
+                                message_id.as_deref(),
+                                file,
+                            );
+                        }
                         record_or_terminal(
                             &journal,
                             &events,
                             "update",
                             message_id.as_deref(),
-                            tool_call_journal_payload(&value, &mut tool_memory),
+                            payload,
                         );
                     }
                 }
@@ -1721,6 +1741,29 @@ fn take_reasoning_journal_payload(reasoning_raw: &Arc<Mutex<String>>) -> Value {
 struct ToolCallMemory {
     title: Option<String>,
     detail: String,
+    write_path: Option<String>,
+    edit_kind: bool,
+    write_reported: bool,
+}
+
+fn remember_write_path(memory: &mut ToolCallMemory, kind: Option<&str>, input: Option<&Value>) {
+    if let Some(kind) = kind {
+        memory.edit_kind = kind == "edit";
+    }
+    let Some(input) = input else { return };
+    let named = crate::journal::tool_write_path(memory.title.as_deref().unwrap_or(""), input);
+    let typed = memory
+        .edit_kind
+        .then(|| {
+            input
+                .get("path")
+                .or_else(|| input.get("file_path"))
+                .and_then(Value::as_str)
+        })
+        .flatten();
+    if let Some(path) = named.or(typed).filter(|p| !p.is_empty() && p.len() <= 4096) {
+        memory.write_path = Some(path.into());
+    }
 }
 
 /// Plafond du champ `detail` (rawInput sérialisé), miroir Claude.
@@ -1779,7 +1822,7 @@ fn tool_call_journal_payload(
     let title = field("title");
     let name = field("name");
     let tool_kind = field("kind");
-    let tool_call_id = field("toolCallId");
+    let mut tool_call_id = field("toolCallId").filter(|id| id.len() <= 256);
     let raw_input = update.get("rawInput").or_else(|| content.get("rawInput"));
     let summary_text = update
         .get("text")
@@ -1787,6 +1830,12 @@ fn tool_call_journal_payload(
         .and_then(Value::as_str)
         .unwrap_or("");
 
+    if tool_memory.len() >= 256 && tool_call_id.is_some_and(|id| !tool_memory.contains_key(id)) {
+        // Conserver les tombstones : une saturation ne réarme pas un outil
+        // déjà signalé. Les nouveaux outils restent visibles au journal.
+        log::warn!("observation_gap: cache de corrélation ACP saturé");
+        tool_call_id = None;
+    }
     let memory = match tool_call_id {
         Some(tool_call_id) => tool_memory.entry(tool_call_id.to_string()).or_default(),
         None => {
@@ -1811,6 +1860,7 @@ fn tool_call_journal_payload(
     };
     remember_tool_title(memory, title.or(name).or(tool_kind));
     remember_tool_detail(memory, raw_input);
+    remember_write_path(memory, tool_kind, raw_input);
     // rawInput (arguments) est sticky ; le text/content de la trame reste
     // local — un tool_call_update peut dire « terminé » sans écraser les args.
     let detail = if !memory.detail.is_empty() {
@@ -1822,7 +1872,19 @@ fn tool_call_journal_payload(
         .title
         .clone()
         .unwrap_or_else(|| "inconnu".to_string());
-    build_tool_journal_payload(&tool, &detail, tool_call_id, title, name, tool_kind)
+    let mut payload =
+        build_tool_journal_payload(&tool, &detail, tool_call_id, title, name, tool_kind);
+    if field("status") == Some("failed") {
+        memory.write_reported = true;
+    }
+    if field("status") == Some("completed")
+        && !memory.write_reported
+        && let Some(path) = memory.write_path.as_ref()
+    {
+        payload["write_completed_path"] = Value::String(path.clone());
+        memory.write_reported = true;
+    }
+    payload
 }
 
 /// Enrichit le fil quand la permission porte le vrai nom (MCP Cursor).
@@ -1834,7 +1896,7 @@ fn permission_tool_journal_payload(
     let tool_call_id = tool_call
         .get("toolCallId")
         .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())?;
+        .filter(|value| !value.is_empty() && value.len() <= 256)?;
     let title = tool_call
         .get("title")
         .or_else(|| tool_call.get("name"))
@@ -1845,10 +1907,19 @@ fn permission_tool_journal_payload(
         return None;
     }
     let raw_input = tool_call.get("rawInput");
+    if tool_memory.len() >= 256 && !tool_memory.contains_key(tool_call_id) {
+        log::warn!("observation_gap: cache de corrélation ACP saturé");
+        return None;
+    }
     let memory = tool_memory.entry(tool_call_id.to_string()).or_default();
     let before = memory.clone();
     remember_tool_title(memory, Some(title));
     remember_tool_detail(memory, raw_input);
+    remember_write_path(
+        memory,
+        tool_call.get("kind").and_then(Value::as_str),
+        raw_input,
+    );
     // N'émettre que si on gagne un vrai nom ou des arguments.
     let gained_title = before.title.as_deref() != memory.title.as_deref()
         && memory
@@ -2016,6 +2087,97 @@ fn prompt_for_with_private_instructions(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spec100_acp_correlates_permission_path_and_separate_edit_kind() {
+        let mut memory = std::collections::HashMap::new();
+        for id in ["permission", "separate"] {
+            let start = serde_json::json!({"params":{"update":{"toolCallId":id,"title":"Write File","kind":"edit","status":"in_progress"}}});
+            super::tool_call_journal_payload(&start, &mut memory);
+            if id == "permission" {
+                let permission = serde_json::json!({"params":{"toolCall":{"toolCallId":id,"title":"Write","rawInput":{"path":"/p/x"}}}});
+                super::permission_tool_journal_payload(&permission, &mut memory);
+            } else {
+                let args = serde_json::json!({"params":{"update":{"toolCallId":id,"rawInput":{"path":"/p/x"}}}});
+                super::tool_call_journal_payload(&args, &mut memory);
+            }
+            let end =
+                serde_json::json!({"params":{"update":{"toolCallId":id,"status":"completed"}}});
+            assert_eq!(
+                super::tool_call_journal_payload(&end, &mut memory)["write_completed_path"],
+                "/p/x"
+            );
+            assert!(
+                super::tool_call_journal_payload(&end, &mut memory)
+                    .get("write_completed_path")
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn spec100_acp_correlates_completed_write_not_read_or_failure() {
+        let mut memory = std::collections::HashMap::new();
+        let start = serde_json::json!({"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"w","title":"Write","kind":"edit","rawInput":{"content":"x".repeat(2000),"path":"/project/x"},"status":"in_progress"}}});
+        assert!(
+            super::tool_call_journal_payload(&start, &mut memory)
+                .get("write_completed_path")
+                .is_none()
+        );
+        let end = serde_json::json!({"params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"w","status":"completed"}}});
+        assert_eq!(
+            super::tool_call_journal_payload(&end, &mut memory)["write_completed_path"],
+            "/project/x"
+        );
+        assert!(
+            super::tool_call_journal_payload(&end, &mut memory)
+                .get("write_completed_path")
+                .is_none()
+        );
+        let read = serde_json::json!({"params":{"update":{"toolCallId":"r","title":"Read","kind":"read","rawInput":{"path":"/project/x"},"status":"completed"}}});
+        assert!(
+            super::tool_call_journal_payload(&read, &mut memory)
+                .get("write_completed_path")
+                .is_none()
+        );
+        let mut failed = start.clone();
+        failed["params"]["update"]["toolCallId"] = serde_json::json!("failure");
+        failed["params"]["update"]["status"] = serde_json::json!("failed");
+        assert!(
+            super::tool_call_journal_payload(&failed, &mut memory)
+                .get("write_completed_path")
+                .is_none()
+        );
+        failed["params"]["update"]["status"] = serde_json::json!("completed");
+        assert!(
+            super::tool_call_journal_payload(&failed, &mut memory)
+                .get("write_completed_path")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn spec100_acp_saturation_does_not_rearm_completed_writes() {
+        let mut memory = std::collections::HashMap::new();
+        let write = serde_json::json!({"params":{"update":{"toolCallId":"original","title":"Write","rawInput":{"path":"/p/x"},"status":"completed"}}});
+        assert!(
+            super::tool_call_journal_payload(&write, &mut memory)
+                .get("write_completed_path")
+                .is_some()
+        );
+        for index in 0..300 {
+            let other = serde_json::json!({"params":{"update":{"toolCallId":format!("other-{index}"),"title":"Read","rawInput":{"path":"/p/x"},"status":"completed"}}});
+            super::tool_call_journal_payload(&other, &mut memory);
+        }
+        assert_eq!(memory.len(), 256);
+        assert!(
+            super::tool_call_journal_payload(&write, &mut memory)
+                .get("write_completed_path")
+                .is_none()
+        );
+        let permission = serde_json::json!({"params":{"toolCall":{"toolCallId":"new","title":"Write","rawInput":{"path":"/p/x"}}}});
+        assert!(super::permission_tool_journal_payload(&permission, &mut memory).is_none());
+        assert_eq!(memory.len(), 256);
+    }
     use super::*;
     use std::time::Instant;
 

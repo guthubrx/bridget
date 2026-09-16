@@ -222,6 +222,7 @@ impl CodexActKind {
 }
 
 struct ReaderContext {
+    cwd: String,
     waiters: Waiters,
     observations: Arc<(Mutex<Observations>, Condvar)>,
     alive: Arc<AtomicBool>,
@@ -432,6 +433,10 @@ impl CodexAppServerTransport {
         let reader_handle = spawn_reader(
             lines,
             ReaderContext {
+                cwd: std::env::current_dir()
+                    .ok()
+                    .and_then(|p| p.into_os_string().into_string().ok())
+                    .unwrap_or_default(),
                 waiters: waiters.clone(),
                 observations: observations.clone(),
                 alive: alive.clone(),
@@ -2623,6 +2628,7 @@ fn write_value(writer: &Writer, value: Value) -> Result<(), TransportError> {
 
 fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandle<()> {
     let ReaderContext {
+        cwd,
         waiters,
         observations,
         alive,
@@ -2642,6 +2648,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
         // SPEC-088 : lignes de sandbox reconnues, par item de commande. Un
         // acte `refusal` n'est écrit qu'à la fin en ÉCHEC du même item.
         let mut sandbox_lines_by_item: HashMap<String, String> = HashMap::new();
+        let mut completed_file_items = (String::new(), HashSet::<String>::new());
         let mut refusals_recorded: HashSet<(String, String)> = HashSet::new();
         let mut termination = "flux Codex fermé".to_string();
         for line in lines {
@@ -2837,6 +2844,65 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 // sans flux partiel). `item/completed` type agentMessage.
                 Some("item/completed") => {
                     let item = value.pointer("/params/item");
+                    if item.and_then(|i| i.get("type")).and_then(Value::as_str)
+                        == Some("fileChange")
+                        && item.and_then(|i| i.get("status")).and_then(Value::as_str)
+                            == Some("completed")
+                    {
+                        let message_id = active_detail
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .as_ref()
+                            .filter(|active| source_matches_active_turn(active, &value))
+                            .map(|active| active.message_id.clone());
+                        if let Some(message_id) = message_id
+                            && let Some(changes) = item
+                                .and_then(|i| i.get("changes"))
+                                .and_then(Value::as_array)
+                        {
+                            let turn = value
+                                .pointer("/params/turnId")
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            if completed_file_items.0 != turn {
+                                completed_file_items = (turn.into(), HashSet::new());
+                            }
+                            let item_id = item
+                                .and_then(|i| i.get("id"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            let accepted = !item_id.is_empty()
+                                && item_id.len() <= 256
+                                && completed_file_items.1.len() < 4096
+                                && completed_file_items.1.insert(item_id.into());
+                            if !accepted && completed_file_items.1.len() >= 4096 {
+                                log::warn!(
+                                    "observation_gap: déduplication Codex saturée pour ce tour"
+                                );
+                            }
+                            for change in changes.iter().take(if accepted { 256 } else { 0 }) {
+                                if let Some(path) = change.get("path").and_then(Value::as_str)
+                                    && let Some(payload) = crate::journal::confirmed_write_payload(
+                                        path,
+                                        Path::new(&cwd),
+                                    )
+                                {
+                                    record_or_terminal(
+                                        &journal,
+                                        &observations,
+                                        "update",
+                                        Some(&message_id),
+                                        payload,
+                                    );
+                                }
+                            }
+                            if changes.len() > 256 {
+                                log::warn!(
+                                    "observation_gap: changements Codex au-delà de 256 fichiers"
+                                );
+                            }
+                        }
+                    }
                     if interactive
                         && item.and_then(|i| i.get("type")).and_then(Value::as_str)
                             == Some("userMessage")
@@ -3696,6 +3762,7 @@ mod tests {
             Box::new(rx.into_iter()),
             ReaderContext {
                 waiters: waiters.clone(),
+                cwd: "/tmp".into(),
                 observations: observations.clone(),
                 alive: alive.clone(),
                 journal: journal.clone(),
@@ -3733,6 +3800,17 @@ mod tests {
             r#"{ "method":"turn/started", "params":{"threadId":"thread","turn":{"id":"t","status":"inProgress"}} }"#,
         );
         assert_eq!(queue.0.lock().unwrap().external_turn.as_deref(), Some("t"));
+        // SPEC100 : le vrai lecteur ne publie qu'une réussite structurée,
+        // ignore échec, doublon et ancien tour (aucun processus fournisseur).
+        for (turn, id, status) in [
+            ("old", "late", "completed"),
+            ("t", "failed", "failed"),
+            ("t", "write", "completed"),
+            ("t", "write", "completed"),
+        ] {
+            barrier(&json!({"method":"item/completed","params":{"threadId":"thread","turnId":turn,
+                "item":{"type":"fileChange","id":id,"status":status,"changes":[{"path":"/project/spec100.rs"}]}}}).to_string());
+        }
         for raw in [
             r#"{ "id":7, "method":"item/commandExecution/requestApproval", "params":{"threadId":"thread","turnId":"t","future":42} }"#,
             r#"{ "id":"eight", "method":"mcpServer/elicitation/request", "params":{"serverName":"bridget","mode":"form","requestedSchema":{}} }"#,
@@ -3927,6 +4005,13 @@ mod tests {
             .unwrap()
             .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
             .collect();
+        assert_eq!(
+            logs.lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter(|entry| entry["payload"]["write_confirmed"] == true)
+                .count(),
+            1
+        );
         assert!(
             logs.lines()
                 .map(|line| serde_json::from_str::<Value>(line).unwrap())
@@ -3981,6 +4066,7 @@ mod tests {
             Box::new(rx.into_iter()),
             ReaderContext {
                 waiters: waiters.clone(),
+                cwd: "/tmp".into(),
                 observations: observations.clone(),
                 alive: alive.clone(),
                 journal: journal.clone(),

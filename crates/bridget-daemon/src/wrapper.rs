@@ -2684,6 +2684,17 @@ impl AttachRelayWorker {
             let mut had_live_subscriptions = false;
             let mut seen_generation = 0;
             while !worker_stopped.load(Ordering::SeqCst) {
+                if let Some(feed) = &live_feed {
+                    let (facts, dropped) = feed.take_observations();
+                    if dropped > 0 {
+                        log::warn!(
+                            "observation_gap: {dropped} faits perdus par saturation du relais"
+                        );
+                    }
+                    for fact in facts {
+                        worker_emit(fact);
+                    }
+                }
                 let current_generation = worker_generation.load(Ordering::SeqCst);
                 if current_generation != seen_generation {
                     subscriptions.clear();
@@ -4554,10 +4565,12 @@ fn ensure_claude_permission_bypass(args: &mut Vec<String>) {
     }
 }
 
-const BRIDGET_SAFE_MCP_TOOLS: [&str; 12] = [
+const BRIDGET_SAFE_MCP_TOOLS: [&str; 14] = [
     "bridget_who",
     "bridget_send",
     "bridget_ledger",
+    "bridget_journal",
+    "bridget_events",
     "bridget_cancel",
     "bridget_read_artifact",
     "bridget_publish_artifact",
@@ -7307,6 +7320,8 @@ mod reconnect_tests {
                 "bridget_who={approval_mode=\"approve\"},",
                 "bridget_send={approval_mode=\"approve\"},",
                 "bridget_ledger={approval_mode=\"approve\"},",
+                "bridget_journal={approval_mode=\"approve\"},",
+                "bridget_events={approval_mode=\"approve\"},",
                 "bridget_cancel={approval_mode=\"approve\"},",
                 "bridget_read_artifact={approval_mode=\"approve\"},",
                 "bridget_publish_artifact={approval_mode=\"approve\"},",
@@ -7333,6 +7348,8 @@ mod reconnect_tests {
             "bridget_who",
             "bridget_send",
             "bridget_ledger",
+            "bridget_journal",
+            "bridget_events",
             "bridget_cancel",
             "bridget_read_artifact",
             "bridget_publish_artifact",
@@ -8434,6 +8451,57 @@ mod reconnect_tests {
         assert_eq!(reads.load(Ordering::SeqCst), 0);
         worker.shutdown();
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec100_relay_observes_without_attach_view_or_disk_reader() {
+        let root = relay_root("spec100-without-view");
+        let feed = JournalLiveFeed::default();
+        let writer = JournalWriter::start_with_live_feed(
+            &root,
+            "agent",
+            "session",
+            Arc::new(Mutex::new(bridget_transport::AcpEventQueue::default())),
+            Some(feed.clone()),
+        )
+        .unwrap();
+        let (tx, rx) = mpsc::channel();
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let probe = reads.clone();
+        let mut relay = AttachRelayWorker::start_with_clock(
+            root.join("agent"),
+            Arc::new(|| "2026-09-16".into()),
+            1,
+            Some(feed),
+            Arc::new(move |message| {
+                let _ = tx.send(message);
+            }),
+            AttachRelayHooks {
+                before_read: Arc::new(move || {
+                    probe.fetch_add(1, Ordering::SeqCst);
+                }),
+                ..AttachRelayHooks::default()
+            },
+        );
+        writer
+            .enqueue(
+                "turn_end",
+                Some("human"),
+                serde_json::json!({"stop_reason":"completed"}),
+            )
+            .unwrap();
+        writer.stop();
+        let message = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(
+            message,
+            WrapperToDaemon::ObservedActivity {
+                seq: 1,
+                event: bridget_transport::protocol::ObservationKind::TurnEnded,
+                ..
+            }
+        ));
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        relay.shutdown();
     }
 
     #[test]

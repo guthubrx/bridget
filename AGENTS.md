@@ -1,10 +1,12 @@
 <!-- SPECKIT START -->
-Plan actif : specs/099-fiabilite-communications/plan.md (socle : session 089).
+Plan actif : specs/100-observation-partage/plan.md (socle : sessions 089 et 099).
 Périmètre : communication inter-agents, observation et fédération SSH.
 Ne pas lancer de daemon, wrapper ou script de déploiement avant configuration
-explicite d'un home/socket isolé. L'installation historique reste hors périmètre.
-Sélection SpecKit : SPECIFY_FEATURE=099-fiabilite-communications lorsque le script
-exige un préfixe numérique ; branche session-099-fiabilite-communications.
+explicite d'un home/socket isolé pour les tests. L'adoption de la session 100
+sur l'installation existante est autorisée par l'utilisateur le 2026-09-16,
+après validation, sauvegarde et vérification des processus concernés.
+Sélection SpecKit : SPECIFY_FEATURE=100-observation-partage lorsque le script
+exige un préfixe numérique ; branche session-100-observation-partage.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->

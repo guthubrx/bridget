@@ -175,6 +175,8 @@ pub fn run() {
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
         "mcp" => cmd_mcp(),
         "attach" => cmd_attach(&args[2..]),
+        "journal" => cmd_journal(&args[2..]),
+        "events" => cmd_events(&args[2..]),
         "artifact" => cmd_artifact(&args[2..]),
         "spawn" => cmd_spawn(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
@@ -605,6 +607,8 @@ fn print_usage() {
            t3 <OP>                Expose les fils t3code comme agents (install|status|uninstall|serve)\n  \
            mcp                    Lance le serveur MCP sur stdio\n  \
            attach <UUID>          Observe et écrit à un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
+           journal <UUID>         Extrait [--tail N | --from-seq N] [--to UUID] [--reply]\n  \
+           events <OP>            types | sub EVENEMENT [--agent UUID] [--file MOTIF] [--once] [--ttl S] | list | unsub ID\n  \
            spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID] [--posture discovery|development]\n  \
            stop <N>               Arrête un équipier géré\n  \
            relaunch <N>           Relance un équipier géré arrêté\n  \
@@ -654,6 +658,177 @@ fn print_usage() {
 
 fn socket_path() -> std::path::PathBuf {
     DaemonConfig::default().socket_path
+}
+
+fn cmd_journal(args: &[String]) {
+    let result = (|| -> Result<crate::attach::JournalRequest, String> {
+        let agent = args
+            .first()
+            .filter(|s| !s.starts_with('-'))
+            .ok_or("journal : agent requis")?;
+        let mut request = serde_json::json!({"agent":agent});
+        let mut i = 1;
+        while i < args.len() {
+            let key = match args[i].as_str() {
+                "--tail" => "tail",
+                "--from-seq" => "from_seq",
+                "--to" => "to",
+                "--reply" => "reply",
+                other => return Err(unknown_argument("journal", other)),
+            };
+            if request.get(key).is_some() {
+                return Err(format!("journal : option répétée {key}"));
+            }
+            if key == "reply" {
+                request[key] = serde_json::json!(true);
+            } else {
+                i += 1;
+                let value = args.get(i).ok_or("journal : valeur manquante")?;
+                request[key] = if key == "to" {
+                    serde_json::json!(value)
+                } else {
+                    serde_json::json!(
+                        value
+                            .parse::<u64>()
+                            .map_err(|_| "journal : entier requis")?
+                    )
+                };
+            }
+            i += 1;
+        }
+        serde_json::from_value(request).map_err(|e| e.to_string())
+    })()
+    .unwrap_or_else(|error| exit_argument_error(&error));
+    let excerpt = result.read(&socket_path()).unwrap_or_else(|error| {
+        eprintln!("bridget journal : {error}");
+        std::process::exit(1);
+    });
+    if let Some(to) = result.to {
+        let mut send = vec!["--to".into(), to];
+        if result.reply {
+            send.push("--reply".into());
+        }
+        send.extend(["--".into(), excerpt.shared_body()]);
+        cmd_send(&send);
+    } else {
+        println!("{}", serde_json::to_string(&excerpt).expect("extrait JSON"));
+    }
+}
+
+fn parse_events_args(
+    args: &[String],
+) -> Result<bridget_transport::protocol::ObservationRequest, String> {
+    let action = args
+        .first()
+        .ok_or("events : types, sub, list ou unsub requis")?;
+    let mut value = serde_json::json!({"action":action});
+    let mut i = 1;
+    if action == "sub" || action == "unsub" {
+        let argument = args
+            .get(i)
+            .filter(|s| !s.starts_with('-'))
+            .ok_or("events : événement ou id manquant")?;
+        value[if action == "sub" { "event" } else { "id" }] = serde_json::json!(argument);
+        i += 1;
+    }
+    while i < args.len() {
+        if action != "sub" {
+            return Err("events : paramètres superflus".into());
+        }
+        let key = match args[i].as_str() {
+            "--agent" => "agent",
+            "--file" => "file",
+            "--once" => "once",
+            "--ttl" => "ttl_secs",
+            other => return Err(unknown_argument("events", other)),
+        };
+        if value.get(key).is_some() {
+            return Err(format!("events : option répétée {key}"));
+        }
+        if key == "once" {
+            value[key] = serde_json::json!(true);
+        } else {
+            i += 1;
+            let argument = args.get(i).ok_or("events : valeur manquante")?;
+            value[key] = if key == "ttl_secs" {
+                serde_json::json!(
+                    argument
+                        .parse::<u64>()
+                        .map_err(|_| "events : ttl entier requis")?
+                )
+            } else {
+                serde_json::json!(argument)
+            };
+        }
+        i += 1;
+    }
+    serde_json::from_value(value).map_err(|e| format!("events : {e}"))
+}
+
+#[cfg(test)]
+#[test]
+fn spec100_cli_events_contract() {
+    use bridget_transport::protocol::{ObservationKind, ObservationRequest};
+    let args = [
+        "sub",
+        "file_collision",
+        "--agent",
+        "a",
+        "--file",
+        "*.rs",
+        "--ttl",
+        "30",
+        "--once",
+    ]
+    .map(String::from);
+    assert!(matches!(
+        parse_events_args(&args).unwrap(),
+        ObservationRequest::Sub {
+            event: ObservationKind::FileCollision,
+            once: true,
+            ttl_secs: Some(30),
+            agent: Some(_),
+            file: Some(_)
+        }
+    ));
+    assert!(matches!(
+        parse_events_args(&["list".into()]).unwrap(),
+        ObservationRequest::List {}
+    ));
+    assert!(matches!(
+        parse_events_args(&["types".into()]).unwrap(),
+        ObservationRequest::Types {}
+    ));
+    assert!(matches!(
+        parse_events_args(&["unsub".into(), "id".into()]).unwrap(),
+        ObservationRequest::Unsub { .. }
+    ));
+}
+
+fn cmd_events(args: &[String]) {
+    let request = parse_events_args(args).unwrap_or_else(|error| exit_argument_error(&error));
+    let identity = crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
+        eprintln!(
+            "bridget events : {} : {}",
+            error.code(),
+            error.remediation()
+        );
+        std::process::exit(1);
+    });
+    let result = crate::communication::client::observation_request(
+        &identity.name,
+        &identity.instance_id,
+        &socket_path(),
+        request,
+    )
+    .unwrap_or_else(|error| {
+        eprintln!("bridget events : {error}");
+        std::process::exit(1);
+    });
+    println!("{result}");
+    if result["status"] == "rejected" {
+        std::process::exit(1);
+    }
 }
 
 fn cmd_attach(args: &[String]) {

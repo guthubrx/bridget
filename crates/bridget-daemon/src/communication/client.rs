@@ -16,6 +16,23 @@ use std::time::{Duration, Instant};
 
 pub(crate) const DAEMON_BUDGET: Duration = Duration::from_secs(10);
 
+pub(crate) fn observation_request(
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+    request: bridget_transport::protocol::ObservationRequest,
+) -> Result<serde_json::Value, ClientError> {
+    let mut connection = registered_connection(identity, instance_id, socket)?;
+    match connection.send_then_wait(&WrapperToDaemon::ObservationRequest { request })? {
+        DaemonToWrapper::ObservationResult { result } => Ok(result),
+        DaemonToWrapper::Nack { reason, .. } => Err(ClientError::Technical {
+            code: "observation_rejected",
+            message: reason,
+        }),
+        other => unexpected_response(other),
+    }
+}
+
 pub(crate) fn cancel_request(
     identity: &str,
     instance_id: &str,
@@ -662,7 +679,7 @@ impl DaemonConnection {
         self.read_response(after_write)
     }
 
-    fn read_response(
+    pub(crate) fn read_response(
         &mut self,
         failure_code: &'static str,
     ) -> Result<DaemonToWrapper, ClientError> {

@@ -2113,10 +2113,47 @@ impl std::fmt::Debug for IdentityCredential {
 }
 
 /// Messages envoyés par le wrapper vers le daemon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationKind {
+    TurnEnded,
+    PermissionRequired,
+    FileWritten,
+    FileCollision,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ObservationRequest {
+    Types {},
+    Sub {
+        event: ObservationKind,
+        agent: Option<String>,
+        file: Option<String>,
+        #[serde(default)]
+        once: bool,
+        ttl_secs: Option<u64>,
+    },
+    List {},
+    Unsub {
+        id: String,
+    },
+}
+
+/// Messages envoyés par le wrapper vers le daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
+    ObservationRequest {
+        request: ObservationRequest,
+    },
+    /// Fait minimal tiré du journal vivant par son seul wrapper propriétaire.
+    ObservedActivity {
+        seq: u64,
+        event: ObservationKind,
+        file: Option<String>,
+    },
     /// Atteste une connexion auxiliaire sans remplacer la route propriétaire.
     RegisterAuxiliary {
         agent_id: String,
@@ -2970,6 +3007,9 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    ObservationResult {
+        result: serde_json::Value,
+    },
     #[serde(rename = "runtime_ingress_accepted")]
     RuntimeIngressAccepted {
         project_id: String,

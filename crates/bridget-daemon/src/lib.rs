@@ -36,6 +36,7 @@ pub use managed_supervisor::{
 };
 pub mod mcp;
 pub mod mcp_identity;
+mod observation;
 pub mod project_compat;
 pub mod reaper;
 pub mod receipt_store;

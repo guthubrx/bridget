@@ -949,6 +949,8 @@ fn spawn_reader(
             .into_iter()
             .map(Ok)
             .chain(BufReader::new(stdout).lines());
+        let mut pending_writes = std::collections::HashMap::new();
+        let observation_cwd = std::env::current_dir().ok();
         for line in lines {
             let Ok(line) = line else { break };
             let raw = line.as_bytes().to_vec();
@@ -993,6 +995,20 @@ fn spawn_reader(
                 .get("type")
                 .and_then(Value::as_str)
                 .unwrap_or("inconnu");
+            for path in confirmed_tool_writes(&value, &mut pending_writes) {
+                let message_id = queue
+                    .0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .active
+                    .as_ref()
+                    .map(|a| a.message_id.clone());
+                if let (Some(message_id), Some(cwd)) = (message_id, observation_cwd.as_deref())
+                    && let Some(payload) = crate::journal::confirmed_write_payload(&path, cwd)
+                {
+                    record_or_terminal(&journal, &events, "update", Some(&message_id), payload);
+                }
+            }
             // (A) Retranscription : chaque delta texte → journal `update`.
             // Sans cela le fil ne voit que « a travaillé Ns ».
             if let Some(delta) = value.pointer("/event/delta/text").and_then(Value::as_str) {
@@ -1331,6 +1347,52 @@ fn usage_event(value: &Value) -> Option<ManagedEventKind> {
 /// Choix étroit : garder le journal lisible si un outil reçoit un gros blob.
 const TOOL_INPUT_DETAIL_MAX: usize = 512;
 
+fn confirmed_tool_writes(
+    value: &Value,
+    pending: &mut std::collections::HashMap<String, Option<String>>,
+) -> Vec<String> {
+    let kind = value.get("type").and_then(Value::as_str);
+    if kind == Some("result") {
+        pending.clear();
+        return vec![];
+    }
+    let Some(blocks) = value.pointer("/message/content").and_then(Value::as_array) else {
+        return vec![];
+    };
+    let mut paths = vec![];
+    for block in blocks {
+        if kind == Some("assistant")
+            && block.get("type").and_then(Value::as_str) == Some("tool_use")
+        {
+            let Some(id) = block
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| id.len() <= 256)
+            else {
+                continue;
+            };
+            let name = block.get("name").and_then(Value::as_str).unwrap_or("");
+            if let Some(path) = crate::journal::tool_write_path(name, &block["input"]) {
+                if pending.len() >= 256 && !pending.contains_key(id) {
+                    log::warn!("observation_gap: trop d'écritures Claude dans ce tour");
+                    continue;
+                }
+                pending
+                    .entry(id.into())
+                    .or_insert_with(|| Some(path.into()));
+            }
+        } else if kind == Some("user")
+            && block.get("type").and_then(Value::as_str) == Some("tool_result")
+            && let Some(id) = block.get("tool_use_id").and_then(Value::as_str)
+            && let Some(path) = pending.get_mut(id).and_then(Option::take)
+            && block.get("is_error").and_then(Value::as_bool) != Some(true)
+        {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
 /// Journalise chaque bloc `tool_use` d'un message assistant.
 /// Vocabulaire imposé : `kind=tool` (pas `tool_call`).
 fn record_tool_uses_from_assistant(
@@ -1449,6 +1511,28 @@ fn push_source(events: &Arc<Mutex<VecDeque<ManagedEvent>>>, raw: Vec<u8>, kind: 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spec100_claude_requires_success_and_keeps_path_before_truncation() {
+        let mut pending = std::collections::HashMap::new();
+        let tool = serde_json::json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"w","name":"Write","input":{"content":"x".repeat(2000),"file_path":"/project/x"}}]}});
+        assert!(super::confirmed_tool_writes(&tool, &mut pending).is_empty());
+        let done = serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"w","is_error":false}]}});
+        assert_eq!(
+            super::confirmed_tool_writes(&done, &mut pending),
+            vec!["/project/x"]
+        );
+        assert!(super::confirmed_tool_writes(&done, &mut pending).is_empty());
+        super::confirmed_tool_writes(&tool, &mut pending);
+        assert!(
+            super::confirmed_tool_writes(&done, &mut pending).is_empty(),
+            "une répétition assistant/résultat ne recrée pas l'écriture"
+        );
+        super::confirmed_tool_writes(&serde_json::json!({"type":"result"}), &mut pending);
+        super::confirmed_tool_writes(&tool, &mut pending);
+        let failed = serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"w","is_error":true}]}});
+        assert!(super::confirmed_tool_writes(&failed, &mut pending).is_empty());
+        assert!(super::confirmed_tool_writes(&done, &mut pending).is_empty());
+    }
     use super::*;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};

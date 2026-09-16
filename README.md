@@ -421,6 +421,60 @@ ou processus de l'ancienne flotte n'est remplacé. Le
 décrit le paquet à liste de sources fermée, ses empreintes et les préconditions
 de compte. Ce n'est pas une autorisation de bascule de la flotte.
 
+## Observer et partager, sans bloquer le travail
+
+Bridget sait transmettre un extrait exact du journal et prévenir un agent d'un
+fait observable. Ces fonctions sont indépendantes de T3 et de Maicie : elles
+n'ajoutent ni mandat, ni validation obligatoire, ni verrou sur les fichiers.
+Remplacer les UUID d'exemple par ceux de `bridget agents --json` :
+
+```sh
+bridget journal 'UUID_SOURCE' --tail 50 --to 'UUID_RELECTEUR' --reply
+bridget events types
+bridget events sub turn_ended --agent 'UUID_SOURCE' --once --ttl 1800
+bridget events sub file_collision --file '/projet/src/*' --ttl 3600
+bridget events list
+bridget events unsub 'ID_ABONNEMENT'
+```
+
+Les mêmes opérations existent en MCP : `bridget_journal` et `bridget_events`.
+`reply` suit une réponse attendue ; un abonnement signale un fait et ne résout
+jamais cette demande. Une fin de tour ne prouve ni succès, ni fin de mission.
+L'extrait contient agent, séquences, entrées et notices ; 50 entrées par défaut,
+200 maximum et moins de 64 Kio. `--from-seq` permet de reprendre à `next_seq`.
+Une entrée trop grande reste explicitement incomplète ; aucun résumé inventé.
+
+Événements disponibles : `turn_ended`, `permission_required`, `file_written`,
+`file_collision`. Filtres par UUID et motif de chemin (`*` uniquement). Le
+propriétaire est l'identité active du client CLI/MCP, jamais un paramètre libre.
+L'abonnement concerne les faits reçus par le daemon après sa création, sans
+relecture de l'historique ; un fait déjà produit mais encore en transit peut
+donc le déclencher. Ce n'est pas une synchronisation des horloges des agents.
+Les fins de tour corrélées viennent des pilotes gérés ACP, Claude stream-json
+et Codex app-server ; les états idle natifs/T3 seuls ne suffisent pas. Les
+permissions sont signalées lorsque le pilote les journalise, éventuellement
+après leur traitement automatique (ACP/Codex, pas promesse universelle Claude).
+Les écritures viennent d'outils structurés connus et terminés avec succès :
+Claude/ACP Write, Edit et équivalents reconnus, Codex fileChange completed.
+Ni lecture, ni commande shell libre, ni surveillance universelle du disque.
+
+Une collision est un **risque** : deux auteurs, même hôte et même chemin absolu
+normalisé, moins de 30 secondes. Aucun accès au disque, verrou ou fusion Git ;
+les alias par symlink, différences de casse et hôtes mal nommés restent des
+limites. Les faits ne sont pas fédérés entre daemons.
+
+Les abonnements vivent en mémoire : défaut une heure, maximum sept jours,
+16 par agent et 128 au total. La fermeture du client auxiliaire les conserve ;
+le redémarrage du daemon les efface. `once` consomme le déclenchement même si
+sa remise échoue. Agent absent, mode ne-pas-déranger, saturation : pas de
+livraison durable. Les reçus exposent `notifications_lost`, `evicted_writes`
+et les listes `suppressed_total` (limite de cinq notifications/s/abonnement).
+La file de remise contient 64 messages ; budget d'une seconde par tentative,
+expiration après cinq secondes. Le relais de faits est borné à 256 éléments,
+le cache de fichiers à 4096 ; les pertes à la source sont journalisées sous
+`observation_gap`. Les tours issus de notifications Bridget ne redéclenchent
+pas d'observations ; une action manuelle ultérieure reste un nouveau travail.
+
 ## Plusieurs serveurs
 
 Le modèle reste un daemon maître et des clients via transfert de socket Unix

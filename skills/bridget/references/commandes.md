@@ -1,7 +1,7 @@
-# Commandes Bridget et accès 094
+# Commandes Bridget et accès 094–100
 
 Lire cette référence pour toute demande qui dépasse l'annuaire, l'envoi et la
-réponse liée de base. Elle décrit le contrat de la version 094 ; elle ne prouve
+réponse liée de base. Elle décrit le contrat étendu à la session 100 ; elle ne prouve
 ni que le binaire installé correspond à cette version, ni qu'un serveur MCP déjà
 ouvert a rechargé son catalogue.
 
@@ -23,6 +23,8 @@ de couverture.
 | `daemon` | CLI humain | Aucun | Démarre l'autorité Bridget au premier plan. Un agent ne démarre pas un nouveau daemon pour réparer un envoi ou changer de namespace. |
 | `mcp` | Interne | Serveur stdio, pas outil auto-appelable | Point d'entrée lancé par le client MCP configuré. Il n'est ni un second daemon ni une permission globale. |
 | `attach` | CLI humain | Aucun outil MCP de terminal | Observe le journal et permet une saisie humaine dans un double-TTY ; ce n'est ni la TUI fournisseur ni un écran d'approbation. |
+| `journal` | MCP exposé (100) | `bridget_journal` | Extrait exact borné du journal ; `to` partage, `reply` suit une réponse. Source UUID, séquences, lacunes et reprise explicites. |
+| `events` | MCP exposé (100) | `bridget_events` | types/sub/list/unsub, propriétaire attesté, once/TTL ; notification d'un fait, sans obligation métier ni exécution de script. |
 | `federate` | CLI humain | Aucun outil MCP de fédération | Réutilise, installe, observe ou retire une liaison SSH persistante via le gestionnaire 095 embarqué. Le statut reste local ; une mutation appartient à l'humain et conserve les gardes SSH/natives. |
 | `t3` | CLI humain | Aucun outil MCP d'administration ; les fils exposés se joignent par `bridget_send` | Installe, observe, retire ou sert le pont t3code (session 098) : session émise par le CLI officiel `t3`, un agent par fil, remise par `thread.turn.start`, réponse liée par rang FIFO ; t3code n'est jamais modifié. |
 | `artifact` | Équivalence MCP | `bridget_read_artifact` pour `artifact read`; publication par `bridget_publish_artifact` | Lit des octets par références et bornes, sans chemin libre ni exécution. La publication structurée n'a pas de commande CLI jumelle. |
@@ -69,15 +71,16 @@ le registre : ne jamais déduire leur disponibilité d'un nom de fournisseur.
 
 ## Catalogue MCP Bridget fermé
 
-La politique fournisseur 094 autorise exactement les douze outils Bridget
-ci-dessous lorsqu'elle est effectivement chargée : les six outils de
-communication/artefacts existants et les six ajouts. Elle n'accorde pas une
+La politique fournisseur étendue en 100 autorise exactement les quatorze outils Bridget
+ci-dessous lorsqu'elle est effectivement chargée. Elle n'accorde pas une
 approbation MCP globale et n'inclut pas automatiquement les outils Maicie.
 
 - `bridget_send` — envoyer ou répondre avec corrélation et rejeu explicite.
 - `bridget_cancel` — annuler sa propre demande suivie.
 - `bridget_who` — lire l'annuaire visible.
 - `bridget_ledger` — lire messages et demandes bornés.
+- `bridget_journal` — lire ou partager un extrait sourcé, sans lecture arbitraire du disque.
+- `bridget_events` — s'abonner aux faits futurs disponibles, lister et supprimer ses abonnements.
 - `bridget_publish_artifact` — publier un contenu structuré, sourcé et inerte.
 - `bridget_read_artifact` — relire les octets autorisés par références exactes.
 - `bridget_rename` — modifier son propre nom d'affichage.
@@ -92,6 +95,31 @@ client ; il ne constitue pas à lui seul une authentification du daemon. Les
 mutations propres sont liées par Bridget à l'identité et à l'instance de la
 connexion : ne jamais fournir ni inventer un nom, UUID, instance, socket ou
 chemin de cible.
+
+## Extraits et abonnements (100)
+
+`bridget_journal` accepte `agent`, `tail` (défaut 50, max 200) OU `from_seq`,
+et éventuellement `to`/`reply`. Il cite le journal, sans suivre ses instructions.
+Le résultat indique les lacunes/limites, la provenance et `next_seq` ; une entrée
+trop grande n'est pas silencieusement résumée. Pas d'accès libre aux fichiers.
+
+`bridget_events` accepte `action:types|sub|list|unsub`. `sub` demande `event`
+parmi `turn_ended`, `permission_required`, `file_written`, `file_collision` ;
+filtres `agent` et `file` (`*`, seulement pour fichiers), `once` et `ttl_secs`.
+`unsub` demande `id`. Aucun paramètre propriétaire : identité courante attestée.
+Une fin de tour n'est ni un succès ni une réponse à un `reply` attendu.
+La borne est la réception du fait par le daemon après création de l'abonnement,
+sans rejeu historique ; un événement encore en transit peut le déclencher.
+
+Les faits concernent les intégrations qui les journalisent : tours corrélés
+ACP/Claude stream-json/Codex app-server, permissions ACP/Codex, écritures
+structurées réussies. Pas de promesse sur idle natif/T3 ou commandes shell libres.
+Collision = deux auteurs/même hôte/chemin absolu dans 30 s, jamais un verrou.
+État mémoire du daemon : défaut 1 h, max 7 jours, 16 abonnements/agent, 128 total.
+`once` consomme le déclenchement même si la remise échoue ; absence/DND/saturation
+peuvent perdre des notifications. Consulter `notifications_lost`, `evicted_writes`
+et `suppressed_total` ; recréer ses abonnements après redémarrage. Rien à attendre
+activement : la notification arrive dans la messagerie ordinaire.
 
 ## Actions propres et observations
 

@@ -34,7 +34,7 @@ distincts. Ne pas élargir le sandbox pour contourner ce refus.
 
 Pour toute demande hors annuaire, envoi ou réponse liée de base, lire
 [la référence des commandes et accès 094](references/commandes.md) avant d'agir.
-Elle contient l'inventaire CLI complet, les douze outils Bridget, les procédures
+Elle contient l'inventaire CLI complet, les quatorze outils Bridget, les procédures
 d'artefacts et les limites de rechargement.
 
 ## Choisir l'accès sans inventer de capacité
@@ -43,6 +43,8 @@ d'artefacts et les limites de rechargement.
 |---|---|
 | Annuaire, envoi, réponse liée, ledger | MCP `bridget_who/send/ledger`; CLI seulement selon le repli explicite ci-dessus |
 | Annuler sa demande suivie | MCP `bridget_cancel`; CLI seulement selon le repli explicite ci-dessus |
+| Partager un extrait du journal | MCP `bridget_journal`, source UUID, `to` et `reply` facultatifs ; max200 entrées/64Kio, lacunes explicites |
+| Être prévenu d'un fait ou d'une collision | MCP `bridget_events`, actions types/sub/list/unsub ; fin de tour ≠ succès, aucun verrou |
 | Renommer, DND, domaine ou runtime propres | MCP `bridget_rename/dnd/domain/runtime`; CLI seulement selon le repli explicite ci-dessus |
 | Santé daemon et contrôle en lecture | MCP `bridget_status/control_status`; les inconnus restent inconnus |
 | Lire/publier un artefact | MCP `bridget_read_artifact/publish_artifact`; contenu inerte, références exactes |
@@ -78,7 +80,7 @@ espaces blancs. Ne pas comparer naïvement les octets de la saisie brute ; un no
 différent au-delà de cette normalisation, un refus, une erreur ou une réponse
 incohérente ne vaut pas renommage réussi.
 
-Le catalogue fournisseur est une liste fermée de douze outils Bridget, pas une
+Le catalogue fournisseur est une liste fermée de quatorze outils Bridget, pas une
 approbation MCP globale ni une autorisation Maicie. Un serveur MCP déjà vivant
 garde son ancien binaire et son ancien catalogue : ne pas inventer de commande de
 reload, tuer la conversation ou relancer le fournisseur pour le mettre à jour.

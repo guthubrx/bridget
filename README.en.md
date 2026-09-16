@@ -392,6 +392,52 @@ or provider profile is replaced. The
 documents the allowlisted source package, checksums and account requirements.
 This does not authorize a fleet migration.
 
+## Observe and share without blocking agents
+
+`bridget journal 'SOURCE_UUID' --tail 50 --to 'REVIEWER_UUID' --reply` shares an
+exact, attributed excerpt through the existing messaging path. MCP exposes
+`bridget_journal` and `bridget_events`; neither requires T3 or Maicie. Excerpts
+default to 50 entries, max 200 and under 64 KiB, with explicit gaps/truncation
+and `next_seq` for `--from-seq`. An oversized entry is not silently summarized.
+
+```sh
+bridget events types
+bridget events sub turn_ended --agent 'SOURCE_UUID' --once --ttl 1800
+bridget events sub file_collision --file '/project/src/*' --ttl 3600
+bridget events list
+bridget events unsub 'SUBSCRIPTION_ID'
+```
+
+Events are `turn_ended`, `permission_required`, `file_written`, `file_collision`.
+Optional filters are agent UUID and path pattern (`*` only). The authenticated
+agent owns its subscriptions. A turn end is not mission success. Subscriptions
+complement `reply`; they never fulfill a pending response obligation.
+Subscriptions match facts received by the daemon after creation, without
+replaying history. A fact already produced but still in transit can trigger
+them; source clocks are not synchronized by this feature.
+
+Correlated turn endings cover managed ACP, Claude stream-json and Codex
+app-server, not native/T3 idle state alone. Permissions depend on journaled
+provider signals (ACP/Codex, potentially already auto-handled). File events
+require successful structured writes: known Claude/ACP writing tools and
+completed Codex fileChange items. Reads, arbitrary shell and unsupported
+adapters are not covered. No filesystem watcher or cross-daemon event federation.
+
+A collision is a risk: different agents, same host and lexically normalized
+absolute path, within 30 seconds. No file lock, filesystem access or Git merge.
+Symlink aliases, case differences and incorrectly named hosts are limitations.
+
+Subscriptions are daemon-memory state: default 1 hour, max 7 days, 16 per agent,
+128 overall. Auxiliary client disconnects preserve them; daemon restarts do not.
+`once` consumes a trigger even if delivery fails. Missing agents, DND, queue
+pressure and expired deliveries are losses, not durable work. Receipts expose
+`notifications_lost`, `evicted_writes`; lists expose `suppressed_total` for the
+five-notifications/second/subscription limit. Delivery uses a 64-message queue,
+one-second attempts, five-second queue expiry. Source facts use a 256-item queue,
+recent files a 4096-entry cache; source losses log `observation_gap`. Turns
+caused by Bridget observation messages do not generate further observations.
+No mandatory workflow, approval gate or execution lock is introduced.
+
 ## Cross-server communication
 
 One master daemon, Unix socket forwarding through SSH, the same public protocol,

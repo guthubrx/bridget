@@ -684,6 +684,10 @@ impl Drop for FixtureRoot {
 }
 
 struct DaemonState {
+    observations: crate::observation::Observations,
+    observation_sequences: HashMap<String, u64>,
+    observation_tx: mpsc::SyncSender<(Instant, DeferredControl)>,
+    observation_lost: Arc<std::sync::atomic::AtomicU64>,
     #[cfg(test)]
     fixture_root: Option<FixtureRoot>,
     /// Machine, base et identité **de ce daemon**, retenues une fois au
@@ -1271,6 +1275,69 @@ fn deliver_to_agent(
 
     info!("Message délivré à {}", target_name);
     Ok(message_id)
+}
+
+fn observation_output() -> (
+    mpsc::SyncSender<(Instant, DeferredControl)>,
+    Arc<std::sync::atomic::AtomicU64>,
+) {
+    let (tx, rx) = mpsc::sync_channel::<(Instant, DeferredControl)>(64);
+    let lost = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let failures = lost.clone();
+    thread::spawn(move || {
+        while let Ok((deadline, control)) = rx.recv() {
+            if Instant::now() >= deadline
+                || push_control_message_until(
+                    &control.writer,
+                    &control.message,
+                    deadline.min(Instant::now() + CANCEL_NOTIFICATION_BUDGET),
+                )
+                .is_err()
+            {
+                failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    });
+    (tx, lost)
+}
+
+/// O(S), S<=128 ; aucune E/S sous verrou, dépôt non bloquant en file de 64.
+fn observe_fact(st: &mut DaemonState, fact: crate::observation::Fact) {
+    let notifications = st.observations.observe(fact, Instant::now());
+    for notification in notifications {
+        let target = st.router.get_agent(&notification.owner).and_then(|route| {
+            let presence = st
+                .conn_instances
+                .get(&route.connection_id)
+                .and_then(|id| st.presences.get(id))?;
+            if presence.is_dnd() {
+                return None;
+            }
+            st.connections.get(&route.connection_id).cloned()
+        });
+        let accepted = target.is_some_and(|writer| {
+            let mut message = bridget_core::BridgetMessage::new(
+                "bridget",
+                &notification.owner,
+                &notification.body,
+            );
+            message.id = format!("bridget-observation:{}", message.id);
+            message.origin = Some(bridget_core::MessageOrigin::System);
+            st.observation_tx
+                .try_send((
+                    Instant::now() + Duration::from_secs(5),
+                    DeferredControl {
+                        writer,
+                        message: DaemonToWrapper::Deliver(message),
+                    },
+                ))
+                .is_ok()
+        });
+        if !accepted {
+            st.observation_lost
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2826,7 +2893,12 @@ impl DaemonState {
         let execution_store = ExecutionStore::open(&config.db_path)?;
         let registry = AgentRegistry::load()?;
         let (view_closed_tx, view_closed_rx) = mpsc::channel();
+        let (observation_tx, observation_lost) = observation_output();
         Ok(DaemonState {
+            observations: Default::default(),
+            observation_sequences: HashMap::new(),
+            observation_tx,
+            observation_lost,
             #[cfg(test)]
             fixture_root: None,
             host: crate::build_info::local_host(),
@@ -4801,6 +4873,7 @@ fn handle_connection(
         let removed = st.router.unregister_by_conn(&conn_id);
         st.mark_unreachable(&conn_id);
         st.conn_names.remove(&conn_id);
+        st.observation_sequences.remove(&conn_id);
         st.conn_hosts.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
@@ -8774,6 +8847,257 @@ mod spec099_classic_delivery_tests {
         (Arc::new(Mutex::new(state)), root, peers)
     }
 
+    #[test]
+    fn spec100_owner_source_collision_and_nonblocking_notifications() {
+        use bridget_transport::protocol::{ObservationKind as Kind, ObservationRequest as Request};
+        let (state, _root, mut peers) = fixture();
+        let request = Request::Sub {
+            event: Kind::FileCollision,
+            agent: None,
+            file: Some("/p/*".into()),
+            once: true,
+            ttl_secs: Some(60),
+        };
+        assert!(matches!(
+            handle_wrapper_message(
+                "intruder",
+                WrapperToDaemon::ObservationRequest {
+                    request: request.clone()
+                },
+                &state
+            ),
+            Some(DaemonToWrapper::Nack { .. })
+        ));
+        let Some(DaemonToWrapper::ObservationResult { result }) = handle_wrapper_message(
+            "witness",
+            WrapperToDaemon::ObservationRequest { request },
+            &state,
+        ) else {
+            panic!("reçu requis")
+        };
+        let id = result["subscription"]["id"].as_str().unwrap();
+        let result = handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationRequest {
+                request: Request::Unsub { id: id.into() },
+            },
+            &state,
+        );
+        assert!(
+            matches!(result,Some(DaemonToWrapper::ObservationResult{result}) if result["status"]=="rejected")
+        );
+        for (conn, seq) in [("sender", 1), ("target", 1), ("target", 1)] {
+            handle_wrapper_message(
+                conn,
+                WrapperToDaemon::ObservedActivity {
+                    seq,
+                    event: Kind::FileWritten,
+                    file: Some("/p/./x".into()),
+                },
+                &state,
+            );
+        }
+        let peer = peers.pop().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut reader = BufReader::new(peer);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let delivered = decode::<DaemonToWrapper>(line.trim()).unwrap();
+        let DaemonToWrapper::Deliver(message) = delivered else {
+            panic!("notification ordinaire attendue")
+        };
+        assert!(message.id.starts_with("bridget-observation:"));
+        assert!(!message.reply);
+        assert!(message.body.contains(SENDER) && message.body.contains(TARGET));
+        assert!(message.body.contains("/p/x"));
+        let writer = state.lock().unwrap().connections["witness"].clone();
+        let held = writer.lock().unwrap();
+        handle_wrapper_message(
+            "witness",
+            WrapperToDaemon::ObservationRequest {
+                request: Request::Sub {
+                    event: Kind::TurnEnded,
+                    agent: None,
+                    file: None,
+                    once: false,
+                    ttl_secs: None,
+                },
+            },
+            &state,
+        );
+        let started = Instant::now();
+        for seq in 2..1000 {
+            handle_wrapper_message(
+                "sender",
+                WrapperToDaemon::ObservedActivity {
+                    seq,
+                    event: Kind::TurnEnded,
+                    file: None,
+                },
+                &state,
+            );
+        }
+        assert!(matches!(
+            handle_wrapper_message("target", WrapperToDaemon::ListAgents, &state),
+            Some(DaemonToWrapper::AgentList { .. })
+        ));
+        let mut witness = BridgetMessage::new(
+            SENDER,
+            TARGET,
+            "Extrait du journal Bridget — témoin de communication",
+        );
+        witness.reply = true;
+        let witness_id = witness.id.clone();
+        assert!(matches!(
+            handle_wrapper_message("sender", WrapperToDaemon::Send(witness), &state),
+            Some(DaemonToWrapper::Ack { .. })
+        ));
+        let peer = peers.pop().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut target = BufReader::new(peer);
+        let mut line = String::new();
+        target.read_line(&mut line).unwrap();
+        assert!(
+            matches!(decode::<DaemonToWrapper>(line.trim()).unwrap(),DaemonToWrapper::Deliver(message) if message.reply && message.id==witness_id)
+        );
+        assert!(
+            state
+                .lock()
+                .unwrap()
+                .pending_replies
+                .iter()
+                .any(|p| p.msg_id == witness_id)
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "writer occupé ne bloque pas le dispatch"
+        );
+        // Un client auxiliaire ne peut inventer un fait pour son agent.
+        state
+            .lock()
+            .unwrap()
+            .auxiliary_connections
+            .insert("sender".into());
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservedActivity {
+                seq: 1001,
+                event: Kind::TurnEnded,
+                file: None,
+            },
+            &state,
+        );
+        assert_eq!(state.lock().unwrap().observation_sequences["sender"], 999);
+        drop(held);
+        handle_wrapper_message(
+            "witness",
+            WrapperToDaemon::ObservationRequest {
+                request: Request::Sub {
+                    event: Kind::PermissionRequired,
+                    agent: None,
+                    file: None,
+                    once: true,
+                    ttl_secs: None,
+                },
+            },
+            &state,
+        );
+        let before = {
+            let mut st = state.lock().unwrap();
+            let instance = st.conn_instances["witness"].clone();
+            st.presences.get_mut(&instance).unwrap().dnd_until =
+                Some(Instant::now() + Duration::from_secs(30));
+            st.observation_lost
+                .load(std::sync::atomic::Ordering::Relaxed)
+        };
+        handle_wrapper_message(
+            "target",
+            WrapperToDaemon::ObservedActivity {
+                seq: 2,
+                event: Kind::PermissionRequired,
+                file: None,
+            },
+            &state,
+        );
+        assert!(
+            state
+                .lock()
+                .unwrap()
+                .observation_lost
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > before
+        );
+    }
+
+    #[test]
+    fn spec100_notification_queue_saturation_is_nonblocking_and_drains() {
+        let (server, peer) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(server)));
+        let held = writer.lock().unwrap();
+        let (tx, lost) = observation_output();
+        let start = Instant::now();
+        let mut accepted = 0;
+        let mut full = 0;
+        for _ in 0..128 {
+            match tx.try_send((
+                Instant::now() + Duration::from_secs(5),
+                DeferredControl {
+                    writer: writer.clone(),
+                    message: DaemonToWrapper::Ack {
+                        id: "queue-test".into(),
+                    },
+                },
+            )) {
+                Ok(()) => accepted += 1,
+                Err(mpsc::TrySendError::Full(_)) => full += 1,
+                Err(error) => panic!("file interrompue : {error}"),
+            }
+        }
+        assert!((64..=65).contains(&accepted));
+        assert!(full > 0);
+        assert!(start.elapsed() < Duration::from_secs(1));
+        drop(held);
+        drop(tx);
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut reader = BufReader::new(peer);
+        for _ in 0..accepted {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(
+                matches!(decode::<DaemonToWrapper>(line.trim()).unwrap(), DaemonToWrapper::Ack { id } if id == "queue-test")
+            );
+        }
+        assert_eq!(lost.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn spec100_expired_notification_is_lost_without_blocking_next_delivery() {
+        let (server, peer) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(server)));
+        let (tx, lost) = observation_output();
+        for (id, deadline) in [
+            ("expired", Instant::now()),
+            ("fresh", Instant::now() + Duration::from_secs(5)),
+        ] {
+            tx.try_send((
+                deadline,
+                DeferredControl {
+                    writer: writer.clone(),
+                    message: DaemonToWrapper::Ack { id: id.into() },
+                },
+            ))
+            .unwrap();
+        }
+        drop(tx);
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut line = String::new();
+        BufReader::new(peer).read_line(&mut line).unwrap();
+        assert!(
+            matches!(decode::<DaemonToWrapper>(line.trim()).unwrap(), DaemonToWrapper::Ack { id } if id == "fresh")
+        );
+        assert_eq!(lost.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
     fn pressure(hold_writer: bool) {
         let (state, root, peers) = fixture();
         let writer = Arc::clone(state.lock().unwrap().connections.get("target").unwrap());
@@ -9203,6 +9527,8 @@ fn handle_wrapper_message(
                 // greffe en a besoin pour savoir SUR QUELLE MACHINE il écrirait.
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
+                | WrapperToDaemon::ObservationRequest { .. }
+                | WrapperToDaemon::ObservedActivity { .. }
                 | WrapperToDaemon::ClientHello { .. }
                 | WrapperToDaemon::ArtifactPublish { .. }
                 | WrapperToDaemon::ArtifactRead { .. }
@@ -9414,6 +9740,8 @@ fn handle_wrapper_message(
                 // c'est le rôle Client qui l'emprunte (`daemon_identity`).
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
+                | WrapperToDaemon::ObservationRequest { .. }
+                | WrapperToDaemon::ObservedActivity { .. }
                 | WrapperToDaemon::ServiceHello { .. }
                 | WrapperToDaemon::ArtifactPublish { .. }
                 | WrapperToDaemon::ArtifactRead { .. }
@@ -9510,6 +9838,70 @@ fn handle_wrapper_message(
     }
 
     match msg {
+        WrapperToDaemon::ObservationRequest { request } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some((owner, _)) = live_connection_identity(&st, conn_id) else {
+                return Some(DaemonToWrapper::Nack {
+                    id: "observation".into(),
+                    reason: "identité active requise".into(),
+                });
+            };
+            let mut result = st.observations.request(
+                &owner,
+                request,
+                Instant::now(),
+                unix_now_secs().max(0) as u64,
+            );
+            result["daemon_instance"] = serde_json::json!(st.instance_id);
+            result["lifetime"] = serde_json::json!(
+                "daemon_memory: recréer après redémarrage ; pas de livraison durable, DND respecté"
+            );
+            result["notifications_lost"] = serde_json::json!(
+                st.observation_lost
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            );
+            result["evicted_writes"] = serde_json::json!(st.observations.evicted_writes);
+            Some(DaemonToWrapper::ObservationResult { result })
+        }
+        WrapperToDaemon::ObservedActivity { seq, event, file } => {
+            use bridget_transport::protocol::ObservationKind;
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let (agent, instance) = live_connection_identity(&st, conn_id)?;
+            if st.auxiliary_connections.contains(conn_id)
+                || seq == 0
+                || st
+                    .observation_sequences
+                    .get(conn_id)
+                    .is_some_and(|last| seq <= *last)
+                || !matches!(
+                    event,
+                    ObservationKind::FileWritten
+                        | ObservationKind::PermissionRequired
+                        | ObservationKind::TurnEnded
+                )
+                || (event == ObservationKind::FileWritten && file.is_none())
+                || (event != ObservationKind::FileWritten && file.is_some())
+            {
+                return None;
+            }
+            st.observation_sequences.insert(conn_id.into(), seq);
+            let host = st
+                .presences
+                .get(&instance)
+                .map(|p| p.host.clone())
+                .unwrap_or_else(|| st.host.clone());
+            observe_fact(
+                &mut st,
+                crate::observation::Fact {
+                    event,
+                    agent,
+                    host,
+                    file,
+                    other_agent: None,
+                },
+            );
+            None
+        }
         WrapperToDaemon::RoleHandshake { .. } => unreachable!("handshake traité avant le dispatch"),
         WrapperToDaemon::ControlStateRead { version } => {
             Some(handle_control_state_read(state, version))
@@ -11829,6 +12221,7 @@ fn handle_wrapper_message(
                 st.router.unregister_by_conn(conn_id);
                 st.mark_stopped(conn_id);
                 st.conn_names.remove(conn_id);
+                st.observation_sequences.remove(conn_id);
                 st.conn_hosts.remove(conn_id);
                 st.conn_operating_systems.remove(conn_id);
                 st.service_negotiations.remove(conn_id);
