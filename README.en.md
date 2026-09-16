@@ -51,6 +51,26 @@ An address is a UUID. `bridget rename "Team B"` or `bridget_rename` changes only
 the owning session's display name; retries, instance and history stay bound to
 the same identity. Neither a provider name nor `--from` grants another identity.
 
+### Communication guarantees and upgrade 099
+
+A CLI or MCP client acting for an agent must present the private credential
+issued to its wrapper. Knowing an agent UUID, instance or replay scope is not
+authorization. The credential rotates when the owner reconnects and old auxiliary
+connections lose their authority. It stays in the wrapper's private state,
+including when the daemon is reached through SSH, never in the public directory.
+
+Upgrade the daemon, wrappers and clients together, then reconnect the wrappers
+in the **verified namespace**. Older auxiliaries without a credential receive
+an explicit refusal; there is no fallback to declarative registration. This does
+not isolate hostile processes controlling the same operating-system account and
+able to read its private files. Do not share that account with an untrusted party.
+
+Classic delivery waits at most one second for its output lock and write, without
+holding the daemon's global state lock. A failed write does not receive a success
+acknowledgment. Partial delivery may remain indeterminate: inspect request state
+before retrying. A delivery acknowledgment proves neither provider completion
+nor answer quality.
+
 The 094 contract documents a closed list of twelve Bridget tools:
 `bridget_who`, `bridget_send`, `bridget_cancel`, `bridget_ledger`, both artifact
 tools and the six additions `bridget_rename`, `bridget_dnd`, `bridget_domain`,
@@ -108,6 +128,14 @@ file inside Bridget state; a 401 triggers one renewal, a second one is an
 explicit failure shown by `status`. The thread journal (`bridget attach`) never
 replays history older than the installation. An archived thread leaves the
 directory, never t3code. See [ADR 034](docs/decisions/034-adaptateur-t3code.md).
+
+The bridge processes cancellation while waiting for an idle thread: a request
+cancelled before dispatch does not start a later turn. Expiration and automatic
+reminders do not open an extra provider turn. Cancellation after t3code
+accepts a turn does not guarantee provider interruption. A prepared response is
+retained until confirmation, including recipient disconnects and bridge restarts;
+recovery does not rerun the provider task. The journal retains long text within
+its bounds or explicitly reports a gap, never silently cutting at 4,096 characters.
 
 ## Native interactive Claude Code, without tmux (session 097)
 

@@ -596,7 +596,9 @@ impl Peer {
             journal_available: None,
         });
         match peer.recv() {
-            DaemonToWrapper::Registered { agent_id: assigned } => peer.name = assigned,
+            DaemonToWrapper::Registered {
+                agent_id: assigned, ..
+            } => peer.name = assigned,
             other => panic!("enregistrement inattendu: {other:?}"),
         }
         peer
@@ -849,6 +851,25 @@ fn collect_journal(socket: &Path, agent: &str) -> Vec<String> {
                 .is_some_and(|message_id| bootstrap_message_ids.contains(message_id))
         })
         .collect();
+    if business.len() != MATRIX_EXPECTED_TURNS * MATRIX_EVENTS_PER_TURN {
+        // Diagnostic : en cas d'écart, inventorier les tours métier reçus pour
+        // situer un tour manquant ou rejoué (sous charge, un tour en trop a été vu).
+        for bytes in &business {
+            let value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+            eprintln!(
+                "DIAG event={} message_id={} from={} body={}",
+                value["event"],
+                value["message_id"],
+                value["payload"]["from"],
+                value["payload"]["body"]
+                    .as_str()
+                    .unwrap_or("")
+                    .chars()
+                    .take(30)
+                    .collect::<String>()
+            );
+        }
+    }
     assert_eq!(
         business.len(),
         MATRIX_EXPECTED_TURNS * MATRIX_EVENTS_PER_TURN,
@@ -919,7 +940,9 @@ fn run_corpus(socket: &Path, agent: &str, run: usize, proxy: &CutProxy) -> ModeO
         "QUEUE-NEXT",
         MATRIX_FAST_REPLY_TIMEOUT_SECS,
     );
-    let busy = wait_agent(&mut peer, agent);
+    // La remise est asynchrone par destinataire (spec 099) : l'état busy
+    // s'observe en attendant, pas en lisant l'annuaire juste après l'envoi.
+    let busy = wait_agent_state(&mut peer, agent, "busy");
     assert_eq!(busy.state, "busy", "le tour lent doit être observable");
     proxy.cut_wrapper_and_wait_for_reconnect();
     let reconnected = wait_busy_reconnected(&mut peer, agent);

@@ -40,6 +40,14 @@ fn mcp_binaire_huit_register_coexistants_neuvieme_busy_sans_neuvieme_socket() {
     let listener = UnixListener::bind(socket(&root)).unwrap();
     fs::set_permissions(socket(&root), fs::Permissions::from_mode(0o600)).unwrap();
     listener.set_nonblocking(true).unwrap();
+    let credential =
+        bridget_transport::protocol::IdentityCredential::new("concurrent-mock-proof".into());
+    save_fixture_credential(
+        &socket(&root),
+        ACTOR,
+        "eight-real-connections",
+        credential.clone(),
+    );
     let (ready_tx, ready_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let server = thread::spawn(move || {
@@ -64,25 +72,10 @@ fn mcp_binaire_huit_register_coexistants_neuvieme_busy_sans_neuvieme_socket() {
                 .set_write_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut writer = BufWriter::new(stream);
+            let writer = BufWriter::new(stream);
+            // L'annuaire est public : `bridget_who` interroge sans preuve ni
+            // enregistrement, la première trame est directement ListAgents.
             let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            assert!(
-                matches!(decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
-                WrapperToDaemon::Register { ref agent_id, instance_id: Some(ref instance), .. }
-                    if agent_id == ACTOR && instance == "eight-real-connections")
-            );
-            writeln!(
-                writer,
-                "{}",
-                encode(&DaemonToWrapper::Registered {
-                    agent_id: ACTOR.into()
-                })
-                .unwrap()
-            )
-            .unwrap();
-            writer.flush().unwrap();
-            line.clear();
             reader.read_line(&mut line).unwrap();
             assert!(matches!(
                 decode::<WrapperToDaemon>(line.trim_end()).unwrap(),

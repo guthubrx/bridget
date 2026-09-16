@@ -451,6 +451,7 @@ fn outil_mcp_rejette_la_reponse_liee_divergente_sans_muter_les_demandes() {
     let mut daemon = MatrixDaemonGuard::start(&root, &sync);
     let socket_path = socket(&root);
     let mut recipient = register_recipient_as(&socket_path, "mcp-linked-recipient");
+    let _actor = register_agent_as(&socket_path, ACTOR, "mcp-linked-instance");
     let mut mcp = McpProcess::start(&root, ACTOR, "mcp-linked-instance");
     let initialize = mcp.request(serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}
@@ -613,6 +614,7 @@ fn binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee() {
     let mut daemon = MatrixDaemonGuard::start(&root, &sync);
     let socket_path = socket(&root);
     let mut recipient = register_recipient_as(&socket_path, "recipient-parity-instance");
+    let _actor = register_agent_as(&socket_path, ACTOR, "shared-cli-mcp-instance");
 
     let first = run_linked_cli(
         &root,

@@ -431,6 +431,7 @@ fn execute_tool_at(
     arguments: &serde_json::Map<String, Value>,
     socket: &Path,
 ) -> Result<Value, ToolError> {
+    crate::mcp_identity::mock_private_identity(socket, identity, "test-instance");
     execute_tool_at_with_scope(identity, "test-instance", name, arguments, socket)
 }
 
@@ -620,6 +621,12 @@ fn execute_send(
         } => {}
         other => return unexpected_response(other),
     }
+    crate::communication::client::authenticate_auxiliary(
+        &mut connection,
+        identity,
+        instance_id,
+        socket,
+    )?;
     let issuer_scope = issuer_scope(instance_id);
     match connection.exchange(&WrapperToDaemon::ClientHello {
         contract_version: CLIENT_CONTRACT_VERSION,
@@ -881,7 +888,11 @@ fn execute_who(
         ),
         None => None,
     };
-    let mut connection = registered_connection(identity, instance_id, socket)?;
+    // L'annuaire est la projection publique du daemon : sa lecture n'exige
+    // aucune preuve d'identité, comme `bridget who` au clavier. Les outils qui
+    // écrivent ou lisent une portée privée restent attestés.
+    let _ = (identity, instance_id);
+    let mut connection = DaemonConnection::connect(socket)?;
     match connection.exchange(&WrapperToDaemon::ListAgents)? {
         DaemonToWrapper::AgentList { agents } => Ok(json!({
             "agents": agents.into_iter().filter(|agent| {
@@ -2180,12 +2191,14 @@ mod tests {
             let read_stream = stream.try_clone().unwrap();
             let mut reader = BufReader::new(read_stream);
             let mut writer = BufWriter::new(stream);
-            assert!(
-                matches!(read_command(&mut reader), WrapperToDaemon::Register { agent_type, .. } if agent_type == "mcp")
-            );
+            assert!(matches!(
+                read_command(&mut reader),
+                WrapperToDaemon::RegisterAuxiliary { .. }
+            ));
             write_command(
                 &mut writer,
                 DaemonToWrapper::Registered {
+                    credential: None,
                     agent_id: "agent-fixture".to_string(),
                 },
             );
@@ -2462,11 +2475,19 @@ mod tests {
     }
 
     fn test_socket(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "bridget-mcp-{label}-{}-{}.sock",
-            std::process::id(),
-            NEXT_MESSAGE_ID.fetch_add(1, Ordering::Relaxed)
-        ))
+        crate::mcp_identity::mock_socket(label)
+    }
+
+    // Fixture privée pour les tests de projection, sans exception d'admission.
+    fn execute_tool_at_with_scope(
+        identity: &str,
+        instance: &str,
+        name: &str,
+        arguments: &serde_json::Map<String, Value>,
+        socket: &Path,
+    ) -> Result<Value, ToolError> {
+        crate::mcp_identity::mock_private_identity(socket, identity, instance);
+        super::execute_tool_at_with_scope(identity, instance, name, arguments, socket)
     }
 
     fn read_command(reader: &mut BufReader<UnixStream>) -> WrapperToDaemon {
@@ -2478,6 +2499,45 @@ mod tests {
     fn write_command(writer: &mut BufWriter<UnixStream>, response: DaemonToWrapper) {
         writeln!(writer, "{}", encode(&response).unwrap()).unwrap();
         writer.flush().unwrap();
+        if matches!(
+            response,
+            DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            }
+        ) {
+            let mut reader = BufReader::new(writer.get_ref().try_clone().unwrap());
+            let registration = read_command(&mut reader);
+            let WrapperToDaemon::RegisterAuxiliary {
+                agent_id,
+                instance_id,
+                credential,
+            } = registration
+            else {
+                panic!("preuve auxiliaire attendue");
+            };
+            let address = writer.get_ref().local_addr().unwrap();
+            let expected = crate::mcp_identity::auxiliary_registration(
+                &agent_id,
+                &instance_id,
+                address.as_pathname().unwrap(),
+            )
+            .unwrap();
+            assert!(
+                matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. }
+                if expected == credential)
+            );
+            writeln!(
+                writer,
+                "{}",
+                encode(&DaemonToWrapper::Registered {
+                    agent_id,
+                    credential: None
+                })
+                .unwrap()
+            )
+            .unwrap();
+            writer.flush().unwrap();
+        }
     }
 
     #[test]
@@ -2492,19 +2552,19 @@ mod tests {
             let mut writer = BufWriter::new(stream);
             assert!(matches!(
                 read_command(&mut reader),
-                WrapperToDaemon::Register {
-                    agent_type,
-                    identity_version: 2,
+                WrapperToDaemon::RegisterAuxiliary {
+
+
                     agent_id: name,
-                    instance_id: Some(instance_id),
+                    instance_id,
                     ..
-                } if agent_type == "mcp"
-                    && name == "jc2"
+                } if name == "jc2"
                     && instance_id == "instance-greffe-1"
             ));
             write_command(
                 &mut writer,
                 DaemonToWrapper::Registered {
+                    credential: None,
                     agent_id: "jc2".to_string(),
                 },
             );
@@ -2569,11 +2629,12 @@ mod tests {
             let mut writer = BufWriter::new(stream);
             assert!(matches!(
                 read_command(&mut reader),
-                WrapperToDaemon::Register { .. }
+                WrapperToDaemon::RegisterAuxiliary { .. }
             ));
             write_command(
                 &mut writer,
                 DaemonToWrapper::Registered {
+                    credential: None,
                     agent_id: "jc2".to_string(),
                 },
             );
@@ -2651,11 +2712,12 @@ mod tests {
             let mut writer = BufWriter::new(stream);
             assert!(matches!(
                 read_command(&mut reader),
-                WrapperToDaemon::Register { .. }
+                WrapperToDaemon::RegisterAuxiliary { .. }
             ));
             write_command(
                 &mut writer,
                 DaemonToWrapper::Registered {
+                    credential: None,
                     agent_id: "jc2".to_string(),
                 },
             );
@@ -3639,6 +3701,7 @@ mod tests {
         let (started_tx, started_rx) = mpsc::channel();
         let socket = test_socket("eight-registers");
         let listener = UnixListener::bind(&socket).unwrap();
+        crate::mcp_identity::mock_private_identity(&socket, "fixture-agent", "fixture-instance");
         let (principals_tx, principals_rx) = mpsc::channel();
         let daemon = thread::spawn(move || {
             for _ in 0..MAX_IN_FLIGHT_TOOL_CALLS {
@@ -3646,10 +3709,9 @@ mod tests {
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut writer = BufWriter::new(stream);
                 let registered_agent = match read_command(&mut reader) {
-                    WrapperToDaemon::Register {
-                        identity_version: 2,
+                    WrapperToDaemon::RegisterAuxiliary {
                         agent_id: name,
-                        instance_id: Some(instance_id),
+                        instance_id,
                         ..
                     } => {
                         principals_tx.send((name.clone(), instance_id)).unwrap();
@@ -3660,6 +3722,7 @@ mod tests {
                 write_command(
                     &mut writer,
                     DaemonToWrapper::Registered {
+                        credential: None,
                         agent_id: registered_agent,
                     },
                 );
@@ -3823,7 +3886,7 @@ mod tests {
     }
 
     #[test]
-    fn who_ouvre_une_connexion_ephemere_register_puis_commande() {
+    fn who_lit_l_annuaire_public_sans_enregistrement() {
         let socket = test_socket("who");
         let listener = UnixListener::bind(&socket).unwrap();
         let server = thread::spawn(move || {
@@ -3831,20 +3894,8 @@ mod tests {
             let read_stream = stream.try_clone().unwrap();
             let mut reader = BufReader::new(read_stream);
             let mut writer = BufWriter::new(stream);
-            let registered_agent = match read_command(&mut reader) {
-                WrapperToDaemon::Register {
-                    agent_type,
-                    agent_id,
-                    ..
-                } if agent_type == "mcp" => agent_id,
-                other => panic!("Register MCP attendu: {other:?}"),
-            };
-            write_command(
-                &mut writer,
-                DaemonToWrapper::Registered {
-                    agent_id: registered_agent,
-                },
-            );
+            // L'annuaire est public : aucune preuve ni enregistrement avant la
+            // commande, exactement comme `bridget who` au clavier.
             assert!(matches!(
                 read_command(&mut reader),
                 WrapperToDaemon::ListAgents

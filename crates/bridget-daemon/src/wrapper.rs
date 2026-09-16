@@ -1626,8 +1626,15 @@ pub(crate) fn connect_and_register_at(
 
     let mut line = String::new();
     reader.read_line(&mut line).map_err(|e| e.to_string())?;
-    match decode(line.trim()).map_err(|e| e.to_string())? {
-        DaemonToWrapper::Registered { agent_id } => {
+    match decode(line.trim()).map_err(|_| "réponse d'enregistrement invalide".to_string())? {
+        DaemonToWrapper::Registered {
+            agent_id,
+            credential,
+        } => {
+            if let Some(credential) = credential {
+                let root = socket.parent().ok_or("socket sans répertoire privé")?;
+                crate::mcp_identity::save_credential(root, &agent_id, instance_id, credential)?;
+            }
             send_disk_space_fact(&mut writer);
             Ok((reader, writer, agent_id))
         }
@@ -2206,8 +2213,8 @@ pub fn launch(
 
             let msg: DaemonToWrapper = match decode(line) {
                 Ok(m) => m,
-                Err(e) => {
-                    warn!("message illisible: {}", e);
+                Err(_) => {
+                    warn!("message de protocole illisible");
                     continue;
                 }
             };
@@ -4073,7 +4080,7 @@ fn launch_session_with_status(
                 }
                 Ok(DaemonToWrapper::Disconnect) => break,
                 Ok(_) => {}
-                Err(error) => warn!("message ACP illisible: {}", error),
+                Err(_) => warn!("message ACP de protocole illisible"),
             },
             Err(error)
                 if matches!(
@@ -6601,6 +6608,7 @@ mod reconnect_tests {
                 writer,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
+                    credential: None,
                     agent_id: "lab-agent".to_string()
                 })
                 .unwrap()
@@ -8069,6 +8077,8 @@ mod reconnect_tests {
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
         let expected_derived = derive_domain();
         let expected_derived_for_server = expected_derived.clone();
+        let credential =
+            bridget_transport::protocol::IdentityCredential::new(uuid::Uuid::new_v4().to_string());
         let server = std::thread::spawn(move || {
             let (mut primary, _) = listener.accept().unwrap();
             let mut primary_reader = BufReader::new(primary.try_clone().unwrap());
@@ -8083,6 +8093,7 @@ mod reconnect_tests {
                 primary,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
+                    credential: Some(credential.clone()),
                     agent_id: identity.to_string(),
                 })
                 .unwrap()
@@ -8097,12 +8108,14 @@ mod reconnect_tests {
             auxiliary_reader.read_line(&mut line).unwrap();
             assert!(matches!(
                 decode(line.trim()).unwrap(),
-                WrapperToDaemon::Register { agent_id, .. } if agent_id == identity
+                WrapperToDaemon::RegisterAuxiliary { agent_id, credential: presented, .. }
+                    if agent_id == identity && presented == credential
             ));
             writeln!(
                 auxiliary,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
+                    credential: None,
                     agent_id: identity.to_string(),
                 })
                 .unwrap()
@@ -8170,6 +8183,9 @@ mod reconnect_tests {
         let identity = "89000000-0000-4000-8000-000000000494";
         let instance_id = "instance-domain-race-094";
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        crate::mcp_identity::mock_private_identity(&socket, identity, instance_id);
+        let credential =
+            bridget_transport::protocol::IdentityCredential::new(uuid::Uuid::new_v4().to_string());
         let expected_derived = derive_domain();
         let (seen_tx, seen_rx) = mpsc::channel();
         let server = std::thread::spawn(move || {
@@ -8179,12 +8195,13 @@ mod reconnect_tests {
             setter_reader.read_line(&mut line).unwrap();
             assert!(matches!(
                 decode(line.trim()).unwrap(),
-                WrapperToDaemon::Register { agent_id, .. } if agent_id == identity
+                WrapperToDaemon::RegisterAuxiliary { agent_id, .. } if agent_id == identity
             ));
             writeln!(
                 setter,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
+                    credential: None,
                     agent_id: identity.to_string(),
                 })
                 .unwrap()
@@ -8224,6 +8241,7 @@ mod reconnect_tests {
                 primary,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
+                    credential: Some(credential.clone()),
                     agent_id: identity.to_string(),
                 })
                 .unwrap()
@@ -8238,12 +8256,14 @@ mod reconnect_tests {
             auxiliary_reader.read_line(&mut line).unwrap();
             assert!(matches!(
                 decode(line.trim()).unwrap(),
-                WrapperToDaemon::Register { agent_id, .. } if agent_id == identity
+                WrapperToDaemon::RegisterAuxiliary { agent_id, credential: presented, .. }
+                    if agent_id == identity && presented == credential
             ));
             writeln!(
                 auxiliary,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
+                    credential: None,
                     agent_id: identity.to_string(),
                 })
                 .unwrap()

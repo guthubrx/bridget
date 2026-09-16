@@ -132,6 +132,7 @@ fn who_agents_et_status_refusent_un_inventaire_non_atteste_sans_sortie_trompeuse
                 stream,
                 "{}\n{}",
                 encode(&DaemonToWrapper::Registered {
+                    credential: None,
                     agent_id: "étranger".into()
                 })
                 .unwrap(),

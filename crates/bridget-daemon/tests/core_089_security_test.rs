@@ -236,6 +236,14 @@ fn mcp_reel_garde_outcome_unknown_apres_reponse_invalide_sans_fuite_du_canari() 
         let listener = UnixListener::bind(socket(&root)).unwrap();
         fs::set_permissions(socket(&root), fs::Permissions::from_mode(0o600)).unwrap();
         listener.set_nonblocking(true).unwrap();
+        let credential =
+            bridget_transport::protocol::IdentityCredential::new(format!("security-mock-{fault}"));
+        save_fixture_credential(
+            &socket(&root),
+            ACTOR,
+            "security-instance",
+            credential.clone(),
+        );
         let server = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(10);
             let stream = loop {
@@ -255,9 +263,10 @@ fn mcp_reel_garde_outcome_unknown_apres_reponse_invalide_sans_fuite_du_canari() 
             let mut client = Client {
                 reader: BufReader::new(stream.try_clone().unwrap()),
                 writer: BufWriter::new(stream),
+                owner: None,
             };
             // Client est ici côté serveur : décodage des requêtes indépendant.
-            for stage in 0..3 {
+            for stage in 0..4 {
                 let mut line = String::new();
                 client.reader.read_line(&mut line).unwrap();
                 let command: WrapperToDaemon =
@@ -266,7 +275,7 @@ fn mcp_reel_garde_outcome_unknown_apres_reponse_invalide_sans_fuite_du_canari() 
                     (0, WrapperToDaemon::RoleHandshake { role }) => {
                         DaemonToWrapper::RoleAccepted { role }
                     }
-                    (1, WrapperToDaemon::ClientHello { capabilities, .. }) => {
+                    (2, WrapperToDaemon::ClientHello { capabilities, .. }) => {
                         DaemonToWrapper::ClientWelcome {
                             version: 1,
                             build_id: "unknown".into(),
@@ -275,7 +284,23 @@ fn mcp_reel_garde_outcome_unknown_apres_reponse_invalide_sans_fuite_du_canari() 
                             capabilities,
                         }
                     }
-                    (2, WrapperToDaemon::SendIdempotent { message_id, .. }) => {
+                    (
+                        1,
+                        WrapperToDaemon::RegisterAuxiliary {
+                            agent_id,
+                            instance_id,
+                            credential: received,
+                        },
+                    ) => {
+                        assert_eq!(agent_id, ACTOR);
+                        assert_eq!(instance_id, "security-instance");
+                        assert_eq!(received, credential);
+                        DaemonToWrapper::Registered {
+                            agent_id,
+                            credential: None,
+                        }
+                    }
+                    (3, WrapperToDaemon::SendIdempotent { message_id, .. }) => {
                         let reply = match fault {
                             "mauvaise-trame" => json!({"type":"Ack","id":"CANARI_SECRET_089"}),
                             "mauvais-id" | "mauvaise-operation" => json!({

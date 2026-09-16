@@ -2094,11 +2094,35 @@ pub enum ArtifactReadRefusal {
     StorageUnavailable,
 }
 
+/// Preuve privée de rattachement. La sérialisation transporte le secret,
+/// mais aucune projection Debug (y compris des trames) ne le révèle.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct IdentityCredential(String);
+
+impl IdentityCredential {
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl std::fmt::Debug for IdentityCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("IdentityCredential([REDACTED])")
+    }
+}
+
 /// Messages envoyés par le wrapper vers le daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
+    /// Atteste une connexion auxiliaire sans remplacer la route propriétaire.
+    RegisterAuxiliary {
+        agent_id: String,
+        instance_id: String,
+        credential: IdentityCredential,
+    },
     /// Négocie un rôle avant l'usage d'une connexion persistante.
     RoleHandshake {
         role: ConnectionRole,
@@ -3291,6 +3315,8 @@ pub enum DaemonToWrapper {
     /// Confirmation d'enregistrement avec l'identifiant stable.
     Registered {
         agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        credential: Option<IdentityCredential>,
     },
     /// Livrer un message à l'agent.
     Deliver(BridgetMessage),
@@ -3850,6 +3876,37 @@ pub struct RequestInfo {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spec099_credential_optionnel_compatible_et_masque_dans_debug() {
+        use super::{DaemonToWrapper, IdentityCredential, WrapperToDaemon};
+        let old: DaemonToWrapper =
+            serde_json::from_str(r#"{"type":"Registered","agent_id":"agent"}"#).unwrap();
+        assert!(matches!(
+            old,
+            DaemonToWrapper::Registered {
+                credential: None,
+                ..
+            }
+        ));
+        let secret = "ne-doit-jamais-apparaitre-dans-les-logs";
+        let credential = IdentityCredential::new(secret.into());
+        let registration = WrapperToDaemon::RegisterAuxiliary {
+            agent_id: "agent".into(),
+            instance_id: "instance".into(),
+            credential: credential.clone(),
+        };
+        let response = DaemonToWrapper::Registered {
+            agent_id: "agent".into(),
+            credential: Some(credential),
+        };
+        assert!(!format!("{registration:?} {response:?}").contains(secret));
+        assert!(
+            serde_json::to_string(&registration)
+                .unwrap()
+                .contains(secret)
+        );
+    }
+
     #[test]
     fn spec091_selection_fermee_bornee_et_sans_permissions() {
         use super::{RuntimeSelection, RuntimeSelectionOutcome};

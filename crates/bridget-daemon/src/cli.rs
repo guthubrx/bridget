@@ -1170,6 +1170,7 @@ mod spawn_executor_tests {
                 writer,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
+                    credential: None,
                     agent_id: "cli-cwd-oracle".to_string(),
                 })
                 .expect("Registered encodable")
@@ -2319,13 +2320,26 @@ fn send_idempotent_to_daemon(
     message: &BridgetMessage,
     options: &IdempotentSendOptions,
 ) -> Result<DaemonToWrapper, String> {
-    send_idempotent_to_daemon_at(&socket_path(), message, options)
+    let identity = match crate::mcp_identity::resolve_current_identity() {
+        Ok(identity) => Some(identity),
+        // Un humain au clavier n'a pas d'identité d'agent à prouver : il parle
+        // sous l'étiquette humaine, que le daemon n'assimile jamais à un agent.
+        Err(_) if message.from == "human" => None,
+        Err(_) => {
+            return Err(
+                "identité auxiliaire indisponible : lancez la commande depuis le wrapper"
+                    .to_string(),
+            );
+        }
+    };
+    send_idempotent_to_daemon_at(&socket_path(), message, options, identity.as_ref())
 }
 
 fn send_idempotent_to_daemon_at(
     path: &std::path::Path,
     message: &BridgetMessage,
     options: &IdempotentSendOptions,
+    identity: Option<&crate::mcp_identity::ResolvedIdentity>,
 ) -> Result<DaemonToWrapper, String> {
     let mut connection = DaemonConnection::connect(path).map_err(|error| error.to_string())?;
     match connection
@@ -2338,6 +2352,19 @@ fn send_idempotent_to_daemon_at(
             role: ConnectionRole::Client,
         } => {}
         response => return Err(format!("handshake client refusé: {response:?}")),
+    }
+
+    if let Some(identity) = identity {
+        if identity.name != message.from {
+            return Err("identité expéditeur différente du wrapper appelant".into());
+        }
+        crate::communication::client::authenticate_auxiliary(
+            &mut connection,
+            &identity.name,
+            &identity.instance_id,
+            path,
+        )
+        .map_err(|error| error.to_string())?;
     }
 
     match connection
@@ -2432,7 +2459,14 @@ fn send_control_to_daemon_at(
     command: WrapperToDaemon,
 ) -> Result<DaemonToWrapper, String> {
     let mut connection = DaemonConnection::connect(socket).map_err(|e| e.to_string())?;
-    let reg = cli_register("send");
+    let reg = match crate::mcp_identity::resolve_current_identity() {
+        Ok(identity) => crate::mcp_identity::auxiliary_registration(
+            &identity.name,
+            &identity.instance_id,
+            socket,
+        )?,
+        Err(_) => cli_register("send"),
+    };
     if !matches!(
         connection.exchange(&reg).map_err(|e| e.to_string())?,
         DaemonToWrapper::Registered { .. }
@@ -5510,6 +5544,7 @@ mod hook_tests {
                     writer,
                     "{}",
                     encode(&DaemonToWrapper::Registered {
+                        credential: None,
                         agent_id: "cli-test".to_string()
                     })
                     .unwrap()
@@ -5988,16 +6023,48 @@ mod idempotency_projection_tests {
     use bridget_transport::protocol::{REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION};
     use rusqlite::params;
     use std::os::unix::net::UnixListener;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static SOCKET_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn temporary_socket_path() -> std::path::PathBuf {
-        let counter = SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "bridget-t1208-{}-{counter}.sock",
-            std::process::id()
-        ))
+        crate::mcp_identity::mock_socket("cli-canon")
+    }
+
+    fn caller_identity() -> crate::mcp_identity::ResolvedIdentity {
+        crate::mcp_identity::ResolvedIdentity {
+            name: "89000000-0000-4000-8000-000000000200".into(),
+            instance_id: "test-cli-instance".into(),
+        }
+    }
+
+    fn owner_connection(path: &Path) -> DaemonConnection {
+        let identity = caller_identity();
+        let mut owner = DaemonConnection::connect(path).unwrap();
+        let mut registration = cli_register("fixture");
+        if let WrapperToDaemon::Register {
+            agent_id,
+            agent_type,
+            instance_id,
+            ..
+        } = &mut registration
+        {
+            *agent_id = identity.name.clone();
+            *agent_type = "fixture".into();
+            *instance_id = Some(identity.instance_id.clone());
+        }
+        let DaemonToWrapper::Registered {
+            credential: Some(credential),
+            ..
+        } = owner.exchange(&registration).unwrap()
+        else {
+            panic!("credential propriétaire requis");
+        };
+        crate::mcp_identity::save_credential(
+            path.parent().unwrap(),
+            &identity.name,
+            &identity.instance_id,
+            credential,
+        )
+        .unwrap();
+        owner
     }
 
     fn start_real_daemon() -> (std::path::PathBuf, std::path::PathBuf) {
@@ -6087,6 +6154,29 @@ mod idempotency_projection_tests {
 
                 line.clear();
                 reader.read_line(&mut line).unwrap();
+                let WrapperToDaemon::RegisterAuxiliary {
+                    agent_id,
+                    instance_id,
+                    credential,
+                } = decode(line.trim()).unwrap()
+                else {
+                    panic!("preuve auxiliaire attendue");
+                };
+                let expected =
+                    crate::mcp_identity::auxiliary_registration(&agent_id, &instance_id, &path)
+                        .unwrap();
+                assert!(
+                    matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential)
+                );
+                write_response(
+                    &mut writer,
+                    DaemonToWrapper::Registered {
+                        agent_id,
+                        credential: None,
+                    },
+                );
+                line.clear();
+                reader.read_line(&mut line).unwrap();
                 assert!(matches!(
                     decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
                     WrapperToDaemon::ClientHello {
@@ -6160,6 +6250,20 @@ mod idempotency_projection_tests {
             DaemonToWrapper::RoleAccepted {
                 role: ConnectionRole::Client
             }
+        ));
+        write_control_message(
+            &mut writer,
+            &crate::mcp_identity::auxiliary_registration(
+                &message.from,
+                &caller_identity().instance_id,
+                path,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            read_control_message(&mut reader).unwrap(),
+            DaemonToWrapper::Registered { .. }
         ));
         write_control_message(
             &mut writer,
@@ -6425,11 +6529,14 @@ mod idempotency_projection_tests {
         let path = temporary_socket_path();
         let server = start_reference_server(path.clone(), 3);
         let options = example_options();
-        let mut message = BridgetMessage::new("human", "codex-1", "bonjour");
+        let identity = caller_identity();
+        crate::mcp_identity::mock_private_identity(&path, &identity.name, &identity.instance_id);
+        let mut message = BridgetMessage::new(&identity.name, "codex-1", "bonjour");
         message.id = options.id.clone();
 
         let reference = reference_client_send(&path, &message, &options);
-        let cli = send_idempotent_to_daemon_at(&path, &message, &options).unwrap();
+        let cli = send_idempotent_to_daemon_at(&path, &message, &options, Some(&caller_identity()))
+            .unwrap();
         assert!(matches!(
             (reference, cli),
             (
@@ -6447,7 +6554,8 @@ mod idempotency_projection_tests {
         let mut divergent = message.clone();
         divergent.body = "message différent".to_string();
         assert!(matches!(
-            send_idempotent_to_daemon_at(&path, &divergent, &options).unwrap(),
+            send_idempotent_to_daemon_at(&path, &divergent, &options, Some(&caller_identity()))
+                .unwrap(),
             DaemonToWrapper::IdempotencyResult {
                 issue: IdempotencyIssue::EnvelopeMismatch,
                 ..
@@ -6464,6 +6572,7 @@ mod idempotency_projection_tests {
     #[test]
     fn projection_cli_et_reference_partagent_le_canon_du_daemon_reel() {
         let (socket_path, db_path) = start_real_daemon();
+        let _owner = owner_connection(&socket_path);
         let issued_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -6473,14 +6582,21 @@ mod idempotency_projection_tests {
             issued_at,
             issuer_scope: "012_scope_aaaaaaaaaaaa".to_string(),
         };
-        let mut message = BridgetMessage::new("human", "destinataire-absent", "bonjour");
+        let mut message =
+            BridgetMessage::new(&caller_identity().name, "destinataire-absent", "bonjour");
         message.id = options.id.clone();
         message.reply = true;
         message.reply_timeout = Some(12);
 
         let reference = idempotency_issue(reference_client_send(&socket_path, &message, &options));
         let cli = idempotency_issue(
-            send_idempotent_to_daemon_at(&socket_path, &message, &options).unwrap(),
+            send_idempotent_to_daemon_at(
+                &socket_path,
+                &message,
+                &options,
+                Some(&caller_identity()),
+            )
+            .unwrap(),
         );
         assert_eq!(reference, cli, "référence et CLI rejouent la même issue");
         let canonical = stored_canonical_bytes(&db_path, &options);
@@ -6502,7 +6618,13 @@ mod idempotency_projection_tests {
         for divergent in divergences {
             assert_eq!(
                 idempotency_issue(
-                    send_idempotent_to_daemon_at(&socket_path, &divergent, &options).unwrap(),
+                    send_idempotent_to_daemon_at(
+                        &socket_path,
+                        &divergent,
+                        &options,
+                        Some(&caller_identity())
+                    )
+                    .unwrap(),
                 ),
                 IdempotencyIssue::EnvelopeMismatch,
             );

@@ -1,10 +1,10 @@
 <!-- SPECKIT START -->
-Plan actif : specs/090-codex-interactif/plan.md (socle : session 089).
+Plan actif : specs/099-fiabilite-communications/plan.md (socle : session 089).
 Périmètre : communication inter-agents, observation et fédération SSH.
 Ne pas lancer de daemon, wrapper ou script de déploiement avant configuration
 explicite d'un home/socket isolé. L'installation historique reste hors périmètre.
-Sélection SpecKit : SPECIFY_FEATURE=089-communication-core lorsque le script
-exige un préfixe numérique ; la branche Git reste session-089-communication-core.
+Sélection SpecKit : SPECIFY_FEATURE=099-fiabilite-communications lorsque le script
+exige un préfixe numérique ; branche session-099-fiabilite-communications.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->

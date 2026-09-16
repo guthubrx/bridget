@@ -363,6 +363,7 @@ struct Client {
     reader: BufReader<UnixStream>,
     writer: BufWriter<UnixStream>,
     deadline: Instant,
+    socket: PathBuf,
 }
 impl Client {
     fn connect(socket: &Path, deadline: Instant) -> Self {
@@ -377,6 +378,7 @@ impl Client {
             reader: BufReader::new(stream.try_clone().unwrap()),
             writer: BufWriter::new(stream),
             deadline,
+            socket: socket.to_path_buf(),
         }
     }
     fn raw(&mut self, line: &str) -> DaemonToWrapper {
@@ -403,7 +405,31 @@ impl Client {
         self.raw(&encode(&message).unwrap())
     }
     fn register(&mut self, agent: &str, instance: &str, kind: &str) -> DaemonToWrapper {
-        self.request(WrapperToDaemon::Register {
+        let proof_path = self
+            .socket
+            .parent()
+            .unwrap()
+            .join("agent-names")
+            .join(format!("proof-{}.json", sha256_hex(instance.as_bytes())));
+        if kind == "mcp" {
+            let credential = fs::read(&proof_path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                .and_then(|proof| serde_json::from_value(proof["credential"].clone()).ok())
+                // Le scénario d'intrusion présente une preuve invalide au
+                // vrai daemon ; il ne simule jamais le résultat du refus.
+                .unwrap_or_else(|| {
+                    bridget_transport::protocol::IdentityCredential::new(
+                        "invalid-fixture-proof".into(),
+                    )
+                });
+            return self.request(WrapperToDaemon::RegisterAuxiliary {
+                agent_id: agent.into(),
+                instance_id: instance.into(),
+                credential,
+            });
+        }
+        let response = self.request(WrapperToDaemon::Register {
             identity_version: 2,
             agent_type: kind.into(),
             agent_id: agent.into(),
@@ -417,13 +443,28 @@ impl Client {
             domain: None,
             turn_in_progress: false,
             journal_available: Some(false),
-        })
+        });
+        if let DaemonToWrapper::Registered {
+            credential: Some(credential),
+            ..
+        } = &response
+        {
+            bridget_transport::fsutil::write_private_file_atomic(
+                &proof_path,
+                &serde_json::to_vec(&serde_json::json!({
+                    "agent_id": agent, "instance_id": instance, "credential": credential,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        response
     }
     fn agent(fixture: &Fixture, agent: &str, instance: &str, kind: &str) -> Self {
         let mut client = fixture.client();
         let response = client.register(agent, instance, kind);
         assert!(
-            matches!(response, DaemonToWrapper::Registered { ref agent_id } if agent_id == agent),
+            matches!(response, DaemonToWrapper::Registered { ref agent_id, .. } if agent_id == agent),
             "{response:?}"
         );
         client

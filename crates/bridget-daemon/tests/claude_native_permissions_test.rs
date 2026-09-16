@@ -186,6 +186,7 @@ fn run_mission_with(
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
+                credential: None,
                 agent_id: AGENT_ID.to_string(),
             })
             .unwrap()

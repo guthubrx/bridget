@@ -306,6 +306,7 @@ fn accept_wrapper(
         writer,
         "{}",
         encode(&DaemonToWrapper::Registered {
+            credential: None,
             agent_id: ACP_AGENT.into()
         })
         .unwrap()

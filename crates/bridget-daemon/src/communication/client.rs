@@ -3,7 +3,7 @@
 
 use bridget_transport::protocol::{
     CLIENT_CONTRACT_VERSION, CONTROL_STATE_CONTRACT_VERSION, ClientCapability, ConnectionRole,
-    ControlEventFrame, ControlStateFrame, PresenceMode, RuntimeSource, decode, encode,
+    ControlEventFrame, ControlStateFrame, RuntimeSource, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use std::io::{self, BufReader, Write};
@@ -766,23 +766,27 @@ fn registered_connection_until(
     deadline: Instant,
 ) -> Result<DaemonConnection, ClientError> {
     let mut connection = DaemonConnection::connect_until(socket, deadline)?;
-    let registration = WrapperToDaemon::Register {
-        agent_type: "mcp".to_string(),
-        identity_version: 2,
-        agent_id: identity.to_string(),
-        host: None,
-        transport: None,
-        channel: bridget_transport::ChannelReport::Unknown,
-        mode: Some(PresenceMode::Cli),
-        location: None,
-        os: None,
-        instance_id: Some(instance_id.to_string()),
-        domain: None,
-        turn_in_progress: false,
-        journal_available: None,
-    };
+    authenticate_auxiliary(&mut connection, identity, instance_id, socket)?;
+    Ok(connection)
+}
+
+pub(crate) fn authenticate_auxiliary(
+    connection: &mut DaemonConnection,
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+) -> Result<(), ClientError> {
+    let registration = crate::mcp_identity::auxiliary_registration(identity, instance_id, socket)
+        .map_err(|message| ClientError::Technical {
+        code: "auxiliary_credential_required",
+        message,
+    })?;
     match connection.exchange(&registration)? {
-        DaemonToWrapper::Registered { agent_id } if agent_id == identity => Ok(connection),
+        DaemonToWrapper::Registered { agent_id, .. } if agent_id == identity => Ok(()),
+        DaemonToWrapper::Nack { reason, .. } => Err(ClientError::Technical {
+            code: "auxiliary_identity_unproven",
+            message: reason,
+        }),
         other => unexpected_response(other),
     }
 }
@@ -824,19 +828,29 @@ mod security_tests {
         response: DaemonToWrapper,
     ) -> (thread::JoinHandle<()>, mpsc::Receiver<WrapperToDaemon>) {
         let listener = UnixListener::bind(path).unwrap();
+        crate::mcp_identity::mock_private_identity(
+            path,
+            "89000000-0000-4000-8000-000000000194",
+            "instance-094",
+        );
         let (seen_tx, seen_rx) = mpsc::channel();
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
-            let WrapperToDaemon::Register { agent_id, .. } = decode(line.trim()).unwrap() else {
+            let WrapperToDaemon::RegisterAuxiliary { agent_id, .. } = decode(line.trim()).unwrap()
+            else {
                 panic!("Register attendu");
             };
             writeln!(
                 stream,
                 "{}",
-                encode(&DaemonToWrapper::Registered { agent_id }).unwrap()
+                encode(&DaemonToWrapper::Registered {
+                    credential: None,
+                    agent_id
+                })
+                .unwrap()
             )
             .unwrap();
             stream.flush().unwrap();
@@ -855,8 +869,7 @@ mod security_tests {
 
         let identity = "89000000-0000-4000-8000-000000000194";
         for (returned_name, accepted) in [("Agent Vingt Trois", true), ("Autre agent", false)] {
-            let path =
-                std::env::temp_dir().join(format!("b94-rename-{}", uuid::Uuid::new_v4().simple()));
+            let path = crate::mcp_identity::mock_socket("rename");
             let response = DaemonToWrapper::DisplayNameResult {
                 outcome: DisplayNameOutcome::Applied {
                     agent_id: identity.to_string(),
@@ -881,7 +894,7 @@ mod security_tests {
     fn spec094_domaine_distingue_ack_memoire_et_echec_de_persistance() {
         let root =
             std::env::temp_dir().join(format!("b94-domain-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&root).unwrap();
+        crate::environment::ensure_private_directory(&root).unwrap();
         let path = root.join("daemon.sock");
         let (server, seen) = registered_server(
             &path,
@@ -925,9 +938,14 @@ mod security_tests {
             "b94-domain-order-{}",
             uuid::Uuid::new_v4().simple()
         ));
-        std::fs::create_dir_all(&root).unwrap();
+        crate::environment::ensure_private_directory(&root).unwrap();
         let path = root.join("daemon.sock");
         let listener = UnixListener::bind(&path).unwrap();
+        crate::mcp_identity::mock_private_identity(
+            &path,
+            "89000000-0000-4000-8000-000000000294",
+            "instance-094",
+        );
         let (seen_tx, seen_rx) = mpsc::channel();
         let memory_domain = Arc::new(std::sync::Mutex::new(None));
         let memory_domain_for_server = Arc::clone(&memory_domain);
@@ -937,14 +955,19 @@ mod security_tests {
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
-                let WrapperToDaemon::Register { agent_id, .. } = decode(line.trim()).unwrap()
+                let WrapperToDaemon::RegisterAuxiliary { agent_id, .. } =
+                    decode(line.trim()).unwrap()
                 else {
                     panic!("Register attendu");
                 };
                 writeln!(
                     stream,
                     "{}",
-                    encode(&DaemonToWrapper::Registered { agent_id }).unwrap()
+                    encode(&DaemonToWrapper::Registered {
+                        credential: None,
+                        agent_id
+                    })
+                    .unwrap()
                 )
                 .unwrap();
                 stream.flush().unwrap();
@@ -1052,22 +1075,31 @@ mod security_tests {
     fn spec094_control_status_negocie_lookup_borne_a_l_instance_sans_mutation() {
         use bridget_transport::protocol::ControlStateRefusal;
 
-        let path =
-            std::env::temp_dir().join(format!("b94-control-{}", uuid::Uuid::new_v4().simple()));
+        let path = crate::mcp_identity::mock_socket("control");
         let listener = UnixListener::bind(&path).unwrap();
+        crate::mcp_identity::mock_private_identity(
+            &path,
+            "89000000-0000-4000-8000-000000000194",
+            "instance-094",
+        );
         let (hello_tx, hello_rx) = mpsc::channel();
         let server = thread::spawn(move || {
             let (mut registration, _) = listener.accept().unwrap();
             let mut registration_reader = BufReader::new(registration.try_clone().unwrap());
             let mut line = String::new();
             registration_reader.read_line(&mut line).unwrap();
-            let WrapperToDaemon::Register { agent_id, .. } = decode(line.trim()).unwrap() else {
+            let WrapperToDaemon::RegisterAuxiliary { agent_id, .. } = decode(line.trim()).unwrap()
+            else {
                 panic!("Register attendu avant la lecture Client");
             };
             writeln!(
                 registration,
                 "{}",
-                encode(&DaemonToWrapper::Registered { agent_id }).unwrap()
+                encode(&DaemonToWrapper::Registered {
+                    credential: None,
+                    agent_id
+                })
+                .unwrap()
             )
             .unwrap();
             registration.flush().unwrap();
@@ -1159,11 +1191,13 @@ mod security_tests {
 
     #[test]
     fn spec094_control_status_stoppe_si_l_attestation_auxiliaire_est_perimee() {
-        let path = std::env::temp_dir().join(format!(
-            "b94-control-stale-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+        let path = crate::mcp_identity::mock_socket("control-stale");
         let listener = UnixListener::bind(&path).unwrap();
+        crate::mcp_identity::mock_private_identity(
+            &path,
+            "89000000-0000-4000-8000-000000000194",
+            "instance-perimee",
+        );
         let (check_tx, check_rx) = mpsc::channel();
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
@@ -1172,8 +1206,8 @@ mod security_tests {
             reader.read_line(&mut line).unwrap();
             assert!(matches!(
                 decode(line.trim()).unwrap(),
-                WrapperToDaemon::Register {
-                    instance_id: Some(instance_id), ..
+                WrapperToDaemon::RegisterAuxiliary {
+                    instance_id, ..
                 } if instance_id == "instance-perimee"
             ));
             writeln!(

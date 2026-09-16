@@ -55,6 +55,26 @@ seulement le nom affiché depuis la session propriétaire ; les rejeux, l'instan
 et l'historique restent liés à la même identité. Un nom de fournisseur ou un
 champ `--from` ne permet pas d'usurper cette identité.
 
+### Garanties de communication et mise à jour 099
+
+Un client MCP ou CLI rattaché à un agent doit présenter la preuve privée reçue
+par son wrapper. Connaître l'UUID, l'instance ou une portée de rejeu ne suffit
+pas. La preuve est renouvelée à la reconnexion du propriétaire ; ses anciennes
+connexions auxiliaires perdent leurs droits. Elle reste dans l'état privé du
+wrapper, y compris avec un daemon distant par SSH, jamais dans l'annuaire.
+
+Mettre à jour ensemble daemon, wrappers et clients, puis reconnecter les wrappers
+du **namespace vérifié**. Un ancien auxiliaire sans preuve reçoit un refus
+explicite : aucun repli vers l'ancienne inscription déclarative. Cette correction
+n'isole pas deux processus hostiles qui contrôlent le même compte système et
+peuvent lire ses fichiers privés. Ne pas partager ce compte avec un tiers non fiable.
+
+Une remise classique attend au maximum une seconde le verrou et l'écriture de
+sortie, sans garder le verrou global du daemon. Une panne d'écriture ne produit
+pas un accusé de réussite : une remise partielle peut rester indéterminée, et il
+faut consulter le suivi avant un rejeu. Un accusé de remise n'atteste ni la fin
+du travail fournisseur ni la qualité de sa réponse.
+
 Le contrat 094 décrit une liste fermée de douze outils Bridget :
 `bridget_who`, `bridget_send`, `bridget_cancel`, `bridget_ledger`, les deux outils
 d'artefacts et les six ajouts `bridget_rename`, `bridget_dnd`, `bridget_domain`,
@@ -113,6 +133,15 @@ un seul renouvellement, un second refus est un échec explicite dans `status`.
 Le journal du fil (`bridget attach`) ne rejoue pas l'historique antérieur à
 l'installation. Le fil archivé disparaît de l'annuaire, jamais de t3code.
 Voir [l'ADR 034](docs/decisions/034-adaptateur-t3code.md).
+
+Le pont traite les annulations pendant l'attente d'un fil libre : une demande
+annulée avant démarrage ne devient pas un tour ultérieur. L'expiration et les
+rappels automatiques n'ouvrent pas de tour supplémentaire. Une annulation après
+acceptation par t3code ne garantit pas l'interruption du fournisseur. La réponse
+préparée est conservée jusqu'à confirmation, y compris si son destinataire se
+déconnecte ou si le pont redémarre ; sa reprise ne relance pas le travail.
+Le journal conserve les textes longs dans ses bornes ou signale explicitement
+la lacune, sans coupe silencieuse à 4 096 caractères.
 
 ## Claude Code interactif, sans tmux (session 097)
 

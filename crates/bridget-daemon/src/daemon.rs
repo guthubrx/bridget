@@ -731,6 +731,8 @@ struct DaemonState {
     /// Connexions MCP filles : elles portent le principal canonique pour les
     /// gardes, sans devenir propriétaires de la présence du wrapper.
     auxiliary_connections: HashSet<String>,
+    /// Secrets éphémères détenus par les seules connexions propriétaires.
+    identity_credentials: HashMap<String, bridget_transport::protocol::IdentityCredential>,
     /// Les clients attach négocient ce rôle explicite ; l'absence d'entrée
     /// reste un wrapper pour préserver les agents 007 déjà connectés.
     connection_roles: HashMap<String, ConnectionRole>,
@@ -1243,6 +1245,8 @@ enum ReminderAction {
         msg_id: String,
         from_conn: String,
         timeout_secs: u64,
+        /// t3code reçoit un contrôle, jamais un nouveau tour textuel.
+        cancel_target: Option<String>,
     },
     Deferred {
         to: String,
@@ -1253,56 +1257,17 @@ enum ReminderAction {
     },
 }
 
-// Type d'erreur pour la livraison de messages (H-002)
-#[derive(Debug)]
-enum DeliveryError {
-    Encoding(String),
-    Lock(String),
-    Write(String),
-    Flush(String),
-}
-
-impl std::fmt::Display for DeliveryError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DeliveryError::Encoding(msg) => write!(f, "Erreur d'encodage: {}", msg),
-            DeliveryError::Lock(msg) => write!(f, "Erreur de verrouillage: {}", msg),
-            DeliveryError::Write(msg) => write!(f, "Erreur d'écriture: {}", msg),
-            DeliveryError::Flush(msg) => write!(f, "Erreur de flush: {}", msg),
-        }
-    }
-}
-
 fn deliver_to_agent(
     writer: &Arc<Mutex<BufWriter<UnixStream>>>,
     target_name: &str,
     body: &str,
-) -> Result<String, DeliveryError> {
+) -> std::io::Result<String> {
     let msg = bridget_core::BridgetMessage::new("bridget", target_name, body);
     let message_id = msg.id.clone();
     let dtw = DaemonToWrapper::Deliver(msg);
-    let json = encode(&dtw).map_err(|e| {
-        error!("Erreur d'encodage message pour {}: {}", target_name, e);
-        DeliveryError::Encoding(e.to_string())
-    })?;
-
-    let mut w = writer.lock().map_err(|e| {
-        error!(
-            "Impossible de verrouiller le writer pour {}: {}",
-            target_name, e
-        );
-        DeliveryError::Lock(e.to_string())
-    })?;
-
-    writeln!(w, "{}", json).map_err(|e| {
-        error!("Erreur d'écriture pour {}: {}", target_name, e);
-        DeliveryError::Write(e.to_string())
-    })?;
-
-    w.flush().map_err(|e| {
-        error!("Erreur de flush pour {}: {}", target_name, e);
-        DeliveryError::Flush(e.to_string())
-    })?;
+    // Les notifications système partagent la même borne que les remises :
+    // une cible non lectrice ne doit jamais immobiliser le thread de rappel.
+    push_control_message_until(writer, &dtw, Instant::now() + CANCEL_NOTIFICATION_BUDGET)?;
 
     info!("Message délivré à {}", target_name);
     Ok(message_id)
@@ -1546,7 +1511,7 @@ mod core_089_cancel_pressure_tests {
     }
 }
 
-/// Budget global de notification d'annulation, incluant l'attente du writer.
+/// Budget global d'une sortie de contrôle ou remise, incluant le verrou writer.
 /// L'issue durable ne dépend pas de la disponibilité du destinataire.
 const CANCEL_NOTIFICATION_BUDGET: Duration = Duration::from_secs(1);
 
@@ -1735,8 +1700,6 @@ fn is_ephemeral_cli_route(
 /// Sort de l'attribution de l'expéditeur pour un envoi hors rôle attach.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SenderAttribution {
-    /// Le nom porté par le message est conservé tel quel.
-    Keep,
     /// Le nom est remplacé par celui de la connexion émettrice.
     UseConnectionName,
     /// L'émetteur s'est nommé, mais ce nom n'est adressable par personne :
@@ -1756,12 +1719,10 @@ pub(crate) enum SenderAttribution {
 ///   l'identité d'un agent connecté — ce serait une usurpation — ni se donner
 ///   un nom que personne ne porte — ce serait un expéditeur sans adresse de
 ///   retour. Les deux cas sont refusés, avec des motifs distincts ;
-/// - si elle ne se nomme pas, le comportement d'origine est conservé, y compris
-///   le nom hérité de l'environnement d'un wrapper qui l'a lancée.
+/// - un nom hérité de l'environnement ne constitue pas davantage une preuve :
+///   les clients rattachés utilisent RegisterAuxiliary et ne passent plus par
+///   la route CLI éphémère.
 ///
-/// La garde ne porte donc que sur le `--from` explicite. C'est la voie par
-/// laquelle les trois usurpations du 28/08 ont été produites, et la seule qui
-/// puisse être fermée sans casser un usage existant.
 /// Complexité : O(1).
 pub(crate) fn resolve_sender_attribution(
     ephemeral_cli: bool,
@@ -1778,7 +1739,7 @@ pub(crate) fn resolve_sender_attribution(
         return SenderAttribution::RefuseUnaddressable;
     }
     if from_is_addressable {
-        return SenderAttribution::Keep;
+        return SenderAttribution::RefuseImpersonation;
     }
     SenderAttribution::UseConnectionName
 }
@@ -1859,15 +1820,12 @@ mod attribution_emetteur_cli_tests {
         );
     }
 
-    /// Non-régression du chemin implicite : sans `--from`, un CLI lancé dans le
-    /// contexte d'un wrapper porte encore le nom hérité de son environnement.
-    /// La garde ne vise que la déclaration explicite ; fermer aussi cette voie
-    /// casserait un usage existant sans fermer aucune usurpation mesurée.
+    /// Un nom hérité ne vaut pas la preuve privée du wrapper.
     #[test]
-    fn nom_herite_de_l_environnement_reste_conserve() {
+    fn nom_herite_de_l_environnement_ne_prouve_pas_identite() {
         assert_eq!(
             resolve_sender_attribution(true, false, true),
-            SenderAttribution::Keep
+            SenderAttribution::RefuseImpersonation
         );
     }
 
@@ -2909,6 +2867,7 @@ impl DaemonState {
             conn_operating_systems: HashMap::new(),
             conn_instances: HashMap::new(),
             auxiliary_connections: HashSet::new(),
+            identity_credentials: HashMap::new(),
             connection_roles: HashMap::new(),
             terminal_sessions: HashSet::new(),
             client_negotiations: HashMap::new(),
@@ -2951,6 +2910,7 @@ impl DaemonState {
     }
 
     fn mark_unreachable(&mut self, conn_id: &str) {
+        self.revoke_identity_authorizations(conn_id);
         self.terminal_sessions.remove(conn_id);
         if self.auxiliary_connections.remove(conn_id) {
             self.conn_instances.remove(conn_id);
@@ -2976,6 +2936,7 @@ impl DaemonState {
     }
 
     fn mark_stopped(&mut self, conn_id: &str) {
+        self.revoke_identity_authorizations(conn_id);
         if self.auxiliary_connections.remove(conn_id) {
             self.conn_instances.remove(conn_id);
             return;
@@ -2990,6 +2951,26 @@ impl DaemonState {
                 presence.state = "stopped".to_string();
                 presence.touch_capacity();
             }
+        }
+    }
+
+    fn revoke_identity_authorizations(&mut self, owner: &str) {
+        if self.identity_credentials.remove(owner).is_none() {
+            return;
+        }
+        let Some(instance) = self.conn_instances.get(owner).cloned() else {
+            return;
+        };
+        let auxiliaries: Vec<_> = self
+            .auxiliary_connections
+            .iter()
+            .filter(|conn| self.conn_instances.get(*conn) == Some(&instance))
+            .cloned()
+            .collect();
+        for conn in auxiliaries {
+            self.auxiliary_connections.remove(&conn);
+            self.conn_instances.remove(&conn);
+            self.conn_names.remove(&conn);
         }
     }
 
@@ -3020,6 +3001,7 @@ impl DaemonState {
             return false;
         }
         self.router.unregister_by_conn(&old_conn);
+        self.revoke_identity_authorizations(&old_conn);
         self.conn_instances.remove(&old_conn);
         self.conn_names.remove(&old_conn);
         self.conn_hosts.remove(&old_conn);
@@ -3114,6 +3096,7 @@ impl DaemonState {
             .collect();
         for conn_id in dangling {
             self.router.unregister_by_conn(&conn_id);
+            self.revoke_identity_authorizations(&conn_id);
             self.conn_instances.remove(&conn_id);
             self.conn_names.remove(&conn_id);
             self.conn_hosts.remove(&conn_id);
@@ -4442,27 +4425,28 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                         msg_id,
                         from_conn,
                         timeout_secs,
+                        cancel_target,
                     } => {
-                        let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
-                        // Notifier l'émetteur que le destinataire n'a pas répondu
-                        if let Some(sender_writer) = st.connections.get(&from_conn) {
-                            let body = format!(
-                                "{} n'a pas repondu en {}s au message #{}.\nTu peux reessayer, changer de destinataire ou abandonner.",
-                                to,
-                                timeout_secs,
-                                &msg_id[..msg_id.len().min(8)]
-                            );
-                            if let Err(e) = deliver_to_agent(sender_writer, &from, &body) {
-                                error!(
-                                    "Impossible de délivrer la notification de timeout à {}: {}",
-                                    from, e
+                        if let Some(target_conn) = cancel_target {
+                            let writer = st_reminder
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .connections
+                                .get(&target_conn)
+                                .cloned();
+                            if let Some(writer) = writer {
+                                let _ = push_control_message_until(
+                                    &writer,
+                                    &DaemonToWrapper::CancelDelivery {
+                                        id: msg_id.clone(),
+                                        reason: "échéance de la demande dépassée".into(),
+                                    },
+                                    Instant::now() + Duration::from_secs(1),
                                 );
                             }
-                            info!(
-                                "palier 3 (timeout notifié à {} : {} n'a pas répondu)",
-                                from, to
-                            );
                         }
+                        let st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
+                        let sender_writer = st.connections.get(&from_conn).cloned();
                         // SPEC-087 T029 : une demande du référent restée sans
                         // réponse est une dette humaine ; elle arrive dans sa
                         // boîte, pas seulement dans le fil.
@@ -4490,6 +4474,26 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                                 &["ack".to_string()],
                                 now,
                             );
+                        }
+                        drop(st);
+                        // Aucun verrou global pendant la notification réseau.
+                        if let Some(sender_writer) = sender_writer {
+                            let body = format!(
+                                "{} n'a pas repondu en {}s au message #{}.\nTu peux reessayer, changer de destinataire ou abandonner.",
+                                to,
+                                timeout_secs,
+                                &msg_id[..msg_id.len().min(8)]
+                            );
+                            match deliver_to_agent(&sender_writer, &from, &body) {
+                                Ok(_) => info!(
+                                    "palier 3 (timeout notifié à {} : {} n'a pas répondu)",
+                                    from, to
+                                ),
+                                Err(e) => error!(
+                                    "Impossible de délivrer la notification de timeout à {}: {}",
+                                    from, e
+                                ),
+                            }
                         }
                     }
                     ReminderAction::Deferred {
@@ -4732,8 +4736,10 @@ fn handle_connection(
 
             let msg: WrapperToDaemon = match decode(line) {
                 Ok(m) => m,
-                Err(e) => {
-                    warn!("message illisible de {}: {}", conn_id, e);
+                Err(_) => {
+                    // Les erreurs Serde peuvent citer une valeur fournie,
+                    // notamment un credential mal typé. Ne jamais la journaliser.
+                    warn!("message de protocole illisible de {}", conn_id);
                     if raw_guichet_frame(line) {
                         let json = encode(&DaemonToWrapper::ServiceRejected {
                             reason: ServiceRefusal::InvalidEnvelope,
@@ -5605,37 +5611,24 @@ fn handle_register_with_channel(
         };
     }
 
-    let auxiliary_mcp = agent_type == "mcp";
+    if agent_type == "mcp" {
+        return DaemonToWrapper::Nack {
+            id: "register".into(),
+            reason:
+                "auxiliary_credential_required : mettez à jour le wrapper et le client auxiliaire"
+                    .into(),
+        };
+    }
     // La sonde d'inventaire n'est pas un équipier. Sa route de réponse est
     // éphémère et ne doit pas créer une identité/un profil à chaque lecture.
     // Aucun droit supplémentaire : l'autorisation des mutations reste celle
     // de la connexion, et une sonde ne revendique aucune instance fournisseur.
     let ephemeral_status_probe =
         agent_type == "status-probe" && mode == Some(PresenceMode::Cli) && instance_id.is_none();
-    let requested_agent_id = agent_id.clone();
     let parsed_type = agent_type
         .parse()
         .unwrap_or(bridget_core::AgentType::Custom(agent_type.clone()));
 
-    // Un MCP auxiliaire partage parfois identite et instance avec le wrapper
-    // vivant. Il ne doit donc jamais tenter de reprendre la route canonique.
-    if auxiliary_mcp
-        && let Some(instance_id) = instance_id.as_deref()
-        && state.presences.get(instance_id).is_some_and(|presence| {
-            presence.name == agent_id && matches!(presence.state.as_str(), "connected" | "busy")
-        })
-    {
-        state
-            .conn_names
-            .insert(conn_id.to_string(), agent_id.clone());
-        state
-            .conn_instances
-            .insert(conn_id.to_string(), instance_id.to_string());
-        state.auxiliary_connections.insert(conn_id.to_string());
-        return DaemonToWrapper::Registered {
-            agent_id: agent_id.clone(),
-        };
-    }
     // Le relais UI singleton reprend sa route humaine dédiée après un
     // redémarrage, puis les routes fantômes ordinaires suivent leur garde
     // habituelle. Aucun autre type d'agent ne peut emprunter ce chemin.
@@ -5678,31 +5671,6 @@ fn handle_register_with_channel(
                                 })
                         });
                 if presence_owned_by_live_connection {
-                    let canonical_mcp_name = state
-                        .presences
-                        .get(&instance_id)
-                        .filter(|presence| {
-                            auxiliary_mcp
-                                && Some(requested_agent_id.as_str()) == Some(presence.name.as_str())
-                        })
-                        .map(|presence| presence.name.clone());
-                    if let Some(canonical_name) = canonical_mcp_name {
-                        // Le MCP est une filiation du wrapper : conserver son
-                        // principal exact pour l'autorisation, mais retirer sa
-                        // route auxiliaire afin qu'il n'apparaisse jamais comme
-                        // un second équipier dans `who`.
-                        state.router.unregister_by_conn(conn_id);
-                        state
-                            .conn_names
-                            .insert(conn_id.to_string(), canonical_name.clone());
-                        state
-                            .conn_instances
-                            .insert(conn_id.to_string(), instance_id.clone());
-                        state.auxiliary_connections.insert(conn_id.to_string());
-                        return DaemonToWrapper::Registered {
-                            agent_id: canonical_name,
-                        };
-                    }
                     let same_equipier = state
                         .presences
                         .get(&instance_id)
@@ -5720,11 +5688,25 @@ fn handle_register_with_channel(
                         state.restore_pending_for_agent(&final_agent_id, conn_id);
                         return DaemonToWrapper::Registered {
                             agent_id: final_agent_id,
+                            credential: None,
                         };
                     }
                     // Réconnexion du même équipier avant l'EOF de l'ancienne
                     // connexion : voler l'instance pour que mark_unreachable
                     // retardé ne puisse plus écraser busy / connected.
+                    let old_owners: Vec<_> = state
+                        .conn_instances
+                        .iter()
+                        .filter(|(conn, owned)| {
+                            *conn != conn_id
+                                && *owned == &instance_id
+                                && !state.auxiliary_connections.contains(*conn)
+                        })
+                        .map(|(conn, _)| conn.clone())
+                        .collect();
+                    for owner in old_owners {
+                        state.revoke_identity_authorizations(&owner);
+                    }
                     let auxiliary_connections = &state.auxiliary_connections;
                     state
                         .conn_instances
@@ -5956,8 +5938,21 @@ fn handle_register_with_channel(
 
             state.restore_pending_for_agent(&final_agent_id, conn_id);
             info!("agent '{}' enregistré ({})", final_agent_id, conn_id);
+            state.revoke_identity_authorizations(conn_id);
+            let credential = state.conn_instances.contains_key(conn_id).then(|| {
+                let proof = bridget_transport::protocol::IdentityCredential::new(format!(
+                    "{}{}",
+                    uuid::Uuid::new_v4().simple(),
+                    uuid::Uuid::new_v4().simple()
+                ));
+                state
+                    .identity_credentials
+                    .insert(conn_id.into(), proof.clone());
+                proof
+            });
             DaemonToWrapper::Registered {
                 agent_id: final_agent_id,
+                credential,
             }
         }
         Err(e) => {
@@ -6396,6 +6391,17 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
     let mut state_updates = Vec::new();
     let mut timeout_candidates = Vec::new();
     let mut deferred_events = Vec::new();
+    let t3_connections: HashSet<_> = state
+        .conn_instances
+        .iter()
+        .filter(|(_, instance)| {
+            state
+                .presences
+                .get(*instance)
+                .is_some_and(|p| p.transport == "t3code")
+        })
+        .map(|(conn, _)| conn.clone())
+        .collect();
     let undisturbed: std::collections::HashSet<String> = state
         .presences
         .values()
@@ -6465,7 +6471,16 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
                 pending.msg_id.clone(),
                 pending.from_conn.clone(),
                 timeout,
+                t3_connections
+                    .contains(&pending.target_conn)
+                    .then(|| pending.target_conn.clone()),
             ));
+            continue;
+        }
+        // Le pont corrèle la fin du tour automatiquement. Un rappel destiné
+        // au CLI deviendrait ici un nouveau travail fournisseur indépendant,
+        // capable de démarrer après l'expiration de la demande originale.
+        if t3_connections.contains(&pending.target_conn) {
             continue;
         }
         if !should_remind(undisturbed.contains(&pending.to), pending.escalation_level) {
@@ -6540,7 +6555,7 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
     for (id, level) in deferred_events {
         let _ = state.store.record_deferred_reminder(&id, level);
     }
-    for (to, from, msg_id, from_conn, timeout_secs) in timeout_candidates {
+    for (to, from, msg_id, from_conn, timeout_secs, cancel_target) in timeout_candidates {
         if claim_timeout(&mut state.store, &msg_id) {
             actions.push(ReminderAction::Timeout {
                 to,
@@ -6548,6 +6563,7 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
                 msg_id,
                 from_conn,
                 timeout_secs,
+                cancel_target,
             });
         }
     }
@@ -7211,6 +7227,48 @@ fn live_connection_identity(st: &DaemonState, conn_id: &str) -> Option<(String, 
     Some((agent.clone(), instance.clone()))
 }
 
+/// Réutilise l'autorité de connexion des mutations ; un scope de rejeu ou un
+/// champ from ne devient jamais une preuve d'identité.
+fn sender_is_authorized(st: &DaemonState, conn_id: &str, sender: &str) -> bool {
+    let sender = routing_agent_id(sender);
+    st.conn_names
+        .get(conn_id)
+        .is_some_and(|name| name == sender)
+        && (st
+            .router
+            .get_agent(sender)
+            .is_some_and(|route| route.connection_id == conn_id)
+            || live_connection_identity(st, conn_id).is_some())
+}
+
+fn register_auxiliary(
+    st: &mut DaemonState,
+    conn_id: &str,
+    agent_id: String,
+    instance_id: String,
+    credential: bridget_transport::protocol::IdentityCredential,
+) -> DaemonToWrapper {
+    let valid = st.router.get_agent(&agent_id).is_some_and(|route| {
+        route.connection_id != conn_id
+            && st.identity_credentials.get(&route.connection_id) == Some(&credential)
+            && live_connection_identity(st, &route.connection_id)
+                == Some((agent_id.clone(), instance_id.clone()))
+    });
+    if !valid || st.conn_names.contains_key(conn_id) {
+        return DaemonToWrapper::Nack {
+            id: "register-auxiliary".into(),
+            reason: "auxiliary_identity_unproven : preuve absente, invalide ou révoquée".into(),
+        };
+    }
+    st.conn_names.insert(conn_id.into(), agent_id.clone());
+    st.conn_instances.insert(conn_id.into(), instance_id);
+    st.auxiliary_connections.insert(conn_id.into());
+    DaemonToWrapper::Registered {
+        agent_id,
+        credential: None,
+    }
+}
+
 fn self_mutation_instance(
     st: &DaemonState,
     conn_id: &str,
@@ -7413,6 +7471,17 @@ fn handle_idempotent_send(
     st: &mut DaemonState,
     controls: &mut Vec<DeferredControl>,
 ) -> DaemonToWrapper {
+    // Un client négocié sans identité propre parle comme humain, comme sur le
+    // chemin de contrôle : l'étiquette humaine n'est pas une identité d'agent
+    // que l'on emprunte. Toute autre attribution exige une preuve.
+    let human_from_bare_client = matches!(message.from.as_str(), "" | "human" | "humain")
+        && !st.conn_names.contains_key(conn_id);
+    if !human_from_bare_client && !sender_is_authorized(st, conn_id, &message.from) {
+        return DaemonToWrapper::Nack {
+            id: message_id,
+            reason: "identité expéditeur non attestée : rattachement auxiliaire requis".into(),
+        };
+    }
     let Some(negotiated) = st.client_negotiations.get(conn_id).cloned() else {
         return DaemonToWrapper::ClientRejected {
             reason: ClientRefusal::NegotiationRequired,
@@ -8629,6 +8698,269 @@ fn select_runtime_from_attach(
     DaemonToWrapper::RuntimeSelectionResult { outcome }
 }
 
+#[cfg(test)]
+mod spec099_classic_delivery_tests {
+    use super::*;
+    use bridget_core::BridgetMessage;
+    use std::os::unix::fs::DirBuilderExt;
+
+    const SENDER: &str = "99000000-0000-4000-8000-000000000001";
+    const TARGET: &str = "99000000-0000-4000-8000-000000000002";
+    const WITNESS: &str = "99000000-0000-4000-8000-000000000003";
+
+    #[test]
+    fn spec099_notification_systeme_bornee_meme_si_writer_occupe() {
+        let (socket, _peer) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(BufWriter::new(socket)));
+        let guard = writer.lock().unwrap();
+        let blocked = writer.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let task = std::thread::spawn(move || {
+            tx.send(deliver_to_agent(&blocked, TARGET, "notification système").is_err())
+                .unwrap();
+        });
+        let result = rx.recv_timeout(Duration::from_millis(1500));
+        drop(guard);
+        task.join().unwrap();
+        assert_eq!(result.ok(), Some(true), "notification non bornée");
+    }
+
+    // Même montage socketpair que core_089_cancel_pressure_tests ; aucun
+    // processus fournisseur ni modification du HOME de la session.
+    fn fixture() -> (Arc<Mutex<DaemonState>>, PathBuf, Vec<UnixStream>) {
+        let root = std::env::temp_dir().join(format!("bg099-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .unwrap();
+        let config = DaemonConfig {
+            socket_path: root.join("s"),
+            db_path: root.join("state.db"),
+            log_path: root.join("log"),
+            circuit_breaker_window: 180,
+            circuit_breaker_limit: 8,
+            dedup_window: 180,
+            quarantine_window: 3600,
+            retention_days: 7,
+        };
+        let (tx, _rx) = mpsc::channel();
+        let mut state = DaemonState::new(&config, tx).unwrap();
+        let mut peers = Vec::new();
+        for (conn, agent) in [("sender", SENDER), ("target", TARGET), ("witness", WITNESS)] {
+            let (server, peer) = UnixStream::pair().unwrap();
+            state
+                .connections
+                .insert(conn.into(), Arc::new(Mutex::new(BufWriter::new(server))));
+            let response = handle_register_with_channel(
+                conn,
+                2,
+                "fixture".into(),
+                agent.into(),
+                Some("audit".into()),
+                Some("acp".into()),
+                ChannelReport::Known("unix".into()),
+                Some(PresenceMode::Acp),
+                None,
+                Some("test".into()),
+                Some(format!("spec099-{conn}")),
+                None,
+                false,
+                Some(false),
+                &mut state,
+            );
+            assert!(matches!(response, DaemonToWrapper::Registered { .. }));
+            peers.push(peer);
+        }
+        (Arc::new(Mutex::new(state)), root, peers)
+    }
+
+    fn pressure(hold_writer: bool) {
+        let (state, root, peers) = fixture();
+        let writer = Arc::clone(state.lock().unwrap().connections.get("target").unwrap());
+        // Filet de sécurité pour que l'ancienne implémentation ne suspende pas
+        // le banc ; la borne métier reste 1 seconde, pas ces 4 secondes.
+        writer
+            .lock()
+            .unwrap()
+            .get_ref()
+            .set_write_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let held = hold_writer.then(|| writer.lock().unwrap());
+        let mut message = BridgetMessage::new(SENDER, TARGET, "x".repeat(1024 * 1024));
+        message.id = "spec099-pressure".into();
+        message.reply = hold_writer;
+        let send_state = Arc::clone(&state);
+        let (send_tx, send_rx) = mpsc::channel();
+        let send_started = Instant::now();
+        let send = thread::spawn(move || {
+            send_tx
+                .send(handle_wrapper_message(
+                    "sender",
+                    WrapperToDaemon::Send(message),
+                    &send_state,
+                ))
+                .unwrap();
+        });
+        let db = rusqlite::Connection::open_with_flags(
+            root.join("state.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        db.busy_timeout(Duration::from_millis(20)).unwrap();
+        let barrier = Instant::now() + Duration::from_secs(2);
+        let mut admitted = false;
+        while Instant::now() < barrier {
+            let query = if hold_writer {
+                "SELECT EXISTS(SELECT 1 FROM tracked_requests WHERE id='spec099-pressure')"
+            } else {
+                "SELECT EXISTS(SELECT 1 FROM ledger WHERE id='spec099-pressure')"
+            };
+            admitted = db
+                .query_row(query, [], |row| row.get::<_, bool>(0))
+                .unwrap_or(false);
+            if admitted {
+                break;
+            }
+            thread::yield_now();
+        }
+        let probe_state = Arc::clone(&state);
+        let (probe_tx, probe_rx) = mpsc::channel();
+        let probe = thread::spawn(move || {
+            for _ in 0..10 {
+                let start = Instant::now();
+                let response =
+                    handle_wrapper_message("witness", WrapperToDaemon::ListAgents, &probe_state);
+                let ok = matches!(response, Some(DaemonToWrapper::AgentList { .. }))
+                    && start.elapsed() < Duration::from_secs(1);
+                probe_tx.send(ok).unwrap();
+            }
+            let witness = BridgetMessage::new(WITNESS, SENDER, "independent witness");
+            let start = Instant::now();
+            let response =
+                handle_wrapper_message("witness", WrapperToDaemon::Send(witness), &probe_state);
+            probe_tx
+                .send(
+                    matches!(response, Some(DaemonToWrapper::Ack { .. }))
+                        && start.elapsed() < Duration::from_secs(1),
+                )
+                .unwrap();
+        });
+        let mut probes = Vec::new();
+        for _ in 0..11 {
+            match probe_rx.recv_timeout(Duration::from_millis(900)) {
+                Ok(ok) => probes.push(ok),
+                Err(_) => break,
+            }
+        }
+        let result = send_rx.recv_timeout(Duration::from_millis(1100));
+        let elapsed = send_started.elapsed();
+        // Libérer toutes les ressources AVANT les assertions, y compris sur
+        // l'ancienne implémentation volontairement défaillante.
+        drop(held);
+        for peer in &peers {
+            let _ = peer.shutdown(std::net::Shutdown::Both);
+        }
+        send.join().unwrap();
+        probe.join().unwrap();
+        drop(db);
+        drop(state);
+        drop(writer);
+        drop(peers);
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(admitted, "le message n'a pas atteint la frontière durable");
+        assert_eq!(
+            probes,
+            vec![true; 11],
+            "un writer bloqué retient l'annuaire ou l'échange témoin"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "remise non bornée: {elapsed:?}"
+        );
+        assert!(
+            matches!(result, Ok(Some(DaemonToWrapper::Nack { .. }))),
+            "aucun Ack sur une remise échouée: {result:?}"
+        );
+    }
+
+    #[test]
+    fn spec099_socket_saturee_isolee_des_autres_agents() {
+        pressure(false);
+    }
+
+    #[test]
+    fn spec099_writer_verrouille_isole_des_autres_agents() {
+        pressure(true);
+    }
+
+    #[test]
+    fn spec099_t3code_recoit_annulation_structuree_sans_nouveau_tour() {
+        let (state, root, peers) = fixture();
+        {
+            let mut state = state.lock().unwrap();
+            let target = state.presences.get_mut("spec099-target").unwrap();
+            target.mode = Some(PresenceMode::Cli);
+            target.transport = "t3code".into();
+            state
+                .store
+                .create_request("spec099-cancel", SENDER, TARGET, 60)
+                .unwrap();
+        }
+        let response = handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::CancelRequest {
+                id: "spec099-cancel".into(),
+                sender: SENDER.into(),
+                reason: None,
+            },
+            &state,
+        );
+        assert!(matches!(
+            response,
+            Some(DaemonToWrapper::RequestCancelled { .. })
+        ));
+        let mut reader = BufReader::new(peers[1].try_clone().unwrap());
+        assert!(matches!(presence_tests::read_control(&mut reader),
+            DaemonToWrapper::CancelDelivery { id, .. } if id == "spec099-cancel"));
+        drop(reader);
+        drop(state);
+        drop(peers);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec099_reponse_immediate_reste_correlable() {
+        let (state, root, peers) = fixture();
+        let mut message = BridgetMessage::new(SENDER, TARGET, "instant request");
+        message.id = "spec099-immediate".into();
+        message.reply = true;
+        let response = handle_wrapper_message("sender", WrapperToDaemon::Send(message), &state);
+        assert!(matches!(response, Some(DaemonToWrapper::Ack { .. })));
+        let mut reader = BufReader::new(peers[1].try_clone().unwrap());
+        let delivered = presence_tests::read_control(&mut reader);
+        assert!(matches!(delivered, DaemonToWrapper::Deliver(_)));
+        let mut reply = BridgetMessage::new(TARGET, SENDER, "instant answer");
+        reply.in_reply_to = Some("spec099-immediate".into());
+        let response = handle_wrapper_message("target", WrapperToDaemon::Send(reply), &state);
+        assert!(matches!(response, Some(DaemonToWrapper::Ack { .. })));
+        assert_eq!(
+            state
+                .lock()
+                .unwrap()
+                .store
+                .get_request("spec099-immediate")
+                .unwrap()
+                .unwrap()
+                .state,
+            "answered"
+        );
+        drop(reader);
+        drop(state);
+        drop(peers);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
 fn handle_wrapper_message(
     conn_id: &str,
     msg: WrapperToDaemon,
@@ -8905,6 +9237,7 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::JournalReadError { .. }
                 | WrapperToDaemon::End { .. }
                 | WrapperToDaemon::AttachRejected { .. }
+                | WrapperToDaemon::RegisterAuxiliary { .. }
                 | WrapperToDaemon::Register { .. }
                 | WrapperToDaemon::DiskSpace { .. }
                 | WrapperToDaemon::JournalReady
@@ -8951,6 +9284,7 @@ fn handle_wrapper_message(
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         match st.connection_roles.get(conn_id) {
             Some(ConnectionRole::Client) => match &msg {
+                WrapperToDaemon::RegisterAuxiliary { .. } => None,
                 WrapperToDaemon::SelectRuntime { .. } | WrapperToDaemon::RuntimeSelectionReported { .. } => Some(ClientRefusal::MessageOutsideClientRole),
                 WrapperToDaemon::ClientHello { .. }
                     if st.client_negotiations.contains_key(conn_id) =>
@@ -10248,6 +10582,20 @@ fn handle_wrapper_message(
                 capabilities,
             })
         }
+        WrapperToDaemon::RegisterAuxiliary {
+            agent_id,
+            instance_id,
+            credential,
+        } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            Some(register_auxiliary(
+                &mut st,
+                conn_id,
+                agent_id,
+                instance_id,
+                credential,
+            ))
+        }
         WrapperToDaemon::SendIdempotent {
             message,
             message_id,
@@ -11400,6 +11748,7 @@ fn handle_wrapper_message(
             if let (
                 Some(instance_id),
                 DaemonToWrapper::Registered {
+                    credential: _,
                     agent_id: final_agent_id,
                 },
             ) = (managed_instance, &response)
@@ -11527,61 +11876,27 @@ fn handle_wrapper_message(
             }
             let sender_name = st.conn_names.get(conn_id).cloned().unwrap_or_default();
             let ephemeral_cli = is_ephemeral_cli_route(conn_id, st.router.get_agent(&sender_name));
-            // Résolution de l'expéditeur :
-            // - Si la connexion est un wrapper (agent enregistré sous son vrai nom),
-            //   utiliser ce nom.
-            // - Si la route appartient à cette connexion CLI temporaire, vérifier si
-            //   le from du message correspond à un agent enregistré (ex: codex-1).
-            //   Si oui, utiliser ce from (le CLI a été lancé depuis l'intérieur du wrapper).
-            //   Si non, garder le from tel quel (envoi depuis terminal externe).
             if is_attach {
-                // Le rôle attach ne peut pas emprunter l'identité d'un wrapper
-                // ni répondre à une demande suivie. T804a conservera cette
-                // règle quand il raccordera les envois aux abonnements.
                 bridge_msg.from = "humain".to_string();
                 bridge_msg.in_reply_to = None;
             } else {
-                let from_is_addressable = st.router.get_agent(&bridge_msg.from).is_some();
-                match resolve_sender_attribution(
-                    ephemeral_cli || sender_name.is_empty(),
-                    bridge_msg.from_declared,
-                    from_is_addressable,
-                ) {
-                    // CLI temporaire dont le from est un agent enregistré
-                    // → confiance accordée, le nom passe tel quel.
-                    SenderAttribution::Keep => {}
-                    // Wrapper, ou CLI qui ne s'est pas nommé : le nom de la
-                    // connexion fait foi.
-                    SenderAttribution::UseConnectionName => {
-                        if !sender_name.is_empty() {
-                            bridge_msg.from = sender_name.clone();
-                        }
-                    }
-                    // L'émetteur s'est nommé et ce nom n'est adressable par
-                    // personne. Le remplacer par cli-send-<pid> lui rendrait un
-                    // succès mensonger : on refuse et on dit pourquoi.
-                    SenderAttribution::RefuseUnaddressable => {
-                        return Some(DaemonToWrapper::Nack {
-                            id: bridge_msg.id.clone(),
-                            reason: format!(
-                                "expéditeur « {} » non adressable : aucun agent connecté ne porte ce nom, ta réponse n'aurait pas d'adresse de retour ; connecte un agent sous ce nom ou renonce à --from",
-                                bridge_msg.from
-                            ),
-                        });
-                    }
-                    // L'émetteur emprunte le nom d'un agent connecté depuis une
-                    // connexion qui ne prouve pas être cet agent. Laisser passer
-                    // fabriquerait un message faussement attribué : c'est ainsi
-                    // qu'une fausse alerte de dette humaine a été produite le 28/08.
-                    SenderAttribution::RefuseImpersonation => {
-                        return Some(DaemonToWrapper::Nack {
-                            id: bridge_msg.id.clone(),
-                            reason: format!(
-                                "usurpation refusée : « {} » est un agent connecté et cette connexion ne prouve pas être lui ; --from ne permet pas d'emprunter une identité, envoie depuis l'agent lui-même",
-                                bridge_msg.from
-                            ),
-                        });
-                    }
+                // Un terminal extérieur a sa propre route temporaire, jamais
+                // celle d'un agent dont il connaît simplement l'UUID.
+                if ephemeral_cli
+                    && matches!(bridge_msg.from.as_str(), "" | "human" | "humain")
+                    && resolve_sender_attribution(
+                        true,
+                        bridge_msg.from_declared,
+                        st.router.get_agent(&bridge_msg.from).is_some(),
+                    ) == SenderAttribution::UseConnectionName
+                {
+                    bridge_msg.from = sender_name;
+                }
+                if !sender_is_authorized(&st, conn_id, &bridge_msg.from) {
+                    return Some(DaemonToWrapper::Nack {
+                        id: bridge_msg.id.clone(),
+                        reason: "identité expéditeur non attestée : --from ne permet pas d'emprunter une identité".into(),
+                    });
                 }
             }
 
@@ -11628,7 +11943,12 @@ fn handle_wrapper_message(
                     // durable avant de rafraîchir la capacité de l'expéditeur.
                     touch_message_sender_activity(&mut st, &bridge_msg.from);
                 }
-                Err(e) => error!("store: {}", e),
+                Err(error) => {
+                    return Some(DaemonToWrapper::Nack {
+                        id: bridge_msg.id.clone(),
+                        reason: format!("message non persisté: {error}"),
+                    });
+                }
             }
             st.circuit_breaker
                 .record(&prepared.logical_sender, &bridge_msg.to);
@@ -11716,29 +12036,45 @@ fn handle_wrapper_message(
                 },
                 None => DaemonToWrapper::Deliver(delivered_message),
             };
-            let json = encode(&dtw).unwrap_or_default();
-            eprintln!("[BRIDGET] Push vers {}: {} octets", target_conn, json.len());
-
-            let mut delivery_succeeded = false;
-            if let Some(target_writer) = st.connections.get(&target_conn) {
-                log::debug!("push vers {}: écriture sur writer", target_conn);
-                if let Ok(mut w) = target_writer.lock() {
-                    eprintln!("[BRIDGET] Writer locked for {}, écriture...", target_conn);
-                    match writeln!(w, "{}", json) {
-                        Ok(_) if w.flush().is_ok() => {
-                            delivery_succeeded = true;
-                            info!(
-                                "livré: {} → « {} » (hops={}, reply={})",
-                                bridge_msg.id, bridge_msg.to, bridge_msg.hops, bridge_msg.reply
-                            );
-                        }
-                        Ok(_) => error!("push {}: flush échoué", target_conn),
-                        Err(e) => error!("push {}: {}", target_conn, e),
-                    }
-                }
-            } else {
-                warn!("cible {} disparue", target_conn);
+            // Le destinataire peut répondre dès le premier octet remis : son
+            // suivi et la route attach doivent donc exister AVANT le push.
+            if let Err(reason) = track_reply_cycle(
+                &mut st,
+                &bridge_msg,
+                prepared.reply_sender_conn.clone(),
+                target_conn.clone(),
+            ) {
+                return Some(DaemonToWrapper::Nack {
+                    id: bridge_msg.id.clone(),
+                    reason,
+                });
             }
+            if is_attach {
+                st.pending_attach_sends.insert(
+                    bridge_msg.id.clone(),
+                    PendingAttachSend {
+                        conn_id: conn_id.to_string(),
+                        expires_at: Instant::now() + PENDING_ATTACH_SEND_TTL,
+                    },
+                );
+            }
+            let target_writer = st.connections.get(&target_conn).cloned();
+            drop(st);
+            let delivery = target_writer
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::NotConnected, "cible disparue")
+                })
+                .and_then(|writer| {
+                    push_control_message_until(
+                        &writer,
+                        &dtw,
+                        Instant::now() + CANCEL_NOTIFICATION_BUDGET,
+                    )
+                });
+            let delivery_succeeded = delivery.is_ok();
+            // Aucun writer n'est détenu à la reprise du verrou global. Le
+            // suivi peut déjà être terminal ; ne jamais le recréer ici.
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             if !delivery_succeeded
                 && let Some((execution_id, generation, revision)) = execution_attempt
             {
@@ -11769,26 +12105,14 @@ fn handle_wrapper_message(
                 info!("demande {} répondue après livraison", request_id);
             }
 
-            if let Err(reason) = track_reply_cycle(
-                &mut st,
-                &bridge_msg,
-                prepared.reply_sender_conn.clone(),
-                target_conn.clone(),
-            ) {
+            if let Err(error) = delivery {
+                st.pending_attach_sends.remove(&bridge_msg.id);
                 return Some(DaemonToWrapper::Nack {
                     id: bridge_msg.id.clone(),
-                    reason,
+                    reason: format!(
+                        "remise indéterminée: écriture vers le destinataire échouée ({error}); vérifier le suivi avant tout rejeu"
+                    ),
                 });
-            }
-
-            if is_attach {
-                st.pending_attach_sends.insert(
-                    bridge_msg.id.clone(),
-                    PendingAttachSend {
-                        conn_id: conn_id.to_string(),
-                        expires_at: Instant::now() + PENDING_ATTACH_SEND_TTL,
-                    },
-                );
             }
             Some(DaemonToWrapper::Ack {
                 id: bridge_msg.id.clone(),
@@ -12060,10 +12384,15 @@ fn handle_wrapper_message(
                 {
                     return None;
                 }
-                if let Some(agent) = st.router.get_agent(&request.sender)
-                    && let Some(writer) = st.connections.get(&agent.connection_id)
+                let writer = st
+                    .router
+                    .get_agent(&request.sender)
+                    .and_then(|agent| st.connections.get(&agent.connection_id))
+                    .cloned();
+                drop(st);
+                if let Some(writer) = writer
                     && let Err(error) = deliver_to_agent(
-                        writer,
+                        &writer,
                         &request.sender,
                         &format!("Échec de livraison de la demande #{id} : {reason}"),
                     )
@@ -12104,10 +12433,11 @@ fn handle_wrapper_message(
                         .retain(|pending| pending.msg_id != request.id);
                     let notification = st.router.get_agent(&request.target)
                         .and_then(|agent| st.connections.get(&agent.connection_id).map(|writer| {
-                            let is_acp = st.conn_instances.get(&agent.connection_id)
+                            let has_structured_cancel = st.conn_instances.get(&agent.connection_id)
                                 .and_then(|instance| st.presences.get(instance))
-                                .is_some_and(|presence| presence.mode == Some(PresenceMode::Acp));
-                            let message = if is_acp {
+                                .is_some_and(|presence| presence.mode == Some(PresenceMode::Acp)
+                                    || presence.transport == "t3code");
+                            let message = if has_structured_cancel {
                                 DaemonToWrapper::CancelDelivery {
                                     id: request.id.clone(),
                                     reason: request.cancel_reason.clone()
@@ -12253,7 +12583,7 @@ fn get_status_until(
     };
     if !matches!(
         connection.exchange(&registration),
-        Ok(DaemonToWrapper::Registered { agent_id }) if agent_id == probe_id
+        Ok(DaemonToWrapper::Registered { credential: _, agent_id }) if agent_id == probe_id
     ) {
         return Ok(daemon_inventory_unavailable(&identity));
     }
@@ -13249,10 +13579,15 @@ mod inventory_provenance_tests {
                 let ack = match bad_ack {
                     Some(true) => "{}".to_string(),
                     Some(false) => encode(&DaemonToWrapper::Registered {
+                        credential: None,
                         agent_id: format!("autre-{agent_id}"),
                     })
                     .unwrap(),
-                    None => encode(&DaemonToWrapper::Registered { agent_id }).unwrap(),
+                    None => encode(&DaemonToWrapper::Registered {
+                        credential: None,
+                        agent_id,
+                    })
+                    .unwrap(),
                 };
                 writeln!(
                     stream,
@@ -13308,7 +13643,11 @@ mod inventory_provenance_tests {
             writeln!(
                 stream,
                 "{}",
-                encode(&DaemonToWrapper::Registered { agent_id }).unwrap()
+                encode(&DaemonToWrapper::Registered {
+                    credential: None,
+                    agent_id
+                })
+                .unwrap()
             )
             .unwrap();
             line.clear();
@@ -13429,7 +13768,11 @@ mod inventory_provenance_tests {
             writeln!(
                 stream,
                 "{}",
-                encode(&DaemonToWrapper::Registered { agent_id }).unwrap()
+                encode(&DaemonToWrapper::Registered {
+                    credential: None,
+                    agent_id
+                })
+                .unwrap()
             )
             .unwrap();
             stream.flush().unwrap();
@@ -13473,7 +13816,11 @@ mod inventory_provenance_tests {
             writeln!(
                 stream,
                 "{}",
-                encode(&DaemonToWrapper::Registered { agent_id }).unwrap()
+                encode(&DaemonToWrapper::Registered {
+                    credential: None,
+                    agent_id
+                })
+                .unwrap()
             )
             .unwrap();
             stream.flush().unwrap();
@@ -13869,14 +14216,29 @@ mod presence_tests {
         }
         let mut state = state_result.unwrap();
         state.fixture_root = Some(fixture_root);
-        state
-            .router
-            .register(
-                "89000000-0000-4000-8000-000000000102",
-                &bridget_core::AgentType::Claude,
+        assert!(matches!(
+            handle_register_with_channel(
                 "conn-1",
-            )
-            .unwrap();
+                2,
+                "claude".into(),
+                "89000000-0000-4000-8000-000000000102".into(),
+                Some("macbook".into()),
+                Some("acp".into()),
+                ChannelReport::Known("unix".into()),
+                Some(PresenceMode::Acp),
+                None,
+                Some("macOS".into()),
+                Some("instance-1".into()),
+                None,
+                false,
+                Some(true),
+                &mut state,
+            ),
+            DaemonToWrapper::Registered {
+                credential: Some(_),
+                ..
+            }
+        ));
         state
             .conn_instances
             .insert("conn-1".to_string(), "instance-1".to_string());
@@ -13986,7 +14348,7 @@ mod presence_tests {
                 Some(false),
                 &mut state,
             ),
-            DaemonToWrapper::Registered { agent_id: name } if name == "89000000-0000-4000-8000-000000000103"
+            DaemonToWrapper::Registered { credential: _, agent_id: name } if name == "89000000-0000-4000-8000-000000000103"
         ));
         let stale = Instant::now()
             .checked_sub(Duration::from_secs(1900))
@@ -14034,7 +14396,12 @@ mod presence_tests {
     fn session_046_envoi_idempotent_ancien_agent_actif_rajeunit_last_seen() {
         let (state, config) = state_with_aged_sender("last-seen-idempotent");
         let shared = Arc::new(Mutex::new(state));
-        negotiate_idempotent_client(&shared, "client-activity", "046_scope_aaaaaaaaaaaa");
+        negotiate_idempotent_client(
+            &shared,
+            "client-activity",
+            "046_scope_aaaaaaaaaaaa",
+            "89000000-0000-4000-8000-000000000103",
+        );
         let mut message = BridgetMessage::new(
             "89000000-0000-4000-8000-000000000103",
             "89000000-0000-4000-8000-000000000102",
@@ -14072,7 +14439,7 @@ mod presence_tests {
         let result = handle_wrapper_message(
             "conn-sender",
             WrapperToDaemon::Send(BridgetMessage::new(
-                "identité-écrasée-par-le-wrapper",
+                "89000000-0000-4000-8000-000000000103",
                 "89000000-0000-4000-8000-000000000102",
                 "activité historique réelle",
             )),
@@ -14092,7 +14459,12 @@ mod presence_tests {
     fn session_046_envoi_refuse_ne_rajeunit_pas_last_seen() {
         let (state, config) = state_with_aged_sender("last-seen-refus");
         let shared = Arc::new(Mutex::new(state));
-        negotiate_idempotent_client(&shared, "client-refused", "046_scope_bbbbbbbbbbbb");
+        negotiate_idempotent_client(
+            &shared,
+            "client-refused",
+            "046_scope_bbbbbbbbbbbb",
+            "89000000-0000-4000-8000-000000000103",
+        );
         let mut message = BridgetMessage::new(
             "89000000-0000-4000-8000-000000000103",
             "agent-inconnu",
@@ -14134,7 +14506,7 @@ mod presence_tests {
         let result = handle_wrapper_message(
             "conn-1",
             WrapperToDaemon::Send(BridgetMessage::new(
-                "identité-écrasée-par-le-wrapper",
+                "89000000-0000-4000-8000-000000000102",
                 "89000000-0000-4000-8000-000000000103",
                 "mandat reçu sans activité émise",
             )),
@@ -14351,7 +14723,7 @@ mod presence_tests {
             DaemonToWrapper::Registered { .. }
         ));
         let shared = Arc::new(Mutex::new(state));
-        negotiate_idempotent_client(&shared, "ui-client", "081_scope_ui_replyrouting");
+        negotiate_idempotent_client(&shared, "ui-client", "081_scope_ui_replyrouting", "humain");
         let mut message = BridgetMessage::new(UI_HUMAN_SENDER, target, "message humain");
         message.reply = true;
 
@@ -15165,7 +15537,7 @@ mod presence_tests {
                 },
                 &shared,
             ),
-            Some(DaemonToWrapper::Registered { agent_id: ref name }) if name == "89000000-0000-4000-8000-000000000116"
+            Some(DaemonToWrapper::Registered { credential: _, agent_id: ref name }) if name == "89000000-0000-4000-8000-000000000116"
         ));
         assert!(matches!(
             handle_wrapper_message(
@@ -16544,7 +16916,50 @@ mod presence_tests {
         shared: &Arc<Mutex<DaemonState>>,
         connection: &str,
         scope: &str,
+        sender: &str,
     ) {
+        let (instance, credential) = {
+            let mut state = shared.lock().unwrap();
+            let sender = routing_agent_id(sender);
+            let owner = state
+                .router
+                .get_agent(sender)
+                .map(|route| route.connection_id.clone())
+                .unwrap_or_else(|| format!("owner-{sender}"));
+            if !state.identity_credentials.contains_key(&owner) {
+                state.router.unregister_by_conn(&owner);
+                assert!(matches!(
+                    handle_register_with_channel(
+                        &owner,
+                        2,
+                        "fixture".into(),
+                        sender.into(),
+                        Some("fixture".into()),
+                        Some("acp".into()),
+                        ChannelReport::Known("unix".into()),
+                        Some(PresenceMode::Acp),
+                        None,
+                        Some("test".into()),
+                        Some(format!("instance-{owner}")),
+                        None,
+                        false,
+                        Some(false),
+                        &mut state,
+                    ),
+                    DaemonToWrapper::Registered {
+                        credential: Some(_),
+                        ..
+                    }
+                ));
+            }
+            if !state.connections.contains_key(&owner) {
+                let _peer = super::spec094_live_test_connection(&mut state, &owner);
+            }
+            (
+                state.conn_instances[&owner].clone(),
+                state.identity_credentials[&owner].clone(),
+            )
+        };
         assert!(matches!(
             handle_wrapper_message(
                 connection,
@@ -16555,6 +16970,21 @@ mod presence_tests {
             ),
             Some(DaemonToWrapper::RoleAccepted {
                 role: ConnectionRole::Client
+            })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                connection,
+                WrapperToDaemon::RegisterAuxiliary {
+                    agent_id: routing_agent_id(sender).into(),
+                    instance_id: instance,
+                    credential,
+                },
+                shared
+            ),
+            Some(DaemonToWrapper::Registered {
+                credential: None,
+                ..
             })
         ));
         assert!(matches!(
@@ -16572,8 +17002,11 @@ mod presence_tests {
     }
 
     fn idempotent_message(body: &str) -> BridgetMessage {
-        let mut message =
-            BridgetMessage::new("maicie", "89000000-0000-4000-8000-000000000102", body);
+        let mut message = BridgetMessage::new(
+            "89000000-0000-4000-8000-000000000200",
+            "89000000-0000-4000-8000-000000000102",
+            body,
+        );
         message.hops = 4;
         message
     }
@@ -16603,7 +17036,12 @@ mod presence_tests {
             .insert("conn-1".to_string(), target_writer);
 
         let shared = Arc::new(Mutex::new(state));
-        negotiate_idempotent_client(&shared, "client-codex-deadline", "012_scope_codexdeadline");
+        negotiate_idempotent_client(
+            &shared,
+            "client-codex-deadline",
+            "012_scope_codexdeadline",
+            "89000000-0000-4000-8000-000000000200",
+        );
 
         let mut message = idempotent_message("mandat Maicie sans reply");
         message.reply = false;
@@ -16727,7 +17165,12 @@ mod presence_tests {
         let shared = Arc::new(Mutex::new(state));
         let scope_a = "012_scope_aaaaaaaaaaaa";
         let scope_b = "012_scope_bbbbbbbbbbbb";
-        negotiate_idempotent_client(&shared, "client-a", scope_a);
+        negotiate_idempotent_client(
+            &shared,
+            "client-a",
+            scope_a,
+            "89000000-0000-4000-8000-000000000200",
+        );
         let issued_at = unix_now_secs();
         let first = handle_wrapper_message(
             "client-a",
@@ -16749,7 +17192,12 @@ mod presence_tests {
             }) => delivery_id,
             other => panic!("réponse inattendue: {other:?}"),
         };
-        negotiate_idempotent_client(&shared, "client-b", scope_b);
+        negotiate_idempotent_client(
+            &shared,
+            "client-b",
+            scope_b,
+            "89000000-0000-4000-8000-000000000200",
+        );
         let other_scope = handle_wrapper_message(
             "client-b",
             WrapperToDaemon::SendIdempotent {
@@ -16839,9 +17287,18 @@ mod presence_tests {
     fn send_idempotent_persiste_un_refus_et_la_voie_historique_ne_contamine_pas_le_socle() {
         let (state, config) = state_with_registered_agent("idempotent-rejection");
         let shared = Arc::new(Mutex::new(state));
-        negotiate_idempotent_client(&shared, "client-reject", "012_scope_cccccccccccc");
+        negotiate_idempotent_client(
+            &shared,
+            "client-reject",
+            "012_scope_cccccccccccc",
+            "89000000-0000-4000-8000-000000000200",
+        );
         let issued_at = unix_now_secs();
-        let mut unknown_target = BridgetMessage::new("maicie", "inconnu", "à refuser");
+        let mut unknown_target = BridgetMessage::new(
+            "89000000-0000-4000-8000-000000000200",
+            "inconnu",
+            "à refuser",
+        );
         unknown_target.hops = 4;
         let send = || WrapperToDaemon::SendIdempotent {
             message: unknown_target.clone(),
@@ -16880,10 +17337,12 @@ mod presence_tests {
         };
         assert_eq!(replay_expiry, rejection_expiry);
 
+        let _target_peer =
+            super::spec094_live_test_connection(&mut shared.lock().unwrap(), "conn-1");
         let historic = handle_wrapper_message(
-            "89000000-0000-4000-8000-000000000113",
+            "owner-89000000-0000-4000-8000-000000000200",
             WrapperToDaemon::Send(BridgetMessage::new(
-                "historique",
+                "89000000-0000-4000-8000-000000000200",
                 "89000000-0000-4000-8000-000000000102",
                 "ancienne voie",
             )),
@@ -16920,7 +17379,12 @@ mod presence_tests {
         state.presences.get_mut("instance-1").unwrap().dnd_until =
             Some(Instant::now() + Duration::from_secs(60));
         let shared = Arc::new(Mutex::new(state));
-        negotiate_idempotent_client(&shared, "client-reply", "012_scope_replyyyyyyyyy");
+        negotiate_idempotent_client(
+            &shared,
+            "client-reply",
+            "012_scope_replyyyyyyyyy",
+            "89000000-0000-4000-8000-000000000122",
+        );
         let mut reply = idempotent_message("réponse suivie");
         reply.from = "89000000-0000-4000-8000-000000000122".to_string();
         reply.reply = true;
@@ -16998,7 +17462,12 @@ mod presence_tests {
             deferred_level: None,
         });
         let shared = Arc::new(Mutex::new(state));
-        negotiate_idempotent_client(&shared, "client-reply", "012_scope_replyyyyyyyyy");
+        negotiate_idempotent_client(
+            &shared,
+            "client-reply",
+            "012_scope_replyyyyyyyyy",
+            "89000000-0000-4000-8000-000000000124",
+        );
 
         let mut response = BridgetMessage::new(
             "89000000-0000-4000-8000-000000000124",
@@ -17068,7 +17537,7 @@ mod presence_tests {
             .create_request(
                 "request-a",
                 "89000000-0000-4000-8000-000000000102",
-                "coderBridget",
+                "89000000-0000-4000-8000-000000000124",
                 60,
             )
             .unwrap();
@@ -17077,16 +17546,21 @@ mod presence_tests {
             .create_request(
                 "request-b",
                 "89000000-0000-4000-8000-000000000102",
-                "coderBridget",
+                "89000000-0000-4000-8000-000000000124",
                 60,
             )
             .unwrap();
         let shared = Arc::new(Mutex::new(state));
-        negotiate_idempotent_client(&shared, "client-reply", "012_scope_replyyyyyyyyy");
+        negotiate_idempotent_client(
+            &shared,
+            "client-reply",
+            "012_scope_replyyyyyyyyy",
+            "89000000-0000-4000-8000-000000000124",
+        );
         let issued_at = unix_now_secs();
         for request_id in ["request-a", "request-b"] {
             let mut response = BridgetMessage::new(
-                "coderBridget",
+                "89000000-0000-4000-8000-000000000124",
                 "89000000-0000-4000-8000-000000000102",
                 "réponse MCP",
             );
@@ -18072,7 +18546,7 @@ mod presence_tests {
         assert!(
             matches!(
                 registered,
-                DaemonToWrapper::Registered { agent_id: ref name } if name == "89000000-0000-4000-8000-000000000102"
+                DaemonToWrapper::Registered { credential: _, agent_id: ref name } if name == "89000000-0000-4000-8000-000000000102"
             ),
             "takeover refusé: {registered:?}"
         );
@@ -18329,6 +18803,34 @@ mod presence_tests {
             Arc::new(Mutex::new(BufWriter::new(writer_stream))),
         );
         assert_eq!(state.next_conn_id(), "conn-1");
+        // Spec 099 : un client n'envoie qu'au nom d'une identité qu'il prouve.
+        // L'expéditeur du mandat est un agent vivant dont le client public
+        // détient la preuve de rattachement.
+        const SENDER: &str = "98beefe0-0000-4000-8000-000000000201";
+        let _sender_owner = super::spec094_live_test_connection(&mut state, "owner-sender");
+        let DaemonToWrapper::Registered {
+            credential: Some(sender_credential),
+            ..
+        } = handle_register_with_channel(
+            "owner-sender",
+            2,
+            "fixture".into(),
+            SENDER.into(),
+            Some("fixture".into()),
+            Some("acp".into()),
+            ChannelReport::Known("unix".into()),
+            Some(PresenceMode::Acp),
+            None,
+            Some("test".into()),
+            Some("instance-sender".into()),
+            None,
+            false,
+            Some(false),
+            &mut state,
+        )
+        else {
+            panic!("enregistrement de l'expéditeur attendu");
+        };
         let shared = Arc::new(Mutex::new(state));
         let listener = UnixListener::bind(&config.socket_path).unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -18419,6 +18921,17 @@ mod presence_tests {
             }
         ));
         assert!(matches!(
+            exchange(WrapperToDaemon::RegisterAuxiliary {
+                agent_id: SENDER.into(),
+                instance_id: "instance-sender".into(),
+                credential: sender_credential,
+            }),
+            DaemonToWrapper::Registered {
+                credential: None,
+                ..
+            }
+        ));
+        assert!(matches!(
             exchange(WrapperToDaemon::ClientHello {
                 contract_version: CLIENT_CONTRACT_VERSION,
                 issuer_scope: crate::communication::issuer_scope("busy-public-client"),
@@ -18426,7 +18939,7 @@ mod presence_tests {
             }),
             DaemonToWrapper::ClientWelcome { .. }
         ));
-        let message = bridget_core::BridgetMessage::new("human", target, MANDAT_BODY);
+        let message = bridget_core::BridgetMessage::new(SENDER, target, MANDAT_BODY);
         let message_id = message.id.clone();
         let issue = exchange(WrapperToDaemon::SendIdempotent {
             message,
@@ -18685,6 +19198,8 @@ mod presence_tests {
     #[test]
     fn enregistrement_auxiliaire_mcp_ne_revendique_pas_la_presence_du_wrapper_vivant() {
         let (mut state, config) = state_with_registered_agent("presence-mcp-fusion");
+        let _owner = super::spec094_live_test_connection(&mut state, "conn-1");
+        let credential = state.identity_credentials["conn-1"].clone();
         let rich = state.presences.get_mut("instance-1").unwrap();
         rich.domain = Some("coordination".to_string());
         rich.derived_domain = Some("coordination".to_string());
@@ -18692,20 +19207,12 @@ mod presence_tests {
         rich.effort = Some("high".to_string());
 
         assert!(matches!(
-            handle_register(
-                "mcp-child",
-                "mcp".to_string(),
-                Some("89000000-0000-4000-8000-000000000102".to_string()),
-                None,
-                None,
-                Some(PresenceMode::Cli),
-                None,
-                None,
-                Some("instance-1".to_string()),
-                None,
-                false,
-                None,
+            register_auxiliary(
                 &mut state,
+                "mcp-child",
+                "89000000-0000-4000-8000-000000000102".into(),
+                "instance-1".into(),
+                credential.clone()
             ),
             DaemonToWrapper::Registered { .. }
         ));
@@ -18734,20 +19241,12 @@ mod presence_tests {
         assert_eq!(agents[0].state, "connected");
 
         assert!(matches!(
-            handle_register(
-                "mcp-child-2",
-                "mcp".to_string(),
-                Some("89000000-0000-4000-8000-000000000102".to_string()),
-                None,
-                None,
-                Some(PresenceMode::Cli),
-                None,
-                None,
-                Some("instance-1".to_string()),
-                None,
-                false,
-                None,
+            register_auxiliary(
                 &mut state,
+                "mcp-child-2",
+                "89000000-0000-4000-8000-000000000102".into(),
+                "instance-1".into(),
+                credential
             ),
             DaemonToWrapper::Registered { .. }
         ));
@@ -19121,7 +19620,7 @@ mod presence_tests {
                 None,
                 &mut state,
             ),
-            DaemonToWrapper::Registered { agent_id: ref name } if name == "89000000-0000-4000-8000-000000000112"
+            DaemonToWrapper::Registered { credential: _, agent_id: ref name } if name == "89000000-0000-4000-8000-000000000112"
         ));
 
         let agent = state.agent_infos().pop().expect("Claude inscrit");
@@ -20505,6 +21004,50 @@ mod presence_tests {
     }
 
     #[test]
+    fn spec099_t3code_aucun_rappel_ne_devient_un_tour_fournisseur() {
+        let (mut state, _config) = state_with_registered_agent("spec099-t3-reminder");
+        state.presences.get_mut("instance-1").unwrap().transport = "t3code".into();
+        state
+            .store
+            .create_request(
+                "spec099-t3-reminder",
+                "sender",
+                "89000000-0000-4000-8000-000000000102",
+                60,
+            )
+            .unwrap();
+        let started = Instant::now();
+        state.pending_replies.push(PendingReply {
+            msg_id: "spec099-t3-reminder".into(),
+            from: "sender".into(),
+            from_conn: "sender".into(),
+            to: "89000000-0000-4000-8000-000000000102".into(),
+            target_conn: "conn-1".into(),
+            timeout_secs: 60,
+            created_at: started,
+            escalation_level: 0,
+            deferred_level: None,
+        });
+        for seconds in [20, 40, 59] {
+            let actions =
+                collect_reminder_actions(&mut state, started + Duration::from_secs(seconds));
+            assert!(!actions.iter().any(|action| matches!(
+                action,
+                ReminderAction::Gentle { .. } | ReminderAction::Firm { .. }
+            )));
+        }
+        let actions = collect_reminder_actions(&mut state, started + Duration::from_secs(60));
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|action| matches!(action,
+            ReminderAction::Timeout { cancel_target: Some(conn), .. } if conn == "conn-1"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn reconnexion_redeclare_busy_et_arret_propre_reste_stopped() {
         let (mut state, config) = state_with_registered_agent("tour-reconnexion");
         state.set_turn_state("conn-1", true).unwrap();
@@ -20769,10 +21312,50 @@ mod presence_tests {
         state
             .connections
             .insert("conn-1".to_string(), initial_writer);
+        // Spec 099 : le client UI envoie au nom d'un agent attesté, rattaché
+        // en auxiliaire avec la preuve de son propriétaire vivant.
+        const SENDER: &str = "89000000-0000-4000-8000-000000000079";
+        let _sender_owner = super::spec094_live_test_connection(&mut state, "owner-079");
+        let DaemonToWrapper::Registered {
+            credential: Some(sender_credential),
+            ..
+        } = handle_register_with_channel(
+            "owner-079",
+            2,
+            "fixture".into(),
+            SENDER.into(),
+            Some("fixture".into()),
+            Some("acp".into()),
+            ChannelReport::Known("unix".into()),
+            Some(PresenceMode::Acp),
+            None,
+            Some("test".into()),
+            Some("instance-079".into()),
+            None,
+            false,
+            Some(false),
+            &mut state,
+        )
+        else {
+            panic!("enregistrement de l'expéditeur attendu");
+        };
+        assert!(matches!(
+            register_auxiliary(
+                &mut state,
+                "ui-client-079",
+                SENDER.into(),
+                "instance-079".into(),
+                sender_credential,
+            ),
+            DaemonToWrapper::Registered {
+                credential: None,
+                ..
+            }
+        ));
 
         let now = unix_now_secs();
         let mut message = bridget_core::BridgetMessage::new(
-            "human",
+            SENDER,
             "89000000-0000-4000-8000-000000000102",
             "message exact après acquittement",
         );
@@ -24501,6 +25084,276 @@ fn spec094_live_test_connection(state: &mut DaemonState, conn_id: &str) -> UnixS
 
 #[cfg(test)]
 #[test]
+fn spec099_identite_connue_ne_permet_pas_inscription_mcp() {
+    let (mut state, _config) = presence_tests::state_with_registered_agent("spec099-mcp-forge");
+    let agent = state.presences["instance-1"].name.clone();
+    let _owner = spec094_live_test_connection(&mut state, "conn-1");
+    let response = handle_register_with_channel(
+        "attacker",
+        2,
+        "mcp".into(),
+        agent,
+        None,
+        None,
+        ChannelReport::Unknown,
+        Some(PresenceMode::Cli),
+        None,
+        None,
+        Some("instance-1".into()),
+        None,
+        false,
+        None,
+        &mut state,
+    );
+    assert!(matches!(response, DaemonToWrapper::Nack { .. }));
+}
+
+#[cfg(test)]
+#[test]
+fn spec099_cli_flag_false_ne_permet_pas_usurpation() {
+    let (mut state, _config) = presence_tests::state_with_registered_agent("spec099-cli-forge");
+    let agent = state.presences["instance-1"].name.clone();
+    let _owner = spec094_live_test_connection(&mut state, "conn-1");
+    let mut message = bridget_core::BridgetMessage::new(&agent, &agent, "faux émetteur");
+    message.from_declared = false;
+    let response = handle_wrapper_message(
+        "attacker",
+        WrapperToDaemon::Send(message),
+        &Arc::new(Mutex::new(state)),
+    );
+    assert!(
+        matches!(response, Some(DaemonToWrapper::Nack { reason, .. }) if reason.contains("identité"))
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn spec099_preuve_auxiliaire_valide_bornee_et_revoquee() {
+    use bridget_transport::protocol::IdentityCredential;
+    let (mut state, _config) = presence_tests::state_with_registered_agent("spec099-proof");
+    let agent = state.presences["instance-1"].name.clone();
+    let _owner = spec094_live_test_connection(&mut state, "conn-1");
+    let credential = state.identity_credentials["conn-1"].clone();
+    for (name, instance, proof) in [
+        (
+            agent.clone(),
+            "instance-1",
+            IdentityCredential::new("incorrecte".into()),
+        ),
+        (
+            uuid::Uuid::new_v4().to_string(),
+            "instance-1",
+            credential.clone(),
+        ),
+        (agent.clone(), "autre-instance", credential.clone()),
+    ] {
+        assert!(matches!(
+            register_auxiliary(&mut state, "attacker", name, instance.into(), proof),
+            DaemonToWrapper::Nack { .. }
+        ));
+        assert!(!state.conn_names.contains_key("attacker"));
+    }
+    let _aux = spec094_live_test_connection(&mut state, "aux");
+    assert!(matches!(
+        register_auxiliary(
+            &mut state,
+            "aux",
+            agent.clone(),
+            "instance-1".into(),
+            credential.clone()
+        ),
+        DaemonToWrapper::Registered {
+            credential: None,
+            ..
+        }
+    ));
+    assert!(sender_is_authorized(&state, "aux", &agent));
+    assert!(self_mutation_instance(&state, "aux", &agent, "rename").is_ok());
+    let private_wire = serde_json::to_string(&credential).unwrap();
+    let directory = encode(&DaemonToWrapper::AgentList {
+        agents: state.agent_infos(),
+    })
+    .unwrap();
+    assert!(!directory.contains(&private_wire));
+    state.router.unregister_by_conn("conn-1");
+    state.mark_unreachable("conn-1");
+    assert!(!sender_is_authorized(&state, "aux", &agent));
+    assert!(self_mutation_instance(&state, "aux", &agent, "rename").is_err());
+    assert!(matches!(
+        register_auxiliary(
+            &mut state,
+            "retry",
+            agent.clone(),
+            "instance-1".into(),
+            credential.clone()
+        ),
+        DaemonToWrapper::Nack { .. }
+    ));
+    let _new_owner = spec094_live_test_connection(&mut state, "owner-reconnected");
+    let DaemonToWrapper::Registered {
+        credential: Some(renewed),
+        ..
+    } = handle_register_with_channel(
+        "owner-reconnected",
+        2,
+        "fixture".into(),
+        agent.clone(),
+        Some("fixture".into()),
+        Some("acp".into()),
+        ChannelReport::Known("unix".into()),
+        Some(PresenceMode::Acp),
+        None,
+        Some("test".into()),
+        Some("instance-1".into()),
+        None,
+        false,
+        Some(false),
+        &mut state,
+    )
+    else {
+        panic!("reconnexion propriétaire attendue");
+    };
+    assert_ne!(renewed, credential);
+    assert!(matches!(
+        register_auxiliary(
+            &mut state,
+            "retry-old",
+            agent.clone(),
+            "instance-1".into(),
+            credential
+        ),
+        DaemonToWrapper::Nack { .. }
+    ));
+    assert!(matches!(
+        register_auxiliary(
+            &mut state,
+            "aux",
+            agent.clone(),
+            "instance-1".into(),
+            renewed
+        ),
+        DaemonToWrapper::Registered {
+            credential: None,
+            ..
+        }
+    ));
+    assert!(sender_is_authorized(&state, "aux", &agent));
+}
+
+#[cfg(test)]
+#[test]
+fn spec099_humain_idempotent_depuis_client_nu_reste_admis() {
+    let (mut state, _config) = presence_tests::state_with_registered_agent("spec099-humain-nu");
+    let agent = state.presences["instance-1"].name.clone();
+    let _owner = spec094_live_test_connection(&mut state, "conn-1");
+    state.client_negotiations.insert(
+        "client".into(),
+        NegotiatedClient {
+            version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: "human-scope".into(),
+            capabilities: vec![ClientCapability::SendIdempotent],
+        },
+    );
+    let mut controls = Vec::new();
+    let response = handle_idempotent_send(
+        "client",
+        bridget_core::BridgetMessage::new("human", &agent, "bonjour"),
+        "spec099-humain-id".into(),
+        unix_now_secs(),
+        IdempotentSendAdmission {
+            project: None,
+            issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+        },
+        &mut state,
+        &mut controls,
+    );
+    assert!(
+        !matches!(&response, DaemonToWrapper::Nack { reason, .. } if reason.contains("non attestée")),
+        "l'humain d'un client nu ne doit pas être traité comme une identité empruntée : {response:?}"
+    );
+    // Le même client, une fois porteur d'une identité d'agent, ne peut plus
+    // se dire humain pour contourner la preuve.
+    state.conn_names.insert("client".into(), agent.clone());
+    let response = handle_idempotent_send(
+        "client",
+        bridget_core::BridgetMessage::new("human", &agent, "bonjour"),
+        "spec099-humain-id-2".into(),
+        unix_now_secs(),
+        IdempotentSendAdmission {
+            project: None,
+            issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+        },
+        &mut state,
+        &mut controls,
+    );
+    assert!(
+        matches!(&response, DaemonToWrapper::Nack { reason, .. } if reason.contains("non attestée"))
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn spec099_client_scope_ne_prouve_pas_identite_avant_reservation() {
+    let (mut state, _config) = presence_tests::state_with_registered_agent("spec099-client-forge");
+    let agent = state.presences["instance-1"].name.clone();
+    let _owner = spec094_live_test_connection(&mut state, "conn-1");
+    state.client_negotiations.insert(
+        "client".into(),
+        NegotiatedClient {
+            version: CLIENT_CONTRACT_VERSION,
+            issuer_scope: "known-scope".into(),
+            capabilities: vec![ClientCapability::SendIdempotent],
+        },
+    );
+    let id = "spec099-forged-id";
+    let response = handle_idempotent_send(
+        "client",
+        bridget_core::BridgetMessage::new(&agent, &agent, "forgé"),
+        id.into(),
+        unix_now_secs(),
+        IdempotentSendAdmission {
+            project: None,
+            issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+        },
+        &mut state,
+        &mut Vec::new(),
+    );
+    assert!(matches!(response, DaemonToWrapper::Nack { .. }));
+    assert_eq!(state.idempotency.record_count().unwrap(), 0);
+}
+
+#[cfg(test)]
+#[test]
+fn spec099_roles_attach_et_service_refusent_preuve_auxiliaire() {
+    let (mut state, _config) = presence_tests::state_with_registered_agent("spec099-roles");
+    let agent = state.presences["instance-1"].name.clone();
+    let _owner = spec094_live_test_connection(&mut state, "conn-1");
+    let credential = state.identity_credentials["conn-1"].clone();
+    state
+        .connection_roles
+        .insert("attach".into(), ConnectionRole::Attach);
+    state
+        .connection_roles
+        .insert("service".into(), ConnectionRole::Service);
+    let shared = Arc::new(Mutex::new(state));
+    for conn in ["attach", "service"] {
+        assert!(!matches!(
+            handle_wrapper_message(
+                conn,
+                WrapperToDaemon::RegisterAuxiliary {
+                    agent_id: agent.clone(),
+                    instance_id: "instance-1".into(),
+                    credential: credential.clone(),
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::Registered { .. })
+        ));
+    }
+}
+
+#[cfg(test)]
+#[test]
 fn spec094_mutations_propres_refusent_connexion_brute_cible_etrangere_et_ancienne_instance() {
     use bridget_transport::protocol::RuntimeSource;
 
@@ -24584,22 +25437,13 @@ fn spec094_mutations_propres_refusent_connexion_brute_cible_etrangere_et_ancienn
     let (_old_peer, _new_peer) = {
         let mut state = shared.lock().unwrap();
         let peer = spec094_live_test_connection(&mut state, "mcp-old");
-        let registered = handle_register_with_channel(
-            "mcp-old",
-            2,
-            "mcp".to_string(),
-            agent_a.to_string(),
-            None,
-            None,
-            ChannelReport::Unknown,
-            Some(PresenceMode::Cli),
-            None,
-            None,
-            Some("instance-1".to_string()),
-            None,
-            false,
-            None,
+        let credential = state.identity_credentials["conn-1"].clone();
+        let registered = register_auxiliary(
             &mut state,
+            "mcp-old",
+            agent_a.into(),
+            "instance-1".into(),
+            credential,
         );
         assert!(matches!(registered, DaemonToWrapper::Registered { .. }));
         state.router.unregister_by_conn("conn-1");
@@ -24664,22 +25508,13 @@ fn spec094_mutations_propres_refusent_connexion_brute_cible_etrangere_et_ancienn
     let _current_auxiliary_peer = {
         let mut state = shared.lock().unwrap();
         let peer = spec094_live_test_connection(&mut state, "mcp-new");
-        let registered = handle_register_with_channel(
-            "mcp-new",
-            2,
-            "mcp".to_string(),
-            agent_a.to_string(),
-            None,
-            None,
-            ChannelReport::Unknown,
-            Some(PresenceMode::Cli),
-            None,
-            None,
-            Some("instance-new".to_string()),
-            None,
-            false,
-            None,
+        let credential = state.identity_credentials["conn-new"].clone();
+        let registered = register_auxiliary(
             &mut state,
+            "mcp-new",
+            agent_a.into(),
+            "instance-new".into(),
+            credential,
         );
         assert!(matches!(registered, DaemonToWrapper::Registered { .. }));
         peer
