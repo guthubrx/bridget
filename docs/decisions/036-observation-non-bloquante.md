@@ -37,5 +37,7 @@ moteur de règles général ni couche Maicie/T3 obligatoire.
 
 Tests purs filtres/TTL/propriétaire/collision/bornes ; vrai writer post-flush ;
 producteurs positifs et négatifs ; sockets CLI/MCP et dispatcher daemon ;
-communication/reply témoin sous pression de notifications. Namespace historique
-inchangé, aucun fournisseur ni daemon externe lancé pour cette session.
+communication/reply témoin sous pression de notifications. Tests dans des
+namespaces privés, sans fournisseur externe. Après autorisation de livraison,
+un vrai daemon isolé a validé les parcours CLI/MCP, puis l'installation existante
+a été mise à jour avec sauvegarde ; aucune conversation fournisseur arrêtée.

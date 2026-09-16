@@ -248,3 +248,33 @@ fait déjà en transit peut déclencher un abonnement récent. Cette limite est
 explicitée dans le contrat, les deux README et la référence des commandes.
 Un filtrage temporel strict à la source constituerait une garantie supplémentaire,
 non implémentée ici. Les deux régressions ACP TEMOIN_TOOL passent également.
+
+## Livraison effective
+
+Commit fonctionnalité c680c6ce36c5, fusion en avance rapide dans main. Construction
+depuis main propre : `cargo build --locked --offline --release -p bridget-daemon`,
+PASS. SHA256 du binaire installé :
+6a53b8d002bd4ba76f781c9ef381a0843b409e2b964f482d6bbfe495d948ae6e.
+Smoke rejoué avec la release : PASS sur sept contrôles ; namespace privé
+/tmp/b100.20260916-81555-1tifwwb, processus arrêté proprement ensuite.
+
+Adoption : SIGTERM individuel après vérification PID/commande pour le daemon
+94616 puis le pont94724. Les plists KeepAlive inchangés ont relancé les seuls
+services Bridget, daemon82429 et pont83263 ; l'application T3 et les processus
+fournisseurs n'ont pas été arrêtés. Retour des neuf fils T3 (quatre busy/cinq
+connected au contrôle), trois anciennes présences gérées toujours stopped.
+`bridget status` confirme build-id c680c6ce36c5 sans avertissement de version.
+Lecture réelle du journal bdget : une entrée, seq220, complete=true ; contenu
+non recopié dans ce reçu. Nouveau MCP : 18 outils au total, dont14 Bridget
+et4 Maicie déjà existants ; bridget_journal/bridget_events présents.
+
+Les clients MCP déjà vivants peuvent garder leur ancien catalogue. Renouveler
+leur connexion ou ouvrir une nouvelle session est nécessaire selon le client,
+sans interrompre les conversations pour forcer ce rechargement.
+Le disque reste bas (~2,7 Gio libres) : aucun nettoyage hors périmètre effectué.
+T014–T017 terminées ; aucune tâche restante. Les commits documentaires suivant
+ce reçu ne changent pas les octets de la release identifiée par c680c6ce36c5.
+Retour arrière : restauration du seul binaire sauvegardé puis relance contrôlée
+des deux services ; pas de restauration automatique de la base, qui effacerait
+les messages reçus entre-temps. Reçu complet :
+/Users/moi/.cache/bridget-adoptions/100-20260916.iMZZbR/receipt.md

@@ -1,6 +1,6 @@
 # Recette 100
 
-Racine : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/100-observation-partage
+Racine de la version livrée : /Users/moi/Nextcloud/10.Scripts/64.bridget
 Ne pas employer le daemon historique. Les tests doivent créer des répertoires
 temporaires et configurer explicitement BRIDGET_HOME et BRIDGET_SOCKET.
 
@@ -50,3 +50,23 @@ Exemples MCP (remplacer les identifiants par les UUID de l'annuaire) :
 Les abonnements ne survivent pas au redémarrage du daemon. `once` signifie une
 occurrence, pas une livraison garantie. Voir contracts/observation.md pour les
 limites et la couverture par intégration. Installation/rechargement hors recette.
+
+## Version installée le 2026-09-16
+
+Le code100 est fusionné dans main ; build installé c680c6ce36c5.
+Commande habituelle : /Users/moi/.local/bin/bridget
+Source des skills déjà partagée avec les profils :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/skills/bridget/SKILL.md
+
+Un nouveau client MCP expose bridget_journal et bridget_events parmi les
+14 outils Bridget. Un client MCP déjà ouvert peut conserver l'ancien catalogue :
+renouveler sa connexion par le mécanisme du client ou utiliser une nouvelle
+session, sans tuer une conversation en cours. Les abonnements demandent
+l'identité réelle d'un agent Bridget enregistré ; pas d'identité à inventer.
+
+Le partage d'un journal T3 a été vérifié sur l'installation. Les événements de
+fin de tour/écriture restent limités aux producteurs structurés documentés ;
+l'installation n'ajoute pas cette observation au pont T3 natif.
+
+Sauvegarde et retour arrière :
+/Users/moi/.cache/bridget-adoptions/100-20260916.iMZZbR/receipt.md

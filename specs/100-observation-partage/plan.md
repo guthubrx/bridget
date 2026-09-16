@@ -1,6 +1,6 @@
 # Plan 100 — Observation et partage
 
-Statut : Intégration/livraison en cours. Spec : spec.md. Socle 099 final : e1b83e95.
+Statut : Livré — main et release c680c6ce36c5, services vérifiés le 2026-09-16. Spec : spec.md. Socle 099 final : e1b83e95.
 
 ## Contexte technique
 

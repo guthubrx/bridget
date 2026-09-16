@@ -1,6 +1,6 @@
 # Tâches 100 — Observation et partage
 
-Statut : Intégration en cours — livraison et installation demandées le 2026-09-16, sur main e1b83e95 (099 finale). Racine des chemins :
+Statut : Livré — session100 fusionnée dans main et release c680c6ce36c5 installée le 2026-09-16 sur la 099 finale. 17/17 tâches closes, limites de validation dans implementation.md. Racine des chemins :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/100-observation-partage.
 
 ## Fondations
@@ -35,8 +35,8 @@ Statut : Intégration en cours — livraison et installation demandées le 2026-
 
 - [x] T014 Aligner sur la 099 finale, conserver ses correctifs et adapter les fixtures du protocole.
 - [x] T015 Rejouer la validation de l'ensemble intégré et la revue de livraison ; consigner les limites.
-- [ ] T016 Committer et fusionner la session 100 dans main, sans toucher aux autres branches.
-- [ ] T017 Installer la release après sauvegarde, vérifier les services et les nouveaux outils ; documenter le retour arrière.
+- [x] T016 Committer et fusionner la session 100 dans main, sans toucher aux autres branches.
+- [x] T017 Installer la release après sauvegarde, vérifier les services et les nouveaux outils ; documenter le retour arrière.
 
 T001 → T002 → T003 → T004 ; puis T005 → T006 → T007 ; T008 → T009 ; T010–T013 après intégration.
 US1 vérifiable seule mais livraison complète = US1+US2+US3. Aucun MVP ne clôt la demande.

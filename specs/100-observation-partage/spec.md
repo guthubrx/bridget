@@ -2,8 +2,8 @@
 
 Branche : session-100-observation-partage
 Date : 2026-09-16
-Statut : Intégration et livraison en cours sur la 099 finale ; preuves dans implementation.md
-Tests : 20/20 ciblés100, suites de régression vertes ; suite intégrale bloquée (harnais SIGKILL), détails dans implementation.md.
+Statut : Livré — fusion main et release c680c6ce36c5 installée le 2026-09-16 ; preuves dans implementation.md
+Tests : 23/23 ciblés100, suites de régression et smoke daemon réel verts ; suite intégrale non exécutée (harnais SIGKILL), détails dans implementation.md.
 Dépendances : 089 (communication et journal), 092–093 (rejeu), 094 (parité CLI/MCP), 097–098 (producteurs), 099 (identité et remise bornée).
 
 ## Pourquoi et périmètre
