@@ -175,6 +175,8 @@ pub fn run() {
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
         "mcp" => cmd_mcp(),
         "attach" => cmd_attach(&args[2..]),
+        "journal" => cmd_journal(&args[2..]),
+        "events" => cmd_events(&args[2..]),
         "artifact" => cmd_artifact(&args[2..]),
         "spawn" => cmd_spawn(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
@@ -605,6 +607,8 @@ fn print_usage() {
            t3 <OP>                Expose les fils t3code comme agents (install|status|uninstall|serve)\n  \
            mcp                    Lance le serveur MCP sur stdio\n  \
            attach <UUID>          Observe et écrit à un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
+           journal <UUID>         Extrait [--tail N | --from-seq N] [--to UUID] [--reply]\n  \
+           events <OP>            types | sub EVENEMENT [--agent UUID] [--file MOTIF] [--once] [--ttl S] | list | unsub ID\n  \
            spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID] [--posture discovery|development]\n  \
            stop <N>               Arrête un équipier géré\n  \
            relaunch <N>           Relance un équipier géré arrêté\n  \
@@ -654,6 +658,177 @@ fn print_usage() {
 
 fn socket_path() -> std::path::PathBuf {
     DaemonConfig::default().socket_path
+}
+
+fn cmd_journal(args: &[String]) {
+    let result = (|| -> Result<crate::attach::JournalRequest, String> {
+        let agent = args
+            .first()
+            .filter(|s| !s.starts_with('-'))
+            .ok_or("journal : agent requis")?;
+        let mut request = serde_json::json!({"agent":agent});
+        let mut i = 1;
+        while i < args.len() {
+            let key = match args[i].as_str() {
+                "--tail" => "tail",
+                "--from-seq" => "from_seq",
+                "--to" => "to",
+                "--reply" => "reply",
+                other => return Err(unknown_argument("journal", other)),
+            };
+            if request.get(key).is_some() {
+                return Err(format!("journal : option répétée {key}"));
+            }
+            if key == "reply" {
+                request[key] = serde_json::json!(true);
+            } else {
+                i += 1;
+                let value = args.get(i).ok_or("journal : valeur manquante")?;
+                request[key] = if key == "to" {
+                    serde_json::json!(value)
+                } else {
+                    serde_json::json!(
+                        value
+                            .parse::<u64>()
+                            .map_err(|_| "journal : entier requis")?
+                    )
+                };
+            }
+            i += 1;
+        }
+        serde_json::from_value(request).map_err(|e| e.to_string())
+    })()
+    .unwrap_or_else(|error| exit_argument_error(&error));
+    let excerpt = result.read(&socket_path()).unwrap_or_else(|error| {
+        eprintln!("bridget journal : {error}");
+        std::process::exit(1);
+    });
+    if let Some(to) = result.to {
+        let mut send = vec!["--to".into(), to];
+        if result.reply {
+            send.push("--reply".into());
+        }
+        send.extend(["--".into(), excerpt.shared_body()]);
+        cmd_send(&send);
+    } else {
+        println!("{}", serde_json::to_string(&excerpt).expect("extrait JSON"));
+    }
+}
+
+fn parse_events_args(
+    args: &[String],
+) -> Result<bridget_transport::protocol::ObservationRequest, String> {
+    let action = args
+        .first()
+        .ok_or("events : types, sub, list ou unsub requis")?;
+    let mut value = serde_json::json!({"action":action});
+    let mut i = 1;
+    if action == "sub" || action == "unsub" {
+        let argument = args
+            .get(i)
+            .filter(|s| !s.starts_with('-'))
+            .ok_or("events : événement ou id manquant")?;
+        value[if action == "sub" { "event" } else { "id" }] = serde_json::json!(argument);
+        i += 1;
+    }
+    while i < args.len() {
+        if action != "sub" {
+            return Err("events : paramètres superflus".into());
+        }
+        let key = match args[i].as_str() {
+            "--agent" => "agent",
+            "--file" => "file",
+            "--once" => "once",
+            "--ttl" => "ttl_secs",
+            other => return Err(unknown_argument("events", other)),
+        };
+        if value.get(key).is_some() {
+            return Err(format!("events : option répétée {key}"));
+        }
+        if key == "once" {
+            value[key] = serde_json::json!(true);
+        } else {
+            i += 1;
+            let argument = args.get(i).ok_or("events : valeur manquante")?;
+            value[key] = if key == "ttl_secs" {
+                serde_json::json!(
+                    argument
+                        .parse::<u64>()
+                        .map_err(|_| "events : ttl entier requis")?
+                )
+            } else {
+                serde_json::json!(argument)
+            };
+        }
+        i += 1;
+    }
+    serde_json::from_value(value).map_err(|e| format!("events : {e}"))
+}
+
+#[cfg(test)]
+#[test]
+fn spec100_cli_events_contract() {
+    use bridget_transport::protocol::{ObservationKind, ObservationRequest};
+    let args = [
+        "sub",
+        "file_collision",
+        "--agent",
+        "a",
+        "--file",
+        "*.rs",
+        "--ttl",
+        "30",
+        "--once",
+    ]
+    .map(String::from);
+    assert!(matches!(
+        parse_events_args(&args).unwrap(),
+        ObservationRequest::Sub {
+            event: ObservationKind::FileCollision,
+            once: true,
+            ttl_secs: Some(30),
+            agent: Some(_),
+            file: Some(_)
+        }
+    ));
+    assert!(matches!(
+        parse_events_args(&["list".into()]).unwrap(),
+        ObservationRequest::List {}
+    ));
+    assert!(matches!(
+        parse_events_args(&["types".into()]).unwrap(),
+        ObservationRequest::Types {}
+    ));
+    assert!(matches!(
+        parse_events_args(&["unsub".into(), "id".into()]).unwrap(),
+        ObservationRequest::Unsub { .. }
+    ));
+}
+
+fn cmd_events(args: &[String]) {
+    let request = parse_events_args(args).unwrap_or_else(|error| exit_argument_error(&error));
+    let identity = crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
+        eprintln!(
+            "bridget events : {} : {}",
+            error.code(),
+            error.remediation()
+        );
+        std::process::exit(1);
+    });
+    let result = crate::communication::client::observation_request(
+        &identity.name,
+        &identity.instance_id,
+        &socket_path(),
+        request,
+    )
+    .unwrap_or_else(|error| {
+        eprintln!("bridget events : {error}");
+        std::process::exit(1);
+    });
+    println!("{result}");
+    if result["status"] == "rejected" {
+        std::process::exit(1);
+    }
 }
 
 fn cmd_attach(args: &[String]) {
@@ -1170,6 +1345,7 @@ mod spawn_executor_tests {
                 writer,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
+                    credential: None,
                     agent_id: "cli-cwd-oracle".to_string(),
                 })
                 .expect("Registered encodable")
@@ -2319,13 +2495,17 @@ fn send_idempotent_to_daemon(
     message: &BridgetMessage,
     options: &IdempotentSendOptions,
 ) -> Result<DaemonToWrapper, String> {
-    send_idempotent_to_daemon_at(&socket_path(), message, options)
+    let identity = crate::mcp_identity::resolve_current_identity().map_err(|_| {
+        "identité auxiliaire indisponible : lancez la commande depuis le wrapper".to_string()
+    })?;
+    send_idempotent_to_daemon_at(&socket_path(), message, options, &identity)
 }
 
 fn send_idempotent_to_daemon_at(
     path: &std::path::Path,
     message: &BridgetMessage,
     options: &IdempotentSendOptions,
+    identity: &crate::mcp_identity::ResolvedIdentity,
 ) -> Result<DaemonToWrapper, String> {
     let mut connection = DaemonConnection::connect(path).map_err(|error| error.to_string())?;
     match connection
@@ -2339,6 +2519,17 @@ fn send_idempotent_to_daemon_at(
         } => {}
         response => return Err(format!("handshake client refusé: {response:?}")),
     }
+
+    if identity.name != message.from {
+        return Err("identité expéditeur différente du wrapper appelant".into());
+    }
+    crate::communication::client::authenticate_auxiliary(
+        &mut connection,
+        &identity.name,
+        &identity.instance_id,
+        path,
+    )
+    .map_err(|error| error.to_string())?;
 
     match connection
         .exchange(&WrapperToDaemon::ClientHello {
@@ -2432,7 +2623,14 @@ fn send_control_to_daemon_at(
     command: WrapperToDaemon,
 ) -> Result<DaemonToWrapper, String> {
     let mut connection = DaemonConnection::connect(socket).map_err(|e| e.to_string())?;
-    let reg = cli_register("send");
+    let reg = match crate::mcp_identity::resolve_current_identity() {
+        Ok(identity) => crate::mcp_identity::auxiliary_registration(
+            &identity.name,
+            &identity.instance_id,
+            socket,
+        )?,
+        Err(_) => cli_register("send"),
+    };
     if !matches!(
         connection.exchange(&reg).map_err(|e| e.to_string())?,
         DaemonToWrapper::Registered { .. }
@@ -5510,6 +5708,7 @@ mod hook_tests {
                     writer,
                     "{}",
                     encode(&DaemonToWrapper::Registered {
+                        credential: None,
                         agent_id: "cli-test".to_string()
                     })
                     .unwrap()
@@ -5988,16 +6187,48 @@ mod idempotency_projection_tests {
     use bridget_transport::protocol::{REVIEW_DELEGATE_CONTRACT_VERSION, SERVICE_CONTRACT_VERSION};
     use rusqlite::params;
     use std::os::unix::net::UnixListener;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static SOCKET_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn temporary_socket_path() -> std::path::PathBuf {
-        let counter = SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "bridget-t1208-{}-{counter}.sock",
-            std::process::id()
-        ))
+        crate::mcp_identity::mock_socket("cli-canon")
+    }
+
+    fn caller_identity() -> crate::mcp_identity::ResolvedIdentity {
+        crate::mcp_identity::ResolvedIdentity {
+            name: "89000000-0000-4000-8000-000000000200".into(),
+            instance_id: "test-cli-instance".into(),
+        }
+    }
+
+    fn owner_connection(path: &Path) -> DaemonConnection {
+        let identity = caller_identity();
+        let mut owner = DaemonConnection::connect(path).unwrap();
+        let mut registration = cli_register("fixture");
+        if let WrapperToDaemon::Register {
+            agent_id,
+            agent_type,
+            instance_id,
+            ..
+        } = &mut registration
+        {
+            *agent_id = identity.name.clone();
+            *agent_type = "fixture".into();
+            *instance_id = Some(identity.instance_id.clone());
+        }
+        let DaemonToWrapper::Registered {
+            credential: Some(credential),
+            ..
+        } = owner.exchange(&registration).unwrap()
+        else {
+            panic!("credential propriétaire requis");
+        };
+        crate::mcp_identity::save_credential(
+            path.parent().unwrap(),
+            &identity.name,
+            &identity.instance_id,
+            credential,
+        )
+        .unwrap();
+        owner
     }
 
     fn start_real_daemon() -> (std::path::PathBuf, std::path::PathBuf) {
@@ -6087,6 +6318,29 @@ mod idempotency_projection_tests {
 
                 line.clear();
                 reader.read_line(&mut line).unwrap();
+                let WrapperToDaemon::RegisterAuxiliary {
+                    agent_id,
+                    instance_id,
+                    credential,
+                } = decode(line.trim()).unwrap()
+                else {
+                    panic!("preuve auxiliaire attendue");
+                };
+                let expected =
+                    crate::mcp_identity::auxiliary_registration(&agent_id, &instance_id, &path)
+                        .unwrap();
+                assert!(
+                    matches!(expected, WrapperToDaemon::RegisterAuxiliary { credential: expected, .. } if expected == credential)
+                );
+                write_response(
+                    &mut writer,
+                    DaemonToWrapper::Registered {
+                        agent_id,
+                        credential: None,
+                    },
+                );
+                line.clear();
+                reader.read_line(&mut line).unwrap();
                 assert!(matches!(
                     decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
                     WrapperToDaemon::ClientHello {
@@ -6160,6 +6414,20 @@ mod idempotency_projection_tests {
             DaemonToWrapper::RoleAccepted {
                 role: ConnectionRole::Client
             }
+        ));
+        write_control_message(
+            &mut writer,
+            &crate::mcp_identity::auxiliary_registration(
+                &message.from,
+                &caller_identity().instance_id,
+                path,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            read_control_message(&mut reader).unwrap(),
+            DaemonToWrapper::Registered { .. }
         ));
         write_control_message(
             &mut writer,
@@ -6425,11 +6693,14 @@ mod idempotency_projection_tests {
         let path = temporary_socket_path();
         let server = start_reference_server(path.clone(), 3);
         let options = example_options();
-        let mut message = BridgetMessage::new("human", "codex-1", "bonjour");
+        let identity = caller_identity();
+        crate::mcp_identity::mock_private_identity(&path, &identity.name, &identity.instance_id);
+        let mut message = BridgetMessage::new(&identity.name, "codex-1", "bonjour");
         message.id = options.id.clone();
 
         let reference = reference_client_send(&path, &message, &options);
-        let cli = send_idempotent_to_daemon_at(&path, &message, &options).unwrap();
+        let cli =
+            send_idempotent_to_daemon_at(&path, &message, &options, &caller_identity()).unwrap();
         assert!(matches!(
             (reference, cli),
             (
@@ -6447,7 +6718,7 @@ mod idempotency_projection_tests {
         let mut divergent = message.clone();
         divergent.body = "message différent".to_string();
         assert!(matches!(
-            send_idempotent_to_daemon_at(&path, &divergent, &options).unwrap(),
+            send_idempotent_to_daemon_at(&path, &divergent, &options, &caller_identity()).unwrap(),
             DaemonToWrapper::IdempotencyResult {
                 issue: IdempotencyIssue::EnvelopeMismatch,
                 ..
@@ -6464,6 +6735,7 @@ mod idempotency_projection_tests {
     #[test]
     fn projection_cli_et_reference_partagent_le_canon_du_daemon_reel() {
         let (socket_path, db_path) = start_real_daemon();
+        let _owner = owner_connection(&socket_path);
         let issued_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -6473,14 +6745,16 @@ mod idempotency_projection_tests {
             issued_at,
             issuer_scope: "012_scope_aaaaaaaaaaaa".to_string(),
         };
-        let mut message = BridgetMessage::new("human", "destinataire-absent", "bonjour");
+        let mut message =
+            BridgetMessage::new(&caller_identity().name, "destinataire-absent", "bonjour");
         message.id = options.id.clone();
         message.reply = true;
         message.reply_timeout = Some(12);
 
         let reference = idempotency_issue(reference_client_send(&socket_path, &message, &options));
         let cli = idempotency_issue(
-            send_idempotent_to_daemon_at(&socket_path, &message, &options).unwrap(),
+            send_idempotent_to_daemon_at(&socket_path, &message, &options, &caller_identity())
+                .unwrap(),
         );
         assert_eq!(reference, cli, "référence et CLI rejouent la même issue");
         let canonical = stored_canonical_bytes(&db_path, &options);
@@ -6502,7 +6776,13 @@ mod idempotency_projection_tests {
         for divergent in divergences {
             assert_eq!(
                 idempotency_issue(
-                    send_idempotent_to_daemon_at(&socket_path, &divergent, &options).unwrap(),
+                    send_idempotent_to_daemon_at(
+                        &socket_path,
+                        &divergent,
+                        &options,
+                        &caller_identity()
+                    )
+                    .unwrap(),
                 ),
                 IdempotencyIssue::EnvelopeMismatch,
             );

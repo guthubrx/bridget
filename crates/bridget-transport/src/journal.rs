@@ -121,6 +121,9 @@ pub struct JournalLiveBatch {
 /// live. Une perte par saturation reste observable comme une plage `gap`.
 #[derive(Clone)]
 pub struct JournalLiveFeed {
+    observation_sender: mpsc::SyncSender<crate::protocol::WrapperToDaemon>,
+    observation_receiver: Arc<Mutex<mpsc::Receiver<crate::protocol::WrapperToDaemon>>>,
+    observation_dropped: Arc<AtomicU64>,
     sender: mpsc::SyncSender<JournalLiveEvent>,
     receiver: Arc<Mutex<mpsc::Receiver<JournalLiveEvent>>>,
     queued_bytes: Arc<AtomicUsize>,
@@ -142,7 +145,11 @@ impl JournalLiveFeed {
             "le relais live doit avoir une capacité non nulle"
         );
         let (sender, receiver) = mpsc::sync_channel(WRITER_QUEUE_CAPACITY);
+        let (observation_sender, observation_receiver) = mpsc::sync_channel(WRITER_QUEUE_CAPACITY);
         Self {
+            observation_sender,
+            observation_receiver: Arc::new(Mutex::new(observation_receiver)),
+            observation_dropped: Arc::new(AtomicU64::new(0)),
             sender,
             receiver: Arc::new(Mutex::new(receiver)),
             queued_bytes: Arc::new(AtomicUsize::new(0)),
@@ -177,6 +184,19 @@ impl JournalLiveFeed {
     pub fn latest_seq(&self) -> Option<u64> {
         let latest = self.latest_seq.load(Ordering::SeqCst);
         (latest > 0).then_some(latest)
+    }
+
+    /// Flux indépendant d'attach : seuls les petits faits structurés y passent.
+    /// O(n), n<=256 ; la source n'attend jamais un consommateur.
+    pub fn take_observations(&self) -> (Vec<crate::protocol::WrapperToDaemon>, u64) {
+        let receiver = self
+            .observation_receiver
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        (
+            receiver.try_iter().take(WRITER_QUEUE_CAPACITY).collect(),
+            self.observation_dropped.swap(0, Ordering::Relaxed),
+        )
     }
 
     pub fn after(&self, cursor: Option<u64>) -> JournalLiveBatch {
@@ -363,6 +383,7 @@ impl JournalWriter {
             while let Ok(command) = receiver.recv() {
                 match command {
                     WriterCommand::Entry(entry) => {
+                        let observation = observation_metadata(&entry);
                         #[cfg(any(test, feature = "test-support"))]
                         let started = Instant::now();
                         #[cfg(feature = "test-support")]
@@ -387,6 +408,18 @@ impl JournalWriter {
                         #[cfg(feature = "test-support")]
                         let sequence = live_event.seq;
                         if let Some(feed) = &live_feed {
+                            if let Some((event, file)) = observation
+                                && feed
+                                    .observation_sender
+                                    .try_send(crate::protocol::WrapperToDaemon::ObservedActivity {
+                                        seq: live_event.seq,
+                                        event,
+                                        file,
+                                    })
+                                    .is_err()
+                            {
+                                feed.observation_dropped.fetch_add(1, Ordering::Relaxed);
+                            }
                             feed.publish(live_event);
                         }
                         #[cfg(test)]
@@ -495,6 +528,83 @@ impl JournalWriter {
                 .unwrap_or_else(|poison| poison.into_inner()),
         )
     }
+}
+
+fn observation_metadata(
+    entry: &JournalEntry,
+) -> Option<(crate::protocol::ObservationKind, Option<String>)> {
+    use crate::protocol::ObservationKind;
+    // Les tours provoqués par nos notifications ne créent pas d'autres
+    // observations. La corrélation réutilise l'id du message, pas son texte.
+    if entry
+        .message_id
+        .as_deref()
+        .is_some_and(|id| id.starts_with("bridget-observation:"))
+    {
+        return None;
+    }
+    // Les adaptateurs natifs/T3 sans corrélation avec le message déclencheur
+    // n'exposent pas cette observation : leur simple état idle est ambigu.
+    if entry.event == "turn_end" && entry.payload.get("stop_reason").is_some() {
+        return Some((ObservationKind::TurnEnded, None));
+    }
+    if entry.event == "permission"
+        || (entry.event == "update"
+            && entry.payload.get("kind").and_then(Value::as_str) == Some("approval"))
+    {
+        return Some((ObservationKind::PermissionRequired, None));
+    }
+    if entry.event == "update"
+        && entry
+            .payload
+            .get("write_confirmed")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && entry.payload.get("kind").and_then(Value::as_str) == Some("file")
+    {
+        let path = entry.payload.get("text")?.as_str()?;
+        if Path::new(path).is_absolute()
+            && path.len() <= 4096
+            && !path.chars().any(char::is_control)
+        {
+            return Some((ObservationKind::FileWritten, Some(path.into())));
+        }
+    }
+    None
+}
+
+/// Métadonnée commune à Claude, Codex et ACP, uniquement après succès outil.
+/// O(longueur chemin), sans lecture du fichier ni exposition de son contenu.
+pub fn confirmed_write_payload(path: &str, cwd: &Path) -> Option<Value> {
+    if path.is_empty() || path.len() > 4096 || path.chars().any(char::is_control) {
+        return None;
+    }
+    let absolute = if Path::new(path).is_absolute() {
+        PathBuf::from(path)
+    } else {
+        cwd.join(path)
+    };
+    let absolute = absolute.to_str()?;
+    if !Path::new(absolute).is_absolute() || absolute.len() > 4096 {
+        return None;
+    }
+    Some(serde_json::json!({"kind":"file","text":absolute,"write_confirmed":true}))
+}
+
+/// Ne reconnaît que des outils écrivains connus ; jamais de parsing shell.
+pub fn tool_write_path<'a>(name: &str, input: &'a Value) -> Option<&'a str> {
+    if !matches!(
+        name,
+        "Write" | "Edit" | "MultiEdit" | "NotebookEdit" | "write_file" | "replace"
+    ) {
+        return None;
+    }
+    input
+        .get("file_path")
+        .or_else(|| input.get("path"))
+        .or_else(|| input.get("notebook_path"))?
+        .as_str()
+        .filter(|p| !p.is_empty() && p.len() <= 4096 && !p.chars().any(char::is_control))
 }
 
 pub struct SessionJournal {
@@ -1009,6 +1119,128 @@ fn civil_time(seconds: i64) -> (i64, u32, u32, i64, i64, i64) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spec100_observation_requires_confirmed_structured_write() {
+        use super::*;
+        let payload = confirmed_write_payload("src/lib.rs", Path::new("/project")).unwrap();
+        let entry = JournalEntry::new(1, "now", "s", "update", None, payload);
+        assert_eq!(
+            observation_metadata(&entry),
+            Some((
+                crate::protocol::ObservationKind::FileWritten,
+                Some("/project/src/lib.rs".into())
+            ))
+        );
+        let attempt = JournalEntry::new(
+            2,
+            "now",
+            "s",
+            "update",
+            None,
+            serde_json::json!({"kind":"file","text":"/project/src/lib.rs"}),
+        );
+        assert!(observation_metadata(&attempt).is_none());
+        assert!(tool_write_path("Read", &serde_json::json!({"file_path":"/p/x"})).is_none());
+        assert!(tool_write_path("Bash", &serde_json::json!({"command":"echo x > /p/x"})).is_none());
+        assert!(confirmed_write_payload("x", Path::new("relative")).is_none());
+    }
+
+    #[test]
+    fn spec100_observation_feed_is_independent_and_bounded() {
+        use super::*;
+        let feed = JournalLiveFeed::default();
+        for seq in 1..=WRITER_QUEUE_CAPACITY {
+            feed.observation_sender
+                .try_send(crate::protocol::WrapperToDaemon::ObservedActivity {
+                    seq: seq as u64,
+                    event: crate::protocol::ObservationKind::PermissionRequired,
+                    file: None,
+                })
+                .unwrap();
+        }
+        assert!(
+            feed.observation_sender
+                .try_send(crate::protocol::WrapperToDaemon::ObservedActivity {
+                    seq: 999,
+                    event: crate::protocol::ObservationKind::PermissionRequired,
+                    file: None,
+                })
+                .is_err()
+        );
+        let (events, _) = feed.take_observations();
+        assert_eq!(events.len(), WRITER_QUEUE_CAPACITY);
+        assert!(feed.after(None).events.is_empty());
+    }
+
+    #[test]
+    fn spec100_post_flush_turns_do_not_reobserve_notifications() {
+        let root = root("spec100-post-flush");
+        let feed = JournalLiveFeed::default();
+        let writer = JournalWriter::start_with_live_feed(
+            &root,
+            "agent",
+            "session",
+            Arc::new(Mutex::new(AcpEventQueue::default())),
+            Some(feed.clone()),
+        )
+        .unwrap();
+        writer
+            .enqueue(
+                "turn_end",
+                Some("human"),
+                json!({"stop_reason":"cancelled"}),
+            )
+            .unwrap();
+        writer
+            .enqueue(
+                "turn_end",
+                Some("bridget-observation:123"),
+                json!({"stop_reason":"completed"}),
+            )
+            .unwrap();
+        writer
+            .enqueue("turn_end", Some("unattributed-native"), json!({}))
+            .unwrap();
+        writer
+            .enqueue(
+                "update",
+                Some("bridget-observation:123"),
+                confirmed_write_payload("/p/x", Path::new("/p")).unwrap(),
+            )
+            .unwrap();
+        writer
+            .enqueue(
+                "update",
+                Some("human"),
+                confirmed_write_payload("/p/x", Path::new("/p")).unwrap(),
+            )
+            .unwrap();
+        writer.stop();
+        let (facts, lost) = feed.take_observations();
+        assert_eq!(lost, 0);
+        assert_eq!(facts.len(), 2);
+        assert!(matches!(
+            facts[0],
+            crate::protocol::WrapperToDaemon::ObservedActivity {
+                seq: 1,
+                event: crate::protocol::ObservationKind::TurnEnded,
+                ..
+            }
+        ));
+        assert!(matches!(
+            facts[1],
+            crate::protocol::WrapperToDaemon::ObservedActivity {
+                seq: 5,
+                event: crate::protocol::ObservationKind::FileWritten,
+                ..
+            }
+        ));
+        assert_eq!(
+            feed.after(None).events.len(),
+            5,
+            "le journal attach n'est pas consommé par les observations"
+        );
+    }
     use super::*;
     use serde_json::json;
 

@@ -259,7 +259,7 @@ fn connect_sender(socket: &Path) -> (BufWriter<UnixStream>, BufReader<UnixStream
         },
     );
     match read_message(&mut reader) {
-        DaemonToWrapper::Registered { agent_id: name } if name == SENDER => {}
+        DaemonToWrapper::Registered { agent_id: name, .. } if name == SENDER => {}
         other => panic!("Register bench-sender inattendu: {other:?}"),
     }
     (writer, reader)

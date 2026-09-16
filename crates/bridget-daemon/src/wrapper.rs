@@ -1626,8 +1626,15 @@ pub(crate) fn connect_and_register_at(
 
     let mut line = String::new();
     reader.read_line(&mut line).map_err(|e| e.to_string())?;
-    match decode(line.trim()).map_err(|e| e.to_string())? {
-        DaemonToWrapper::Registered { agent_id } => {
+    match decode(line.trim()).map_err(|_| "réponse d'enregistrement invalide".to_string())? {
+        DaemonToWrapper::Registered {
+            agent_id,
+            credential,
+        } => {
+            if let Some(credential) = credential {
+                let root = socket.parent().ok_or("socket sans répertoire privé")?;
+                crate::mcp_identity::save_credential(root, &agent_id, instance_id, credential)?;
+            }
             send_disk_space_fact(&mut writer);
             Ok((reader, writer, agent_id))
         }
@@ -2206,8 +2213,8 @@ pub fn launch(
 
             let msg: DaemonToWrapper = match decode(line) {
                 Ok(m) => m,
-                Err(e) => {
-                    warn!("message illisible: {}", e);
+                Err(_) => {
+                    warn!("message de protocole illisible");
                     continue;
                 }
             };
@@ -2677,6 +2684,17 @@ impl AttachRelayWorker {
             let mut had_live_subscriptions = false;
             let mut seen_generation = 0;
             while !worker_stopped.load(Ordering::SeqCst) {
+                if let Some(feed) = &live_feed {
+                    let (facts, dropped) = feed.take_observations();
+                    if dropped > 0 {
+                        log::warn!(
+                            "observation_gap: {dropped} faits perdus par saturation du relais"
+                        );
+                    }
+                    for fact in facts {
+                        worker_emit(fact);
+                    }
+                }
                 let current_generation = worker_generation.load(Ordering::SeqCst);
                 if current_generation != seen_generation {
                     subscriptions.clear();
@@ -4073,7 +4091,7 @@ fn launch_session_with_status(
                 }
                 Ok(DaemonToWrapper::Disconnect) => break,
                 Ok(_) => {}
-                Err(error) => warn!("message ACP illisible: {}", error),
+                Err(_) => warn!("message ACP de protocole illisible"),
             },
             Err(error)
                 if matches!(
@@ -4547,10 +4565,12 @@ fn ensure_claude_permission_bypass(args: &mut Vec<String>) {
     }
 }
 
-const BRIDGET_SAFE_MCP_TOOLS: [&str; 12] = [
+const BRIDGET_SAFE_MCP_TOOLS: [&str; 14] = [
     "bridget_who",
     "bridget_send",
     "bridget_ledger",
+    "bridget_journal",
+    "bridget_events",
     "bridget_cancel",
     "bridget_read_artifact",
     "bridget_publish_artifact",
@@ -6601,6 +6621,7 @@ mod reconnect_tests {
                 writer,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
+                    credential: None,
                     agent_id: "lab-agent".to_string()
                 })
                 .unwrap()
@@ -7299,6 +7320,8 @@ mod reconnect_tests {
                 "bridget_who={approval_mode=\"approve\"},",
                 "bridget_send={approval_mode=\"approve\"},",
                 "bridget_ledger={approval_mode=\"approve\"},",
+                "bridget_journal={approval_mode=\"approve\"},",
+                "bridget_events={approval_mode=\"approve\"},",
                 "bridget_cancel={approval_mode=\"approve\"},",
                 "bridget_read_artifact={approval_mode=\"approve\"},",
                 "bridget_publish_artifact={approval_mode=\"approve\"},",
@@ -7325,6 +7348,8 @@ mod reconnect_tests {
             "bridget_who",
             "bridget_send",
             "bridget_ledger",
+            "bridget_journal",
+            "bridget_events",
             "bridget_cancel",
             "bridget_read_artifact",
             "bridget_publish_artifact",
@@ -8069,6 +8094,8 @@ mod reconnect_tests {
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
         let expected_derived = derive_domain();
         let expected_derived_for_server = expected_derived.clone();
+        let credential =
+            bridget_transport::protocol::IdentityCredential::new(uuid::Uuid::new_v4().to_string());
         let server = std::thread::spawn(move || {
             let (mut primary, _) = listener.accept().unwrap();
             let mut primary_reader = BufReader::new(primary.try_clone().unwrap());
@@ -8083,6 +8110,7 @@ mod reconnect_tests {
                 primary,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
+                    credential: Some(credential.clone()),
                     agent_id: identity.to_string(),
                 })
                 .unwrap()
@@ -8097,12 +8125,14 @@ mod reconnect_tests {
             auxiliary_reader.read_line(&mut line).unwrap();
             assert!(matches!(
                 decode(line.trim()).unwrap(),
-                WrapperToDaemon::Register { agent_id, .. } if agent_id == identity
+                WrapperToDaemon::RegisterAuxiliary { agent_id, credential: presented, .. }
+                    if agent_id == identity && presented == credential
             ));
             writeln!(
                 auxiliary,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
+                    credential: None,
                     agent_id: identity.to_string(),
                 })
                 .unwrap()
@@ -8170,6 +8200,9 @@ mod reconnect_tests {
         let identity = "89000000-0000-4000-8000-000000000494";
         let instance_id = "instance-domain-race-094";
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        crate::mcp_identity::mock_private_identity(&socket, identity, instance_id);
+        let credential =
+            bridget_transport::protocol::IdentityCredential::new(uuid::Uuid::new_v4().to_string());
         let expected_derived = derive_domain();
         let (seen_tx, seen_rx) = mpsc::channel();
         let server = std::thread::spawn(move || {
@@ -8179,12 +8212,13 @@ mod reconnect_tests {
             setter_reader.read_line(&mut line).unwrap();
             assert!(matches!(
                 decode(line.trim()).unwrap(),
-                WrapperToDaemon::Register { agent_id, .. } if agent_id == identity
+                WrapperToDaemon::RegisterAuxiliary { agent_id, .. } if agent_id == identity
             ));
             writeln!(
                 setter,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
+                    credential: None,
                     agent_id: identity.to_string(),
                 })
                 .unwrap()
@@ -8224,6 +8258,7 @@ mod reconnect_tests {
                 primary,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
+                    credential: Some(credential.clone()),
                     agent_id: identity.to_string(),
                 })
                 .unwrap()
@@ -8238,12 +8273,14 @@ mod reconnect_tests {
             auxiliary_reader.read_line(&mut line).unwrap();
             assert!(matches!(
                 decode(line.trim()).unwrap(),
-                WrapperToDaemon::Register { agent_id, .. } if agent_id == identity
+                WrapperToDaemon::RegisterAuxiliary { agent_id, credential: presented, .. }
+                    if agent_id == identity && presented == credential
             ));
             writeln!(
                 auxiliary,
                 "{}",
                 encode(&DaemonToWrapper::Registered {
+                    credential: None,
                     agent_id: identity.to_string(),
                 })
                 .unwrap()
@@ -8414,6 +8451,57 @@ mod reconnect_tests {
         assert_eq!(reads.load(Ordering::SeqCst), 0);
         worker.shutdown();
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec100_relay_observes_without_attach_view_or_disk_reader() {
+        let root = relay_root("spec100-without-view");
+        let feed = JournalLiveFeed::default();
+        let writer = JournalWriter::start_with_live_feed(
+            &root,
+            "agent",
+            "session",
+            Arc::new(Mutex::new(bridget_transport::AcpEventQueue::default())),
+            Some(feed.clone()),
+        )
+        .unwrap();
+        let (tx, rx) = mpsc::channel();
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let probe = reads.clone();
+        let mut relay = AttachRelayWorker::start_with_clock(
+            root.join("agent"),
+            Arc::new(|| "2026-09-16".into()),
+            1,
+            Some(feed),
+            Arc::new(move |message| {
+                let _ = tx.send(message);
+            }),
+            AttachRelayHooks {
+                before_read: Arc::new(move || {
+                    probe.fetch_add(1, Ordering::SeqCst);
+                }),
+                ..AttachRelayHooks::default()
+            },
+        );
+        writer
+            .enqueue(
+                "turn_end",
+                Some("human"),
+                serde_json::json!({"stop_reason":"completed"}),
+            )
+            .unwrap();
+        writer.stop();
+        let message = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(
+            message,
+            WrapperToDaemon::ObservedActivity {
+                seq: 1,
+                event: bridget_transport::protocol::ObservationKind::TurnEnded,
+                ..
+            }
+        ));
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        relay.shutdown();
     }
 
     #[test]

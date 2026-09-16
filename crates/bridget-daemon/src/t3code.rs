@@ -6,17 +6,22 @@
 //! les messages par `thread.turn.start` et renvoie à l'expéditeur la réponse
 //! du tour corrélé par rang FIFO. Tout l'état est sous `<BRIDGET_HOME>/t3code`.
 
-use std::collections::{BTreeMap, HashSet};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::io::{BufRead, BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use bridget_transport::journal::{JournalLiveFeed, JournalWriter};
-use bridget_transport::protocol::{DaemonToWrapper, PresenceMode, WrapperToDaemon, decode};
+use bridget_transport::journal::{
+    IncrementalJournalReader, JournalLiveFeed, JournalReadItem, JournalWriter,
+};
+use bridget_transport::protocol::{
+    DaemonToWrapper, PresenceMode, RequestInfo, WrapperToDaemon, decode,
+};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 
@@ -25,7 +30,7 @@ use crate::t3code_contract::{
 };
 use crate::wrapper::{
     AttachRelayWorker, IdempotentDeliveryTracker, connect_and_register_at,
-    deliver_idempotent_to_interactive, record_interactive_turn, send_wrapper_message,
+    deliver_idempotent_to_interactive, send_wrapper_message,
 };
 
 const PROTOCOL: &str = "t3code";
@@ -37,10 +42,8 @@ const AUTH_FAILED_PAUSE: Duration = Duration::from_secs(60);
 const DETAIL_PAGE: u32 = 20;
 const DETAIL_PAGE_MAX: u32 = 320;
 const SEEN_BOUND: usize = 1000;
-/// Lectures successives d'un fil au repos avant de renoncer à corréler. Au
-/// sondage par défaut (3 s) cela laisse une quinzaine de secondes au tour pour
-/// démarrer : t3code en met moins d'une, mais renoncer trop tôt perdrait une
-/// réponse réelle.
+/// Lectures successives avant de signaler une corrélation incertaine. L'attente
+/// reste conservée : ce seuil ne prouve ni l'absence du tour ni sa clôture.
 const SETTLE_ATTEMPTS: u32 = 5;
 const NAMESPACE_098: uuid::Uuid = uuid::Uuid::from_bytes([
     0x09, 0x8b, 0x71, 0xd3, 0xc0, 0xde, 0x4a, 0x11, 0x9b, 0x1d, 0x73, 0x63, 0x6f, 0x64, 0x65, 0x01,
@@ -188,6 +191,9 @@ pub(crate) struct Pending {
     pub dispatched_at: String,
     #[serde(default)]
     pub attempts: u32,
+    /// Réponse préparée : conservée avant envoi, supprimée seulement sur preuve.
+    #[serde(default)]
+    pub response: Option<String>,
 }
 
 /// État durable d'un fil : curseur du journal et remises en attente.
@@ -227,19 +233,8 @@ impl ThreadState {
 
 /// Écriture atomique 0600 : fichier temporaire voisin puis renommage.
 fn private_write(path: &Path, text: &str) -> Result<(), String> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let temporary = path.with_extension("tmp");
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&temporary)
-        .map_err(|e| format!("{} : {e}", temporary.display()))?;
-    file.write_all(text.as_bytes())
-        .and_then(|_| file.sync_all())
-        .map_err(|e| format!("{} : {e}", temporary.display()))?;
-    std::fs::rename(&temporary, path).map_err(|e| format!("{} : {e}", path.display()))
+    bridget_transport::fsutil::write_private_file_atomic(path, text.as_bytes())
+        .map_err(|e| format!("{} : {e}", path.display()))
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>, String> {
@@ -1053,7 +1048,6 @@ impl Link {
             .map_err(|e| format!("socket du lien : {e}"))?;
         let stream = reader.get_ref().try_clone().map_err(|e| e.to_string())?;
         let (events, inbox) = mpsc::channel();
-        spawn_reader(reader, events.clone());
         let worker = LinkWorker::new(
             paths,
             session,
@@ -1063,6 +1057,12 @@ impl Link {
             writer,
             stream,
         )?;
+        spawn_reader(
+            reader,
+            events.clone(),
+            worker.daemon_alive.clone(),
+            worker.cancelled.clone(),
+        );
         let handle = thread::Builder::new()
             .name(format!("t3-{}", &summary.id[..summary.id.len().min(8)]))
             .spawn(move || worker.run(inbox))
@@ -1089,7 +1089,12 @@ impl Link {
     }
 }
 
-fn spawn_reader(mut reader: BufReader<UnixStream>, events: Sender<LinkEvent>) {
+fn spawn_reader(
+    mut reader: BufReader<UnixStream>,
+    events: Sender<LinkEvent>,
+    alive: Arc<AtomicBool>,
+    cancelled: Arc<Mutex<BTreeMap<String, Instant>>>,
+) {
     thread::spawn(move || {
         let mut line = String::new();
         loop {
@@ -1103,6 +1108,16 @@ fn spawn_reader(mut reader: BufReader<UnixStream>, events: Sender<LinkEvent>) {
                     }
                     match decode::<DaemonToWrapper>(trimmed) {
                         Ok(frame) => {
+                            match &frame {
+                                DaemonToWrapper::CancelDelivery { id, .. } => {
+                                    cancelled
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner())
+                                        .insert(id.clone(), Instant::now());
+                                }
+                                DaemonToWrapper::Disconnect => alive.store(false, Ordering::SeqCst),
+                                _ => {}
+                            }
                             if events.send(LinkEvent::Frame(Box::new(frame))).is_err() {
                                 break;
                             }
@@ -1114,6 +1129,7 @@ fn spawn_reader(mut reader: BufReader<UnixStream>, events: Sender<LinkEvent>) {
                 Err(_) => break,
             }
         }
+        alive.store(false, Ordering::SeqCst);
         let _ = events.send(LinkEvent::DaemonGone);
     });
 }
@@ -1137,6 +1153,20 @@ struct LinkWorker {
     title_refused_at: Option<Instant>,
     last_key: String,
     turn_wait: Duration,
+    queue: VecDeque<(DaemonToWrapper, Instant)>,
+    requests: BTreeMap<String, RequestInfo>,
+    daemon_alive: Arc<AtomicBool>,
+    cancelled: Arc<Mutex<BTreeMap<String, Instant>>>,
+    next_dispatch_check: Instant,
+    journal_failed: Arc<AtomicBool>,
+    journal_dir: PathBuf,
+    journal_readers: BTreeMap<PathBuf, IncrementalJournalReader>,
+    journal_inflight: HashSet<String>,
+    journal_caught_up: bool,
+    /// Une admission refusée doit être reprise même après vidage des inflight
+    /// et sans changement du snapshot fournisseur.
+    journal_dirty: bool,
+    response_sent: BTreeMap<String, Instant>,
 }
 
 impl LinkWorker {
@@ -1154,12 +1184,17 @@ impl LinkWorker {
         let journal_root = paths.root.join("sessions");
         crate::environment::ensure_private_directory(&journal_root)?;
         let live_feed = JournalLiveFeed::default();
+        let journal_failed = Arc::new(AtomicBool::new(false));
+        let failure_flag = journal_failed.clone();
         let journal = Arc::new(
             JournalWriter::start_with_live_feed_and_failure(
                 &journal_root,
                 &agent_id,
                 &instance_id,
-                Arc::new(|detail| warn!("journal t3code en échec : {detail}")),
+                Arc::new(move |detail| {
+                    failure_flag.store(true, Ordering::SeqCst);
+                    warn!("journal t3code en échec : {detail}");
+                }),
                 Some(live_feed.clone()),
             )
             .map_err(|e| format!("journal du fil : {e}"))?,
@@ -1180,6 +1215,7 @@ impl LinkWorker {
         let state = ThreadState::load(&state_path);
         Ok(Self {
             thread_id: summary.id.clone(),
+            journal_dir: journal_root.join(&agent_id),
             agent_id,
             session,
             writer,
@@ -1193,99 +1229,171 @@ impl LinkWorker {
             title_refused_at: None,
             last_key: String::new(),
             turn_wait: turn_wait(),
+            queue: VecDeque::new(),
+            requests: BTreeMap::new(),
+            daemon_alive: Arc::new(AtomicBool::new(true)),
+            cancelled: Arc::new(Mutex::new(BTreeMap::new())),
+            next_dispatch_check: Instant::now(),
+            journal_failed,
+            journal_readers: BTreeMap::new(),
+            journal_inflight: HashSet::new(),
+            journal_caught_up: false,
+            journal_dirty: false,
+            response_sent: BTreeMap::new(),
         })
     }
 
     fn run(mut self, inbox: Receiver<LinkEvent>) {
-        loop {
-            match inbox.recv_timeout(Duration::from_secs(30)) {
-                Ok(LinkEvent::Tick(summary)) => {
-                    send_wrapper_message(&self.writer, WrapperToDaemon::Heartbeat);
-                    let title = display_title(&summary.title);
-                    let retry = self
-                        .title_refused_at
-                        .is_some_and(|since| since.elapsed() >= rename_retry());
-                    if title != self.title || retry {
-                        if title != self.title {
-                            info!(
-                                "fil {} renommé « {} » → « {title} »",
-                                self.thread_id, self.title
-                            );
-                        }
-                        publish_title(&self.writer, &title);
-                        self.title = title;
-                        // En attente du verdict : Applied efface, Rejected redate.
-                        self.title_refused_at = Some(Instant::now());
-                    }
-                    let key = summary.change_key();
-                    if key != self.last_key || !self.state.pending.is_empty() {
-                        self.last_key = key;
-                        self.refresh(&summary);
-                    }
-                }
-                Ok(LinkEvent::Frame(frame)) => self.handle_frame(*frame),
-                Ok(LinkEvent::DaemonGone) => {
-                    warn!("daemon parti pour le fil {}", self.thread_id);
-                    break;
-                }
-                Ok(LinkEvent::Close) => {
-                    send_wrapper_message(&self.writer, WrapperToDaemon::Unregister);
-                    break;
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    send_wrapper_message(&self.writer, WrapperToDaemon::Heartbeat);
-                }
+        while self.daemon_alive.load(Ordering::SeqCst) {
+            match inbox.recv_timeout(Duration::from_millis(100)) {
+                Ok(event) => self.handle_event(event),
+                Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
+            }
+            self.drain_controls(&inbox);
+            if !self.daemon_alive.load(Ordering::SeqCst) {
+                break;
+            }
+            if !self.journal_caught_up || !self.journal_inflight.is_empty() {
+                self.confirm_journal();
+            }
+            if self.journal_failed.load(Ordering::SeqCst) {
+                // Le writer est arrêté après échec : rouvrir le lien recrée le
+                // journal. Les messages non confirmés restent à reprendre.
+                break;
+            }
+            if !self.queue.is_empty() && Instant::now() >= self.next_dispatch_check {
+                self.next_dispatch_check = Instant::now() + Duration::from_millis(500);
+                self.drive_queue(&inbox);
             }
         }
         self.relay.shutdown();
+        self.journal.stop();
         let _ = self.stream.shutdown(std::net::Shutdown::Both);
+    }
+
+    fn drain_controls(&mut self, inbox: &Receiver<LinkEvent>) {
+        while let Ok(event) = inbox.try_recv() {
+            self.handle_event(event);
+        }
+    }
+
+    fn handle_event(&mut self, event: LinkEvent) {
+        match event {
+            LinkEvent::Tick(summary) => {
+                send_wrapper_message(&self.writer, WrapperToDaemon::Heartbeat);
+                let title = display_title(&summary.title);
+                let retry = self
+                    .title_refused_at
+                    .is_some_and(|since| since.elapsed() >= rename_retry());
+                if title != self.title || retry {
+                    if title != self.title {
+                        info!(
+                            "fil {} renommé « {} » → « {title} »",
+                            self.thread_id, self.title
+                        );
+                    }
+                    publish_title(&self.writer, &title);
+                    self.title = title;
+                    // En attente du verdict : Applied efface, Rejected redate.
+                    self.title_refused_at = Some(Instant::now());
+                }
+                let key = summary.change_key();
+                if (key != self.last_key
+                    || !self.state.pending.is_empty()
+                    || !self.journal_inflight.is_empty()
+                    || self.journal_dirty)
+                    && self.refresh(&summary)
+                {
+                    self.last_key = key;
+                }
+                if !self.state.pending.is_empty() || !self.queue.is_empty() {
+                    self.request_status();
+                    self.send_ready_responses();
+                }
+            }
+            LinkEvent::Frame(frame) => self.handle_frame(*frame),
+            LinkEvent::DaemonGone => {
+                warn!("daemon parti pour le fil {}", self.thread_id);
+                self.daemon_alive.store(false, Ordering::SeqCst);
+            }
+            LinkEvent::Close => {
+                send_wrapper_message(&self.writer, WrapperToDaemon::Unregister);
+                self.daemon_alive.store(false, Ordering::SeqCst);
+            }
+        }
     }
 
     fn handle_frame(&mut self, frame: DaemonToWrapper) {
         match frame {
-            DaemonToWrapper::Deliver(message) => {
-                record_interactive_turn(self.journal.as_ref(), &message);
-                if let Err(e) = self.dispatch(&message) {
-                    error!("remise {} au fil {} : {e}", message.id, self.thread_id);
+            delivery
+            @ (DaemonToWrapper::Deliver(_) | DaemonToWrapper::DeliverIdempotent { .. }) => {
+                self.queue.push_back((delivery, Instant::now()));
+                self.request_status();
+            }
+            DaemonToWrapper::CancelDelivery { id, reason } => {
+                self.cancelled
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(id.clone(), Instant::now());
+                self.queue
+                    .retain(|(frame, _)| delivery_message(frame).id != id);
+                info!("demande {id} retirée avant démarrage : {reason}");
+            }
+            DaemonToWrapper::Ack { id } => {
+                self.response_sent
+                    .retain(|request, _| reply_id(request) != id);
+                self.state
+                    .pending
+                    .retain(|p| p.response.is_none() || reply_id(&p.request_id) != id);
+                if let Err(e) = self.state.save(&self.state_path) {
+                    warn!("confirmation réponse : {e}");
                 }
             }
-            DaemonToWrapper::DeliverIdempotent {
-                delivery_id,
-                recipient_instance_id,
-                delivery_generation,
-                expires_at,
-                message,
-                ..
-            } => {
-                record_interactive_turn(self.journal.as_ref(), &message);
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or_default();
-                // Le tracker déduplique les rejeux ; l'ack ne part qu'après
-                // acceptation de la commande par t3code (dispatch 200).
-                let mut outcome = Ok(());
-                let mut tracker = self.tracker.take().expect("tracker présent");
-                let reports = deliver_idempotent_to_interactive(
-                    &mut tracker,
-                    delivery_id,
-                    recipient_instance_id,
-                    delivery_generation,
-                    expires_at,
-                    message,
-                    now,
-                    |message| {
-                        outcome = self.dispatch_with_id(message, Some(&message.id));
-                        outcome.clone()
-                    },
-                );
-                self.tracker = Some(tracker);
-                if let Err(e) = outcome {
-                    error!("remise idempotente au fil {} : {e}", self.thread_id);
+            DaemonToWrapper::Nack { id, reason } => {
+                if self
+                    .state
+                    .pending
+                    .iter()
+                    .any(|p| reply_id(&p.request_id) == id)
+                {
+                    warn!("réponse {id} non remise, conservée : {reason}");
                 }
-                for report in reports {
-                    send_wrapper_message(&self.writer, report);
+            }
+            DaemonToWrapper::RequestList { requests } => {
+                for request in requests {
+                    if request.target != self.agent_id {
+                        continue;
+                    }
+                    if matches!(
+                        request.state.as_str(),
+                        "answered" | "cancelled" | "timed_out"
+                    ) {
+                        self.state
+                            .pending
+                            .retain(|p| p.request_id != request.id || p.from != request.sender);
+                        self.queue
+                            .retain(|(frame, _)| delivery_message(frame).id != request.id);
+                    }
+                    self.requests.insert(request.id.clone(), request);
+                }
+                let queued_ids: HashSet<&str> = self
+                    .queue
+                    .iter()
+                    .map(|(frame, _)| delivery_message(frame).id.as_str())
+                    .collect();
+                self.requests
+                    .retain(|id, _| queued_ids.contains(id.as_str()));
+                let pending_ids: HashSet<&str> = self
+                    .state
+                    .pending
+                    .iter()
+                    .map(|pending| pending.request_id.as_str())
+                    .collect();
+                self.response_sent
+                    .retain(|id, _| pending_ids.contains(id.as_str()));
+                if let Err(e) = self.state.save(&self.state_path) {
+                    warn!("réconciliation réponse : {e}");
                 }
             }
             DaemonToWrapper::Subscribe {
@@ -1324,24 +1432,156 @@ impl LinkWorker {
                 }
             }
             DaemonToWrapper::Disconnect => {
+                self.daemon_alive.store(false, Ordering::SeqCst);
                 warn!("daemon a demandé la déconnexion du fil {}", self.thread_id);
             }
             _ => {}
         }
     }
 
-    fn dispatch(&mut self, message: &bridget_core::BridgetMessage) -> Result<(), String> {
-        self.dispatch_with_id(message, None)
+    fn request_status(&self) {
+        send_wrapper_message(
+            &self.writer,
+            WrapperToDaemon::ListRequests {
+                sender: self.agent_id.clone(),
+                limit: 200,
+            },
+        );
     }
 
-    /// Attend un fil sans tour actif (borné), puis `thread.turn.start`.
+    fn drive_queue(&mut self, inbox: &Receiver<LinkEvent>) {
+        let now = unix_now();
+        self.cancelled
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|_, received| received.elapsed() <= self.turn_wait);
+        self.queue.retain(|(frame, received)| {
+            let message = delivery_message(frame);
+            let expired = message.deadline_at.is_some_and(|deadline| deadline <= now)
+                || message.reply_timeout.is_some_and(|timeout| received.elapsed() >= Duration::from_secs(timeout))
+                || received.elapsed() >= self.turn_wait
+                || matches!(frame, DaemonToWrapper::DeliverIdempotent { expires_at, .. } if *expires_at <= now as i64)
+                || self.requests.get(&message.id).is_some_and(|request| request.state != "open" || request.deadline_at <= now as i64);
+            if expired { warn!("remise {} périmée avant démarrage", message.id); }
+            !expired
+        });
+        if self.queue.is_empty() || !self.daemon_alive.load(Ordering::SeqCst) {
+            return;
+        }
+        let snapshot = match self.session.call(|client| client.snapshot()) {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                warn!("attente du fil {} : {e}", self.thread_id);
+                return;
+            }
+        };
+        // Une requête HTTP peut prendre du temps. Appliquer tous les contrôles
+        // reçus entre son départ et son retour AVANT toute commande fournisseur.
+        self.drain_controls(inbox);
+        if !self.daemon_alive.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(summary) = snapshot
+            .threads
+            .into_iter()
+            .find(|t| t.id == self.thread_id && t.is_live())
+        else {
+            return;
+        };
+        if summary
+            .session
+            .as_ref()
+            .is_some_and(|s| s.active_turn_id.is_some())
+        {
+            return;
+        }
+        let Some((frame, received)) = self.queue.front() else {
+            return;
+        };
+        let message = delivery_message(frame);
+        if message
+            .deadline_at
+            .is_some_and(|deadline| deadline <= unix_now())
+            || received.elapsed() >= self.turn_wait
+            || message
+                .reply_timeout
+                .is_some_and(|timeout| received.elapsed() >= Duration::from_secs(timeout))
+            || matches!(frame, DaemonToWrapper::DeliverIdempotent { expires_at, .. } if *expires_at <= unix_now() as i64)
+        {
+            self.queue.pop_front();
+            return;
+        }
+        // Pour une demande suivie, le daemon atteste l'échéance véritable (qui
+        // peut être plus courte que celle du tour). Une absence dans une page
+        // bornée n'est ni une autorisation de démarrage ni une clôture.
+        if message.reply
+            && !self.requests.get(&message.id).is_some_and(|r| {
+                r.sender == message.from && r.state == "open" && r.deadline_at > unix_now() as i64
+            })
+        {
+            self.request_status();
+            return;
+        }
+        let (frame, _) = self.queue.pop_front().expect("remise présente");
+        match frame {
+            DaemonToWrapper::Deliver(message) => {
+                if let Err(e) = self.dispatch_with_id(&message, None, &summary) {
+                    error!("remise {} au fil {} : {e}", message.id, self.thread_id);
+                }
+            }
+            DaemonToWrapper::DeliverIdempotent {
+                delivery_id,
+                recipient_instance_id,
+                delivery_generation,
+                expires_at,
+                message,
+                ..
+            } => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or_default();
+                // Le tracker déduplique les rejeux ; l'ack ne part qu'après
+                // acceptation de la commande par t3code (dispatch 200).
+                let mut outcome = Ok(());
+                let mut tracker = self.tracker.take().expect("tracker présent");
+                let reports = deliver_idempotent_to_interactive(
+                    &mut tracker,
+                    delivery_id,
+                    recipient_instance_id,
+                    delivery_generation,
+                    expires_at,
+                    message,
+                    now,
+                    |message| {
+                        outcome = self.dispatch_with_id(message, Some(&message.id), &summary);
+                        outcome.clone()
+                    },
+                );
+                self.tracker = Some(tracker);
+                if let Err(e) = outcome {
+                    error!("remise idempotente au fil {} : {e}", self.thread_id);
+                }
+                for report in reports {
+                    send_wrapper_message(&self.writer, report);
+                }
+            }
+            _ => unreachable!("la file ne contient que des remises"),
+        }
+    }
+
+    /// Démarre le fil attesté libre par drive_queue, après contrôle d'autorité.
     /// `commandId` = identifiant du message Bridget (t3code déduplique dessus).
     fn dispatch_with_id(
         &mut self,
         message: &bridget_core::BridgetMessage,
         command_id: Option<&str>,
+        summary: &ThreadSummary,
     ) -> Result<(), String> {
-        let (anchor, runtime_mode, interaction_mode) = self.wait_idle()?;
+        if !self.daemon_alive.load(Ordering::SeqCst) {
+            return Err("daemon déconnecté".into());
+        }
+        let anchor = summary.latest_turn.as_ref().map(|t| t.turn_id.clone());
         let command_id = command_id.unwrap_or(&message.id).to_string();
         // Identifiant de message déterministe : un rejeu après panne reconstruit
         // exactement la même commande, que t3code déduplique par `commandId`.
@@ -1351,13 +1591,13 @@ impl LinkWorker {
             &command_id,
             &message_id,
             &envelope(message),
-            &runtime_mode,
-            &interaction_mode,
+            &summary.runtime_mode,
+            &summary.interaction_mode,
         );
         // L'attente est écrite AVANT l'appel : si le pont meurt entre le 200 de
         // t3code et cette ligne, la corrélation serait perdue et la réponse ne
-        // reviendrait jamais. Écrite avant, elle est au pire inutile — et alors
-        // retirée faute de trouver son message dans le fil.
+        // reviendrait jamais. Écrite avant, elle est au pire inutile — et reste
+        // conservée jusqu'à un refus certain ou une clôture attestée.
         if !self
             .state
             .pending
@@ -1371,10 +1611,46 @@ impl LinkWorker {
                 anchor_turn_id: anchor,
                 dispatched_at: contract::iso_now(),
                 attempts: 0,
+                response: None,
             });
             self.state.save(&self.state_path)?;
         }
-        match self.session.call(|client| client.dispatch(&command)) {
+        // La persistance peut elle-même prendre du temps. Le lecteur socket
+        // publie la perte d'autorité sans attendre le traitement de sa file.
+        if !self.daemon_alive.load(Ordering::SeqCst)
+            || message
+                .deadline_at
+                .is_some_and(|deadline| deadline <= unix_now())
+            || self
+                .requests
+                .get(&message.id)
+                .is_some_and(|request| request.deadline_at <= unix_now() as i64)
+        {
+            return Err("autorité absente ou demande périmée avant dispatch".into());
+        }
+        // Session.call peut attendre le verrou partagé de renouvellement.
+        // Vérifier aussi dans sa closure, à la dernière frontière HTTP.
+        match self.session.call(|client| {
+            if !self.daemon_alive.load(Ordering::SeqCst)
+                || self
+                    .cancelled
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains_key(&message.id)
+                || message
+                    .deadline_at
+                    .is_some_and(|deadline| deadline <= unix_now())
+                || self
+                    .requests
+                    .get(&message.id)
+                    .is_some_and(|request| request.deadline_at <= unix_now() as i64)
+            {
+                return Err(ContractError::Transport(
+                    "remise annulée, périmée ou autorité déconnectée avant dispatch".into(),
+                ));
+            }
+            client.dispatch(&command)
+        }) {
             Ok(result) => {
                 info!(
                     "message {} remis au fil {} (séquence {})",
@@ -1382,10 +1658,15 @@ impl LinkWorker {
                 );
                 Ok(())
             }
-            // Refus de forme : le tour n'existera jamais, l'attente est retirée.
-            // Une panne réseau, elle, laisse l'attente : le tour a peut-être
-            // démarré et sa réponse doit encore pouvoir revenir.
-            Err(error @ (ContractError::Http { .. } | ContractError::InvalidShape { .. })) => {
+            // Seuls ces refus explicites attestent une commande rejetée.
+            // JSON/sequence invalides APRÈS 2xx, 5xx ou coupure : le tour a pu
+            // démarrer, sa corrélation doit survivre sans réexécution.
+            Err(
+                error @ ContractError::Http {
+                    status: 400 | 404 | 405 | 413 | 415 | 422,
+                    ..
+                },
+            ) => {
                 self.state.pending.retain(|p| p.request_id != message.id);
                 let _ = self.state.save(&self.state_path);
                 Err(error.to_string())
@@ -1394,47 +1675,9 @@ impl LinkWorker {
         }
     }
 
-    /// Attend un fil libre et rend, lus au même instant : l'ancre (dernier
-    /// tour clos) et la politique du fil. La politique n'est pas mise en cache :
-    /// entre deux sondages l'humain peut la changer, et la valeur périmée
-    /// serait refusée par t3code — ou, pire, figerait des droits.
-    fn wait_idle(&self) -> Result<(Option<String>, String, String), String> {
-        let deadline = Instant::now() + self.turn_wait;
-        loop {
-            let snapshot = self
-                .session
-                .call(|client| client.snapshot())
-                .map_err(|e| e.to_string())?;
-            let Some(thread) = snapshot.threads.iter().find(|t| t.id == self.thread_id) else {
-                return Err("fil disparu du snapshot".to_string());
-            };
-            if !thread.is_live() {
-                return Err("fil archivé".to_string());
-            }
-            let busy = thread
-                .session
-                .as_ref()
-                .is_some_and(|s| s.active_turn_id.is_some());
-            if !busy {
-                return Ok((
-                    thread.latest_turn.as_ref().map(|t| t.turn_id.clone()),
-                    thread.runtime_mode.clone(),
-                    thread.interaction_mode.clone(),
-                ));
-            }
-            if Instant::now() >= deadline {
-                return Err(format!(
-                    "fil occupé depuis plus de {:?} ; remise refusée",
-                    self.turn_wait
-                ));
-            }
-            thread::sleep(Duration::from_millis(500));
-        }
-    }
-
     /// Relit le fil (page bornée, élargie si l'ancre manque), projette le
     /// journal et clôt les remises dont la réponse est complète.
-    fn refresh(&mut self, summary: &ThreadSummary) {
+    fn refresh(&mut self, summary: &ThreadSummary) -> bool {
         let mut limit = DETAIL_PAGE;
         let detail = loop {
             let fetched = self
@@ -1444,7 +1687,7 @@ impl LinkWorker {
                 Ok(detail) => detail,
                 Err(e) => {
                     warn!("détail du fil {} : {e}", self.thread_id);
-                    return;
+                    return false;
                 }
             };
             let anchors_missing = self.state.pending.iter().any(|p| {
@@ -1466,122 +1709,209 @@ impl LinkWorker {
         self.settle_pending(&detail, summary);
         if let Err(e) = self.state.save(&self.state_path) {
             warn!("état du fil {} : {e}", self.thread_id);
+            return false;
         }
+        self.journal_caught_up && !self.journal_dirty && !self.journal_failed.load(Ordering::SeqCst)
     }
 
     /// Repère d'installation : au premier regard, l'historique antérieur est
     /// mémorisé sans être rejoué. Ensuite, chaque message nouveau est projeté.
     fn project_journal(&mut self, detail: &ThreadDetail, summary: &ThreadSummary) {
-        let seen: HashSet<&str> = self.state.seen.iter().map(String::as_str).collect();
-        let mut new_seen = Vec::new();
-        let mut ended = Vec::new();
+        self.confirm_journal();
+        self.journal_dirty = true;
+        if !self.journal_caught_up {
+            return;
+        }
         if !self.state.seeded {
-            new_seen.extend(detail.messages.iter().map(|m| m.id.clone()));
-            ended.extend(detail.messages.iter().filter_map(|m| m.turn_id.clone()));
-            self.state.seeded = true;
-        } else {
-            let final_turn = |turn_id: &str| {
-                summary
-                    .latest_turn
-                    .as_ref()
-                    .is_none_or(|latest| latest.turn_id != turn_id || turn_is_final(&latest.state))
-            };
-            let mine: HashSet<&str> = self
-                .state
-                .pending
-                .iter()
-                .map(|p| p.message_id.as_str())
-                .collect();
-            let ended_turns: HashSet<&str> =
-                self.state.ended_turns.iter().map(String::as_str).collect();
             for message in &detail.messages {
-                if seen.contains(message.id.as_str()) {
-                    continue;
-                }
-                let text = message.text.chars().take(4096).collect::<String>();
-                let write = match message.role.as_str() {
-                    "user" => {
-                        // Nos propres remises sont déjà journalisées par record_interactive_turn.
-                        if mine.contains(message.id.as_str()) {
-                            new_seen.push(message.id.clone());
-                            continue;
-                        }
-                        self.journal.enqueue(
-                            "turn_start",
-                            Some(&message.id),
-                            serde_json::json!({"from": "human", "body": text}),
-                        )
-                    }
-                    _ => {
-                        if message.streaming {
-                            continue;
-                        }
-                        self.journal.enqueue(
-                            "update",
-                            Some(&message.id),
-                            serde_json::json!({"kind": "text", "text": text}),
-                        )
-                    }
+                self.state.remember(&message.id);
+            }
+            self.state
+                .ended_turns
+                .extend(detail.messages.iter().filter_map(|m| m.turn_id.clone()));
+            self.state.seeded = true;
+            self.journal_dirty = false;
+            return;
+        }
+        if self.journal_failed.load(Ordering::SeqCst) {
+            return;
+        }
+        let final_turn = |turn_id: &str| {
+            summary
+                .latest_turn
+                .as_ref()
+                .is_none_or(|latest| latest.turn_id != turn_id || turn_is_final(&latest.state))
+        };
+        for message in &detail.messages {
+            if message.streaming {
+                continue;
+            }
+            if !self.state.seen.contains(&message.id)
+                && !self.journal_inflight.contains(&message.id)
+            {
+                let (mut event, mut payload) = if message.role == "user" {
+                    let from = self
+                        .state
+                        .pending
+                        .iter()
+                        .find(|p| p.message_id == message.id)
+                        .map(|p| p.from.as_str())
+                        .unwrap_or("human");
+                    (
+                        "turn_start",
+                        serde_json::json!({"from": from, "body": message.text}),
+                    )
+                } else {
+                    (
+                        "update",
+                        serde_json::json!({"kind": "text", "text": message.text}),
+                    )
                 };
-                if let Err(e) = write {
-                    warn!("journal du fil {} : {e}", self.thread_id);
+                // La borne concerne le JSON échappé, pas les caractères UTF-8.
+                // Réserver l'enveloppe sous la limite lecteur existante de 4 Mio.
+                if serde_json::to_vec(&payload).map_or(true, |v| v.len() > 4 * 1024 * 1024 - 4096) {
+                    event = "error";
+                    payload = serde_json::json!({"gap": true, "reason": "sortie t3code au-delà de la borne de journalisation (4 Mio)", "source_bytes": message.text.len()});
                 }
-                new_seen.push(message.id.clone());
-                if let Some(turn_id) = message.turn_id.as_deref()
-                    && !ended_turns.contains(turn_id)
-                    && !ended.iter().any(|t| t == turn_id)
-                    && final_turn(turn_id)
-                {
-                    let _ =
-                        self.journal
-                            .enqueue("turn_end", Some(&message.id), serde_json::json!({}));
-                    ended.push(turn_id.to_string());
+                match self.journal.enqueue(event, Some(&message.id), payload) {
+                    Ok(()) => {
+                        self.journal_inflight.insert(message.id.clone());
+                    }
+                    Err(e) => {
+                        warn!("journal du fil {} : {e}", self.thread_id);
+                        // Ne pas dépasser un trou : sinon B peut être écrit
+                        // avant A lorsque la file se libère pendant ce lot.
+                        return;
+                    }
+                }
+            }
+            if let Some(turn_id) = message.turn_id.as_deref()
+                && !self.state.ended_turns.iter().any(|id| id == turn_id)
+                && !self.journal_inflight.contains(&format!("end:{turn_id}"))
+                && final_turn(turn_id)
+            {
+                match self.journal.enqueue(
+                    "turn_end",
+                    Some(&message.id),
+                    serde_json::json!({"t3_turn_id": turn_id}),
+                ) {
+                    Ok(()) => {
+                        self.journal_inflight.insert(format!("end:{turn_id}"));
+                    }
+                    Err(e) => {
+                        warn!("fin de tour non journalisée : {e}");
+                        return;
+                    }
                 }
             }
         }
-        for id in new_seen {
-            self.state.remember(&id);
+        self.journal_dirty = false;
+    }
+
+    /// Le flux live est consommé par AttachRelayWorker. Réutiliser le lecteur
+    /// incrémental du journal pour attester l'append, y compris après un crash
+    /// entre flush et sauvegarde du curseur, sans voler les événements d'attach.
+    fn confirm_journal(&mut self) {
+        let Ok(entries) = std::fs::read_dir(&self.journal_dir) else {
+            return;
+        };
+        self.journal_caught_up = true;
+        let mut paths: Vec<_> = entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+            .collect();
+        paths.sort();
+        let mut changed = false;
+        for path in paths {
+            let reader = self
+                .journal_readers
+                .entry(path.clone())
+                .or_insert_with(|| IncrementalJournalReader::new(path.clone()));
+            // Budget par tour de boucle ; les lecteurs gardent leur position.
+            let items = match reader.read_chunk(4 * 1024 * 1024) {
+                Ok(items) => items,
+                Err(e) => {
+                    self.journal_caught_up = false;
+                    warn!("confirmation journal : {e}");
+                    break;
+                }
+            };
+            for item in items {
+                let JournalReadItem::Event(entry) = item else {
+                    continue;
+                };
+                let Ok(value) = serde_json::from_slice::<serde_json::Value>(&entry.bytes) else {
+                    continue;
+                };
+                let Some(id) = value["message_id"].as_str() else {
+                    continue;
+                };
+                match value["event"].as_str() {
+                    Some("turn_start" | "update") => {
+                        if !self.state.seen.iter().any(|seen| seen == id) {
+                            self.state.remember(id);
+                            changed = true;
+                        }
+                        self.journal_inflight.remove(id);
+                    }
+                    Some("error") if value["payload"]["gap"] == true => {
+                        if !self.state.seen.iter().any(|seen| seen == id) {
+                            self.state.remember(id);
+                            changed = true;
+                        }
+                        self.journal_inflight.remove(id);
+                    }
+                    Some("turn_end") => {
+                        if let Some(turn) = value["payload"]["t3_turn_id"].as_str() {
+                            if !self.state.ended_turns.iter().any(|ended| ended == turn) {
+                                self.state.ended_turns.push(turn.to_string());
+                                changed = true;
+                            }
+                            self.journal_inflight.remove(&format!("end:{turn}"));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if std::fs::metadata(&path).map_or(true, |m| reader.next_offset() < m.len()) {
+                self.journal_caught_up = false;
+                break;
+            }
         }
-        self.state.ended_turns.extend(ended);
         if self.state.ended_turns.len() > SEEN_BOUND {
-            let excess = self.state.ended_turns.len() - SEEN_BOUND;
-            self.state.ended_turns.drain(..excess);
+            self.state
+                .ended_turns
+                .drain(..self.state.ended_turns.len() - SEEN_BOUND);
+        }
+        if changed && let Err(e) = self.state.save(&self.state_path) {
+            warn!("curseur journal non sauvegardé : {e}");
         }
     }
 
     fn settle_pending(&mut self, detail: &ThreadDetail, summary: &ThreadSummary) {
-        for mut pending in std::mem::take(&mut self.state.pending) {
-            let verdict = correlate(detail, summary, &pending);
-            let keep = match verdict {
+        // La collection reste entière pendant chaque remplacement atomique :
+        // une panne ne peut pas laisser sur disque un simple préfixe traité.
+        for pending in &mut self.state.pending {
+            if pending.response.is_some() {
+                continue;
+            }
+            let verdict = correlate(detail, summary, pending);
+            match verdict {
                 Correlation::Answered(text) => {
-                    let mut reply = bridget_core::BridgetMessage::new(
-                        self.agent_id.clone(),
-                        pending.from.clone(),
-                        text,
-                    );
-                    // Identifiant stable : si le pont meurt entre l'envoi et la
-                    // sauvegarde, le rejeu porte le même identifiant et ne crée
-                    // pas une seconde réponse.
-                    reply.id = reply_id(&pending.request_id);
-                    reply.in_reply_to = Some(pending.request_id.clone());
-                    info!(
-                        "réponse du fil {} renvoyée à {} (demande {})",
-                        self.thread_id, pending.from, pending.request_id
-                    );
-                    send_wrapper_message(&self.writer, WrapperToDaemon::Send(reply));
-                    false
+                    pending.response = Some(text);
                 }
-                Correlation::Waiting => true,
+                Correlation::Waiting => {}
                 Correlation::Ambiguous | Correlation::Missing => {
-                    pending.attempts += 1;
-                    if pending.attempts >= SETTLE_ATTEMPTS {
+                    pending.attempts = pending.attempts.saturating_add(1);
+                    if pending.attempts == SETTLE_ATTEMPTS {
                         let reason = match verdict {
                             Correlation::Ambiguous => format!(
                                 "fil {} au repos sans appariement certain entre messages et tours après {} lectures ; demande laissée sans réponse plutôt qu'attribuée au tour d'autrui",
                                 self.thread_id, pending.attempts
                             ),
                             _ => format!(
-                                "message {} introuvable dans le fil t3code après {} lectures ; réponse abandonnée",
+                                "message {} introuvable dans le fil t3code après {} lectures ; attente conservée sans réponse inventée",
                                 pending.message_id, pending.attempts
                             ),
                         };
@@ -1591,21 +1921,65 @@ impl LinkWorker {
                             Some(&pending.request_id),
                             serde_json::json!({"reason": reason}),
                         );
-                        false
-                    } else {
-                        true
                     }
                 }
-            };
-            if keep {
-                self.state.pending.push(pending);
-            }
-            // Sauvegarde après CHAQUE décision : une panne ne peut pas rejouer
-            // une réponse déjà émise ni perdre celles qui restent.
-            if let Err(e) = self.state.save(&self.state_path) {
-                warn!("état du fil {} : {e}", self.thread_id);
             }
         }
+        // Une réponse n'est jamais expédiée avant sa conservation durable.
+        if let Err(e) = self.state.save(&self.state_path) {
+            warn!("état du fil {} : {e}", self.thread_id);
+            return;
+        }
+        self.send_ready_responses();
+    }
+
+    fn send_ready_responses(&mut self) {
+        if !self.daemon_alive.load(Ordering::SeqCst) {
+            return;
+        }
+        // Également requis à la reprise si une sauvegarde précédente a échoué.
+        if let Err(e) = self.state.save(&self.state_path) {
+            warn!("réponses non persistées, envoi différé : {e}");
+            return;
+        }
+        for pending in &self.state.pending {
+            let Some(text) = pending.response.as_ref() else {
+                continue;
+            };
+            if self
+                .response_sent
+                .get(&pending.request_id)
+                .is_some_and(|sent| sent.elapsed() < RECONNECT_BACKOFF)
+            {
+                continue;
+            }
+            let mut reply = bridget_core::BridgetMessage::new(
+                self.agent_id.clone(),
+                pending.from.clone(),
+                text.clone(),
+            );
+            reply.id = reply_id(&pending.request_id);
+            reply.in_reply_to = Some(pending.request_id.clone());
+            send_wrapper_message(&self.writer, WrapperToDaemon::Send(reply));
+            self.response_sent
+                .insert(pending.request_id.clone(), Instant::now());
+        }
+    }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn delivery_message(frame: &DaemonToWrapper) -> &bridget_core::BridgetMessage {
+    match frame {
+        DaemonToWrapper::Deliver(message) | DaemonToWrapper::DeliverIdempotent { message, .. } => {
+            message
+        }
+        _ => unreachable!("seules les remises sont mises en attente"),
     }
 }
 
@@ -1779,6 +2153,529 @@ mod tests {
     use super::*;
     use crate::t3code_contract::{LatestTurn, Message};
 
+    // Réutilise LinkWorker, Session et socketpair : aucun daemon ou compte réel.
+    fn worker099() -> (LinkWorker, UnixStream) {
+        let root = std::env::temp_dir().join(format!("t3-spec099-{}", uuid::Uuid::new_v4()));
+        let paths = Paths::at(root.clone(), root.join("bridget.sock"));
+        paths.ensure().unwrap();
+        let runtime = ServerRuntime {
+            port: 1,
+            pid: std::process::id(),
+        };
+        let session = Arc::new(Session::new(
+            &paths,
+            runtime,
+            TokenFile {
+                installation_id: "test".into(),
+                label: "test".into(),
+                session_id: "test".into(),
+                token: "synthetic".into(),
+                expires_at: String::new(),
+                issued_at: String::new(),
+            },
+        ));
+        let (stream, peer) = UnixStream::pair().unwrap();
+        let worker = LinkWorker::new(
+            &paths,
+            session,
+            &summary(None),
+            stable_uuid("test"),
+            stable_uuid("instance:test"),
+            BufWriter::new(stream.try_clone().unwrap()),
+            stream,
+        )
+        .unwrap();
+        (worker, peer)
+    }
+
+    #[test]
+    fn spec099_reponse_non_acquittee_et_autres_attentes_survivent() {
+        let (mut worker, _peer) = worker099();
+        let first = pending("uA", None);
+        let mut second = pending("uB", None);
+        second.request_id = "other".into();
+        worker.state.pending = vec![first, second];
+        let detail = ThreadDetail {
+            messages: vec![
+                message("uA", "user", "nous", None, false),
+                message("aA", "assistant", "réponse durable", Some("tA"), false),
+            ],
+            latest_turn: None,
+        };
+        worker.settle_pending(&detail, &summary(Some(("tA", "completed"))));
+        let saved = ThreadState::load(&worker.state_path);
+        assert_eq!(
+            saved.pending.len(),
+            2,
+            "aucune attente ne disparaît avant confirmation"
+        );
+        assert!(
+            serde_json::to_string(&saved)
+                .unwrap()
+                .contains("réponse durable")
+        );
+        worker.handle_frame(DaemonToWrapper::Nack {
+            id: reply_id("req"),
+            reason: "absent".into(),
+        });
+        assert_eq!(worker.state.pending.len(), 2);
+        worker.handle_frame(DaemonToWrapper::RequestList { requests: vec![] });
+        assert_eq!(
+            worker.state.pending.len(),
+            2,
+            "une liste bornée vide ne prouve rien"
+        );
+        worker.handle_frame(DaemonToWrapper::Ack {
+            id: reply_id("req"),
+        });
+        assert_eq!(ThreadState::load(&worker.state_path).pending.len(), 1);
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec099_journal_conserve_dix_mille_caracteres_unicode() {
+        let (mut worker, _peer) = worker099();
+        worker.state.seeded = true;
+        let text = "é🦀漢".repeat(4000);
+        let detail = ThreadDetail {
+            messages: vec![message("long", "assistant", &text, Some("t"), false)],
+            latest_turn: None,
+        };
+        worker.project_journal(&detail, &summary(None));
+        worker.journal.stop();
+        let root = worker
+            .state_path
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+        let folder = root.join("sessions").join(&worker.agent_id);
+        let events: Vec<_> = std::fs::read_dir(folder)
+            .unwrap()
+            .flat_map(|p| bridget_transport::journal::valid_events(&p.unwrap().path()))
+            .collect();
+        assert!(
+            events.iter().any(|v| v["payload"]["text"] == text),
+            "sortie intégrale"
+        );
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec099_journal_refuse_n_avance_pas_le_repere() {
+        let (mut worker, _peer) = worker099();
+        worker.state.seeded = true;
+        worker.journal.stop();
+        let detail = ThreadDetail {
+            messages: vec![message("lost", "assistant", "texte", Some("t"), false)],
+            latest_turn: None,
+        };
+        worker.project_journal(&detail, &summary(None));
+        assert!(!worker.state.seen.iter().any(|id| id == "lost"));
+        assert!(!worker.state.ended_turns.iter().any(|id| id == "t"));
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec099_controles_retirent_seulement_la_demande_annulee() {
+        let (mut worker, _peer) = worker099();
+        let mut cancelled = bridget_core::BridgetMessage::new("alice", "bob", "annulée");
+        cancelled.id = "cancelled".into();
+        let mut next = cancelled.clone();
+        next.id = "next".into();
+        let started = Instant::now();
+        worker.handle_frame(DaemonToWrapper::Deliver(cancelled));
+        worker.handle_frame(DaemonToWrapper::Deliver(next));
+        worker.handle_frame(DaemonToWrapper::CancelDelivery {
+            id: "cancelled".into(),
+            reason: "test".into(),
+        });
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "aucune attente fournisseur dans le traitement des contrôles"
+        );
+        assert_eq!(worker.queue.len(), 1);
+        assert_eq!(delivery_message(&worker.queue[0].0).id, "next");
+        worker.handle_frame(DaemonToWrapper::Disconnect);
+        let (_tx, inbox) = mpsc::channel();
+        worker.drive_queue(&inbox);
+        assert!(!worker.daemon_alive.load(Ordering::SeqCst));
+        assert!(
+            worker.state.pending.is_empty(),
+            "aucune acceptation après disparition de l'autorité"
+        );
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec099_peremption_demande_et_tour_avant_tout_http() {
+        let (mut worker, _peer) = worker099();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        worker.session.reset_runtime(ServerRuntime {
+            port: listener.local_addr().unwrap().port(),
+            pid: std::process::id(),
+        });
+        let mut message = bridget_core::BridgetMessage::new("alice", "bob", "périmée");
+        message.deadline_at = Some(unix_now().saturating_sub(1));
+        worker.handle_frame(DaemonToWrapper::Deliver(message.clone()));
+        let (_tx, inbox) = mpsc::channel();
+        worker.drive_queue(&inbox);
+        assert!(worker.queue.is_empty());
+        message.deadline_at = Some(unix_now() + 1000);
+        message.reply_timeout = Some(0);
+        worker.handle_frame(DaemonToWrapper::Deliver(message.clone()));
+        worker.drive_queue(&inbox);
+        assert!(
+            worker.queue.is_empty(),
+            "l'échéance demande peut précéder le tour"
+        );
+        message.reply_timeout = None;
+        worker.handle_frame(DaemonToWrapper::Deliver(message.clone()));
+        worker.requests.insert(
+            message.id.clone(),
+            RequestInfo {
+                id: message.id,
+                sender: "alice".into(),
+                target: worker.agent_id.clone(),
+                state: "open".into(),
+                created_at: unix_now() as i64 - 100,
+                deadline_at: unix_now() as i64 - 1,
+                cancel_reason: None,
+                deferred_reminder_level: None,
+                deferred_reminder_at: None,
+            },
+        );
+        worker.drive_queue(&inbox);
+        assert!(worker.queue.is_empty());
+        assert!(
+            matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+            "aucun appel fournisseur pour un travail périmé"
+        );
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec099_journal_echec_apres_enqueue_ne_confirme_rien() {
+        let (mut worker, _peer) = worker099();
+        worker.state.seeded = true;
+        let date = &contract::iso_now()[..10];
+        // SessionJournal ouvre son fichier lors du premier append : rendre
+        // ce chemin inouvrable provoque un échec réel APRÈS admission en file.
+        std::fs::create_dir(worker.journal_dir.join(format!("{date}.jsonl"))).unwrap();
+        let detail = ThreadDetail {
+            messages: vec![message("failed", "assistant", "texte", Some("t"), false)],
+            latest_turn: None,
+        };
+        worker
+            .journal
+            .enqueue(
+                "update",
+                Some("failed"),
+                serde_json::json!({"kind": "text", "text": "texte"}),
+            )
+            .unwrap();
+        worker.journal.stop();
+        assert!(worker.journal_failed.load(Ordering::SeqCst));
+        worker.project_journal(&detail, &summary(None));
+        worker.confirm_journal();
+        assert!(!worker.state.seen.contains(&"failed".to_string()));
+        assert!(
+            !ThreadState::load(&worker.state_path)
+                .seen
+                .contains(&"failed".to_string())
+        );
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec099_reprise_journal_apres_flush_sans_curseur_ne_duplique_pas() {
+        let (mut worker, _peer) = worker099();
+        worker.state.seeded = true;
+        let detail = ThreadDetail {
+            messages: vec![message(
+                "once",
+                "assistant",
+                "é🦀".repeat(6000).as_str(),
+                Some("t"),
+                false,
+            )],
+            latest_turn: None,
+        };
+        worker.project_journal(&detail, &summary(None));
+        worker.journal.stop();
+        assert!(
+            !worker.state.seen.contains(&"once".to_string()),
+            "enqueue seul ne confirme pas"
+        );
+        // Simuler le redémarrage entre append et conservation du curseur.
+        worker.journal_inflight.clear();
+        worker.journal_readers.clear();
+        worker.project_journal(&detail, &summary(None));
+        assert!(worker.state.seen.contains(&"once".to_string()));
+        assert!(worker.journal_inflight.is_empty(), "rien à réémettre");
+        let events: Vec<_> = std::fs::read_dir(&worker.journal_dir)
+            .unwrap()
+            .flat_map(|p| bridget_transport::journal::valid_events(&p.unwrap().path()))
+            .collect();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|v| v["event"] == "update" && v["message_id"] == "once")
+                .count(),
+            1
+        );
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec099_reponse_rechargee_sans_reexecution_et_ack_perdu_reconcilie() {
+        let (mut worker, _peer) = worker099();
+        let mut ready = pending("uA", None);
+        ready.response = Some("déjà produite".into());
+        worker.state.pending.push(ready);
+        worker.state.save(&worker.state_path).unwrap();
+        worker.state = ThreadState::load(&worker.state_path);
+        worker.send_ready_responses();
+        assert_eq!(
+            worker.state.pending.len(),
+            1,
+            "l'envoi ne vaut pas acquittement"
+        );
+        worker.handle_frame(DaemonToWrapper::RequestList {
+            requests: vec![RequestInfo {
+                id: "req".into(),
+                sender: "alice".into(),
+                target: worker.agent_id.clone(),
+                state: "answered".into(),
+                created_at: 0,
+                deadline_at: i64::MAX,
+                cancel_reason: None,
+                deferred_reminder_level: None,
+                deferred_reminder_at: None,
+            }],
+        });
+        assert!(ThreadState::load(&worker.state_path).pending.is_empty());
+        assert!(
+            worker.queue.is_empty(),
+            "la reprise de réponse ne crée aucune commande fournisseur"
+        );
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec099_ancien_etat_pending_reste_lisible() {
+        let state: ThreadState = serde_json::from_value(serde_json::json!({"pending": [{
+            "request_id": "legacy", "from": "alice", "message_id": "u", "anchor_turn_id": null,
+            "dispatched_at": "2026-09-16T00:00:00Z", "attempts": 0
+        }]}))
+        .unwrap();
+        assert!(state.pending[0].response.is_none());
+    }
+
+    #[test]
+    fn spec099_annulation_signalee_par_lecteur_interdit_la_frontiere_http() {
+        let (mut worker, _peer) = worker099();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        worker.session.reset_runtime(ServerRuntime {
+            port: listener.local_addr().unwrap().port(),
+            pid: std::process::id(),
+        });
+        let message =
+            bridget_core::BridgetMessage::new("alice", &worker.agent_id, "ne démarre pas");
+        // Le lecteur a reçu CancelDelivery mais sa trame n'a pas encore été
+        // traitée par le worker occupé à persister une remise.
+        worker
+            .cancelled
+            .lock()
+            .unwrap()
+            .insert(message.id.clone(), Instant::now());
+        assert!(
+            worker
+                .dispatch_with_id(&message, None, &summary(None))
+                .is_err()
+        );
+        assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec099_journal_hors_borne_rend_une_lacune_explicite() {
+        let (mut worker, _peer) = worker099();
+        worker.state.seeded = true;
+        // Les contrôles s'échappent sur six octets en JSON : la limite doit
+        // porter sur la ligne sérialisée, pas la longueur du texte source.
+        let detail = ThreadDetail {
+            messages: vec![message(
+                "oversized",
+                "assistant",
+                &"\u{1}".repeat(800_000),
+                None,
+                false,
+            )],
+            latest_turn: None,
+        };
+        worker.project_journal(&detail, &summary(None));
+        worker.journal.stop();
+        worker.confirm_journal();
+        let events: Vec<_> = std::fs::read_dir(&worker.journal_dir)
+            .unwrap()
+            .flat_map(|p| bridget_transport::journal::valid_events(&p.unwrap().path()))
+            .collect();
+        assert!(
+            events
+                .iter()
+                .any(|v| v["event"] == "error" && v["payload"]["gap"] == true)
+        );
+        assert!(!events.iter().any(|v| v["event"] == "update"));
+        assert!(
+            worker.state.seen.contains(&"oversized".to_string()),
+            "la lacune n'est confirmée qu'après append"
+        );
+        worker.relay.shutdown();
+    }
+
+    // Aucun équivalent HTTP dans ce module : un seul échange sur boucle
+    // locale, délai d'attente borné, aucun sous-processus ni fournisseur réel.
+    fn http_once099(worker: &LinkWorker, status: u16, body: String) -> thread::JoinHandle<String> {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        worker.session.reset_runtime(ServerRuntime {
+            port: listener.local_addr().unwrap().port(),
+            pid: std::process::id(),
+        });
+        thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(5))
+                    }
+                    _ => return String::new(),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut headers = String::new();
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap();
+                }
+                headers.push_str(&line);
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            let mut content = vec![0; length];
+            reader.read_exact(&mut content).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            headers + &String::from_utf8(content).unwrap()
+        })
+    }
+
+    #[test]
+    fn spec099_refus_publication_est_repris_sur_tick_inchange() {
+        let (mut worker, _peer) = worker099();
+        worker.state.seeded = true;
+        let summary = summary(None);
+        worker.last_key = summary.change_key();
+        let detail = ThreadDetail {
+            messages: vec![message("retry", "assistant", "conservé", Some("t"), false)],
+            latest_turn: None,
+        };
+        // Même branche Err que queueFull, sans failure sink asynchrone : cet
+        // oracle n'affirme pas provoquer une saturation réelle de la file.
+        worker.journal.stop();
+        worker.project_journal(&detail, &summary);
+        worker.confirm_journal();
+        assert!(!worker.journal_failed.load(Ordering::SeqCst));
+        assert!(worker.journal_inflight.is_empty());
+        worker.journal = Arc::new(
+            JournalWriter::start_with_live_feed_and_failure(
+                worker.journal_dir.parent().unwrap(),
+                &worker.agent_id,
+                "retry-instance",
+                Arc::new(|_| {}),
+                None,
+            )
+            .unwrap(),
+        );
+        let server = http_once099(&worker, 200, serde_json::json!({"thread": {"messages": [{"id": "retry", "role": "assistant", "text": "conservé", "streaming": false, "turnId": "t"}]}}).to_string());
+        worker.handle_event(LinkEvent::Tick(Box::new(summary)));
+        worker.journal.stop();
+        let request = server.join().unwrap();
+        worker.confirm_journal();
+        worker.relay.shutdown();
+        assert!(
+            request.starts_with("GET /api/orchestration/threads/"),
+            "un refus ne fige pas la clé du fil"
+        );
+        assert!(worker.state.seen.contains(&"retry".to_string()));
+        assert!(worker.state.ended_turns.contains(&"t".to_string()));
+    }
+
+    #[test]
+    fn spec099_post_accepte_issue_illisible_conserve_la_correlation() {
+        for (status, response) in [(200, "{}"), (500, "erreur après acceptation")] {
+            let (mut worker, _peer) = worker099();
+            let request =
+                bridget_core::BridgetMessage::new("alice", &worker.agent_id, "travail accepté");
+            let server = http_once099(&worker, status, response.into());
+            assert!(
+                worker
+                    .dispatch_with_id(&request, None, &summary(None))
+                    .is_err()
+            );
+            let accepted = server.join().unwrap();
+            assert!(accepted.starts_with("POST /api/orchestration/dispatch"));
+            let saved = ThreadState::load(&worker.state_path);
+            assert_eq!(
+                saved.pending.len(),
+                1,
+                "une issue HTTP inconnue ne prouve pas le refus du tour"
+            );
+            let detail = ThreadDetail {
+                messages: vec![
+                    message(&saved.pending[0].message_id, "user", "accepté", None, false),
+                    message("answer", "assistant", "réponse récupérée", Some("t"), false),
+                ],
+                latest_turn: None,
+            };
+            worker.settle_pending(&detail, &summary(Some(("t", "completed"))));
+            assert_eq!(
+                worker.state.pending[0].response.as_deref(),
+                Some("réponse récupérée")
+            );
+            worker.journal.stop();
+            worker.relay.shutdown();
+        }
+    }
+
     fn message(id: &str, role: &str, text: &str, turn: Option<&str>, streaming: bool) -> Message {
         Message {
             id: id.to_string(),
@@ -1819,6 +2716,7 @@ mod tests {
             anchor_turn_id: anchor.map(str::to_string),
             dispatched_at: String::new(),
             attempts: 0,
+            response: None,
         }
     }
 

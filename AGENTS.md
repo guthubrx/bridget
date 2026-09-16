@@ -1,10 +1,10 @@
 <!-- SPECKIT START -->
-Plan actif : specs/090-codex-interactif/plan.md (socle : session 089).
+Plan actif : specs/100-observation-partage/plan.md (socle : sessions 089 et 099).
 Périmètre : communication inter-agents, observation et fédération SSH.
 Ne pas lancer de daemon, wrapper ou script de déploiement avant configuration
 explicite d'un home/socket isolé. L'installation historique reste hors périmètre.
-Sélection SpecKit : SPECIFY_FEATURE=089-communication-core lorsque le script
-exige un préfixe numérique ; la branche Git reste session-089-communication-core.
+Sélection SpecKit : SPECIFY_FEATURE=100-observation-partage lorsque le script
+exige un préfixe numérique ; branche session-100-observation-partage.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->

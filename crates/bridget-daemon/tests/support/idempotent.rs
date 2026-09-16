@@ -7,9 +7,12 @@ use bridget_daemon::store::Store;
 #[cfg(feature = "test-support")]
 use bridget_daemon::test_sync::DIRECTORY_ENV;
 use bridget_transport::protocol::{
-    CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue, decode, encode,
+    CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole, IdempotencyIssue,
+    IdentityCredential, decode, encode,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
@@ -20,7 +23,7 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Mutex, Once, OnceLock, mpsc};
+use std::sync::{Arc, Mutex, Once, OnceLock, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -182,9 +185,11 @@ pub fn run_isolated(root: &Path, args: &[&str], linked: bool) -> std::process::O
     let mut command = isolated_command(root);
     command.args(args);
     if linked {
+        let instance = private_fixture_instance(&socket(root), ACTOR)
+            .unwrap_or_else(|| "shared-cli-mcp-instance".into());
         command
             .env("BRIDGET_AGENT_ID", ACTOR)
-            .env("BRIDGET_AGENT_INSTANCE_ID", "shared-cli-mcp-instance");
+            .env("BRIDGET_AGENT_INSTANCE_ID", instance);
     }
     run_command(command)
 }
@@ -336,6 +341,9 @@ impl Drop for WrapperProcess {
 pub struct Client {
     pub reader: BufReader<UnixStream>,
     pub writer: BufWriter<UnixStream>,
+    /// Les clients concurrents partagent le vrai owner ; le dernier client
+    /// libère sa connexion. Aucun owner artificiel n'est créé dans le daemon.
+    pub owner: Option<Arc<Client>>,
 }
 
 pub struct McpProcess {
@@ -429,6 +437,7 @@ impl Client {
         Self {
             reader,
             writer: BufWriter::new(stream),
+            owner: None,
         }
     }
 
@@ -720,11 +729,80 @@ pub fn register_agent_as(socket: &Path, agent_id: &str, instance_id: &str) -> Cl
         journal_available: None,
         turn_in_progress: false,
     });
-    assert!(matches!(
-        recipient.receive(),
-        DaemonToWrapper::Registered { .. }
-    ));
+    let DaemonToWrapper::Registered {
+        agent_id: registered,
+        credential: Some(credential),
+    } = recipient.receive()
+    else {
+        panic!("inscription propriétaire avec preuve attendue");
+    };
+    assert_eq!(registered, agent_id);
+    save_fixture_credential(socket, agent_id, instance_id, credential);
     recipient
+}
+
+/// Reprend le format privé du wrapper, sans utiliser un raccourci
+/// d'autorisation : credential vient obligatoirement du vrai Registered.
+pub fn save_fixture_credential(
+    socket: &Path,
+    agent_id: &str,
+    instance_id: &str,
+    credential: IdentityCredential,
+) {
+    let path = socket.parent().unwrap().join("agent-names").join(format!(
+        "proof-{:x}.json",
+        Sha256::digest(instance_id.as_bytes())
+    ));
+    bridget_transport::fsutil::write_private_file_atomic(
+        &path,
+        &serde_json::to_vec(&serde_json::json!({
+            "agent_id": agent_id, "instance_id": instance_id, "credential": credential,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+pub fn attest_agent(socket: &Path, client: &mut Client, agent_id: &str, instance_id: &str) {
+    let path = socket.parent().unwrap().join("agent-names").join(format!(
+        "proof-{:x}.json",
+        Sha256::digest(instance_id.as_bytes())
+    ));
+    let proof: serde_json::Value =
+        serde_json::from_slice(&fs::read(path).expect("preuve privée émise par le owner")).unwrap();
+    assert_eq!(proof["agent_id"], agent_id);
+    assert_eq!(proof["instance_id"], instance_id);
+    let credential: IdentityCredential =
+        serde_json::from_value(proof["credential"].clone()).unwrap();
+    client.send(WrapperToDaemon::RegisterAuxiliary {
+        agent_id: agent_id.into(),
+        instance_id: instance_id.into(),
+        credential,
+    });
+    assert!(
+        matches!(client.receive(), DaemonToWrapper::Registered { agent_id: accepted, .. } if accepted == agent_id)
+    );
+}
+
+/// Retrouve l'incarnation effectivement inscrite par ce scénario dans son
+/// répertoire privé ; le fichier le plus récent remplace un ancien owner.
+fn private_fixture_instance(socket: &Path, agent_id: &str) -> Option<String> {
+    fs::read_dir(socket.parent()?.join("agent-names"))
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let value: serde_json::Value =
+                serde_json::from_slice(&fs::read(entry.path()).ok()?).ok()?;
+            if value["agent_id"] != agent_id {
+                return None;
+            }
+            Some((
+                entry.metadata().ok()?.modified().ok()?,
+                value["instance_id"].as_str()?.to_string(),
+            ))
+        })
+        .max_by_key(|entry| entry.0)
+        .map(|entry| entry.1)
 }
 
 pub fn receive_delivery(recipient: &mut Client) -> DaemonToWrapper {
@@ -756,6 +834,34 @@ pub fn assert_no_delivery(recipient: &mut Client) {
 }
 
 pub fn negotiate_client(socket: &Path) -> Client {
+    // Sérialiser seulement l'établissement du owner afin que les huit clients
+    // du test de concurrence ne remplacent pas mutuellement son incarnation.
+    static OWNERS: OnceLock<Mutex<BTreeMap<PathBuf, Weak<Client>>>> = OnceLock::new();
+    let mut owners = OWNERS
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .unwrap();
+    let mut probe = Client::connect(socket);
+    probe.send(WrapperToDaemon::ListAgents);
+    let DaemonToWrapper::AgentList { agents } = probe.receive() else {
+        panic!("annuaire attendu");
+    };
+    let actor_online = agents.iter().any(|agent| {
+        agent.agent_id == ACTOR && matches!(agent.state.as_str(), "connected" | "busy")
+    });
+    drop(probe);
+    let owner = if actor_online {
+        owners.get(socket).and_then(Weak::upgrade)
+    } else {
+        let owner = Arc::new(register_agent_as(socket, ACTOR, "shared-cli-mcp-instance"));
+        owners.insert(socket.to_path_buf(), Arc::downgrade(&owner));
+        Some(owner)
+    };
+    // Un owner déclaré par le scénario peut employer une autre incarnation.
+    // L'annuaire public ne publie pas la preuve : on lit le fichier privé
+    // effectivement enregistré par la fixture, jamais une preuve inventée.
+    let instance_id =
+        private_fixture_instance(socket, ACTOR).expect("preuve privée du owner ACTOR");
     let mut client = Client::connect(socket);
     client.send(WrapperToDaemon::RoleHandshake {
         role: ConnectionRole::Client,
@@ -775,6 +881,8 @@ pub fn negotiate_client(socket: &Path) -> Client {
         client.receive(),
         DaemonToWrapper::ClientWelcome { .. }
     ));
+    attest_agent(socket, &mut client, ACTOR, &instance_id);
+    client.owner = owner;
     client
 }
 

@@ -6,7 +6,9 @@ use bridget_transport::greffe_policy_refresh::{
     LiveMarker, MARKER_INVENTORY_VERSION, MarkerInventory, MarkerSource, StaleMarker,
     StaleMarkerReason,
 };
+use bridget_transport::protocol::IdentityCredential;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Read;
@@ -56,6 +58,120 @@ pub struct AgentPidMarker {
 pub struct ResolvedIdentity {
     pub name: String,
     pub instance_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateIdentity {
+    agent_id: String,
+    instance_id: String,
+    credential: IdentityCredential,
+}
+
+fn credential_path(root: &Path, instance_id: &str) -> PathBuf {
+    root.join("agent-names").join(format!(
+        "proof-{:x}.json",
+        Sha256::digest(instance_id.as_bytes())
+    ))
+}
+
+/// Écriture côté wrapper, donc également sur l'hôte distant d'un tunnel SSH.
+pub(crate) fn save_credential(
+    root: &Path,
+    agent_id: &str,
+    instance_id: &str,
+    credential: IdentityCredential,
+) -> Result<(), String> {
+    let path = credential_path(root, instance_id);
+    crate::environment::ensure_private_directory(root)?;
+    crate::environment::validate_private_directory_if_present(&root.join("agent-names"))?;
+    crate::environment::validate_state_file(&path, false)?;
+    let identity = PrivateIdentity {
+        agent_id: agent_id.into(),
+        instance_id: instance_id.into(),
+        credential,
+    };
+    let bytes = serde_json::to_vec(&identity).map_err(|_| "identité privée non sérialisable")?;
+    bridget_transport::fsutil::write_private_file_atomic(&path, &bytes)
+        .map_err(|_| "impossible de conserver la preuve privée de rattachement".into())
+}
+
+pub(crate) fn auxiliary_registration(
+    agent_id: &str,
+    instance_id: &str,
+    socket: &Path,
+) -> Result<bridget_transport::WrapperToDaemon, String> {
+    let root = socket.parent().ok_or("socket sans répertoire privé")?;
+    let credential = load_credential(root, agent_id, instance_id)?;
+    Ok(bridget_transport::WrapperToDaemon::RegisterAuxiliary {
+        agent_id: agent_id.into(),
+        instance_id: instance_id.into(),
+        credential,
+    })
+}
+
+fn load_credential(
+    root: &Path,
+    agent_id: &str,
+    instance_id: &str,
+) -> Result<IdentityCredential, String> {
+    let invalid = || {
+        "auxiliary_credential_required : relancez le wrapper et son client auxiliaire".to_string()
+    };
+    let path = credential_path(root, instance_id);
+    crate::environment::validate_private_directory_if_present(root).map_err(|_| invalid())?;
+    crate::environment::validate_private_directory_if_present(&root.join("agent-names"))
+        .map_err(|_| invalid())?;
+    crate::environment::validate_state_file(&path, false).map_err(|_| invalid())?;
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|_| invalid())?;
+    let metadata = file.metadata().map_err(|_| invalid())?;
+    if !metadata.is_file() || metadata.len() > MAX_MARKER_BYTES {
+        return Err(invalid());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_MARKER_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| invalid())?;
+    if bytes.len() as u64 > MAX_MARKER_BYTES {
+        return Err(invalid());
+    }
+    let identity: PrivateIdentity = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    if identity.agent_id != agent_id || identity.instance_id != instance_id {
+        return Err(invalid());
+    }
+    Ok(identity.credential)
+}
+
+/// Fixture de protocole uniquement : aucun vrai daemon n'est simulé ici.
+/// Les tests d'autorisation obtiennent leur preuve par Registered.
+#[cfg(test)]
+pub(crate) fn mock_private_identity(socket: &Path, agent_id: &str, instance_id: &str) {
+    if !socket.exists() {
+        return;
+    }
+    let root = socket.parent().unwrap();
+    assert_ne!(root, std::env::temp_dir());
+    save_credential(
+        root,
+        agent_id,
+        instance_id,
+        IdentityCredential::new(format!("mock-{}", uuid::Uuid::new_v4())),
+    )
+    .unwrap();
+}
+
+#[cfg(test)]
+pub(crate) fn mock_socket(label: &str) -> PathBuf {
+    let root = std::env::temp_dir().join(format!(
+        "bm-{label}-{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..10]
+    ));
+    crate::environment::ensure_private_directory(&root).unwrap();
+    root.join("b.sock")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -497,6 +613,37 @@ mod tests {
 
     const AGENT_A: &str = "96389249-07a4-4e29-83f0-9c46bd775021";
     const AGENT_B: &str = "da78fd70-41e8-424c-a88d-e29e2c5babcd";
+
+    #[test]
+    fn spec099_preuve_privee_atomique_bornee_sans_symlink() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("bg-proof-{}", uuid::Uuid::new_v4().simple()));
+        let credential = IdentityCredential::new("secret-fixture".into());
+        save_credential(&root, AGENT_A, "instance-1", credential.clone()).unwrap();
+        let path = credential_path(&root, "instance-1");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            load_credential(&root, AGENT_A, "instance-1").unwrap(),
+            credential
+        );
+        assert!(load_credential(&root, AGENT_B, "instance-1").is_err());
+        assert!(!format!("{credential:?}").contains("secret-fixture"));
+        fs::remove_file(&path).unwrap();
+        let target = root.join("target");
+        fs::write(&target, "ne pas modifier").unwrap();
+        symlink(&target, &path).unwrap();
+        assert!(load_credential(&root, AGENT_A, "instance-1").is_err());
+        assert!(save_credential(&root, AGENT_A, "instance-1", credential.clone()).is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "ne pas modifier");
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, vec![b'x'; MAX_MARKER_BYTES as usize + 1]).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(load_credential(&root, AGENT_A, "instance-1").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[derive(Default)]
     struct Fixture(BTreeMap<u32, (u64, u32)>);

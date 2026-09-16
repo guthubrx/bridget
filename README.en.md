@@ -51,6 +51,26 @@ An address is a UUID. `bridget rename "Team B"` or `bridget_rename` changes only
 the owning session's display name; retries, instance and history stay bound to
 the same identity. Neither a provider name nor `--from` grants another identity.
 
+### Communication guarantees and upgrade 099
+
+A CLI or MCP client acting for an agent must present the private credential
+issued to its wrapper. Knowing an agent UUID, instance or replay scope is not
+authorization. The credential rotates when the owner reconnects and old auxiliary
+connections lose their authority. It stays in the wrapper's private state,
+including when the daemon is reached through SSH, never in the public directory.
+
+Upgrade the daemon, wrappers and clients together, then reconnect the wrappers
+in the **verified namespace**. Older auxiliaries without a credential receive
+an explicit refusal; there is no fallback to declarative registration. This does
+not isolate hostile processes controlling the same operating-system account and
+able to read its private files. Do not share that account with an untrusted party.
+
+Classic delivery waits at most one second for its output lock and write, without
+holding the daemon's global state lock. A failed write does not receive a success
+acknowledgment. Partial delivery may remain indeterminate: inspect request state
+before retrying. A delivery acknowledgment proves neither provider completion
+nor answer quality.
+
 The 094 contract documents a closed list of twelve Bridget tools:
 `bridget_who`, `bridget_send`, `bridget_cancel`, `bridget_ledger`, both artifact
 tools and the six additions `bridget_rename`, `bridget_dnd`, `bridget_domain`,
@@ -108,6 +128,14 @@ file inside Bridget state; a 401 triggers one renewal, a second one is an
 explicit failure shown by `status`. The thread journal (`bridget attach`) never
 replays history older than the installation. An archived thread leaves the
 directory, never t3code. See [ADR 034](docs/decisions/034-adaptateur-t3code.md).
+
+The bridge processes cancellation while waiting for an idle thread: a request
+cancelled before dispatch does not start a later turn. Expiration and automatic
+reminders do not open an extra provider turn. Cancellation after t3code
+accepts a turn does not guarantee provider interruption. A prepared response is
+retained until confirmation, including recipient disconnects and bridge restarts;
+recovery does not rerun the provider task. The journal retains long text within
+its bounds or explicitly reports a gap, never silently cutting at 4,096 characters.
 
 ## Native interactive Claude Code, without tmux (session 097)
 
@@ -363,6 +391,49 @@ or provider profile is replaced. The
 [independent installation and rollback guide](docs/communication-installation.md)
 documents the allowlisted source package, checksums and account requirements.
 This does not authorize a fleet migration.
+
+## Observe and share without blocking agents
+
+`bridget journal 'SOURCE_UUID' --tail 50 --to 'REVIEWER_UUID' --reply` shares an
+exact, attributed excerpt through the existing messaging path. MCP exposes
+`bridget_journal` and `bridget_events`; neither requires T3 or Maicie. Excerpts
+default to 50 entries, max 200 and under 64 KiB, with explicit gaps/truncation
+and `next_seq` for `--from-seq`. An oversized entry is not silently summarized.
+
+```sh
+bridget events types
+bridget events sub turn_ended --agent 'SOURCE_UUID' --once --ttl 1800
+bridget events sub file_collision --file '/project/src/*' --ttl 3600
+bridget events list
+bridget events unsub 'SUBSCRIPTION_ID'
+```
+
+Events are `turn_ended`, `permission_required`, `file_written`, `file_collision`.
+Optional filters are agent UUID and path pattern (`*` only). The authenticated
+agent owns its subscriptions. A turn end is not mission success. Subscriptions
+complement `reply`; they never fulfill a pending response obligation.
+
+Correlated turn endings cover managed ACP, Claude stream-json and Codex
+app-server, not native/T3 idle state alone. Permissions depend on journaled
+provider signals (ACP/Codex, potentially already auto-handled). File events
+require successful structured writes: known Claude/ACP writing tools and
+completed Codex fileChange items. Reads, arbitrary shell and unsupported
+adapters are not covered. No filesystem watcher or cross-daemon event federation.
+
+A collision is a risk: different agents, same host and lexically normalized
+absolute path, within 30 seconds. No file lock, filesystem access or Git merge.
+Symlink aliases, case differences and incorrectly named hosts are limitations.
+
+Subscriptions are daemon-memory state: default 1 hour, max 7 days, 16 per agent,
+128 overall. Auxiliary client disconnects preserve them; daemon restarts do not.
+`once` consumes a trigger even if delivery fails. Missing agents, DND, queue
+pressure and expired deliveries are losses, not durable work. Receipts expose
+`notifications_lost`, `evicted_writes`; lists expose `suppressed_total` for the
+five-notifications/second/subscription limit. Delivery uses a 64-message queue,
+one-second attempts, five-second queue expiry. Source facts use a 256-item queue,
+recent files a 4096-entry cache; source losses log `observation_gap`. Turns
+caused by Bridget observation messages do not generate further observations.
+No mandatory workflow, approval gate or execution lock is introduced.
 
 ## Cross-server communication
 

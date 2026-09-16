@@ -216,7 +216,7 @@ impl LiveAgent {
             journal_available: Some(false),
         });
         assert!(
-            matches!(agent.read(), DaemonToWrapper::Registered { agent_id } if agent_id == AGENT_ID)
+            matches!(agent.read(), DaemonToWrapper::Registered { agent_id, .. } if agent_id == AGENT_ID)
         );
         agent
     }

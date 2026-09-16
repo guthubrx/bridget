@@ -181,6 +181,7 @@ done
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
+                credential: None,
                 agent_id: "89000000-0000-4000-8000-000000000801".to_string(),
             })
             .unwrap()
@@ -327,6 +328,7 @@ while IFS= read -r line; do :; done
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
+                credential: None,
                 agent_id: "89000000-0000-4000-8000-000000000802".to_string(),
             })
             .unwrap()
@@ -495,6 +497,7 @@ while :; do :; done
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
+                credential: None,
                 agent_id: "89000000-0000-4000-8000-000000000803".to_string(),
             })
             .unwrap()
@@ -671,6 +674,7 @@ while IFS= read -r line; do :; done
             writer,
             "{}",
             encode(&DaemonToWrapper::Registered {
+                credential: None,
                 agent_id: "89000000-0000-4000-8000-000000000804".to_string(),
             })
             .unwrap()

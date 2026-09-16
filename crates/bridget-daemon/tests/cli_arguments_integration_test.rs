@@ -128,6 +128,7 @@ fn capture_one_message(
                         stream,
                         "{}",
                         serde_json::to_string(&bridget_transport::DaemonToWrapper::Registered {
+                            credential: None,
                             agent_id
                         })
                         .unwrap()

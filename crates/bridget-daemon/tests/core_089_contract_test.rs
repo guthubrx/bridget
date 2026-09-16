@@ -24,6 +24,7 @@ const LINK: &str = "core-089-linked-request";
 const BODY: &str = "  réponse UTF-8 : été 🐙\n{\"texte\":\"espaces  conservés\"}\nfin  ";
 
 fn reference_client(root: &Path) -> Client {
+    let owner = std::sync::Arc::new(register_agent_as(&socket(root), ACTOR, INSTANCE));
     let mut client = Client::connect(&socket(root));
     client.send(WrapperToDaemon::RoleHandshake {
         role: ConnectionRole::Client,
@@ -43,6 +44,8 @@ fn reference_client(root: &Path) -> Client {
         client.receive(),
         DaemonToWrapper::ClientWelcome { .. }
     ));
+    attest_agent(&socket(root), &mut client, ACTOR, INSTANCE);
+    client.owner = Some(owner);
     client
 }
 
@@ -345,7 +348,13 @@ fn six_formes_partielles_cli_refusees_avant_la_socket() {
     fs::remove_dir_all(root).unwrap();
 }
 
-fn register_identity(client: &mut Client, id: &str, kind: &str, instance: Option<&str>) {
+fn register_identity(
+    socket: &Path,
+    client: &mut Client,
+    id: &str,
+    kind: &str,
+    instance: Option<&str>,
+) {
     client.send(WrapperToDaemon::Register {
         agent_type: kind.into(),
         identity_version: 2,
@@ -361,10 +370,17 @@ fn register_identity(client: &mut Client, id: &str, kind: &str, instance: Option
         turn_in_progress: false,
         journal_available: None,
     });
-    assert!(matches!(
-        client.receive(),
-        DaemonToWrapper::Registered { .. }
-    ));
+    let DaemonToWrapper::Registered { credential, .. } = client.receive() else {
+        panic!("inscription attendue");
+    };
+    if let Some(instance) = instance {
+        save_fixture_credential(
+            socket,
+            id,
+            instance,
+            credential.expect("preuve du propriétaire"),
+        );
+    }
 }
 
 #[test]
@@ -372,7 +388,13 @@ fn cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_eph
     let root = test_root("core-sender");
     let daemon = spawn_daemon(&root, None);
     let mut actor = Client::connect(&socket(&root));
-    register_identity(&mut actor, ACTOR, "codex", Some("actual-actor"));
+    register_identity(
+        &socket(&root),
+        &mut actor,
+        ACTOR,
+        "codex",
+        Some("actual-actor"),
+    );
     let mut recipient = register_recipient_as(&socket(&root), "actual-recipient");
     let output = run_linked_cli(&root, &["send", "--to", RECIPIENT, "message hérité"]);
     assert!(output.status.success(), "{}", output_text(&output));
@@ -380,11 +402,8 @@ fn cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_eph
         DaemonToWrapper::Deliver(message) => assert_eq!(message.from, ACTOR),
         other => panic!("remise historique attendue : {other:?}"),
     }
-    for (claimed, reason) in [
-        (ACTOR, "usurpation refusée"),
-        (MATRIX_AGENT, "non adressable"),
-    ] {
-        let refused = run_linked_cli(
+    for claimed in [ACTOR, MATRIX_AGENT] {
+        let refused = run_isolated(
             &root,
             &[
                 "send",
@@ -394,10 +413,11 @@ fn cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_eph
                 RECIPIENT,
                 "tentative explicite",
             ],
+            false,
         );
         assert_eq!(refused.status.code(), Some(1), "{}", output_text(&refused));
         assert!(
-            output_text(&refused).contains(reason),
+            output_text(&refused).contains("identité expéditeur non attestée"),
             "{}",
             output_text(&refused)
         );
@@ -406,7 +426,7 @@ fn cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_eph
     // peut promettre une réponse future. Mutant : ancien test de préfixe UUID
     // toujours faux => Ack, nouvelle demande suivie et seconde livraison.
     let mut temporary = Client::connect(&socket(&root));
-    register_identity(&mut temporary, MATRIX_AGENT, "cli", None);
+    register_identity(&socket(&root), &mut temporary, MATRIX_AGENT, "cli", None);
     let mut message = BridgetMessage::new(MATRIX_AGENT, RECIPIENT, "réponse impossible");
     message.reply = true;
     let message_id = message.id.clone();

@@ -596,7 +596,9 @@ impl Peer {
             journal_available: None,
         });
         match peer.recv() {
-            DaemonToWrapper::Registered { agent_id: assigned } => peer.name = assigned,
+            DaemonToWrapper::Registered {
+                agent_id: assigned, ..
+            } => peer.name = assigned,
             other => panic!("enregistrement inattendu: {other:?}"),
         }
         peer
