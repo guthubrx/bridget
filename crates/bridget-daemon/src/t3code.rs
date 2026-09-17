@@ -207,6 +207,15 @@ pub(crate) struct ThreadState {
     pub pending: Vec<Pending>,
     #[serde(default)]
     pub seeded: bool,
+    #[serde(default)]
+    pub observations_seeded: bool,
+    #[serde(default)]
+    pub seen_activities: Vec<String>,
+    /// IDs natifs issus des notifications, pas de recherche dans leur texte.
+    #[serde(default)]
+    pub notification_messages: Vec<String>,
+    #[serde(default)]
+    pub turn_origins: BTreeMap<String, String>,
 }
 
 impl ThreadState {
@@ -890,10 +899,16 @@ fn serve(paths: &Paths) -> Result<(), String> {
 
     let mut links: BTreeMap<String, Link> = BTreeMap::new();
     let mut retry_after: BTreeMap<String, Instant> = BTreeMap::new();
+    let t3_base = contract::base_dir().map_err(|e| e.to_string())?;
+    let mut identities = crate::t3code_identity::IdentityBindings::new(&paths.root);
     loop {
         let snapshot = match session.call(|client| client.snapshot()) {
             Ok(snapshot) => snapshot,
             Err(ContractError::Unauthorized) => {
+                identities.clear();
+                for link in links.values() {
+                    let _ = link.events.send(LinkEvent::Unavailable);
+                }
                 let detail = "session refusée deux fois par t3code ; réinstaller (bridget t3 uninstall && bridget t3 install)";
                 error!("{detail}");
                 publish_status(paths, "auth_failed", detail, links.len());
@@ -901,12 +916,17 @@ fn serve(paths: &Paths) -> Result<(), String> {
                 continue;
             }
             Err(ContractError::Cli(detail)) => {
+                identities.clear();
+                for link in links.values() {
+                    let _ = link.events.send(LinkEvent::Unavailable);
+                }
                 error!("renouvellement impossible : {detail}");
                 publish_status(paths, "auth_failed", &detail, links.len());
                 thread::sleep(AUTH_FAILED_PAUSE);
                 continue;
             }
             Err(ContractError::Transport(detail)) => {
+                identities.clear();
                 // Serveur parti : on ferme les liens et on attend son retour.
                 warn!("t3code injoignable ({detail}) ; liens fermés");
                 for (_, link) in std::mem::take(&mut links) {
@@ -917,6 +937,10 @@ fn serve(paths: &Paths) -> Result<(), String> {
                 continue;
             }
             Err(e) => {
+                identities.clear();
+                for link in links.values() {
+                    let _ = link.events.send(LinkEvent::Unavailable);
+                }
                 warn!("snapshot t3code : {e}");
                 publish_status(paths, "degraded", &e.to_string(), links.len());
                 thread::sleep(poll);
@@ -958,6 +982,16 @@ fn serve(paths: &Paths) -> Result<(), String> {
             .iter()
             .filter(|t| live.contains(t.id.as_str()))
         {
+            // Un fil sans worktree travaille dans la racine publiée du projet.
+            // Nécessaire aux chemins relatifs des écritures, jamais à l'identité.
+            let mut summary = summary.clone();
+            if summary.worktree_path.is_none() {
+                summary.worktree_path = snapshot
+                    .projects
+                    .iter()
+                    .find(|project| project.id == summary.project_id)
+                    .map(|project| project.workspace_root.clone());
+            }
             if !links.contains_key(&summary.id) {
                 if retry_after
                     .get(&summary.id)
@@ -965,7 +999,7 @@ fn serve(paths: &Paths) -> Result<(), String> {
                 {
                     continue;
                 }
-                match Link::open(paths, session.clone(), summary) {
+                match Link::open(paths, session.clone(), &summary) {
                     Ok(link) => {
                         links.insert(summary.id.clone(), link);
                     }
@@ -979,6 +1013,21 @@ fn serve(paths: &Paths) -> Result<(), String> {
             if let Some(link) = links.get(&summary.id) {
                 link.tick(summary.clone());
             }
+        }
+        let bindings: Vec<_> = links
+            .iter()
+            .filter(|(_, link)| link.is_alive())
+            .map(|(id, _)| {
+                (
+                    id.clone(),
+                    stable_uuid(id),
+                    stable_uuid(&format!("instance:{id}")),
+                )
+            })
+            .collect();
+        let runtime = session.lock().runtime.clone();
+        if let Err(error) = identities.refresh(&t3_base, &runtime, &bindings) {
+            warn!("rattachement MCP T3 indisponible : {error}");
         }
         publish_status(paths, "running", &session.base_url(), links.len());
         thread::sleep(poll);
@@ -994,6 +1043,7 @@ enum LinkEvent {
     Tick(Box<ThreadSummary>),
     DaemonGone,
     Close,
+    Unavailable,
 }
 
 struct Link {
@@ -1167,6 +1217,8 @@ struct LinkWorker {
     /// et sans changement du snapshot fournisseur.
     journal_dirty: bool,
     response_sent: BTreeMap<String, Instant>,
+    observation_events: Vec<bridget_transport::protocol::ObservationKind>,
+    observation_schema: Vec<bridget_transport::protocol::ObservationKind>,
 }
 
 impl LinkWorker {
@@ -1240,6 +1292,8 @@ impl LinkWorker {
             journal_caught_up: false,
             journal_dirty: false,
             response_sent: BTreeMap::new(),
+            observation_events: Vec::new(),
+            observation_schema: Vec::new(),
         })
     }
 
@@ -1313,6 +1367,10 @@ impl LinkWorker {
                 }
             }
             LinkEvent::Frame(frame) => self.handle_frame(*frame),
+            LinkEvent::Unavailable => {
+                self.set_observation_ready(false);
+                self.last_key.clear();
+            }
             LinkEvent::DaemonGone => {
                 warn!("daemon parti pour le fil {}", self.thread_id);
                 self.daemon_alive.store(false, Ordering::SeqCst);
@@ -1598,7 +1656,15 @@ impl LinkWorker {
         // t3code et cette ligne, la corrélation serait perdue et la réponse ne
         // reviendrait jamais. Écrite avant, elle est au pire inutile — et reste
         // conservée jusqu'à un refus certain ou une clôture attestée.
-        if !self
+        if message.id.starts_with("bridget-observation:") {
+            if !self.state.notification_messages.contains(&message_id) {
+                self.state.notification_messages.push(message_id.clone());
+                if self.state.notification_messages.len() > SEEN_BOUND {
+                    self.state.notification_messages.remove(0);
+                }
+                self.state.save(&self.state_path)?;
+            }
+        } else if !self
             .state
             .pending
             .iter()
@@ -1687,6 +1753,7 @@ impl LinkWorker {
                 Ok(detail) => detail,
                 Err(e) => {
                     warn!("détail du fil {} : {e}", self.thread_id);
+                    self.set_observation_ready(false);
                     return false;
                 }
             };
@@ -1699,19 +1766,120 @@ impl LinkWorker {
                 })
             });
             let seeded = self.state.seeded;
-            if (anchors_missing || !seeded) && limit < DETAIL_PAGE_MAX {
+            let origin_missing = detail.latest_turn.as_ref().is_some_and(|turn| {
+                !self.state.turn_origins.contains_key(&turn.turn_id)
+                    && observation_origin(&detail, turn).is_none()
+            });
+            if (anchors_missing || !seeded || origin_missing) && limit < DETAIL_PAGE_MAX {
                 limit *= 2;
                 continue;
             }
             break detail;
         };
+        // Le fait de capacité précède les faits du journal sur le même writer,
+        // notamment lors du rétablissement après une indisponibilité HTTP.
+        use bridget_transport::protocol::ObservationKind as Kind;
+        self.observation_schema.clear();
+        let origin_known = detail.latest_turn.as_ref().is_none_or(|turn| {
+            self.state.turn_origins.contains_key(&turn.turn_id)
+                || observation_origin(&detail, turn).is_some()
+        });
+        if origin_known {
+            self.observation_schema.push(Kind::TurnEnded);
+        }
+        if detail.activities_available && origin_known {
+            self.observation_schema.push(Kind::PermissionRequired);
+            // T3 ne conserve pas actuellement input.file_path de Claude.
+            // Ne pas annoncer une couverture d'écritures qu'il ne fournit pas.
+            if thread_provider(summary).as_deref() == Some("codex") {
+                self.observation_schema.push(Kind::FileWritten);
+            }
+        }
+        // La fenêtre T3 est bornée : absence de recouvrement à la reprise
+        // signifie une lacune possible, jamais une continuité garantie.
+        // O(A + S), A<=4096, S<=8192 : pas de recherche linéaire du curseur
+        // pour chacune des activités à chaque lecture du fil.
+        let seen_activities: HashSet<_> = self
+            .state
+            .seen_activities
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let activity_gap = self.state.observations_seeded
+            && detail.activities.iter().any(|a| {
+                if seen_activities.contains(a.id.as_str()) {
+                    return false;
+                }
+                let useful = a.kind == "approval.requested"
+                    || (a.kind == "tool.completed"
+                        && a.payload["itemType"] == "file_change"
+                        && a.payload["status"] == "completed");
+                let origin_known = a.turn_id.as_ref().is_some_and(|id| {
+                    self.state.turn_origins.contains_key(id)
+                        || detail.latest_turn.as_ref().is_some_and(|turn| {
+                            turn.turn_id == *id && observation_origin(&detail, turn).is_some()
+                        })
+                });
+                let paths_truncated = a.payload["data"]["files"]
+                    .as_array()
+                    .is_some_and(|files| files.len() >= 12);
+                useful && (!origin_known || paths_truncated)
+            });
+        let turn_gap = self.state.observations_seeded
+            && detail.messages.iter().any(|message| {
+                message.turn_id.as_ref().is_some_and(|id| {
+                    detail
+                        .latest_turn
+                        .as_ref()
+                        .is_some_and(|latest| latest.turn_id != *id)
+                        && !self.state.ended_turns.contains(id)
+                        && !self.journal_inflight.contains(&format!("end:{id}"))
+                })
+            });
+        let gap = activity_gap
+            || turn_gap
+            || (self.state.observations_seeded
+                && !self.state.seen_activities.is_empty()
+                && !detail.activities.is_empty()
+                && !detail
+                    .activities
+                    .iter()
+                    .any(|a| seen_activities.contains(a.id.as_str())));
+        self.set_observation_ready(!self.journal_failed.load(Ordering::SeqCst));
+        if gap {
+            // Lacune connue, quantité inconnue : ne pas inventer un nombre de
+            // faits perdus ni deux notices de fausse déconnexion/reconnexion.
+            send_wrapper_message(&self.writer, WrapperToDaemon::ObservationGap { dropped: 0 });
+        }
         self.project_journal(&detail, summary);
         self.settle_pending(&detail, summary);
         if let Err(e) = self.state.save(&self.state_path) {
             warn!("état du fil {} : {e}", self.thread_id);
+            self.set_observation_ready(false);
             return false;
         }
-        self.journal_caught_up && !self.journal_dirty && !self.journal_failed.load(Ordering::SeqCst)
+        let ready = self.journal_caught_up
+            && !self.journal_dirty
+            && !self.journal_failed.load(Ordering::SeqCst);
+        self.set_observation_ready(ready);
+        ready
+    }
+
+    /// Annonce un fait de source, jamais une capacité déduite du titre du fil.
+    fn set_observation_ready(&mut self, ready: bool) {
+        let events = if ready {
+            self.observation_schema.clone()
+        } else {
+            vec![]
+        };
+        if events == self.observation_events {
+            return;
+        }
+        self.observation_events = events.clone();
+        send_wrapper_message(
+            &self.writer,
+            WrapperToDaemon::ObservationCapabilities { events },
+        );
     }
 
     /// Repère d'installation : au premier regard, l'historique antérieur est
@@ -1726,15 +1894,70 @@ impl LinkWorker {
             for message in &detail.messages {
                 self.state.remember(&message.id);
             }
+            let latest = detail.latest_turn.as_ref().or(summary.latest_turn.as_ref());
             self.state
                 .ended_turns
-                .extend(detail.messages.iter().filter_map(|m| m.turn_id.clone()));
+                .extend(detail.messages.iter().filter_map(|m| {
+                    m.turn_id
+                        .as_ref()
+                        .filter(|id| {
+                            latest.is_none_or(|turn| {
+                                &turn.turn_id != *id || turn_is_final(&turn.state)
+                            })
+                        })
+                        .cloned()
+                }));
+            // Une fin sans texte assistant fait aussi partie de l'historique.
+            if let Some(turn) = latest.filter(|turn| turn_is_final(&turn.state))
+                && !self.state.ended_turns.contains(&turn.turn_id)
+            {
+                self.state.ended_turns.push(turn.turn_id.clone());
+            }
+            if let Some(turn) = latest
+                && let Some(origin) = observation_origin(detail, turn)
+            {
+                self.state
+                    .turn_origins
+                    .insert(turn.turn_id.clone(), origin.into());
+            }
+            self.state
+                .seen_activities
+                .extend(detail.activities.iter().map(|a| a.id.clone()));
+            self.state.observations_seeded = true;
             self.state.seeded = true;
             self.journal_dirty = false;
             return;
         }
         if self.journal_failed.load(Ordering::SeqCst) {
             return;
+        }
+        let latest = detail.latest_turn.as_ref().or(summary.latest_turn.as_ref());
+        // Migration100 : les activités déjà présentes ne sont pas des faits futurs.
+        if !self.state.observations_seeded {
+            self.state
+                .seen_activities
+                .extend(detail.activities.iter().map(|a| a.id.clone()));
+            if let Some(turn) = latest.filter(|turn| turn_is_final(&turn.state)) {
+                self.state.ended_turns.push(turn.turn_id.clone());
+            }
+            self.state.notification_messages.extend(
+                self.state
+                    .pending
+                    .iter()
+                    .filter(|p| p.request_id.starts_with("bridget-observation:"))
+                    .map(|p| p.message_id.clone()),
+            );
+            self.state
+                .pending
+                .retain(|p| !p.request_id.starts_with("bridget-observation:"));
+            self.state.observations_seeded = true;
+        }
+        if let Some(turn) = latest
+            && let Some(origin) = observation_origin(detail, turn)
+        {
+            self.state
+                .turn_origins
+                .insert(turn.turn_id.clone(), origin.to_string());
         }
         let final_turn = |turn_id: &str| {
             summary
@@ -1789,6 +2012,7 @@ impl LinkWorker {
                 && !self.state.ended_turns.iter().any(|id| id == turn_id)
                 && !self.journal_inflight.contains(&format!("end:{turn_id}"))
                 && final_turn(turn_id)
+                && latest.is_none_or(|turn| turn.turn_id != turn_id)
             {
                 match self.journal.enqueue(
                     "turn_end",
@@ -1804,6 +2028,120 @@ impl LinkWorker {
                     }
                 }
             }
+        }
+        // L'état terminal vient du contrat T3 fermé, jamais du silence ou d'idle.
+        if let Some(turn) = latest.filter(|turn| turn_is_final(&turn.state))
+            && !self.state.ended_turns.contains(&turn.turn_id)
+            && !self
+                .journal_inflight
+                .contains(&format!("end:{}", turn.turn_id))
+        {
+            let origin = self.state.turn_origins.get(&turn.turn_id);
+            let notification =
+                origin.is_some_and(|id| self.state.notification_messages.contains(id));
+            let id = if notification {
+                format!("bridget-observation:{}", turn.turn_id)
+            } else {
+                origin.cloned().unwrap_or_else(|| turn.turn_id.clone())
+            };
+            let payload = if origin.is_some() {
+                serde_json::json!({"t3_turn_id":turn.turn_id,"stop_reason":turn.state})
+            } else {
+                serde_json::json!({"t3_turn_id":turn.turn_id,"gap":true,"reason":"origine du tour non attestée, notification de fin supprimée"})
+            };
+            if self
+                .journal
+                .enqueue("turn_end", Some(&id), payload)
+                .is_err()
+            {
+                return;
+            }
+            self.journal_inflight
+                .insert(format!("end:{}", turn.turn_id));
+        }
+        let provider = thread_provider(summary).unwrap_or_default();
+        let cwd = Path::new(summary.worktree_path.as_deref().unwrap_or(""));
+        let seen: HashSet<_> = self
+            .state
+            .seen_activities
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let mut ignored = Vec::new();
+        for activity in &detail.activities {
+            if seen.contains(activity.id.as_str()) {
+                continue;
+            }
+            let key = format!("activity:{}", activity.id);
+            if self.journal_inflight.contains(&key) {
+                continue;
+            }
+            let origin = activity
+                .turn_id
+                .as_ref()
+                .and_then(|turn| self.state.turn_origins.get(turn));
+            let notification =
+                origin.is_some_and(|id| self.state.notification_messages.contains(id));
+            let payloads = activity_payloads(activity, &provider, cwd);
+            if payloads.is_empty() {
+                ignored.push(activity.id.clone());
+                continue;
+            }
+            // Métadonnées uniquement ; les autres activités ne sont pas recopiées.
+            for (index, mut payload) in payloads.into_iter().enumerate() {
+                payload["t3_activity_id"] = serde_json::json!(activity.id);
+                let id = if notification {
+                    format!("bridget-observation:{}:{index}", activity.id)
+                } else {
+                    format!("t3-activity:{}:{index}", activity.id)
+                };
+                // Une admission partielle n'autorise pas à rejouer les fichiers
+                // déjà confirmés ou encore dans la file d'écriture.
+                if self.state.seen.contains(&id) || self.journal_inflight.contains(&id) {
+                    continue;
+                }
+                // Sans origine prouvée, écrire une lacune et ne pas nourrir le catalogue.
+                let event = if origin.is_some() {
+                    "update"
+                } else {
+                    payload = serde_json::json!({"t3_activity_id":activity.id,"gap":true,"reason":"origine activité non attestée"});
+                    "error"
+                };
+                if self.journal.enqueue(event, Some(&id), payload).is_err() {
+                    return;
+                }
+                self.journal_inflight.insert(id);
+            }
+            // Repère séparé : ne pas confirmer une activité multi-fichiers sur le
+            // premier fichier seulement ; le marqueur suit tous ses faits.
+            if self
+                .journal
+                .enqueue(
+                    "t3_activity_seen",
+                    Some(&key),
+                    serde_json::json!({"t3_activity_id":activity.id}),
+                )
+                .is_err()
+            {
+                return;
+            }
+            self.journal_inflight.insert(key);
+        }
+        self.state.seen_activities.extend(ignored);
+        if self.state.seen_activities.len() > 8192 {
+            self.state
+                .seen_activities
+                .drain(..self.state.seen_activities.len() - 8192);
+        }
+        if self.state.turn_origins.len() > SEEN_BOUND {
+            let visible: HashSet<_> = detail
+                .messages
+                .iter()
+                .filter_map(|m| m.turn_id.as_ref())
+                .collect();
+            self.state
+                .turn_origins
+                .retain(|id, _| visible.contains(id) || latest.is_some_and(|t| t.turn_id == *id));
         }
         self.journal_dirty = false;
     }
@@ -1848,6 +2186,16 @@ impl LinkWorker {
                     continue;
                 };
                 match value["event"].as_str() {
+                    Some("t3_activity_seen") => {
+                        if let Some(activity) = value["payload"]["t3_activity_id"].as_str() {
+                            if !self.state.seen_activities.iter().any(|id| id == activity) {
+                                self.state.seen_activities.push(activity.into());
+                                changed = true;
+                            }
+                            self.journal_inflight
+                                .remove(&format!("activity:{activity}"));
+                        }
+                    }
                     Some("turn_start" | "update") => {
                         if !self.state.seen.iter().any(|seen| seen == id) {
                             self.state.remember(id);
@@ -1883,6 +2231,11 @@ impl LinkWorker {
             self.state
                 .ended_turns
                 .drain(..self.state.ended_turns.len() - SEEN_BOUND);
+        }
+        if self.state.seen_activities.len() > 8192 {
+            self.state
+                .seen_activities
+                .drain(..self.state.seen_activities.len() - 8192);
         }
         if changed && let Err(e) = self.state.save(&self.state_path) {
             warn!("curseur journal non sauvegardé : {e}");
@@ -2020,6 +2373,12 @@ pub(crate) fn reply_id(request_id: &str) -> String {
 
 /// Texte remis au fil : l'agent t3code répond normalement, le pont relaie.
 pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
+    if message.id.starts_with("bridget-observation:") {
+        return format!(
+            "🔔 Notification Bridget (id {}) :\n\n{}\n\nAucune réponse inter-agent requise ; informe l'utilisateur si utile.",
+            message.id, message.body
+        );
+    }
     format!(
         "💬 Message Bridget de {} (id {}) :\n\n{}\n\n— Réponds normalement dans ce tour : Bridget transmettra ta réponse à {}.",
         message.from, message.id, message.body, message.from
@@ -2027,10 +2386,59 @@ pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
 }
 
 pub(crate) fn turn_is_final(state: &str) -> bool {
-    !matches!(
-        state,
-        "running" | "queued" | "pending" | "streaming" | "in_progress" | "starting"
-    )
+    matches!(state, "completed" | "error" | "interrupted")
+}
+
+/// O(messages), page bornée. T3 projette requestedAt et createdAt depuis la
+/// même commande. Égalité unique, jamais ordre temporel ni texte de l'utilisateur.
+fn observation_origin<'a>(
+    detail: &'a ThreadDetail,
+    turn: &contract::LatestTurn,
+) -> Option<&'a str> {
+    let requested = turn.requested_at.as_ref()?;
+    let mut candidates = detail
+        .messages
+        .iter()
+        .filter(|m| m.role == "user" && m.created_at.as_ref() == Some(requested));
+    let origin = candidates.next()?;
+    candidates.next().is_none().then_some(origin.id.as_str())
+}
+
+/// O(fichiers), au plus256 chemins. Type fermé ET succès ; aucun parsing shell.
+fn activity_payloads(
+    activity: &contract::Activity,
+    provider: &str,
+    cwd: &Path,
+) -> Vec<serde_json::Value> {
+    use bridget_transport::journal::confirmed_write_payload;
+    if activity.kind == "approval.requested" {
+        return vec![serde_json::json!({"kind":"approval","text":"permission demandée dans T3"})];
+    }
+    let payload = &activity.payload;
+    if activity.kind != "tool.completed"
+        || payload["itemType"] != "file_change"
+        || payload["status"] != "completed"
+    {
+        return vec![];
+    }
+    // Claude : T3 perd input.file_path et peut synthétiser completed à la fin
+    // du tour sans résultat d'outil attesté. Aucun fait d'écriture dans ce cas.
+    if provider != "codex" {
+        return vec![];
+    }
+    let Some(files) = payload["data"]["files"]
+        .as_array()
+        .filter(|files| files.len() <= 256)
+    else {
+        return vec![];
+    };
+    let mut seen = HashSet::new();
+    files
+        .iter()
+        .filter_map(|file| file["path"].as_str())
+        .filter(|path| seen.insert(*path))
+        .filter_map(|path| confirmed_write_payload(path, cwd))
+        .collect()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -2153,7 +2561,192 @@ mod tests {
     use super::*;
     use crate::t3code_contract::{LatestTurn, Message};
 
+    #[test]
+    fn spec101_t3_terminal_state_is_closed() {
+        assert!(!turn_is_final("future_unknown_state"));
+        assert!(turn_is_final("completed"));
+        assert!(turn_is_final("error"));
+        assert!(turn_is_final("interrupted"));
+    }
+
+    #[test]
+    fn spec101_t3_observation_notification_ne_demande_pas_de_reponse() {
+        let mut msg = bridget_core::BridgetMessage::new("bridget", "target", "fait observé");
+        msg.id = "bridget-observation:test".into();
+        msg.origin = Some(bridget_core::MessageOrigin::System);
+        let text = envelope(&msg);
+        assert!(!text.contains("transmettra ta réponse"));
+        assert!(text.contains("Aucune réponse"));
+    }
+
+    #[test]
+    fn spec101_t3_fin_sans_texte_et_origine_non_ambigue() {
+        let detail = contract::parse_thread_detail(r#"{"thread":{
+            "messages":[{"id":"u","role":"user","text":"travaille","streaming":false,"turnId":null,"createdAt":"2026-09-16T12:00:00Z"}],
+            "latestTurn":{"turnId":"t","state":"interrupted","requestedAt":"2026-09-16T12:00:00Z"},"activities":[]}}"#).unwrap();
+        let latest = detail.latest_turn.as_ref().unwrap();
+        assert_eq!(observation_origin(&detail, latest), Some("u"));
+        let mut ambiguous = detail.clone();
+        ambiguous.messages.push(ambiguous.messages[0].clone());
+        assert_eq!(observation_origin(&ambiguous, latest), None);
+    }
+
+    #[test]
+    fn spec101_t3_lectures_et_echecs_ne_sont_pas_ecritures() {
+        let mut activity = contract::Activity {
+            id: "a".into(),
+            kind: "tool.completed".into(),
+            turn_id: Some("t".into()),
+            payload: serde_json::json!({"itemType":"file_change","status":"completed",
+                "data":{"toolName":"ReadFile","files":[{"path":"/tmp/fichier"}]}}),
+        };
+        assert!(activity_payloads(&activity, "claude", Path::new("/tmp")).is_empty());
+        activity.payload["data"]["toolName"] = serde_json::json!("Write");
+        assert!(activity_payloads(&activity, "claude", Path::new("/tmp")).is_empty());
+        assert_eq!(
+            activity_payloads(&activity, "codex", Path::new("/tmp")).len(),
+            1
+        );
+        activity.payload["status"] = serde_json::json!("failed");
+        assert!(activity_payloads(&activity, "claude", Path::new("/tmp")).is_empty());
+        activity.kind = "approval.requested".into();
+        assert_eq!(
+            activity_payloads(&activity, "claude", Path::new("/tmp"))[0]["kind"],
+            "approval"
+        );
+    }
+
+    #[test]
+    fn spec101_t3_journal_confirme_fin_permission_et_fichiers_sans_doublon() {
+        let (mut worker, _peer) = worker099();
+        worker.state.seeded = true;
+        worker.state.observations_seeded = true;
+        let detail = contract::parse_thread_detail(r#"{"thread":{
+            "messages":[{"id":"u","role":"user","streaming":false,"createdAt":"date"}],
+            "latestTurn":{"turnId":"t","state":"completed","requestedAt":"date"},
+            "activities":[
+              {"id":"permission","kind":"approval.requested","turnId":"t","payload":{}},
+              {"id":"write","kind":"tool.completed","turnId":"t","payload":{"itemType":"file_change","status":"completed","data":{"files":[{"path":"/tmp/a"},{"path":"/tmp/b"}]}}}
+            ]}}"#).unwrap();
+        let mut summary = summary(Some(("t", "completed")));
+        summary.provider_instance_id = Some("codex".into());
+        worker.project_journal(&detail, &summary);
+        worker.journal.stop();
+        let entries = std::fs::read_dir(&worker.journal_dir)
+            .unwrap()
+            .flat_map(|path| bridget_transport::journal::valid_events(&path.unwrap().path()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|v| v["payload"]["stop_reason"] == "completed")
+                .count(),
+            1
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|v| v["payload"]["write_confirmed"] == true)
+                .count(),
+            2
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|v| v["payload"]["kind"] == "approval")
+                .count(),
+            1
+        );
+        worker.journal_inflight.clear();
+        worker.journal_readers.clear();
+        worker.project_journal(&detail, &summary);
+        assert!(
+            worker.journal_inflight.is_empty(),
+            "aucun fait n'est réémis après flush sans curseur"
+        );
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec101_t3_tour_notification_porte_origine_exclue_du_collecteur() {
+        let (mut worker, _peer) = worker099();
+        worker.state.seeded = true;
+        worker.state.observations_seeded = true;
+        worker.state.notification_messages.push("u".into());
+        let detail = contract::parse_thread_detail(
+            r#"{"thread":{
+            "messages":[{"id":"u","role":"user","streaming":false,"createdAt":"date"}],
+            "latestTurn":{"turnId":"t","state":"error","requestedAt":"date"},"activities":[]}}"#,
+        )
+        .unwrap();
+        worker.project_journal(&detail, &summary(Some(("t", "error"))));
+        worker.journal.stop();
+        let entries = std::fs::read_dir(&worker.journal_dir)
+            .unwrap()
+            .flat_map(|path| bridget_transport::journal::valid_events(&path.unwrap().path()))
+            .collect::<Vec<_>>();
+        let end = entries.iter().find(|v| v["event"] == "turn_end").unwrap();
+        assert!(
+            end["message_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("bridget-observation:")
+        );
+        assert!(worker.state.pending.is_empty());
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec101_t3_seed_ne_consomme_pas_la_fin_future_du_tour_actif() {
+        let (mut worker, _peer) = worker099();
+        let mut detail = contract::parse_thread_detail(
+            r#"{"thread":{
+            "messages":[{"id":"u","role":"user","streaming":false,"createdAt":"date"},
+                {"id":"a","role":"assistant","streaming":true,"turnId":"t"}],
+            "latestTurn":{"turnId":"t","state":"running","requestedAt":"date"},"activities":[]}}"#,
+        )
+        .unwrap();
+        worker.project_journal(&detail, &summary(Some(("t", "running"))));
+        assert!(!worker.state.ended_turns.contains(&"t".to_string()));
+        detail.latest_turn.as_mut().unwrap().state = "completed".into();
+        worker.project_journal(&detail, &summary(Some(("t", "completed"))));
+        worker.journal.stop();
+        let entries = std::fs::read_dir(&worker.journal_dir)
+            .unwrap()
+            .flat_map(|path| bridget_transport::journal::valid_events(&path.unwrap().path()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|v| v["payload"]["stop_reason"] == "completed")
+                .count(),
+            1
+        );
+        worker.relay.shutdown();
+    }
+
     // Réutilise LinkWorker, Session et socketpair : aucun daemon ou compte réel.
+    #[test]
+    fn spec101_t3_seed_ignore_fin_historique_sans_texte() {
+        let (mut worker, _peer) = worker099();
+        let detail = contract::parse_thread_detail(
+            r#"{"thread":{
+            "messages":[{"id":"u","role":"user","streaming":false,"createdAt":"date"}],
+            "latestTurn":{"turnId":"t","state":"error","requestedAt":"date"},"activities":[]}}"#,
+        )
+        .unwrap();
+        let summary = summary(Some(("t", "error")));
+        worker.project_journal(&detail, &summary);
+        worker.project_journal(&detail, &summary);
+        worker.journal.stop();
+        let entries = std::fs::read_dir(&worker.journal_dir)
+            .unwrap()
+            .flat_map(|path| bridget_transport::journal::valid_events(&path.unwrap().path()))
+            .collect::<Vec<_>>();
+        assert!(!entries.iter().any(|v| v["event"] == "turn_end"));
+        worker.relay.shutdown();
+    }
+
     fn worker099() -> (LinkWorker, UnixStream) {
         let root = std::env::temp_dir().join(format!("t3-spec099-{}", uuid::Uuid::new_v4()));
         let paths = Paths::at(root.clone(), root.join("bridget.sock"));
@@ -2189,6 +2782,61 @@ mod tests {
     }
 
     #[test]
+    fn spec101_http_capacites_honnetes_et_lacune_signalee() {
+        use bridget_transport::protocol::ObservationKind as Kind;
+        for provider in ["codex", "claudeAgent"] {
+            let (mut worker, peer) = worker099();
+            worker.state.seeded = true;
+            worker.state.observations_seeded = true;
+            worker
+                .state
+                .seen_activities
+                .push("sortie-de-la-fenetre".into());
+            worker.observation_events = vec![Kind::TurnEnded];
+            let server = http_once099(&worker, 200, serde_json::json!({"thread":{
+                "messages":[{"id":"u","role":"user","streaming":false,"createdAt":"date"}],
+                "latestTurn":{"turnId":"t","state":"running","requestedAt":"date"},
+                "activities":[{"id":"nouvelle","kind":"approval.requested","turnId":"t","payload":{}}]
+            }}).to_string());
+            let mut summary = summary(Some(("t", "running")));
+            summary.provider_instance_id = Some(provider.into());
+            assert!(worker.refresh(&summary));
+            assert!(server.join().unwrap().starts_with("GET "));
+            assert!(worker.observation_events.contains(&Kind::TurnEnded));
+            assert!(
+                worker
+                    .observation_events
+                    .contains(&Kind::PermissionRequired)
+            );
+            assert_eq!(
+                worker.observation_events.contains(&Kind::FileWritten),
+                provider == "codex"
+            );
+            peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+            let mut reader = BufReader::new(peer);
+            let mut saw_capabilities = false;
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                match decode::<WrapperToDaemon>(line.trim()).unwrap() {
+                    WrapperToDaemon::ObservationCapabilities { events } => {
+                        assert!(!events.is_empty(), "pas de fausse déconnexion");
+                        saw_capabilities = true;
+                    }
+                    WrapperToDaemon::ObservationGap { dropped } => {
+                        assert_eq!(dropped, 0, "ne pas quantifier une perte inconnue");
+                        assert!(saw_capabilities);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            worker.journal.stop();
+            worker.relay.shutdown();
+        }
+    }
+
+    #[test]
     fn spec099_reponse_non_acquittee_et_autres_attentes_survivent() {
         let (mut worker, _peer) = worker099();
         let first = pending("uA", None);
@@ -2196,6 +2844,8 @@ mod tests {
         second.request_id = "other".into();
         worker.state.pending = vec![first, second];
         let detail = ThreadDetail {
+            activities: Vec::new(),
+            activities_available: false,
             messages: vec![
                 message("uA", "user", "nous", None, false),
                 message("aA", "assistant", "réponse durable", Some("tA"), false),
@@ -2239,6 +2889,8 @@ mod tests {
         worker.state.seeded = true;
         let text = "é🦀漢".repeat(4000);
         let detail = ThreadDetail {
+            activities: Vec::new(),
+            activities_available: false,
             messages: vec![message("long", "assistant", &text, Some("t"), false)],
             latest_turn: None,
         };
@@ -2270,6 +2922,8 @@ mod tests {
         worker.state.seeded = true;
         worker.journal.stop();
         let detail = ThreadDetail {
+            activities: Vec::new(),
+            activities_available: false,
             messages: vec![message("lost", "assistant", "texte", Some("t"), false)],
             latest_turn: None,
         };
@@ -2369,6 +3023,8 @@ mod tests {
         // ce chemin inouvrable provoque un échec réel APRÈS admission en file.
         std::fs::create_dir(worker.journal_dir.join(format!("{date}.jsonl"))).unwrap();
         let detail = ThreadDetail {
+            activities: Vec::new(),
+            activities_available: false,
             messages: vec![message("failed", "assistant", "texte", Some("t"), false)],
             latest_turn: None,
         };
@@ -2398,6 +3054,8 @@ mod tests {
         let (mut worker, _peer) = worker099();
         worker.state.seeded = true;
         let detail = ThreadDetail {
+            activities: Vec::new(),
+            activities_available: false,
             messages: vec![message(
                 "once",
                 "assistant",
@@ -2514,6 +3172,8 @@ mod tests {
         // Les contrôles s'échappent sur six octets en JSON : la limite doit
         // porter sur la ligne sérialisée, pas la longueur du texte source.
         let detail = ThreadDetail {
+            activities: Vec::new(),
+            activities_available: false,
             messages: vec![message(
                 "oversized",
                 "assistant",
@@ -2605,6 +3265,8 @@ mod tests {
         let summary = summary(None);
         worker.last_key = summary.change_key();
         let detail = ThreadDetail {
+            activities: Vec::new(),
+            activities_available: false,
             messages: vec![message("retry", "assistant", "conservé", Some("t"), false)],
             latest_turn: None,
         };
@@ -2660,6 +3322,8 @@ mod tests {
                 "une issue HTTP inconnue ne prouve pas le refus du tour"
             );
             let detail = ThreadDetail {
+                activities: Vec::new(),
+                activities_available: false,
                 messages: vec![
                     message(&saved.pending[0].message_id, "user", "accepté", None, false),
                     message("answer", "assistant", "réponse récupérée", Some("t"), false),
@@ -2678,6 +3342,7 @@ mod tests {
 
     fn message(id: &str, role: &str, text: &str, turn: Option<&str>, streaming: bool) -> Message {
         Message {
+            created_at: None,
             id: id.to_string(),
             role: role.to_string(),
             text: text.to_string(),
@@ -2700,6 +3365,7 @@ mod tests {
             settled_override: None,
             updated_at: "2026-09-14T00:00:00Z".to_string(),
             latest_turn: latest.map(|(id, state)| LatestTurn {
+                requested_at: None,
                 turn_id: id.to_string(),
                 state: state.to_string(),
                 assistant_message_id: None,
@@ -2724,6 +3390,8 @@ mod tests {
     fn spec098_correlation_par_rang_fifo_avec_message_humain_intercale() {
         // Ordre observé en sonde : user A (nous), user B (humain), assistant A, assistant B.
         let detail = ThreadDetail {
+            activities: Vec::new(),
+            activities_available: false,
             messages: vec![
                 message("u0", "user", "avant", None, false),
                 message("a0", "assistant", "réponse avant", Some("t0"), false),
@@ -2733,6 +3401,7 @@ mod tests {
                 message("aB", "assistant", "pour l'humain", Some("tB"), false),
             ],
             latest_turn: Some(LatestTurn {
+                requested_at: None,
                 turn_id: "tB".to_string(),
                 state: "completed".to_string(),
                 assistant_message_id: None,
@@ -2752,11 +3421,14 @@ mod tests {
     #[test]
     fn spec098_correlation_attend_la_fin_du_tour() {
         let detail = ThreadDetail {
+            activities: Vec::new(),
+            activities_available: false,
             messages: vec![
                 message("uA", "user", "nous", None, false),
                 message("aA", "assistant", "partiel", Some("tA"), true),
             ],
             latest_turn: Some(LatestTurn {
+                requested_at: None,
                 turn_id: "tA".to_string(),
                 state: "running".to_string(),
                 assistant_message_id: None,
@@ -2768,11 +3440,14 @@ mod tests {
             Correlation::Waiting
         );
         let done = ThreadDetail {
+            activities: Vec::new(),
+            activities_available: false,
             messages: vec![
                 message("uA", "user", "nous", None, false),
                 message("aA", "assistant", "complet", Some("tA"), false),
             ],
             latest_turn: Some(LatestTurn {
+                requested_at: None,
                 turn_id: "tA".to_string(),
                 state: "completed".to_string(),
                 assistant_message_id: None,
@@ -2791,6 +3466,8 @@ mod tests {
     #[test]
     fn spec098_correlation_sans_message_ni_tour() {
         let detail = ThreadDetail {
+            activities: Vec::new(),
+            activities_available: false,
             messages: vec![message("uA", "user", "nous", None, false)],
             latest_turn: None,
         };
@@ -2823,12 +3500,15 @@ mod tests {
         // de message assistant, puis l'humain obtient le sien. Un appariement
         // ordinal donnerait la réponse de l'humain à Bridget.
         let detail = ThreadDetail {
+            activities: Vec::new(),
+            activities_available: false,
             messages: vec![
                 message("uB", "user", "nous", None, false),
                 message("uH", "user", "humain", None, false),
                 message("aH", "assistant", "réponse à l'humain", Some("tH"), false),
             ],
             latest_turn: Some(LatestTurn {
+                requested_at: None,
                 turn_id: "tH".to_string(),
                 state: "completed".to_string(),
                 assistant_message_id: None,
@@ -2852,12 +3532,15 @@ mod tests {
     fn spec098_tour_supplementaire_sans_message_utilisateur_est_ambigu() {
         // Fan-out : t3code peut ouvrir un tour sans message utilisateur associé.
         let detail = ThreadDetail {
+            activities: Vec::new(),
+            activities_available: false,
             messages: vec![
                 message("uA", "user", "nous", None, false),
                 message("aX", "assistant", "sous-agent", Some("tX"), false),
                 message("aA", "assistant", "réponse", Some("tA"), false),
             ],
             latest_turn: Some(LatestTurn {
+                requested_at: None,
                 turn_id: "tA".to_string(),
                 state: "completed".to_string(),
                 assistant_message_id: None,

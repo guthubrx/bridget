@@ -2687,6 +2687,7 @@ impl AttachRelayWorker {
                 if let Some(feed) = &live_feed {
                     let (facts, dropped) = feed.take_observations();
                     if dropped > 0 {
+                        worker_emit(WrapperToDaemon::ObservationGap { dropped });
                         log::warn!(
                             "observation_gap: {dropped} faits perdus par saturation du relais"
                         );
@@ -3816,6 +3817,16 @@ fn launch_session_with_status(
     transport.activate_journal(&journal_root, &my_name, Some(live_feed.clone()))?;
     apply_pending_profile_instructions(socket, transport.as_mut(), &my_name, &instance_id);
     send_wrapper_message(&writer, WrapperToDaemon::JournalReady);
+    send_wrapper_message(
+        &writer,
+        WrapperToDaemon::ObservationCapabilities {
+            events: vec![
+                bridget_transport::protocol::ObservationKind::TurnEnded,
+                bridget_transport::protocol::ObservationKind::PermissionRequired,
+                bridget_transport::protocol::ObservationKind::FileWritten,
+            ],
+        },
+    );
     let journal_directory = journal_root.join(&my_name);
     let relay_writer = writer.clone();
     let mut relay = AttachRelayWorker::start(
@@ -4909,6 +4920,16 @@ fn reconnect_managed_session(
                 // même journal local reste actif, il doit donc être annoncé de
                 // nouveau sur la nouvelle connexion.
                 send_wrapper_message(writer, WrapperToDaemon::JournalReady);
+                send_wrapper_message(
+                    writer,
+                    WrapperToDaemon::ObservationCapabilities {
+                        events: vec![
+                            bridget_transport::protocol::ObservationKind::TurnEnded,
+                            bridget_transport::protocol::ObservationKind::PermissionRequired,
+                            bridget_transport::protocol::ObservationKind::FileWritten,
+                        ],
+                    },
+                );
                 if terminal_session {
                     send_wrapper_message(writer, WrapperToDaemon::TerminalSessionReady);
                 }
@@ -8451,6 +8472,55 @@ mod reconnect_tests {
         assert_eq!(reads.load(Ordering::SeqCst), 0);
         worker.shutdown();
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec101_relay_reports_upstream_saturation_before_remaining_facts() {
+        let root = relay_root("spec101-upstream-gap");
+        let feed = JournalLiveFeed::default();
+        // Trois flushs de100 évitent de saturer le writer lui-même ; seule la
+        // file indépendante de256 observations reste volontairement non lue.
+        for _ in 0..3 {
+            let writer = JournalWriter::start_with_live_feed(
+                &root,
+                "agent",
+                "session",
+                Arc::new(Mutex::new(bridget_transport::AcpEventQueue::default())),
+                Some(feed.clone()),
+            )
+            .unwrap();
+            for _ in 0..100 {
+                writer
+                    .enqueue(
+                        "turn_end",
+                        Some("human"),
+                        serde_json::json!({"stop_reason":"completed"}),
+                    )
+                    .unwrap();
+            }
+            writer.stop();
+        }
+        let (tx, rx) = mpsc::channel();
+        let mut relay = AttachRelayWorker::start_with_clock(
+            root.join("agent"),
+            Arc::new(|| "2026-09-16".into()),
+            1,
+            Some(feed),
+            Arc::new(move |message| {
+                let _ = tx.send(message);
+            }),
+            AttachRelayHooks::default(),
+        );
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            WrapperToDaemon::ObservationGap { dropped: 44 }
+        ));
+        for seq in 1..=256 {
+            assert!(
+                matches!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), WrapperToDaemon::ObservedActivity { seq: actual, .. } if actual == seq)
+            );
+        }
+        relay.shutdown();
     }
 
     #[test]

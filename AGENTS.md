@@ -1,12 +1,13 @@
 <!-- SPECKIT START -->
-Plan actif : specs/100-observation-partage/plan.md (socle : sessions 089 et 099).
+Plan actif : specs/101-abonnements-t3/plan.md (socle : sessions 098, 099 et 100).
 Périmètre : communication inter-agents, observation et fédération SSH.
 Ne pas lancer de daemon, wrapper ou script de déploiement avant configuration
-explicite d'un home/socket isolé pour les tests. L'adoption de la session 100
-sur l'installation existante est autorisée par l'utilisateur le 2026-09-16,
-après validation, sauvegarde et vérification des processus concernés.
-Sélection SpecKit : SPECIFY_FEATURE=100-observation-partage lorsque le script
-exige un préfixe numérique ; branche session-100-observation-partage.
+explicite d'un home/socket isolé pour les tests. Les adoptions100 et101
+sur l'installation existante sont autorisées par l'utilisateur le2026-09-16,
+après tests, sauvegarde et vérification des processus. Pour101 : relancer
+seulement Bridget et son pont, jamais T3 ni ses fournisseurs ; aucun commit.
+Sélection SpecKit : SPECIFY_FEATURE=101-abonnements-t3 lorsque le script
+exige un préfixe numérique ; branche session-101-abonnements-t3.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->

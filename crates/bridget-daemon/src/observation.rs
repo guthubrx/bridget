@@ -1,22 +1,41 @@
 //! Faits locaux, filtres et risques de collision. Aucun workflow ni accès disque.
 use bridget_transport::protocol::{ObservationKind as Kind, ObservationRequest as Request};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Component, Path};
 use std::time::{Duration, Instant};
 
-#[derive(Clone)]
-struct Subscription {
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Subscription {
     id: String,
     owner: String,
     event: Kind,
     agent: Option<String>,
     file: Option<String>,
     once: bool,
+    #[serde(skip, default = "Instant::now")]
     expires: Instant,
     expires_at: u64,
+    #[serde(skip)]
     last_notification: Option<Instant>,
+    #[serde(skip)]
     suppressed: u64,
+    #[serde(skip)]
+    interrupted: bool,
+    #[serde(skip)]
+    available: bool,
+    #[serde(skip)]
+    source_count: usize,
+    #[serde(skip)]
+    interruption_announced: bool,
+    #[serde(skip)]
+    facts_lost: u64,
+    #[serde(skip)]
+    last_gap_notice: Option<Instant>,
+    #[serde(skip)]
+    observation_gaps: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -33,30 +52,219 @@ pub(crate) struct Notification {
     pub body: String,
 }
 
+#[derive(Clone)]
 struct RecentWrite {
     agent: String,
     at: Instant,
     warned: Option<(String, String, Instant)>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct Observations {
-    subscriptions: HashMap<String, Subscription>,
+    pub subscriptions: HashMap<String, Subscription>,
     writes: HashMap<(String, String), RecentWrite>,
     pub evicted_writes: u64,
+    sources: HashMap<String, (String, Vec<Kind>)>,
+    pub revision: u64,
+    pub facts_lost: u64,
+    pub observation_gaps: u64,
 }
 
 impl Observations {
+    /// O(S*C), S<=128 abonnements, C sources primaires vivantes.
+    /// Lacune signalée (possible si dropped=0), jamais une fin de tour ; once conservé.
+    pub fn report_gap(&mut self, agent: &str, dropped: u64, now: Instant) -> Vec<Notification> {
+        self.facts_lost = self.facts_lost.saturating_add(dropped);
+        self.observation_gaps = self.observation_gaps.saturating_add(1);
+        let mut notices = vec![];
+        for sub in self
+            .subscriptions
+            .values_mut()
+            .filter(|s| !s.interrupted && s.expires > now)
+        {
+            if sub.agent.as_ref().is_some_and(|wanted| wanted != agent)
+                || !self
+                    .sources
+                    .values()
+                    .any(|(source, events)| source == agent && Self::compatible(events, sub.event))
+            {
+                continue;
+            }
+            sub.facts_lost = sub.facts_lost.saturating_add(dropped);
+            sub.observation_gaps = sub.observation_gaps.saturating_add(1);
+            if sub.last_gap_notice.is_some_and(|last| {
+                now.saturating_duration_since(last) < Duration::from_millis(200)
+            }) {
+                sub.suppressed = sub.suppressed.saturating_add(1);
+                continue;
+            }
+            sub.last_gap_notice = Some(now);
+            notices.push(Notification { owner: sub.owner.clone(), body: format!("[Bridget observation] {}", json!({
+                "subscription_id":sub.id,"event":"observation_gap","agent":agent,"facts_lost_total":sub.facts_lost,
+                "observation_gaps":sub.observation_gaps,"dropped":if dropped > 0 {Some(dropped)} else {None},
+                "notice":if dropped == 0 {"continuité d'observation non garantie ; quantité manquante inconnue ; surveillance poursuivie sans reconstruire la lacune"}
+                    else {"faits perdus à la source ; surveillance poursuivie sans reconstruire la lacune ; types et chemins des faits perdus inconnus"}
+            })) });
+        }
+        notices
+    }
+
+    pub fn snapshot(&self) -> Result<Vec<u8>, serde_json::Error> {
+        let mut subscriptions: Vec<_> = self.subscriptions.values().collect();
+        subscriptions.sort_by(|a, b| a.id.cmp(&b.id));
+        serde_json::to_vec(&subscriptions)
+    }
+
+    pub fn restore(bytes: &[u8], now: Instant, wall: u64) -> Result<Self, std::io::Error> {
+        let invalid = || std::io::Error::other("invalid observation subscription snapshot");
+        if bytes.len() > 262144 {
+            return Err(invalid());
+        }
+        let subs: Vec<Subscription> = serde_json::from_slice(bytes).map_err(|_| invalid())?;
+        if subs.len() > 128 {
+            return Err(invalid());
+        }
+        let mut state = Self::default();
+        for mut sub in subs {
+            if sub.id.is_empty()
+                || sub.id.len() > 128
+                || sub.owner.is_empty()
+                || sub.owner.len() > 128
+                || sub.agent.as_ref().is_some_and(|s| {
+                    s.is_empty() || s.len() > 128 || s.chars().any(char::is_control)
+                })
+                || sub.file.as_ref().is_some_and(|s| {
+                    s.is_empty() || s.len() > 256 || s.chars().any(char::is_control)
+                })
+                || (sub.file.is_some()
+                    && !matches!(sub.event, Kind::FileWritten | Kind::FileCollision))
+                || sub.expires_at > wall.saturating_add(604800)
+                || state.subscriptions.contains_key(&sub.id)
+                || state
+                    .subscriptions
+                    .values()
+                    .filter(|s| s.owner == sub.owner)
+                    .count()
+                    >= 16
+            {
+                return Err(invalid());
+            }
+            if sub.expires_at <= wall {
+                continue;
+            }
+            sub.expires = now + Duration::from_secs(sub.expires_at - wall);
+            sub.interrupted = true;
+            state.subscriptions.insert(sub.id.clone(), sub);
+        }
+        Ok(state)
+    }
+
+    fn compatible(events: &[Kind], event: Kind) -> bool {
+        events.contains(&if event == Kind::FileCollision {
+            Kind::FileWritten
+        } else {
+            event
+        })
+    }
+
+    pub fn accepts(&self, connection: &str, event: Kind) -> bool {
+        self.sources
+            .get(connection)
+            .is_some_and(|(_, events)| events.contains(&event))
+    }
+
+    pub fn catalogue(&self) -> Value {
+        let mut sources: Vec<_> = self
+            .sources
+            .iter()
+            .map(|(connection, (agent, events))| {
+                let mut supported = events.clone();
+                if events.contains(&Kind::FileWritten) {
+                    supported.push(Kind::FileCollision);
+                }
+                json!({"connection":connection,"agent":agent,"events":supported})
+            })
+            .collect();
+        sources.sort_by(|a, b| a["connection"].as_str().cmp(&b["connection"].as_str()));
+        json!(sources)
+    }
+
+    pub fn set_source(
+        &mut self,
+        connection: &str,
+        agent: &str,
+        events: Vec<Kind>,
+        now: Instant,
+    ) -> Vec<Notification> {
+        self.sources
+            .insert(connection.into(), (agent.into(), events));
+        self.refresh_sources(now)
+    }
+
+    pub fn remove_source(&mut self, connection: &str, now: Instant) -> Vec<Notification> {
+        self.sources.remove(connection);
+        self.refresh_sources(now)
+    }
+
+    fn refresh_sources(&mut self, now: Instant) -> Vec<Notification> {
+        let mut notices = vec![];
+        for sub in self
+            .subscriptions
+            .values_mut()
+            .filter(|s| !s.interrupted && s.expires > now)
+        {
+            let source_count = self
+                .sources
+                .values()
+                .filter(|(agent, events)| {
+                    sub.agent.as_ref().is_none_or(|wanted| wanted == agent)
+                        && Self::compatible(events, sub.event)
+                })
+                .count();
+            let available = source_count > 0;
+            if source_count != sub.source_count {
+                sub.available = available;
+                sub.source_count = source_count;
+                notices.push(Notification { owner: sub.owner.clone(), body: format!("[Bridget observation] {}", json!({
+                    "subscription_id":sub.id,"state":if available {"active"} else {"source_unavailable"},
+                    "sources_compatible":source_count,
+                    "notice":if available {"couverture modifiée ; seules les sources déclarées sont observées, lacunes non rejouées"} else {"surveillance interrompue : source indisponible"}
+                })) });
+            }
+        }
+        notices
+    }
+
+    pub fn owner_returned(&mut self, owner: &str, now: Instant) -> Vec<Notification> {
+        self.subscriptions.values_mut().filter(|s| s.owner == owner && s.interrupted && !s.interruption_announced && s.expires > now)
+            .map(|s| {
+                s.interruption_announced = true;
+                Notification { owner: owner.into(), body: format!("[Bridget observation] {}", json!({"subscription_id":s.id,"state":"interrupted","notice":"daemon redémarré : surveillance interrompue, nouvel abonnement requis ; aucun historique rejoué"})) }
+            }).collect()
+    }
+
     /// O(S), liste triée O(S log S), S <= 128. Identité hors Request.
     pub fn request(&mut self, owner: &str, request: Request, now: Instant, wall: u64) -> Value {
+        let before = self.subscriptions.len();
         self.subscriptions.retain(|_, s| s.expires > now);
+        if before != self.subscriptions.len() {
+            self.revision += 1;
+        }
         match request {
-            Request::Types {} => json!({"events":[
-                {"event":"turn_ended","meaning":"fin d'un tour, pas succès ou fin de mission"},
-                {"event":"permission_required","meaning":"demande de permission observée, éventuellement déjà traitée"},
-                {"event":"file_written","meaning":"écriture structurée confirmée par une intégration"},
-                {"event":"file_collision","meaning":"risque : deux auteurs, même hôte/chemin, 30 secondes"}
-            ]}),
+            Request::Types {} => {
+                let events: Vec<_> = [
+                    (Kind::TurnEnded, "fin d'un tour, pas succès ou fin de mission"),
+                    (Kind::PermissionRequired, "demande de permission observée, éventuellement déjà traitée"),
+                    (Kind::FileWritten, "écriture structurée confirmée par une intégration"),
+                    (Kind::FileCollision, "risque : deux auteurs, même hôte/chemin, 30 secondes"),
+                ].into_iter().map(|(kind, meaning)| {
+                    let mut sources: Vec<_> = self.sources.values().filter(|(_, events)| Self::compatible(events, kind)).map(|(agent, _)| agent).collect();
+                    sources.sort();
+                    sources.dedup();
+                    json!({"event":kind,"meaning":meaning,"available":!sources.is_empty(),"sources":sources})
+                }).collect();
+                json!({"events":events})
+            }
             Request::Sub {
                 event,
                 agent,
@@ -86,6 +294,22 @@ impl Observations {
                 {
                     return json!({"status":"rejected","reason":"subscription_limit"});
                 }
+                let source_count = self
+                    .sources
+                    .values()
+                    .filter(|(source, events)| {
+                        agent.as_ref().is_none_or(|a| a == source)
+                            && Self::compatible(events, event)
+                    })
+                    .count();
+                if source_count == 0 {
+                    let unavailable = agent.as_ref().is_some_and(|wanted| {
+                        self.sources
+                            .values()
+                            .any(|(source, events)| source == wanted && events.is_empty())
+                    });
+                    return json!({"status":"rejected","reason":if unavailable {"source_unavailable"} else {"no_compatible_source"}});
+                }
                 let id = uuid::Uuid::new_v4().to_string();
                 let sub = Subscription {
                     id: id.clone(),
@@ -98,9 +322,17 @@ impl Observations {
                     expires_at: wall.saturating_add(ttl),
                     last_notification: None,
                     suppressed: 0,
+                    interrupted: false,
+                    available: true,
+                    source_count,
+                    interruption_announced: false,
+                    facts_lost: 0,
+                    last_gap_notice: None,
+                    observation_gaps: 0,
                 };
                 let result = json!({"status":"subscribed","subscription":subscription_json(&sub)});
                 self.subscriptions.insert(id, sub);
+                self.revision += 1;
                 result
             }
             Request::List {} => {
@@ -117,6 +349,7 @@ impl Observations {
                     return json!({"status":"rejected","reason":"subscription_not_found"});
                 }
                 self.subscriptions.remove(&id);
+                self.revision += 1;
                 json!({"status":"unsubscribed","id":id})
             }
         }
@@ -174,8 +407,10 @@ impl Observations {
             );
         }
         let mut notifications = vec![];
+        let before = self.subscriptions.len();
         self.subscriptions.retain(|_, sub| {
             if sub.expires <= now { return false; }
+            if sub.interrupted || !sub.available { return true; }
             for fact in &facts {
                 if sub.event != fact.event
                     || sub.agent.as_ref().is_some_and(|a| a!=&fact.agent && fact.other_agent.as_ref()!=Some(a))
@@ -194,13 +429,20 @@ impl Observations {
             }
             true
         });
+        if before != self.subscriptions.len() {
+            self.revision += 1;
+        }
         notifications
     }
 }
 
 fn subscription_json(s: &Subscription) -> Value {
     json!({"id":s.id,"event":s.event,"agent":s.agent,"file":s.file,
-        "once":s.once,"expires_at":s.expires_at,"suppressed_total":s.suppressed})
+        "once":s.once,"expires_at":s.expires_at,"suppressed_total":s.suppressed,
+        "sources_compatible":s.source_count,
+        "facts_lost_total":s.facts_lost,
+        "observation_gaps":s.observation_gaps,
+        "state":if s.interrupted {"interrupted"} else if s.available {"active"} else {"source_unavailable"}})
 }
 
 /// Comparaison lexicale Unix, sans I/O ni résolution des symlinks.
@@ -247,6 +489,112 @@ fn path_matches(pattern: &str, path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn spec101_gap_is_counted_filtered_and_notification_rate_bounded() {
+        let now = Instant::now();
+        let mut state = Observations::default();
+        state.set_source("a", "a", vec![Kind::TurnEnded], now);
+        state.set_source("b", "b", vec![Kind::TurnEnded], now);
+        let for_agent = |agent: &str| Request::Sub {
+            event: Kind::TurnEnded,
+            agent: Some(agent.into()),
+            file: None,
+            once: true,
+            ttl_secs: Some(60),
+        };
+        state.request("owner-a", for_agent("a"), now, 100);
+        state.request("owner-b", for_agent("b"), now, 100);
+        let notices = state.report_gap("a", 44, now);
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].owner, "owner-a");
+        assert!(notices[0].body.contains("observation_gap"));
+        assert!(state.report_gap("a", 2, now).is_empty());
+        assert_eq!(state.facts_lost, 46);
+        let list = state.request("owner-a", Request::List {}, now, 100);
+        assert_eq!(list["subscriptions"][0]["facts_lost_total"], 46);
+        assert_eq!(list["subscriptions"][0]["state"], "active");
+        assert_eq!(
+            state.subscriptions.len(),
+            2,
+            "la lacune ne consomme jamais once"
+        );
+    }
+    #[test]
+    fn spec101_sources_are_required_and_loss_is_explicit() {
+        let now = Instant::now();
+        let mut state = Observations::default();
+        assert_eq!(
+            state.request("owner", sub(Kind::TurnEnded, false), now, 100)["reason"],
+            "no_compatible_source"
+        );
+        assert!(
+            state
+                .set_source("conn", "a", vec![Kind::TurnEnded], now)
+                .is_empty()
+        );
+        let catalogue = state.request("owner", Request::Types {}, now, 100);
+        assert_eq!(catalogue["events"][0]["available"], true);
+        assert_eq!(catalogue["events"][0]["sources"], json!(["a"]));
+        assert_eq!(catalogue["events"][2]["available"], false);
+        assert_eq!(
+            state.request("owner", sub(Kind::FileWritten, false), now, 100)["reason"],
+            "no_compatible_source"
+        );
+        state.request("owner", sub(Kind::TurnEnded, false), now, 100);
+        assert_eq!(state.remove_source("conn", now).len(), 1);
+        assert_eq!(
+            state.request("owner", Request::List {}, now, 100)["subscriptions"][0]["state"],
+            "source_unavailable"
+        );
+        assert_eq!(
+            state
+                .set_source("new", "a", vec![Kind::TurnEnded], now)
+                .len(),
+            1
+        );
+        assert_eq!(
+            state.request("owner", Request::List {}, now, 100)["subscriptions"][0]["state"],
+            "active"
+        );
+    }
+
+    #[test]
+    fn spec101_restore_is_interrupted_and_absolute_ttl_is_preserved() {
+        let now = Instant::now();
+        let mut state = Observations::default();
+        state.set_source("conn", "a", vec![Kind::TurnEnded], now);
+        state.request("owner", sub(Kind::TurnEnded, true), now, 100);
+        let bytes = state.snapshot().unwrap();
+        let mut restored = Observations::restore(&bytes, now, 110).unwrap();
+        restored.set_source("conn", "a", vec![Kind::TurnEnded], now);
+        assert_eq!(
+            restored.request("owner", Request::List {}, now, 110)["subscriptions"][0]["state"],
+            "interrupted"
+        );
+        assert_eq!(restored.owner_returned("owner", now).len(), 1);
+        assert!(restored.owner_returned("owner", now).is_empty());
+        assert!(
+            restored
+                .observe(
+                    Fact {
+                        event: Kind::TurnEnded,
+                        agent: "a".into(),
+                        host: "h".into(),
+                        file: None,
+                        other_agent: None
+                    },
+                    now
+                )
+                .is_empty()
+        );
+        assert!(
+            Observations::restore(&bytes, now, 161)
+                .unwrap()
+                .subscriptions
+                .is_empty()
+        );
+        assert!(Observations::restore(b"invalid", now, 110).is_err());
+    }
     fn sub(event: Kind, once: bool) -> Request {
         Request::Sub {
             event,
@@ -269,6 +617,7 @@ mod tests {
     fn spec100_once_owner_expiry_and_filters() {
         let now = Instant::now();
         let mut state = Observations::default();
+        state.set_source("a", "a", vec![Kind::TurnEnded], now);
         let receipt = state.request("owner", sub(Kind::TurnEnded, true), now, 100);
         let id = receipt["subscription"]["id"].as_str().unwrap().to_string();
         assert_eq!(
@@ -297,6 +646,7 @@ mod tests {
     fn spec100_collision_is_scoped_and_deduplicated() {
         let now = Instant::now();
         let mut state = Observations::default();
+        state.set_source("a", "a", vec![Kind::FileWritten], now);
         state.request("owner", sub(Kind::FileCollision, false), now, 100);
         assert!(state.observe(file("a", "h", "/p/x"), now).is_empty());
         assert!(state.observe(file("a", "h", "/p/./x"), now).is_empty());
@@ -316,6 +666,7 @@ mod tests {
     fn spec100_subscriptions_are_bounded_and_unknown_fields_refused() {
         let now = Instant::now();
         let mut state = Observations::default();
+        state.set_source("a", "a", vec![Kind::TurnEnded], now);
         for _ in 0..16 {
             assert_eq!(
                 state.request("owner", sub(Kind::TurnEnded, false), now, 0)["status"],
@@ -362,6 +713,7 @@ mod tests {
     fn spec100_rate_cache_and_combined_filters_are_bounded() {
         let now = Instant::now();
         let mut state = Observations::default();
+        state.set_source("a", "a", vec![Kind::FileWritten], now);
         state.request(
             "owner",
             Request::Sub {

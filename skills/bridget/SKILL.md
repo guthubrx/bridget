@@ -1,6 +1,6 @@
 ---
 name: bridget
-description: Communiquer entre agents avec Bridget, lancer un équipier sur demande explicite, observer son journal et reprendre une session interactive. MCP ou CLI sur la même autorité, y compris via un tunnel SSH configuré. Ne coordonne pas les tâches métier.
+description: Communiquer et demander une relecture entre agents avec Bridget, partager un extrait de journal, s'abonner aux fins de tour, permissions ou modifications concurrentes. Lancer un équipier uniquement sur demande explicite. MCP ou CLI attesté, sans orchestrateur métier.
 ---
 
 # Communication entre agents
@@ -13,7 +13,7 @@ envoyer un message. Une panne de connexion n'autorise pas une autre route.
 
 Si l'outil MCP Bridget requis est présent (éventuellement différé), l'employer.
 La présence du daemon Bridget et celle du serveur MCP sont deux faits distincts.
-Si des outils Bridget de base sont visibles mais qu'un outil 094 manque, signaler
+Si des outils Bridget de base sont visibles mais qu'un outil requis manque, signaler
 un catalogue MCP ancien : installer un binaire ne recharge pas le processus déjà
 vivant. Utiliser un rechargement natif seulement s'il est connu, sinon demander à
 l'humain de rouvrir la session. Ne jamais inventer de commande de reload.
@@ -33,9 +33,32 @@ panne du daemon Bridget ni celle du serveur MCP : ce sont des chemins d'exécuti
 distincts. Ne pas élargir le sandbox pour contourner ce refus.
 
 Pour toute demande hors annuaire, envoi ou réponse liée de base, lire
-[la référence des commandes et accès 094](references/commandes.md) avant d'agir.
+[la référence des commandes et accès 094–101](references/commandes.md) avant d'agir.
 Elle contient l'inventaire CLI complet, les quatorze outils Bridget, les procédures
 d'artefacts et les limites de rechargement.
+
+## Les demandes du quotidien
+
+Exécuter la demande avec l'identité de cette conversation ; aucun formulaire,
+profil métier ou passage par Maicie n'est nécessaire. Résoudre les noms par
+l'annuaire ; demander une précision seulement si plusieurs cibles conviennent.
+
+| Demande | Action utile |
+|---|---|
+| « Fais relire ce travail par B » | Envoyer à B le périmètre, les questions et les références utiles, avec `reply:true` et un délai adapté. Ne pas lancer un nouvel agent implicitement. |
+| « Partage les dernières étapes de A avec B » | `bridget_journal` sur A, extrait borné avec `to:B`. Ajouter `reply:true` seulement si un retour est demandé. |
+| « Préviens-moi quand A finit, maximum 15 minutes » | Vérifier les sources dans `types`, puis `sub` sur A : `turn_ended`, `once:true`, `ttl_secs:900`. |
+| « Prolonge de 10 minutes » / « Arrête la surveillance » | Retrouver l'abonnement par `list`, puis suivre la procédure de remplacement ou `unsub` de la référence. Il n'existe pas d'action `renew`. |
+| « Signale les modifications concurrentes ici » | Vérifier la couverture des écritures puis s'abonner à `file_collision`, limité au chemin absolu demandé ; aucun verrou. |
+
+Pour ces observations, lire les **recettes pratiques** de la référence. Confirmer
+l'activation seulement sur un reçu `subscribed`, et annoncer l'échéance réelle.
+Après confirmation, rendre la main : les notifications arrivent par message,
+sans boucle de sondage ni attente active. L'expiration n'envoie pas d'alerte.
+Une notification `[Bridget observation]` s'explique à l'utilisateur si utile :
+aucun accusé inter-agent, nouvel abonnement ou travail supplémentaire implicite.
+Une fin de tour peut être une erreur ou une interruption ; ce n'est ni une
+validation de mission ni la réponse exigée par un `reply`.
 
 ## Choisir l'accès sans inventer de capacité
 
