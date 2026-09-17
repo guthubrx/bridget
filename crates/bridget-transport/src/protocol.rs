@@ -2145,6 +2145,15 @@ pub enum ObservationRequest {
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
+    /// Lacune de faits structurés signalée par le seul producteur primaire.
+    ObservationGap {
+        /// Zéro : continuité non garantie, quantité inconnue ; positif : pertes comptées.
+        dropped: u64,
+    },
+    /// Capacités réelles du producteur primaire vivant ; vide = indisponible.
+    ObservationCapabilities {
+        events: Vec<ObservationKind>,
+    },
     ObservationRequest {
         request: ObservationRequest,
     },

@@ -1301,11 +1301,44 @@ fn observation_output() -> (
     (tx, lost)
 }
 
-/// O(S), S<=128 ; aucune E/S sous verrou, dépôt non bloquant en file de 64.
+/// O(S), S<=128 ; persistance seulement si abonnement consommé/expiré.
+/// Aucune E/S de notification sous verrou, dépôt non bloquant en file de64.
 fn observe_fact(st: &mut DaemonState, fact: crate::observation::Fact) {
+    let before = st.observations.subscriptions.clone();
+    let revision = st.observations.revision;
     let notifications = st.observations.observe(fact, Instant::now());
+    if revision != st.observations.revision {
+        let saved = st
+            .observations
+            .snapshot()
+            .ok()
+            .is_some_and(|bytes| st.store.save_observation_snapshot(&bytes).is_ok());
+        if !saved {
+            st.observations.subscriptions = before;
+            st.observations.revision = revision;
+            st.observation_lost.fetch_add(
+                notifications.len() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            error!("observation persistence failed; no notification delivered");
+            return;
+        }
+    }
+    queue_observation_notifications(st, notifications);
+}
+
+// Réutilisé pour faits et interruptions, même file bornée et même règle DND.
+fn queue_observation_notifications(
+    st: &DaemonState,
+    notifications: Vec<crate::observation::Notification>,
+) {
     for notification in notifications {
         let target = st.router.get_agent(&notification.owner).and_then(|route| {
+            // Une route en cours de Register n'a pas encore sa preuve : ne
+            // jamais faire précéder le reçu Registered par une notification.
+            if !st.identity_credentials.contains_key(&route.connection_id) {
+                return None;
+            }
             let presence = st
                 .conn_instances
                 .get(&route.connection_id)
@@ -2894,8 +2927,13 @@ impl DaemonState {
         let registry = AgentRegistry::load()?;
         let (view_closed_tx, view_closed_rx) = mpsc::channel();
         let (observation_tx, observation_lost) = observation_output();
+        let observations = crate::observation::Observations::restore(
+            &store.observation_snapshot()?,
+            Instant::now(),
+            unix_now_secs().max(0) as u64,
+        )?;
         Ok(DaemonState {
-            observations: Default::default(),
+            observations,
             observation_sequences: HashMap::new(),
             observation_tx,
             observation_lost,
@@ -3027,7 +3065,11 @@ impl DaemonState {
     }
 
     fn revoke_identity_authorizations(&mut self, owner: &str) {
-        if self.identity_credentials.remove(owner).is_none() {
+        let had_credential = self.identity_credentials.remove(owner).is_some();
+        self.observation_sequences.remove(owner);
+        let notices = self.observations.remove_source(owner, Instant::now());
+        queue_observation_notifications(self, notices);
+        if !had_credential {
             return;
         }
         let Some(instance) = self.conn_instances.get(owner).cloned() else {
@@ -4852,6 +4894,16 @@ fn handle_connection(
             // Après Registered : rejouer les notices ORPHELIN dont l'émetteur
             // était hors ligne à la purge (voir flush_pending_orphan_emitter_notices).
             if registered_just_now {
+                {
+                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some((owner, instance)) = live_connection_identity(&st, &conn_id)
+                        && !st.auxiliary_connections.contains(&conn_id)
+                        && st.presences.get(&instance).is_some_and(|p| !p.is_dnd())
+                    {
+                        let notices = st.observations.owner_returned(&owner, Instant::now());
+                        queue_observation_notifications(&st, notices);
+                    }
+                }
                 state
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -4874,6 +4926,8 @@ fn handle_connection(
         st.mark_unreachable(&conn_id);
         st.conn_names.remove(&conn_id);
         st.observation_sequences.remove(&conn_id);
+        let notices = st.observations.remove_source(&conn_id, Instant::now());
+        queue_observation_notifications(&st, notices);
         st.conn_hosts.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
@@ -8848,9 +8902,332 @@ mod spec099_classic_delivery_tests {
     }
 
     #[test]
+    fn spec101_upstream_gap_requires_primary_and_dnd_preserves_loss_counters() {
+        use bridget_transport::protocol::{ObservationKind as Kind, ObservationRequest as Request};
+        let (state, _root, _peers) = fixture();
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationGap { dropped: 99 },
+            &state,
+        );
+        assert_eq!(state.lock().unwrap().observations.facts_lost, 0);
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationCapabilities {
+                events: vec![Kind::TurnEnded],
+            },
+            &state,
+        );
+        handle_wrapper_message(
+            "witness",
+            WrapperToDaemon::ObservationRequest {
+                request: Request::Sub {
+                    event: Kind::TurnEnded,
+                    agent: Some(SENDER.into()),
+                    file: None,
+                    once: true,
+                    ttl_secs: Some(60),
+                },
+            },
+            &state,
+        );
+        {
+            let mut st = state.lock().unwrap();
+            st.auxiliary_connections.insert("sender".into());
+            let instance = st.conn_instances["witness"].clone();
+            st.presences.get_mut(&instance).unwrap().dnd_until =
+                Some(Instant::now() + Duration::from_secs(30));
+        }
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationGap { dropped: 99 },
+            &state,
+        );
+        assert_eq!(state.lock().unwrap().observations.facts_lost, 0);
+        state.lock().unwrap().auxiliary_connections.remove("sender");
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationGap { dropped: 44 },
+            &state,
+        );
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationGap { dropped: 0 },
+            &state,
+        );
+        let Some(DaemonToWrapper::ObservationResult { result }) = handle_wrapper_message(
+            "witness",
+            WrapperToDaemon::ObservationRequest {
+                request: Request::List {},
+            },
+            &state,
+        ) else {
+            panic!("résultat requis")
+        };
+        assert_eq!(result["facts_lost"], 44);
+        assert_eq!(result["observation_gaps"], 2);
+        assert_eq!(result["subscriptions"][0]["facts_lost_total"], 44);
+        assert_eq!(result["subscriptions"][0]["observation_gaps"], 2);
+        assert_eq!(
+            result["notifications_lost"], 1,
+            "DND perd la notice, pas le diagnostic consultable"
+        );
+        assert_eq!(result["subscriptions"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn spec101_sqlite_contention_rolls_back_subscription_and_once_without_waiting() {
+        use bridget_transport::protocol::{ObservationKind as Kind, ObservationRequest as Request};
+        let (state, _root, _peers) = fixture();
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationCapabilities {
+                events: vec![Kind::TurnEnded],
+            },
+            &state,
+        );
+        let subscribe = || WrapperToDaemon::ObservationRequest {
+            request: Request::Sub {
+                event: Kind::TurnEnded,
+                agent: Some(SENDER.into()),
+                file: None,
+                once: true,
+                ttl_secs: Some(60),
+            },
+        };
+        handle_wrapper_message("witness", subscribe(), &state);
+        let blocker = rusqlite::Connection::open(&state.lock().unwrap().db_path).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let started = Instant::now();
+        assert!(
+            matches!(handle_wrapper_message("witness", subscribe(), &state), Some(DaemonToWrapper::ObservationResult { result }) if result["reason"] == "subscription_persistence_failed")
+        );
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservedActivity {
+                seq: 1,
+                event: Kind::TurnEnded,
+                file: None,
+            },
+            &state,
+        );
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert_eq!(state.lock().unwrap().observations.subscriptions.len(), 1);
+        blocker.execute_batch("ROLLBACK").unwrap();
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservedActivity {
+                seq: 2,
+                event: Kind::TurnEnded,
+                file: None,
+            },
+            &state,
+        );
+        assert!(state.lock().unwrap().observations.subscriptions.is_empty());
+        assert_eq!(
+            state.lock().unwrap().store.observation_snapshot().unwrap(),
+            b"[]"
+        );
+    }
+
+    #[test]
+    fn spec101_capabilities_auth_persistence_and_failure() {
+        use bridget_transport::protocol::{ObservationKind as Kind, ObservationRequest as Request};
+        let (state, _root, _peers) = fixture();
+        let request = || WrapperToDaemon::ObservationRequest {
+            request: Request::Sub {
+                event: Kind::TurnEnded,
+                agent: Some(SENDER.into()),
+                file: None,
+                once: true,
+                ttl_secs: Some(60),
+            },
+        };
+        let result = handle_wrapper_message("witness", request(), &state);
+        assert!(
+            matches!(result, Some(DaemonToWrapper::ObservationResult {result}) if result["reason"] == "no_compatible_source")
+        );
+        state
+            .lock()
+            .unwrap()
+            .auxiliary_connections
+            .insert("sender".into());
+        assert!(matches!(
+            handle_wrapper_message(
+                "sender",
+                WrapperToDaemon::ObservationCapabilities {
+                    events: vec![Kind::TurnEnded]
+                },
+                &state
+            ),
+            Some(DaemonToWrapper::Nack { .. })
+        ));
+        state.lock().unwrap().auxiliary_connections.remove("sender");
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservedActivity {
+                seq: 1,
+                event: Kind::TurnEnded,
+                file: None,
+            },
+            &state,
+        );
+        assert!(state.lock().unwrap().observation_sequences.is_empty());
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationCapabilities {
+                events: vec![Kind::TurnEnded, Kind::FileWritten],
+            },
+            &state,
+        );
+        let result = handle_wrapper_message("witness", request(), &state);
+        assert!(
+            matches!(result, Some(DaemonToWrapper::ObservationResult {result}) if result["status"] == "subscribed")
+        );
+        {
+            let st = state.lock().unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Vec<serde_json::Value>>(
+                    &st.store.observation_snapshot().unwrap()
+                )
+                .unwrap()
+                .len(),
+                1
+            );
+            st.store
+                .connection()
+                .execute_batch("PRAGMA query_only=ON")
+                .unwrap();
+        }
+        let result = handle_wrapper_message("witness", request(), &state);
+        assert!(
+            matches!(result, Some(DaemonToWrapper::ObservationResult {result}) if result["reason"] == "subscription_persistence_failed")
+        );
+        assert_eq!(state.lock().unwrap().observations.subscriptions.len(), 1);
+        // Aucun INSERT pour un fait non pertinent, même si SQLite est read-only.
+        let changes = state.lock().unwrap().store.connection().total_changes();
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservedActivity {
+                seq: 1,
+                event: Kind::FileWritten,
+                file: Some("/private/irrelevant".into()),
+            },
+            &state,
+        );
+        assert_eq!(state.lock().unwrap().observation_sequences["sender"], 1);
+        assert_eq!(
+            state.lock().unwrap().store.connection().total_changes(),
+            changes
+        );
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservedActivity {
+                seq: 2,
+                event: Kind::TurnEnded,
+                file: None,
+            },
+            &state,
+        );
+        assert_eq!(
+            state.lock().unwrap().observations.subscriptions.len(),
+            1,
+            "once non consommé si sauvegarde impossible"
+        );
+        state
+            .lock()
+            .unwrap()
+            .store
+            .connection()
+            .execute_batch("PRAGMA query_only=OFF")
+            .unwrap();
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservedActivity {
+                seq: 3,
+                event: Kind::TurnEnded,
+                file: None,
+            },
+            &state,
+        );
+        assert_eq!(
+            state.lock().unwrap().store.observation_snapshot().unwrap(),
+            b"[]"
+        );
+    }
+
+    #[test]
+    fn spec101_missing_agent_offline_source_and_invalid_announcements_are_refused() {
+        use bridget_transport::protocol::{ObservationKind as Kind, ObservationRequest as Request};
+        let (state, _root, _peers) = fixture();
+        let subscribe = |agent: &str| WrapperToDaemon::ObservationRequest {
+            request: Request::Sub {
+                event: Kind::TurnEnded,
+                agent: Some(agent.into()),
+                file: None,
+                once: false,
+                ttl_secs: Some(60),
+            },
+        };
+        assert!(
+            matches!(handle_wrapper_message("witness", subscribe("unknown"), &state), Some(DaemonToWrapper::ObservationResult { result }) if result["reason"] == "agent_not_found")
+        );
+        for events in [
+            vec![Kind::FileCollision],
+            vec![Kind::TurnEnded, Kind::TurnEnded],
+            vec![Kind::TurnEnded; 4],
+        ] {
+            assert!(matches!(
+                handle_wrapper_message(
+                    "sender",
+                    WrapperToDaemon::ObservationCapabilities { events },
+                    &state
+                ),
+                Some(DaemonToWrapper::Nack { .. })
+            ));
+        }
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationCapabilities { events: vec![] },
+            &state,
+        );
+        assert!(
+            matches!(handle_wrapper_message("witness", subscribe(SENDER), &state), Some(DaemonToWrapper::ObservationResult { result }) if result["reason"] == "source_unavailable")
+        );
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationCapabilities {
+                events: vec![Kind::TurnEnded],
+            },
+            &state,
+        );
+        handle_wrapper_message("witness", subscribe(SENDER), &state);
+        handle_wrapper_message("sender", WrapperToDaemon::Unregister, &state);
+        assert!(
+            !state
+                .lock()
+                .unwrap()
+                .observations
+                .accepts("sender", Kind::TurnEnded)
+        );
+        assert!(
+            matches!(handle_wrapper_message("witness", subscribe(SENDER), &state), Some(DaemonToWrapper::ObservationResult { result }) if result["reason"] == "source_unavailable")
+        );
+    }
+
+    #[test]
     fn spec100_owner_source_collision_and_nonblocking_notifications() {
         use bridget_transport::protocol::{ObservationKind as Kind, ObservationRequest as Request};
         let (state, _root, mut peers) = fixture();
+        for conn in ["sender", "target"] {
+            handle_wrapper_message(
+                conn,
+                WrapperToDaemon::ObservationCapabilities {
+                    events: vec![Kind::FileWritten, Kind::TurnEnded, Kind::PermissionRequired],
+                },
+                &state,
+            );
+        }
         let request = Request::Sub {
             event: Kind::FileCollision,
             agent: None,
@@ -9529,6 +9906,8 @@ fn handle_wrapper_message(
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ObservationRequest { .. }
                 | WrapperToDaemon::ObservedActivity { .. }
+                | WrapperToDaemon::ObservationCapabilities { .. }
+                | WrapperToDaemon::ObservationGap { .. }
                 | WrapperToDaemon::ClientHello { .. }
                 | WrapperToDaemon::ArtifactPublish { .. }
                 | WrapperToDaemon::ArtifactRead { .. }
@@ -9742,6 +10121,8 @@ fn handle_wrapper_message(
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ObservationRequest { .. }
                 | WrapperToDaemon::ObservedActivity { .. }
+                | WrapperToDaemon::ObservationCapabilities { .. }
+                | WrapperToDaemon::ObservationGap { .. }
                 | WrapperToDaemon::ServiceHello { .. }
                 | WrapperToDaemon::ArtifactPublish { .. }
                 | WrapperToDaemon::ArtifactRead { .. }
@@ -9838,6 +10219,51 @@ fn handle_wrapper_message(
     }
 
     match msg {
+        WrapperToDaemon::ObservationGap { dropped } => {
+            use bridget_transport::protocol::ObservationKind;
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let (agent, _) = live_connection_identity(&st, conn_id)?;
+            if st.auxiliary_connections.contains(conn_id)
+                || ![
+                    ObservationKind::TurnEnded,
+                    ObservationKind::PermissionRequired,
+                    ObservationKind::FileWritten,
+                ]
+                .into_iter()
+                .any(|kind| st.observations.accepts(conn_id, kind))
+            {
+                return None;
+            }
+            let notices = st.observations.report_gap(&agent, dropped, Instant::now());
+            queue_observation_notifications(&st, notices);
+            None
+        }
+        WrapperToDaemon::ObservationCapabilities { events } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some((agent, _)) = live_connection_identity(&st, conn_id) else {
+                return Some(DaemonToWrapper::Nack {
+                    id: "observation-capabilities".into(),
+                    reason: "primary_identity_required".into(),
+                });
+            };
+            if st.auxiliary_connections.contains(conn_id)
+                || events.len() > 3
+                || events.iter().enumerate().any(|(i, event)| {
+                    *event == bridget_transport::protocol::ObservationKind::FileCollision
+                        || events[..i].contains(event)
+                })
+            {
+                return Some(DaemonToWrapper::Nack {
+                    id: "observation-capabilities".into(),
+                    reason: "invalid_primary_capabilities".into(),
+                });
+            }
+            let notices = st
+                .observations
+                .set_source(conn_id, &agent, events, Instant::now());
+            queue_observation_notifications(&st, notices);
+            None
+        }
         WrapperToDaemon::ObservationRequest { request } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let Some((owner, _)) = live_connection_identity(&st, conn_id) else {
@@ -9846,15 +10272,56 @@ fn handle_wrapper_message(
                     reason: "identité active requise".into(),
                 });
             };
+            if let bridget_transport::protocol::ObservationRequest::Sub {
+                agent: Some(ref agent),
+                ..
+            } = request
+            {
+                let reason = if st.router.get_agent(agent).is_none() {
+                    Some(if st.presences.values().any(|p| p.name == *agent) {
+                        "source_unavailable"
+                    } else {
+                        "agent_not_found"
+                    })
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
+                    return Some(DaemonToWrapper::ObservationResult {
+                        result: serde_json::json!({"status":"rejected","reason":reason}),
+                    });
+                }
+            }
+            let before = st.observations.subscriptions.clone();
+            let revision = st.observations.revision;
             let mut result = st.observations.request(
                 &owner,
                 request,
                 Instant::now(),
                 unix_now_secs().max(0) as u64,
             );
+            if st.observations.revision != revision
+                && st
+                    .observations
+                    .snapshot()
+                    .ok()
+                    .is_none_or(|bytes| st.store.save_observation_snapshot(&bytes).is_err())
+            {
+                st.observations.subscriptions = before;
+                st.observations.revision = revision;
+                return Some(DaemonToWrapper::ObservationResult {
+                    result: serde_json::json!({"status":"rejected","reason":"subscription_persistence_failed"}),
+                });
+            }
+            result["sources"] = st.observations.catalogue();
+            result["facts_lost"] = serde_json::json!(st.observations.facts_lost);
+            result["observation_gaps"] = serde_json::json!(st.observations.observation_gaps);
+            result["coverage"] = serde_json::json!(
+                "partial: declared compatible live sources only; no historical replay; T3: latest turn only, activity window 500 before compression, at most 12 paths per activity; Claude T3 file writes unsupported"
+            );
             result["daemon_instance"] = serde_json::json!(st.instance_id);
             result["lifetime"] = serde_json::json!(
-                "daemon_memory: recréer après redémarrage ; pas de livraison durable, DND respecté"
+                "subscriptions retained interrupted after restart: resubscribe explicitly; no durable delivery, DND respected"
             );
             result["notifications_lost"] = serde_json::json!(
                 st.observation_lost
@@ -9868,6 +10335,7 @@ fn handle_wrapper_message(
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let (agent, instance) = live_connection_identity(&st, conn_id)?;
             if st.auxiliary_connections.contains(conn_id)
+                || !st.observations.accepts(conn_id, event)
                 || seq == 0
                 || st
                     .observation_sequences
@@ -12222,6 +12690,8 @@ fn handle_wrapper_message(
                 st.mark_stopped(conn_id);
                 st.conn_names.remove(conn_id);
                 st.observation_sequences.remove(conn_id);
+                let notices = st.observations.remove_source(conn_id, Instant::now());
+                queue_observation_notifications(&st, notices);
                 st.conn_hosts.remove(conn_id);
                 st.conn_operating_systems.remove(conn_id);
                 st.service_negotiations.remove(conn_id);

@@ -1725,7 +1725,7 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_events",
-            "description": "S'abonner aux faits futurs, les lister ou se désabonner. Notifications non bloquantes par message, DND respecté. once=une occurrence ; expiration défaut1h, max7j. État perdu au redémarrage daemon. Fin de tour n'est pas succès. Fichiers : seulement écritures structurées confirmées, pas shell ni surveillance globale.",
+            "description": "S'abonner aux faits reçus après création, les lister ou se désabonner. Consulter types pour les sources compatibles ; une source impossible est refusée. Notifications non bloquantes, DND respecté. once=une occurrence ; expiration défaut1h, max7j. Après redémarrage : abonnements conservés interrompus, réabonnement explicite requis. Fin de tour n'est pas succès. Fichiers : écritures structurées attestées seulement, pas shell ni surveillance globale ; via T3, Codex uniquement et couverture partielle.",
             "inputSchema": {"type":"object","properties":{
                 "action":{"enum":["types","sub","list","unsub"]},
                 "event":{"enum":["turn_ended","permission_required","file_written","file_collision"]},

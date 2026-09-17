@@ -1296,7 +1296,9 @@ fn private_prompt(instructions: Option<&str>, body: &str) -> String {
 }
 
 fn communication_prompt(message: &BridgetMessage, interactive: bool) -> String {
-    let response = if interactive {
+    let response = if !message.reply {
+        "Aucune réponse inter-agent attendue. N'envoie pas d'accusé de réception, même pour annoncer ton silence. Ta réponse finale ne sera pas relayée."
+    } else if interactive {
         "Si reply=true, réponds une seule fois par l'outil bridget_send avec to=from et in_reply_to=id ci-dessus. La réponse finale à l'écran n'est pas envoyée à cet agent."
     } else {
         "Si reply=true, le wrapper relaie automatiquement ta réponse finale à from avec in_reply_to=id ci-dessus. Utilise cette réponse finale pour terminer la demande ; pour un avancement distinct, utilise bridget_send avec to=from et reply=false, sans in_reply_to."
@@ -7213,6 +7215,20 @@ for line in sys.stdin:
                 !interactive
             );
             assert!(prompt.contains("un refus du shell ne prouve pas une panne MCP"));
+        }
+    }
+
+    #[test]
+    fn spec105_codex_sans_demande_ne_prescrit_aucun_envoi() {
+        for interactive in [false, true] {
+            let mut message = message("notification");
+            message.reply = false;
+            message.in_reply_to = Some("question".into());
+            let prompt = communication_prompt(&message, interactive);
+            assert!(prompt.contains("Aucune réponse inter-agent attendue"));
+            assert!(!prompt.contains("réponds une seule fois"));
+            assert!(!prompt.contains("relaie automatiquement"));
+            assert!(prompt.contains(&message.body));
         }
     }
 

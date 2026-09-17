@@ -265,7 +265,7 @@ impl ProcessTree for SystemProcessTree {
 }
 
 #[cfg(target_os = "macos")]
-fn process_parent(pid: u32) -> std::io::Result<u32> {
+pub(crate) fn process_parent(pid: u32) -> std::io::Result<u32> {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
     let expected = std::mem::size_of::<libc::proc_bsdinfo>();
     let written = unsafe {
@@ -284,7 +284,7 @@ fn process_parent(pid: u32) -> std::io::Result<u32> {
 }
 
 #[cfg(target_os = "linux")]
-fn process_parent(pid: u32) -> std::io::Result<u32> {
+pub(crate) fn process_parent(pid: u32) -> std::io::Result<u32> {
     let status = fs::read_to_string(format!("/proc/{pid}/status"))?;
     status
         .lines()
@@ -393,17 +393,34 @@ pub fn write_marker(
     instance_id: &str,
     name_file: &Path,
 ) -> std::io::Result<()> {
-    fs::create_dir_all(marker_directory)?;
+    crate::environment::ensure_private_directory(marker_directory)
+        .map_err(std::io::Error::other)?;
     let marker = AgentPidMarker {
         pid,
         birth,
         instance_id: instance_id.to_string(),
         name_file: name_file.to_path_buf(),
     };
-    fs::write(
-        marker_directory.join(pid.to_string()),
-        serde_json::to_vec(&marker).unwrap(),
-    )
+    let path = marker_directory.join(pid.to_string());
+    crate::environment::validate_state_file(&path, false).map_err(std::io::Error::other)?;
+    bridget_transport::fsutil::write_private_file_atomic(&path, &serde_json::to_vec(&marker)?)
+}
+
+/// Publication atomique sans remplacement, pour un adaptateur qui ne possède
+/// pas encore le PID. Le lien dur évite la course « exists puis rename » entre
+/// deux ponts ; un marqueur concurrent, même périmé, reste intact.
+pub(crate) fn write_marker_if_absent(
+    marker_directory: &Path,
+    marker: &AgentPidMarker,
+) -> std::io::Result<()> {
+    crate::environment::ensure_private_directory(marker_directory)
+        .map_err(std::io::Error::other)?;
+    let temporary = marker_directory.join(format!(".t3-{}.tmp", uuid::Uuid::new_v4()));
+    let path = marker_directory.join(marker.pid.to_string());
+    bridget_transport::fsutil::write_private_file_atomic(&temporary, &serde_json::to_vec(marker)?)?;
+    let result = fs::hard_link(&temporary, &path);
+    let _ = fs::remove_file(temporary);
+    result
 }
 
 /// Produit un inventaire complet sur l'hôte qui possède réellement les PID.
@@ -562,7 +579,7 @@ fn local_hostname() -> Result<String, MarkerScanError> {
     Ok(host)
 }
 
-fn read_name(path: &Path) -> Option<String> {
+pub(crate) fn read_name(path: &Path) -> Option<String> {
     read_name_file(path).ok()
 }
 

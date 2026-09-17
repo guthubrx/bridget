@@ -176,6 +176,8 @@ pub struct LatestTurn {
     pub turn_id: String,
     pub state: String,
     pub assistant_message_id: Option<String>,
+    /// Même createdAt de la commande que le message utilisateur (projection T3).
+    pub requested_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,6 +260,7 @@ fn parse_latest_turn(
     Ok(Some(LatestTurn {
         turn_id: str_field(turn, source, "latestTurn.turnId")?.to_string(),
         state: str_field(turn, source, "latestTurn.state")?.to_string(),
+        requested_at: opt_str(turn, "requestedAt"),
         assistant_message_id: opt_str(turn, "assistantMessageId"),
     }))
 }
@@ -331,12 +334,23 @@ pub struct Message {
     pub text: String,
     pub streaming: bool,
     pub turn_id: Option<String>,
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Activity {
+    pub id: String,
+    pub kind: String,
+    pub turn_id: Option<String>,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ThreadDetail {
     pub messages: Vec<Message>,
     pub latest_turn: Option<LatestTurn>,
+    pub activities: Vec<Activity>,
+    pub activities_available: bool,
 }
 
 pub fn parse_thread_detail(text: &str) -> Result<ThreadDetail, ContractError> {
@@ -362,11 +376,28 @@ pub fn parse_thread_detail(text: &str) -> Result<ThreadDetail, ContractError> {
                 .and_then(Value::as_bool)
                 .ok_or_else(|| shape(SRC, "messages[].streaming"))?,
             turn_id: opt_str(message, "turnId"),
+            created_at: opt_str(message, "createdAt"),
         });
+    }
+    let mut activities = Vec::new();
+    if let Some(items) = thread.get("activities").and_then(Value::as_array) {
+        if items.len() > 4096 {
+            return Err(shape(SRC, "activities: limite 4096 dépassée"));
+        }
+        for item in items {
+            activities.push(Activity {
+                id: str_field(item, SRC, "activities[].id")?.to_string(),
+                kind: str_field(item, SRC, "activities[].kind")?.to_string(),
+                turn_id: opt_str(item, "turnId"),
+                payload: item.get("payload").cloned().unwrap_or(Value::Null),
+            });
+        }
     }
     Ok(ThreadDetail {
         messages,
         latest_turn: parse_latest_turn(thread.get("latestTurn"), SRC)?,
+        activities,
+        activities_available: thread.get("activities").is_some_and(Value::is_array),
     })
 }
 

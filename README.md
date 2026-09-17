@@ -143,6 +143,24 @@ déconnecte ou si le pont redémarre ; sa reprise ne relance pas le travail.
 Le journal conserve les textes longs dans ses bornes ou signale explicitement
 la lacune, sans coupe silencieuse à 4 096 caractères.
 
+La session 105 réserve le relais automatique aux demandes `reply=true`.
+Les réponses reçues et notifications `reply=false` ne produisent plus de réponse
+automatique en retour. Les anciennes attentes dépourvues de contrat sont
+conservées mais ne sont envoyées qu'après preuve d'une demande encore ouverte.
+Les consignes T3, Claude, Codex, ACP et terminal demandent de ne pas accuser
+réception inutilement. Une nouvelle question explicite reste possible : il
+n'existe pas de filtre sur des mots comme « OK », ni de blocage des envois volontaires.
+
+La session 101 ajoute le rattachement automatique des appels MCP au fil T3
+réel, lorsque son identité fournisseur et sa filiation de processus sont
+attestées. Le pont lit uniquement les correspondances de sessions nécessaires
+dans la base T3, sans la modifier. Ni le titre, ni le projet, ni le fichier le
+plus récent ne servent de preuve. Une ambiguïté entraîne un refus explicite,
+pas le choix arbitraire d'une conversation. Aucun redémarrage de T3 ou d'un
+fournisseur n'est nécessaire à ce mécanisme. Les événements proposés restent
+ceux annoncés par la source dans `bridget events types` ; voir
+[l'ADR 037](docs/decisions/037-observations-t3-attestees.md).
+
 ## Claude Code interactif, sans tmux (session 097)
 
 Depuis un vrai terminal (iTerm, Terminal, shell distant), dans le répertoire voulu :
@@ -393,6 +411,13 @@ est du contenu inerte : aucun rendu, script ou navigateur dans le noyau.
 
 ## Construire sans toucher à l'installation existante
 
+Pour les builds courants, utiliser `make build`, `make release`, `make test` ou
+`python3 scripts/build.py cargo …` : l'entretien automatique conserve jusqu'à
+10 Gio de caches récents, purge les caches anciens après 7 jours et préserve
+les profils utilisés. `make clean-builds DRY_RUN=1` permet une simulation.
+Un appel direct à Cargo ne déclenche pas cet entretien. Voir le
+[guide des caches de compilation](docs/build-cache.md) pour les réglages et limites.
+
 Répertoire de réalisation :
 `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core`.
 
@@ -423,6 +448,11 @@ de compte. Ce n'est pas une autorisation de bascule de la flotte.
 
 ## Observer et partager, sans bloquer le travail
 
+Pour les agents : la [skill Bridget](skills/bridget/SKILL.md) explique quel outil
+choisir ; les [recettes pratiques](skills/bridget/references/commandes.md#recettes-pratiques--observer-prolonger-partager)
+détaillent l'abonnement, sa prolongation/annulation, le partage avec un relecteur
+et les alertes de fichiers. Aucun nouveau profil ni formulaire à remplir.
+
 Bridget sait transmettre un extrait exact du journal et prévenir un agent d'un
 fait observable. Ces fonctions sont indépendantes de T3 et de Maicie : elles
 n'ajoutent ni mandat, ni validation obligatoire, ni verrou sur les fichiers.
@@ -440,32 +470,85 @@ bridget events unsub 'ID_ABONNEMENT'
 Les mêmes opérations existent en MCP : `bridget_journal` et `bridget_events`.
 `reply` suit une réponse attendue ; un abonnement signale un fait et ne résout
 jamais cette demande. Une fin de tour ne prouve ni succès, ni fin de mission.
+Après un abonnement confirmé, l'agent peut rendre la main : pas de sondage
+continu. L'expiration met fin à l'abonnement sans envoyer d'alerte de délai.
+Il n'existe pas de commande de prolongation : créer un remplacement confirmé
+puis retirer l'ancien, en conservant ses filtres et en calculant la nouvelle
+échéance. Ce remplacement peut brièvement se chevaucher ; voir les recettes.
 L'extrait contient agent, séquences, entrées et notices ; 50 entrées par défaut,
 200 maximum et moins de 64 Kio. `--from-seq` permet de reprendre à `next_seq`.
 Une entrée trop grande reste explicitement incomplète ; aucun résumé inventé.
 
-Événements disponibles : `turn_ended`, `permission_required`, `file_written`,
-`file_collision`. Filtres par UUID et motif de chemin (`*` uniquement). Le
+Types d'événements : `turn_ended`, `permission_required`, `file_written`,
+`file_collision`. `events types` indique pour chacun sa disponibilité et les
+UUID des sources compatibles. Seule une connexion principale attestée peut
+annoncer ses capacités ; un ancien wrapper sans cette annonce n'est pas
+considéré compatible. Une souscription visant un agent inconnu, indisponible
+ou sans événement compatible est refusée immédiatement. Sans filtre d'agent,
+la couverture reste limitée aux sources déclarées, pas à toute la flotte.
+
+Filtres par UUID et motif de chemin (`*` uniquement). Le
 propriétaire est l'identité active du client CLI/MCP, jamais un paramètre libre.
 L'abonnement concerne les faits reçus par le daemon après sa création, sans
 relecture de l'historique ; un fait déjà produit mais encore en transit peut
 donc le déclencher. Ce n'est pas une synchronisation des horloges des agents.
-Les fins de tour corrélées viennent des pilotes gérés ACP, Claude stream-json
-et Codex app-server ; les états idle natifs/T3 seuls ne suffisent pas. Les
+Les fins de tour corrélées viennent des pilotes gérés ACP, Claude stream-json,
+Codex app-server et de l'adaptateur T3. Pour T3, seules les fins explicites
+`completed`, `error` et `interrupted` sont prises en compte, même sans texte
+assistant, si l'origine du tour est attestée. Un état idle ou une déconnexion
+ne constitue jamais une fin de tour. Les
 permissions sont signalées lorsque le pilote les journalise, éventuellement
-après leur traitement automatique (ACP/Codex, pas promesse universelle Claude).
+après leur traitement automatique : `permission_required` signifie « demande
+observée », pas nécessairement « agent encore en attente d'une autorisation ».
 Les écritures viennent d'outils structurés connus et terminés avec succès :
 Claude/ACP Write, Edit et équivalents reconnus, Codex fileChange completed.
 Ni lecture, ni commande shell libre, ni surveillance universelle du disque.
 
+T3 fournit des événements `approval.requested` et certaines écritures Codex
+attestées. **Les écritures de Claude dans T3 ne sont pas couvertes** : la
+projection actuelle perd le chemin `input.file_path` et peut annoncer un outil
+terminé sans résultat confirmant l'écriture. Le pont n'annonce donc pas
+`file_written` pour ces fils. Cela ne change pas les capacités des wrappers
+structurés Bridget utilisés sans T3.
+
+Exemple : « préviens-moi quand Horizon-3D termine » devient un abonnement
+ponctuel `turn_ended` sur son UUID, après vérification de sa présence dans
+`events types`. La notification signifie **« tour terminé »**, jamais « projet
+Horizon-3D fini ». Un refus d'abonnement ou une interruption doivent être
+rapportés ; ils ne valent pas une surveillance active.
+
+La couverture T3 reste bornée : `latestTurn` ne décrit que le dernier tour,
+donc plusieurs fins entre deux lectures peuvent être manquées. La fenêtre
+d'activités est limitée à 500 entrées avant compression côté T3, et la
+projection à 12 chemins par activité. Une lacune détectée est signalée ; le
+pont ne reconstruit pas les faits absents et ne promet pas d'exhaustivité.
+
 Une collision est un **risque** : deux auteurs, même hôte et même chemin absolu
 normalisé, moins de 30 secondes. Aucun accès au disque, verrou ou fusion Git ;
 les alias par symlink, différences de casse et hôtes mal nommés restent des
-limites. Les faits ne sont pas fédérés entre daemons.
+limites. Les faits ne sont pas fédérés entre daemons. Une lacune détectée
+(saturation ou projection T3 incomplète) donne une notice distincte, sans
+consommer `once`. `events list` expose `facts_lost` pour les pertes quantifiées
+et `observation_gaps` pour les lacunes, même de quantité inconnue ; chaque
+abonnement expose ses propres compteurs. Ces compteurs concernent l'instance
+courante du daemon, distinctement des notifications perdues à la remise.
 
-Les abonnements vivent en mémoire : défaut une heure, maximum sept jours,
-16 par agent et 128 au total. La fermeture du client auxiliaire les conserve ;
-le redémarrage du daemon les efface. `once` consomme le déclenchement même si
+Les abonnements ont une durée par défaut d'une heure, un maximum de sept jours,
+une limite de 16 par agent et 128 au total. La fermeture du client auxiliaire
+les conserve. Leur trace est persistée : après redémarrage du daemon, les
+abonnements non expirés apparaissent dans `events list` en état `interrupted`,
+sans reprendre automatiquement. Un avertissement est prévu au retour du
+propriétaire ; consulter la liste reste nécessaire si cette remise échoue.
+Supprimer l'ancien abonnement puis en créer un nouveau reprend uniquement sur
+les faits futurs, sans rejouer la période manquante.
+
+Pendant la vie du daemon, une source perdue fait passer l'abonnement à
+`source_unavailable`. Son retour peut le rendre `active`, avec une notice de
+reprise ; les changements de couverture sont signalés, sans rattrapage des
+lacunes. Ces états sont consultables dans `events list` et les notices suivent
+les mêmes limites de remise que les autres notifications.
+
+`once` consomme le déclenchement même si
 sa remise échoue. Agent absent, mode ne-pas-déranger, saturation : pas de
 livraison durable. Les reçus exposent `notifications_lost`, `evicted_writes`
 et les listes `suppressed_total` (limite de cinq notifications/s/abonnement).
@@ -474,6 +557,9 @@ expiration après cinq secondes. Le relais de faits est borné à 256 éléments
 le cache de fichiers à 4096 ; les pertes à la source sont journalisées sous
 `observation_gap`. Les tours issus de notifications Bridget ne redéclenchent
 pas d'observations ; une action manuelle ultérieure reste un nouveau travail.
+La disponibilité réelle dépend des versions chargées et des capacités
+annoncées : cette documentation ne constitue pas une preuve de déploiement ni
+de notification reçue dans un vrai fil.
 
 ## Plusieurs serveurs
 
@@ -497,5 +583,6 @@ le HOME réel. Les gates ignorés de compte/SSH ne valent pas des succès CI.
 La [carte de tests](specs/089-communication-core/test-map.md) distingue leurs états.
 
 Bridget ne remplace ni un orchestrateur de tâches, ni une revue humaine, ni une
-preuve de travail terminé. A2A, une intégration T3 et la greffière sont des sujets
-extérieurs : aucun framework supplémentaire n'est introduit dans cette reprise.
+preuve de travail terminé. L'adaptateur T3 reste séparé du cœur de communication ;
+A2A et la greffière ne sont pas requis pour ces observations. Aucun framework
+d'orchestration supplémentaire n'est introduit.

@@ -882,7 +882,8 @@ fn write_input(
     message: &BridgetMessage,
     instructions: Option<&str>,
 ) -> Result<(), TransportError> {
-    let prompt = private_prompt(instructions, &message.body);
+    // Même contrat géré qu'ACP : une réponse finale, uniquement si demandée.
+    let prompt = private_prompt(instructions, &crate::acp::prompt_for(message));
     let frame = json!({
         "type": "user",
         "message": {
@@ -1539,6 +1540,37 @@ mod tests {
     use std::time::Instant;
 
     static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn spec105_claude_trame_transmet_le_contrat_et_le_corps() {
+        for requested in [false, true] {
+            let mut child = Command::new("/bin/cat")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let writer = Arc::new(Mutex::new(child.stdin.take()));
+            let mut message = BridgetMessage::new("alice", "bob", "Texte utile\nligne suivante");
+            message.reply = requested;
+            message.in_reply_to = Some("parent".into());
+            write_input(&writer, &message, Some("Instruction privée")).unwrap();
+            drop(writer);
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success());
+            let frame: Value = serde_json::from_slice(&output.stdout).unwrap();
+            let prompt = frame["message"]["content"][0]["text"].as_str().unwrap();
+            assert!(prompt.contains("Instruction privée"));
+            assert!(prompt.contains(&message.id));
+            assert!(prompt.contains("alice"));
+            assert!(prompt.contains("parent"));
+            assert!(prompt.ends_with(&message.body));
+            assert_eq!(
+                prompt.contains("Aucune réponse inter-agent attendue"),
+                !requested
+            );
+            assert_eq!(prompt.contains("relaie automatiquement"), requested);
+        }
+    }
 
     fn options() -> ClaudeStreamJsonOptions {
         ClaudeStreamJsonOptions {
