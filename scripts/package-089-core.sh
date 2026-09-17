@@ -23,6 +23,7 @@ entries=(
   Cargo.toml Cargo.lock rust-toolchain.toml LICENSE README.md README.en.md
   crates skills/bridget
   docs/communication-installation.md docs/federation-services.md
+  docs/build-cache.md Makefile scripts/build.py scripts/tests/test_build_cleanup.py
   docs/decisions/031-services-federation-autonomes.md
   scripts/package-089-core.sh scripts/federate-ssh.sh scripts/deploy-remote.sh
   scripts/tests/federation_089_test.sh scripts/tests/package_089_test.sh

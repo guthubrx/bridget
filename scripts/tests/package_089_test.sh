@@ -16,6 +16,9 @@ for required in README.md README.en.md BUILD_ID skills/bridget/SKILL.md docs/com
   [[ -f "$package/$required" ]]
 done
 before=$(shasum -a 256 "$package/Cargo.toml")
+for required in Makefile scripts/build.py scripts/tests/test_build_cleanup.py docs/build-cache.md; do
+  [[ -f "$package/$required" ]]
+done
 if bash "$root/scripts/package-089-core.sh" "$package" >"$fixture/occupied.log" 2>&1; then
   echo 'destination occupée acceptée' >&2; exit 1
 fi
