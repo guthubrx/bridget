@@ -411,6 +411,13 @@ est du contenu inerte : aucun rendu, script ou navigateur dans le noyau.
 
 ## Construire sans toucher à l'installation existante
 
+Pour les builds courants, utiliser `make build`, `make release`, `make test` ou
+`python3 scripts/build.py cargo …` : l'entretien automatique conserve jusqu'à
+10 Gio de caches récents, purge les caches anciens après 7 jours et préserve
+les profils utilisés. `make clean-builds DRY_RUN=1` permet une simulation.
+Un appel direct à Cargo ne déclenche pas cet entretien. Voir le
+[guide des caches de compilation](docs/build-cache.md) pour les réglages et limites.
+
 Répertoire de réalisation :
 `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/089-communication-core`.
 

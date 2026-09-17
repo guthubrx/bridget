@@ -242,7 +242,12 @@ build_release_if_needed() {
     fi
     # shellcheck disable=SC1091
     [[ -f "${HOME}/.cargo/env" ]] && source "${HOME}/.cargo/env"
-    cargo build --release -p bridget-daemon -p maicie
+    if [[ -f "$ROOT_DIR/scripts/build.py" ]]; then
+      python3 "$ROOT_DIR/scripts/build.py" cargo build --release -p bridget-daemon -p maicie
+    else
+      # Compatibilité des anciennes distributions autonomes de K1.
+      cargo build --release -p bridget-daemon -p maicie
+    fi
   ) >/tmp/k1-build.out 2>/tmp/k1-build.err || {
     tail -n 80 /tmp/k1-build.err >&2 || true
     die "build release a échoué"
@@ -945,6 +950,9 @@ main() {
     die "vérification incomplète ou échouée — voir NON VÉRIFIÉ ci-dessus"
   fi
 
+  if [[ -f "$ROOT_DIR/scripts/build.py" ]]; then
+    python3 "$ROOT_DIR/scripts/build.py" clean || warn "nettoyage des caches différé"
+  fi
   log "terminé"
 }
 
