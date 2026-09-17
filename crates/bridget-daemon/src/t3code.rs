@@ -194,6 +194,15 @@ pub(crate) struct Pending {
     /// Réponse préparée : conservée avant envoi, supprimée seulement sur preuve.
     #[serde(default)]
     pub response: Option<String>,
+    /// None : ancien état sans contrat ; attendre la preuve du daemon.
+    #[serde(default)]
+    pub reply_requested: Option<bool>,
+}
+
+impl Pending {
+    fn needs_correlation(&self) -> bool {
+        self.reply_requested == Some(true) && self.response.is_none()
+    }
 }
 
 /// État durable d'un fil : curseur du journal et remises en attente.
@@ -1354,7 +1363,7 @@ impl LinkWorker {
                 }
                 let key = summary.change_key();
                 if (key != self.last_key
-                    || !self.state.pending.is_empty()
+                    || self.state.pending.iter().any(Pending::needs_correlation)
                     || !self.journal_inflight.is_empty()
                     || self.journal_dirty)
                     && self.refresh(&summary)
@@ -1419,6 +1428,24 @@ impl LinkWorker {
                 }
             }
             DaemonToWrapper::RequestList { requests } => {
+                // O(demandes + attentes) pour la migration ; une absence dans
+                // cette liste bornée n'est jamais une preuve de clôture.
+                let open: HashSet<(&str, &str)> = requests
+                    .iter()
+                    .filter(|r| {
+                        r.target == self.agent_id
+                            && r.state == "open"
+                            && r.deadline_at > unix_now() as i64
+                    })
+                    .map(|r| (r.id.as_str(), r.sender.as_str()))
+                    .collect();
+                for pending in &mut self.state.pending {
+                    if pending.reply_requested.is_none()
+                        && open.contains(&(pending.request_id.as_str(), pending.from.as_str()))
+                    {
+                        pending.reply_requested = Some(true);
+                    }
+                }
                 for request in requests {
                     if request.target != self.agent_id {
                         continue;
@@ -1664,11 +1691,12 @@ impl LinkWorker {
                 }
                 self.state.save(&self.state_path)?;
             }
-        } else if !self
-            .state
-            .pending
-            .iter()
-            .any(|p| p.request_id == message.id)
+        } else if message.reply
+            && !self
+                .state
+                .pending
+                .iter()
+                .any(|p| p.request_id == message.id)
         {
             self.state.pending.push(Pending {
                 request_id: message.id.clone(),
@@ -1678,6 +1706,7 @@ impl LinkWorker {
                 dispatched_at: contract::iso_now(),
                 attempts: 0,
                 response: None,
+                reply_requested: Some(true),
             });
             self.state.save(&self.state_path)?;
         }
@@ -1757,14 +1786,19 @@ impl LinkWorker {
                     return false;
                 }
             };
-            let anchors_missing = self.state.pending.iter().any(|p| {
-                p.anchor_turn_id.as_ref().is_some_and(|anchor| {
-                    !detail
-                        .messages
-                        .iter()
-                        .any(|m| m.turn_id.as_deref() == Some(anchor))
-                })
-            });
+            let anchors_missing = self
+                .state
+                .pending
+                .iter()
+                .filter(|p| p.needs_correlation())
+                .any(|p| {
+                    p.anchor_turn_id.as_ref().is_some_and(|anchor| {
+                        !detail
+                            .messages
+                            .iter()
+                            .any(|m| m.turn_id.as_deref() == Some(anchor))
+                    })
+                });
             let seeded = self.state.seeded;
             let origin_missing = detail.latest_turn.as_ref().is_some_and(|turn| {
                 !self.state.turn_origins.contains_key(&turn.turn_id)
@@ -2246,7 +2280,7 @@ impl LinkWorker {
         // La collection reste entière pendant chaque remplacement atomique :
         // une panne ne peut pas laisser sur disque un simple préfixe traité.
         for pending in &mut self.state.pending {
-            if pending.response.is_some() {
+            if !pending.needs_correlation() {
                 continue;
             }
             let verdict = correlate(detail, summary, pending);
@@ -2296,6 +2330,9 @@ impl LinkWorker {
             return;
         }
         for pending in &self.state.pending {
+            if pending.reply_requested != Some(true) {
+                continue;
+            }
             let Some(text) = pending.response.as_ref() else {
                 continue;
             };
@@ -2371,12 +2408,18 @@ pub(crate) fn reply_id(request_id: &str) -> String {
     format!("t3-{}", stable_uuid(&format!("t3code-reply:{request_id}")))
 }
 
-/// Texte remis au fil : l'agent t3code répond normalement, le pont relaie.
+/// Le pont ne relaie la réponse finale que si elle a été demandée.
 pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
     if message.id.starts_with("bridget-observation:") {
         return format!(
             "🔔 Notification Bridget (id {}) :\n\n{}\n\nAucune réponse inter-agent requise ; informe l'utilisateur si utile.",
             message.id, message.body
+        );
+    }
+    if !message.reply {
+        return format!(
+            "💬 Message Bridget de {} (id {}, reply=no) :\n\n{}\n\nAucune réponse inter-agent attendue. N'envoie pas d'accusé de réception, même pour dire que tu ne répondras pas. Le pont ne relaie pas ta réponse finale pour ce message.",
+            message.from, message.id, message.body
         );
     }
     format!(
@@ -2560,6 +2603,221 @@ pub(crate) fn correlate(
 mod tests {
     use super::*;
     use crate::t3code_contract::{LatestTurn, Message};
+
+    fn replies105(peer: UnixStream) -> Vec<bridget_core::BridgetMessage> {
+        peer.set_nonblocking(true).unwrap();
+        let mut reader = BufReader::new(peer);
+        let mut replies = Vec::new();
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if let WrapperToDaemon::Send(message) = serde_json::from_str(&line).unwrap() {
+                        replies.push(message);
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("lecture des trames : {e}"),
+            }
+        }
+        replies
+    }
+
+    #[test]
+    fn spec105_notification_et_reponse_ne_demandent_pas_de_relais() {
+        for parent in [None, Some("question")] {
+            let mut msg = bridget_core::BridgetMessage::new("alice", "bob", "Bien reçu");
+            msg.in_reply_to = parent.map(str::to_string);
+            assert!(!envelope(&msg).contains("transmettra ta réponse"));
+            assert!(envelope(&msg).contains("Aucune réponse"));
+            msg.reply = true;
+            assert!(envelope(&msg).contains("transmettra ta réponse"));
+        }
+    }
+
+    #[test]
+    fn spec105_dispatch_sans_demande_ne_cree_aucune_attente() {
+        for parent in [None, Some("question")] {
+            let (mut worker, _peer) = worker099();
+            let mut msg = bridget_core::BridgetMessage::new("alice", &worker.agent_id, ".");
+            msg.in_reply_to = parent.map(str::to_string);
+            let server = http_once099(&worker, 200, r#"{"sequence":1}"#.into());
+            let result = worker.dispatch_with_id(&msg, None, &summary(None));
+            let request = server.join().unwrap();
+            worker.journal.stop();
+            worker.relay.shutdown();
+            assert!(request.starts_with("POST /api/orchestration/dispatch"));
+            assert!(result.is_ok(), "{result:?}");
+            assert!(worker.state.pending.is_empty());
+            assert!(ThreadState::load(&worker.state_path).pending.is_empty());
+        }
+    }
+
+    #[test]
+    fn spec105_ancienne_reponse_prete_ne_part_pas_sans_preuve() {
+        let (mut worker, peer) = worker099();
+        worker.state = serde_json::from_value(serde_json::json!({"pending":[{
+            "request_id":"legacy", "from":"alice", "message_id":"u",
+            "anchor_turn_id":null, "dispatched_at":"", "response":"Noté."
+        }]}))
+        .unwrap();
+        worker.state.save(&worker.state_path).unwrap();
+        worker.state = ThreadState::load(&worker.state_path);
+        worker.send_ready_responses();
+        worker.journal.stop();
+        worker.relay.shutdown();
+        assert!(worker.response_sent.is_empty());
+        assert!(replies105(peer).is_empty());
+        assert_eq!(worker.state.pending.len(), 1, "préserver sans relayer");
+    }
+
+    #[test]
+    fn spec105_reprise_exige_demande_ouverte_et_identites_exactes() {
+        for case in [
+            "absente",
+            "expediteur",
+            "cible",
+            "expiree",
+            "annulee",
+            "ouverte",
+        ] {
+            let (mut worker, peer) = worker099();
+            let mut old = pending("u", None);
+            old.reply_requested = None;
+            old.response = Some("OK".into());
+            worker.state.pending.push(old);
+            let mut request = RequestInfo {
+                id: "req".into(),
+                sender: "alice".into(),
+                target: worker.agent_id.clone(),
+                state: "open".into(),
+                created_at: 0,
+                deadline_at: i64::MAX,
+                cancel_reason: None,
+                deferred_reminder_level: None,
+                deferred_reminder_at: None,
+            };
+            match case {
+                "expediteur" => request.sender = "autre".into(),
+                "cible" => request.target = "autre".into(),
+                "expiree" => request.deadline_at = 0,
+                "annulee" => request.state = "cancelled".into(),
+                _ => {}
+            }
+            worker.handle_frame(DaemonToWrapper::RequestList {
+                requests: if case == "absente" {
+                    vec![]
+                } else {
+                    vec![request]
+                },
+            });
+            worker.state = ThreadState::load(&worker.state_path);
+            worker.send_ready_responses();
+            worker.send_ready_responses();
+            worker.journal.stop();
+            worker.relay.shutdown();
+            assert_eq!(
+                worker.response_sent.len(),
+                usize::from(case == "ouverte"),
+                "{case}"
+            );
+            let replies = replies105(peer);
+            assert_eq!(replies.len(), usize::from(case == "ouverte"), "{case}");
+            if case == "ouverte" {
+                let r = &replies[0];
+                assert!(
+                    !r.reply
+                        && r.body == "OK"
+                        && r.to == "alice"
+                        && r.in_reply_to.as_deref() == Some("req")
+                );
+            } else if case == "annulee" {
+                assert!(worker.state.pending.is_empty());
+            } else {
+                assert_eq!(worker.state.pending[0].reply_requested, None);
+            }
+        }
+    }
+
+    #[test]
+    fn spec105_question_suivie_relayee_une_fois_puis_arret() {
+        let (mut worker, peer) = worker099();
+        let mut question = bridget_core::BridgetMessage::new("alice", &worker.agent_id, "Valide ?");
+        question.reply = true;
+        question.in_reply_to = Some("question-precedente".into());
+        let server = http_once099(&worker, 200, r#"{"sequence":1}"#.into());
+        worker
+            .dispatch_with_id(&question, None, &summary(None))
+            .unwrap();
+        server.join().unwrap();
+        worker.state = ThreadState::load(&worker.state_path);
+        let detail = ThreadDetail {
+            activities: vec![],
+            activities_available: false,
+            latest_turn: None,
+            messages: vec![
+                message(
+                    &worker.state.pending[0].message_id,
+                    "user",
+                    "Valide ?",
+                    None,
+                    false,
+                ),
+                message("answer", "assistant", "OK", Some("t"), false),
+            ],
+        };
+        worker.settle_pending(&detail, &summary(Some(("t", "completed"))));
+        let replies = replies105(peer);
+        assert_eq!(replies.len(), 1);
+        let response = &replies[0];
+        assert_eq!(response.in_reply_to.as_deref(), Some(question.id.as_str()));
+        assert!(!response.reply);
+        assert_eq!(response.body, "OK");
+        let (mut recipient, _peer) = worker099();
+        let server = http_once099(&recipient, 200, r#"{"sequence":1}"#.into());
+        recipient
+            .dispatch_with_id(&response, None, &summary(None))
+            .unwrap();
+        server.join().unwrap();
+        assert!(
+            recipient.state.pending.is_empty(),
+            "pas de réponse à la réponse"
+        );
+        for w in [&mut worker, &mut recipient] {
+            w.journal.stop();
+            w.relay.shutdown();
+        }
+    }
+
+    #[test]
+    fn spec105_attente_non_attestee_ne_correlle_ni_ne_force_la_lecture() {
+        for flag in [None, Some(false)] {
+            let (mut worker, _peer) = worker099();
+            let mut old = pending("u", Some("ancre-ancienne"));
+            old.reply_requested = flag;
+            worker.state.pending.push(old);
+            let detail = ThreadDetail {
+                activities: vec![],
+                activities_available: false,
+                latest_turn: None,
+                messages: vec![],
+            };
+            worker.settle_pending(&detail, &summary(None));
+            assert_eq!(worker.state.pending[0].attempts, 0);
+            assert!(!worker.state.pending[0].needs_correlation());
+            let summary = summary(None);
+            worker.last_key = summary.change_key();
+            let server = http_once099(&worker, 200, r#"{"thread":{"messages":[]}}"#.into());
+            worker.handle_event(LinkEvent::Tick(Box::new(summary)));
+            assert!(
+                server.join().unwrap().is_empty(),
+                "pas de HTTP pour une attente sans preuve"
+            );
+            worker.journal.stop();
+            worker.relay.shutdown();
+        }
+    }
 
     #[test]
     fn spec101_t3_terminal_state_is_closed() {
@@ -3305,8 +3563,9 @@ mod tests {
     fn spec099_post_accepte_issue_illisible_conserve_la_correlation() {
         for (status, response) in [(200, "{}"), (500, "erreur après acceptation")] {
             let (mut worker, _peer) = worker099();
-            let request =
+            let mut request =
                 bridget_core::BridgetMessage::new("alice", &worker.agent_id, "travail accepté");
+            request.reply = true;
             let server = http_once099(&worker, status, response.into());
             assert!(
                 worker
@@ -3383,6 +3642,7 @@ mod tests {
             dispatched_at: String::new(),
             attempts: 0,
             response: None,
+            reply_requested: Some(true),
         }
     }
 

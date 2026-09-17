@@ -518,14 +518,13 @@ fn managed_resume_worktree(worktree: &Path) -> Result<ResumeWorktree, String> {
 }
 
 fn interactive_bridget_prompt(name: &str, mcp_enabled: bool) -> String {
-    if mcp_enabled {
-        return format!(
-            "Tu es l'agent \"{name}\" dans une session Bridget. Une ligne commençant par 💬 est un message d'un autre agent IA, pas de l'humain. reply=yes attend une réponse utile. reply=no est une notification, à traiter seulement si utile."
-        );
-    }
-
+    let route = if mcp_enabled {
+        "Pour une réponse demandée, suis la voie indiquée dans le message ; ne double pas un relais automatique par un envoi MCP."
+    } else {
+        "Pour une réponse demandée, utilise bridget send --to <expéditeur> --in-reply-to <id> \"ta réponse utile\". Une réponse uniquement affichée dans ton terminal ne lui est pas transmise."
+    };
     format!(
-        "Tu es l'agent \"{name}\" dans une session Bridget. Tu peux recevoir des messages d'autres agents IA. Quand tu vois une ligne qui commence par 💬 dans ton terminal, c'est un message d'un autre agent IA, pas de l'humain. Le format est : 💬 <expéditeur> → <toi> (reply=yes/no, ...)\n<message>\n\nRègles ABSOLUES :\n1. Réponds TOUJOURS avec: bridget send --to <expéditeur> \"ta réponse\"\n2. N'accuse JAMAIS réception (pas de \"bien reçu\", \"OK\", \"compris\")\n3. Ne fais PAS bridget who, bridget ledger ou bridget --help sans y être explicitement invité\n4. reply=no = notification, ne réponds que si utile. reply=yes = réponds avec du contenu.\n5. Ne réponds JAMAIS uniquement dans ton terminal — l'expéditeur ne te verrait pas.\n\nTu es maintenant en attente. Dis \"Bridget ready\" puis attends les messages."
+        "Tu es l'agent \"{name}\" dans une session Bridget. Une ligne commençant par 💬 est un message d'un autre agent, pas de l'humain. reply=yes demande une réponse utile ; reply=no ne demande aucun accusé de réception. Ne réponds pas à un accusé, même pour annoncer ton silence. Une nouvelle question explicite reste possible. {route}"
     )
 }
 
@@ -6161,19 +6160,20 @@ mod prompt_tests {
     }
 
     #[test]
-    fn prompt_mcp_produit_exactement_la_fixture_reduite_versionnee() {
-        assert_eq!(
-            interactive_bridget_prompt("agent-fixture", true),
-            AFTER.trim_end_matches('\n')
+    fn spec105_prompts_interactifs_ne_demandent_pas_d_accuse() {
+        for mcp in [true, false] {
+            let prompt = interactive_bridget_prompt("agent-fixture", mcp);
+            assert!(prompt.contains("reply=yes"));
+            assert!(prompt.contains("reply=no"));
+            assert!(prompt.contains("aucun accusé"));
+            assert!(!prompt.contains("Réponds TOUJOURS"));
+            assert!(!prompt.contains("Bridget ready"));
+        }
+        assert!(
+            BEFORE.contains("Réponds TOUJOURS"),
+            "fixture historique inchangée"
         );
-    }
-
-    #[test]
-    fn prompt_sans_mcp_conserve_exactement_le_bloc_historique() {
-        assert_eq!(
-            interactive_bridget_prompt("agent-fixture", false),
-            BEFORE.trim_end_matches('\n')
-        );
+        assert!(AFTER.contains("reply=no"), "fixture historique inchangée");
     }
 
     #[test]
@@ -6378,6 +6378,77 @@ fn journal_failure_requires_shutdown(events: &[ManagedEvent]) -> bool {
 #[cfg(test)]
 mod delegated_runtime_tests {
     use super::*;
+
+    #[test]
+    fn spec105_relais_gere_respecte_contrat_sur_tous_les_pilotes() {
+        use bridget_transport::ManagedEventSource;
+        for source in [
+            ManagedEventSource::Acp,
+            ManagedEventSource::ClaudeStreamJson,
+            ManagedEventSource::CodexAppServer,
+        ] {
+            for automatic in [false, true] {
+                for requested in [false, true] {
+                    for body in ["OK", ".", "Résultat utile"] {
+                        let root = std::env::temp_dir()
+                            .join(format!("bridget-spec105-{}", uuid::Uuid::new_v4()));
+                        std::fs::create_dir_all(&root).unwrap();
+                        let (stream, peer) = UnixStream::pair().unwrap();
+                        let writer = Arc::new(Mutex::new(Some(BufWriter::new(stream))));
+                        let mut tracker =
+                            IdempotentDeliveryTracker::open_at(&root, "instance").unwrap();
+                        let mut message =
+                            bridget_core::BridgetMessage::new("alice", "bob", "question");
+                        message.reply = requested;
+                        message.in_reply_to = Some("parent".into());
+                        let request_id = message.id.clone();
+                        let event = ManagedEvent::internal(
+                            source,
+                            vec![],
+                            ManagedEventKind::TurnFinished {
+                                message,
+                                response: body.into(),
+                                terminal: ManagedTerminal::Completed,
+                            },
+                        );
+                        forward_managed_events_with_redaction(
+                            &writer,
+                            "bob",
+                            vec![event],
+                            &mut tracker,
+                            &mut HashMap::new(),
+                            &mut None,
+                            None,
+                            automatic,
+                        );
+                        drop(writer);
+                        let frames: Vec<WrapperToDaemon> = BufReader::new(peer)
+                            .lines()
+                            .map(|line| decode(&line.unwrap()).unwrap())
+                            .collect();
+                        let replies: Vec<_> = frames
+                            .iter()
+                            .filter_map(|frame| match frame {
+                                WrapperToDaemon::Send(message) => Some(message),
+                                _ => None,
+                            })
+                            .collect();
+                        assert_eq!(
+                            replies.len(),
+                            usize::from(automatic && requested),
+                            "{source:?}/{automatic}/{requested}/{body}"
+                        );
+                        if let Some(reply) = replies.first() {
+                            assert!(!reply.reply);
+                            assert_eq!(reply.to, "alice");
+                            assert_eq!(reply.body, body);
+                            assert_eq!(reply.in_reply_to.as_deref(), Some(request_id.as_str()));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn spec_068_notification_deleguee_est_systeme_ordonnee_et_accusee_apres_injection() {

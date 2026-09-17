@@ -404,7 +404,7 @@ double-TTY ; en double-TTY seulement, il peut exiger la confirmation littérale
 du label, de l'hôte enregistré et du port affichés. Une ambiguïté, une résolution
 hors budget ou des paramètres explicites divergents sont des refus sans mutation.
 
-## Adaptateur t3code (098/101)
+## Adaptateur t3code (098/101/105)
 
 `bridget t3 install [--no-service]` émet une session dédiée par
 `t3 auth session issue --subject bridget --label bridget-<id> --ttl 30d --json`,
@@ -421,11 +421,20 @@ agent : identité stable dérivée de l'identifiant du fil, type = fournisseur
 (`claude`, `codex`, …), transport `t3code`, mode `cli`, nom humain = titre du
 fil (refusé si le nom existe déjà). Une remise attend un fil sans tour actif
 (borne `BRIDGET_T3_TURN_WAIT_SECS`, 120 s), envoie `thread.turn.start` avec
-`commandId` = identifiant du message Bridget (t3code déduplique), puis renvoie
+`commandId` = identifiant du message Bridget (t3code déduplique), puis, uniquement
+si `reply=true`, renvoie
 comme réponse liée le texte du tour de même rang que le message, une fois le
 tour clos. Un 401 déclenche un renouvellement unique ; un second 401 est un
 échec explicite (`auth_failed`) visible par `status`. Le journal du fil est
 projeté pour `attach` sans rejouer l'historique antérieur à l'installation.
+
+Depuis la 105, `reply=false` ne crée pas d'attente de réponse automatique,
+y compris pour une réponse corrélée. Ne pas répondre par un accusé, ni envoyer
+« aucune réponse nécessaire ». Les anciennes attentes sans indicateur de
+réponse demandée sont conservées sans relais jusqu'à preuve par le daemon
+d'une demande ouverte, non expirée et avec les bonnes identités. Une liste
+bornée sans cette demande ne justifie ni envoi ni suppression. Un envoi volontaire
+par outil reste possible ; cette protection n'est pas un filtre de contenu.
 
 Le pont101 peut rattacher automatiquement les appels MCP au vrai fil :
 croisement exact de son identifiant fournisseur et des processus descendants

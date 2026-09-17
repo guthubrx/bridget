@@ -1,13 +1,12 @@
 <!-- SPECKIT START -->
-Plan actif : specs/101-abonnements-t3/plan.md (socle : sessions 098, 099 et 100).
+Plan actif : specs/105-arret-boucles/plan.md (socle : copie non commitée de la session 101).
 Périmètre : communication inter-agents, observation et fédération SSH.
 Ne pas lancer de daemon, wrapper ou script de déploiement avant configuration
-explicite d'un home/socket isolé pour les tests. Les adoptions100 et101
-sur l'installation existante sont autorisées par l'utilisateur le2026-09-16,
-après tests, sauvegarde et vérification des processus. Pour101 : relancer
-seulement Bridget et son pont, jamais T3 ni ses fournisseurs ; aucun commit.
-Sélection SpecKit : SPECIFY_FEATURE=101-abonnements-t3 lorsque le script
-exige un préfixe numérique ; branche session-101-abonnements-t3.
+explicite d'un home/socket isolé pour les tests. L'adoption de la session 100
+sur l'installation existante est autorisée par l'utilisateur le 2026-09-16,
+après validation, sauvegarde et vérification des processus concernés.
+Sélection SpecKit : SPECIFY_FEATURE=105-arret-boucles lorsque le script
+exige un préfixe numérique ; branche session-105-arret-boucles.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->

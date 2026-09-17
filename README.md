@@ -143,6 +143,14 @@ déconnecte ou si le pont redémarre ; sa reprise ne relance pas le travail.
 Le journal conserve les textes longs dans ses bornes ou signale explicitement
 la lacune, sans coupe silencieuse à 4 096 caractères.
 
+La session 105 réserve le relais automatique aux demandes `reply=true`.
+Les réponses reçues et notifications `reply=false` ne produisent plus de réponse
+automatique en retour. Les anciennes attentes dépourvues de contrat sont
+conservées mais ne sont envoyées qu'après preuve d'une demande encore ouverte.
+Les consignes T3, Claude, Codex, ACP et terminal demandent de ne pas accuser
+réception inutilement. Une nouvelle question explicite reste possible : il
+n'existe pas de filtre sur des mots comme « OK », ni de blocage des envois volontaires.
+
 La session 101 ajoute le rattachement automatique des appels MCP au fil T3
 réel, lorsque son identité fournisseur et sa filiation de processus sont
 attestées. Le pont lit uniquement les correspondances de sessions nécessaires

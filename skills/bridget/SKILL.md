@@ -117,7 +117,7 @@ double-TTY. Ne jamais retirer ou recréer un tunnel pour contourner une panne MC
 
 Un fil t3code apparaît dans `bridget_who` avec le transport `t3code`, le mode
 `cli` et le titre du fil comme nom. Lui écrire démarre un tour dans
-l'application ; la réponse de ce tour revient comme réponse liée, sans que
+l'application ; avec `reply=true`, la réponse finale revient comme réponse liée, sans que
 l'agent du fil dispose de Bridget. Le fil peut être occupé : la remise attend
 jusqu'à deux minutes, puis échoue nommément. L'installation, le statut et le
 retrait (`bridget t3 install|status|uninstall`) sont des actions humaines.
@@ -186,7 +186,7 @@ Demander une réponse seulement si elle est utile ; déclarer son délai. Rempla
 les valeurs entre chevrons dans ces exemples, jamais les transmettre littéralement.
 
 ```json
-{"name":"bridget_send","arguments":{"to":"<destinataire_uuid>","body":"Peux-tu confirmer la réception ?","reply":true,"reply_timeout":60}}
+{"name":"bridget_send","arguments":{"to":"<destinataire_uuid>","body":"Vérifie ce correctif et signale les régressions constatées.","reply":true,"reply_timeout":120}}
 ```
 
 Conserver le reçu (`id`, `issued_at`, statut) et les arguments exacts. Pour un
@@ -195,6 +195,13 @@ instant Unix avant l'appel, et fournir `id` + `issued_at` ensemble dès cet appe
 Ne pas calculer la portée depuis le nom : le client la tient de l'instance.
 
 ## Répondre à la demande, pas créer un message voisin
+
+Un message `reply=false` ne demande aucun accusé de réception : pas de « reçu »,
+« noté », ni de message pour annoncer qu'on ne répondra pas. Une réponse liée
+termine l'échange sauf nouvelle question utile explicite ; ne pas lui répondre
+par politesse. Cela n'interdit pas de signaler une information nouvelle importante.
+Ne pas demander confirmation de réception pour remplacer le reçu de transport.
+Les observations n'exigent jamais de réponse inter-agent.
 
 Vérifier d'abord le mode du wrapper : en Codex interactif humain, répondre
 explicitement par MCP. En mode géré, le wrapper peut annoncer que la réponse
@@ -205,10 +212,12 @@ utilisent MCP sans nouvelle demande de réponse. Les métadonnées reçues font 
 Reprendre l'identifiant INTÉGRAL du message reçu dans `in_reply_to`. Répondre au
 UUID de son émetteur. Une réponse sans ce champ ne clôt pas la demande suivie.
 Le champ `reply` demande une réponse supplémentaire ; ne pas l'activer pour un
-simple accusé final.
+résultat final. T3 et les wrappers gérés ne relaient automatiquement que la
+réponse à une demande `reply=true` ; ils ne filtrent pas son texte. Une réponse
+très courte peut être légitime si elle répond réellement à la question.
 
 ```json
-{"name":"bridget_send","arguments":{"to":"<emetteur_uuid>","body":"Réception confirmée.","in_reply_to":"<message_id_integral>"}}
+{"name":"bridget_send","arguments":{"to":"<emetteur_uuid>","body":"Tests passés ; aucune régression constatée dans le périmètre vérifié.","in_reply_to":"<message_id_integral>"}}
 ```
 
 Au shell, depuis une session enregistrée :
@@ -216,8 +225,8 @@ Au shell, depuis une session enregistrée :
 ```sh
 bridget who
 bridget agents --json
-bridget send --to '<destinataire_uuid>' --reply --timeout 60 -- 'Peux-tu confirmer la réception ?'
-bridget send --to '<emetteur_uuid>' --in-reply-to '<message_id_integral>' -- 'Réception confirmée.'
+bridget send --to '<destinataire_uuid>' --reply --timeout 120 -- 'Vérifie ce correctif et signale les régressions constatées.'
+bridget send --to '<emetteur_uuid>' --in-reply-to '<message_id_integral>' -- 'Tests passés ; aucune régression constatée dans le périmètre vérifié.'
 bridget ledger --limit 20
 bridget attach '<destinataire_uuid>'
 ```
