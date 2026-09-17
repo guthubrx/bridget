@@ -1,27 +1,28 @@
-.PHONY: build release test daemon install install-k1 test-install-k1-preflight install-ronde test-ronde uninstall clean
+.PHONY: build release test daemon install install-k1 test-install-k1-preflight install-ronde test-ronde uninstall clean clean-builds test-build-cleanup
 
 BINARY = bridget
 INSTALL_DIR = $(HOME)/.local/bin
 LAUNCHD_PLIST = $(HOME)/Library/LaunchAgents/com.bridget.daemon.plist
-RELEASE_BIN = target/release/$(BINARY)
+export CARGO_TARGET_DIR ?= $(CURDIR)/target
+RELEASE_BIN = $(CARGO_TARGET_DIR)/release/$(BINARY)
 MAICIE_CONFIG ?= $(HOME)/.config/maicie/config.json
 
 build:
-	cargo build
+	python3 scripts/build.py cargo build
 
 release:
-	cargo build --release
+	python3 scripts/build.py cargo build --release
 
 test:
-	cargo test
+	python3 scripts/build.py cargo test
 
 daemon: release
-	RUST_LOG=info ./$(RELEASE_BIN) daemon
+	RUST_LOG=info "$(RELEASE_BIN)" daemon
 
 install: release
 	@echo "Installation du binaire bridget..."
 	install -d $(INSTALL_DIR)
-	install -m 755 $(RELEASE_BIN) $(INSTALL_DIR)/$(BINARY)
+	install -m 755 "$(RELEASE_BIN)" "$(INSTALL_DIR)/$(BINARY)"
 	@echo "Installation du service launchd..."
 	install -d $(dir $(LAUNCHD_PLIST))
 	@python3 -c "import os; home=os.path.expanduser('~'); print(f'''\
@@ -45,7 +46,7 @@ install: release
     <key>StandardOutPath</key><string>{home}/.cache/bridget/daemon-stdout.log</string>\n\
     <key>StandardErrorPath</key><string>{home}/.cache/bridget/daemon-stderr.log</string>\n\
 </dict>\n\
-</plist>''')" > $(LAUNCHD_PLIST)'
+</plist>''')" > "$(LAUNCHD_PLIST)"
 	launchctl load $(LAUNCHD_PLIST) 2>/dev/null || true
 	@echo ""
 	@echo "Bridget installé !"
@@ -58,6 +59,7 @@ install: release
 	@echo "  bridget send --to N  Envoie un message"
 	@echo "  bridget who          Liste les agents"
 	@echo "  bridget daemon       Lance le daemon manuellement"
+	python3 scripts/build.py installed --target "$(CARGO_TARGET_DIR)" --binary "$(INSTALL_DIR)/$(BINARY)"
 
 uninstall:
 	@echo "Arrêt du daemon..."
@@ -68,7 +70,13 @@ uninstall:
 	@echo "Bridget désinstallé."
 
 clean:
-	cargo clean
+	python3 scripts/build.py clean
+
+clean-builds:
+	python3 scripts/build.py clean $(if $(DRY_RUN),--dry-run,)
+
+test-build-cleanup:
+	python3 -m unittest discover -s scripts/tests -p 'test_build_cleanup.py' -v
 
 install-k1:
 	@chmod +x scripts/install-k1.sh

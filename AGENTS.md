@@ -19,3 +19,14 @@ exige un préfixe numérique ; branche session-100-observation-partage.
 - Ne pas modifier directement `.agents/skills/speckit-*`, `.specify/templates/*`, `.specify/scripts/*` ou `.specify/workflows/*`.
 - Les commandes utilisateur canoniques vivent dans `~/.speckit/commands/` et sont publiees vers Codex/Claude/Gemini par `~/.speckit/scripts/sync-agent-adapters.py`.
 <!-- SPECKIT-USER END -->
+
+## Entretien des caches de compilation
+
+Pour les nouveaux builds et tests, utiliser `make build`, `make release`,
+`make test` ou `python3 scripts/build.py cargo <build|test|check|clippy> …`.
+Un appel direct à Cargo contourne le nettoyage automatique. Budget commun aux
+worktrees : 10 Gio ; caches anciens : 7 jours. Réglages et procédure des builds
+temporaires : `/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/build-cache.md`.
+Ne pas lancer `cargo clean` sur l'installation active. Préférer
+`make clean-builds DRY_RUN=1`, puis `make clean-builds` : seuls les intermédiaires
+admissibles sont supprimés ; verrous et fichiers utilisés sont respectés.
