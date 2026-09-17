@@ -22,7 +22,7 @@ pub fn wrap_envelope(msg: &BridgetMessage) -> String {
     } else {
         // reply=no : notification simple, pas de réponse attendue.
         format!(
-            "💬 {from} → {to} (reply=no, id={id})\n{body}",
+            "💬 {from} → {to} (reply=no, id={id})\n{body}\n\nAucune réponse inter-agent attendue. N'envoie pas d'accusé de réception, même pour annoncer ton silence.",
             from = msg.from,
             to = msg.to,
             body = msg.body,
@@ -94,6 +94,9 @@ mod tests {
         assert!(env.contains("reply=no"));
         assert!(env.contains("id=mcp-38210-6a8a7fc7-1"));
         assert!(env.contains("💬"));
+        assert!(env.contains("Aucune réponse inter-agent attendue"));
+        assert!(env.contains("accusé"));
+        assert!(!env.contains("Tu DOIS répondre"));
     }
 
     #[test]

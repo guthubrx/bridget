@@ -177,22 +177,116 @@ pub fn parse_codex_rollout(path: &Path) -> Option<RuntimeObservation> {
 ///
 /// Complexité : O(nombre de descripteurs ouverts par le processus).
 pub fn open_session_file(pid: u32) -> Option<std::path::PathBuf> {
-    let output = std::process::Command::new("lsof")
-        .args(["-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        log::debug!("lsof a échoué pour le pid {}", pid);
-        return None;
-    }
+    let candidates = open_session_files(&[pid]).ok()?;
+    most_recently_written(candidates.get(&pid)?)
+}
 
-    let candidates: Vec<std::path::PathBuf> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| line.split_whitespace().next_back())
-        .filter(|path| path.ends_with(".jsonl"))
-        .map(std::path::PathBuf::from)
-        .collect();
-    most_recently_written(&candidates)
+/// Inventaire complet en une collecte. L'identité ne doit JAMAIS utiliser le
+/// classement mtime de `open_session_file` : un sous-agent peut écrire après son parent.
+/// Noms avec espaces conservés grâce au format machine lsof ; refus si tronqué.
+pub(crate) fn open_session_files(
+    pids: &[u32],
+) -> std::io::Result<std::collections::HashMap<u32, Vec<std::path::PathBuf>>> {
+    use std::os::fd::AsRawFd;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    const MAX_OUTPUT: usize = 2 * 1024 * 1024;
+    if pids.is_empty() {
+        return Ok(Default::default());
+    }
+    if pids.len() > 256 {
+        return Err(std::io::Error::other("inventaire PID au-delà de la borne"));
+    }
+    let selection = pids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut child = Command::new("lsof")
+        .args(["-n", "-P", "-b", "-w", "-F0pn", "-p", &selection])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let result = (|| {
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| std::io::Error::other("sortie absente"))?;
+        let fd = stdout.as_raw_fd();
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 8192];
+        loop {
+            match stdout.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) if bytes.len() + n <= MAX_OUTPUT => bytes.extend_from_slice(&buffer[..n]),
+                Ok(_) => return Err(std::io::Error::other("inventaire fichiers tronqué")),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => return Err(error),
+            }
+            if Instant::now() >= deadline {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "inventaire fichiers expiré",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "lsof expiré",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        if !status.success() {
+            return Err(std::io::Error::other("inventaire lsof incomplet"));
+        }
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|_| std::io::Error::other("inventaire non UTF8"))?;
+        let mut found: std::collections::HashMap<u32, Vec<std::path::PathBuf>> = Default::default();
+        let mut current = None;
+        for field in text.split('\0') {
+            let line = field.trim_start_matches('\n');
+            if let Some(pid) = line.strip_prefix('p') {
+                current = pid.parse::<u32>().ok().filter(|pid| pids.contains(pid));
+            } else if let Some(path) = line.strip_prefix('n')
+                && let Some(pid) = current
+                && path.ends_with(".jsonl")
+                && Path::new(path).is_absolute()
+            {
+                let files = found.entry(pid).or_default();
+                let path = std::path::PathBuf::from(path);
+                if !files.contains(&path) {
+                    files.push(path);
+                }
+            }
+        }
+        Ok(found)
+    })();
+    if result.is_err() {
+        // Ce PID est notre enfant lsof non récolté, jamais un PID fournisseur.
+        // Pas de SIGKILL ni de signal à un groupe ; wait séparé garde le pont borné.
+        if matches!(child.try_wait(), Ok(None)) {
+            unsafe {
+                libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+            }
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+    }
+    result
 }
 
 /// Retient le fichier le plus récemment écrit parmi des candidats.
