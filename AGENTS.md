@@ -1,12 +1,12 @@
 <!-- SPECKIT START -->
-Plan actif : specs/100-observation-partage/plan.md (socle : sessions 089 et 099).
-Périmètre : communication inter-agents, observation et fédération SSH.
-Ne pas lancer de daemon, wrapper ou script de déploiement avant configuration
-explicite d'un home/socket isolé pour les tests. L'adoption de la session 100
-sur l'installation existante est autorisée par l'utilisateur le 2026-09-16,
-après validation, sauvegarde et vérification des processus concernés.
-Sélection SpecKit : SPECIFY_FEATURE=100-observation-partage lorsque le script
-exige un préfixe numérique ; branche session-100-observation-partage.
+Plan actif : specs/102-fils-inter-agents/plan.md.
+Branche : session-102-fils-inter-agents ; SPECIFY_FEATURE=102-fils-inter-agents.
+Commande du 2026-09-16 : préparation détaillée UNIQUEMENT, sans implémentation,
+commit, installation ni relance. Une nouvelle demande est nécessaire pour coder.
+Lire specs/102-fils-inter-agents/quickstart.md avant reprise : la session 101
+n'est pas intégrée dans cette base 1738a072 ; ne pas copier son code à la main.
+Tests futurs : home/socket isolés obligatoires ; aucune conversation fournisseur
+réelle ni aucun service de production ne doivent être interrompus.
 <!-- SPECKIT END -->
 
 <!-- SPECKIT-USER START -->
