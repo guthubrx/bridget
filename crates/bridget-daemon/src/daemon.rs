@@ -686,6 +686,11 @@ impl Drop for FixtureRoot {
 struct DaemonState {
     observations: crate::observation::Observations,
     observation_sequences: HashMap<String, u64>,
+    /// Session 102 : version d'alerte de fil acceptée par connexion principale,
+    /// annoncée après l'enregistrement et effacée avec la connexion.
+    thread_notice_versions: HashMap<String, u16>,
+    /// Session 102 : instants des derniers départs d'alertes de fil (débit 5/s).
+    thread_wake_departures: VecDeque<Instant>,
     observation_tx: mpsc::SyncSender<(Instant, DeferredControl)>,
     observation_lost: Arc<std::sync::atomic::AtomicU64>,
     #[cfg(test)]
@@ -1301,11 +1306,44 @@ fn observation_output() -> (
     (tx, lost)
 }
 
-/// O(S), S<=128 ; aucune E/S sous verrou, dépôt non bloquant en file de 64.
+/// O(S), S<=128 ; persistance seulement si abonnement consommé/expiré.
+/// Aucune E/S de notification sous verrou, dépôt non bloquant en file de64.
 fn observe_fact(st: &mut DaemonState, fact: crate::observation::Fact) {
+    let before = st.observations.subscriptions.clone();
+    let revision = st.observations.revision;
     let notifications = st.observations.observe(fact, Instant::now());
+    if revision != st.observations.revision {
+        let saved = st
+            .observations
+            .snapshot()
+            .ok()
+            .is_some_and(|bytes| st.store.save_observation_snapshot(&bytes).is_ok());
+        if !saved {
+            st.observations.subscriptions = before;
+            st.observations.revision = revision;
+            st.observation_lost.fetch_add(
+                notifications.len() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            error!("observation persistence failed; no notification delivered");
+            return;
+        }
+    }
+    queue_observation_notifications(st, notifications);
+}
+
+// Réutilisé pour faits et interruptions, même file bornée et même règle DND.
+fn queue_observation_notifications(
+    st: &DaemonState,
+    notifications: Vec<crate::observation::Notification>,
+) {
     for notification in notifications {
         let target = st.router.get_agent(&notification.owner).and_then(|route| {
+            // Une route en cours de Register n'a pas encore sa preuve : ne
+            // jamais faire précéder le reçu Registered par une notification.
+            if !st.identity_credentials.contains_key(&route.connection_id) {
+                return None;
+            }
             let presence = st
                 .conn_instances
                 .get(&route.connection_id)
@@ -2894,9 +2932,16 @@ impl DaemonState {
         let registry = AgentRegistry::load()?;
         let (view_closed_tx, view_closed_rx) = mpsc::channel();
         let (observation_tx, observation_lost) = observation_output();
+        let observations = crate::observation::Observations::restore(
+            &store.observation_snapshot()?,
+            Instant::now(),
+            unix_now_secs().max(0) as u64,
+        )?;
         Ok(DaemonState {
-            observations: Default::default(),
+            observations,
             observation_sequences: HashMap::new(),
+            thread_notice_versions: HashMap::new(),
+            thread_wake_departures: VecDeque::new(),
             observation_tx,
             observation_lost,
             #[cfg(test)]
@@ -3027,7 +3072,11 @@ impl DaemonState {
     }
 
     fn revoke_identity_authorizations(&mut self, owner: &str) {
-        if self.identity_credentials.remove(owner).is_none() {
+        let had_credential = self.identity_credentials.remove(owner).is_some();
+        self.observation_sequences.remove(owner);
+        let notices = self.observations.remove_source(owner, Instant::now());
+        queue_observation_notifications(self, notices);
+        if !had_credential {
             return;
         }
         let Some(instance) = self.conn_instances.get(owner).cloned() else {
@@ -3043,6 +3092,7 @@ impl DaemonState {
             self.auxiliary_connections.remove(&conn);
             self.conn_instances.remove(&conn);
             self.conn_names.remove(&conn);
+            self.thread_notice_versions.remove(&conn);
         }
     }
 
@@ -3079,6 +3129,7 @@ impl DaemonState {
         self.conn_hosts.remove(&old_conn);
         self.conn_operating_systems.remove(&old_conn);
         self.auxiliary_connections.remove(&old_conn);
+        self.thread_notice_versions.remove(&old_conn);
         true
     }
 
@@ -4425,6 +4476,15 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
                 let mut st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
                 collect_reminder_actions(&mut st, now)
             };
+            // Session 102 : réévaluation bornée des sollicitations de fil
+            // (membre revenu, DND levé, capacité annoncée, échéance passée).
+            let wake_controls = {
+                let mut st = st_reminder.lock().unwrap_or_else(|e| e.into_inner());
+                let mut controls = Vec::new();
+                dispatch_thread_wakes(&mut st, unix_now_secs(), now, &mut controls);
+                controls
+            };
+            let _ = execute_controls(wake_controls);
 
             // Exécuter les actions hors lock
             for action in actions {
@@ -4852,6 +4912,16 @@ fn handle_connection(
             // Après Registered : rejouer les notices ORPHELIN dont l'émetteur
             // était hors ligne à la purge (voir flush_pending_orphan_emitter_notices).
             if registered_just_now {
+                {
+                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some((owner, instance)) = live_connection_identity(&st, &conn_id)
+                        && !st.auxiliary_connections.contains(&conn_id)
+                        && st.presences.get(&instance).is_some_and(|p| !p.is_dnd())
+                    {
+                        let notices = st.observations.owner_returned(&owner, Instant::now());
+                        queue_observation_notifications(&st, notices);
+                    }
+                }
                 state
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -4874,6 +4944,8 @@ fn handle_connection(
         st.mark_unreachable(&conn_id);
         st.conn_names.remove(&conn_id);
         st.observation_sequences.remove(&conn_id);
+        let notices = st.observations.remove_source(&conn_id, Instant::now());
+        queue_observation_notifications(&st, notices);
         st.conn_hosts.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
@@ -7199,6 +7271,11 @@ fn handle_delivery_ack(
                     .retain(|pending| pending.msg_id != request_id);
                 info!("demande {} répondue après accusé idempotent", request_id);
             }
+            settle_thread_wake_by_delivery(
+                st,
+                &delivery_id,
+                crate::store::threads::WakeOutcome::Dispatched,
+            );
             #[cfg(feature = "test-support")]
             crate::test_sync::checkpoint("after_delivery_acked");
             None
@@ -7277,6 +7354,366 @@ fn provider_display_name(st: &DaemonState, sender: &str) -> Option<String> {
 /// d'un paramètre fourni par le navigateur ou le fournisseur.
 fn artifact_scope_for_agent(agent_id: &str) -> String {
     format!("conversation-agent:{agent_id}")
+}
+
+/// Session 102 : départ figé d'une sollicitation de fil.
+struct ThreadWakeDeparture {
+    thread_id: String,
+    agent_id: String,
+    through_seq: u64,
+    generation: u64,
+    delivery_id: String,
+    delivery_key: String,
+    recipient_instance_id: String,
+    delivery_generation: u64,
+    issued_at: i64,
+    expires_at: i64,
+    target_conn: String,
+}
+
+/// Destinataire vivant d'une alerte : connexion principale et instance.
+fn thread_wake_recipient(st: &DaemonState, agent_id: &str) -> Option<(String, String)> {
+    let route = st.router.get_agent(agent_id)?;
+    let conn = route.connection_id.clone();
+    if !st.connections.contains_key(&conn) {
+        return None;
+    }
+    let instance = st.conn_instances.get(&conn)?.clone();
+    st.presences
+        .get(&instance)
+        .filter(|presence| matches!(presence.state.as_str(), "connected" | "busy"))?;
+    Some((conn, instance))
+}
+
+/// Session 102 : sélection, réservation durable et projection 099 des
+/// sollicitations prêtes. Tout se passe sous le verrou d'état, sans E/S
+/// fournisseur ; la poussée vers la connexion est différée dans `controls`.
+/// Au plus `WAKE_BATCH` candidats et `WAKE_DEPARTURES_PER_SEC` départs par tick.
+fn dispatch_thread_wakes(
+    st: &mut DaemonState,
+    now_secs: i64,
+    now: Instant,
+    controls: &mut Vec<DeferredControl>,
+) {
+    if let Err(error) = st.store.thread_wakes_expire(now_secs) {
+        error!("fils 102 : échéances de sollicitation : {error}");
+    }
+    recover_thread_wakes_in_flight(st, now_secs, controls);
+    let candidates = match st
+        .store
+        .thread_wake_candidates(now_secs, crate::threads::WAKE_BATCH)
+    {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            error!("fils 102 : candidats de sollicitation : {error}");
+            return;
+        }
+    };
+    for candidate in candidates {
+        st.thread_wake_departures
+            .retain(|departure| now.duration_since(*departure) < Duration::from_secs(1));
+        if st.thread_wake_departures.len() >= crate::threads::WAKE_DEPARTURES_PER_SEC as usize {
+            let _ = st.store.thread_wake_defer(
+                &candidate.thread_id,
+                &candidate.agent_id,
+                "rate_limited",
+                now_secs,
+            );
+            break;
+        }
+        let Some((target_conn, instance)) = thread_wake_recipient(st, &candidate.agent_id) else {
+            let _ = st.store.thread_wake_defer(
+                &candidate.thread_id,
+                &candidate.agent_id,
+                "offline",
+                now_secs,
+            );
+            continue;
+        };
+        if st
+            .presences
+            .get(&instance)
+            .is_some_and(|presence| presence.is_dnd())
+        {
+            let _ = st.store.thread_wake_defer(
+                &candidate.thread_id,
+                &candidate.agent_id,
+                "dnd",
+                now_secs,
+            );
+            continue;
+        }
+        if st.thread_notice_versions.get(&target_conn).copied()
+            != Some(crate::threads::THREAD_NOTICE_VERSION)
+        {
+            let _ = st.store.thread_wake_defer(
+                &candidate.thread_id,
+                &candidate.agent_id,
+                "capability_unavailable",
+                now_secs,
+            );
+            continue;
+        }
+        let generation = candidate.generation + 1;
+        let departure = ThreadWakeDeparture {
+            delivery_id: Uuid::new_v4().to_string(),
+            delivery_key: format!(
+                "thread-wake:{}:{}:{generation}",
+                candidate.thread_id, candidate.agent_id
+            ),
+            thread_id: candidate.thread_id.clone(),
+            agent_id: candidate.agent_id.clone(),
+            through_seq: candidate.pending_seq,
+            generation,
+            recipient_instance_id: instance,
+            delivery_generation: next_delivery_generation(),
+            issued_at: now_secs,
+            expires_at: now_secs + crate::threads::WAKE_INJECTION_DEADLINE_SECS,
+            target_conn,
+        };
+        let reserved = st.store.thread_wake_reserve(
+            crate::store::threads::WakeReservation {
+                thread_id: &departure.thread_id,
+                agent_id: &departure.agent_id,
+                expected_generation: candidate.generation,
+                through_seq: departure.through_seq,
+                delivery_id: &departure.delivery_id,
+                delivery_key: &departure.delivery_key,
+                recipient_instance_id: &departure.recipient_instance_id,
+                delivery_generation: departure.delivery_generation,
+                issued_at: departure.issued_at,
+                expires_at: departure.expires_at,
+            },
+            now_secs,
+        );
+        match reserved {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => {
+                error!("fils 102 : réservation de sollicitation : {error}");
+                continue;
+            }
+        }
+        st.thread_wake_departures.push_back(now);
+        if let Err(reason) = project_thread_wake(st, &departure, controls) {
+            warn!(
+                "fils 102 : sollicitation {} → {} refusée avant injection : {reason}",
+                departure.thread_id, departure.agent_id
+            );
+            let _ = st.store.thread_wake_settle(
+                &departure.thread_id,
+                &departure.agent_id,
+                departure.generation,
+                crate::store::threads::WakeOutcome::Refused(reason),
+            );
+        }
+    }
+}
+
+/// Reprise : une réservation de fil figée avant sa gravure 099 (arrêt entre
+/// les deux écritures) reprend la même clé, la même instance et la même
+/// génération ; jamais une nouvelle identité de remise.
+fn recover_thread_wakes_in_flight(
+    st: &mut DaemonState,
+    now_secs: i64,
+    controls: &mut Vec<DeferredControl>,
+) {
+    let Ok(in_flight) = st.store.thread_wakes_in_flight() else {
+        return;
+    };
+    let Ok(issuer_scope) = st.idempotency.supervisor_scope() else {
+        return;
+    };
+    for wake in in_flight {
+        let (
+            Some(delivery_id),
+            Some(delivery_key),
+            Some(instance),
+            Some(generation),
+            Some(issued_at),
+            Some(expires_at),
+            Some(through_seq),
+        ) = (
+            wake.delivery_id.clone(),
+            wake.delivery_key.clone(),
+            wake.recipient_instance_id.clone(),
+            wake.delivery_generation,
+            wake.issued_at,
+            wake.expires_at,
+            wake.active_through_seq,
+        )
+        else {
+            continue;
+        };
+        let Ok(key) = IdempotencyKey::new(
+            issuer_scope.clone(),
+            OperationKind::Send,
+            delivery_key.clone(),
+        ) else {
+            continue;
+        };
+        // Déjà gravée : la reprise 099 au réenregistrement de l'instance fait foi.
+        if !matches!(
+            st.idempotency.lookup(&key, now_secs),
+            Ok(LookupResult::IdempotencyExpired)
+        ) {
+            continue;
+        }
+        let Some((target_conn, live_instance)) = thread_wake_recipient(st, &wake.agent_id) else {
+            continue;
+        };
+        if live_instance != instance {
+            // L'instance figée a disparu : issue inconnue visible, pas de reroutage.
+            continue;
+        }
+        let departure = ThreadWakeDeparture {
+            thread_id: wake.thread_id.clone(),
+            agent_id: wake.agent_id.clone(),
+            through_seq,
+            generation: wake.generation,
+            delivery_id,
+            delivery_key,
+            recipient_instance_id: instance,
+            delivery_generation: generation,
+            issued_at,
+            expires_at,
+            target_conn,
+        };
+        if let Err(reason) = project_thread_wake(st, &departure, controls) {
+            warn!("fils 102 : reprise de sollicitation impossible : {reason}");
+        }
+    }
+}
+
+/// Projection d'une sollicitation figée vers la remise idempotente 099 :
+/// scope superviseur durable, clé métier de fil, canon avec notice typée,
+/// remise bornée par l'échéance d'injection puis par l'horizon de clé.
+fn project_thread_wake(
+    st: &mut DaemonState,
+    departure: &ThreadWakeDeparture,
+    controls: &mut Vec<DeferredControl>,
+) -> Result<(), String> {
+    let issuer_scope = st
+        .idempotency
+        .supervisor_scope()
+        .map_err(|error| error.to_string())?;
+    let key = IdempotencyKey::new(
+        issuer_scope,
+        OperationKind::Send,
+        departure.delivery_key.clone(),
+    )
+    .map_err(|error| error.to_string())?;
+    let mut message = bridget_core::BridgetMessage::new(
+        "bridget",
+        &departure.agent_id,
+        crate::threads::notice_body(&departure.thread_id, departure.through_seq),
+    );
+    message.id = crate::threads::notice_message_id(
+        &departure.thread_id,
+        &departure.agent_id,
+        departure.generation,
+    );
+    message.reply = false;
+    message.origin = Some(bridget_core::MessageOrigin::System);
+    message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+    message.deadline_at = Some(departure.expires_at.max(0) as u64);
+    message.thread_notice = Some(bridget_core::ThreadNotice {
+        version: crate::threads::THREAD_NOTICE_VERSION,
+        thread_id: departure.thread_id.clone(),
+        through_seq: departure.through_seq,
+        generation: departure.generation,
+    });
+    let canonical = canonical_send(
+        &key.issuer_scope,
+        &key.idempotency_key,
+        &message,
+        departure.issued_at,
+    );
+    let reservation_expiry = match st.idempotency.reserve(
+        &key,
+        &canonical,
+        departure.issued_at,
+        CLIENT_IDEMPOTENCY_HORIZON_SECS,
+        departure.issued_at,
+        CLIENT_ISSUED_AT_TOLERANCE_SECS,
+    ) {
+        Ok(Reservation::Prepared { expires_at }) => expires_at,
+        // Déjà gravée par un passage précédent : la remise existante fait foi.
+        Ok(Reservation::Replayed(_)) => return Ok(()),
+        Ok(other) => return Err(format!("réservation inattendue : {other:?}")),
+        Err(error) => return Err(error.to_string()),
+    };
+    let delivery = SendDelivery {
+        delivery_id: departure.delivery_id.clone(),
+        recipient_instance_id: departure.recipient_instance_id.clone(),
+        delivery_generation: departure.delivery_generation,
+        expires_at: departure.expires_at.min(reservation_expiry),
+        message_bytes: serde_json::to_vec(&message).map_err(|error| error.to_string())?,
+    };
+    st.idempotency
+        .begin_send_delivery(&key, &delivery)
+        .map_err(|error| error.to_string())?;
+    defer_idempotent_delivery(st, &departure.target_conn, delivery, controls)
+}
+
+/// Corrèle une issue de remise 099 à la génération de sollicitation figée.
+fn settle_thread_wake_by_delivery(
+    st: &mut DaemonState,
+    delivery_id: &str,
+    outcome: crate::store::threads::WakeOutcome,
+) {
+    let Ok(Some(wake)) = st.store.thread_wake_by_delivery(delivery_id) else {
+        return;
+    };
+    if let Err(error) =
+        st.store
+            .thread_wake_settle(&wake.thread_id, &wake.agent_id, wake.generation, outcome)
+    {
+        error!("fils 102 : issue de sollicitation : {error}");
+    }
+}
+
+/// Session 102 : regard de l'annuaire vivant pour les fils. Un membre peut
+/// être déconnecté s'il reste connu du routeur ou d'une présence retenue.
+struct DaemonDirectory<'a> {
+    state: &'a DaemonState,
+}
+
+impl crate::threads::Directory for DaemonDirectory<'_> {
+    fn known_agent(&self, agent_id: &str) -> bool {
+        self.state.router.get_agent(agent_id).is_some()
+            || self
+                .state
+                .presences
+                .values()
+                .any(|presence| presence.name == agent_id)
+    }
+
+    fn member_facts(&self, agent_id: &str) -> crate::threads::MemberFacts {
+        let connection = self
+            .state
+            .router
+            .get_agent(agent_id)
+            .map(|route| route.connection_id.clone());
+        // Connecté = route vivante ET présence active ; un membre connu sans
+        // route est simplement absent, jamais « inconnu ».
+        let connected = Some(connection.as_ref().is_some_and(|conn| {
+            self.state.connections.contains_key(conn)
+                && self
+                    .state
+                    .conn_instances
+                    .get(conn)
+                    .and_then(|instance| self.state.presences.get(instance))
+                    .is_some_and(|presence| matches!(presence.state.as_str(), "connected" | "busy"))
+        }));
+        let thread_notice_version = connection
+            .as_ref()
+            .and_then(|conn| self.state.thread_notice_versions.get(conn).copied());
+        crate::threads::MemberFacts {
+            connected,
+            thread_notice_version,
+        }
+    }
 }
 
 /// Autorité unique de publication ET lecture : principal/instance attestés,
@@ -7544,6 +7981,11 @@ fn handle_idempotent_send(
     st: &mut DaemonState,
     controls: &mut Vec<DeferredControl>,
 ) -> DaemonToWrapper {
+    // Session 102 : une alerte de fil n'est construite que par le daemon. Une
+    // notice fournie par un client est neutralisée AVANT le canon d'idempotence,
+    // pour que le rejeu reste identique et qu'aucun DM ne se fasse passer pour
+    // une sollicitation.
+    message.thread_notice = None;
     // Un client négocié sans identité propre parle comme humain, comme sur le
     // chemin de contrôle : l'étiquette humaine n'est pas une identité d'agent
     // que l'on emprunte. Toute autre attribution exige une preuve.
@@ -8848,9 +9290,332 @@ mod spec099_classic_delivery_tests {
     }
 
     #[test]
+    fn spec101_upstream_gap_requires_primary_and_dnd_preserves_loss_counters() {
+        use bridget_transport::protocol::{ObservationKind as Kind, ObservationRequest as Request};
+        let (state, _root, _peers) = fixture();
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationGap { dropped: 99 },
+            &state,
+        );
+        assert_eq!(state.lock().unwrap().observations.facts_lost, 0);
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationCapabilities {
+                events: vec![Kind::TurnEnded],
+            },
+            &state,
+        );
+        handle_wrapper_message(
+            "witness",
+            WrapperToDaemon::ObservationRequest {
+                request: Request::Sub {
+                    event: Kind::TurnEnded,
+                    agent: Some(SENDER.into()),
+                    file: None,
+                    once: true,
+                    ttl_secs: Some(60),
+                },
+            },
+            &state,
+        );
+        {
+            let mut st = state.lock().unwrap();
+            st.auxiliary_connections.insert("sender".into());
+            let instance = st.conn_instances["witness"].clone();
+            st.presences.get_mut(&instance).unwrap().dnd_until =
+                Some(Instant::now() + Duration::from_secs(30));
+        }
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationGap { dropped: 99 },
+            &state,
+        );
+        assert_eq!(state.lock().unwrap().observations.facts_lost, 0);
+        state.lock().unwrap().auxiliary_connections.remove("sender");
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationGap { dropped: 44 },
+            &state,
+        );
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationGap { dropped: 0 },
+            &state,
+        );
+        let Some(DaemonToWrapper::ObservationResult { result }) = handle_wrapper_message(
+            "witness",
+            WrapperToDaemon::ObservationRequest {
+                request: Request::List {},
+            },
+            &state,
+        ) else {
+            panic!("résultat requis")
+        };
+        assert_eq!(result["facts_lost"], 44);
+        assert_eq!(result["observation_gaps"], 2);
+        assert_eq!(result["subscriptions"][0]["facts_lost_total"], 44);
+        assert_eq!(result["subscriptions"][0]["observation_gaps"], 2);
+        assert_eq!(
+            result["notifications_lost"], 1,
+            "DND perd la notice, pas le diagnostic consultable"
+        );
+        assert_eq!(result["subscriptions"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn spec101_sqlite_contention_rolls_back_subscription_and_once_without_waiting() {
+        use bridget_transport::protocol::{ObservationKind as Kind, ObservationRequest as Request};
+        let (state, _root, _peers) = fixture();
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationCapabilities {
+                events: vec![Kind::TurnEnded],
+            },
+            &state,
+        );
+        let subscribe = || WrapperToDaemon::ObservationRequest {
+            request: Request::Sub {
+                event: Kind::TurnEnded,
+                agent: Some(SENDER.into()),
+                file: None,
+                once: true,
+                ttl_secs: Some(60),
+            },
+        };
+        handle_wrapper_message("witness", subscribe(), &state);
+        let blocker = rusqlite::Connection::open(&state.lock().unwrap().db_path).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let started = Instant::now();
+        assert!(
+            matches!(handle_wrapper_message("witness", subscribe(), &state), Some(DaemonToWrapper::ObservationResult { result }) if result["reason"] == "subscription_persistence_failed")
+        );
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservedActivity {
+                seq: 1,
+                event: Kind::TurnEnded,
+                file: None,
+            },
+            &state,
+        );
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert_eq!(state.lock().unwrap().observations.subscriptions.len(), 1);
+        blocker.execute_batch("ROLLBACK").unwrap();
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservedActivity {
+                seq: 2,
+                event: Kind::TurnEnded,
+                file: None,
+            },
+            &state,
+        );
+        assert!(state.lock().unwrap().observations.subscriptions.is_empty());
+        assert_eq!(
+            state.lock().unwrap().store.observation_snapshot().unwrap(),
+            b"[]"
+        );
+    }
+
+    #[test]
+    fn spec101_capabilities_auth_persistence_and_failure() {
+        use bridget_transport::protocol::{ObservationKind as Kind, ObservationRequest as Request};
+        let (state, _root, _peers) = fixture();
+        let request = || WrapperToDaemon::ObservationRequest {
+            request: Request::Sub {
+                event: Kind::TurnEnded,
+                agent: Some(SENDER.into()),
+                file: None,
+                once: true,
+                ttl_secs: Some(60),
+            },
+        };
+        let result = handle_wrapper_message("witness", request(), &state);
+        assert!(
+            matches!(result, Some(DaemonToWrapper::ObservationResult {result}) if result["reason"] == "no_compatible_source")
+        );
+        state
+            .lock()
+            .unwrap()
+            .auxiliary_connections
+            .insert("sender".into());
+        assert!(matches!(
+            handle_wrapper_message(
+                "sender",
+                WrapperToDaemon::ObservationCapabilities {
+                    events: vec![Kind::TurnEnded]
+                },
+                &state
+            ),
+            Some(DaemonToWrapper::Nack { .. })
+        ));
+        state.lock().unwrap().auxiliary_connections.remove("sender");
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservedActivity {
+                seq: 1,
+                event: Kind::TurnEnded,
+                file: None,
+            },
+            &state,
+        );
+        assert!(state.lock().unwrap().observation_sequences.is_empty());
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationCapabilities {
+                events: vec![Kind::TurnEnded, Kind::FileWritten],
+            },
+            &state,
+        );
+        let result = handle_wrapper_message("witness", request(), &state);
+        assert!(
+            matches!(result, Some(DaemonToWrapper::ObservationResult {result}) if result["status"] == "subscribed")
+        );
+        {
+            let st = state.lock().unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Vec<serde_json::Value>>(
+                    &st.store.observation_snapshot().unwrap()
+                )
+                .unwrap()
+                .len(),
+                1
+            );
+            st.store
+                .connection()
+                .execute_batch("PRAGMA query_only=ON")
+                .unwrap();
+        }
+        let result = handle_wrapper_message("witness", request(), &state);
+        assert!(
+            matches!(result, Some(DaemonToWrapper::ObservationResult {result}) if result["reason"] == "subscription_persistence_failed")
+        );
+        assert_eq!(state.lock().unwrap().observations.subscriptions.len(), 1);
+        // Aucun INSERT pour un fait non pertinent, même si SQLite est read-only.
+        let changes = state.lock().unwrap().store.connection().total_changes();
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservedActivity {
+                seq: 1,
+                event: Kind::FileWritten,
+                file: Some("/private/irrelevant".into()),
+            },
+            &state,
+        );
+        assert_eq!(state.lock().unwrap().observation_sequences["sender"], 1);
+        assert_eq!(
+            state.lock().unwrap().store.connection().total_changes(),
+            changes
+        );
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservedActivity {
+                seq: 2,
+                event: Kind::TurnEnded,
+                file: None,
+            },
+            &state,
+        );
+        assert_eq!(
+            state.lock().unwrap().observations.subscriptions.len(),
+            1,
+            "once non consommé si sauvegarde impossible"
+        );
+        state
+            .lock()
+            .unwrap()
+            .store
+            .connection()
+            .execute_batch("PRAGMA query_only=OFF")
+            .unwrap();
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservedActivity {
+                seq: 3,
+                event: Kind::TurnEnded,
+                file: None,
+            },
+            &state,
+        );
+        assert_eq!(
+            state.lock().unwrap().store.observation_snapshot().unwrap(),
+            b"[]"
+        );
+    }
+
+    #[test]
+    fn spec101_missing_agent_offline_source_and_invalid_announcements_are_refused() {
+        use bridget_transport::protocol::{ObservationKind as Kind, ObservationRequest as Request};
+        let (state, _root, _peers) = fixture();
+        let subscribe = |agent: &str| WrapperToDaemon::ObservationRequest {
+            request: Request::Sub {
+                event: Kind::TurnEnded,
+                agent: Some(agent.into()),
+                file: None,
+                once: false,
+                ttl_secs: Some(60),
+            },
+        };
+        assert!(
+            matches!(handle_wrapper_message("witness", subscribe("unknown"), &state), Some(DaemonToWrapper::ObservationResult { result }) if result["reason"] == "agent_not_found")
+        );
+        for events in [
+            vec![Kind::FileCollision],
+            vec![Kind::TurnEnded, Kind::TurnEnded],
+            vec![Kind::TurnEnded; 4],
+        ] {
+            assert!(matches!(
+                handle_wrapper_message(
+                    "sender",
+                    WrapperToDaemon::ObservationCapabilities { events },
+                    &state
+                ),
+                Some(DaemonToWrapper::Nack { .. })
+            ));
+        }
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationCapabilities { events: vec![] },
+            &state,
+        );
+        assert!(
+            matches!(handle_wrapper_message("witness", subscribe(SENDER), &state), Some(DaemonToWrapper::ObservationResult { result }) if result["reason"] == "source_unavailable")
+        );
+        handle_wrapper_message(
+            "sender",
+            WrapperToDaemon::ObservationCapabilities {
+                events: vec![Kind::TurnEnded],
+            },
+            &state,
+        );
+        handle_wrapper_message("witness", subscribe(SENDER), &state);
+        handle_wrapper_message("sender", WrapperToDaemon::Unregister, &state);
+        assert!(
+            !state
+                .lock()
+                .unwrap()
+                .observations
+                .accepts("sender", Kind::TurnEnded)
+        );
+        assert!(
+            matches!(handle_wrapper_message("witness", subscribe(SENDER), &state), Some(DaemonToWrapper::ObservationResult { result }) if result["reason"] == "source_unavailable")
+        );
+    }
+
+    #[test]
     fn spec100_owner_source_collision_and_nonblocking_notifications() {
         use bridget_transport::protocol::{ObservationKind as Kind, ObservationRequest as Request};
         let (state, _root, mut peers) = fixture();
+        for conn in ["sender", "target"] {
+            handle_wrapper_message(
+                conn,
+                WrapperToDaemon::ObservationCapabilities {
+                    events: vec![Kind::FileWritten, Kind::TurnEnded, Kind::PermissionRequired],
+                },
+                &state,
+            );
+        }
         let request = Request::Sub {
             event: Kind::FileCollision,
             agent: None,
@@ -9528,7 +10293,11 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ObservationRequest { .. }
+                | WrapperToDaemon::ThreadRequest { .. }
+                | WrapperToDaemon::ThreadNoticeCapability { .. }
                 | WrapperToDaemon::ObservedActivity { .. }
+                | WrapperToDaemon::ObservationCapabilities { .. }
+                | WrapperToDaemon::ObservationGap { .. }
                 | WrapperToDaemon::ClientHello { .. }
                 | WrapperToDaemon::ArtifactPublish { .. }
                 | WrapperToDaemon::ArtifactRead { .. }
@@ -9741,7 +10510,11 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ObservationRequest { .. }
+                | WrapperToDaemon::ThreadRequest { .. }
+                | WrapperToDaemon::ThreadNoticeCapability { .. }
                 | WrapperToDaemon::ObservedActivity { .. }
+                | WrapperToDaemon::ObservationCapabilities { .. }
+                | WrapperToDaemon::ObservationGap { .. }
                 | WrapperToDaemon::ServiceHello { .. }
                 | WrapperToDaemon::ArtifactPublish { .. }
                 | WrapperToDaemon::ArtifactRead { .. }
@@ -9838,6 +10611,107 @@ fn handle_wrapper_message(
     }
 
     match msg {
+        WrapperToDaemon::ObservationGap { dropped } => {
+            use bridget_transport::protocol::ObservationKind;
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let (agent, _) = live_connection_identity(&st, conn_id)?;
+            if st.auxiliary_connections.contains(conn_id)
+                || ![
+                    ObservationKind::TurnEnded,
+                    ObservationKind::PermissionRequired,
+                    ObservationKind::FileWritten,
+                ]
+                .into_iter()
+                .any(|kind| st.observations.accepts(conn_id, kind))
+            {
+                return None;
+            }
+            let notices = st.observations.report_gap(&agent, dropped, Instant::now());
+            queue_observation_notifications(&st, notices);
+            None
+        }
+        WrapperToDaemon::ObservationCapabilities { events } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some((agent, _)) = live_connection_identity(&st, conn_id) else {
+                return Some(DaemonToWrapper::Nack {
+                    id: "observation-capabilities".into(),
+                    reason: "primary_identity_required".into(),
+                });
+            };
+            if st.auxiliary_connections.contains(conn_id)
+                || events.len() > 3
+                || events.iter().enumerate().any(|(i, event)| {
+                    *event == bridget_transport::protocol::ObservationKind::FileCollision
+                        || events[..i].contains(event)
+                })
+            {
+                return Some(DaemonToWrapper::Nack {
+                    id: "observation-capabilities".into(),
+                    reason: "invalid_primary_capabilities".into(),
+                });
+            }
+            let notices = st
+                .observations
+                .set_source(conn_id, &agent, events, Instant::now());
+            queue_observation_notifications(&st, notices);
+            None
+        }
+        WrapperToDaemon::ThreadNoticeCapability { versions } => {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            // Capacité de réception d'une connexion principale enregistrée ; un
+            // client auxiliaire ne reçoit jamais d'alerte. Au plus 8 valeurs lues.
+            let eligible =
+                st.conn_names.contains_key(conn_id) && !st.auxiliary_connections.contains(conn_id);
+            if eligible
+                && versions
+                    .iter()
+                    .take(8)
+                    .any(|version| *version == crate::threads::THREAD_NOTICE_VERSION)
+            {
+                st.thread_notice_versions
+                    .insert(conn_id.to_string(), crate::threads::THREAD_NOTICE_VERSION);
+            } else {
+                st.thread_notice_versions.remove(conn_id);
+            }
+            None
+        }
+        WrapperToDaemon::ThreadRequest { request } => {
+            let mutates = matches!(
+                request.request,
+                bridget_transport::protocol::ThreadAction::Post { .. }
+                    | bridget_transport::protocol::ThreadAction::Ack { .. }
+                    | bridget_transport::protocol::ThreadAction::Close { .. }
+            );
+            let (result, controls) = {
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                let Some((owner, _)) = live_connection_identity(&st, conn_id) else {
+                    return Some(DaemonToWrapper::ThreadResult {
+                        result: bridget_transport::protocol::ThreadResult {
+                            version: bridget_transport::protocol::THREAD_CONTRACT_VERSION,
+                            result: crate::threads::error(
+                                "identity_unavailable",
+                                "identité active requise",
+                                false,
+                            ),
+                        },
+                    });
+                };
+                let now = unix_now_secs();
+                let result = {
+                    let directory = DaemonDirectory { state: &st };
+                    crate::threads::handle(&st.store, &directory, &owner, request, now)
+                };
+                let mut controls = Vec::new();
+                // Un dépôt, une confirmation ou une clôture réévaluent les
+                // sollicitations tout de suite ; la poussée part hors verrou.
+                if mutates && result.result["status"] != "error" {
+                    dispatch_thread_wakes(&mut st, now, Instant::now(), &mut controls);
+                }
+                (result, controls)
+            };
+            let _ = execute_controls(controls);
+            Some(DaemonToWrapper::ThreadResult { result })
+        }
         WrapperToDaemon::ObservationRequest { request } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let Some((owner, _)) = live_connection_identity(&st, conn_id) else {
@@ -9846,15 +10720,56 @@ fn handle_wrapper_message(
                     reason: "identité active requise".into(),
                 });
             };
+            if let bridget_transport::protocol::ObservationRequest::Sub {
+                agent: Some(ref agent),
+                ..
+            } = request
+            {
+                let reason = if st.router.get_agent(agent).is_none() {
+                    Some(if st.presences.values().any(|p| p.name == *agent) {
+                        "source_unavailable"
+                    } else {
+                        "agent_not_found"
+                    })
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
+                    return Some(DaemonToWrapper::ObservationResult {
+                        result: serde_json::json!({"status":"rejected","reason":reason}),
+                    });
+                }
+            }
+            let before = st.observations.subscriptions.clone();
+            let revision = st.observations.revision;
             let mut result = st.observations.request(
                 &owner,
                 request,
                 Instant::now(),
                 unix_now_secs().max(0) as u64,
             );
+            if st.observations.revision != revision
+                && st
+                    .observations
+                    .snapshot()
+                    .ok()
+                    .is_none_or(|bytes| st.store.save_observation_snapshot(&bytes).is_err())
+            {
+                st.observations.subscriptions = before;
+                st.observations.revision = revision;
+                return Some(DaemonToWrapper::ObservationResult {
+                    result: serde_json::json!({"status":"rejected","reason":"subscription_persistence_failed"}),
+                });
+            }
+            result["sources"] = st.observations.catalogue();
+            result["facts_lost"] = serde_json::json!(st.observations.facts_lost);
+            result["observation_gaps"] = serde_json::json!(st.observations.observation_gaps);
+            result["coverage"] = serde_json::json!(
+                "partial: declared compatible live sources only; no historical replay; T3: latest turn only, activity window 500 before compression, at most 12 paths per activity; Claude T3 file writes unsupported"
+            );
             result["daemon_instance"] = serde_json::json!(st.instance_id);
             result["lifetime"] = serde_json::json!(
-                "daemon_memory: recréer après redémarrage ; pas de livraison durable, DND respecté"
+                "subscriptions retained interrupted after restart: resubscribe explicitly; no durable delivery, DND respected"
             );
             result["notifications_lost"] = serde_json::json!(
                 st.observation_lost
@@ -9868,6 +10783,7 @@ fn handle_wrapper_message(
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let (agent, instance) = live_connection_identity(&st, conn_id)?;
             if st.auxiliary_connections.contains(conn_id)
+                || !st.observations.accepts(conn_id, event)
                 || seq == 0
                 || st
                     .observation_sequences
@@ -11179,6 +12095,11 @@ fn handle_wrapper_message(
                 delivery_generation,
             ) {
                 Ok(()) => {
+                    settle_thread_wake_by_delivery(
+                        &mut st,
+                        &delivery_id,
+                        crate::store::threads::WakeOutcome::OutcomeUnknown,
+                    );
                     #[cfg(feature = "test-support")]
                     crate::test_sync::checkpoint("after_delivery_indeterminate");
                     None
@@ -12222,6 +13143,8 @@ fn handle_wrapper_message(
                 st.mark_stopped(conn_id);
                 st.conn_names.remove(conn_id);
                 st.observation_sequences.remove(conn_id);
+                let notices = st.observations.remove_source(conn_id, Instant::now());
+                queue_observation_notifications(&st, notices);
                 st.conn_hosts.remove(conn_id);
                 st.conn_operating_systems.remove(conn_id);
                 st.service_negotiations.remove(conn_id);
@@ -12252,6 +13175,8 @@ fn handle_wrapper_message(
             None
         }
         WrapperToDaemon::Send(mut bridge_msg) => {
+            // Session 102 : aucune notice de fil ne vient d'un client.
+            bridge_msg.thread_notice = None;
             eprintln!(
                 "[BRIDGET] Send de {}: to={}, body={}",
                 conn_id,

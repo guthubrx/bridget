@@ -454,6 +454,50 @@ fn execute_tool_at_with_scope(
                 request,
             )
         }
+        "bridget_thread" => {
+            let action: bridget_transport::protocol::ThreadAction =
+                serde_json::from_value(Value::Object(arguments.clone()))
+                    .map_err(|error| ToolError::InvalidParams(format!("thread : {error}")))?;
+            let result = crate::communication::client::thread_request(
+                identity,
+                instance_id,
+                socket,
+                bridget_transport::protocol::ThreadRequest {
+                    version: bridget_transport::protocol::THREAD_CONTRACT_VERSION,
+                    request: action,
+                },
+            )?;
+            Ok(result.result)
+        }
+        "bridget_handoff" => {
+            let request = crate::handoff::parse_request(&Value::Object(arguments.clone()))
+                .map_err(|error| ToolError::InvalidParams(format!("handoff : {error}")))?;
+            match request.transport {
+                // Aperçu local : aucune connexion, aucun identifiant fabriqué.
+                None => Ok(crate::handoff::preview_result(&request.rendered)),
+                Some(transport) => {
+                    let mut send = serde_json::Map::new();
+                    send.insert("to".into(), Value::from(transport.to));
+                    send.insert("body".into(), Value::from(request.rendered.body.clone()));
+                    send.insert("reply".into(), Value::from(transport.reply));
+                    if let Some(timeout) = transport.reply_timeout {
+                        send.insert("reply_timeout".into(), Value::from(timeout));
+                    }
+                    if let Some(in_reply_to) = transport.in_reply_to {
+                        send.insert("in_reply_to".into(), Value::from(in_reply_to));
+                    }
+                    if let (Some(id), Some(issued_at)) = (transport.id, transport.issued_at) {
+                        send.insert("id".into(), Value::from(id));
+                        send.insert("issued_at".into(), Value::from(issued_at));
+                    }
+                    let receipt = execute_send(identity, instance_id, &send, socket)?;
+                    Ok(crate::handoff::decorate_send_result(
+                        receipt,
+                        &request.rendered,
+                    ))
+                }
+            }
+        }
         "bridget_journal" => {
             let request: crate::attach::JournalRequest =
                 serde_json::from_value(Value::Object(arguments.clone()))
@@ -1426,7 +1470,7 @@ fn fetch_ledger_requests(
     }
 }
 
-fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value {
+pub(crate) fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value {
     match issue {
         IdempotencyIssue::Accepted { .. } => {
             json!({ "status": "accepted", "id": id, "issued_at": issued_at, "hops": 4 })
@@ -1507,6 +1551,18 @@ pub(crate) fn public_refusal_category(category: &str) -> &str {
 
 fn tool_result(payload: Value) -> Value {
     let text = serde_json::to_string(&payload).expect("un résultat MCP est toujours sérialisable");
+    // Session 102 : un résultat structuré `status:"error"` (code, detail,
+    // retryable) est une erreur d'outil, jamais un succès avec message d'échec.
+    if payload["status"] == "error"
+        && let Some(code) = payload["code"].as_str()
+    {
+        return json!({
+            "content": [{ "type": "text", "text": text }],
+            "structuredContent": payload,
+            "isError": true,
+            "code": code
+        });
+    }
     json!({
         "content": [{ "type": "text", "text": text }],
         "structuredContent": payload
@@ -1724,8 +1780,51 @@ fn tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "bridget_thread",
+            "description": "Fil inter-agents partagé : create, list, show, post, read, ack, history, close. Un dépôt avec notify:[] reste silencieux ; notify liste des UUID membres ou \"all\" (auteur exclu) ; le texte du corps n'est jamais interprété. Recevoir une alerte ≠ lire (read) ≠ confirmer (ack). operation_id UUID obligatoire pour create/post/close, à réutiliser à l'identique pour rejouer sans dupliquer. Pages bornées (limit 1–200, 60 Kio) avec reçu ; history relit une plage sans déplacer le repère. Aucun résumé automatique ; les erreurs portent code et retryable.",
+            "inputSchema": {"type":"object","properties":{
+                "action":{"enum":["create","list","show","post","read","ack","history","close"]},
+                "thread_id":{"type":"string","minLength":36,"maxLength":36},
+                "title":{"type":"string","minLength":1,"maxLength":640},
+                "members":{"type":"array","items":{"type":"string","minLength":36,"maxLength":36},"maxItems":16},
+                "operation_id":{"type":"string","minLength":36,"maxLength":36},
+                "body":{"type":"string","minLength":1,"maxLength":16384},
+                "notify":{"oneOf":[{"type":"array","items":{"type":"string","minLength":36,"maxLength":36},"maxItems":16},{"enum":["all"]}]},
+                "reply_to_seq":{"type":"integer","minimum":1},
+                "ack_receipt":{"type":"string","minLength":36,"maxLength":36},
+                "receipt":{"type":"string","minLength":36,"maxLength":36},
+                "limit":{"type":"integer","minimum":1,"maximum":200},
+                "after_thread_id":{"type":"string","minLength":36,"maxLength":36},
+                "from_seq":{"type":"integer","minimum":1},
+                "to_seq":{"type":"integer","minimum":1}
+            },"required":["action"],"additionalProperties":false}
+        }),
+        json!({
+            "name": "bridget_handoff",
+            "description": "Dossier de passation rédigé par l'agent (objectif et résumé obligatoires ; résultats, décisions, questions, prochain pas, références, limites facultatifs). preview valide et rend le corps sans rien envoyer ; send transmet le corps exact au destinataire UUID par l'envoi idempotent habituel (id et issued_at à réutiliser à l'identique pour rejouer). Aucune source n'est lue ni certifiée ; conservation du journal (sept jours par défaut) ; pas de confidentialité au-delà du ledger. Corps ≤ 16 Kio, refusé plutôt que tronqué. Le schéma est indicatif : le validateur du dossier fait autorité (octets UTF-8, chaînes non blanches, champs inconnus et null refusés).",
+            "inputSchema": {"type":"object","properties":{
+                "action":{"enum":["preview","send"]},
+                "draft":{"type":"object","properties":{
+                    "objective":{"type":"string","minLength":1,"maxLength":1024},
+                    "summary":{"type":"string","minLength":1,"maxLength":8192},
+                    "results":{"type":"array","maxItems":12,"items":{"type":"object","properties":{"text":{"type":"string","minLength":1,"maxLength":2048},"evidence":{"type":"string","minLength":1,"maxLength":2048}},"required":["text"],"additionalProperties":false}},
+                    "decisions":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}},
+                    "questions":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}},
+                    "next_step":{"type":"string","minLength":1,"maxLength":2048},
+                    "references":{"type":"array","maxItems":16,"items":{"type":"object","properties":{"kind":{"enum":["file","url","message","journal","thread","artifact"]},"label":{"type":"string","minLength":1,"maxLength":256},"host":{"type":"string"},"path":{"type":"string"},"url":{"type":"string"},"id":{"type":"string"},"target":{"type":"string"},"agent":{"type":"string"},"thread_id":{"type":"string"},"artifact_id":{"type":"string"},"version_id":{"type":"string"},"from_seq":{"type":"integer","minimum":0},"to_seq":{"type":"integer","minimum":0},"source_label":{"type":"string","minLength":1,"maxLength":256}},"required":["kind","label"],"additionalProperties":false}},
+                    "limitations":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}}
+                },"required":["objective","summary"],"additionalProperties":false},
+                "to":{"type":"string","minLength":36,"maxLength":36},
+                "reply":{"type":"boolean","default":false},
+                "reply_timeout":{"type":"integer","minimum":1},
+                "in_reply_to":{"type":"string","minLength":1},
+                "id":{"type":"string","minLength":1},
+                "issued_at":{"type":"integer","minimum":1}
+            },"required":["action","draft"],"additionalProperties":false}
+        }),
+        json!({
             "name": "bridget_events",
-            "description": "S'abonner aux faits futurs, les lister ou se désabonner. Notifications non bloquantes par message, DND respecté. once=une occurrence ; expiration défaut1h, max7j. État perdu au redémarrage daemon. Fin de tour n'est pas succès. Fichiers : seulement écritures structurées confirmées, pas shell ni surveillance globale.",
+            "description": "S'abonner aux faits reçus après création, les lister ou se désabonner. Consulter types pour les sources compatibles ; une source impossible est refusée. Notifications non bloquantes, DND respecté. once=une occurrence ; expiration défaut1h, max7j. Après redémarrage : abonnements conservés interrompus, réabonnement explicite requis. Fin de tour n'est pas succès. Fichiers : écritures structurées attestées seulement, pas shell ni surveillance globale ; via T3, Codex uniquement et couverture partielle.",
             "inputSchema": {"type":"object","properties":{
                 "action":{"enum":["types","sub","list","unsub"]},
                 "event":{"enum":["turn_ended","permission_required","file_written","file_collision"]},
@@ -2028,7 +2127,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    18
+                    20
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -2047,6 +2146,106 @@ mod tests {
     }
 
     #[test]
+    fn spec102_v33_bridget_thread_transmet_le_contrat_et_refuse_les_champs_inconnus() {
+        use bridget_transport::protocol::{IdentityCredential, ThreadAction, ThreadResult};
+        use sha2::{Digest, Sha256};
+        let root = std::env::temp_dir().join(format!("mcp102-{}", uuid::Uuid::new_v4().simple()));
+        bridget_transport::fsutil::create_private_dir(&root).unwrap();
+        bridget_transport::fsutil::create_private_dir(&root.join("agent-names")).unwrap();
+        let socket = root.join("s");
+        let proof = root
+            .join("agent-names")
+            .join(format!("proof-{:x}.json", Sha256::digest(b"instance102")));
+        bridget_transport::fsutil::write_private_file_atomic(&proof,&serde_json::to_vec(&json!({"agent_id":"alice","instance_id":"instance102","credential":IdentityCredential::new("fixture-only".into())})).unwrap()).unwrap();
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+            assert!(matches!(
+                bridget_transport::protocol::decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::RegisterAuxiliary { .. }
+            ));
+            std::io::Write::write_all(
+                &mut stream,
+                format!(
+                    "{}\n",
+                    bridget_transport::protocol::encode(&DaemonToWrapper::Registered {
+                        agent_id: "alice".into(),
+                        credential: None
+                    })
+                    .unwrap()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            line.clear();
+            std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+            let WrapperToDaemon::ThreadRequest { request } =
+                bridget_transport::protocol::decode::<WrapperToDaemon>(line.trim()).unwrap()
+            else {
+                panic!("requête de fil attendue")
+            };
+            assert_eq!(request.version, 1);
+            assert!(
+                matches!(request.request, ThreadAction::Post { ref thread_id, .. } if thread_id == "33333333-3333-4333-8333-333333333333")
+            );
+            std::io::Write::write_all(
+                &mut stream,
+                format!(
+                    "{}\n",
+                    bridget_transport::protocol::encode(&DaemonToWrapper::ThreadResult {
+                        result: ThreadResult { version: 1, result: json!({"status":"error","code":"thread_unavailable","detail":"Fil indisponible pour cette identité.","retryable":false}) }
+                    })
+                    .unwrap()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        });
+        let result = execute_tool_at_with_scope(
+            "alice",
+            "instance102",
+            "bridget_thread",
+            json!({"action":"post","thread_id":"33333333-3333-4333-8333-333333333333","body":"b","notify":[],"operation_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"})
+                .as_object()
+                .unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(result["code"], "thread_unavailable");
+        let rendered = tool_result(result);
+        assert_eq!(
+            rendered["isError"], true,
+            "une erreur métier n'est jamais un succès"
+        );
+        assert_eq!(rendered["structuredContent"]["code"], "thread_unavailable");
+        server.join().unwrap();
+        for invalid in [
+            json!({"action":"post","thread_id":"t","body":"b","notify":[],"operation_id":"o","actor":"x"}),
+            json!({"action":"summary","thread_id":"t"}),
+            json!({"action":"post","thread_id":"t","body":"b","operation_id":"o"}),
+        ] {
+            assert!(matches!(
+                execute_tool_at_with_scope(
+                    "alice",
+                    "instance102",
+                    "bridget_thread",
+                    invalid.as_object().unwrap(),
+                    &socket
+                ),
+                Err(ToolError::InvalidParams(_))
+            ));
+        }
+        assert_eq!(
+            tool_result(json!({"status":"accepted"}))["isError"],
+            Value::Null
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn catalogue_mcp_expose_exactement_les_quatre_verbes_du_greffe() {
         let names = tools()
             .into_iter()
@@ -2058,6 +2257,7 @@ mod tests {
             "bridget_dnd",
             "bridget_domain",
             "bridget_events",
+            "bridget_handoff",
             "bridget_journal",
             "bridget_ledger",
             "bridget_publish_artifact",
@@ -2066,6 +2266,7 @@ mod tests {
             "bridget_runtime",
             "bridget_send",
             "bridget_status",
+            "bridget_thread",
             "bridget_who",
             "maicie_delegate",
             "maicie_objective_close",

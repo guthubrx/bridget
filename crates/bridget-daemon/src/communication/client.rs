@@ -33,6 +33,24 @@ pub(crate) fn observation_request(
     }
 }
 
+/// Session 102 : opération de fil, même connexion attestée que les observations.
+pub(crate) fn thread_request(
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+    request: bridget_transport::protocol::ThreadRequest,
+) -> Result<bridget_transport::protocol::ThreadResult, ClientError> {
+    let mut connection = registered_connection(identity, instance_id, socket)?;
+    match connection.send_then_wait(&WrapperToDaemon::ThreadRequest { request })? {
+        DaemonToWrapper::ThreadResult { result } => Ok(result),
+        DaemonToWrapper::Nack { reason, .. } => Err(ClientError::Technical {
+            code: "thread_rejected",
+            message: reason,
+        }),
+        other => unexpected_response(other),
+    }
+}
+
 pub(crate) fn cancel_request(
     identity: &str,
     instance_id: &str,

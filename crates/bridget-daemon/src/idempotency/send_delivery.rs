@@ -186,12 +186,19 @@ impl IdempotencyStore {
         {
             return Ok(0);
         }
+        // Session 102 : une alerte de fil reste liée à l'instance figée dans
+        // sa réservation ; elle n'est jamais réaffectée à une autre instance.
+        // L'enveloppe durable typée est inspectée en SQL (JSON1), en un seul
+        // UPDATE transactionnel, sans relecture ligne à ligne.
         let updated = self.conn.execute(
             "UPDATE send_deliveries
              SET recipient_instance_id = ?1
              WHERE recipient_instance_id = ?2
                AND phase = 'dispatching'
-               AND expires_at > ?3",
+               AND expires_at > ?3
+               AND (message_bytes IS NULL
+                    OR json_valid(CAST(message_bytes AS TEXT)) = 0
+                    OR json_extract(CAST(message_bytes AS TEXT), '$.thread_notice') IS NULL)",
             params![to_instance_id, from_instance_id, now],
         )?;
         Ok(updated)

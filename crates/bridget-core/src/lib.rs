@@ -19,6 +19,6 @@ pub use execution::{
     WorkSubmission,
 };
 pub use host::{HOTE_NON_ATTESTE, host_is_attested, local_host};
-pub use message::{AgentType, BridgetMessage, MessageIntent, MessageOrigin};
+pub use message::{AgentType, BridgetMessage, MessageIntent, MessageOrigin, ThreadNotice};
 pub use router::{Router, RouterAction, RouterError};
 pub use text_guards::{is_disallowed_control, is_format_character};

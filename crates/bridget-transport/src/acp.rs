@@ -2070,10 +2070,17 @@ fn prompt_for_with_private_instructions(
     message: &BridgetMessage,
     instructions: Option<&str>,
 ) -> String {
+    let response = if message.reply {
+        "Le wrapper relaie automatiquement ta réponse finale à l'expéditeur avec in_reply_to=id. Réponds avec le résultat utile ; ne double pas cette réponse par un envoi d'outil."
+    } else {
+        "Aucune réponse inter-agent attendue. N'envoie pas d'accusé de réception, même pour annoncer ton silence. Ta réponse finale ne sera pas relayée."
+    };
     let prompt = format!(
-        "[message Bridget de {} — réponse attendue : {}]\n\n{}",
+        "[message Bridget de {} — réponse attendue : {}]\n[Métadonnées : {}]\n{response}\n\n{}",
         message.from,
         if message.reply { "oui" } else { "non" },
+        json!({"id": message.id, "from": message.from, "to": message.to,
+            "reply": message.reply, "in_reply_to": message.in_reply_to}),
         message.body
     );
     let Some(instructions) = instructions
@@ -2246,10 +2253,27 @@ mod tests {
     fn prompt_preserves_the_body_byte_for_byte() {
         let mut message = BridgetMessage::new("alice", "bob", "'\"$x\nligne");
         message.id = "mcp-38210-6a8a7fc7-1".to_string();
-        assert_eq!(
-            prompt_for(&message),
-            "[message Bridget de alice — réponse attendue : non]\n\n'\"$x\nligne"
-        );
+        let prompt = prompt_for(&message);
+        assert!(prompt.starts_with("[message Bridget de alice — réponse attendue : non]"));
+        assert!(prompt.ends_with(&message.body));
+    }
+
+    #[test]
+    fn spec105_acp_contrat_explicite_et_corps_intact() {
+        for requested in [false, true] {
+            let mut msg = BridgetMessage::new("alice", "bob", "Texte ' et \" et\nseconde ligne");
+            msg.reply = requested;
+            msg.in_reply_to = Some("parent".into());
+            let prompt = prompt_for(&msg);
+            assert!(prompt.contains(&msg.id));
+            assert!(prompt.contains("parent"));
+            assert!(prompt.ends_with(&msg.body));
+            assert_eq!(
+                prompt.contains("Aucune réponse inter-agent attendue"),
+                !requested
+            );
+            assert_eq!(prompt.contains("relaie automatiquement"), requested);
+        }
     }
 
     #[test]
@@ -4001,14 +4025,7 @@ exit 0
 
         assert!(prompt.contains("Privilégie les sources attestées."));
         assert!(prompt.ends_with(&message.body));
-        assert_eq!(
-            prompt_for(&message),
-            format!(
-                "[message Bridget de {} — réponse attendue : {}]\n\n{}",
-                message.from,
-                if message.reply { "oui" } else { "non" },
-                message.body
-            )
-        );
+        assert!(prompt_for(&message).ends_with(&message.body));
+        assert!(prompt_for(&message).contains(&message.id));
     }
 }

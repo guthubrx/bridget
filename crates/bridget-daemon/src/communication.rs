@@ -78,7 +78,22 @@ pub(crate) fn canonical_send(
     canonical_option(&mut bytes, message.in_reply_to.as_deref());
     canonical_message_control(&mut bytes, message);
     canonical_field(&mut bytes, &issued_at.to_be_bytes());
+    canonical_thread_notice(&mut bytes, message);
     bytes
+}
+
+/// Session 102 : une alerte de fil ajoute un domaine distinct à la FIN du canon.
+/// `None` conserve exactement les octets historiques ; chaque champ de la
+/// notice modifie le canon, donc un rejeu avec une autre notice est refusé.
+fn canonical_thread_notice(bytes: &mut Vec<u8>, message: &bridget_core::BridgetMessage) {
+    let Some(notice) = &message.thread_notice else {
+        return;
+    };
+    bytes.extend_from_slice(b"bridget/thread-notice/v1\0");
+    canonical_field(bytes, &notice.version.to_be_bytes());
+    canonical_field(bytes, notice.thread_id.as_bytes());
+    canonical_field(bytes, &notice.through_seq.to_be_bytes());
+    canonical_field(bytes, &notice.generation.to_be_bytes());
 }
 
 #[cfg(test)]
@@ -118,6 +133,60 @@ mod tests {
             bytes,
             canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &message, 123000)
         );
+    }
+
+    #[test]
+    fn spec102_v20_canon_sans_notice_inchange_et_chaque_champ_de_notice_compte() {
+        let base: bridget_core::BridgetMessage = serde_json::from_str(
+            r#"{"id":"message-1","from":"agent-a","to":"agent-b","body":"texte","reply":false,"hops":4}"#,
+        )
+        .unwrap();
+        let reference = canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &base, 123000);
+        let mut same = base.clone();
+        same.thread_notice = None;
+        assert_eq!(
+            canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &same, 123000),
+            reference
+        );
+        let notice = bridget_core::ThreadNotice {
+            version: 1,
+            thread_id: "33333333-3333-4333-8333-333333333333".into(),
+            through_seq: 20,
+            generation: 2,
+        };
+        let mut with_notice = base.clone();
+        with_notice.thread_notice = Some(notice.clone());
+        let canon = canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &with_notice, 123000);
+        assert_ne!(canon, reference);
+        assert!(
+            canon.starts_with(&reference),
+            "le préfixe historique est conservé"
+        );
+        for variant in [
+            bridget_core::ThreadNotice {
+                version: 2,
+                ..notice.clone()
+            },
+            bridget_core::ThreadNotice {
+                thread_id: "44444444-4444-4444-8444-444444444444".into(),
+                ..notice.clone()
+            },
+            bridget_core::ThreadNotice {
+                through_seq: 21,
+                ..notice.clone()
+            },
+            bridget_core::ThreadNotice {
+                generation: 3,
+                ..notice.clone()
+            },
+        ] {
+            let mut other = base.clone();
+            other.thread_notice = Some(variant);
+            assert_ne!(
+                canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &other, 123000),
+                canon
+            );
+        }
     }
 
     #[test]

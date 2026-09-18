@@ -2140,11 +2140,133 @@ pub enum ObservationRequest {
     },
 }
 
+/// Session 102 — fils inter-agents. Version fixée par le client, refusée si
+/// inconnue ; chaque variante rejette les champs inconnus.
+pub const THREAD_CONTRACT_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThreadRequest {
+    pub version: u16,
+    pub request: ThreadAction,
+}
+
+/// Cibles d'un dépôt : `[]` silence explicite, liste d'UUID, ou `"all"`.
+/// Le champ est obligatoire : la discipline de sollicitation n'est jamais
+/// laissée au hasard d'une omission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ThreadNotify {
+    All(ThreadNotifyAll),
+    Targets(Vec<String>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThreadNotifyAll {
+    All,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ThreadAction {
+    Create {
+        title: String,
+        members: Vec<String>,
+        operation_id: String,
+    },
+    List {
+        #[serde(default)]
+        limit: Option<u32>,
+        #[serde(default)]
+        after_thread_id: Option<String>,
+    },
+    Show {
+        thread_id: String,
+    },
+    Post {
+        thread_id: String,
+        body: String,
+        notify: ThreadNotify,
+        operation_id: String,
+        #[serde(default)]
+        reply_to_seq: Option<u64>,
+        #[serde(default)]
+        ack_receipt: Option<String>,
+    },
+    Read {
+        thread_id: String,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
+    Ack {
+        thread_id: String,
+        receipt: String,
+    },
+    History {
+        thread_id: String,
+        #[serde(default)]
+        from_seq: Option<u64>,
+        #[serde(default)]
+        to_seq: Option<u64>,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
+    Close {
+        thread_id: String,
+        operation_id: String,
+    },
+}
+
+impl ThreadAction {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Create { .. } => "create",
+            Self::List { .. } => "list",
+            Self::Show { .. } => "show",
+            Self::Post { .. } => "post",
+            Self::Read { .. } => "read",
+            Self::Ack { .. } => "ack",
+            Self::History { .. } => "history",
+            Self::Close { .. } => "close",
+        }
+    }
+}
+
+/// Résultat versionné : `result` porte un discriminant fermé `status`
+/// (created/listed/shown/posted/read/history/acknowledged/
+/// already_acknowledged/closed/error), identique pour CLI et MCP.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThreadResult {
+    pub version: u16,
+    pub result: serde_json::Value,
+}
+
 /// Messages envoyés par le wrapper vers le daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
+    /// Session 102 : opération sur un fil, réservée à une identité attestée.
+    ThreadRequest {
+        request: ThreadRequest,
+    },
+    /// Session 102 : versions d'alerte de fil que ce wrapper sait recevoir,
+    /// annoncées après `Registered` comme les autres faits de connexion ;
+    /// vide = aucune. La sélection est liée à la connexion et disparaît avec elle.
+    ThreadNoticeCapability {
+        versions: Vec<u16>,
+    },
+    /// Lacune de faits structurés signalée par le seul producteur primaire.
+    ObservationGap {
+        /// Zéro : continuité non garantie, quantité inconnue ; positif : pertes comptées.
+        dropped: u64,
+    },
+    /// Capacités réelles du producteur primaire vivant ; vide = indisponible.
+    ObservationCapabilities {
+        events: Vec<ObservationKind>,
+    },
     ObservationRequest {
         request: ObservationRequest,
     },
@@ -3007,6 +3129,10 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    /// Session 102 : résultat d'une opération de fil.
+    ThreadResult {
+        result: ThreadResult,
+    },
     ObservationResult {
         result: serde_json::Value,
     },
@@ -6547,5 +6673,165 @@ mod control_and_inbox_contract_tests {
         assert!(encoded.contains(r#""on_conflict":"queue""#), "{encoded}");
         let decoded: ServiceRequestPayload = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, with_origin);
+    }
+}
+
+#[cfg(test)]
+mod spec102_thread_contract_tests {
+    use super::{
+        DaemonToWrapper, THREAD_CONTRACT_VERSION, ThreadAction, ThreadNotify, ThreadNotifyAll,
+        ThreadRequest, ThreadResult, WrapperToDaemon, decode, encode,
+    };
+
+    fn action(json: &str) -> Result<ThreadAction, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+
+    #[test]
+    fn spec102_v33_huit_actions_fermees_et_champs_inconnus_refuses() {
+        let create =
+            action(r#"{"action":"create","title":"T","members":["a","b"],"operation_id":"op"}"#)
+                .unwrap();
+        assert_eq!(create.name(), "create");
+        assert_eq!(action(r#"{"action":"list"}"#).unwrap().name(), "list");
+        assert_eq!(
+            action(r#"{"action":"show","thread_id":"t"}"#)
+                .unwrap()
+                .name(),
+            "show"
+        );
+        assert_eq!(
+            action(r#"{"action":"read","thread_id":"t","limit":5}"#)
+                .unwrap()
+                .name(),
+            "read"
+        );
+        assert_eq!(
+            action(r#"{"action":"ack","thread_id":"t","receipt":"r"}"#)
+                .unwrap()
+                .name(),
+            "ack"
+        );
+        assert_eq!(
+            action(r#"{"action":"history","thread_id":"t","from_seq":1,"to_seq":9}"#)
+                .unwrap()
+                .name(),
+            "history"
+        );
+        assert_eq!(
+            action(r#"{"action":"close","thread_id":"t","operation_id":"op"}"#)
+                .unwrap()
+                .name(),
+            "close"
+        );
+        let post = action(
+            r#"{"action":"post","thread_id":"t","body":"b","notify":[],"operation_id":"op"}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(post, ThreadAction::Post { notify: ThreadNotify::Targets(ref t), .. } if t.is_empty())
+        );
+        // Champ inconnu, action inconnue, notify manquant, paramètre d'acteur : refusés avant toute mutation.
+        assert!(action(r#"{"action":"read","thread_id":"t","actor":"x"}"#).is_err());
+        assert!(action(r#"{"action":"summary","thread_id":"t"}"#).is_err());
+        assert!(
+            action(r#"{"action":"post","thread_id":"t","body":"b","operation_id":"op"}"#).is_err()
+        );
+        assert!(action(r#"{"action":"post","thread_id":"t","body":"b","notify":"everyone","operation_id":"op"}"#).is_err());
+    }
+
+    #[test]
+    fn spec102_v05_notify_all_est_une_chaine_explicite() {
+        let all = action(
+            r#"{"action":"post","thread_id":"t","body":"b","notify":"all","operation_id":"op"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            all,
+            ThreadAction::Post {
+                notify: ThreadNotify::All(ThreadNotifyAll::All),
+                ..
+            }
+        ));
+        let targets = action(r#"{"action":"post","thread_id":"t","body":"@all","notify":["b","b"],"operation_id":"op"}"#).unwrap();
+        assert!(
+            matches!(targets, ThreadAction::Post { notify: ThreadNotify::Targets(ref t), .. } if t.len() == 2)
+        );
+        assert_eq!(
+            serde_json::to_value(ThreadNotify::All(ThreadNotifyAll::All)).unwrap(),
+            "all"
+        );
+    }
+
+    #[test]
+    fn spec102_v22_enveloppe_versionnee_et_variantes_de_protocole() {
+        let request = ThreadRequest {
+            version: THREAD_CONTRACT_VERSION,
+            request: ThreadAction::Show {
+                thread_id: "t".into(),
+            },
+        };
+        let wire = encode(&WrapperToDaemon::ThreadRequest {
+            request: request.clone(),
+        })
+        .unwrap();
+        assert!(wire.contains(r#""type":"ThreadRequest""#));
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&wire).unwrap(),
+            WrapperToDaemon::ThreadRequest { request: decoded } if decoded == request
+        ));
+        assert!(
+            serde_json::from_str::<ThreadRequest>(
+                r#"{"version":1,"request":{"action":"show","thread_id":"t"},"actor":"x"}"#
+            )
+            .is_err()
+        );
+        let result = DaemonToWrapper::ThreadResult {
+            result: ThreadResult {
+                version: 1,
+                result: serde_json::json!({"status":"error","code":"thread_unavailable"}),
+            },
+        };
+        let wire = encode(&result).unwrap();
+        assert!(matches!(
+            decode::<DaemonToWrapper>(&wire).unwrap(),
+            DaemonToWrapper::ThreadResult { result } if result.result["status"] == "error"
+        ));
+    }
+
+    #[test]
+    fn spec102_v27_capacite_d_alerte_annoncee_apres_enregistrement() {
+        // Ancien wrapper : aucune annonce, donc aucune alerte ; le daemon ancien
+        // qui ignorerait la variante ne casse pas la sérialisation des DM.
+        let announced =
+            encode(&WrapperToDaemon::ThreadNoticeCapability { versions: vec![1] }).unwrap();
+        assert!(matches!(
+            decode::<WrapperToDaemon>(&announced).unwrap(),
+            WrapperToDaemon::ThreadNoticeCapability { versions } if versions == vec![1]
+        ));
+        let legacy_register = r#"{"type":"Register","identity_version":2,"agent_type":"codex","agent_id":"10200000-0000-4000-8000-000000000001"}"#;
+        assert!(matches!(
+            decode::<WrapperToDaemon>(legacy_register).unwrap(),
+            WrapperToDaemon::Register { .. }
+        ));
+        let legacy_registered = r#"{"type":"Registered","agent_id":"a"}"#;
+        assert!(matches!(
+            decode::<DaemonToWrapper>(legacy_registered).unwrap(),
+            DaemonToWrapper::Registered { .. }
+        ));
+        assert!(
+            WrapperToDaemon::ThreadRequest {
+                request: ThreadRequest {
+                    version: 1,
+                    request: ThreadAction::List {
+                        limit: None,
+                        after_thread_id: None
+                    }
+                }
+            }
+            .attach_refusal()
+            .is_some(),
+            "le rôle attach ne peut pas manipuler les fils"
+        );
     }
 }

@@ -23,6 +23,7 @@ pub use execution_store::{
 pub mod federate;
 pub mod fleet;
 pub mod greffe_policy_refresh;
+pub mod handoff;
 pub mod human_inbox;
 pub mod idempotency;
 pub mod identity_migration;
@@ -49,6 +50,8 @@ pub mod store;
 pub mod store_schema;
 pub mod t3code;
 pub mod t3code_contract;
+pub(crate) mod t3code_identity;
 #[cfg(feature = "test-support")]
 pub mod test_sync;
+pub mod threads;
 pub mod wrapper;

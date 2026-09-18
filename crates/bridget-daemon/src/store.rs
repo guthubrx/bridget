@@ -7,6 +7,7 @@
 mod ledger_requests;
 mod project_compat;
 mod service_events;
+pub(crate) mod threads;
 
 pub use ledger_requests::{LedgerEntry, LedgerSearchOutcome, TrackedRequest, UsageDashboardRow};
 pub(crate) use ledger_requests::{
@@ -32,6 +33,34 @@ pub struct Store {
 }
 
 impl Store {
+    pub(crate) fn observation_snapshot(&self) -> Result<Vec<u8>, StoreError> {
+        use rusqlite::OptionalExtension;
+        self.conn
+            .query_row(
+                "SELECT payload FROM observation_subscriptions WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map(|bytes| bytes.unwrap_or_else(|| b"[]".to_vec()))
+            .map_err(StoreError::Sqlite)
+    }
+
+    pub(crate) fn save_observation_snapshot(&self, bytes: &[u8]) -> Result<(), StoreError> {
+        let previous_ms: u64 = self
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .map_err(StoreError::Sqlite)?;
+        self.conn
+            .busy_timeout(std::time::Duration::ZERO)
+            .map_err(StoreError::Sqlite)?;
+        let result = self.conn.execute("INSERT INTO observation_subscriptions(singleton,payload) VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET payload=excluded.payload", [bytes]);
+        let restored = self
+            .conn
+            .busy_timeout(std::time::Duration::from_millis(previous_ms));
+        result.map_err(StoreError::Sqlite)?;
+        restored.map_err(StoreError::Sqlite)
+    }
     /// Ouvre ou crée la base de données.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         let conn = Connection::open(path).map_err(StoreError::Sqlite)?;
@@ -56,7 +85,11 @@ impl Store {
         // peuvent conserver cette colonne nullable ignorée ; reconstruire la
         // table pour la supprimer n'apporterait aucun invariant supplémentaire.
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS ledger (
+            "CREATE TABLE IF NOT EXISTS observation_subscriptions (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                payload BLOB NOT NULL CHECK (length(payload) <= 262144)
+            );
+            CREATE TABLE IF NOT EXISTS ledger (
                 id TEXT NOT NULL,
                 ts INTEGER NOT NULL,
                 sender TEXT NOT NULL,
@@ -315,6 +348,13 @@ impl Store {
         )
         .map_err(StoreError::Sqlite)?;
         ensure_project_bindings_runtime_schema(conn)?;
+        threads::ensure_schema(conn)?;
+        // Préflight 102 : tables et index attendus présents, sinon refus explicite.
+        if !threads::schema_ready(conn)? {
+            return Err(StoreError::Invariant(
+                "schéma des fils incomplet après migration",
+            ));
+        }
         Self::ensure_project_audit_schema(conn)?;
         Ok(())
     }
@@ -440,3 +480,55 @@ impl std::error::Error for StoreError {}
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+
+    #[test]
+    fn spec101_contended_snapshot_fails_fast_and_restores_timeout() {
+        let root =
+            std::env::temp_dir().join(format!("bg101-store-{}", uuid::Uuid::new_v4().simple()));
+        bridget_transport::fsutil::create_private_dir(&root).unwrap();
+        let path = root.join("state.db");
+        let store = Store::open(&path).unwrap();
+        store.save_observation_snapshot(b"[]").unwrap();
+        let blocker = Connection::open(&path).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let started = std::time::Instant::now();
+        assert!(store.save_observation_snapshot(b"[{}]").is_err());
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(300),
+            "ne pas attendre deux secondes sous verrou daemon"
+        );
+        assert_eq!(store.observation_snapshot().unwrap(), b"[]");
+        assert_eq!(
+            store
+                .conn
+                .query_row("PRAGMA busy_timeout", [], |r| r.get::<_, u64>(0))
+                .unwrap(),
+            2000
+        );
+        blocker.execute_batch("ROLLBACK").unwrap();
+        store.save_observation_snapshot(b"[{}]").unwrap();
+        assert_eq!(
+            store
+                .conn
+                .query_row("PRAGMA busy_timeout", [], |r| r.get::<_, u64>(0))
+                .unwrap(),
+            2000
+        );
+    }
+
+    #[test]
+    fn spec101_snapshot_is_bounded_atomic_and_readonly_failure_preserves_previous() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        assert_eq!(store.observation_snapshot().unwrap(), b"[]");
+        store.save_observation_snapshot(b"[{}]").unwrap();
+        assert!(store.save_observation_snapshot(&vec![0; 262145]).is_err());
+        assert_eq!(store.observation_snapshot().unwrap(), b"[{}]");
+        store.conn.execute_batch("PRAGMA query_only=ON").unwrap();
+        assert!(store.save_observation_snapshot(b"[]").is_err());
+        assert_eq!(store.observation_snapshot().unwrap(), b"[{}]");
+    }
+}
