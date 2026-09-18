@@ -392,6 +392,7 @@ fn spec094_claude_recoit_la_liste_fermee_des_outils_bridget_autorises() {
         "bridget_events",
         "bridget_journal",
         "bridget_thread",
+        "bridget_handoff",
     ]
     .map(|name| format!("mcp__bridget__{name}"))
     .into_iter()

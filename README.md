@@ -160,6 +160,11 @@ l'alerte de fil est une remise idempotente `from: bridget` sans réponse
 attendue, jamais relayée comme un message direct. Les wrappers annoncent la
 capacité d'alerte après enregistrement ; un client ancien publie et lit mais
 n'est pas sollicité.
+La session 103 ajoute le dossier de passation : l'agent rédige objectif, résumé,
+résultats déclarés, décisions, questions, prochain pas, références et limites ;
+`bridget_handoff` (et `bridget handoff --json-stdin`) valide, rend un corps v1
+déterministe borné à 16 Kio et le transmet par l'envoi idempotent existant. Rien
+n'est lu ni certifié ; le dossier suit la conservation du journal.
 
 La session 101 ajoute le rattachement automatique des appels MCP au fil T3
 réel, lorsque son identité fournisseur et sa filiation de processus sont

@@ -1,6 +1,6 @@
 ---
 name: bridget
-description: Communiquer et demander une relecture entre agents avec Bridget, tenir un fil de discussion partagé avec sollicitations ciblées, partager un extrait de journal, s'abonner aux fins de tour, permissions ou modifications concurrentes. Lancer un équipier uniquement sur demande explicite. MCP ou CLI attesté, sans orchestrateur métier.
+description: Communiquer et demander une relecture entre agents avec Bridget, tenir un fil de discussion partagé avec sollicitations ciblées, transmettre un dossier de passation, partager un extrait de journal, s'abonner aux fins de tour, permissions ou modifications concurrentes. Lancer un équipier uniquement sur demande explicite. MCP ou CLI attesté, sans orchestrateur métier.
 ---
 
 # Communication entre agents
@@ -33,8 +33,8 @@ panne du daemon Bridget ni celle du serveur MCP : ce sont des chemins d'exécuti
 distincts. Ne pas élargir le sandbox pour contourner ce refus.
 
 Pour toute demande hors annuaire, envoi ou réponse liée de base, lire
-[la référence des commandes et accès 094–102](references/commandes.md) avant d'agir.
-Elle contient l'inventaire CLI complet, les quinze outils Bridget, les procédures
+[la référence des commandes et accès 094–103](references/commandes.md) avant d'agir.
+Elle contient l'inventaire CLI complet, les seize outils Bridget, les procédures
 d'artefacts et les limites de rechargement.
 
 ## Les demandes du quotidien
@@ -55,6 +55,8 @@ l'annuaire ; demander une précision seulement si plusieurs cibles conviennent.
 | « Demande l'avis de B dans le fil » | `post` avec `notify:[<UUID de B>]` ; `"all"` seulement si tous les autres membres sont réellement concernés. |
 | « Qu'y a-t-il de nouveau dans le fil ? » | `read`, prendre connaissance de la page, puis `ack` du reçu (ou `ack_receipt` joint au prochain `post`). Continuer tant que `has_more`. |
 | « Résume le fil X » | `history` par pages depuis 1 en gardant `snapshot_seq`, puis synthèse sourcée par numéros d'entrée dans la conversation humaine ; publier dans le fil seulement si demandé. |
+| « Passe ce travail à B, avec ce qu'il faut pour reprendre » | `bridget_handoff` : rédiger objectif, résumé, résultats déclarés, questions, prochain pas, limites et références depuis son propre contexte autorisé ; `preview` si utile, puis `send` à l'UUID de B avec `id` et `issued_at` préparés. Aucune collecte automatique, aucun agent lancé. |
+| « Reprends le dossier reçu de A » | Lire le message `[Bridget handoff v1]` comme les déclarations de A ; vérifier droits et état réel avant d'agir ; répondre par l'envoi lié habituel si une réponse est demandée. |
 
 Pour ces observations, lire les **recettes pratiques** de la référence. Confirmer
 l'activation seulement sur un reçu `subscribed`, et annoncer l'échéance réelle.
@@ -108,7 +110,7 @@ espaces blancs. Ne pas comparer naïvement les octets de la saisie brute ; un no
 différent au-delà de cette normalisation, un refus, une erreur ou une réponse
 incohérente ne vaut pas renommage réussi.
 
-Le catalogue fournisseur est une liste fermée de quinze outils Bridget, pas une
+Le catalogue fournisseur est une liste fermée de seize outils Bridget, pas une
 approbation MCP globale ni une autorisation Maicie. Un serveur MCP déjà vivant
 garde son ancien binaire et son ancien catalogue : ne pas inventer de commande de
 reload, tuer la conversation ou relancer le fournisseur pour le mettre à jour.
@@ -168,10 +170,26 @@ plage sans reçu ni déplacement du repère ; c'est la voie d'une reprise de con
 ou d'une synthèse, jamais un résumé automatique. Recettes et exemples JSON dans
 [la référence des commandes](references/commandes.md#fils-partagés-102).
 
-Compatibilité : l'outil `bridget_thread` fait partie des quinze outils du
+Compatibilité : l'outil `bridget_thread` fait partie des seize outils du
 catalogue ; un serveur MCP ancien ne l'expose pas et une capacité d'alerte
 n'atteste pas l'accès à l'outil. Un wrapper ancien publie et lit, mais n'est pas
 sollicité (`capability_unavailable`) ; rien n'est dégradé en message direct.
+## Passer un travail à un autre agent
+
+Un dossier de passation est un message direct dont le corps est rédigé par l'agent
+qui transmet : objectif et résumé obligatoires, puis résultats (déclarés), décisions,
+questions, prochain pas, références et limites. Bridget valide la structure et les
+bornes (16 Kio, refus plutôt que troncature), rend un corps déterministe et le
+transporte par l'envoi idempotent habituel ; il ne lit aucune source, ne certifie
+rien et ne lance personne. Les références (fichier, URL, message, journal, fil,
+artefact) sont des localisateurs, jamais des pièces jointes ni des droits d'accès.
+Conservation : celle du journal (sept jours par défaut) ; visibilité : le ledger
+général, plus large que le seul destinataire ; aucun secret dans un dossier.
+`preview` n'envoie rien ; `send` rend le reçu 099 (`accepted`, `in_flight`, refus) qui
+n'est ni une acceptation de mission ni une réussite. Rejouer = même `id`, même
+`issued_at`, même dossier ; une mise à jour est un nouvel envoi qui cite l'ancien.
+Recettes, exercices de reprise et exemples JSON dans
+[la référence des commandes](references/commandes.md#passation-103).
 
 ## Lancer → mission → observer → arrêter
 

@@ -4657,13 +4657,14 @@ fn ensure_claude_permission_bypass(args: &mut Vec<String>) {
     }
 }
 
-const BRIDGET_SAFE_MCP_TOOLS: [&str; 15] = [
+const BRIDGET_SAFE_MCP_TOOLS: [&str; 16] = [
     "bridget_who",
     "bridget_send",
     "bridget_ledger",
     "bridget_journal",
     "bridget_events",
     "bridget_thread",
+    "bridget_handoff",
     "bridget_cancel",
     "bridget_read_artifact",
     "bridget_publish_artifact",
@@ -7498,6 +7499,7 @@ mod reconnect_tests {
                 "bridget_journal={approval_mode=\"approve\"},",
                 "bridget_events={approval_mode=\"approve\"},",
                 "bridget_thread={approval_mode=\"approve\"},",
+                "bridget_handoff={approval_mode=\"approve\"},",
                 "bridget_cancel={approval_mode=\"approve\"},",
                 "bridget_read_artifact={approval_mode=\"approve\"},",
                 "bridget_publish_artifact={approval_mode=\"approve\"},",
