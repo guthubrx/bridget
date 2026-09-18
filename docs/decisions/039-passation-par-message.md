@@ -1,6 +1,6 @@
 # Passation structurée dans Send
 
-Date : 2026-09-16. Statut : Proposé, préparation documentaire sans implémentation.
+Date : 2026-09-16. Statut : Accepté — implémenté le 2026-09-17 dans la session 103 (worktree, non fusionné, non déployé).
 
 ## Contexte
 
@@ -18,3 +18,11 @@ interfaces bornées et tests décrits pour un mainteneur sans le contexte de cet
 Négatives : conservation limitée du ledger, accès globaux historiques inchangés ; toute
 référence reste soumise à ses droits et à la disponibilité de sa source.
 Le statut ne sera accepté définitivement qu'après implémentation et validation des gates.
+
+## Mise en œuvre (2026-09-17)
+
+Réalisée telle que décrite : module `handoff.rs` (validation stricte, rendu v1
+déterministe borné à 16 Kio, requête commune MCP/CLI), outil `bridget_handoff`
+(preview local, send délégué à l'envoi idempotent 099 sans champ protocolaire ni
+table nouvelle), commande `bridget handoff --json-stdin`. Fichier doré du rendu,
+tests unitaires et d'intégration, recettes et exercices de reprise dans la skill.

@@ -151,6 +151,12 @@ Les consignes T3, Claude, Codex, ACP et terminal demandent de ne pas accuser
 réception inutilement. Une nouvelle question explicite reste possible : il
 n'existe pas de filtre sur des mots comme « OK », ni de blocage des envois volontaires.
 
+La session 103 ajoute le dossier de passation : l'agent rédige objectif, résumé,
+résultats déclarés, décisions, questions, prochain pas, références et limites ;
+`bridget_handoff` (et `bridget handoff --json-stdin`) valide, rend un corps v1
+déterministe borné à 16 Kio et le transmet par l'envoi idempotent existant. Rien
+n'est lu ni certifié ; le dossier suit la conservation du journal.
+
 La session 101 ajoute le rattachement automatique des appels MCP au fil T3
 réel, lorsque son identité fournisseur et sa filiation de processus sont
 attestées. Le pont lit uniquement les correspondances de sessions nécessaires

@@ -177,6 +177,7 @@ pub fn run() {
         "attach" => cmd_attach(&args[2..]),
         "journal" => cmd_journal(&args[2..]),
         "events" => cmd_events(&args[2..]),
+        "handoff" => cmd_handoff(&args[2..]),
         "artifact" => cmd_artifact(&args[2..]),
         "spawn" => cmd_spawn(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
@@ -609,6 +610,7 @@ fn print_usage() {
            attach <UUID>          Observe et écrit à un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            journal <UUID>         Extrait [--tail N | --from-seq N] [--to UUID] [--reply]\n  \
            events <OP>            types | sub EVENEMENT [--agent UUID] [--file MOTIF] [--once] [--ttl S] | list | unsub ID\n  \
+           handoff <OP>           Dossier de passation : preview | send, objet JSON sur stdin (--json-stdin [--json])\n  \
            spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID] [--posture discovery|development]\n  \
            stop <N>               Arrête un équipier géré\n  \
            relaunch <N>           Relance un équipier géré arrêté\n  \
@@ -828,6 +830,252 @@ fn cmd_events(args: &[String]) {
     println!("{result}");
     if result["status"] == "rejected" {
         std::process::exit(1);
+    }
+}
+
+const HANDOFF_USAGE: &str = "usage :\n  \
+  bridget handoff preview --json-stdin [--json]\n  \
+  bridget handoff send --json-stdin [--json]\n\n\
+stdin : le même objet JSON que l'outil MCP bridget_handoff (action, draft ; pour send : to UUID,\n\
+puis id et issued_at ensemble pour rejouer, reply, reply_timeout, in_reply_to), au plus 65 536 octets.\n\
+Aucun fichier n'est lu, aucune référence n'est ouverte, aucune source n'est certifiée.\n\
+Sortie : --json rend l'objet MCP ; sinon aperçu du corps ou reçu d'envoi lisible.\n\
+Codes de sortie : 0 preview_valid ou accepted ; 2 paramètres invalides ; 1 panne, refus ou issue\n\
+non confirmée (in_flight, outcome_unknown) : rejouer la même clé, jamais une nouvelle.";
+
+const HANDOFF_STDIN_MAX_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HandoffArgs {
+    action: crate::handoff::HandoffAction,
+    json: bool,
+}
+
+/// Analyse stricte : sous-commande, `--json-stdin` obligatoire, `--json` facultatif.
+fn parse_handoff_args(args: &[String]) -> Result<HandoffArgs, String> {
+    let (subcommand, rest) = args
+        .split_first()
+        .ok_or("handoff : sous-commande preview ou send requise")?;
+    let action = match subcommand.as_str() {
+        "preview" => crate::handoff::HandoffAction::Preview,
+        "send" => crate::handoff::HandoffAction::Send,
+        other => return Err(format!("handoff : sous-commande inconnue « {other} »")),
+    };
+    let mut json_stdin = false;
+    let mut json = false;
+    for argument in rest {
+        match argument.as_str() {
+            "--json-stdin" if !json_stdin => json_stdin = true,
+            "--json" if !json => json = true,
+            "--json-stdin" | "--json" => {
+                return Err(format!("handoff : option répétée {argument}"));
+            }
+            other => return Err(unknown_argument("handoff", other)),
+        }
+    }
+    if !json_stdin {
+        return Err("handoff : --json-stdin est requis (aucun fichier n'est lu)".to_string());
+    }
+    Ok(HandoffArgs { action, json })
+}
+
+/// Lit au plus 65 537 octets : le 65 537e est refusé avant tout parsing.
+fn read_bounded_stdin<R: std::io::Read>(reader: R) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    let mut bytes = Vec::with_capacity(4096);
+    reader
+        .take(HANDOFF_STDIN_MAX_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("handoff : lecture de stdin : {error}"))?;
+    if bytes.len() > HANDOFF_STDIN_MAX_BYTES {
+        return Err(format!(
+            "handoff : entrée de plus de {HANDOFF_STDIN_MAX_BYTES} octets refusée avant analyse"
+        ));
+    }
+    Ok(bytes)
+}
+
+fn handoff_request_from_stdin(
+    action: crate::handoff::HandoffAction,
+    bytes: &[u8],
+) -> Result<crate::handoff::HandoffRequest, String> {
+    let value: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|error| format!("handoff : JSON de stdin invalide : {error}"))?;
+    let request =
+        crate::handoff::parse_request(&value).map_err(|error| format!("handoff : {error}"))?;
+    if request.action != action {
+        return Err(format!(
+            "handoff : action « {} » dans l'entrée, sous-commande « {} »",
+            request.action.name(),
+            action.name()
+        ));
+    }
+    Ok(request)
+}
+
+/// Session 103 : dossier de passation, même validation et même transport
+/// idempotent que l'outil MCP. Aucun fichier lu, aucune source ouverte.
+fn cmd_handoff(args: &[String]) {
+    if matches!(
+        args.first().map(String::as_str),
+        None | Some("--help") | Some("-h") | Some("help")
+    ) {
+        println!("{HANDOFF_USAGE}");
+        std::process::exit(if args.is_empty() { 2 } else { 0 });
+    }
+    let parsed = parse_handoff_args(args).unwrap_or_else(|error| {
+        eprintln!("{HANDOFF_USAGE}");
+        eprintln!("erreur: {error}");
+        std::process::exit(2);
+    });
+    let bytes = read_bounded_stdin(std::io::stdin().lock()).unwrap_or_else(|error| {
+        eprintln!("erreur: {error}");
+        std::process::exit(2);
+    });
+    let request = handoff_request_from_stdin(parsed.action, &bytes).unwrap_or_else(|error| {
+        eprintln!("erreur: {error}");
+        std::process::exit(2);
+    });
+    let Some(transport) = request.transport else {
+        let result = crate::handoff::preview_result(&request.rendered);
+        if parsed.json {
+            println!("{result}");
+        } else {
+            println!("{}", request.rendered.body);
+            println!();
+            println!(
+                "aperçu valide : {} octets ; rien n'a été envoyé",
+                request.rendered.bytes
+            );
+            for detail in crate::handoff::WARNING_DETAILS {
+                println!("- {detail}");
+            }
+        }
+        std::process::exit(0);
+    };
+    let identity = crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
+        eprintln!(
+            "bridget handoff send : {} : {}",
+            error.code(),
+            error.remediation()
+        );
+        std::process::exit(1);
+    });
+    let mut message = BridgetMessage::new(&identity.name, &transport.to, &request.rendered.body);
+    let id = transport.id.clone().unwrap_or_else(|| message.id.clone());
+    let issued_at = transport.issued_at.unwrap_or_else(unix_timestamp);
+    message.id = id.clone();
+    message.reply = transport.reply;
+    message.reply_timeout = transport.reply_timeout;
+    message.in_reply_to = transport.in_reply_to.clone();
+    let options = IdempotentSendOptions {
+        id: id.clone(),
+        issued_at,
+        issuer_scope: crate::communication::issuer_scope(&identity.instance_id),
+    };
+    let receipt = match send_idempotent_to_daemon(&message, &options) {
+        Ok(DaemonToWrapper::IdempotencyResult { issue, .. }) => {
+            crate::mcp::send_issue_result(&id, issued_at, issue)
+        }
+        Ok(DaemonToWrapper::ClientRejected { reason }) => {
+            eprintln!("REJET: {reason:?}");
+            std::process::exit(1);
+        }
+        Ok(_) => {
+            eprintln!("réponse inattendue du daemon");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("daemon inaccessible: {error}");
+            std::process::exit(1);
+        }
+    };
+    let result = crate::handoff::decorate_send_result(receipt, &request.rendered);
+    let accepted = result["status"] == "accepted";
+    if parsed.json {
+        println!("{result}");
+    } else {
+        println!(
+            "{} : id={} issued_at={} ({} octets)",
+            result["status"].as_str().unwrap_or("?"),
+            result["id"].as_str().unwrap_or(&id),
+            result["issued_at"],
+            request.rendered.bytes
+        );
+        if let Some(reason) = result["reason"].as_str() {
+            println!("  {reason}");
+        }
+        println!(
+            "  {} ; {}",
+            crate::handoff::WARNING_DETAILS[1],
+            crate::handoff::WARNING_DETAILS[2]
+        );
+    }
+    std::process::exit(if accepted { 0 } else { 1 });
+}
+
+#[cfg(test)]
+mod spec103_cli_handoff_tests {
+    use super::*;
+    use crate::handoff::HandoffAction;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn spec103_s18_arguments_stricts_et_action_coherente() {
+        assert_eq!(
+            parse_handoff_args(&args(&["preview", "--json-stdin"])).unwrap(),
+            HandoffArgs {
+                action: HandoffAction::Preview,
+                json: false
+            }
+        );
+        assert_eq!(
+            parse_handoff_args(&args(&["send", "--json-stdin", "--json"])).unwrap(),
+            HandoffArgs {
+                action: HandoffAction::Send,
+                json: true
+            }
+        );
+        for invalid in [
+            vec!["preview"],
+            vec!["send", "--json"],
+            vec!["send", "--json-stdin", "--file", "/tmp/x"],
+            vec!["send", "--json-stdin", "--json-stdin"],
+            vec!["render", "--json-stdin"],
+            vec!["send", "--json-stdin", "--from", "x"],
+        ] {
+            assert!(parse_handoff_args(&args(&invalid)).is_err(), "{invalid:?}");
+        }
+        let preview = br#"{"action":"preview","draft":{"objective":"o","summary":"s"}}"#;
+        assert!(handoff_request_from_stdin(HandoffAction::Preview, preview).is_ok());
+        let mismatch = handoff_request_from_stdin(HandoffAction::Send, preview).unwrap_err();
+        assert!(mismatch.contains("sous-commande"), "{mismatch}");
+        let invalid =
+            handoff_request_from_stdin(HandoffAction::Preview, b"{pas du json").unwrap_err();
+        assert!(invalid.contains("JSON"), "{invalid}");
+        let empty = handoff_request_from_stdin(HandoffAction::Preview, b"").unwrap_err();
+        assert!(empty.contains("JSON"), "{empty}");
+    }
+
+    #[test]
+    fn spec103_s19_stdin_borne_a_64_kio_avant_analyse() {
+        let exact = vec![b' '; HANDOFF_STDIN_MAX_BYTES];
+        assert_eq!(
+            read_bounded_stdin(&exact[..]).unwrap().len(),
+            HANDOFF_STDIN_MAX_BYTES
+        );
+        let over = vec![b' '; HANDOFF_STDIN_MAX_BYTES + 1];
+        let error = read_bounded_stdin(&over[..]).unwrap_err();
+        assert!(error.contains("65536"), "{error}");
+        // Le contenu au-delà de la borne n'est jamais analysé : même un JSON
+        // valide mais trop long est refusé avant parsing.
+        let mut long = br#"{"action":"preview","draft":{"objective":"o","summary":""#.to_vec();
+        long.extend(std::iter::repeat_n(b's', HANDOFF_STDIN_MAX_BYTES));
+        long.extend_from_slice(b"\"}}");
+        assert!(read_bounded_stdin(&long[..]).is_err());
     }
 }
 

@@ -1,8 +1,20 @@
 # Point d'entrée pour l'implémenteur — 103-dossier-passation
 
+## État au 2026-09-17 (fin de cycle bdget)
+
+Implémentation réalisée dans ce worktree (diff non commité sur `c6ecc307`, base main
+`f36804ea`) : module `src/handoff.rs`, outil MCP `bridget_handoff`, commande `bridget handoff`,
+allowlist 15, docs (SKILL, commandes.md « Passation (103) », README), tests unitaires spec103
+(12) et d'intégration `handoff_103_test` (5), fichier doré. Journal : implementation.md ;
+convergence : analysis.md. Surfaces partagées avec la 102 (non fusionnée) : `mcp.rs`
+(catalogue, matrice FR-009 = 19 dans chaque branche → 20 après fusion), `wrapper.rs`
+(`BRIDGET_SAFE_MCP_TOOLS` 15 → 16 après fusion, golden Codex), `cli.rs` (répartiteur, aide),
+`claude_native_permissions_test`, SKILL.md/commandes.md (« quinze » → « seize »). Aucun
+commit, installation ni agent réel : autorisation nouvelle requise.
+
 ## Mandat et ordre de lecture
 
-Préparation documentaire prête, développement non commencé. Ne pas modifier l'arbre principal.
+Préparation documentaire réalisée le 2026-09-16 ; implémentation le 2026-09-17. Ne pas modifier l'arbre principal.
 Worktree : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/103-dossier-passation
 Branche : session-103-dossier-passation
 Base observée :1738a072. Vérifier git status et changements d'autres agents avant toute action.

@@ -1,6 +1,6 @@
 ---
 name: bridget
-description: Communiquer et demander une relecture entre agents avec Bridget, partager un extrait de journal, s'abonner aux fins de tour, permissions ou modifications concurrentes. Lancer un équipier uniquement sur demande explicite. MCP ou CLI attesté, sans orchestrateur métier.
+description: Communiquer et demander une relecture entre agents avec Bridget, transmettre un dossier de passation, partager un extrait de journal, s'abonner aux fins de tour, permissions ou modifications concurrentes. Lancer un équipier uniquement sur demande explicite. MCP ou CLI attesté, sans orchestrateur métier.
 ---
 
 # Communication entre agents
@@ -33,8 +33,8 @@ panne du daemon Bridget ni celle du serveur MCP : ce sont des chemins d'exécuti
 distincts. Ne pas élargir le sandbox pour contourner ce refus.
 
 Pour toute demande hors annuaire, envoi ou réponse liée de base, lire
-[la référence des commandes et accès 094–101](references/commandes.md) avant d'agir.
-Elle contient l'inventaire CLI complet, les quatorze outils Bridget, les procédures
+[la référence des commandes et accès 094–103](references/commandes.md) avant d'agir.
+Elle contient l'inventaire CLI complet, les quinze outils Bridget, les procédures
 d'artefacts et les limites de rechargement.
 
 ## Les demandes du quotidien
@@ -50,6 +50,8 @@ l'annuaire ; demander une précision seulement si plusieurs cibles conviennent.
 | « Préviens-moi quand A finit, maximum 15 minutes » | Vérifier les sources dans `types`, puis `sub` sur A : `turn_ended`, `once:true`, `ttl_secs:900`. |
 | « Prolonge de 10 minutes » / « Arrête la surveillance » | Retrouver l'abonnement par `list`, puis suivre la procédure de remplacement ou `unsub` de la référence. Il n'existe pas d'action `renew`. |
 | « Signale les modifications concurrentes ici » | Vérifier la couverture des écritures puis s'abonner à `file_collision`, limité au chemin absolu demandé ; aucun verrou. |
+| « Passe ce travail à B, avec ce qu'il faut pour reprendre » | `bridget_handoff` : rédiger objectif, résumé, résultats déclarés, questions, prochain pas, limites et références depuis son propre contexte autorisé ; `preview` si utile, puis `send` à l'UUID de B avec `id` et `issued_at` préparés. Aucune collecte automatique, aucun agent lancé. |
+| « Reprends le dossier reçu de A » | Lire le message `[Bridget handoff v1]` comme les déclarations de A ; vérifier droits et état réel avant d'agir ; répondre par l'envoi lié habituel si une réponse est demandée. |
 
 Pour ces observations, lire les **recettes pratiques** de la référence. Confirmer
 l'activation seulement sur un reçu `subscribed`, et annoncer l'échéance réelle.
@@ -103,7 +105,7 @@ espaces blancs. Ne pas comparer naïvement les octets de la saisie brute ; un no
 différent au-delà de cette normalisation, un refus, une erreur ou une réponse
 incohérente ne vaut pas renommage réussi.
 
-Le catalogue fournisseur est une liste fermée de quatorze outils Bridget, pas une
+Le catalogue fournisseur est une liste fermée de quinze outils Bridget, pas une
 approbation MCP globale ni une autorisation Maicie. Un serveur MCP déjà vivant
 garde son ancien binaire et son ancien catalogue : ne pas inventer de commande de
 reload, tuer la conversation ou relancer le fournisseur pour le mettre à jour.
@@ -121,6 +123,23 @@ l'application ; avec `reply=true`, la réponse finale revient comme réponse li�
 l'agent du fil dispose de Bridget. Le fil peut être occupé : la remise attend
 jusqu'à deux minutes, puis échoue nommément. L'installation, le statut et le
 retrait (`bridget t3 install|status|uninstall`) sont des actions humaines.
+
+## Passer un travail à un autre agent
+
+Un dossier de passation est un message direct dont le corps est rédigé par l'agent
+qui transmet : objectif et résumé obligatoires, puis résultats (déclarés), décisions,
+questions, prochain pas, références et limites. Bridget valide la structure et les
+bornes (16 Kio, refus plutôt que troncature), rend un corps déterministe et le
+transporte par l'envoi idempotent habituel ; il ne lit aucune source, ne certifie
+rien et ne lance personne. Les références (fichier, URL, message, journal, fil,
+artefact) sont des localisateurs, jamais des pièces jointes ni des droits d'accès.
+Conservation : celle du journal (sept jours par défaut) ; visibilité : le ledger
+général, plus large que le seul destinataire ; aucun secret dans un dossier.
+`preview` n'envoie rien ; `send` rend le reçu 099 (`accepted`, `in_flight`, refus) qui
+n'est ni une acceptation de mission ni une réussite. Rejouer = même `id`, même
+`issued_at`, même dossier ; une mise à jour est un nouvel envoi qui cite l'ancien.
+Recettes, exercices de reprise et exemples JSON dans
+[la référence des commandes](references/commandes.md#passation-103).
 
 ## Lancer → mission → observer → arrêter
 
@@ -217,7 +236,7 @@ réponse à une demande `reply=true` ; ils ne filtrent pas son texte. Une répon
 très courte peut être légitime si elle répond réellement à la question.
 
 ```json
-{"name":"bridget_send","arguments":{"to":"<emetteur_uuid>","body":"Tests passés ; aucune régression constatée dans le périmètre vérifié.","in_reply_to":"<message_id_integral>"}}
+{"name":"bridget_send","arguments":{"to":"<emetteur_uuid>","body":"Tests passés ; aucune régression dans le périmètre vérifié.","in_reply_to":"<message_id_integral>"}}
 ```
 
 Au shell, depuis une session enregistrée :

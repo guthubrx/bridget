@@ -3,17 +3,17 @@
 ## Fiche synthèse
 
 Spec: 103-dossier-passation
-Statut: In Progress
+Statut: Implemented (worktree, non fusionné)
 Priorité: P1
-Tâches: 0/22 (0%) — implémentation non commencée
-Tests: 0/23 (0%) — scénarios planifiés, non exécutés
+Tâches: 22/22 (100%)
+Tests: 22/23 automatisés (S21 documentaire)
 Date: 2026-09-16
 Branche: session-103-dossier-passation
 Socle: 089, 094, 099, 100. Compléments facultatifs: 102 et 104.
 
-Préparation documentaire uniquement, conformément à la demande. Aucun développement,
-déploiement ou commit autorisé dans ce tour. Le statut concerne le cycle de réalisation,
-pas une implémentation commencée.
+Implémentation réalisée le 2026-09-17 dans le worktree 103 (voir implementation.md,
+analysis.md § Converge, adversarial-review-cursor-listen.md). Aucun commit, fusion ni
+déploiement : autorisation nouvelle requise.
 
 ## Besoin et résultat attendu
 

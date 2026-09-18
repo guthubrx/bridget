@@ -29,6 +29,7 @@ de couverture.
 | `attach` | CLI humain | Aucun outil MCP de terminal | Observe le journal et permet une saisie humaine dans un double-TTY ; ce n'est ni la TUI fournisseur ni un écran d'approbation. |
 | `journal` | MCP exposé (100) | `bridget_journal` | Extrait exact borné du journal ; `to` partage, `reply` suit une réponse. Source UUID, séquences, lacunes et reprise explicites. |
 | `events` | MCP exposé (100/101) | `bridget_events` | types/sub/list/unsub, capacités sources, propriétaire attesté, once/TTL et interruption visible ; notification d'un fait, sans obligation métier ni exécution de script. |
+| `handoff` | MCP exposé (103) | `bridget_handoff` | `preview` valide et rend le dossier de passation v1 sans rien envoyer ; `send` transmet le corps exact à un UUID par l'envoi idempotent 099 (mêmes `id`/`issued_at` pour rejouer). Objet JSON sur stdin (`--json-stdin`, 64 Kio), `--json` pour le même reçu que MCP ; aucune source lue, conservation du journal, aucun secret. |
 | `federate` | CLI humain | Aucun outil MCP de fédération | Réutilise, installe, observe ou retire une liaison SSH persistante via le gestionnaire 095 embarqué. Le statut reste local ; une mutation appartient à l'humain et conserve les gardes SSH/natives. |
 | `t3` | CLI humain | Aucun outil MCP d'administration ; les fils exposés se joignent par `bridget_send` | Installe, observe, retire ou sert le pont t3code (session 098) : session émise par le CLI officiel `t3`, un agent par fil, remise par `thread.turn.start`, réponse liée par rang FIFO ; t3code n'est jamais modifié. |
 | `artifact` | Équivalence MCP | `bridget_read_artifact` pour `artifact read`; publication par `bridget_publish_artifact` | Lit des octets par références et bornes, sans chemin libre ni exécution. La publication structurée n'a pas de commande CLI jumelle. |
@@ -75,7 +76,7 @@ le registre : ne jamais déduire leur disponibilité d'un nom de fournisseur.
 
 ## Catalogue MCP Bridget fermé
 
-La politique fournisseur étendue en 100 autorise exactement les quatorze outils Bridget
+La politique fournisseur étendue en 100 autorise exactement les quinze outils Bridget
 ci-dessous lorsqu'elle est effectivement chargée. Elle n'accorde pas une
 approbation MCP globale et n'inclut pas automatiquement les outils Maicie.
 
@@ -85,6 +86,7 @@ approbation MCP globale et n'inclut pas automatiquement les outils Maicie.
 - `bridget_ledger` — lire messages et demandes bornés.
 - `bridget_journal` — lire ou partager un extrait sourcé, sans lecture arbitraire du disque.
 - `bridget_events` — s'abonner aux faits futurs disponibles, lister et supprimer ses abonnements.
+- `bridget_handoff` — préparer (preview) puis transmettre (send) un dossier de passation rédigé par l'agent.
 - `bridget_publish_artifact` — publier un contenu structuré, sourcé et inerte.
 - `bridget_read_artifact` — relire les octets autorisés par références exactes.
 - `bridget_rename` — modifier son propre nom d'affichage.
@@ -99,6 +101,87 @@ client ; il ne constitue pas à lui seul une authentification du daemon. Les
 mutations propres sont liées par Bridget à l'identité et à l'instance de la
 connexion : ne jamais fournir ni inventer un nom, UUID, instance, socket ou
 chemin de cible.
+
+## Passation (103)
+
+`bridget_handoff` transporte un dossier de passation **rédigé par l'agent** dans un
+message direct ordinaire (envoi idempotent 099). Deux actions : `preview` (valider et
+rendre, sans rien envoyer) et `send` (transmettre le corps exact à un UUID). Même
+objet et mêmes octets en CLI : `bridget handoff preview|send --json-stdin [--json]`,
+objet JSON sur stdin (64 Kio au plus). Aucune source n'est lue pour remplir le
+dossier ; aucune référence n'est ouverte ; Bridget ne certifie rien.
+
+Champs du `draft` : `objective` (1–1 024 octets) et `summary` (1–8 192) obligatoires ;
+`results` (≤ 12 × {`text`, `evidence` facultatif}), `decisions`, `questions`,
+`limitations` (≤ 12 chaînes de 2 048 octets), `next_step` (≤ 2 048), `references`
+(≤ 16 ; `kind` = `file`{host,path absolu} | `url`{http(s) sans identifiants} |
+`message`{id,target,source_label} | `journal`{agent UUID,from_seq,to_seq,source_label} |
+`thread`{thread_id,from_seq≥1,to_seq,source_label} | `artifact`{artifact_id,version_id,
+source_label}, `label` ≤ 256). Champs inconnus, `null`, chaînes blanches et faux types
+sont refusés ; le corps final (marqueur `[Bridget handoff v1]` + JSON indenté) est
+refusé au-delà de 16 384 octets, jamais tronqué. `source_label` est une indication
+déclarative de provenance, pas une adresse ni un droit.
+
+Transport (`send` seulement) : `to` UUID obligatoire ; `reply` (défaut false) et
+`reply_timeout` (avec `reply:true`) ; `in_reply_to` ; `id` + `issued_at` **ensemble** pour
+rejouer le même envoi après une coupure. `preview` refuse tout paramètre de transport.
+Le reçu de `send` est celui de `bridget_send` (`accepted`, `in_flight`, `outcome_unknown`,
+refus 099 dont `dnd`, `duplicate`, `envelope_mismatch`) complété de `handoff_version`,
+`bytes` et `warnings` ; il ne répète pas le corps. Codes CLI : 0 aperçu valide ou
+`accepted` ; 2 paramètres invalides ; 1 panne, refus ou issue non confirmée (rejouer la
+même clé, jamais une nouvelle).
+
+### Recette : préparer, prévisualiser, envoyer, rejouer, reprendre
+
+1. Préparer : sélectionner dans son contexte ce qui est autorisé à circuler ; écrire
+   objectif, résumé, ce qui est vérifié (déclaré), ce qui reste ouvert, le prochain pas.
+   Ne pas aspirer fichiers, transcriptions ou journaux ; citer des références.
+2. Prévisualiser (facultatif) : corriger un refus de taille en choisissant mieux, pas en
+   découpant en plusieurs messages.
+
+```json
+{"name":"bridget_handoff","arguments":{"action":"preview","draft":{"objective":"Corriger la pagination","summary":"Le défaut est reproduit sur la deuxième page.","results":[{"text":"Le test de chevauchement échoue.","evidence":"Exécution déclarée par A sur la fixture synthétique."}],"questions":["La purge concurrente est-elle responsable ?"],"next_step":"Relancer le test ciblé et observer les identifiants."}}}
+```
+
+3. Envoyer à l'UUID résolu par l'annuaire, en préparant `id` et `issued_at` avant le
+   premier appel si la perte du reçu doit être récupérable.
+
+```json
+{"name":"bridget_handoff","arguments":{"action":"send","to":"11111111-1111-4111-8111-111111111111","id":"handoff-pagination-01","issued_at":1789588800,"draft":{"objective":"Corriger la pagination","summary":"Défaut reproduit, cause encore incertaine."}}}
+```
+
+4. Rejouer : même `id`, même `issued_at`, même `draft`, même `to` ; le daemon rend le
+   sort réel sans dupliquer. Une mise à jour est un nouvel envoi avec une nouvelle clé,
+   qui peut référencer l'ancien (`kind:"message"`) ; l'ancien n'est pas modifié.
+5. Reprendre (destinataire) : lire le dossier reçu comme les déclarations de son auteur,
+   vérifier soi-même droits et état réel avant d'agir ; `accepted` ou `in_flight` n'est
+   ni une prise en charge ni une réussite. Répondre par l'envoi lié habituel si utile.
+
+Formes CLI :
+
+```text
+printf '%s' '{"action":"preview","draft":{"objective":"…","summary":"…"}}' | bridget handoff preview --json-stdin [--json]
+printf '%s' '{"action":"send","to":"<UUID>","id":"<clé>","issued_at":<unix>,"draft":{…}}' | bridget handoff send --json-stdin [--json]
+```
+
+### Trois exercices de reprise (recette SC-001)
+
+Le lecteur, sans historique, doit retrouver objectif, état, prochaine action et limites.
+
+1. Pagination : objectif « corriger la pagination » ; résultats : test de chevauchement
+   en échec, deux causes écartées ; question : purge concurrente ; prochain pas : relancer
+   le test ciblé ; limite : hypothèse non vérifiée. Références : fichier du module, ticket.
+2. Import SQLite : objectif « importer les sessions Codex stockées en SQLite » ; résultat
+   déclaré : lecture des tables OK ; décision : plafond de 400 messages ; question : cas des
+   sessions renommées ; prochain pas : recette sur un projet de test ; limite : aucun test
+   sur base réelle. Référence : journal de l'agent (from_seq/to_seq).
+3. Passation de garde : objectif « poursuivre la relecture sécurité » ; résultat : deux
+   points clos (entrées 3 et 5 du fil) ; question : point 7 ouvert ; prochain pas : lire le
+   fil depuis l'entrée 6 ; limites : accès au fil requis, non transféré par le dossier.
+   Référence : `kind:"thread"` avec plage.
+
+Conservation : sept jours par défaut avec le journal ; visibilité : le ledger général est
+lisible plus largement que le destinataire ; aucun secret dans un dossier.
 
 ## Extraits et abonnements (100/101)
 
@@ -450,7 +533,7 @@ réelle a été réussie ; vérifier le catalogue et les résultats des appels.
 
 ## Version active et rechargement
 
-Comparer le catalogue réellement retourné par le client avec les quatorze noms
+Comparer le catalogue réellement retourné par le client avec les quinze noms
 ci-dessus avant d'annoncer la disponibilité des outils. Un binaire installé et un
 serveur MCP vivant sont deux processus distincts : une ancienne session garde
 son ancien binaire et son ancien catalogue. Les garanties de domaine exigent en

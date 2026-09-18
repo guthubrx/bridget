@@ -2777,7 +2777,7 @@ mod tests {
         let (mut recipient, _peer) = worker099();
         let server = http_once099(&recipient, 200, r#"{"sequence":1}"#.into());
         recipient
-            .dispatch_with_id(&response, None, &summary(None))
+            .dispatch_with_id(response, None, &summary(None))
             .unwrap();
         server.join().unwrap();
         assert!(

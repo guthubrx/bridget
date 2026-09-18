@@ -115,3 +115,36 @@ Performances, isolationdesharnais, transport réel, compatibilité et sécurité
 restent à vérifier pendant le développement. La projectionglobale/rétention du ledger héritées
 ne sont pas corrigées par ces fonctionnalités. Aucun statut de productionnouvelle à annoncer.
 
+
+## Converge — passage 1 (2026-09-17, après implémentation)
+
+Preuves `fichier:fonction` (racine crates/bridget-daemon ; `H` = src/handoff.rs,
+`M` = src/mcp.rs, `C` = src/cli.rs, `I` = tests/handoff_103_test.rs).
+
+| Exigence | Réalisation | Preuve de test |
+|---|---|---|
+| FR-001 | H `validate_and_render` : objective/summary obligatoires, autres facultatifs, listes absentes → `[]`, `next_step` → null | H S01, S03, S05 |
+| FR-002 | H `ResultV1{text, evidence}` : évidence conservée comme déclaration ; avertissement `sources_not_verified` constant | H S10/S11, I S06 |
+| FR-003 | M bras `bridget_handoff` (preview sans connexion) ; C `cmd_handoff` (preview local) | I S02 (aucune socket), I S18 |
+| FR-004 | M `execute_send` délégué avec `to` UUID ; C `send_idempotent_to_daemon` | I S06, I S18 |
+| FR-005 | H : aucune E/S ; `is_absolute_path`/`is_plain_http_url` lexicaux | H S08 (chemin inexistant accepté sans lecture), I S02 |
+| FR-006 | références dans le corps rendu ; ledger persiste le corps | I S09, I S17 |
+| FR-007 | H bornes par champ/liste/référence, 16 384 octets, refus sans troncature | H S04, S05 |
+| FR-008 | délégation 099 (`id`/`issued_at`, `envelope_mismatch`, `in_flight`) | I S12/S13/S17 |
+| FR-009 | `reply` défaut false, `reply_timeout` seulement avec `reply` | I S15, H S02/S03 requête |
+| FR-010 | identité attestée par `execute_send` (MCP) et `resolve_current_identity` (CLI) ; aucun paramètre `from` | I S06 (auteur réel), C `spec103_s18` (`--from` refusé) |
+| FR-011 | `WARNINGS`/`WARNING_DETAILS` constants dans aperçu et reçu ; docs | H S10, I S02 |
+| FR-012 | même `parse_request`, même reçu (`mcp::send_issue_result`), allowlist 15, inventaire 19 | I S18/S20, `mcp::tests`, `wrapper::` |
+| FR-013 | aucune table, aucun champ protocolaire, `canonical_send` inchangé | diff ; I S09 |
+| FR-014 | contenu conservé tel quel, rendu terminal = corps brut | H S10/S11, I S18 (sortie humaine) |
+| SC-001 | trois exercices de reprise documentés (commandes.md) | relecture (S21 documentaire) |
+| SC-002 | aperçu = zéro envoi ; dix rejeux = une ligne ledger | I S02, I S12 |
+| SC-003 | corps identique CLI/MCP octet pour octet | I S18 |
+| SC-004 | erreurs de structure/taille avant envoi, sans troncature | H S03/S04/S05, I S02 |
+| SC-005 | 200 rendus ≈ 16 Kio : p95 ≈ 0,43 ms (debug) | H S22 |
+| SC-006 | aucune lecture de source, statuts transport distincts de la réussite | H S08, I S06/S15/S16 |
+
+Manques : aucun. **CONVERGED** au passage 1 (tasks.md inchangé, aucune tâche ajoutée).
+Limites visibles : S21 est un contrôle documentaire ; S14 (perte du reçu après réservation)
+est couvert par le rejeu S12 sur le même chemin 099, pas par une coupure injectée ;
+S16 couvre DND et instance non attestée (CLI/MCP), pas une révocation en cours d'envoi.

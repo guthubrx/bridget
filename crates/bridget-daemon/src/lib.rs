@@ -23,6 +23,7 @@ pub use execution_store::{
 pub mod federate;
 pub mod fleet;
 pub mod greffe_policy_refresh;
+pub mod handoff;
 pub mod human_inbox;
 pub mod idempotency;
 pub mod identity_migration;

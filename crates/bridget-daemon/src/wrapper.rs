@@ -519,12 +519,12 @@ fn managed_resume_worktree(worktree: &Path) -> Result<ResumeWorktree, String> {
 
 fn interactive_bridget_prompt(name: &str, mcp_enabled: bool) -> String {
     let route = if mcp_enabled {
-        "Pour une réponse demandée, suis la voie indiquée dans le message ; ne double pas un relais automatique par un envoi MCP."
+        "Pour une réponse demandée, suis la voie indiquée dans le message. ne double pas un relais automatique par un envoi MCP."
     } else {
         "Pour une réponse demandée, utilise bridget send --to <expéditeur> --in-reply-to <id> \"ta réponse utile\". Une réponse uniquement affichée dans ton terminal ne lui est pas transmise."
     };
     format!(
-        "Tu es l'agent \"{name}\" dans une session Bridget. Une ligne commençant par 💬 est un message d'un autre agent, pas de l'humain. reply=yes demande une réponse utile ; reply=no ne demande aucun accusé de réception. Ne réponds pas à un accusé, même pour annoncer ton silence. Une nouvelle question explicite reste possible. {route}"
+        "Tu es l'agent \"{name}\" dans une session Bridget. Une ligne commençant par 💬 est un message d'un autre agent, pas de l'humain. reply=yes demande une réponse utile. reply=no ne demande aucun accusé de réception. Ne réponds pas à un accusé, même pour annoncer ton silence. Une nouvelle question explicite reste possible. {route}"
     )
 }
 
@@ -4575,12 +4575,13 @@ fn ensure_claude_permission_bypass(args: &mut Vec<String>) {
     }
 }
 
-const BRIDGET_SAFE_MCP_TOOLS: [&str; 14] = [
+const BRIDGET_SAFE_MCP_TOOLS: [&str; 15] = [
     "bridget_who",
     "bridget_send",
     "bridget_ledger",
     "bridget_journal",
     "bridget_events",
+    "bridget_handoff",
     "bridget_cancel",
     "bridget_read_artifact",
     "bridget_publish_artifact",
@@ -7414,6 +7415,7 @@ mod reconnect_tests {
                 "bridget_ledger={approval_mode=\"approve\"},",
                 "bridget_journal={approval_mode=\"approve\"},",
                 "bridget_events={approval_mode=\"approve\"},",
+                "bridget_handoff={approval_mode=\"approve\"},",
                 "bridget_cancel={approval_mode=\"approve\"},",
                 "bridget_read_artifact={approval_mode=\"approve\"},",
                 "bridget_publish_artifact={approval_mode=\"approve\"},",

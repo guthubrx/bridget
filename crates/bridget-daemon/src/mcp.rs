@@ -454,6 +454,35 @@ fn execute_tool_at_with_scope(
                 request,
             )
         }
+        "bridget_handoff" => {
+            let request = crate::handoff::parse_request(&Value::Object(arguments.clone()))
+                .map_err(|error| ToolError::InvalidParams(format!("handoff : {error}")))?;
+            match request.transport {
+                // Aperçu local : aucune connexion, aucun identifiant fabriqué.
+                None => Ok(crate::handoff::preview_result(&request.rendered)),
+                Some(transport) => {
+                    let mut send = serde_json::Map::new();
+                    send.insert("to".into(), Value::from(transport.to));
+                    send.insert("body".into(), Value::from(request.rendered.body.clone()));
+                    send.insert("reply".into(), Value::from(transport.reply));
+                    if let Some(timeout) = transport.reply_timeout {
+                        send.insert("reply_timeout".into(), Value::from(timeout));
+                    }
+                    if let Some(in_reply_to) = transport.in_reply_to {
+                        send.insert("in_reply_to".into(), Value::from(in_reply_to));
+                    }
+                    if let (Some(id), Some(issued_at)) = (transport.id, transport.issued_at) {
+                        send.insert("id".into(), Value::from(id));
+                        send.insert("issued_at".into(), Value::from(issued_at));
+                    }
+                    let receipt = execute_send(identity, instance_id, &send, socket)?;
+                    Ok(crate::handoff::decorate_send_result(
+                        receipt,
+                        &request.rendered,
+                    ))
+                }
+            }
+        }
         "bridget_journal" => {
             let request: crate::attach::JournalRequest =
                 serde_json::from_value(Value::Object(arguments.clone()))
@@ -1426,7 +1455,7 @@ fn fetch_ledger_requests(
     }
 }
 
-fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value {
+pub(crate) fn send_issue_result(id: &str, issued_at: i64, issue: IdempotencyIssue) -> Value {
     match issue {
         IdempotencyIssue::Accepted { .. } => {
             json!({ "status": "accepted", "id": id, "issued_at": issued_at, "hops": 4 })
@@ -1722,6 +1751,29 @@ fn tools() -> Vec<Value> {
                 "required": ["idempotency_key", "kind", "title", "payload", "sources", "publication_reason"],
                 "additionalProperties": false
             }
+        }),
+        json!({
+            "name": "bridget_handoff",
+            "description": "Dossier de passation rédigé par l'agent (objectif et résumé obligatoires ; résultats, décisions, questions, prochain pas, références, limites facultatifs). preview valide et rend le corps sans rien envoyer ; send transmet le corps exact au destinataire UUID par l'envoi idempotent habituel (id et issued_at à réutiliser à l'identique pour rejouer). Aucune source n'est lue ni certifiée ; conservation du journal (sept jours par défaut) ; pas de confidentialité au-delà du ledger. Corps ≤ 16 Kio, refusé plutôt que tronqué. Le schéma est indicatif : le validateur du dossier fait autorité (octets UTF-8, chaînes non blanches, champs inconnus et null refusés).",
+            "inputSchema": {"type":"object","properties":{
+                "action":{"enum":["preview","send"]},
+                "draft":{"type":"object","properties":{
+                    "objective":{"type":"string","minLength":1,"maxLength":1024},
+                    "summary":{"type":"string","minLength":1,"maxLength":8192},
+                    "results":{"type":"array","maxItems":12,"items":{"type":"object","properties":{"text":{"type":"string","minLength":1,"maxLength":2048},"evidence":{"type":"string","minLength":1,"maxLength":2048}},"required":["text"],"additionalProperties":false}},
+                    "decisions":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}},
+                    "questions":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}},
+                    "next_step":{"type":"string","minLength":1,"maxLength":2048},
+                    "references":{"type":"array","maxItems":16,"items":{"type":"object","properties":{"kind":{"enum":["file","url","message","journal","thread","artifact"]},"label":{"type":"string","minLength":1,"maxLength":256},"host":{"type":"string"},"path":{"type":"string"},"url":{"type":"string"},"id":{"type":"string"},"target":{"type":"string"},"agent":{"type":"string"},"thread_id":{"type":"string"},"artifact_id":{"type":"string"},"version_id":{"type":"string"},"from_seq":{"type":"integer","minimum":0},"to_seq":{"type":"integer","minimum":0},"source_label":{"type":"string","minLength":1,"maxLength":256}},"required":["kind","label"],"additionalProperties":false}},
+                    "limitations":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}}
+                },"required":["objective","summary"],"additionalProperties":false},
+                "to":{"type":"string","minLength":36,"maxLength":36},
+                "reply":{"type":"boolean","default":false},
+                "reply_timeout":{"type":"integer","minimum":1},
+                "in_reply_to":{"type":"string","minLength":1},
+                "id":{"type":"string","minLength":1},
+                "issued_at":{"type":"integer","minimum":1}
+            },"required":["action","draft"],"additionalProperties":false}
         }),
         json!({
             "name": "bridget_events",
@@ -2028,7 +2080,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    18
+                    19
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -2058,6 +2110,7 @@ mod tests {
             "bridget_dnd",
             "bridget_domain",
             "bridget_events",
+            "bridget_handoff",
             "bridget_journal",
             "bridget_ledger",
             "bridget_publish_artifact",
