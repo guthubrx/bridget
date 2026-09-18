@@ -66,6 +66,18 @@ Sources web primaires et limites capturées dans research.md ; données envoyée
 ## Arbitrages
 
 Décisions minimales arrêtées dans research.md. Pas de nouvelle dépendance.
+
+Arbitrages ajoutés pendant l'implémentation (gate anti-doublon, 2026-09-18) :
+
+| Item créé | Existant trouvé (preuve) | Issue | Justification |
+|---|---|---|---|
+| `ledger::search` (module dans `crates/bridget-daemon/src/ledger.rs`) | `ledger.rs:read_projection` (projection récente) | CRÉER à côté | La projection n'a ni validation, ni curseur, ni relecture ; l'étendre aurait mêlé deux contrats. Même fichier, comme prévu par le plan. |
+| `store::ledger_requests::search` (module inline) | `ledger_requests.rs:search_messages` (LIKE SQL), `fold_for_search` | REMPLACER + RÉUTILISER | `search_messages` sans appelant retirée ; `fold_for_search` conservée et réécrite sur `fold_char`, règle unique de repli. |
+| `Store::open_read_only` | `store_schema.rs:validate_existing` (READ_ONLY ponctuel) | CRÉER (12 lignes) | Le pattern existant valide un schéma ; il fallait une connexion réutilisable avec `busy_timeout` 100 ms, sans `init_schema`. |
+| `ReadPermits` / `ReadPermit` | aucun compteur de permis de lecture (`rg permit`) | CRÉER | Compteur atomique + RAII, 30 lignes, testé unitairement ; un sémaphore externe serait une dépendance. |
+| `store::threads::load_thread_for_member` rendu `pub(crate)` | même fonction, privée | RÉUTILISER | Contrôle d'appartenance 102 partagé, aucune duplication de la règle. |
+| Index `idx_ledger_target_page(target, ts, id)` | plan : `(target, ts, id, target)` | CRÉER (variante) | Colonne finale redondante ; EXPLAIN identique. |
+| `inert_text` (CLI) | aucun helper de neutralisation ANSI (`rg is_control` dans cli.rs) | CRÉER (5 lignes) | Exigence FR-015 ; utilisé pour extraits, identifiants et fragments. |
 La politique existante du ledger n'est pas présentée comme un nouvel espace confidentiel.
 Si l'implémenteur rencontre un équivalent nouveau après intégration d'autres branches,
 réauditer avant création ; ne pas invoquer ce PASS pour forcer un doublon.

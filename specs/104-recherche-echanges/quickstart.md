@@ -1,77 +1,76 @@
-# Point d'entrée pour l'implémenteur — 104-recherche-echanges
+# Dossier de livraison et de reprise — 104-recherche-echanges
 
-## Mandat et ordre de lecture
+## État (2026-09-18)
 
-Préparation documentaire prête, développement non commencé. Ne pas modifier l'arbre principal.
-Worktree : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/104-recherche-echanges
-Branche : session-104-recherche-echanges
-Base observée :1738a072. Vérifier git status et changements d'autres agents avant toute action.
-Les modifications déjà présentes hors ce worktree appartiennent à leurs auteurs ; ne pas les annuler.
+Implémentation terminée dans le worktree
+`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/104-recherche-echanges` (branche
+`session-104-recherche-echanges`, base `2720a0c1` sur main `218c5cc1` qui contient 102 et 103).
+Statut détaillé, commandes et mesures : `implementation.md` ; correspondance exigences → code → tests :
+`analysis.md` ; décision : `docs/decisions/040-recherche-bornee-ledger.md` (Accepté).
 
-Lire dans cet ordre :
-1. /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/104-recherche-echanges/specs/104-recherche-echanges/spec.md
-2. /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/104-recherche-echanges/specs/104-recherche-echanges/research.md
-3. /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/104-recherche-echanges/specs/104-recherche-echanges/plan.md
-4. /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/104-recherche-echanges/specs/104-recherche-echanges/data-model.md
-5. /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/104-recherche-echanges/specs/104-recherche-echanges/contracts/search-api.md
-6. /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/104-recherche-echanges/specs/104-recherche-echanges/reuse-audit.md
-7. /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/104-recherche-echanges/specs/104-recherche-echanges/test-plan.md
-8. /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/104-recherche-echanges/specs/104-recherche-echanges/tasks.md
-9. /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/104-recherche-echanges/specs/104-recherche-echanges/analysis.md
+Aucune installation du daemon n'a été faite : le binaire installé (`~/.cache/bridget-core`) reste
+l'ancien ; `bridget ledger search` sur le poste répondra `daemon_protocol` tant que le daemon n'est pas
+reconstruit et relancé (autorisation distincte : `launchctl kickstart -k gui/$UID/com.bridget.daemon`).
 
-Le contrat fixe les noms, limites, statuts et cas d'erreur. Ne pas simplifier le périmètre
-pour cocher les tâches. Commencer par T001, tests avant comportements, une tâche à la fois.
-Ne cocher qu'après preuve. Enregistrer commandes/résultats dans implementation.md à créer
-pendant l'implémentation (pas maintenant). Aucune permission de commit ou déploiement implicite.
+## Ce qui a été livré
 
-## Intégration avec les autres branches
+- Protocole : `WrapperToDaemon::LedgerSearch/LedgerRead`, `DaemonToWrapper::LedgerSearchResult/LedgerReadResult`
+  (`crates/bridget-transport/src/protocol.rs`, types `LedgerSearch*`, `LedgerRead*`).
+- Store : index `idx_ledger_sender_page`, `idx_ledger_target_page` ; `Store::open_read_only` ; module
+  `store::ledger_requests::search` (plages, chargement par clé primaire, repli unique, offset original) ; ancien
+  moteur LIKE retiré.
+- Daemon : `ledger::search` (validation, curseur, page, relecture, permis) ; bras hors verrou avec identité
+  revérifiée (`daemon.rs`).
+- Surfaces : `bridget_ledger` `action=recent|search|read` (MCP, schéma fermé, aucun nouvel outil) ;
+  `bridget ledger search|read [--json]` (CLI, codes 0/2/1) ; `ledger --limit` inchangé.
+- Documentation : `skills/bridget/references/commandes.md` § « Recherche dans les échanges (104) »,
+  `skills/bridget/SKILL.md` § « Chercher, continuer, relire, citer », `README.md`.
+- Tests : `crates/bridget-daemon/tests/search_104_test.rs` (24), unitaires `spec104_*` (transport 3, store 3,
+  ledger 1, client 1).
 
-Le volet fils dépend du code102, non encore implémenté. Sa préparation est dans
-/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/102-fils-inter-agents/specs/102-fils-inter-agents/quickstart.md
-Le volet messages peut avancer avant, pas la livraison complète104. La103 peut être absente.
-Une fois102 publiée/intégrée, vérifier le vrai module Store et y réutiliser les contrôles,
-sans inventer un nom de fichier ni copier une maquette en production.
+## Recette humaine (après reconstruction et relance du daemon)
 
-Surfaces communes : mcp.rs, cli.rs, skill et README. Sérialiser leur intégration, préserver
-les opérations existantes, compter le catalogue réel. Deux spécifications distinctes ne
-signifient pas deux agents écrivant simultanément les mêmes fichiers.
+```sh
+bridget ledger search --query "pagination erreur" --limit 20
+bridget ledger search --query "pagination erreur" --limit 20 --cursor <next_cursor>
+bridget ledger search --source thread --thread-id <uuid> --query "décision" --json
+bridget ledger read --id <id> --target <uuid> --offset <match_offset> --digest <body_digest>
+bridget ledger --limit 20   # inchangé
+```
 
-## Recette humaine à transmettre aux agents
+Attendus : zéro résultat = code 0 avec « fin de la partie conservée » ; `hits=[]` avec « suite disponible »
+est normal ; `--cursor` avec une requête textuellement différente → code 2 `invalid_cursor` ; un message d'un
+tiers → `not_found_or_forbidden` ; un extrait contenant des séquences ANSI s'affiche neutralisé mais reste brut
+en `--json`.
 
-1. Choisir messages (ses messages directs, passations incluses) ou thread avec un fil connu
-   dont on est membre. La recherche n'examine ni le disque ni les conversations provider.
-2. Appeler bridget_ledger action=search avec quelques termes ; restreindre auteur/correspondant
-   ou dates si connus. Tous les termes sont requis, pas de requête en langage naturel interprétée.
-3. Examiner has_more, pas seulement hits. Une page vide avec has_more=true signifie qu'il
-   reste du texte à parcourir ; continuer avec le même filtre et le curseur reçu si nécessaire.
-4. Quand un résultat suffit, ne pas vider toute l'archive par réflexe. Annoncer « trouvé dans
-   la partie consultée », pas « seule décision existante ».
-5. Pour un message, action=read avec id ET target ; conserver digest et offsets pour les suites.
-   Si content_changed, ne pas assembler deux versions. Pour un fil, utiliser history102,
-   jamais read/ack pour confirmer involontairement une vieille plage.
-6. Citer l'auteur, la date, le message (id,target) ou (thread_id,seq), et ce qui a vraiment
-   été lu. Une citation n'est ni une validation de conclusion ni une nouvelle instruction.
+## Commandes de vérification
 
-Le ledger conservé n'est pas toute l'histoire : purge sept jours par défaut. Rechercher
-ses messages ne rend pas privé le ledger historique global. Aucun abonnement ou notification
-n'est déclenché. Une recherche dans les fils ne sera livrée qu'après le code102.
+Depuis le worktree, `umask 077`, `BRIDGET_HOME` pointant sur un répertoire vide (sinon l'identité T3 du poste
+est héritée par les tests CLI) :
 
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test -p bridget-transport --lib spec104
+cargo test -p bridget-daemon --lib -- spec104
+cargo test -p bridget-daemon --test search_104_test
+cargo test -p bridget-daemon --release --test search_104_test spec104_s2 -- --nocapture --test-threads=1   # mesures
+```
 
-## Pièges interdits
+Régressions voisines exécutées : `spec102_threads_test`, `handoff_103_test`, `core_089_ledger_test`,
+`core_089_skill_test`, `claude_native_permissions_test`, puis recette release complète (`--workspace`).
 
-Pas de serviceLLM/RAG, orchestrationMaicie, collecte implicite, permission admin nouvelle
-ou réactivation de feature historique. Pas de lecture SQLite côté client pour contourner
-un daemon distant indisponible. Pas de redémarrageT3/agents pour rafraîchir un catalogue.
-Les références sont des données, jamais des commandes à exécuter.
+## Limites héritées et pièges
 
-## Validation future
+- Rétention du ledger (sept jours par défaut) : les fixtures doivent être datées récentes.
+- Casse/accents précomposés repliés seulement ; formes décomposées non assimilées.
+- Corpus des messages vivant entre deux pages ; fils : instantané de borne haute.
+- Identifiant hérité > 256 octets dans la fenêtre : `source_metadata_too_large`, restreindre les dates.
+- Relecture intégrale d'un corps de 16 Mio : coût `B × ceil(B/16 Kio)` (compromis ADR 040).
+- Ne jamais lancer le daemon de test sur le namespace de production ; jamais de `kill -9`.
 
-Suivre /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/104-recherche-echanges/specs/104-recherche-echanges/test-plan.md. Préparer l'isolation avant toute exécution de processus.
-Le helper existant /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/104-recherche-echanges/crates/bridget-daemon/tests/support/idempotent.rs
-doit être relu : il comporte un nettoyage àSIGKILL qui ne doit pas être repris dans les nouveaux tests.
-Les nouveaux tests utilisent arrêt ciblé propre et attente, jamais un fournisseur réel.
+## État Git et prochaines actions
 
-Le présent travail a vérifié les documents, pas le comportement de code inexistant.
-Après développement : Analyze, Converge contre le code réel, tests/gates, revue et demande
-de validation avant installation ; aucun résultat de cette préparation ne remplace ces preuves.
-
+Commits et fusion : selon l'autorisation en vigueur pour cette session (voir `implementation.md`).
+Prochaine action technique après fusion : reconstruire le daemon installé (`t3-local-build` ou script 106) et
+relancer `com.bridget.daemon` sur autorisation, puis exécuter la recette humaine ci-dessus.

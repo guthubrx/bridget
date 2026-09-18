@@ -3,10 +3,10 @@
 ## Fiche synthèse
 
 Spec: 104-recherche-echanges
-Statut: In Progress
+Statut: Implemented (2026-09-18)
 Priorité: P2
-Tâches: 0/28 (0%) — implémentation non commencée
-Tests: 0/31 (0%) — scénarios planifiés, non exécutés
+Tâches: 28/28 (100%)
+Tests: 31/31 scénarios couverts — 24 tests d'intégration + 8 unitaires/contrat ; recette release 1509/0
 Date: 2026-09-16
 Branche: session-104-recherche-echanges
 
