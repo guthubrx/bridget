@@ -63,13 +63,58 @@ impl Store {
         restored.map_err(StoreError::Sqlite)
     }
     /// Ouvre ou crée la base de données.
+    ///
+    /// Session 107 : journal en écriture anticipée (WAL), propriété persistante
+    /// du fichier posée ici par le premier ouvreur du daemon et héritée par
+    /// toutes les autres connexions (idempotence, exécution, profils, artefacts,
+    /// lecteurs en lecture seule). Les lecteurs ne sont plus bloqués par une
+    /// validation d'écriture ; les écrivains restent sérialisés par
+    /// `busy_timeout`. `synchronous` reste au défaut (`FULL`) : aucune
+    /// relaxation de durabilité. La valeur rendue est vérifiée : SQLite rend
+    /// l'ancien mode sans erreur si la bascule est impossible.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         let conn = Connection::open(path).map_err(StoreError::Sqlite)?;
         conn.busy_timeout(std::time::Duration::from_secs(2))
             .map_err(StoreError::Sqlite)?;
+        // Le contrôle de schéma précède toute écriture : une base d'une
+        // version future est refusée sans que son en-tête soit touché.
         crate::store_schema::validate(&conn).map_err(StoreError::Schema)?;
+        Self::ensure_wal(&conn)?;
         Self::init_schema(&conn)?;
         Ok(Store { conn })
+    }
+
+    /// Bascule (ou confirme) le journal WAL. La bascule exige un verrou
+    /// exclusif bref ; sur cette transition SQLite n'appelle pas le
+    /// gestionnaire d'attente (évitement d'interblocage), d'où un réessai
+    /// borné explicite quand plusieurs ouvreurs démarrent ensemble sur une
+    /// base neuve. Une base déjà en WAL est confirmée sans verrou.
+    fn ensure_wal(conn: &Connection) -> Result<(), StoreError> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let current: String = conn
+                .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+                .map_err(StoreError::Sqlite)?;
+            if matches!(current.as_str(), "wal" | "memory") {
+                return Ok(());
+            }
+            match conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get::<_, String>(0)) {
+                Ok(mode) if mode == "wal" => return Ok(()),
+                Ok(_) => {}
+                Err(rusqlite::Error::SqliteFailure(error, _))
+                    if matches!(
+                        error.code,
+                        rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                    ) => {}
+                Err(error) => return Err(StoreError::Sqlite(error)),
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(StoreError::Invariant(
+                    "journal WAL refusé par SQLite pour la base du daemon",
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     /// Connexion partagée avec les modules du plan de contrôle (SPEC-087) qui

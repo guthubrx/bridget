@@ -453,6 +453,10 @@ Choisir une racine d'état privée NEUVE, courte et absolue. Ne pas pointer vers
 l'ancien cache. Le HOME fournisseur n'est pas remplacé en production : il porte
 les abonnements. Aucun repli vers une API facturée n'est ajouté.
 
+La base `bridget.db` est en journal WAL : `bridget.db-wal` et `bridget.db-shm` l'accompagnent tant
+que le daemon tourne, avec les mêmes droits privés. Une copie à chaud de la base seule est
+incomplète ; copier les trois fichiers ou utiliser `VACUUM INTO`.
+
 ```sh
 bridget_state=$(mktemp -d /tmp/bgcore.XXXXXX)
 export BRIDGET_HOME="$bridget_state"

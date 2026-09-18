@@ -9,6 +9,11 @@ la machine le 2026-08-24 ; un écart observé est noté comme découverte.
 - CLI Bridget : `bridget` → `…/target/release/bridget`
 - Config Maicie (obligatoire, aucun défaut) : `/Users/moi/.config/maicie/config.json`
 - Greffe Maicie : `database_path` de cette config (pas `bridget.db`)
+- Base du daemon : `bridget.db` en journal WAL (session 107) → deux fichiers auxiliaires
+  `bridget.db-wal` et `bridget.db-shm` vivent à côté tant que le daemon tourne. Une copie à chaud
+  de `bridget.db` seul est **incomplète** : copier les trois fichiers, ou arrêter le daemon, ou
+  utiliser `sqlite3 bridget.db "VACUUM INTO 'copie.db'"`. Ne jamais supprimer `-wal`/`-shm` d'un
+  daemon vivant.
 - Catalogue du dû : `docs/catalogue-du-du.md` (`catalogue_path` de la config)
 
 ## 1. Où regarder d’abord

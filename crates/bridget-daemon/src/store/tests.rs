@@ -1947,3 +1947,177 @@ fn spec_066_switch_vers_host_invalide_l_environnement_docker() {
     drop(store);
     let _ = std::fs::remove_file(path);
 }
+
+// ---------------------------------------------------------------------------
+// Session 107 — journal WAL : lecteurs jamais bloqués par une validation
+// ---------------------------------------------------------------------------
+
+fn spec107_path(label: &str) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!(
+        "bridget-spec107-{label}-{}",
+        Uuid::new_v4().simple()
+    ));
+    bridget_transport::fsutil::create_private_dir(&root).unwrap();
+    root.join("bridget.db")
+}
+
+fn journal_mode(conn: &Connection) -> String {
+    conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .unwrap()
+}
+
+fn file_mode(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).unwrap().mode() & 0o777
+}
+
+#[test]
+fn spec107_base_neuve_en_wal_et_base_memoire_acceptee() {
+    let path = spec107_path("neuve");
+    let store = Store::open(&path).unwrap();
+    assert_eq!(journal_mode(store.connection()), "wal");
+    // Une base en mémoire ne connaît pas WAL : l'ouverture reste acceptée.
+    let memory = Store::open(Path::new(":memory:")).unwrap();
+    assert_eq!(journal_mode(memory.connection()), "memory");
+}
+
+#[test]
+fn spec107_conversion_base_delete_sans_perte_et_idempotente() {
+    let path = spec107_path("conversion");
+    {
+        // Base historique en mode rollback (delete), 10 000 échanges.
+        let legacy = Connection::open(&path).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE ledger (id TEXT NOT NULL, ts INTEGER NOT NULL, sender TEXT NOT NULL, target TEXT NOT NULL, body TEXT NOT NULL, conversation_key TEXT NOT NULL, PRIMARY KEY (id, target));
+                 BEGIN;",
+            )
+            .unwrap();
+        let mut insert = legacy
+            .prepare("INSERT INTO ledger VALUES (?1, ?2, 'a', 'b', 'corps', 'a|b')")
+            .unwrap();
+        for i in 0..10_000i64 {
+            insert
+                .execute(params![format!("m-{i:05}"), 1_700_000_000 + i])
+                .unwrap();
+        }
+        drop(insert);
+        legacy.execute_batch("COMMIT").unwrap();
+        assert_eq!(journal_mode(&legacy), "delete");
+    }
+    let checksum = |conn: &Connection| -> (i64, i64, String) {
+        conn.query_row("SELECT count(*), sum(ts), max(id) FROM ledger", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .unwrap()
+    };
+    let before = checksum(&Connection::open(&path).unwrap());
+    for _ in 0..2 {
+        let store = Store::open(&path).unwrap();
+        assert_eq!(journal_mode(store.connection()), "wal");
+        assert_eq!(
+            checksum(store.connection()),
+            before,
+            "aucune perte à la conversion"
+        );
+    }
+    // Une connexion tierce ouverte ensuite hérite du mode persistant.
+    assert_eq!(journal_mode(&Connection::open(&path).unwrap()), "wal");
+}
+
+#[test]
+fn spec107_fichiers_auxiliaires_prives_comme_la_base() {
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = spec107_path("droits");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .unwrap();
+    let store = Store::open(&path).unwrap();
+    let message = bridget_core::BridgetMessage::new("a", "b", "corps privé");
+    store.record_message(&message, "a|b").unwrap();
+    let wal = path.with_file_name("bridget.db-wal");
+    let shm = path.with_file_name("bridget.db-shm");
+    assert!(
+        wal.exists() && shm.exists(),
+        "fichiers auxiliaires WAL attendus"
+    );
+    assert_eq!(file_mode(&path), 0o600);
+    assert_eq!(file_mode(&wal), 0o600, "journal WAL privé");
+    assert_eq!(file_mode(&shm), 0o600, "index partagé privé");
+}
+
+#[test]
+fn spec107_lecteur_lecture_seule_jamais_bloque_par_ecriture_ni_validation() {
+    let path = spec107_path("lecteur");
+    let store = Store::open(&path).unwrap();
+    store
+        .record_message(
+            &bridget_core::BridgetMessage::new("a", "b", "amorce"),
+            "a|b",
+        )
+        .unwrap();
+    // Lecteur 104 : lecture seule, aucune attente (busy_timeout nul) pour que
+    // tout SQLITE_BUSY soit visible immédiatement.
+    let reader = Store::open_read_only(&path).unwrap();
+    reader.busy_timeout(std::time::Duration::ZERO).unwrap();
+    let count = |conn: &Connection| -> rusqlite::Result<i64> {
+        conn.query_row("SELECT count(*) FROM ledger", [], |row| row.get(0))
+    };
+    // 1. Transaction d'écriture ouverte, non validée : le lecteur lit l'état
+    //    validé précédent, sans erreur.
+    store.connection().execute_batch("BEGIN IMMEDIATE").unwrap();
+    store
+        .connection()
+        .execute(
+            "INSERT INTO ledger (id, ts, sender, target, body, conversation_key) VALUES ('x', 1, 'a', 'b', ?1, 'a|b')",
+            params!["y".repeat(64 * 1024)],
+        )
+        .unwrap();
+    for _ in 0..100 {
+        assert_eq!(
+            count(&reader).unwrap(),
+            1,
+            "lecture pendant une écriture ouverte"
+        );
+    }
+    store.connection().execute_batch("COMMIT").unwrap();
+    assert_eq!(count(&reader).unwrap(), 2, "validation visible");
+    // 2. Validations répétées (fsync) pendant des lectures concurrentes :
+    //    0 SQLITE_BUSY côté lecteur.
+    let path_writer = path.clone();
+    let writer = std::thread::spawn(move || {
+        let store = Store::open(&path_writer).unwrap();
+        for i in 0..50 {
+            let mut message = bridget_core::BridgetMessage::new("a", "b", "z".repeat(64 * 1024));
+            message.id = format!("w-{i}");
+            store.record_message(&message, "a|b").unwrap();
+        }
+    });
+    let mut busy = 0;
+    let mut reads = 0;
+    while !writer.is_finished() || reads < 200 {
+        match count(&reader) {
+            Ok(_) => {}
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if error.code == rusqlite::ErrorCode::DatabaseBusy
+                    || error.code == rusqlite::ErrorCode::DatabaseLocked =>
+            {
+                busy += 1
+            }
+            Err(other) => panic!("erreur inattendue : {other}"),
+        }
+        reads += 1;
+        if reads > 100_000 {
+            break;
+        }
+    }
+    writer.join().unwrap();
+    assert_eq!(
+        busy, 0,
+        "aucun SQLITE_BUSY côté lecteur sur {reads} lectures"
+    );
+    assert_eq!(count(&reader).unwrap(), 52);
+}

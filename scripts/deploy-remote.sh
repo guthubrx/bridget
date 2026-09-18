@@ -68,7 +68,7 @@ federation_remote_command "$remote_prefix" "$remote_cargo"
 # quotes simples préservent aussi les quotes doubles de UserKnownHostsFile.
 printf -v rsync_shell "'%s' " ssh "${ssh_args[@]}"
 git -C "$source_dir" ls-files -z | rsync -rltz --no-links --chmod=Du=rwx,Dgo=,Fu=rw,Fgo= \
-  --from0 --files-from=- --exclude=.git --exclude=target --exclude='*.db' --exclude='*.sock' \
+  --from0 --files-from=- --exclude=.git --exclude=target --exclude='*.db' --exclude='*.db-*' --exclude='*.sock' \
   --rsync-path='umask 077 && rsync' -e "$rsync_shell" \
   "$source_dir/" "$target:'$remote_prefix/source/'"
 

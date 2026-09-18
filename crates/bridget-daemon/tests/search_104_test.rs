@@ -990,23 +990,61 @@ fn spec104_s13_corpus_vivant_entre_deux_pages() {
 fn spec104_s14_erreur_sqlite_jamais_resultat_vide() {
     let (db, conn) = fixture_db("spec104-s14");
     insert(&conn, "e1", now(), AGENT_A, AGENT_B, "présent");
-    // Verrou exclusif tenu par un écrivain : la lecture bornée (100 ms) échoue
-    // en storage_unavailable, pas en hits=[].
     let ro = bridget_daemon::store::Store::open_read_only(&db).unwrap();
+    // Session 107 : la base est en WAL. Un écrivain en transaction, même avec
+    // une écriture en attente, ne bloque plus le lecteur : la recherche répond.
     let writer = Connection::open(&db).unwrap();
-    writer.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    insert(&writer, "e2", now() - 1, AGENT_A, AGENT_B, "présent aussi");
+    assert_eq!(
+        page(search_on(&ro, AGENT_A, &request("présent")))
+            .hits
+            .len(),
+        1,
+        "lecture pendant une écriture ouverte : état validé précédent"
+    );
+    writer.execute_batch("COMMIT").unwrap();
+    assert_eq!(
+        page(search_on(&ro, AGENT_A, &request("présent")))
+            .hits
+            .len(),
+        2
+    );
+    // Un vrai SQLITE_BUSY reste possible : une connexion en verrouillage
+    // exclusif persistant (`locking_mode=EXCLUSIVE`) exclut tout autre accès.
+    // Elle exige qu'aucune autre connexion WAL ne soit ouverte : on referme
+    // les nôtres, puis un lecteur neuf subit le refus. La lecture bornée
+    // (100 ms) échoue alors en storage_unavailable, jamais en hits=[].
+    drop(ro);
+    drop(writer);
+    drop(conn);
+    let exclusive = Connection::open(&db).unwrap();
+    exclusive
+        .execute_batch("PRAGMA locking_mode=EXCLUSIVE; BEGIN IMMEDIATE;")
+        .unwrap();
+    insert(
+        &exclusive,
+        "e3",
+        now() - 2,
+        AGENT_A,
+        AGENT_B,
+        "présent encore",
+    );
+    let ro = bridget_daemon::store::Store::open_read_only(&db).unwrap();
     let started = Instant::now();
     assert_eq!(
         error_code(&search_on(&ro, AGENT_A, &request("présent"))),
         "storage_unavailable"
     );
     assert!(started.elapsed() < Duration::from_secs(2));
-    writer.execute_batch("ROLLBACK").unwrap();
+    exclusive.execute_batch("ROLLBACK").unwrap();
+    drop(exclusive);
+    let conn = Connection::open(&db).unwrap();
     assert_eq!(
         page(search_on(&ro, AGENT_A, &request("présent")))
             .hits
             .len(),
-        1
+        2
     );
     // Ligne indécodable (corps BLOB non UTF-8) : erreur propagée, pas ignorée.
     conn.execute(
