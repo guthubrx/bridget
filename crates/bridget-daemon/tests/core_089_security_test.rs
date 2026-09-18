@@ -102,7 +102,7 @@ fn service(root: &std::path::Path, capabilities: Vec<ServiceCapability>) -> Clie
     ));
     client.send(WrapperToDaemon::ServiceHello {
         version: SERVICE_CONTRACT_VERSION,
-        service: "maicie".into(),
+        service: "guichet".into(),
         issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".into(),
         capabilities,
     });
@@ -129,7 +129,7 @@ fn une_portee_valide_ne_permet_pas_de_changer_l_emetteur_du_depot() {
         request_id: "security-foreign-producer".into(),
         issued_at,
         from: RECIPIENT.into(),
-        to: "maicie".into(),
+        to: "guichet".into(),
         operation: ServiceRequestOperation::MissionStatus,
         payload: ServiceRequestPayload::Delegation {
             delegation_id: uuid::Uuid::new_v4().to_string(),
@@ -166,7 +166,7 @@ fn une_portee_valide_ne_permet_pas_de_changer_l_emetteur_du_depot() {
 fn guichet_borne_lf_inclus_et_capacite_non_heritee_apres_fermeture() {
     let root = test_root("security-capability");
     let daemon = spawn_daemon(&root, None);
-    let mut capable = service(&root, vec![ServiceCapability::MaicieGuichet]);
+    let mut capable = service(&root, vec![ServiceCapability::GuichetV1]);
     let request = WrapperToDaemon::GuichetClaimNext {
         version: SERVICE_CONTRACT_VERSION,
     };

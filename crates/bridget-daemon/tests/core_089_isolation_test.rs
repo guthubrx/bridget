@@ -242,11 +242,7 @@ fn migration_explicite_ne_peut_modifier_les_fichiers_historiques() {
     let f = Fixture::new();
     let old = f.path("provider/.cache/bridget");
     private_dir(&old);
-    for (option, name) in [
-        ("--db", "bridget.db"),
-        ("--fleet", "fleet.json"),
-        ("--maicie-config", "config.json"),
-    ] {
+    for (option, name) in [("--db", "bridget.db"), ("--fleet", "fleet.json")] {
         let path = old.join(name);
         private_file(&path, b"historique intact");
         let output = Process::start(
@@ -256,11 +252,7 @@ fn migration_explicite_ne_peut_modifier_les_fichiers_historiques() {
         )
         .finish();
         assert!(!output.status.success());
-        let expected = if option == "--maicie-config" {
-            "migration Maicie hors noyau communication"
-        } else {
-            "namespace historique interdit"
-        };
+        let expected = "namespace historique interdit";
         assert!(
             String::from_utf8_lossy(&output.stderr).contains(expected),
             "{}",

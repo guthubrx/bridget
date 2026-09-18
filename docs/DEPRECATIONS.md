@@ -39,7 +39,7 @@ appelant vivant du pont dans le code de lancement ni dans
 |---|---|---|
 | `registry.rs` `default_agents()` | Déjà `codex app-server` / `claude_stream_json` | Conservé |
 | `acp.rs` + protocole ACP | Couche générique Cursor/Gemini (ADR 010) | Conservé |
-| Fixtures Maicie `codex-acp` / `claude-code-acp` | Définitions de test encore zed | Remplacées par les pilotes natifs |
+| Fixtures le service compagnon `codex-acp` / `claude-code-acp` | Définitions de test encore zed | Remplacées par les pilotes natifs |
 | `daemon.rs` test runtime géré `npx`+`codex-acp` | Fixture ACP, pas un pont | Remplacée par `fixture-acp` |
 | `npx` + `fixture-acp` (fleet, cli, parity, protocol) | Adaptateur ACP de test | Conservé (pas Zed) |
 | `managed_process` / `mcp_identity` tests `npx` | Cycle de vie du groupe, pas le paquet | Conservé |

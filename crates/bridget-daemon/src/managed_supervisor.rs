@@ -38,7 +38,7 @@ pub fn autonomy_runtime_for_control(
 }
 
 /// Verdict de la garde de continuation. Une limite est une issue Bridget :
-/// elle ne modifie aucune délégation ni objectif Maicie.
+/// elle ne modifie aucune délégation ni objectif le service compagnon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GovernedContinuation {
     Reserved,

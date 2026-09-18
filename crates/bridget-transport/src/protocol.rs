@@ -158,7 +158,7 @@ where
 
 /// Version actuellement publiée du contrat idempotent local.
 pub const CLIENT_CONTRACT_VERSION: u16 = 1;
-/// Version du contrat de service du guichet Maicie.
+/// Version du contrat de service du guichet le service compagnon.
 pub const SERVICE_CONTRACT_VERSION: u16 = 1;
 /// Version du contrat local de registre de projets.
 pub const PROJECT_REGISTRY_CONTRACT_VERSION: u16 = 1;
@@ -318,8 +318,8 @@ pub struct ExecutionDeliveryContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServiceCapability {
-    MaicieGuichet,
-    /// Registre local Bridget, exclusivement négocié par le service Maicie.
+    GuichetV1,
+    /// Registre local Bridget, exclusivement négocié par le service compagnon.
     ProjectRegistryV1,
     ProjectProfilesV1,
     CoordinationEventsV1,
@@ -459,7 +459,7 @@ pub struct ProjectBindOutcome {
 }
 
 /// Opération administrative locale du registre. Les mutations restent
-/// strictement sur la connexion Service Maicie négociée; `List` et `Status`
+/// strictement sur la connexion Service le service compagnon négociée; `List` et `Status`
 /// sont des lectures explicites et ne créent aucune liaison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -948,7 +948,7 @@ pub enum ServiceRefusal {
     HumanOriginForbidden,
 }
 
-/// Opérations fermées que Bridget peut déposer dans le guichet Maicie.
+/// Opérations fermées que Bridget peut déposer dans le guichet le service compagnon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServiceRequestOperation {
@@ -961,7 +961,7 @@ pub enum ServiceRequestOperation {
 }
 
 /// Verdict fermé d'une revue. Le transport conserve le fait déclaré ; seule
-/// la greffe Maicie décide s'il correspond au mandat durable.
+/// la greffe le service compagnon décide s'il correspond au mandat durable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewVerdict {
@@ -1085,13 +1085,13 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// Scellé du contenu d'un message humain observé. Même algorithme que
-/// `maicie::domain::human_message_content_seal` (préfixe, champs préfixés par
-/// leur longueur, horodatage en big-endian) : le daemon scelle, Maicie
+/// `service compagnon : sceau de contenu de message humain` (préfixe, champs préfixés par
+/// leur longueur, horodatage en big-endian) : le daemon scelle, service compagnon
 /// vérifie, et les deux doivent produire le même octet.
 pub fn human_message_content_seal(observed: &ObservedHumanMessageFrame) -> String {
     use sha2::{Digest, Sha256};
     let mut digest = Sha256::new();
-    digest.update(b"maicie/human-origin-seal/v1");
+    digest.update(b"bridget/human-origin-seal/v1");
     for field in [
         observed.message_id.as_bytes(),
         observed.sender.as_bytes(),
@@ -1110,7 +1110,7 @@ pub fn human_message_content_seal(observed: &ObservedHumanMessageFrame) -> Strin
 }
 
 /// Attestation d'origine humaine portée par un dépôt de délégation. Elle est
-/// fabriquée uniquement par le daemon et rejouée par Maicie contre ses cinq
+/// fabriquée uniquement par le daemon et rejouée par le service compagnon contre ses cinq
 /// vérifications (`ObjectiveOpeningPermit::human_request`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1200,8 +1200,8 @@ impl AgentPosture {
     }
 }
 
-/// Projection minimale du focus courant, publiée par Maicie dans Bridget.
-/// Le daemon la conserve et la relit, mais ne consulte jamais la base Maicie.
+/// Projection minimale du focus courant, publiée par le service compagnon dans Bridget.
+/// Le daemon la conserve et la relit, mais ne consulte jamais la base le service compagnon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControlFocusFrame {
@@ -1311,7 +1311,7 @@ pub enum HumanInboxState {
 #[serde(rename_all = "snake_case")]
 pub enum HumanInboxProducer {
     Daemon,
-    Maicie,
+    Guichet,
 }
 
 /// Référence vers l'objet concerné par un item. Tous les champs sont
@@ -1477,7 +1477,7 @@ pub enum ServiceSuiteDeclaration {
     Objectif { objective_id: String },
 }
 
-/// Issue fermée qu'un service Maicie atteste au guichet.
+/// Issue fermée qu'un service compagnon atteste au guichet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GuichetOutcome {
@@ -1487,7 +1487,7 @@ pub enum GuichetOutcome {
     Refused,
 }
 
-/// Motif fermé d'un refus déterministe rendu par Maicie après la relève.
+/// Motif fermé d'un refus déterministe rendu par le service compagnon après la relève.
 ///
 /// Il décrit une demande bien formée mais impossible à appliquer au registre
 /// local. Une corruption du store ou une erreur de transport ne passe jamais
@@ -1512,11 +1512,11 @@ pub enum GuichetRefusalReason {
     ObjectiveAlreadyClosed,
     AuthorizationDenied,
     /// L'attestation d'origine humaine n'a pas passé les vérifications de
-    /// Maicie, ou un focus a été demandé sans origine humaine valide. Code
-    /// public unique : la garde précise reste dans le journal Maicie.
+    /// le service compagnon, ou un focus a été demandé sans origine humaine valide. Code
+    /// public unique : la garde précise reste dans le journal le service compagnon.
     HumanOriginInvalid,
     /// Le plafond de création automatique est atteint. Les deux valeurs sont
-    /// attestées par Maicie au moment du refus, elles ne sont jamais déduites
+    /// attestées par le service compagnon au moment du refus, elles ne sont jamais déduites
     /// par Bridget lors de l'affichage ou d'un rejeu.
     BudgetReached {
         cap: u32,
@@ -1550,7 +1550,7 @@ pub enum GuichetLifecycleState {
 
 /// Fait de coordination transport attesté exclusivement par Bridget.
 ///
-/// Cette énumération est volontairement fermée : Maicie ne déduit jamais une
+/// Cette énumération est volontairement fermée : le service compagnon ne déduit jamais une
 /// relance d'un texte ou d'une échéance locale, et une valeur future exige une
 /// capacité/version explicitement négociée.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1559,7 +1559,7 @@ pub enum CoordinationEventKind {
     ReminderSent,
 }
 
-/// Charge canonique d'une réponse Maicie. L'ordre de déclaration est l'ordre
+/// Charge canonique d'une réponse le service compagnon. L'ordre de déclaration est l'ordre
 /// filaire normatif du contrat 015.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -1617,7 +1617,7 @@ pub enum GuichetReplyPayload {
     },
 }
 
-/// Projection fermée d'une coordination Maicie : Bridget la transporte sans
+/// Projection fermée d'une coordination le service compagnon : Bridget la transporte sans
 /// jamais en déduire ni la compléter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2306,15 +2306,15 @@ pub enum WrapperToDaemon {
         #[serde(with = "base64_bytes")]
         canonical_publication: Vec<u8>,
     },
-    /// Négocie le contrat du service Maicie, uniquement après RoleAccepted(Service).
+    /// Négocie le contrat du service compagnon, uniquement après RoleAccepted(Service).
     ServiceHello {
         version: u16,
         service: String,
         issuer_scope: String,
         capabilities: Vec<ServiceCapability>,
     },
-    /// Demande locale Maicie vers Bridget. Elle ne reprend pas le sens inverse
-    /// de `ServiceRequest`, qui reste un dépôt Bridget vers le guichet Maicie.
+    /// Demande locale service compagnon vers Bridget. Elle ne reprend pas le sens inverse
+    /// de `ServiceRequest`, qui reste un dépôt Bridget vers le guichet le service compagnon.
     #[serde(rename = "project_registry_request")]
     ProjectRegistryRequest {
         request: ProjectBindRequest,
@@ -2371,7 +2371,7 @@ pub enum WrapperToDaemon {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         after_cursor: Option<u64>,
     },
-    /// Dépôt durable produit par un wrapper enregistré vers le guichet Maicie.
+    /// Dépôt durable produit par un wrapper enregistré vers le guichet le service compagnon.
     #[serde(rename = "service_request")]
     ServiceRequest {
         #[serde(rename = "v")]
@@ -2830,7 +2830,7 @@ pub enum WrapperToDaemon {
     ControlStateRead {
         version: u16,
     },
-    /// Lire la projection passive du focus publiée par Maicie (SPEC-087).
+    /// Lire la projection passive du focus publiée par le service compagnon (SPEC-087).
     #[serde(rename = "control_focus_read")]
     ControlFocusRead {
         version: u16,
@@ -2871,7 +2871,7 @@ pub enum WrapperToDaemon {
         context: String,
         options: Vec<String>,
     },
-    /// Publier la projection passive du focus. Réservé au service Maicie,
+    /// Publier la projection passive du focus. Réservé au service compagnon,
     /// négocié avec la même capacité que la boîte humaine.
     #[serde(rename = "control_focus_publish")]
     ControlFocusPublish {
@@ -3197,7 +3197,7 @@ pub enum DaemonToWrapper {
     ClientRejected {
         reason: ClientRefusal,
     },
-    /// Contrat et capacité réellement négociés avec un service Maicie.
+    /// Contrat et capacité réellement négociés avec un service compagnon.
     ServiceWelcome {
         version: u16,
         horizon_secs: i64,
@@ -3208,7 +3208,7 @@ pub enum DaemonToWrapper {
     ServiceRejected {
         reason: ServiceRefusal,
     },
-    /// Issue terminale du registre local, corrélée à la commande Maicie.
+    /// Issue terminale du registre local, corrélée à la commandu service compagnon.
     #[serde(rename = "project_registry_outcome")]
     ProjectRegistryOutcome {
         outcome: ProjectBindOutcome,
@@ -3281,7 +3281,7 @@ pub enum DaemonToWrapper {
         version: u16,
     },
     /// Fait terminal durable, émis exclusivement par Bridget vers le service
-    /// Maicie après la transition SQLite correspondante.
+    /// le service compagnon après la transition SQLite correspondante.
     #[serde(rename = "request_lifecycle_event")]
     RequestLifecycleEvent {
         #[serde(rename = "v")]
@@ -3297,7 +3297,7 @@ pub enum DaemonToWrapper {
         response_message_id: Option<String>,
     },
     /// Fait non terminal de coordination, envoyé seulement aux services ayant
-    /// négocié `coordination_events_v1` en plus de `maicie_guichet`.
+    /// négocié `coordination_events_v1` en plus de `guichet_v1`.
     #[serde(rename = "coordination_event")]
     CoordinationEvent {
         #[serde(rename = "v")]
@@ -4472,7 +4472,7 @@ mod tests {
             hello,
             WrapperToDaemon::ServiceHello { capabilities, .. }
                 if capabilities == vec![
-                    ServiceCapability::MaicieGuichet,
+                    ServiceCapability::GuichetV1,
                     ServiceCapability::CoordinationEventsV1,
                 ]
         ));
@@ -5021,9 +5021,9 @@ mod tests {
     fn service_guichet_messages_roundtrip_et_restent_hors_attach() {
         let hello = WrapperToDaemon::ServiceHello {
             version: SERVICE_CONTRACT_VERSION,
-            service: "maicie".to_string(),
+            service: "guichet".to_string(),
             issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
-            capabilities: vec![ServiceCapability::MaicieGuichet],
+            capabilities: vec![ServiceCapability::GuichetV1],
         };
         assert_eq!(
             encode(&hello).unwrap(),
@@ -5035,7 +5035,7 @@ mod tests {
                 version: SERVICE_CONTRACT_VERSION,
                 capabilities,
                 ..
-            } if capabilities == vec![ServiceCapability::MaicieGuichet]
+            } if capabilities == vec![ServiceCapability::GuichetV1]
         ));
 
         let reply = WrapperToDaemon::GuichetReply {
@@ -5225,10 +5225,10 @@ mod tests {
 
         let hello_with_coordination = WrapperToDaemon::ServiceHello {
             version: SERVICE_CONTRACT_VERSION,
-            service: "maicie".to_string(),
+            service: "guichet".to_string(),
             issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
             capabilities: vec![
-                ServiceCapability::MaicieGuichet,
+                ServiceCapability::GuichetV1,
                 ServiceCapability::CoordinationEventsV1,
             ],
         };
@@ -5236,7 +5236,7 @@ mod tests {
             decode::<WrapperToDaemon>(&encode(&hello_with_coordination).unwrap()).unwrap(),
             WrapperToDaemon::ServiceHello { capabilities, .. }
                 if capabilities == vec![
-                    ServiceCapability::MaicieGuichet,
+                    ServiceCapability::GuichetV1,
                     ServiceCapability::CoordinationEventsV1,
                 ]
         ));
@@ -5272,7 +5272,7 @@ mod tests {
                 request_id: format!("request-{wire_name}"),
                 issued_at: 1_787_824_000,
                 from: "jc2".to_string(),
-                to: "maicie".to_string(),
+                to: "guichet".to_string(),
                 operation,
                 payload: payload.clone(),
             };
@@ -6158,7 +6158,7 @@ mod tests {
 
         let hello = WrapperToDaemon::ServiceHello {
             version: SERVICE_CONTRACT_VERSION,
-            service: "maicie".to_string(),
+            service: "guichet".to_string(),
             issuer_scope: "065_scope_0123456789abcdef0123456789abcdef".to_string(),
             capabilities: vec![ServiceCapability::ProjectRegistryV1],
         };
@@ -6168,7 +6168,7 @@ mod tests {
                 service,
                 capabilities,
                 ..
-            } if service == "maicie" && capabilities == vec![ServiceCapability::ProjectRegistryV1]
+            } if service == "guichet" && capabilities == vec![ServiceCapability::ProjectRegistryV1]
         ));
 
         let conflict = ProjectBindOutcome {
@@ -6682,7 +6682,7 @@ mod control_and_inbox_contract_tests {
             context: "{}".to_string(),
             options: vec!["ack".to_string()],
             state: HumanInboxState::Resolved,
-            producer: HumanInboxProducer::Maicie,
+            producer: HumanInboxProducer::Guichet,
             created_at: 1,
             resolved_at: Some(2),
             occurrences: 2,
@@ -6804,7 +6804,7 @@ mod control_and_inbox_contract_tests {
                 message_id: "m1".to_string(),
                 ts: 1,
                 sender: "humain".to_string(),
-                target: "maicie".to_string(),
+                target: "guichet".to_string(),
                 body: "Travaille sur X".to_string(),
             },
             attestation: HumanOriginAttestationFrame {

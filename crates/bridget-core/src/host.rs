@@ -1,7 +1,7 @@
 //! Nom de la machine courante — **source unique** du projet.
 //!
 //! Elle vit ici, dans le socle commun, et non dans le daemon : le greffe
-//! (`plugins/maicie`) ne dépend que de `bridget-core` et `bridget-transport`,
+//! (`plugins/service-compagnon`) ne dépend que de `bridget-core` et `bridget-transport`,
 //! jamais de `bridget-daemon`. L'y laisser aurait obligé chaque appelant hors
 //! daemon à recopier ces quelques lignes — et deux calculs libres de diverger
 //! du nom de machine, c'est exactement la maladie que ce chantier soigne.

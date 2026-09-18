@@ -21,7 +21,7 @@ l'humain de rouvrir la session. Ne jamais inventer de commande de reload.
 Si le serveur MCP est absent, le CLI n'est permis qu'en repli **explicitement
 annoncé**, avec le binaire/socket réellement accessibles et l'identité courante
 attestée. Ne pas basculer silencieusement au shell ni doubler un même envoi par
-outil ET CLI. Ni tmux ni GUI ni Maicie ne sont nécessaires.
+outil ET CLI. Ni tmux ni GUI ni le service compagnon ne sont nécessaires.
 
 Lire l'annuaire et viser l'`agent_id` UUID attesté, pas un nom déduit du fournisseur.
 Les noms affichés peuvent changer, les adresses restent stables.
@@ -40,7 +40,7 @@ d'artefacts et les limites de rechargement.
 ## Les demandes du quotidien
 
 Exécuter la demande avec l'identité de cette conversation ; aucun formulaire,
-profil métier ou passage par Maicie n'est nécessaire. Résoudre les noms par
+profil métier ou passage par le service compagnon n'est nécessaire. Résoudre les noms par
 l'annuaire ; demander une précision seulement si plusieurs cibles conviennent.
 
 | Demande | Action utile |
@@ -85,10 +85,10 @@ validation de mission ni la réponse exigée par un `reply`.
 | Administrer une fédération SSH | CLI humain `bridget federate …`; jamais MCP ni repli automatique |
 | Joindre un fil t3code | `bridget_send` vers l'agent du fil (transport `t3code`) ; installation par l'humain avec `bridget t3 install` |
 
-La skill est le mode d'emploi, pas une alternative au MCP. Les outils Maicie
+La skill est le mode d'emploi, pas une alternative au MCP. Les outils du guichet
 éventuellement exposés parlent à un service extérieur ; leur présence ne prouve
 pas sa disponibilité et n'est pas nécessaire à la communication. Ne pas invoquer
-Maicie pour envoyer une simple mission. Les outils d'artefacts lisent/publient du
+le service compagnon pour envoyer une simple mission. Les outils d'artefacts lisent/publient du
 contenu, sans lancer une interface graphique.
 
 Les actions 094 sont toujours propres à l'identité et à l'instance attestées :
@@ -111,7 +111,7 @@ différent au-delà de cette normalisation, un refus, une erreur ou une réponse
 incohérente ne vaut pas renommage réussi.
 
 Le catalogue fournisseur est une liste fermée de seize outils Bridget, pas une
-approbation MCP globale ni une autorisation Maicie. Un serveur MCP déjà vivant
+approbation MCP globale ni une autorisation le service compagnon. Un serveur MCP déjà vivant
 garde son ancien binaire et son ancien catalogue : ne pas inventer de commande de
 reload, tuer la conversation ou relancer le fournisseur pour le mettre à jour.
 

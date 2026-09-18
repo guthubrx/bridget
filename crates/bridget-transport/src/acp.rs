@@ -3819,7 +3819,7 @@ sleep 2
         assert!(events.iter().any(|event| matches!(event, AcpEvent::DeliveryRejected { message_id, .. } if message_id == "timeout-queued")));
     }
 
-    /// ORACLE — un mandat reply=false (tous les mandats Maicie) honore
+    /// ORACLE — un mandat reply=false (tous les mandats le service compagnon) honore
     /// `deadline_at` absolu du daemon, PAS le notify_timeout figé au spawn.
     /// Mutant : remettre `(!reply).then_some(notify_timeout)` exclusif → meurt.
     /// Preuve d'abord qu'un tour normal aboutit (sinon projection vide).

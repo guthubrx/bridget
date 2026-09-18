@@ -16,13 +16,13 @@ des tours avec outils dépliables, panneau missions/routines, composer humain),
 (géré ACP ou interactif tmux).
 
 Bridget possède déjà le plan de données : journaux de session (v1, streamables
-par `Subscribe`), ledger des messages liés, annuaire `who`, greffe Maicie.
+par `Subscribe`), ledger des messages liés, annuaire `who`, greffe le service compagnon.
 T3 Code (MIT, T3 Tools) offre une GUI desktop/web mûre pour agents de code,
 parlant ACP nativement.
 
 ## Décision
 
-1. **Bridget/Maicie restent le plan de contrôle et l'unique source de
+1. **Bridget/le service compagnon restent le plan de contrôle et l'unique source de
    vérité** (sessions, identités, journaux, approbations). Aucune GUI ne
    reçoit d'autorité sur le cycle de vie des agents.
 2. **Construire une GUI propre, progressive** — lecture/observation d'abord

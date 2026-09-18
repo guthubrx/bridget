@@ -22,7 +22,7 @@ fn assert_graph(metadata: &Value) {
     for package in packages {
         let name = package["name"].as_str().unwrap();
         for forbidden in [
-            "maicie",
+            "guichet",
             "tauri",
             "wry",
             "dioxus",

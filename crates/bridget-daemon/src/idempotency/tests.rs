@@ -1297,7 +1297,7 @@ fn failed_reply_tracking_rolls_back_then_a_retry_after_restart_prepares_both() {
     };
     let reply = ReplyTracking {
         request_id: "request-reply".to_string(),
-        sender: "maicie".to_string(),
+        sender: "guichet".to_string(),
         target: "agent-2".to_string(),
         created_at: NOW,
         deadline_at: NOW + 60,
@@ -1360,7 +1360,7 @@ fn failed_reply_tracking_rolls_back_then_a_retry_after_restart_prepares_both() {
                 |row| row.get::<_, String>(0),
             )
             .unwrap(),
-        "maicie:agent-2"
+        "guichet:agent-2"
     );
     std::fs::remove_file(path).unwrap();
 }

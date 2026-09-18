@@ -1637,7 +1637,7 @@ fn TEMOIN_persistant_tue_redevient_joignable_sans_redemarrer_le_daemon() {
         "on tue le fournisseur, pas le wrapper"
     );
 
-    // Le wrapper doit survivre (propriété nommée par Maicie).
+    // Le wrapper doit survivre (propriété nommée par le service compagnon).
     let survive_deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < survive_deadline {
         if unsafe { libc::kill(wrapper_before as i32, 0) } != 0 {

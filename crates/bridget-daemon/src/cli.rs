@@ -456,11 +456,6 @@ fn parse_identity_command(args: &[String]) -> Result<IdentityCommand, String> {
                     );
                 }
             }
-            "--maicie-config" => {
-                return Err(
-                    "bridget identity migrate: migration Maicie hors noyau communication".into(),
-                );
-            }
             option => return Err(unknown_argument("identity migrate", option)),
         }
         index += 1;
@@ -2949,7 +2944,7 @@ fn parse_guichet_deposit(args: &[String]) -> Result<WrapperToDaemon, String> {
         request_id,
         issued_at,
         from,
-        to: "maicie".to_string(),
+        to: "guichet".to_string(),
         operation,
         payload,
     })
@@ -4651,7 +4646,7 @@ fn cmd_agents(args: &[String]) {
 
 // ---------------------------------------------------------------------------
 // SPEC-087 : `bridget control` et `bridget inbox`. Les mutations exigent un
-// terminal interactif, même borne que l'approbation d'activation Maicie.
+// terminal interactif, même borne que l'approbation d'activation le service compagnon.
 // ---------------------------------------------------------------------------
 
 fn send_control_request(request: WrapperToDaemon) -> Result<DaemonToWrapper, String> {
@@ -6283,7 +6278,7 @@ mod hook_tests {
         let requests = vec![
             RequestInfo {
                 id: "req-a".to_string(),
-                sender: "maicie".to_string(),
+                sender: "guichet".to_string(),
                 target: "coderBridget".to_string(),
                 state: "open".to_string(),
                 created_at: 10,
@@ -6319,7 +6314,7 @@ mod hook_tests {
                 .any(|cell| cell == "VERS")
         );
         assert!(participant.contains("coderBridget"));
-        assert!(!participant.contains("maicie"));
+        assert!(!participant.contains("guichet"));
         assert!(!participant.contains("prospective"));
 
         let global = render_requests(&requests, true);
@@ -6327,7 +6322,7 @@ mod hook_tests {
         assert!(global_header.split_whitespace().any(|cell| cell == "DE"));
         assert!(global_header.split_whitespace().any(|cell| cell == "VERS"));
         assert!(!global_header.contains("DESTINATAIRE"));
-        assert!(global.contains("maicie") && global.contains("coderBridget"));
+        assert!(global.contains("guichet") && global.contains("coderBridget"));
         assert!(global.contains("prospective") && global.contains("reviewer2"));
         assert!(global.contains("100") && global.contains("open"));
     }

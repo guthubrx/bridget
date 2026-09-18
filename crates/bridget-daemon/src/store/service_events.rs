@@ -1,5 +1,5 @@
 //! Dépôt, claims et faits de cycle de vie du protocole public.
-//! Aucun métier Maicie : bytes persistés, lease, curseur et transition atomique.
+//! Aucun métier le service compagnon : bytes persistés, lease, curseur et transition atomique.
 use super::{Store, StoreError, mark_answered_in_transaction};
 use bridget_transport::greffe_authorization::GreffeAuthorizationAttestation;
 use bridget_transport::protocol::{
@@ -52,7 +52,7 @@ pub enum GuichetResult {
         issue: String,
         expires_at: i64,
         newly_finalized: bool,
-        /// Réponse canonique durable produite par Maicie, jamais reconstruite
+        /// Réponse canonique durable produite par le service compagnon, jamais reconstruite
         /// depuis le seul libellé terminal.
         reply_bytes: Vec<u8>,
     },
@@ -364,7 +364,7 @@ impl Store {
             // de D-208 : le rapport reste traçable sans la rouvrir.
             // La clé du service n'est pas l'identité de l'émetteur de la
             // demande suivie (désormais un UUID). L'autorité est le couple
-            // durable de CETTE demande, pas le nom historique « maicie ».
+            // durable de CETTE demande, pas le nom historique du service.
             // Le déposant doit en être le destinataire ; une référence vers
             // la demande d'un tiers ne confère jamais le droit de la clôturer.
             let recipient: Option<String> = tx
@@ -405,7 +405,7 @@ impl Store {
     }
 
     /// Lit les faits terminaux retenus par Bridget dans l'ordre d'observation.
-    /// La réception est idempotente côté Maicie par `event_id`; une nouvelle
+    /// La réception est idempotente côté le service compagnon par `event_id`; une nouvelle
     /// connexion peut donc relever sans réinventer une transition.
     pub fn guichet_lifecycle_events(&self) -> Result<Vec<GuichetLifecycleEvent>, StoreError> {
         let mut statement = self

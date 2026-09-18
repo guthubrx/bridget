@@ -13,7 +13,7 @@ Six couches d'autorisation coexistent dans Bridget : sécurité du contenu local
 3. **Signalement de sandbox, jamais attestation** : une ligne de la liste fermée dans la sortie brute n'est un signalement que si la même commande s'est terminée en échec ; il est affiché comme non attesté, avec le geste « Tester ». Une ligne imprimée par un agent n'établit rien (contre-revue Jim, 2026-09-03).
 4. **Une page « Droits » par question** (« Ce que je vois », « Ce que les agents peuvent faire », « Combien ils décident seuls ») avec trois profils fermés et un mode expert qui montre le mécanisme et le lieu. Les lignes qui vivent dans le navigateur ne sont modifiables que depuis ce navigateur : un serveur relié ne peut pas desserrer la sécurité du référent, et la page le dit.
 5. **Un droit se vérifie** : « Tester » est une tentative corrélée (identifiant du message envoyé, commande canonique exacte, fin de commande) ; sans terminaison, l'issue est inconnue ou expirée, jamais un refus ni une réussite par défaut.
-6. **Propriété** : posture d'agent et réassignation automatique sont des colonnes de `control_state`, écrites par `ControlStateSet` sous la génération de l'ADR-027 ; le profil est dérivé ; l'absence sur le fil vaut inconnu et diffère ; Maicie lit, n'écrit pas.
+6. **Propriété** : posture d'agent et réassignation automatique sont des colonnes de `control_state`, écrites par `ControlStateSet` sous la génération de l'ADR-027 ; le profil est dérivé ; l'absence sur le fil vaut inconnu et diffère ; le service compagnon lit, n'écrit pas.
 
 ## Conséquences
 

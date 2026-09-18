@@ -4,7 +4,7 @@
 //! métier. Bridget centralise le principal depuis la connexion enregistrée,
 //! confronte ce fait à une politique privée, puis émet une attestation liée à
 //! l'action, au `request_id` et au condensé des octets canoniques exacts.
-//! Maicie recharge la politique et vérifie cette attestation sur les octets
+//! le service compagnon recharge la politique et vérifie cette attestation sur les octets
 //! relus, juste avant l'effet : recopier ou modifier une ancienne ligne du
 //! guichet ne suffit donc pas à fabriquer une autorisation.
 //!

@@ -95,7 +95,7 @@ partielle par construction : Bridget vous le dit, au lieu de vous laisser croire
 permission et aux écritures concurrentes, artefacts publiés inertes et relus par référence exacte.
 
 **S'étendre.** Fédération SSH entre serveurs, adaptateur T3 Code pour les fils de bureau, pilotes natifs
-Claude et Codex sans tmux, protocole public pour les services extérieurs comme Maicie.
+Claude et Codex sans tmux, protocole public pour les services extérieurs comme le service compagnon.
 
 ## Ce que Bridget refuse de faire, et c'est voulu
 
@@ -117,7 +117,7 @@ Claude et Codex sans tmux, protocole public pour les services extérieurs comme 
    Codex ───────┤   socket Unix, JSONL, identité    │
    Cursor (T3) ─┼──────── attestée par connexion ───┤   daemon Rust ── SQLite (WAL, 0600)
    Gemini ──────┤                                   │        │
-   Maicie ──────┘                                   └─ MCP : 16 outils Bridget, schémas fermés
+   le service compagnon ──────┘                                   └─ MCP : 16 outils Bridget, schémas fermés
                                                              │
                                           fédération SSH ────┘──── autre machine, même protocole
 ```

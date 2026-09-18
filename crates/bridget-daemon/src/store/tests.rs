@@ -465,7 +465,7 @@ fn reponse_guichet_accepted_clot_atomiquement_la_demande_liee() {
     let mut store = Store::open(&path).unwrap();
     let now = 1_787_500_000;
     store
-        .create_request("message-lie", "maicie", "codex-1", 60)
+        .create_request("message-lie", "guichet", "codex-1", 60)
         .unwrap();
     let deposit = GuichetDeposit {
         issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
@@ -484,13 +484,13 @@ fn reponse_guichet_accepted_clot_atomiquement_la_demande_liee() {
         authorization_attestation: None,
     };
     store.deposit_guichet(&deposit, 600, 60, now).unwrap();
-    let claim = match store.claim_next_guichet("maicie-connection", now).unwrap() {
+    let claim = match store.claim_next_guichet("guichet-connection", now).unwrap() {
         GuichetNext::Claimed(claim) => claim,
         GuichetNext::Empty => panic!("dépôt lié absent"),
     };
     assert!(matches!(
         store.reply_guichet(
-            "maicie-connection",
+            "guichet-connection",
             GuichetReplyInput {
                 issuer_scope: &claim.issuer_scope,
                 request_id: &claim.request_id,
@@ -529,7 +529,7 @@ fn reponse_guichet_accepted_clot_atomiquement_la_demande_liee() {
     // ou laisser une demande answered sans fait durable correspondant.
     assert!(matches!(
         store.reply_guichet(
-            "maicie-connection",
+            "guichet-connection",
             GuichetReplyInput {
                 issuer_scope: &claim.issuer_scope,
                 request_id: &claim.request_id,

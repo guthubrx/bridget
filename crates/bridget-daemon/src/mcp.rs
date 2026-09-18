@@ -547,14 +547,14 @@ fn execute_tool_at_with_scope(
         "bridget_control_status" => {
             execute_control_status(identity, instance_id, arguments, socket)
         }
-        "maicie_delegate" => execute_maicie_delegate(identity, instance_id, arguments, socket),
-        "maicie_registre_add" => {
-            execute_maicie_registre_add(identity, instance_id, arguments, socket)
+        "guichet_delegate" => execute_guichet_delegate(identity, instance_id, arguments, socket),
+        "guichet_registre_add" => {
+            execute_guichet_registre_add(identity, instance_id, arguments, socket)
         }
-        "maicie_objective_close" => {
-            execute_maicie_objective_close(identity, instance_id, arguments, socket)
+        "guichet_objective_close" => {
+            execute_guichet_objective_close(identity, instance_id, arguments, socket)
         }
-        "maicie_request_status" => execute_maicie_request_status(instance_id, arguments, socket),
+        "guichet_request_status" => execute_guichet_request_status(instance_id, arguments, socket),
         _ => Err(ToolError::InvalidParams("outil inconnu".to_string())),
     }
 }
@@ -1085,7 +1085,7 @@ fn execute_ledger_read(
     Ok(serde_json::to_value(outcome).expect("fragment sérialisable"))
 }
 
-fn execute_maicie_delegate(
+fn execute_guichet_delegate(
     identity: &str,
     instance_id: &str,
     arguments: &serde_json::Map<String, Value>,
@@ -1131,7 +1131,7 @@ fn execute_maicie_delegate(
         .map_or(ServiceSuiteDeclaration::Aucune, |objective_id| {
             ServiceSuiteDeclaration::Objectif { objective_id }
         });
-    execute_maicie_mutation(
+    execute_guichet_mutation(
         identity,
         instance_id,
         arguments,
@@ -1152,14 +1152,14 @@ fn execute_maicie_delegate(
     )
 }
 
-fn execute_maicie_registre_add(
+fn execute_guichet_registre_add(
     identity: &str,
     instance_id: &str,
     arguments: &serde_json::Map<String, Value>,
     socket: &Path,
 ) -> Result<Value, ToolError> {
     reject_unknown_arguments(arguments, &["line", "request_id", "issued_at"])?;
-    execute_maicie_mutation(
+    execute_guichet_mutation(
         identity,
         instance_id,
         arguments,
@@ -1171,7 +1171,7 @@ fn execute_maicie_registre_add(
     )
 }
 
-fn execute_maicie_objective_close(
+fn execute_guichet_objective_close(
     identity: &str,
     instance_id: &str,
     arguments: &serde_json::Map<String, Value>,
@@ -1181,7 +1181,7 @@ fn execute_maicie_objective_close(
         arguments,
         &["objective_id", "reason", "request_id", "issued_at"],
     )?;
-    execute_maicie_mutation(
+    execute_guichet_mutation(
         identity,
         instance_id,
         arguments,
@@ -1194,7 +1194,7 @@ fn execute_maicie_objective_close(
     )
 }
 
-fn execute_maicie_mutation(
+fn execute_guichet_mutation(
     identity: &str,
     instance_id: &str,
     arguments: &serde_json::Map<String, Value>,
@@ -1212,7 +1212,7 @@ fn execute_maicie_mutation(
         request_id: request_id.clone(),
         issued_at,
         from: identity.to_string(),
-        to: "maicie".to_string(),
+        to: "guichet".to_string(),
         operation,
         payload,
     };
@@ -1257,13 +1257,13 @@ fn execute_maicie_mutation(
             "issued_at": issued_at,
             "issuer_scope": scope,
             "reason": message,
-            "next": "maicie_request_status"
+            "next": "guichet_request_status"
         })),
         Err(error) => Err(error),
     }
 }
 
-fn execute_maicie_request_status(
+fn execute_guichet_request_status(
     instance_id: &str,
     arguments: &serde_json::Map<String, Value>,
     socket: &Path,
@@ -1374,12 +1374,12 @@ fn guichet_lookup_connection(
     }
     match connection.exchange(&WrapperToDaemon::ServiceHello {
         version: SERVICE_CONTRACT_VERSION,
-        service: "maicie".to_string(),
+        service: "guichet".to_string(),
         issuer_scope: issuer_scope.to_string(),
-        capabilities: vec![ServiceCapability::MaicieGuichet],
+        capabilities: vec![ServiceCapability::GuichetV1],
     })? {
         DaemonToWrapper::ServiceWelcome { capabilities, .. }
-            if capabilities.contains(&ServiceCapability::MaicieGuichet) =>
+            if capabilities.contains(&ServiceCapability::GuichetV1) =>
         {
             Ok(connection)
         }
@@ -1471,7 +1471,7 @@ fn guichet_result_value(
         "request_id": request_id,
         "issued_at": issued_at,
         "issuer_scope": issuer_scope,
-        "next": pending.then_some("maicie_request_status")
+        "next": pending.then_some("guichet_request_status")
     }))
 }
 
@@ -2044,8 +2044,8 @@ fn tools() -> Vec<Value> {
             }
         }),
         json!({
-            "name": "maicie_delegate",
-            "description": "Créer une délégation dans le greffe Maicie central. Une réponse queued exige maicie_request_status.",
+            "name": "guichet_delegate",
+            "description": "Créer une délégation dans le greffe le service compagnon central. Une réponse queued exige guichet_request_status.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -2066,7 +2066,7 @@ fn tools() -> Vec<Value> {
             }
         }),
         json!({
-            "name": "maicie_registre_add",
+            "name": "guichet_registre_add",
             "description": "Ajouter une ligne fermée au registre central. Aucun chemin de registre ne vient de l'appelant.",
             "inputSchema": {
                 "type": "object",
@@ -2080,7 +2080,7 @@ fn tools() -> Vec<Value> {
             }
         }),
         json!({
-            "name": "maicie_objective_close",
+            "name": "guichet_objective_close",
             "description": "Clore un objectif dans le greffe central avec un motif explicite.",
             "inputSchema": {
                 "type": "object",
@@ -2095,7 +2095,7 @@ fn tools() -> Vec<Value> {
             }
         }),
         json!({
-            "name": "maicie_request_status",
+            "name": "guichet_request_status",
             "description": "Relire depuis le daemon maître l'issue terminale et ses identifiants durables.",
             "inputSchema": {
                 "type": "object",
@@ -2332,10 +2332,10 @@ mod tests {
             "bridget_status",
             "bridget_thread",
             "bridget_who",
-            "maicie_delegate",
-            "maicie_objective_close",
-            "maicie_registre_add",
-            "maicie_request_status",
+            "guichet_delegate",
+            "guichet_objective_close",
+            "guichet_registre_add",
+            "guichet_request_status",
         ]
         .into_iter()
         .map(str::to_string)
@@ -3102,7 +3102,7 @@ mod tests {
         let result = execute_tool_at_with_scope(
             "jc2",
             "instance-greffe-1",
-            "maicie_registre_add",
+            "guichet_registre_add",
             json!({
                 "line": "kind=add id=constat-1",
                 "request_id": "request-registre-1",
@@ -3116,7 +3116,7 @@ mod tests {
         assert_eq!(result["status"], "queued");
         assert_eq!(result["terminal"], false);
         assert_eq!(result["applied"], false);
-        assert_eq!(result["next"], "maicie_request_status");
+        assert_eq!(result["next"], "guichet_request_status");
         assert_eq!(result["issuer_scope"], expected_scope);
         server.join().unwrap();
         std::fs::remove_file(socket).unwrap();
@@ -3170,7 +3170,7 @@ mod tests {
         let result = execute_tool_at_with_scope(
             "jc2",
             "instance-review-target",
-            "maicie_delegate",
+            "guichet_delegate",
             json!({
                 "goal": "relire le lot",
                 "review_ref": "origin/session-047-verdict-tete-reecrite",
@@ -3195,7 +3195,7 @@ mod tests {
                 execute_tool_at_with_scope(
                     "jc2",
                     "instance-review-target",
-                    "maicie_delegate",
+                    "guichet_delegate",
                     isolated.as_object().unwrap(),
                     Path::new("/socket/ne-doit-pas-etre-ouverte"),
                 ),
@@ -3237,7 +3237,7 @@ mod tests {
         let result = execute_tool_at_with_scope(
             "jc2",
             "instance-greffe-2",
-            "maicie_objective_close",
+            "guichet_objective_close",
             json!({
                 "objective_id": "objective-1",
                 "reason": "objectif atteint",
@@ -3252,7 +3252,7 @@ mod tests {
         assert_eq!(result["status"], "outcome_unknown");
         assert_eq!(result["terminal"], false);
         assert_eq!(result["applied"], false);
-        assert_eq!(result["next"], "maicie_request_status");
+        assert_eq!(result["next"], "guichet_request_status");
         server.join().unwrap();
         std::fs::remove_file(socket).unwrap();
     }
@@ -3286,9 +3286,9 @@ mod tests {
                     issuer_scope,
                     capabilities,
                     ..
-                } if service == "maicie"
+                } if service == "guichet"
                     && issuer_scope == server_scope
-                    && capabilities == vec![ServiceCapability::MaicieGuichet]
+                    && capabilities == vec![ServiceCapability::GuichetV1]
             ));
             write_command(
                 &mut writer,
@@ -3296,7 +3296,7 @@ mod tests {
                     version: SERVICE_CONTRACT_VERSION,
                     horizon_secs: 60,
                     issued_at_tolerance_secs: 5,
-                    capabilities: vec![ServiceCapability::MaicieGuichet],
+                    capabilities: vec![ServiceCapability::GuichetV1],
                 },
             );
             assert!(matches!(
@@ -3331,7 +3331,7 @@ mod tests {
         let result = execute_tool_at_with_scope(
             "jc2",
             "instance-greffe-3",
-            "maicie_request_status",
+            "guichet_request_status",
             json!({ "request_id": "request-delegate-1" })
                 .as_object()
                 .unwrap(),
@@ -3359,7 +3359,7 @@ mod tests {
                 execute_tool_at_with_scope(
                     "jc2",
                     "instance-greffe-4",
-                    "maicie_registre_add",
+                    "guichet_registre_add",
                     arguments.as_object().unwrap(),
                     socket,
                 ),

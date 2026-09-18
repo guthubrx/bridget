@@ -61,7 +61,7 @@ de couverture.
 | `help` | CLI humain | Aucun | Affiche l'aide locale du binaire invoqué. |
 | `managed-bootstrap` | Interne | Aucun | Couture de démarrage des processus gérés, appelée par le superviseur ; ce n'est pas une promesse de commande utilisateur. |
 | `managed-wrapper` | Interne | Aucun | Lance un pilote géré depuis une définition figée fournie par le superviseur ; ne pas l'appeler directement. |
-| `guichet` | Interne | Aucun outil Bridget public | Dépôt interne de requêtes de service pour des consommateurs historiques. Ce chemin n'est pas une promesse nominale ; les outils Maicie éventuels restent une façade séparée. |
+| `guichet` | Interne | Aucun outil Bridget public | Dépôt interne de requêtes de service pour des consommateurs historiques. Ce chemin n'est pas une promesse nominale ; les outils du guichet éventuels restent une façade séparée. |
 | `hook` | Interne | Aucun | Entrée fail-soft appelée par les hooks Claude (`claude-runtime`, `claude-statusline`) ; elle lit stdin et n'est pas une commande conversationnelle. |
 | `discover` | Interne | Utiliser `bridget_who` ou `who` | Alias de répartiteur vers l'annuaire, non annoncé comme interface publique stable. |
 | `--version` | CLI humain | Alias exact de `version` | Alias orthographique local. |
@@ -79,7 +79,7 @@ le registre : ne jamais déduire leur disponibilité d'un nom de fournisseur.
 
 La politique fournisseur étendue en 100 autorise exactement les seize outils Bridget
 ci-dessous lorsqu'elle est effectivement chargée. Elle n'accorde pas une
-approbation MCP globale et n'inclut pas automatiquement les outils Maicie.
+approbation MCP globale et n'inclut pas automatiquement les outils du guichet.
 
 - `bridget_send` — envoyer ou répondre avec corrélation et rejeu explicite.
 - `bridget_cancel` — annuler sa propre demande suivie.
@@ -458,7 +458,7 @@ Chaque abonnement expose `facts_lost_total` et `observation_gaps` ; ces
 compteurs repartent au redémarrage du daemon. Une notice de lacune ne consomme
 pas `once`. Les notices ne sont pas une file de livraison durable.
 Une souscription acceptée utilise la messagerie ordinaire : aucune attente
-active ni workflow Maicie n'est requis.
+active ni workflow le service compagnon n'est requis.
 
 ## Recettes pratiques : observer, prolonger, partager
 

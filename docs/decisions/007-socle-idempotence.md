@@ -10,7 +10,7 @@ client externe ne peut pas reprendre un envoi après une coupure sans risque de
 doublon : l’identifiant est créé par la voie historique et ses gardes de
 déduplication sont temporaires et en mémoire.
 
-Maicie doit pouvoir persister une délégation avant toute E/S, puis consulter
+le service compagnon doit pouvoir persister une délégation avant toute E/S, puis consulter
 l’issue ou rejouer exactement la même opération après un redémarrage. Les
 ordres de lancement de la session 009 et les projections MCP de la session 010
 ont le même besoin structurel. Trois mécanismes indépendants rendraient leurs
@@ -32,7 +32,7 @@ ne donne jamais l’autorisation de réémettre aveuglément. Au-delà de
 `expires_at`, le résultat est `IdempotencyExpired`, y compris pour une première
 opération dont `issued_at` est déjà hors de l’horizon négocié.
 
-La frontière est un protocole local public et versionné. La CLI, Maicie et un
+La frontière est un protocole local public et versionné. La CLI, le service compagnon et un
 outil MCP futur en sont des projections : aucun ne dépend des crates internes
 ni de la base SQLite du daemon. La voie historique `Send` reste inchangée et ne
 traverse pas ce socle sans négociation explicite.
@@ -57,7 +57,7 @@ vide.
 
 ## Conséquences positives
 
-- Maicie peut reprendre son outbox avec des identifiants et une rétention
+- le service compagnon peut reprendre son outbox avec des identifiants et une rétention
   contractuels.
 - Les futures opérations idempotentes réutilisent les mêmes états, erreurs et
   règles de purge.
@@ -73,5 +73,5 @@ vide.
   exprime une portée d’idempotence, pas une authentification.
 - Les consommateurs 009 et 010 devront se raccorder au socle au lieu de créer
   leurs propres registres d’issues.
-- Maicie devra compléter son outbox par `issuer_scope` et `issued_at` avant son
+- le service compagnon devra compléter son outbox par `issuer_scope` et `issued_at` avant son
   implémentation effective.

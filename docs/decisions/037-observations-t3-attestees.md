@@ -14,7 +14,7 @@ prouve ni l'identité d'un appel MCP natif ni la capacité à produire chaque
 Bridget reste le produit autonome ; T3 reste un adaptateur. Le cas utilisateur
 est « préviens-moi ici quand Horizon-3D termine son tour », pas « orchestre et
 valide son projet ». Aucun profil supplémentaire, verrou de travail ou composant
-Maicie n'est introduit.
+le service compagnon n'est introduit.
 
 ## Décisions
 

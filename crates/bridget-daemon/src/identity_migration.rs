@@ -16,7 +16,7 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const RESERVED_PRINCIPALS: &[&str] = &["human", "humain", "maicie"];
+const RESERVED_PRINCIPALS: &[&str] = &["human", "humain", "guichet"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdentityMigrationPaths {

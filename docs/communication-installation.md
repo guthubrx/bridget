@@ -1,7 +1,7 @@
 # Installer Bridget communication à côté de l'existant
 
 Cette procédure ne remplace aucun binaire global, service, registre, profil de
-fournisseur, skill globale ni base existante. Elle ne démarre pas Maicie ni GUI.
+fournisseur, skill globale ni base existante. Elle ne démarre pas le service compagnon ni GUI.
 Les recettes Claude/GLM et le gate final restent soumis aux résultats consignés
 dans la session 089 ; un paquet construit n'est pas une validation de compte.
 
@@ -23,7 +23,7 @@ PATH=/Users/moi/.cargo/bin:$PATH BRIDGET_BUILD_ID="$(cat BUILD_ID)" \
 Rust 1.92.0 et les dépendances verrouillées doivent déjà être disponibles.
 Un cache incomplet échoue hors ligne : aucune installation implicite. L'archive
 contient les trois crates, les fixtures nécessaires, la skill, les deux scripts
-SSH audités et cette documentation, pas les sources Maicie/UI/runtime.
+SSH audités et cette documentation, pas les sources le service compagnon/UI/runtime.
 BUILD_ID identifie la source ; le manifeste SHA-256 identifie les octets précis,
 y compris un paquet de travail marqué `-dirty`. Sans BUILD_ID à la compilation,
 le binaire d'une archive sans Git annonce honnêtement `unknown`.

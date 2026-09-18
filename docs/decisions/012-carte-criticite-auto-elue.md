@@ -19,13 +19,13 @@ permission.
 
 ## Décision
 
-Maicie tient une carte par projet, sans liste de chemins configurable. Elle
+le service compagnon tient une carte par projet, sans liste de chemins configurable. Elle
 combine quatre règles de germe, la détection dans le diff, les constats
 Bloquants/2 Majors et les ancrages contractuels exacts. Toute zone est un
 chemin complet relatif au dépôt ; une citation ambiguë n’élit jamais plusieurs
 homonymes.
 
-Maicie propose un régime. Le référent doit retenir explicitement une valeur
+le service compagnon propose un régime. Le référent doit retenir explicitement une valeur
 fermée et peut durcir ou alléger sans fournir de justification textuelle.
 Chaque décision, écart et refus est durable et comptable. Le noyau qui calcule
 la carte reste soumis au régime `jury_2x2` fixé par la présente décision ; il

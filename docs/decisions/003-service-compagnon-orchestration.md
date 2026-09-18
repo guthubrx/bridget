@@ -1,4 +1,4 @@
-# ADR 003 — Maicie est un compagnon d'orchestration hors processus
+# ADR 003 — Le service compagnon est un orchestrateur hors processus
 
 - **Statut** : Accepté ; MVP implémenté, activation de profils en finition
 - **Date** : 2026-08-22
@@ -8,7 +8,7 @@
 
 Bridget prouve en usage réel l'intérêt de la communication directe entre
 agents : présence, messages, demandes suivies, réponses et reprise restent
-fluides. L'ancien Maicie centralisait au contraire une mission dans un
+fluides. L'ancien le service compagnon centralisait au contraire une mission dans un
 superviseur, un pipeline et des états de tâches qui enfermaient l'utilisateur
 dans une exécution prédéfinie.
 
@@ -17,11 +17,11 @@ Bridget en moteur de workflow ni attribuer à ACP un statut métier universel.
 
 ## Décision
 
-Maicie v3 est un **compagnon CLI hors processus** distribué dans
-`plugins/maicie/`, avec sa propre SQLite. Chaque invocation charge une
+le service compagnon v3 est un **compagnon CLI hors processus** distribué dans
+`plugins/guichet/`, avec sa propre SQLite. Chaque invocation charge une
 configuration explicite, exécute une commande puis rend la main. Les voies qui
 contactent Bridget réconcilient auparavant leurs outboxes ; les actions
-strictement locales n'ouvrent aucune connexion. Maicie n'est ni chargée par le
+strictement locales n'ouvrent aucune connexion. le service compagnon n'est ni chargée par le
 daemon Bridget, ni un service résident obligatoire.
 
 Elle utilise exclusivement les interfaces locales publiques de Bridget pour :
@@ -32,36 +32,36 @@ Elle utilise exclusivement les interfaces locales publiques de Bridget pour :
 - demander une activation par le `SpawnOrder` public session 009.
 
 Bridget conserve la vérité du transport : connexion, présence, livraison,
-demande suivie, timeout et snapshot. Maicie conserve la vérité de coordination :
+demande suivie, timeout et snapshot. le service compagnon conserve la vérité de coordination :
 objectif, participants, délégations, décisions et outboxes. Il n'existe ni base
-SQLite partagée, ni import de modules internes Bridget, ni accès de Maicie à
+SQLite partagée, ni import de modules internes Bridget, ni accès du service compagnon à
 `bridget.db`.
 
 Une conversation reste libre. Une intention ne devient un objectif coordonné
 que par une commande explicite. Les messages directs ne modifient jamais un
-objectif Maicie par effet de bord.
+objectif le service compagnon par effet de bord.
 
 ## Mise à jour 015 — guichet durable Bridget
 
-La session 015 ajoute un guichet Maicie sans changer le modèle compagnon. Le
-destinataire de service `maicie` devient joignable dans Bridget même lorsque le
-binaire Maicie n'est pas lancé, mais cette joignabilité reste une boîte aux
+La session 015 ajoute un guichet le service compagnon sans changer le modèle compagnon. Le
+destinataire de service `guichet` devient joignable dans Bridget même lorsque le
+binaire le service compagnon n'est pas lancé, mais cette joignabilité reste une boîte aux
 lettres de transport : Bridget ne possède ni objectif, ni délégation, ni
-décision Maicie.
+décision le service compagnon.
 
-La capacité `maicie_guichet` est la borne d'autorisation du guichet. Elle
+La capacité `guichet_v1` est la borne d'autorisation du guichet. Elle
 contrôle la relève `GuichetClaimNext`/`GuichetClaim`, les réponses
 `GuichetReply` et les `RequestLifecycleEvent`. Un nom déclaré, y compris
-`from: "maicie"`, n'accorde jamais ces droits. Ce choix applique la limite C5 :
+`from: "guichet"`, n'accorde jamais ces droits. Ce choix applique la limite C5 :
 dans le modèle local coopératif v1, l'identité reste déclarative et non
 opposable à un processus hostile du même compte. La capacité ferme la surface
 protocolaire sans prétendre fournir une authentification cryptographique.
 
-Le guichet est relevé en pull-only à l'ouverture d'une commande Maicie. Bridget
+Le guichet est relevé en pull-only à l'ouverture d'une commandu service compagnon. Bridget
 retourne au plus une demande relivable par `GuichetClaimNext`, dans l'ordre
-FIFO durable, puis Maicie traite sous budget absolu et rend la main. Il n'y a
+FIFO durable, puis le service compagnon traite sous budget absolu et rend la main. Il n'y a
 ni polling, ni worker caché, ni boucle résidente dans cette décision. Une
-boucle `maicie serve` visible est explicitement une évolution v2, à spécifier
+boucle `guichet serve` visible est explicitement une évolution v2, à spécifier
 avec son arrêt, sa présence et ses règles d'exploitation.
 
 La matrice v1 est fermée : `delivery_report`, `mission_status` et
@@ -81,7 +81,7 @@ au plus une demande avec un propriétaire, un token, une génération et un bail
 courant : une ancienne génération ne peut pas finaliser la demande.
 
 Le gate G1504 a éprouvé la chaîne livrée avec un wrapper ACP réel : dépôt alors
-que Maicie est absente, relève pull-only, greffe unique dans SQLite, réponse
+que le service compagnon est absente, relève pull-only, greffe unique dans SQLite, réponse
 corrélée, demande Bridget `answered`, événement durable relevé, puis rejeu
 sans doublon. Le parcours a mesuré 925 ms dans le commit `69ad00d`. Cette
 preuve ne transforme pas le guichet en runtime : elle confirme que l'identité
@@ -96,7 +96,7 @@ transaction SQLite. Le `message_id`, la cible, le corps, le délai et l'horizon
 existent donc avant toute I/O Bridget.
 
 Au redémarrage, toute ligne non terminale commence par un lookup de l'issue
-durable. En l'absence d'issue et sous l'horizon négocié, Maicie rejoue les
+durable. En l'absence d'issue et sous l'horizon négocié, le service compagnon rejoue les
 octets exacts avec le même identifiant. `IdempotencyExpired` devient un refus
 terminal et n'autorise jamais un nouvel envoi implicite.
 
@@ -110,22 +110,22 @@ La transaction d'approbation persiste simultanément
 
 Le contrat 009 ne comporte pas de `SpawnLookup`. Le replay exact du
 `SpawnOrder`, avec le même `command_id`, est le lookup idempotent et retourne
-l'issue durable. Après acceptation, Maicie compare le digest de définition
+l'issue durable. Après acceptation, le service compagnon compare le digest de définition
 résolue de `SpawnAccepted` au hash épinglé dans l'approbation. Elle ne relit
 jamais le registre courant pour calculer ou confirmer cette preuve.
 
 La session 009 réserve toutefois `SpawnOrder` et `CancelRequest` au rôle
-wrapper ; le rôle client négocié ne les admet pas. Maicie ouvre donc une
+wrapper ; le rôle client négocié ne les admet pas. le service compagnon ouvre donc une
 connexion fraîche déclarée comme wrapper pour chaque émission ou reprise
 d'activation. Cette compatibilité ne constitue pas une autorisation : dans le
 modèle local coopératif v1, tout processus du même compte capable d'ouvrir ce
-rôle peut émettre le même ordre. L'approbation locale Maicie est une preuve de
-gouvernance durable dans Maicie, mais elle n'est pas opposable côté Bridget.
+rôle peut émettre le même ordre. L'approbation locale service compagnon est une preuve de
+gouvernance durable dans le service compagnon, mais elle n'est pas opposable côté Bridget.
 Cette limite est assumée en v1 et n'est pas masquée par le digest.
 
 ## Arrêt et responsabilité des processus
 
-Maicie ne possède aucun processus enfant, groupe de processus, timer actif ou
+le service compagnon ne possède aucun processus enfant, groupe de processus, timer actif ou
 boucle de relance. Interrompre une commande ne détruit pas les transactions
 déjà commitées ; elles seront réconciliées au prochain appel. L'arrêt, la
 reprise et la persistance des équipiers appartiennent exclusivement au daemon
@@ -133,7 +133,7 @@ Bridget.
 
 ## Frontière d'état : deux vérités explicites
 
-Une remise locale durable exprime ce que Maicie a préparé et appris d'une
+Une remise locale durable exprime ce que le service compagnon a préparé et appris d'une
 issue. Un snapshot de transport exprime ce que Bridget ou l'abonnement ACP a
 observé, avec source, séquence et fraîcheur. Aucun des deux ne remplace l'autre.
 
@@ -147,9 +147,9 @@ une décision explicite.
 - aucune sélection par LLM, interprétation sémantique ou échelle implicite de
   compétence ; la cible est explicite ou issue d'une égalité stricte de tags ;
 - aucun DAG, scheduler, cron, GUI ou TUI dans ce périmètre ;
-- aucun daemon Maicie résident ; la boucle `maicie serve` est une évolution v2
+- aucun daemon le service compagnon résident ; la boucle `guichet serve` est une évolution v2
   séparée, pas un effet secondaire de `status` ou de la relève guichet ;
-- aucun lancement, arrêt ou redémarrage d'agent par Maicie ;
+- aucun lancement, arrêt ou redémarrage d'agent par le service compagnon ;
 - les permissions ACP sont affichées comme décisions automatiques déjà prises
   par Bridget, jamais comme demandes humaines en attente ;
 - l'activation ne dispose pas encore d'un budget global unique couvrant toute
@@ -157,7 +157,7 @@ une décision explicite.
   donc se cumuler, contrairement à la voie de délégation ;
 - modèle local coopératif mono-utilisateur, sans frontière d'autorisation
   hostile entre processus du même compte.
-- capacité `maicie_guichet` bornant le guichet, sans droit implicite par nom
+- capacité `guichet_v1` bornant le guichet, sans droit implicite par nom
   déclaré et sans identité cryptographique opposable en v1.
 
 ## Conséquences
@@ -165,7 +165,7 @@ une décision explicite.
 ### Positives
 
 - Bridget reste un transport petit, réutilisable et multifournisseur.
-- Maicie peut évoluer ou être remplacée sans migrer l'état de livraison
+- le service compagnon peut évoluer ou être remplacée sans migrer l'état de livraison
   Bridget.
 - Les crashs entre commit et accusé ne créent ni délégation ni activation en
   double.
@@ -181,7 +181,7 @@ une décision explicite.
 
 ## Alternatives écartées
 
-- **Réintégrer Maicie dans le daemon Bridget** : couplage fort, cycle de
+- **Réintégrer le service compagnon dans le daemon Bridget** : couplage fort, cycle de
   publication commun et transport alourdi.
 - **Reprendre le superviseur historique** : pipeline rigide, cycle de
   worktrees et fournisseur imposés.

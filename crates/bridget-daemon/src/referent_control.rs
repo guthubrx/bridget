@@ -1,7 +1,7 @@
 //! État de contrôle du référent (SPEC-087) : pause de l'autonomie et plafond
 //! d'objectifs auto-générés.
 //!
-//! Le daemon est le seul écrivain. Maicie lit l'état à chaque relève et n'en
+//! Le daemon est le seul écrivain. le service compagnon lit l'état à chaque relève et n'en
 //! garde aucune copie. Tout puits d'effet autonome du daemon passe par
 //! [`admit_autonomous_effect`] : un puits qui ne l'appelle pas est un défaut,
 //! pas une limite acceptée (ADR 027).

@@ -7,7 +7,7 @@
 ## Contexte
 
 Bridget garantit le transport durable, l'identité des instances, les
-générations et le parc. Maicie garantit les objectifs, délégations, décisions
+générations et le parc. le service compagnon garantit les objectifs, délégations, décisions
 et outboxes métier. Les adaptateurs exposent les événements de Codex, Claude et
 ACP. Cursor est déjà un fournisseur déclaré utilisant l'ACP maintenu par Cursor
 et ne nécessite aucun adaptateur séparé.
@@ -20,14 +20,14 @@ ou un tour fournisseur.
 
 Le code officiel Codex distingue explicitement thread, tour, item, mailbox,
 steering, interruption, reprise et graphe d'agents. Ces concepts sont utiles,
-mais le goal Codex ne remplace pas la coordination durable Maicie et ses
+mais le goal Codex ne remplace pas la coordination durable service compagnon et ses
 garanties multi-fournisseurs.
 
 ## Décision proposée
 
 L'architecture comporte trois plans :
 
-1. **Plan de mission Maicie** : objectifs, délégations, décisions, évaluations,
+1. **Plan de mission le service compagnon** : objectifs, délégations, décisions, évaluations,
    clôtures et politiques métier.
 2. **Plan de contrôle Bridget** : soumissions, livraisons, files, exécutions,
    agents, propriété, interruptions, reprise et état runtime.
@@ -36,7 +36,7 @@ L'architecture comporte trois plans :
    utilise app-server, Claude utilise stream-json et Cursor utilise le transport
    ACP commun.
 
-Les bases Bridget et Maicie restent privées et séparées. Les échanges passent
+Les bases Bridget et le service compagnon restent privées et séparées. Les échanges passent
 par des contrats publics versionnés. Une projection n'est jamais une source de
 vérité supplémentaire.
 
@@ -53,7 +53,7 @@ description de la pensée des agents.
   durable.
 - La reprise native peut être utilisée sans imposer Codex aux autres
   fournisseurs.
-- Maicie conserve sa remplaçabilité et son autorité métier.
+- le service compagnon conserve sa remplaçabilité et son autorité métier.
 - Les budgets et continuations automatiques peuvent être ajoutés après preuve
   fiable d'inactivité et d'usage.
 
@@ -62,16 +62,16 @@ description de la pensée des agents.
 - Deux machines d'état supplémentaires doivent être persistées et migrées.
 - Les contrats publics et leurs versions augmentent la discipline de release.
 - Les adaptateurs doivent publier des capacités et corrélations plus riches.
-- La suppression de la dépendance daemon vers Maicie demande une migration
+- La suppression de la dépendance daemon vers le service compagnon demande une migration
   progressive des projections existantes.
 - La période de compatibilité maintient temporairement des projections anciennes
   et nouvelles.
 
 ## Alternatives rejetées
 
-- **Fusionner Maicie et Bridget** : double autorité, migrations couplées et
+- **Fusionner le service compagnon et Bridget** : double autorité, migrations couplées et
   perte de remplaçabilité.
-- **Remplacer Maicie par le goal Codex** : modèle lié à un thread et
+- **Remplacer le service compagnon par le goal Codex** : modèle lié à un thread et
   insuffisant pour les délégations et décisions multi-fournisseurs.
 - **Adopter un moteur générique de workflow** : charge cognitive et surface de
   panne sans besoin prouvé.

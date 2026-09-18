@@ -24,7 +24,7 @@ impl SubmissionState {
     }
 }
 
-/// Etat runtime canonique. Il ne décrit ni le métier Maicie ni le transport.
+/// Etat runtime canonique. Il ne décrit ni le métier le service compagnon ni le transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionState {
@@ -90,7 +90,7 @@ pub enum ExecutionTransitionError {
     },
 }
 
-/// Travail logique accepté par Bridget. Les références Maicie sont opaques.
+/// Travail logique accepté par Bridget. Les références le service compagnon sont opaques.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkSubmission {
     pub submission_id: String,

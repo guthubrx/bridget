@@ -1,6 +1,6 @@
 //! Boîte de réception humaine (SPEC-087).
 //!
-//! Table transport, au même titre que le guichet : le daemon et Maicie y
+//! Table transport, au même titre que le guichet : le daemon et le service compagnon y
 //! déposent, seul le référent tranche, le producteur relève les décisions
 //! sans rien marquer et n'acquitte qu'après avoir appliqué durablement. Un
 //! plantage entre relève et application relit la même décision.
@@ -43,7 +43,7 @@ fn state_in_clause() -> String {
 }
 
 fn producer_in_clause() -> String {
-    let quoted: Vec<String> = [HumanInboxProducer::Daemon, HumanInboxProducer::Maicie]
+    let quoted: Vec<String> = [HumanInboxProducer::Daemon, HumanInboxProducer::Guichet]
         .into_iter()
         .map(|producer| format!("'{}'", sql_literal(producer)))
         .collect();
@@ -637,7 +637,7 @@ mod tests {
             subject,
             context: r#"{"summary":"chaîne épuisée","attempts":2}"#,
             options,
-            producer: HumanInboxProducer::Maicie,
+            producer: HumanInboxProducer::Guichet,
             now: 100,
         }
     }
@@ -656,7 +656,7 @@ mod tests {
             assert!(ddl.contains(&format!("'{}'", kind.as_sql())), "{ddl}");
         }
         assert!(
-            ddl.contains("'closed_self'") && ddl.contains("'maicie'"),
+            ddl.contains("'closed_self'") && ddl.contains("'guichet'"),
             "{ddl}"
         );
     }
@@ -756,7 +756,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(
-            pending_decisions(&conn, HumanInboxProducer::Maicie, 10)
+            pending_decisions(&conn, HumanInboxProducer::Guichet, 10)
                 .unwrap()
                 .is_empty()
         );
@@ -764,8 +764,8 @@ mod tests {
             .unwrap()
             .unwrap();
         let decision_id = resolved.decision.unwrap().decision_id;
-        let first = pending_decisions(&conn, HumanInboxProducer::Maicie, 10).unwrap();
-        let second = pending_decisions(&conn, HumanInboxProducer::Maicie, 10).unwrap();
+        let first = pending_decisions(&conn, HumanInboxProducer::Guichet, 10).unwrap();
+        let second = pending_decisions(&conn, HumanInboxProducer::Guichet, 10).unwrap();
         assert_eq!(first.len(), 1, "la relève ne marque rien");
         assert_eq!(first, second);
         assert_eq!(first[0].decision_id, decision_id);
@@ -782,7 +782,7 @@ mod tests {
         );
         assert_eq!(ack(&conn, "inconnue", 400).unwrap(), None);
         assert!(
-            pending_decisions(&conn, HumanInboxProducer::Maicie, 10)
+            pending_decisions(&conn, HumanInboxProducer::Guichet, 10)
                 .unwrap()
                 .is_empty()
         );

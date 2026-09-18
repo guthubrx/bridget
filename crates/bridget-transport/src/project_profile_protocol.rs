@@ -14,7 +14,7 @@ pub enum ProjectResourceKind {
 
 pub const PROJECT_PROFILE_CONTRACT_VERSION: u16 = 1;
 
-/// Host resolution request before a local Maicie approval.
+/// Host resolution request before a local le service compagnon approval.
 /// The proposal carries declarative references only, never a secret value or
 /// a source revision claimed by the client.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

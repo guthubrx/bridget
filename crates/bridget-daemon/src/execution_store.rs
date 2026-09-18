@@ -398,7 +398,7 @@ impl ExecutionStore {
     /// prompt à partir d'un résumé ou d'une heuristique.
     /// SPEC-087 : une remise issue d'un focus du référent passe avant le
     /// travail ordinaire dans la file d'exécution. Le fait vient des
-    /// références du message (`focus:<objective_id>`), posées par Maicie.
+    /// références du message (`focus:<objective_id>`), posées par le service compagnon.
     pub fn queue_priority_for(message: &bridget_core::BridgetMessage, requested: i64) -> i64 {
         if message
             .references

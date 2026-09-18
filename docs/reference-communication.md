@@ -5,7 +5,7 @@ identités, les messages, les demandes suivies et les faits de livraison ;
 CLI, MCP et observation de journal sont des accès à cette même autorité.
 
 **Cette reprise est centrée sur la communication.** Pas de GUI, de serveur web,
-de runtime Docker/projet ni d'implémentation Maicie dans ce produit. Maicie peut
+de runtime Docker/projet ni d'implémentation le service compagnon dans ce produit. le service compagnon peut
 rester un service extérieur utilisant le protocole public. La voie principale
 utilise les pilotes natifs Codex/Claude ou ACP ; tmux n'est pas requis.
 
@@ -82,7 +82,7 @@ Le contrat 094 décrit une liste fermée de douze outils Bridget :
 d'artefacts et les six ajouts `bridget_rename`, `bridget_dnd`, `bridget_domain`,
 `bridget_runtime`, `bridget_status`, `bridget_control_status`. Ils utilisent la
 même autorité ; ce catalogue n'est ni une approbation MCP globale, ni une
-autorisation automatique des outils Maicie. Avec MCP, répondre avec `to`, `body`
+autorisation automatique des outils du guichet. Avec MCP, répondre avec `to`, `body`
 et `in_reply_to`. La [skill livrée](skills/bridget/SKILL.md) contient les exemples
 et la conduite de reprise ; son
 [inventaire 094](skills/bridget/references/commandes.md) classe chaque commande
@@ -414,7 +414,7 @@ seule une authentification du daemon.
 
 Le lancement, l'arrêt et la relance restent des commandes CLI explicitement
 autorisées, pas des outils MCP de supervision. Toujours lire le reçu et le profil
-effectif : connecté ne signifie pas autorisé à écrire. Les outils Maicie encore
+effectif : connecté ne signifie pas autorisé à écrire. Les outils du guichet encore
 annoncés sont une façade vers un service extérieur, non une dépendance pour
 communiquer. Les artefacts restent inertes et n'ouvrent aucune interface graphique.
 
@@ -479,7 +479,7 @@ détaillent l'abonnement, sa prolongation/annulation, le partage avec un relecte
 et les alertes de fichiers. Aucun nouveau profil ni formulaire à remplir.
 
 Bridget sait transmettre un extrait exact du journal et prévenir un agent d'un
-fait observable. Ces fonctions sont indépendantes de T3 et de Maicie : elles
+fait observable. Ces fonctions sont indépendantes de T3 et du service compagnon : elles
 n'ajoutent ni mandat, ni validation obligatoire, ni verrou sur les fichiers.
 Remplacer les UUID d'exemple par ceux de `bridget agents --json` :
 

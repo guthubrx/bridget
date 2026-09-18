@@ -71,7 +71,7 @@ fn deliver_and_retry(mcp: &mut McpProcess, peer: &mut Client, example: &Value) -
 }
 
 #[test]
-fn exemples_skill_envoient_repondent_et_cloturent_sans_maicie() {
+fn exemples_skill_envoient_repondent_et_cloturent_sans_service_compagnon() {
     let root = test_root("089-skill");
     let daemon = spawn_daemon(&root, None);
     let mut actor = register_agent_as(&socket(&root), ACTOR, "089-skill-a");

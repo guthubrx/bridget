@@ -7,10 +7,10 @@
 ## Contexte
 
 L'approbation d'activation d'un profil exige aujourd'hui un terminal
-interactif : Maicie vérifie que son entrée ET sa sortie sont un terminal,
+interactif : le service compagnon vérifie que son entrée ET sa sortie sont un terminal,
 affiche la définition à autoriser, puis attend que l'humain tape « oui ».
 Aucune option ne permet de contourner ce contrôle
-(`plugins/maicie/src/main.rs`, `confirm_local_profile_approval`).
+(`plugins/guichet/src/main.rs`, `confirm_local_profile_approval`).
 
 La garantie tient par **impossibilité** et non par confiance : un agent qui
 tourne sur cette machine peut exécuter des commandes, écrire des fichiers et

@@ -7,7 +7,7 @@
 ## Contexte
 
 SPEC-065 a créé une politique de racines fail-closed chargée depuis un fichier
-protégé et limité les mutations projet à la CLI Maicie. Cette limite appartenait
+protégé et limité les mutations projet à la CLI le service compagnon. Cette limite appartenait
 à la tranche de fondation sans interface projet.
 
 L'utilisateur veut créer, importer, reconnecter et retirer des projets depuis
@@ -22,7 +22,7 @@ Les racines restent contrôlées par le daemon. Toute modification est validée,
 atomique, versionnée, rechargée et attestée. Une racine excluant un projet actif
 ne peut pas être retirée.
 
-Maicie conserve ProjectIdentity et la saga. L'UI n'accède jamais à sa base et
+le service compagnon conserve ProjectIdentity et la saga. L'UI n'accède jamais à sa base et
 ne reçoit aucune commande shell libre. MCP, agents et API générique restent
 exclus.
 

@@ -1,4 +1,4 @@
-//! Consommateur externe par le protocole public, sans dépendance à Maicie.
+//! Consommateur externe par le protocole public, sans dépendance à le service compagnon.
 //! Les six scénarios 015 conservés, replay brut et droits par connexion.
 use bridget_core::BridgetMessage;
 use bridget_transport::protocol::{
@@ -260,7 +260,7 @@ fn request(
 }
 
 fn service(home: &Path, issuer_scope: &str) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
-    service_with_capabilities(home, issuer_scope, vec![ServiceCapability::MaicieGuichet])
+    service_with_capabilities(home, issuer_scope, vec![ServiceCapability::GuichetV1])
 }
 
 fn service_with_capabilities(
@@ -287,7 +287,7 @@ fn service_with_capabilities(
             &mut writer,
             WrapperToDaemon::ServiceHello {
                 version: SERVICE_CONTRACT_VERSION,
-                service: "maicie".to_string(),
+                service: "guichet".to_string(),
                 issuer_scope: issuer_scope.to_string(),
                 capabilities,
             },
@@ -391,7 +391,7 @@ fn delegate_est_admis_comme_depot_sans_etre_confondu_avec_un_succes_metier() {
         request_id: "delegate-admission-request".to_string(),
         issued_at: now,
         from: PRODUCER.to_string(),
-        to: "maicie".to_string(),
+        to: "guichet".to_string(),
         operation: ServiceRequestOperation::Delegate,
         payload: ServiceRequestPayload::Delegate {
             goal: format!("lot dépendant de {prerequisite}"),
@@ -462,7 +462,7 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
         .unwrap()
         .as_secs() as i64;
 
-    // Un vrai producteur protocolaire dépose pendant l'absence de Maicie.
+    // Un vrai producteur protocolaire dépose pendant l'absence du service compagnon.
     let (mut wrapper_reader, mut wrapper_writer) = connect(&home);
     assert!(matches!(
         request(
@@ -492,7 +492,7 @@ fn crash_reel_claim_rejoue_fifo_et_refuse_le_detenteur_perime() {
         request_id: "gate-request-1".to_string(),
         issued_at: now,
         from: PRODUCER.to_string(),
-        to: "maicie".to_string(),
+        to: "guichet".to_string(),
         operation: ServiceRequestOperation::DeliveryReport,
         payload: ServiceRequestPayload::DeliveryReport {
             objective_id: "objective-1".to_string(),
@@ -696,13 +696,13 @@ fn depot_cli_reel_mesure_head_et_remote_au_lieu_de_copier_le_mandat() {
         ),
         DaemonToWrapper::Registered { .. }
     ));
-    let (mut maicie_reader, mut maicie_writer) = connect(&home);
+    let (mut guichet_reader, mut guichet_writer) = connect(&home);
     assert!(matches!(
         request(
-            &mut maicie_reader,
-            &mut maicie_writer,
+            &mut guichet_reader,
+            &mut guichet_writer,
             WrapperToDaemon::Register {
-                agent_type: "maicie".to_string(),
+                agent_type: "guichet".to_string(),
                 identity_version: 2,
                 agent_id: COORDINATOR.to_string(),
                 host: None,
@@ -711,7 +711,7 @@ fn depot_cli_reel_mesure_head_et_remote_au_lieu_de_copier_le_mandat() {
                 mode: None,
                 location: None,
                 os: None,
-                instance_id: Some("maicie-review-instance".to_string()),
+                instance_id: Some("guichet-review-instance".to_string()),
                 domain: None,
                 turn_in_progress: false,
                 journal_available: None,
@@ -724,8 +724,8 @@ fn depot_cli_reel_mesure_head_et_remote_au_lieu_de_copier_le_mandat() {
     tracked.reply_timeout = Some(60);
     assert!(matches!(
         request(
-            &mut maicie_reader,
-            &mut maicie_writer,
+            &mut guichet_reader,
+            &mut guichet_writer,
             WrapperToDaemon::Send(tracked.clone())
         ),
         DaemonToWrapper::Ack { .. }
@@ -1059,13 +1059,13 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
         ),
         DaemonToWrapper::Registered { .. }
     ));
-    let (mut maicie_reader, mut maicie_writer) = connect(&home);
+    let (mut guichet_reader, mut guichet_writer) = connect(&home);
     assert!(matches!(
         request(
-            &mut maicie_reader,
-            &mut maicie_writer,
+            &mut guichet_reader,
+            &mut guichet_writer,
             WrapperToDaemon::Register {
-                agent_type: "maicie".to_string(),
+                agent_type: "guichet".to_string(),
                 identity_version: 2,
                 agent_id: COORDINATOR.to_string(),
                 host: None,
@@ -1074,7 +1074,7 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
                 mode: None,
                 location: None,
                 os: None,
-                instance_id: Some("maicie-instance".to_string()),
+                instance_id: Some("guichet-instance".to_string()),
                 domain: None,
                 turn_in_progress: false,
                 journal_available: None,
@@ -1087,8 +1087,8 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
     tracked.reply_timeout = Some(60);
     assert!(matches!(
         request(
-            &mut maicie_reader,
-            &mut maicie_writer,
+            &mut guichet_reader,
+            &mut guichet_writer,
             WrapperToDaemon::Send(tracked.clone())
         ),
         DaemonToWrapper::Ack { .. }
@@ -1140,7 +1140,7 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
     let (mut service_reader, mut service_writer) = service(&home, SERVICE_SCOPE);
     assert_ne!(
         SCOPE, SERVICE_SCOPE,
-        "le scope de dépôt n'est pas la session Maicie"
+        "le scope de dépôt n'est pas la session service compagnon"
     );
     // Mutation discriminante : rétablir la comparaison avec le scope négocié
     // du service refuse ce lookup, puis le claim et la réponse du dépôt tiers.
@@ -1224,8 +1224,8 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
     ));
     assert!(matches!(
         request(
-            &mut maicie_reader,
-            &mut maicie_writer,
+            &mut guichet_reader,
+            &mut guichet_writer,
             WrapperToDaemon::ListRequests { sender: COORDINATOR.to_string(), limit: 10 },
         ),
         DaemonToWrapper::RequestList { requests }
@@ -1258,8 +1258,8 @@ fn depot_cli_reel_et_reponse_guichet_cloturent_une_demande_liee_une_seule_fois()
     daemon.kill();
     drop(service_reader);
     drop(service_writer);
-    drop(maicie_reader);
-    drop(maicie_writer);
+    drop(guichet_reader);
+    drop(guichet_writer);
     drop(recipient_reader);
     drop(recipient_writer);
     let restarted = DaemonGuard::start(&home);

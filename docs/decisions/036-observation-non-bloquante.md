@@ -31,7 +31,7 @@ sur signaux d'écritures confirmées, même hôte/chemin lexical ; ni shell, ni
 symlink/casse canonisés, ni analyse Git. Un avertissement n'empêche rien.
 
 Pas de migration DB, dépendance externe, verrou de fichier, formulaire, mandat,
-moteur de règles général ni couche Maicie/T3 obligatoire.
+moteur de règles général ni couche le service compagnon/T3 obligatoire.
 
 ## Vérification
 

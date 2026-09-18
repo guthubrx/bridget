@@ -4881,7 +4881,7 @@ fn codex_mcp_override(server: &serde_json::Value) -> Result<String, Box<dyn std:
     // Codex `auto` sollicite une approbation pour un outil sans annotations.
     // Avec approval_policy=never (équipier), cela interdit même bridget_who.
     // Le lancement Bridget autorise seulement la surface sûre et fermée,
-    // pas tous les outils présents ou futurs du serveur (Maicie notamment).
+    // pas tous les outils présents ou futurs du serveur (le service compagnon notamment).
     // `approve`, et non `auto`, est le mode explicite Codex 0.153.4.
     let tools = BRIDGET_SAFE_MCP_TOOLS
         .map(|name| format!("{name}={{approval_mode=\"approve\"}}"))
@@ -6277,7 +6277,7 @@ mod prompt_tests {
         assert!(context.contains(" M tracked.txt"), "{context}");
         assert!(context.contains("n'atteste PAS la capacité d'exécution"));
         assert!(!context.contains("ALERTE règle 6"));
-        assert!(!context.contains("Mission Maicie"));
+        assert!(!context.contains("Mission service compagnon"));
         assert!(!context.contains("objectif_id="));
         assert!(!context.contains("reprends la mission"));
         fs::remove_dir_all(root).unwrap();
@@ -6332,7 +6332,7 @@ mod prompt_tests {
         assert!(context.contains("Worktree : indisponible"));
         assert!(context.contains("Identité figée"));
         assert!(!context.contains("branche="));
-        assert!(!context.contains("Mission Maicie"));
+        assert!(!context.contains("Mission service compagnon"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -7187,7 +7187,7 @@ mod reconnect_tests {
     }
 
     fn idempotent_message(id: &str) -> bridget_core::BridgetMessage {
-        let mut message = bridget_core::BridgetMessage::new("maicie", "equipier", "tâche");
+        let mut message = bridget_core::BridgetMessage::new("guichet", "equipier", "tâche");
         message.id = id.to_string();
         message
     }
@@ -7544,7 +7544,7 @@ mod reconnect_tests {
             );
         }
         assert!(policy.contains("default_tools_approval_mode=\"prompt\""));
-        assert!(!policy.contains("maicie_delegate={approval_mode=\"approve\"}"));
+        assert!(!policy.contains("guichet_delegate={approval_mode=\"approve\"}"));
     }
 
     #[test]

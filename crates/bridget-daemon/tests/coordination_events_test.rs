@@ -170,7 +170,7 @@ fn spawn_daemon(home: &Path, sync: Option<&Path>) -> TestDaemon {
 
 fn agent_id(name: &str) -> &'static str {
     match name {
-        "maicie" => "00000000-0000-4000-8000-000000000161",
+        "guichet" => "00000000-0000-4000-8000-000000000161",
         "codex-1" => "00000000-0000-4000-8000-000000000162",
         _ => panic!("agent hors fixture"),
     }
@@ -262,17 +262,17 @@ fn coordination_service(home: &Path) -> (BufReader<UnixStream>, BufWriter<UnixSt
             &mut writer,
             WrapperToDaemon::ServiceHello {
                 version: SERVICE_CONTRACT_VERSION,
-                service: "maicie".to_string(),
+                service: "guichet".to_string(),
                 issuer_scope: SERVICE_SCOPE.to_string(),
                 capabilities: vec![
-                    ServiceCapability::MaicieGuichet,
+                    ServiceCapability::GuichetV1,
                     ServiceCapability::CoordinationEventsV1,
                 ],
             },
         ),
         DaemonToWrapper::ServiceWelcome { capabilities, .. }
             if capabilities == vec![
-                ServiceCapability::MaicieGuichet,
+                ServiceCapability::GuichetV1,
                 ServiceCapability::CoordinationEventsV1,
             ]
     ));
@@ -299,17 +299,17 @@ fn coordination_stream_service(home: &Path) -> (BufReader<UnixStream>, BufWriter
             &mut writer,
             WrapperToDaemon::ServiceHello {
                 version: SERVICE_CONTRACT_VERSION,
-                service: "maicie".to_string(),
+                service: "guichet".to_string(),
                 issuer_scope: SERVICE_SCOPE.to_string(),
                 capabilities: vec![
-                    ServiceCapability::MaicieGuichet,
+                    ServiceCapability::GuichetV1,
                     ServiceCapability::CoordinationEventsV2,
                 ],
             },
         ),
         DaemonToWrapper::ServiceWelcome { capabilities, .. }
             if capabilities == vec![
-                ServiceCapability::MaicieGuichet,
+                ServiceCapability::GuichetV1,
                 ServiceCapability::CoordinationEventsV2,
             ]
     ));
@@ -362,7 +362,7 @@ fn reminder_sent_est_atteste_apres_ecriture_et_releve_au_meme_event_id() {
     register(
         &mut sender_reader,
         &mut sender_writer,
-        "maicie",
+        "guichet",
         "coordination-sender",
     );
     register(
@@ -374,7 +374,7 @@ fn reminder_sent_est_atteste_apres_ecriture_et_releve_au_meme_event_id() {
     let (mut service_reader, service_writer) = coordination_service(&home);
 
     let mut tracked =
-        BridgetMessage::new(agent_id("maicie"), agent_id("codex-1"), "rapport attendu");
+        BridgetMessage::new(agent_id("guichet"), agent_id("codex-1"), "rapport attendu");
     tracked.reply = true;
     tracked.reply_timeout = Some(3);
     let request_id = tracked.id.clone();
@@ -488,7 +488,7 @@ fn fait_de_coordination_inconnu_est_refuse_avant_toute_negociation() {
     ));
     writeln!(
         writer,
-        "{{\"type\":\"ServiceHello\",\"version\":1,\"service\":\"maicie\",\"issuer_scope\":\"016_service_abcdef0123456789abcdef0123456789\",\"capabilities\":[\"maicie_guichet\",\"coordination_events_v1\"],\"future\":true}}"
+        "{{\"type\":\"ServiceHello\",\"version\":1,\"service\":\"guichet\",\"issuer_scope\":\"016_service_abcdef0123456789abcdef0123456789\",\"capabilities\":[\"guichet_v1\",\"coordination_events_v1\"],\"future\":true}}"
     )
     .unwrap();
     writer.flush().unwrap();
@@ -512,7 +512,7 @@ fn texte_relance_ne_fabrique_jamais_un_fait_de_coordination() {
     register(
         &mut sender_reader,
         &mut sender_writer,
-        "maicie",
+        "guichet",
         "coordination-text-sender",
     );
     register(
@@ -528,7 +528,7 @@ fn texte_relance_ne_fabrique_jamais_un_fait_de_coordination() {
             &mut sender_reader,
             &mut sender_writer,
             WrapperToDaemon::Send(BridgetMessage::new(
-                agent_id("maicie"),
+                agent_id("guichet"),
                 agent_id("codex-1"),
                 "relance : ce texte ordinaire ne constitue pas un fait",
             )),
@@ -582,7 +582,7 @@ fn reprise_cursee_survit_aux_crashs_reels_et_conserve_les_octets() {
     register(
         &mut sender_reader,
         &mut sender_writer,
-        "maicie",
+        "guichet",
         "cursor-sender",
     );
     register(
@@ -591,7 +591,7 @@ fn reprise_cursee_survit_aux_crashs_reels_et_conserve_les_octets() {
         "codex-1",
         "cursor-recipient",
     );
-    let mut tracked = BridgetMessage::new(agent_id("maicie"), agent_id("codex-1"), "rappel cursé");
+    let mut tracked = BridgetMessage::new(agent_id("guichet"), agent_id("codex-1"), "rappel cursé");
     tracked.reply = true;
     tracked.reply_timeout = Some(3);
     assert!(matches!(
@@ -635,7 +635,7 @@ fn reprise_cursee_survit_aux_crashs_reels_et_conserve_les_octets() {
     register(
         &mut sender_reader,
         &mut sender_writer,
-        "maicie",
+        "guichet",
         "cursor-sender-restarted",
     );
     register(
@@ -645,7 +645,7 @@ fn reprise_cursee_survit_aux_crashs_reels_et_conserve_les_octets() {
         "cursor-recipient-restarted",
     );
     let mut tracked = BridgetMessage::new(
-        agent_id("maicie"),
+        agent_id("guichet"),
         agent_id("codex-1"),
         "rappel durable cursé",
     );

@@ -406,7 +406,7 @@ fn spec094_claude_recoit_la_liste_fermee_des_outils_bridget_autorises() {
         !argv.contains("mcp__bridget__*"),
         "bypass global interdit: {argv}"
     );
-    assert!(!argv.contains("mcp__bridget__maicie_delegate"));
+    assert!(!argv.contains("mcp__bridget__guichet_delegate"));
     let _ = fs::remove_dir_all(root);
 }
 

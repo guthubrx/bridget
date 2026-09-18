@@ -693,7 +693,8 @@ while IFS= read -r line; do :; done
         }
 
         let id = "silence";
-        let mut message = BridgetMessage::new("maicie", "89000000-0000-4000-8000-000000000804", id);
+        let mut message =
+            BridgetMessage::new("guichet", "89000000-0000-4000-8000-000000000804", id);
         message.id = id.to_string();
         writeln!(
             writer,
@@ -731,7 +732,7 @@ while IFS= read -r line; do :; done
 
         for id in ["en-file", "saturation"] {
             let mut message =
-                BridgetMessage::new("maicie", "89000000-0000-4000-8000-000000000804", id);
+                BridgetMessage::new("guichet", "89000000-0000-4000-8000-000000000804", id);
             message.id = id.to_string();
             writeln!(
                 writer,

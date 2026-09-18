@@ -43,7 +43,7 @@ impl Drop for Fixture {
 
 #[test]
 fn echec_evenement_annule_reply_et_answered_puis_rejoue_les_memes_octets() {
-    for sender in ["maicie", "89000000-0000-4000-8000-000000000002"] {
+    for sender in ["guichet", "89000000-0000-4000-8000-000000000002"] {
         reply_atomic_with_sender(sender);
     }
 }

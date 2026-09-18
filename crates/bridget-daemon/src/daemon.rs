@@ -545,7 +545,7 @@ struct Presence {
     state: String,
     /// Instant où le tour `busy` a commencé (`TurnState true` / Register
     /// `turn_in_progress`). Absent hors busy. Sert à libérer un tour qui
-    /// n'aboutit jamais : sans cela Maicie refuse tout mandat (connected|dnd).
+    /// n'aboutit jamais : sans cela le service compagnon refuse tout mandat (connected|dnd).
     busy_since: Option<Instant>,
     /// Dernière attestation de CAPACITÉ (register, tour, runtime…) — pas le
     /// heartbeat. C'est ce que `last_seen_secs` expose à who / bridget-idle.
@@ -3329,7 +3329,7 @@ impl DaemonState {
 
     /// Libère les tours `busy` plus vieux que notify_timeout + grâce.
     /// Sans TurnState false (tour non abouti), l'agent resterait non mandatable
-    /// indéfiniment : Maicie n'envoie qu'aux connected|dnd.
+    /// indéfiniment : le service compagnon n'envoie qu'aux connected|dnd.
     fn release_stale_busy_turns(&mut self) {
         let busy_ids: Vec<(String, String)> = self
             .presences
@@ -3492,7 +3492,7 @@ impl DaemonState {
                         presence.state.clone()
                     },
                     // Âge de CAPACITÉ (capacity_seen), pas du lien. Honnête à lire ;
-                    // aucune décision maicie/reaper ne s'en sert — elles
+                    // aucune décision de service ou de reaper ne s'en sert — elles
                     // regardent `state`. ACP sans événement de contenu → âge
                     // figé (voir regles-chantier, limites de ce lot).
                     last_seen_secs: presence.capacity_seen.elapsed().as_secs(),
@@ -5235,7 +5235,7 @@ fn guichet_request_is_valid(
             },
         ) => target.is_valid(),
         // SPEC-087 : une origine humaine ou un focus voyagent en v2, sans
-        // cible de revue obligatoire (Maicie la mesure elle-même).
+        // cible de revue obligatoire (le service compagnon la mesure elle-même).
         (
             REVIEW_DELEGATE_CONTRACT_VERSION,
             bridget_transport::protocol::ServiceRequestOperation::Delegate,
@@ -5292,7 +5292,7 @@ fn guichet_request_is_valid(
             },
         ) => {
             // SPEC-087 : forme seulement ; la vérité de l'origine est rejouée par
-            // Maicie, et son droit d'être là est tranché par le dispatch.
+            // le service compagnon, et son droit d'être là est tranché par le dispatch.
             let origin_is_valid = origin.as_ref().is_none_or(|origin| match origin {
                 bridget_transport::protocol::DelegateOrigin::Human {
                     message_id,
@@ -5574,7 +5574,7 @@ fn guichet_coordination_response(event: GuichetCoordinationEvent, version: u16) 
 }
 
 /// Atteste le rappel seulement après l'écriture et le flush effectifs vers son
-/// destinataire. B (persistance Maicie) relève ce fait pour l'observation,
+/// destinataire. B (persistance le service compagnon) relève ce fait pour l'observation,
 /// C (reconcile) le déduplique par `event_id`; aucun consommateur ne calcule
 /// l'instant ni la génération à la place du transport.
 fn attest_reminder_sent(
@@ -6897,7 +6897,7 @@ fn live_notify_timeout_secs(fallback: &AgentRegistry, agent_type: &str) -> u64 {
 
 /// Pose `deadline_at` absolue d'exécution au moment de la
 /// POUSSÉE vers le wrapper. Point unique : couvre Deliver classique ET
-/// DeliverIdempotent (Maicie / reprise après redémarrage). Sans cela, le
+/// DeliverIdempotent (le service compagnon / reprise après redémarrage). Sans cela, le
 /// worker retombe sur `notify_timeout` figé dans fleet.json — encore 600 s
 /// pour les codex absents de agents.json.
 ///
@@ -8993,14 +8993,14 @@ fn handle_human_inbox_deposit(
         subject,
         context,
         options,
-        producer: bridget_transport::protocol::HumanInboxProducer::Maicie,
+        producer: bridget_transport::protocol::HumanInboxProducer::Guichet,
         now: unix_now_secs(),
     };
     match crate::human_inbox::deposit_and_notify(st.store.connection(), request, channel.as_ref()) {
         Ok(Ok(deposited)) => {
             if deposited.created {
                 info!(
-                    "boîte humaine: item {} déposé par Maicie ({})",
+                    "boîte humaine: item {} déposé par le service compagnon ({})",
                     deposited.item_id,
                     kind.as_sql()
                 );
@@ -9104,7 +9104,7 @@ fn handle_human_inbox_decisions(
     let st = state.lock().unwrap_or_else(|e| e.into_inner());
     match crate::human_inbox::pending_decisions(
         st.store.connection(),
-        bridget_transport::protocol::HumanInboxProducer::Maicie,
+        bridget_transport::protocol::HumanInboxProducer::Guichet,
         limit,
     ) {
         Ok(decisions) => DaemonToWrapper::HumanInboxDecisionsBatch { decisions },
@@ -10106,7 +10106,7 @@ fn handle_wrapper_message(
                     reason: ClientRefusal::RoleHandshakeRequired,
                 });
             }
-            // Le nom réservé `maicie` ne donne aucun droit : seule une
+            // Le nom réservé `guichet` ne donne aucun droit : seule une
             // connexion explicitement négociée comme service peut le demander.
             WrapperToDaemon::ServiceHello { .. } => {
                 return Some(DaemonToWrapper::ServiceRejected {
@@ -10252,7 +10252,7 @@ fn handle_wrapper_message(
                             negotiated.version == SERVICE_CONTRACT_VERSION
                                 && negotiated
                                     .capabilities
-                                    .contains(&ServiceCapability::MaicieGuichet)
+                                    .contains(&ServiceCapability::GuichetV1)
                         }) =>
                 {
                     Some(ServiceRefusal::CapabilityRequired)
@@ -11277,7 +11277,7 @@ fn handle_wrapper_message(
                     },
                 });
             }
-            if service != "maicie" {
+            if service != "guichet" {
                 return Some(DaemonToWrapper::ServiceRejected {
                     reason: ServiceRefusal::ReservedServiceRequired,
                 });
@@ -11289,7 +11289,7 @@ fn handle_wrapper_message(
             }
             let canonical_capabilities = matches!(
                 capabilities.as_slice(),
-                [] | [ServiceCapability::MaicieGuichet]
+                [] | [ServiceCapability::GuichetV1]
                     | [ServiceCapability::HumanInboxV1]
                     | [ServiceCapability::ProjectRegistryV1]
                     | [
@@ -11298,24 +11298,24 @@ fn handle_wrapper_message(
                     ]
                     | [ServiceCapability::ProjectProfilesV1]
                     | [
-                        ServiceCapability::MaicieGuichet,
+                        ServiceCapability::GuichetV1,
                         ServiceCapability::ProjectRegistryV1,
                     ]
                     | [
-                        ServiceCapability::MaicieGuichet,
+                        ServiceCapability::GuichetV1,
                         ServiceCapability::CoordinationEventsV1,
                     ]
                     | [
-                        ServiceCapability::MaicieGuichet,
+                        ServiceCapability::GuichetV1,
                         ServiceCapability::CoordinationEventsV1,
                         ServiceCapability::ProjectRegistryV1,
                     ]
                     | [
-                        ServiceCapability::MaicieGuichet,
+                        ServiceCapability::GuichetV1,
                         ServiceCapability::CoordinationEventsV2,
                     ]
                     | [
-                        ServiceCapability::MaicieGuichet,
+                        ServiceCapability::GuichetV1,
                         ServiceCapability::CoordinationEventsV2,
                         ServiceCapability::ProjectRegistryV1,
                     ]
@@ -11333,7 +11333,7 @@ fn handle_wrapper_message(
                     capabilities: capabilities.clone(),
                 },
             );
-            if capabilities.contains(&ServiceCapability::MaicieGuichet) {
+            if capabilities.contains(&ServiceCapability::GuichetV1) {
                 match st.store.guichet_lifecycle_events() {
                     Ok(events) => {
                         let controls = events
@@ -11499,7 +11499,7 @@ fn handle_wrapper_message(
                     },
                 });
             }
-            if to != "maicie" {
+            if to != "guichet" {
                 return Some(DaemonToWrapper::ServiceRejected {
                     reason: ServiceRefusal::ReservedTargetRequired,
                 });
@@ -11601,7 +11601,7 @@ fn handle_wrapper_message(
                     message_id: message_id.clone(),
                     ts: issued_at,
                     sender: UI_HUMAN_SENDER.to_string(),
-                    target: "maicie".to_string(),
+                    target: "guichet".to_string(),
                     body: goal.clone(),
                 };
                 let attestation = bridget_transport::protocol::HumanOriginAttestationFrame {
@@ -11615,7 +11615,7 @@ fn handle_wrapper_message(
                 {
                     let st = state.lock().unwrap_or_else(|e| e.into_inner());
                     let mut human_message =
-                        bridget_core::BridgetMessage::new(UI_HUMAN_SENDER, "maicie", goal);
+                        bridget_core::BridgetMessage::new(UI_HUMAN_SENDER, "guichet", goal);
                     human_message.id = message_id.clone();
                     human_message.origin = Some(bridget_core::MessageOrigin::Human);
                     let conv_key = format!("{}|{}", human_message.from, human_message.to);
@@ -17620,7 +17620,7 @@ mod presence_tests {
             request_id: format!("request-version-{version}"),
             issued_at: unix_timestamp(),
             from: "jc2".to_string(),
-            to: "maicie".to_string(),
+            to: "guichet".to_string(),
             operation,
             payload,
         };
@@ -17695,7 +17695,7 @@ mod presence_tests {
     }
 
     #[test]
-    fn service_maicie_negocie_sa_capacite_sans_lier_le_nom_au_droit() {
+    fn service_service_negocie_sa_capacite_sans_lier_le_nom_au_droit() {
         let (state, config) = state_with_registered_agent("service-guichet");
         let shared = Arc::new(Mutex::new(state));
         let scope = "015_scope_0123456789abcdef0123456789abcdef";
@@ -17704,7 +17704,7 @@ mod presence_tests {
         // autorisait le guichet, ce claim serait accepté au lieu du refus.
         assert!(matches!(
             handle_wrapper_message(
-                "wrapper-maicie",
+                "wrapper-guichet",
                 WrapperToDaemon::Register {
                     agent_type: "codex".to_string(),
                     identity_version: 2,
@@ -17726,7 +17726,7 @@ mod presence_tests {
         ));
         assert!(matches!(
             handle_wrapper_message(
-                "wrapper-maicie",
+                "wrapper-guichet",
                 WrapperToDaemon::GuichetClaimNext {
                     version: SERVICE_CONTRACT_VERSION
                 },
@@ -17756,7 +17756,7 @@ mod presence_tests {
                 "service-without-capability",
                 WrapperToDaemon::ServiceHello {
                     version: SERVICE_CONTRACT_VERSION,
-                    service: "maicie".to_string(),
+                    service: "guichet".to_string(),
                     issuer_scope: scope.to_string(),
                     capabilities: Vec::new(),
                 },
@@ -17806,14 +17806,14 @@ mod presence_tests {
                 "service-capable",
                 WrapperToDaemon::ServiceHello {
                     version: SERVICE_CONTRACT_VERSION,
-                    service: "maicie".to_string(),
+                    service: "guichet".to_string(),
                     issuer_scope: scope.to_string(),
-                    capabilities: vec![ServiceCapability::MaicieGuichet],
+                    capabilities: vec![ServiceCapability::GuichetV1],
                 },
                 &shared,
             ),
             Some(DaemonToWrapper::ServiceWelcome { capabilities, .. })
-                if capabilities == vec![ServiceCapability::MaicieGuichet]
+                if capabilities == vec![ServiceCapability::GuichetV1]
         ));
         assert!(matches!(
             handle_wrapper_message(
@@ -17907,7 +17907,7 @@ mod presence_tests {
 
         let no_capability = WrapperToDaemon::ServiceHello {
             version: SERVICE_CONTRACT_VERSION,
-            service: "maicie".to_string(),
+            service: "guichet".to_string(),
             issuer_scope: "015_scope_0123456789abcdef0123456789abcdef".to_string(),
             capabilities: Vec::new(),
         };
@@ -18401,7 +18401,7 @@ mod presence_tests {
         message
     }
 
-    /// ORACLE — SendIdempotent reply=false (tous les mandats Maicie) doit
+    /// ORACLE — SendIdempotent reply=false (tous les mandats le service compagnon) doit
     /// poser deadline_at au DEFAULT natif pour un type ABSENT de agents.json
     /// (codex). Mutant : omettre stamp dans defer_idempotent_delivery → None.
     /// Mutant : reposer 600 (fleet figé) → timeout hors 2700.
@@ -18433,7 +18433,7 @@ mod presence_tests {
             "89000000-0000-4000-8000-000000000200",
         );
 
-        let mut message = idempotent_message("mandat Maicie sans reply");
+        let mut message = idempotent_message("mandat le service compagnon sans reply");
         message.reply = false;
         assert!(
             message.deadline_at.is_none(),
@@ -18532,7 +18532,7 @@ mod presence_tests {
         original.reply_timeout = Some(20);
         original.deadline_at = Some(123_456);
         let mut renamed = original.clone();
-        renamed.from = "maicie-renommee".to_string();
+        renamed.from = "guichet-renomme".to_string();
         renamed.reply_timeout = Some(90);
         assert_eq!(
             canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &original, 123_000),
@@ -20125,7 +20125,7 @@ mod presence_tests {
     }
 
     /// ORACLE — client du protocole public : ListAgents atteste le busy libéré,
-    /// puis SendIdempotent livre le corps exact au wrapper (aucun métier Maicie).
+    /// puis SendIdempotent livre le corps exact au wrapper (aucun métier le service compagnon).
     #[test]
     fn tour_non_abouti_redevient_mandatable_et_le_mandat_parvient() {
         use std::os::unix::fs::DirBuilderExt;
@@ -23793,7 +23793,7 @@ mod presence_tests {
             request_id: request_id.to_string(),
             issued_at: unix_now_secs(),
             from: from.to_string(),
-            to: "maicie".to_string(),
+            to: "guichet".to_string(),
             operation: bridget_transport::protocol::ServiceRequestOperation::Delegate,
             payload,
         }
@@ -23856,7 +23856,7 @@ mod presence_tests {
 
         let mut st = shared.lock().unwrap();
         let now = unix_now_secs();
-        let claim = match st.store.claim_next_guichet("maicie-test", now).unwrap() {
+        let claim = match st.store.claim_next_guichet("guichet-test", now).unwrap() {
             crate::store::GuichetNext::Claimed(claim) => claim,
             other => panic!("dépôt relevable attendu: {other:?}"),
         };
@@ -23881,20 +23881,20 @@ mod presence_tests {
         assert!(message_id.starts_with("hmo-"));
         assert_eq!(observed.message_id, message_id);
         assert_eq!(observed.sender, UI_HUMAN_SENDER);
-        assert_eq!(observed.target, "maicie");
+        assert_eq!(observed.target, "guichet");
         assert_eq!(observed.body, goal);
         assert_eq!(focus.project_id, "project-087");
         assert_eq!(
             attestation.signature,
             bridget_transport::protocol::human_message_content_seal(&observed),
-            "le scellé se recalcule à l'identique côté Maicie"
+            "le scellé se recalcule à l'identique côté service compagnon"
         );
         assert_eq!(attestation.canonical_request_sha256.len(), 64);
         let ledger_rows: i64 = st
             .store
             .connection()
             .query_row(
-                "SELECT COUNT(*) FROM ledger WHERE id = ?1 AND sender = ?2 AND target = 'maicie'",
+                "SELECT COUNT(*) FROM ledger WHERE id = ?1 AND sender = ?2 AND target = 'guichet'",
                 rusqlite::params![message_id, UI_HUMAN_SENDER],
                 |row| row.get(0),
             )
