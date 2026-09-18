@@ -24,3 +24,6 @@ __pycache__/
 .DS_Store
 crates/bridget-daemon/assets/ui/.test-tools/
 crates/bridget-daemon/assets/ui/node_modules/
+
+# Dépôt public généré (passe de confidentialité), non versionné ici
+/.publish/
