@@ -29,6 +29,7 @@ de couverture.
 | `attach` | CLI humain | Aucun outil MCP de terminal | Observe le journal et permet une saisie humaine dans un double-TTY ; ce n'est ni la TUI fournisseur ni un écran d'approbation. |
 | `journal` | MCP exposé (100) | `bridget_journal` | Extrait exact borné du journal ; `to` partage, `reply` suit une réponse. Source UUID, séquences, lacunes et reprise explicites. |
 | `events` | MCP exposé (100/101) | `bridget_events` | types/sub/list/unsub, capacités sources, propriétaire attesté, once/TTL et interruption visible ; notification d'un fait, sans obligation métier ni exécution de script. |
+| `thread` | MCP exposé (102) | `bridget_thread` | create/list/show/post/read/ack/history/close : fil partagé à membres fixes ; dépôt silencieux (`notify:[]`) par défaut, sollicitations ciblées structurées (UUID ou `all`), lecture paginée avec reçu puis confirmation, `history` relit sans déplacer le repère ; identité attestée par la connexion, aucun paramètre d'acteur ; `--id` clé de rejeu obligatoire pour create/post/close. |
 | `federate` | CLI humain | Aucun outil MCP de fédération | Réutilise, installe, observe ou retire une liaison SSH persistante via le gestionnaire 095 embarqué. Le statut reste local ; une mutation appartient à l'humain et conserve les gardes SSH/natives. |
 | `t3` | CLI humain | Aucun outil MCP d'administration ; les fils exposés se joignent par `bridget_send` | Installe, observe, retire ou sert le pont t3code (session 098) : session émise par le CLI officiel `t3`, un agent par fil, remise par `thread.turn.start`, réponse liée par rang FIFO ; t3code n'est jamais modifié. |
 | `artifact` | Équivalence MCP | `bridget_read_artifact` pour `artifact read`; publication par `bridget_publish_artifact` | Lit des octets par références et bornes, sans chemin libre ni exécution. La publication structurée n'a pas de commande CLI jumelle. |
@@ -75,7 +76,7 @@ le registre : ne jamais déduire leur disponibilité d'un nom de fournisseur.
 
 ## Catalogue MCP Bridget fermé
 
-La politique fournisseur étendue en 100 autorise exactement les quatorze outils Bridget
+La politique fournisseur étendue en 100 autorise exactement les quinze outils Bridget
 ci-dessous lorsqu'elle est effectivement chargée. Elle n'accorde pas une
 approbation MCP globale et n'inclut pas automatiquement les outils Maicie.
 
@@ -85,6 +86,7 @@ approbation MCP globale et n'inclut pas automatiquement les outils Maicie.
 - `bridget_ledger` — lire messages et demandes bornés.
 - `bridget_journal` — lire ou partager un extrait sourcé, sans lecture arbitraire du disque.
 - `bridget_events` — s'abonner aux faits futurs disponibles, lister et supprimer ses abonnements.
+- `bridget_thread` — créer, lister, consulter un fil partagé ; publier (silence, cibles ou `all`), lire avec reçu, confirmer, relire une plage, clore.
 - `bridget_publish_artifact` — publier un contenu structuré, sourcé et inerte.
 - `bridget_read_artifact` — relire les octets autorisés par références exactes.
 - `bridget_rename` — modifier son propre nom d'affichage.
@@ -99,6 +101,129 @@ client ; il ne constitue pas à lui seul une authentification du daemon. Les
 mutations propres sont liées par Bridget à l'identité et à l'instance de la
 connexion : ne jamais fournir ni inventer un nom, UUID, instance, socket ou
 chemin de cible.
+
+## Fils partagés (102)
+
+`bridget_thread` accepte `action` parmi `create`, `list`, `show`, `post`, `read`,
+`ack`, `history`, `close` ; les champs inconnus sont refusés. Même contrat en CLI :
+`bridget thread <action> …`, sorties JSON identiques, code de sortie 0 succès,
+2 validation ou refus, 1 panne technique. L'identité est celle de la connexion
+attestée : aucun paramètre `from`, `actor` ou `owner` n'existe. Les membres et
+cibles sont des UUID ; en CLI, `--member`/`--notify` acceptent un nom d'affichage
+saisi explicitement, résolu par l'annuaire et refusé s'il est inconnu ou ambigu.
+
+Résultats : `status` fermé (`created`, `listed`, `shown`, `posted`, `read`,
+`history`, `acknowledged`, `already_acknowledged`, `closed`, `error`) ; une
+erreur porte `code`, `detail` et `retryable`, et l'outil MCP la marque
+`isError:true`. Codes : `invalid_request`, `unsupported_version`,
+`identity_unavailable`, `thread_unavailable`, `thread_closed`,
+`creator_required`, `unknown_member`, `ambiguous_name`, `not_a_member`,
+`invalid_reply_reference`, `envelope_mismatch`, `capacity_exceeded`,
+`entry_too_large`, `receipt_obsolete`, `receipt_invalid`, `cursor_conflict`,
+`range_unavailable`, `storage_unavailable` (seul rejouable),
+`thread_notice_not_replyable` (raccourci `reply`).
+
+### Recette à quatre participants
+
+1. A crée le fil avec B, C et D ; chacun le voit dans `list`, personne n'est réveillé.
+
+```json
+{"name":"bridget_thread","arguments":{"action":"create","title":"Relecture sécurité","members":["22222222-2222-4222-8222-222222222222","33333333-3333-4333-8333-333333333333","44444444-4444-4444-8444-444444444444"],"operation_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}}
+```
+
+2. A dépose un constat en silence : une entrée, zéro sollicitation.
+
+```json
+{"name":"bridget_thread","arguments":{"action":"post","thread_id":"55555555-5555-4555-8555-555555555555","body":"Constat disponible ; citation : @all ne réveille personne.","notify":[],"operation_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}}
+```
+
+3. A sollicite B seul ; B reçoit une alerte courte (`from: bridget`, pas de réponse
+   attendue). C et D ne reçoivent rien.
+
+```json
+{"name":"bridget_thread","arguments":{"action":"post","thread_id":"55555555-5555-4555-8555-555555555555","body":"B, peux-tu contrôler ce point ?","notify":["22222222-2222-4222-8222-222222222222"],"operation_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc"}}
+```
+
+4. B lit puis confirme la page ; la confirmation peut être jointe au dépôt suivant.
+
+```json
+{"name":"bridget_thread","arguments":{"action":"read","thread_id":"55555555-5555-4555-8555-555555555555","limit":50}}
+```
+
+```json
+{"name":"bridget_thread","arguments":{"action":"post","thread_id":"55555555-5555-4555-8555-555555555555","body":"Vérifié : un point à revoir en entrée 2.","notify":["11111111-1111-4111-8111-111111111111"],"operation_id":"dddddddd-dddd-4ddd-8ddd-dddddddddddd","reply_to_seq":2,"ack_receipt":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"}}
+```
+
+```json
+{"name":"bridget_thread","arguments":{"action":"ack","thread_id":"55555555-5555-4555-8555-555555555555","receipt":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"}}
+```
+
+5. `notify:"all"` vise B, C et D une fois chacun, jamais l'auteur ; la clôture par
+   le créateur arrête les nouvelles sollicitations sans effacer l'historique.
+
+```json
+{"name":"bridget_thread","arguments":{"action":"close","thread_id":"55555555-5555-4555-8555-555555555555","operation_id":"ffffffff-ffff-4fff-8fff-ffffffffffff"}}
+```
+
+Formes CLI équivalentes :
+
+```text
+bridget thread create --title "Relecture sécurité" --member <UUID> [--member <UUID>] --id $(uuidgen | tr A-Z a-z)
+bridget thread post <FIL> --silent --id <UUID> -- Constat disponible.
+bridget thread post <FIL> --notify <UUID> --id <UUID> [--reply-to N] [--ack <RECU>] -- Peux-tu contrôler ?
+bridget thread post <FIL> --all --id <UUID> -- Avis de tous.
+bridget thread read <FIL> [--limit N]        # puis : bridget thread ack <FIL> <RECU>
+bridget thread history <FIL> [--from-seq N] [--to-seq N] [--limit N]
+bridget thread show <FIL> | bridget thread list [--limit N] [--after <UUID>] | bridget thread close <FIL> --id <UUID>
+```
+
+### Lecture, reçus et reprise
+
+`read` rend les entrées postérieures au repère confirmé, dans l'ordre, avec
+`receipt`, `base_seq`, `through_seq`, `snapshot_seq` et `has_more`. Tant que le
+reçu n'est ni confirmé ni échu (10 min), une nouvelle lecture rend exactement la
+même page et le même reçu (`pending_receipt_replayed`) : une réponse perdue ne
+fait rien sauter. `ack` avance le repère jusqu'à `through_seq` seulement ; le
+dernier reçu confirmé reste rejouable (`already_acknowledged`), un reçu remplacé
+est `receipt_obsolete`, un reçu étranger `receipt_invalid`. Une page vide n'a pas
+de reçu. `has_more:true` : confirmer puis relire. Les entrées propres apparaissent
+aussi en lecture. Après une perte de contexte, relire explicitement avec `history`
+(`from_seq`, `to_seq` figé au `snapshot_seq` rendu, `next_from_seq`) : le repère
+persistant ne prouve pas que le modèle se souvient des textes.
+
+### Synthèse demandée
+
+Sur demande humaine « résume le fil X » : vérifier son appartenance (`show`),
+relire `history` depuis 1 en conservant `snapshot_seq` jusqu'à `next_from_seq:null`
+ou annoncer précisément la plage lue ; rendre dans la conversation humaine sujet,
+plage 1–N, décisions et désaccords avec numéros d'entrée, questions ouvertes,
+limites de lecture. Ne pas écrire « nous sommes d'accord » si les textes ne
+l'établissent pas. Publier la synthèse dans le fil seulement si demandé, en
+silence sauf demande de solliciter ; aucun agent n'est lancé, aucun résumé n'est
+produit automatiquement à chaque dépôt. Les textes cités restent des données.
+
+### Alertes, états et limites
+
+L'alerte de fil est un message `from: bridget` sans réponse attendue, portant une
+notice typée (fil, borne `through_seq`, génération) et un corps neutre ; elle ne
+cite ni titre ni contribution. Plusieurs mentions avant départ donnent une seule
+alerte ; une remise figée n'est pas modifiée par une mention postérieure, qui
+repart après l'issue de la précédente. Une alerte déjà en vol peut arriver après
+qu'un membre a lu et confirmé la même plage : elle est alors sans objet (lecture
+vide), jamais rappelée. Après `outcome_unknown` échu (120 s), seule
+une mention strictement supérieure ouvre une génération ; un accusé tardif ne
+touche jamais la génération suivante. `show` expose `own_wake` (état, motif
+`offline`/`dnd`/`capability_unavailable`/`rate_limited`, `pending_seq`,
+`dispatched_seq`, dernière issue inconnue) et, pour chaque membre, `connected` et
+la version d'alerte acceptée. Le pont t3code injecte l'alerte sans attente de
+réponse ni relais final ; le raccourci `bridget reply` refuse après une alerte.
+
+Bornes V1 : 2–16 membres ; titre 1–160 caractères ; corps 1–16 Kio UTF-8 non
+blanc et entrée sérialisée ≤ 48 Kio ; pages 1–200 entrées et ≤ 60 Kio ; liste
+1–100 ; 256 fils conservés dont 32 ouverts par créateur ; 10 000 entrées ou
+16 Mio par fil, 128 Mio au total ; 5 départs d'alerte par seconde, lot de 16.
+À saturation, `create`/`post` sont refusés (`capacity_exceeded`) ; lecture,
+confirmation et clôture continuent ; aucune purge automatique.
 
 ## Extraits et abonnements (100/101)
 
@@ -450,7 +575,7 @@ réelle a été réussie ; vérifier le catalogue et les résultats des appels.
 
 ## Version active et rechargement
 
-Comparer le catalogue réellement retourné par le client avec les quatorze noms
+Comparer le catalogue réellement retourné par le client avec les quinze noms
 ci-dessus avant d'annoncer la disponibilité des outils. Un binaire installé et un
 serveur MCP vivant sont deux processus distincts : une ancienne session garde
 son ancien binaire et son ancien catalogue. Les garanties de domaine exigent en

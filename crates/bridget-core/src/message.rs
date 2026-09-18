@@ -108,6 +108,22 @@ pub struct BridgetMessage {
     /// Références durables optionnelles de mission ou délégation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<String>,
+    /// Session 102 : alerte typée d'un fil inter-agents, construite par le seul
+    /// chemin interne du daemon. Absente des messages directs et omise à la
+    /// sérialisation ; un client ne peut pas la forger par `send`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_notice: Option<ThreadNotice>,
+}
+
+/// Métadonnée d'une sollicitation de fil (session 102) : le destinataire lit
+/// lui-même les nouveautés ; l'alerte ne porte ni historique ni titre.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThreadNotice {
+    pub version: u16,
+    pub thread_id: String,
+    pub through_seq: u64,
+    pub generation: u64,
 }
 
 fn default_hops() -> i32 {
@@ -138,6 +154,7 @@ impl BridgetMessage {
             origin: None,
             intent: None,
             references: Vec::new(),
+            thread_notice: None,
         }
     }
 
@@ -164,6 +181,29 @@ impl BridgetMessage {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spec102_thread_notice_absente_par_defaut_et_omise() {
+        let message = super::BridgetMessage::new("a", "b", "corps");
+        assert!(message.thread_notice.is_none());
+        let json = serde_json::to_string(&message).unwrap();
+        assert!(!json.contains("thread_notice"));
+        let old: super::BridgetMessage =
+            serde_json::from_str(r#"{"id":"m","from":"a","to":"b","body":"x"}"#).unwrap();
+        assert!(old.thread_notice.is_none());
+        let typed: super::BridgetMessage = serde_json::from_str(
+            r#"{"id":"m","from":"bridget","to":"b","body":"x","thread_notice":{"version":1,"thread_id":"t","through_seq":3,"generation":2}}"#,
+        )
+        .unwrap();
+        assert_eq!(typed.thread_notice.as_ref().unwrap().through_seq, 3);
+        assert!(
+            serde_json::from_str::<super::BridgetMessage>(
+                r#"{"id":"m","from":"a","to":"b","body":"x","thread_notice":{"version":1,"thread_id":"t","through_seq":3,"generation":2,"body":"forge"}}"#
+            )
+            .is_err(),
+            "champ inconnu refusé dans la notice"
+        );
+    }
+
     use super::*;
 
     #[test]

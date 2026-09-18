@@ -177,6 +177,7 @@ pub fn run() {
         "attach" => cmd_attach(&args[2..]),
         "journal" => cmd_journal(&args[2..]),
         "events" => cmd_events(&args[2..]),
+        "thread" => cmd_thread(&args[2..]),
         "artifact" => cmd_artifact(&args[2..]),
         "spawn" => cmd_spawn(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
@@ -609,6 +610,7 @@ fn print_usage() {
            attach <UUID>          Observe et écrit à un équipier [--from-seq N | --date AAAA-MM-JJ]\n  \
            journal <UUID>         Extrait [--tail N | --from-seq N] [--to UUID] [--reply]\n  \
            events <OP>            types | sub EVENEMENT [--agent UUID] [--file MOTIF] [--once] [--ttl S] | list | unsub ID\n  \
+           thread <OP>            Fils partagés : create | list | show | post | read | ack | history | close (thread --help)\n  \
            spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID] [--posture discovery|development]\n  \
            stop <N>               Arrête un équipier géré\n  \
            relaunch <N>           Relance un équipier géré arrêté\n  \
@@ -828,6 +830,525 @@ fn cmd_events(args: &[String]) {
     println!("{result}");
     if result["status"] == "rejected" {
         std::process::exit(1);
+    }
+}
+
+/// Contexte de réponse laissé par une alerte de fil (format JSON discriminé) ;
+/// les anciennes lignes « expéditeur[TAB]id » restent lues telles quelles.
+fn thread_notice_marker(previous: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(previous.trim()).ok()?;
+    (value["kind"] == "thread_notice")
+        .then(|| value["thread_id"].as_str().map(str::to_owned))
+        .flatten()
+}
+
+const THREAD_USAGE: &str = "usage :\n  \
+  bridget thread create --title TITRE --member UUID|NOM [--member …] --id UUID\n  \
+  bridget thread list [--limit N] [--after UUID]\n  \
+  bridget thread show THREAD\n  \
+  bridget thread post THREAD (--silent | --notify UUID|NOM [--notify …] | --all) --id UUID [--reply-to N] [--ack RECU] -- TEXTE\n  \
+  bridget thread read THREAD [--limit N]\n  \
+  bridget thread ack THREAD RECU\n  \
+  bridget thread history THREAD [--from-seq N] [--to-seq N] [--limit N]\n  \
+  bridget thread close THREAD --id UUID\n\n\
+Un dépôt --silent ne réveille personne ; --notify vise des membres, --all tous les autres membres.\n\
+Recevoir une alerte n'est pas lire ; lire (read) n'est pas confirmer (ack) : confirmer chaque page reçue.\n\
+--id est une clé de rejeu à préparer avant l'appel (uuidgen) et à réutiliser à l'identique après une coupure.\n\
+Sorties JSON ; code de sortie 0 succès, 2 validation ou refus, 1 panne technique.";
+
+/// Session 102 : famille `bridget thread`, même contrat que l'outil MCP.
+fn cmd_thread(args: &[String]) {
+    if matches!(
+        args.first().map(String::as_str),
+        None | Some("--help") | Some("-h") | Some("help")
+    ) {
+        println!("{THREAD_USAGE}");
+        std::process::exit(if args.is_empty() { 2 } else { 0 });
+    }
+    let action = parse_thread_args(args, &resolve_thread_name).unwrap_or_else(|error| {
+        eprintln!("{THREAD_USAGE}");
+        eprintln!("erreur: {error}");
+        std::process::exit(2);
+    });
+    let identity = crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
+        eprintln!(
+            "bridget thread : {} : {}",
+            error.code(),
+            error.remediation()
+        );
+        std::process::exit(1);
+    });
+    let result = crate::communication::client::thread_request(
+        &identity.name,
+        &identity.instance_id,
+        &socket_path(),
+        bridget_transport::protocol::ThreadRequest {
+            version: bridget_transport::protocol::THREAD_CONTRACT_VERSION,
+            request: action,
+        },
+    )
+    .unwrap_or_else(|error| {
+        eprintln!("bridget thread : {error}");
+        std::process::exit(1);
+    });
+    println!("{}", result.result);
+    if result.result["status"] == "error" {
+        std::process::exit(2);
+    }
+}
+
+/// Résout un nom d'affichage saisi explicitement via l'annuaire ; un nom
+/// inconnu ou porté par plusieurs agents est refusé, jamais choisi.
+fn resolve_thread_name(name: &str) -> Result<String, String> {
+    let agents = match send_control_to_daemon(WrapperToDaemon::ListAgents) {
+        Ok(DaemonToWrapper::AgentList { agents }) => agents,
+        Ok(_) => return Err("annuaire indisponible : donner l'UUID".to_string()),
+        Err(error) => return Err(format!("annuaire indisponible ({error}) : donner l'UUID")),
+    };
+    resolve_name_in_directory(
+        name,
+        agents
+            .iter()
+            .map(|agent| (agent.display_name.as_str(), agent.agent_id.as_str())),
+    )
+}
+
+fn resolve_name_in_directory<'a>(
+    name: &str,
+    directory: impl Iterator<Item = (&'a str, &'a str)>,
+) -> Result<String, String> {
+    let mut matches: Vec<&str> = directory
+        .filter(|(display_name, _)| *display_name == name)
+        .map(|(_, agent_id)| agent_id)
+        .collect();
+    matches.sort_unstable();
+    matches.dedup();
+    match matches.as_slice() {
+        [] => Err(format!(
+            "membre inconnu « {name} » : donner l'UUID de l'agent"
+        )),
+        [single] => Ok((*single).to_string()),
+        several => Err(format!(
+            "nom ambigu « {name} » ({} agents) : donner l'UUID de l'agent",
+            several.len()
+        )),
+    }
+}
+
+#[derive(Default)]
+struct ThreadArgs {
+    positionals: Vec<String>,
+    single: std::collections::BTreeMap<&'static str, String>,
+    multi: std::collections::BTreeMap<&'static str, Vec<String>>,
+    flags: std::collections::BTreeSet<&'static str>,
+    text: Option<String>,
+}
+
+const THREAD_SINGLE_OPTIONS: [&str; 8] = [
+    "--title",
+    "--id",
+    "--limit",
+    "--after",
+    "--reply-to",
+    "--ack",
+    "--from-seq",
+    "--to-seq",
+];
+const THREAD_MULTI_OPTIONS: [&str; 2] = ["--member", "--notify"];
+const THREAD_FLAGS: [&str; 2] = ["--silent", "--all"];
+
+fn collect_thread_args(args: &[String]) -> Result<ThreadArgs, String> {
+    let mut parsed = ThreadArgs::default();
+    let mut index = 0;
+    while index < args.len() {
+        let argument = args[index].as_str();
+        if argument == "--" {
+            let rest = &args[index + 1..];
+            if rest.is_empty() {
+                return Err("thread : texte manquant après --".to_string());
+            }
+            parsed.text = Some(rest.join(" "));
+            break;
+        }
+        if let Some(option) = THREAD_SINGLE_OPTIONS.iter().find(|o| **o == argument) {
+            if parsed.single.contains_key(option) {
+                return Err(format!("thread : option répétée {option}"));
+            }
+            let value = option_value(args, &mut index, option)?;
+            parsed.single.insert(option, value);
+        } else if let Some(option) = THREAD_MULTI_OPTIONS.iter().find(|o| **o == argument) {
+            let value = option_value(args, &mut index, option)?;
+            parsed.multi.entry(option).or_default().push(value);
+        } else if let Some(flag) = THREAD_FLAGS.iter().find(|f| **f == argument) {
+            if !parsed.flags.insert(flag) {
+                return Err(format!("thread : option répétée {flag}"));
+            }
+        } else if argument.starts_with('-') && argument.len() > 1 {
+            return Err(unknown_argument("thread", argument));
+        } else {
+            parsed.positionals.push(argument.to_string());
+        }
+        index += 1;
+    }
+    Ok(parsed)
+}
+
+fn thread_positive(parsed: &ThreadArgs, option: &str) -> Result<Option<u64>, String> {
+    match parsed.single.get(option) {
+        None => Ok(None),
+        Some(value) => value
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value > 0)
+            .map(Some)
+            .ok_or_else(|| format!("thread : {option} attend un entier strictement positif")),
+    }
+}
+
+fn thread_members(
+    parsed: &ThreadArgs,
+    option: &'static str,
+    resolver: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<Vec<String>, String> {
+    let mut members = Vec::new();
+    for value in parsed.multi.get(option).into_iter().flatten() {
+        if crate::threads::canonical_uuid(value).is_some() {
+            members.push(value.clone());
+        } else {
+            members.push(resolver(value)?);
+        }
+    }
+    Ok(members)
+}
+
+/// Analyse stricte : sous-commande, options nommées, texte après `--`.
+/// Les noms explicitement saisis sont résolus par `resolver` ; un UUID
+/// canonique est transmis tel quel. Aucun --from, aucun chemin, aucun script.
+fn parse_thread_args(
+    args: &[String],
+    resolver: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<bridget_transport::protocol::ThreadAction, String> {
+    use bridget_transport::protocol::{ThreadAction, ThreadNotify, ThreadNotifyAll};
+    let (subcommand, rest) = args.split_first().ok_or("thread : sous-commande requise")?;
+    let parsed = collect_thread_args(rest)?;
+    let allowed: &[&str] = match subcommand.as_str() {
+        "create" => &["--title", "--member", "--id"],
+        "list" => &["--limit", "--after"],
+        "show" | "ack" => &[],
+        "post" => &[
+            "--silent",
+            "--notify",
+            "--all",
+            "--id",
+            "--reply-to",
+            "--ack",
+        ],
+        "read" => &["--limit"],
+        "history" => &["--from-seq", "--to-seq", "--limit"],
+        "close" => &["--id"],
+        other => return Err(format!("thread : sous-commande inconnue « {other} »")),
+    };
+    for used in parsed
+        .single
+        .keys()
+        .chain(parsed.multi.keys())
+        .chain(parsed.flags.iter())
+    {
+        if !allowed.contains(used) {
+            return Err(format!("thread {subcommand} : option {used} non admise"));
+        }
+    }
+    if parsed.text.is_some() && subcommand != "post" {
+        return Err(format!("thread {subcommand} : texte après -- non admis"));
+    }
+    let positional = |index: usize, name: &str| -> Result<String, String> {
+        parsed
+            .positionals
+            .get(index)
+            .cloned()
+            .ok_or_else(|| format!("thread {subcommand} : {name} requis"))
+    };
+    let expected_positionals = match subcommand.as_str() {
+        "create" | "list" => 0,
+        "ack" => 2,
+        _ => 1,
+    };
+    if parsed.positionals.len() > expected_positionals {
+        return Err(format!(
+            "thread {subcommand} : argument superflu « {} »",
+            parsed.positionals[expected_positionals]
+        ));
+    }
+    let id = || -> Result<String, String> {
+        parsed.single.get("--id").cloned().ok_or_else(|| {
+            format!(
+                "thread {subcommand} : --id UUID requis (clé de rejeu à préparer avant l'appel)"
+            )
+        })
+    };
+    let limit =
+        thread_positive(&parsed, "--limit")?.map(|value| value.min(u64::from(u32::MAX)) as u32);
+    Ok(match subcommand.as_str() {
+        "create" => ThreadAction::Create {
+            title: parsed
+                .single
+                .get("--title")
+                .cloned()
+                .ok_or("thread create : --title requis")?,
+            members: thread_members(&parsed, "--member", resolver)?,
+            operation_id: id()?,
+        },
+        "list" => ThreadAction::List {
+            limit,
+            after_thread_id: parsed.single.get("--after").cloned(),
+        },
+        "show" => ThreadAction::Show {
+            thread_id: positional(0, "THREAD")?,
+        },
+        "post" => {
+            let thread_id = positional(0, "THREAD")?;
+            let silent = parsed.flags.contains("--silent");
+            let all = parsed.flags.contains("--all");
+            let targets = thread_members(&parsed, "--notify", resolver)?;
+            let choices = usize::from(silent) + usize::from(all) + usize::from(!targets.is_empty());
+            if choices != 1 {
+                return Err(
+                    "thread post : choisir exactement un mode parmi --silent, --notify, --all"
+                        .to_string(),
+                );
+            }
+            let body = parsed
+                .text
+                .clone()
+                .ok_or("thread post : texte requis après --")?;
+            ThreadAction::Post {
+                thread_id,
+                body,
+                notify: if all {
+                    ThreadNotify::All(ThreadNotifyAll::All)
+                } else {
+                    ThreadNotify::Targets(targets)
+                },
+                operation_id: id()?,
+                reply_to_seq: thread_positive(&parsed, "--reply-to")?,
+                ack_receipt: parsed.single.get("--ack").cloned(),
+            }
+        }
+        "read" => ThreadAction::Read {
+            thread_id: positional(0, "THREAD")?,
+            limit,
+        },
+        "ack" => ThreadAction::Ack {
+            thread_id: positional(0, "THREAD")?,
+            receipt: positional(1, "RECU")?,
+        },
+        "history" => ThreadAction::History {
+            thread_id: positional(0, "THREAD")?,
+            from_seq: thread_positive(&parsed, "--from-seq")?,
+            to_seq: thread_positive(&parsed, "--to-seq")?,
+            limit,
+        },
+        "close" => ThreadAction::Close {
+            thread_id: positional(0, "THREAD")?,
+            operation_id: id()?,
+        },
+        _ => unreachable!("sous-commande validée plus haut"),
+    })
+}
+
+#[cfg(test)]
+mod spec102_cli_thread_tests {
+    use super::*;
+    use bridget_transport::protocol::{ThreadAction, ThreadNotify, ThreadNotifyAll};
+
+    const A: &str = "10200000-0000-4000-8000-00000000000a";
+    const B: &str = "10200000-0000-4000-8000-00000000000b";
+    const T: &str = "33333333-3333-4333-8333-333333333333";
+    const OP: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn resolver(name: &str) -> Result<String, String> {
+        resolve_name_in_directory(
+            name,
+            [
+                ("Bridget-enhance", B),
+                ("Daily", A),
+                ("Daily", B),
+                ("Daily", B),
+            ]
+            .into_iter(),
+        )
+    }
+
+    #[test]
+    fn spec102_v29_marqueur_thread_notice_reconnu_et_ancien_format_conserve() {
+        assert_eq!(
+            thread_notice_marker(
+                r#"{"kind":"thread_notice","thread_id":"33333333-3333-4333-8333-333333333333"}"#
+            )
+            .as_deref(),
+            Some("33333333-3333-4333-8333-333333333333")
+        );
+        assert!(thread_notice_marker("10200000-0000-4000-8000-00000000000a\tmsg-1").is_none());
+        assert!(thread_notice_marker("10200000-0000-4000-8000-00000000000a").is_none());
+        assert!(thread_notice_marker(r#"{"kind":"autre","thread_id":"x"}"#).is_none());
+    }
+
+    #[test]
+    fn spec102_v07_cli_noms_ambigus_refuses() {
+        let unique = parse_thread_args(
+            &args(&[
+                "create",
+                "--title",
+                "T",
+                "--member",
+                "Bridget-enhance",
+                "--id",
+                OP,
+            ]),
+            &resolver,
+        )
+        .unwrap();
+        assert!(
+            matches!(unique, ThreadAction::Create { members, .. } if members == vec![B.to_string()])
+        );
+        let ambiguous = parse_thread_args(
+            &args(&["post", T, "--notify", "Daily", "--id", OP, "--", "x"]),
+            &resolver,
+        )
+        .unwrap_err();
+        assert!(
+            ambiguous.contains("ambigu") && ambiguous.contains("2 agents"),
+            "{ambiguous}"
+        );
+        let unknown = parse_thread_args(
+            &args(&["post", T, "--notify", "Inconnu", "--id", OP, "--", "x"]),
+            &resolver,
+        )
+        .unwrap_err();
+        assert!(unknown.contains("inconnu"), "{unknown}");
+        // Un UUID canonique est une adresse stable : jamais résolu ni renommé.
+        let direct = parse_thread_args(
+            &args(&["post", T, "--notify", A, "--id", OP, "--", "x"]),
+            &|_| Err("annuaire interdit".into()),
+        )
+        .unwrap();
+        assert!(
+            matches!(direct, ThreadAction::Post { notify: ThreadNotify::Targets(t), .. } if t == vec![A.to_string()])
+        );
+    }
+
+    #[test]
+    fn spec102_v33_cli_thread_flags_stricts_et_formes_exactes() {
+        let silent = parse_thread_args(
+            &args(&["post", T, "--silent", "--id", OP, "--", "un", "texte"]),
+            &resolver,
+        )
+        .unwrap();
+        assert!(
+            matches!(silent, ThreadAction::Post { ref body, notify: ThreadNotify::Targets(ref t), .. } if body == "un texte" && t.is_empty())
+        );
+        let all = parse_thread_args(
+            &args(&[
+                "post",
+                T,
+                "--all",
+                "--id",
+                OP,
+                "--reply-to",
+                "3",
+                "--ack",
+                OP,
+                "--",
+                "x",
+            ]),
+            &resolver,
+        )
+        .unwrap();
+        assert!(matches!(
+            all,
+            ThreadAction::Post {
+                notify: ThreadNotify::All(ThreadNotifyAll::All),
+                reply_to_seq: Some(3),
+                ack_receipt: Some(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse_thread_args(&args(&["list", "--limit", "5", "--after", T]), &resolver).unwrap(),
+            ThreadAction::List {
+                limit: Some(5),
+                after_thread_id: Some(_)
+            }
+        ));
+        assert!(matches!(
+            parse_thread_args(&args(&["show", T]), &resolver).unwrap(),
+            ThreadAction::Show { .. }
+        ));
+        assert!(matches!(
+            parse_thread_args(&args(&["read", T, "--limit", "200"]), &resolver).unwrap(),
+            ThreadAction::Read {
+                limit: Some(200),
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse_thread_args(&args(&["ack", T, OP]), &resolver).unwrap(),
+            ThreadAction::Ack { .. }
+        ));
+        assert!(matches!(
+            parse_thread_args(
+                &args(&["history", T, "--from-seq", "2", "--to-seq", "9"]),
+                &resolver
+            )
+            .unwrap(),
+            ThreadAction::History {
+                from_seq: Some(2),
+                to_seq: Some(9),
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse_thread_args(&args(&["close", T, "--id", OP]), &resolver).unwrap(),
+            ThreadAction::Close { .. }
+        ));
+        for invalid in [
+            vec!["post", T, "--id", OP, "--", "x"],
+            vec!["post", T, "--silent", "--all", "--id", OP, "--", "x"],
+            vec!["post", T, "--silent", "--", "x"],
+            vec!["post", T, "--silent", "--id", OP],
+            vec!["post", T, "--silent", "--id", OP, "--id", OP, "--", "x"],
+            vec!["post", T, "--silent", "--id", OP, "--from", A, "--", "x"],
+            vec![
+                "post",
+                T,
+                "--silent",
+                "--id",
+                OP,
+                "--reply-to",
+                "0",
+                "--",
+                "x",
+            ],
+            vec!["create", "--title", "T", "--member", B],
+            vec!["create", "--member", B, "--id", OP],
+            vec!["show"],
+            vec!["show", T, "extra"],
+            vec!["ack", T],
+            vec!["read", T, "--limit", "abc"],
+            vec!["history", T, "--", "texte"],
+            vec!["close", T],
+            vec!["summary", T],
+            vec!["list", "--script", "/tmp/x.sh"],
+        ] {
+            assert!(
+                parse_thread_args(&args(&invalid), &resolver).is_err(),
+                "{invalid:?} aurait dû être refusé"
+            );
+        }
     }
 }
 
@@ -3695,6 +4216,20 @@ fn cmd_reply(args: &[String]) {
             std::process::exit(1);
         }
     };
+    // Session 102 : après une alerte de fil, le dernier contexte est un
+    // marqueur typé ; répondre en direct viserait l'alerte ou un ancien DM.
+    if let Some(thread_id) = thread_notice_marker(&previous) {
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": "error",
+                "code": "thread_notice_not_replyable",
+                "detail": format!("La dernière remise est une alerte du fil {thread_id} : lis-la avec « bridget thread read {thread_id} » et publie avec « bridget thread post » ; un message direct reste possible avec « bridget send --to <UUID> »."),
+                "retryable": false,
+            })
+        );
+        std::process::exit(2);
+    }
     let mut previous_parts = previous.splitn(2, '\t');
     let to = previous_parts.next().unwrap_or_default().to_string();
     let implicit_in_reply_to = previous_parts.next().map(str::to_string);

@@ -151,6 +151,16 @@ Les consignes T3, Claude, Codex, ACP et terminal demandent de ne pas accuser
 réception inutilement. Une nouvelle question explicite reste possible : il
 n'existe pas de filtre sur des mots comme « OK », ni de blocage des envois volontaires.
 
+La session 102 ajoute les fils partagés : un historique commun à des membres
+fixés, des dépôts silencieux par défaut, des sollicitations ciblées structurées
+(`notify` : `[]`, UUID ou `"all"`), une lecture paginée avec reçu puis
+confirmation, et `history` pour relire sans déplacer le repère. L'outil
+`bridget_thread` et la famille `bridget thread` partagent le même contrat ;
+l'alerte de fil est une remise idempotente `from: bridget` sans réponse
+attendue, jamais relayée comme un message direct. Les wrappers annoncent la
+capacité d'alerte après enregistrement ; un client ancien publie et lit mais
+n'est pas sollicité.
+
 La session 101 ajoute le rattachement automatique des appels MCP au fil T3
 réel, lorsque son identité fournisseur et sa filiation de processus sont
 attestées. Le pont lit uniquement les correspondances de sessions nécessaires

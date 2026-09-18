@@ -5,10 +5,10 @@
 
 Spec: 102-fils-inter-agents
 Titre: Discussion commune, mentions ciblées et lecture incrémentale
-Statut: In Progress
+Statut: Implemented (worktree, non fusionné)
 Priorité: P2
-Tâches: 0/32 (0%)
-Tests: 0/36 (0%)
+Tâches: 33/33 (100%)
+Tests: 34/36 (94%) — V30 et V36 documentaires
 
 Résumé:
 - Contexte: les messages directs fonctionnent, mais dispersent les échanges à plusieurs et leur contexte.
@@ -22,10 +22,11 @@ Fichiers:
 <!-- SPEC-FORMALISM:END -->
 
 **Branche** : session-102-fils-inter-agents. **Création** : 2026-09-16.
-**Autorisation actuelle** : documents de préparation uniquement. Le développement
-sera confié à un autre agent ; aucune tâche d'implémentation n'est exécutée ici.
-Le statut In Progress décrit le cycle complet restant à réaliser, pas un début
-de code. Préparation documentaire prête ; les36 scénarios sont planifiés, non testés.
+**Avancement (2026-09-17)** : implémentation réalisée dans le worktree 102 par la
+session bdget ; US1 à US4 livrées, 34 scénarios sur 36 automatisés (V30 et V36
+restent des contrôles documentaires). Restent la recette finale (T030), la revue
+adverse et la remise (T031–T032). Aucun commit, fusion ni déploiement : ces actes
+demandent une autorisation nouvelle.
 
 ## Pourquoi et périmètre
 

@@ -2410,6 +2410,14 @@ pub(crate) fn reply_id(request_id: &str) -> String {
 
 /// Le pont ne relaie la réponse finale que si elle a été demandée.
 pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
+    if let Some(notice) = &message.thread_notice {
+        // Session 102 : sollicitation de fil. Aucun relais de la réponse finale,
+        // aucun accusé : le destinataire lit et publie par bridget_thread.
+        return format!(
+            "🧵 Sollicitation Bridget dans le fil {} (nouveautés jusqu'à {}, id {}) :\n\n{}\n\nConsulte ce fil avec l'outil bridget_thread (read, puis ack) ; publie dans le fil si utile (post). Ne fais pas de réponse directe à cette alerte : le pont ne relaie pas ta réponse finale.",
+            notice.thread_id, notice.through_seq, message.id, message.body
+        );
+    }
     if message.id.starts_with("bridget-observation:") {
         return format!(
             "🔔 Notification Bridget (id {}) :\n\n{}\n\nAucune réponse inter-agent requise ; informe l'utilisateur si utile.",
@@ -2637,6 +2645,55 @@ mod tests {
     }
 
     #[test]
+    fn spec102_v28_alerte_de_fil_injectee_sans_attente_ni_relais() {
+        let (mut worker, peer) = worker099();
+        let mut msg = bridget_core::BridgetMessage::new(
+            "bridget",
+            &worker.agent_id,
+            "Sollicitation dans le fil t, nouveautés jusqu'à 3.",
+        );
+        msg.id = "thread-notice:t:agent:1".into();
+        msg.origin = Some(bridget_core::MessageOrigin::System);
+        msg.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+        msg.thread_notice = Some(bridget_core::ThreadNotice {
+            version: 1,
+            thread_id: "33333333-3333-4333-8333-333333333333".into(),
+            through_seq: 3,
+            generation: 1,
+        });
+        let text = envelope(&msg);
+        assert!(
+            text.contains("bridget_thread")
+                && text.contains("33333333-3333-4333-8333-333333333333")
+        );
+        assert!(text.contains("jusqu'à 3"));
+        assert!(
+            !text.contains("transmettra ta réponse"),
+            "aucun relais de réponse finale"
+        );
+        assert!(
+            !text.starts_with("🔔"),
+            "une sollicitation n'est pas une observation"
+        );
+        let server = http_once099(&worker, 200, r#"{"sequence":1}"#.into());
+        let result = worker.dispatch_with_id(&msg, Some(&msg.id), &summary(None));
+        let request = server.join().unwrap();
+        worker.journal.stop();
+        worker.relay.shutdown();
+        assert!(result.is_ok(), "{result:?}");
+        assert!(
+            request.contains("bridget_thread"),
+            "l'enveloppe typée est injectée"
+        );
+        assert!(
+            worker.state.pending.is_empty(),
+            "aucune attente de message direct"
+        );
+        assert!(ThreadState::load(&worker.state_path).pending.is_empty());
+        assert!(replies105(peer).is_empty(), "aucune réponse automatique");
+    }
+
+    #[test]
     fn spec105_dispatch_sans_demande_ne_cree_aucune_attente() {
         for parent in [None, Some("question")] {
             let (mut worker, _peer) = worker099();
@@ -2777,7 +2834,7 @@ mod tests {
         let (mut recipient, _peer) = worker099();
         let server = http_once099(&recipient, 200, r#"{"sequence":1}"#.into());
         recipient
-            .dispatch_with_id(&response, None, &summary(None))
+            .dispatch_with_id(response, None, &summary(None))
             .unwrap();
         server.join().unwrap();
         assert!(

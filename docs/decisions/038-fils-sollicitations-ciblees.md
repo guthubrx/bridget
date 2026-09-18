@@ -1,6 +1,6 @@
 # ADR038 — Historique partagé et sollicitations ciblées
 
-Date : 2026-09-16. Statut : Proposé, sans code implémenté.
+Date : 2026-09-16. Statut : Accepté — implémenté le 2026-09-17 dans la session 102 (worktree, non fusionné, non déployé).
 Session : 102-fils-inter-agents.
 
 ## Contexte
@@ -33,3 +33,14 @@ de cache gratuit ni d'exactement-une-lecture.
 Limites : membres fixes, autorité Bridget unique, pas de purge/rétention nouvelle,
 pas de résumé automatique, pas de quota de tours métier ni contrôle de consensus.
 Le plan, le modèle et les contrats de la session102 détaillent les invariants.
+
+## Mise en œuvre (2026-09-17)
+
+Réalisée telle que décrite, avec un ajustement : la capacité de réception des
+alertes est annoncée par un fait de connexion `ThreadNoticeCapability` envoyé
+après l'enregistrement, plutôt que par des champs ajoutés à `Register` et
+`Registered` (même sémantique, ~105 constructions littérales évitées). Les
+alertes empruntent la remise idempotente 099 avec une clé
+`thread-wake:<fil>:<membre>:<génération>`, une échéance d'injection de 120 s et
+une exclusion de la réaffectation entre instances. Preuves : spécification 102,
+`implementation.md` et `analysis.md` (Converge).

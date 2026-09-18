@@ -7,6 +7,7 @@
 mod ledger_requests;
 mod project_compat;
 mod service_events;
+pub(crate) mod threads;
 
 pub use ledger_requests::{LedgerEntry, LedgerSearchOutcome, TrackedRequest, UsageDashboardRow};
 pub(crate) use ledger_requests::{
@@ -347,6 +348,13 @@ impl Store {
         )
         .map_err(StoreError::Sqlite)?;
         ensure_project_bindings_runtime_schema(conn)?;
+        threads::ensure_schema(conn)?;
+        // Préflight 102 : tables et index attendus présents, sinon refus explicite.
+        if !threads::schema_ready(conn)? {
+            return Err(StoreError::Invariant(
+                "schéma des fils incomplet après migration",
+            ));
+        }
         Self::ensure_project_audit_schema(conn)?;
         Ok(())
     }

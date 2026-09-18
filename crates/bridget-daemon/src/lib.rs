@@ -52,4 +52,5 @@ pub mod t3code_contract;
 pub(crate) mod t3code_identity;
 #[cfg(feature = "test-support")]
 pub mod test_sync;
+pub mod threads;
 pub mod wrapper;

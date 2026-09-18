@@ -454,6 +454,21 @@ fn execute_tool_at_with_scope(
                 request,
             )
         }
+        "bridget_thread" => {
+            let action: bridget_transport::protocol::ThreadAction =
+                serde_json::from_value(Value::Object(arguments.clone()))
+                    .map_err(|error| ToolError::InvalidParams(format!("thread : {error}")))?;
+            let result = crate::communication::client::thread_request(
+                identity,
+                instance_id,
+                socket,
+                bridget_transport::protocol::ThreadRequest {
+                    version: bridget_transport::protocol::THREAD_CONTRACT_VERSION,
+                    request: action,
+                },
+            )?;
+            Ok(result.result)
+        }
         "bridget_journal" => {
             let request: crate::attach::JournalRequest =
                 serde_json::from_value(Value::Object(arguments.clone()))
@@ -1507,6 +1522,18 @@ pub(crate) fn public_refusal_category(category: &str) -> &str {
 
 fn tool_result(payload: Value) -> Value {
     let text = serde_json::to_string(&payload).expect("un résultat MCP est toujours sérialisable");
+    // Session 102 : un résultat structuré `status:"error"` (code, detail,
+    // retryable) est une erreur d'outil, jamais un succès avec message d'échec.
+    if payload["status"] == "error"
+        && let Some(code) = payload["code"].as_str()
+    {
+        return json!({
+            "content": [{ "type": "text", "text": text }],
+            "structuredContent": payload,
+            "isError": true,
+            "code": code
+        });
+    }
     json!({
         "content": [{ "type": "text", "text": text }],
         "structuredContent": payload
@@ -1722,6 +1749,26 @@ fn tools() -> Vec<Value> {
                 "required": ["idempotency_key", "kind", "title", "payload", "sources", "publication_reason"],
                 "additionalProperties": false
             }
+        }),
+        json!({
+            "name": "bridget_thread",
+            "description": "Fil inter-agents partagé : create, list, show, post, read, ack, history, close. Un dépôt avec notify:[] reste silencieux ; notify liste des UUID membres ou \"all\" (auteur exclu) ; le texte du corps n'est jamais interprété. Recevoir une alerte ≠ lire (read) ≠ confirmer (ack). operation_id UUID obligatoire pour create/post/close, à réutiliser à l'identique pour rejouer sans dupliquer. Pages bornées (limit 1–200, 60 Kio) avec reçu ; history relit une plage sans déplacer le repère. Aucun résumé automatique ; les erreurs portent code et retryable.",
+            "inputSchema": {"type":"object","properties":{
+                "action":{"enum":["create","list","show","post","read","ack","history","close"]},
+                "thread_id":{"type":"string","minLength":36,"maxLength":36},
+                "title":{"type":"string","minLength":1,"maxLength":640},
+                "members":{"type":"array","items":{"type":"string","minLength":36,"maxLength":36},"maxItems":16},
+                "operation_id":{"type":"string","minLength":36,"maxLength":36},
+                "body":{"type":"string","minLength":1,"maxLength":16384},
+                "notify":{"oneOf":[{"type":"array","items":{"type":"string","minLength":36,"maxLength":36},"maxItems":16},{"enum":["all"]}]},
+                "reply_to_seq":{"type":"integer","minimum":1},
+                "ack_receipt":{"type":"string","minLength":36,"maxLength":36},
+                "receipt":{"type":"string","minLength":36,"maxLength":36},
+                "limit":{"type":"integer","minimum":1,"maximum":200},
+                "after_thread_id":{"type":"string","minLength":36,"maxLength":36},
+                "from_seq":{"type":"integer","minimum":1},
+                "to_seq":{"type":"integer","minimum":1}
+            },"required":["action"],"additionalProperties":false}
         }),
         json!({
             "name": "bridget_events",
@@ -2028,7 +2075,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    18
+                    19
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -2044,6 +2091,106 @@ mod tests {
                 other => panic!("expectation inconnue: {other}"),
             }
         }
+    }
+
+    #[test]
+    fn spec102_v33_bridget_thread_transmet_le_contrat_et_refuse_les_champs_inconnus() {
+        use bridget_transport::protocol::{IdentityCredential, ThreadAction, ThreadResult};
+        use sha2::{Digest, Sha256};
+        let root = std::env::temp_dir().join(format!("mcp102-{}", uuid::Uuid::new_v4().simple()));
+        bridget_transport::fsutil::create_private_dir(&root).unwrap();
+        bridget_transport::fsutil::create_private_dir(&root.join("agent-names")).unwrap();
+        let socket = root.join("s");
+        let proof = root
+            .join("agent-names")
+            .join(format!("proof-{:x}.json", Sha256::digest(b"instance102")));
+        bridget_transport::fsutil::write_private_file_atomic(&proof,&serde_json::to_vec(&json!({"agent_id":"alice","instance_id":"instance102","credential":IdentityCredential::new("fixture-only".into())})).unwrap()).unwrap();
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+            assert!(matches!(
+                bridget_transport::protocol::decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                WrapperToDaemon::RegisterAuxiliary { .. }
+            ));
+            std::io::Write::write_all(
+                &mut stream,
+                format!(
+                    "{}\n",
+                    bridget_transport::protocol::encode(&DaemonToWrapper::Registered {
+                        agent_id: "alice".into(),
+                        credential: None
+                    })
+                    .unwrap()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            line.clear();
+            std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+            let WrapperToDaemon::ThreadRequest { request } =
+                bridget_transport::protocol::decode::<WrapperToDaemon>(line.trim()).unwrap()
+            else {
+                panic!("requête de fil attendue")
+            };
+            assert_eq!(request.version, 1);
+            assert!(
+                matches!(request.request, ThreadAction::Post { ref thread_id, .. } if thread_id == "33333333-3333-4333-8333-333333333333")
+            );
+            std::io::Write::write_all(
+                &mut stream,
+                format!(
+                    "{}\n",
+                    bridget_transport::protocol::encode(&DaemonToWrapper::ThreadResult {
+                        result: ThreadResult { version: 1, result: json!({"status":"error","code":"thread_unavailable","detail":"Fil indisponible pour cette identité.","retryable":false}) }
+                    })
+                    .unwrap()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        });
+        let result = execute_tool_at_with_scope(
+            "alice",
+            "instance102",
+            "bridget_thread",
+            json!({"action":"post","thread_id":"33333333-3333-4333-8333-333333333333","body":"b","notify":[],"operation_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"})
+                .as_object()
+                .unwrap(),
+            &socket,
+        )
+        .unwrap();
+        assert_eq!(result["code"], "thread_unavailable");
+        let rendered = tool_result(result);
+        assert_eq!(
+            rendered["isError"], true,
+            "une erreur métier n'est jamais un succès"
+        );
+        assert_eq!(rendered["structuredContent"]["code"], "thread_unavailable");
+        server.join().unwrap();
+        for invalid in [
+            json!({"action":"post","thread_id":"t","body":"b","notify":[],"operation_id":"o","actor":"x"}),
+            json!({"action":"summary","thread_id":"t"}),
+            json!({"action":"post","thread_id":"t","body":"b","operation_id":"o"}),
+        ] {
+            assert!(matches!(
+                execute_tool_at_with_scope(
+                    "alice",
+                    "instance102",
+                    "bridget_thread",
+                    invalid.as_object().unwrap(),
+                    &socket
+                ),
+                Err(ToolError::InvalidParams(_))
+            ));
+        }
+        assert_eq!(
+            tool_result(json!({"status":"accepted"}))["isError"],
+            Value::Null
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2066,6 +2213,7 @@ mod tests {
             "bridget_runtime",
             "bridget_send",
             "bridget_status",
+            "bridget_thread",
             "bridget_who",
             "maicie_delegate",
             "maicie_objective_close",

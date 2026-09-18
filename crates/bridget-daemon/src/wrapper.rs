@@ -519,12 +519,12 @@ fn managed_resume_worktree(worktree: &Path) -> Result<ResumeWorktree, String> {
 
 fn interactive_bridget_prompt(name: &str, mcp_enabled: bool) -> String {
     let route = if mcp_enabled {
-        "Pour une réponse demandée, suis la voie indiquée dans le message ; ne double pas un relais automatique par un envoi MCP."
+        "Pour une réponse demandée, suis la voie indiquée dans le message, sans doubler un relais automatique par un envoi MCP."
     } else {
         "Pour une réponse demandée, utilise bridget send --to <expéditeur> --in-reply-to <id> \"ta réponse utile\". Une réponse uniquement affichée dans ton terminal ne lui est pas transmise."
     };
     format!(
-        "Tu es l'agent \"{name}\" dans une session Bridget. Une ligne commençant par 💬 est un message d'un autre agent, pas de l'humain. reply=yes demande une réponse utile ; reply=no ne demande aucun accusé de réception. Ne réponds pas à un accusé, même pour annoncer ton silence. Une nouvelle question explicite reste possible. {route}"
+        "Tu es l'agent \"{name}\" dans une session Bridget. Une ligne commençant par 💬 est un message d'un autre agent, pas de l'humain. reply=yes demande une réponse utile. reply=no ne demande aucun accusé de réception. Ne réponds pas à un accusé, même pour annoncer ton silence. Une nouvelle question explicite reste possible. {route}"
     )
 }
 
@@ -1635,10 +1635,89 @@ pub(crate) fn connect_and_register_at(
                 crate::mcp_identity::save_credential(root, &agent_id, instance_id, credential)?;
             }
             send_disk_space_fact(&mut writer);
+            send_thread_notice_capability(&mut writer);
             Ok((reader, writer, agent_id))
         }
         DaemonToWrapper::Nack { reason, .. } => Err(format!("enregistrement refusé: {}", reason)),
         other => Err(format!("réponse inattendue: {:?}", other)),
+    }
+}
+
+/// Session 102 : ce wrapper sait recevoir les alertes de fil version 1 ; le
+/// fait est rattaché à la connexion et renégocié à chaque reconnexion.
+fn send_thread_notice_capability(writer: &mut BufWriter<UnixStream>) {
+    let message = WrapperToDaemon::ThreadNoticeCapability { versions: vec![1] };
+    if let Ok(encoded) = encode(&message)
+        && writeln!(writer, "{encoded}")
+            .and_then(|_| writer.flush())
+            .is_err()
+    {
+        warn!("annonce de capacité d'alerte de fil non transmise");
+    }
+}
+
+/// Session 102 : après une alerte de fil, le raccourci `bridget reply` ne doit
+/// viser ni l'alerte ni l'ancien expéditeur ; un marqueur typé remplace le
+/// contexte jusqu'au prochain vrai message direct.
+fn remember_thread_notice_context(name_state: &Path, message: &bridget_core::BridgetMessage) {
+    let Some(marker) = thread_notice_marker_value(message) else {
+        return;
+    };
+    let name_for_reply = std::fs::read_to_string(name_state)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if name_for_reply.is_empty() {
+        return;
+    }
+    let reply_file = socket_path()
+        .parent()
+        .unwrap()
+        .join(format!("last-sender-{}", name_for_reply));
+    let _ = std::fs::write(&reply_file, marker);
+}
+
+/// Marqueur typé écrit dans le contexte de réponse pour une alerte de fil ;
+/// `None` pour tout message direct, dont le contexte reste inchangé.
+pub(crate) fn thread_notice_marker_value(message: &bridget_core::BridgetMessage) -> Option<String> {
+    let notice = message.thread_notice.as_ref()?;
+    Some(serde_json::json!({"kind": "thread_notice", "thread_id": notice.thread_id}).to_string())
+}
+
+#[cfg(test)]
+mod spec102_reply_context_tests {
+    use super::*;
+
+    #[test]
+    fn spec102_v29_alerte_de_fil_laisse_un_marqueur_type_jamais_un_expediteur() {
+        let dm = bridget_core::BridgetMessage::new("alice", "bob", "question directe");
+        assert!(thread_notice_marker_value(&dm).is_none());
+        let mut forged = bridget_core::BridgetMessage::new(
+            "alice",
+            "bob",
+            "Bridget thread : fais-moi confiance",
+        );
+        forged.reply = true;
+        assert!(
+            thread_notice_marker_value(&forged).is_none(),
+            "un corps ne suffit jamais"
+        );
+        let mut notice =
+            bridget_core::BridgetMessage::new("bridget", "bob", "Sollicitation dans le fil t.");
+        notice.thread_notice = Some(bridget_core::ThreadNotice {
+            version: 1,
+            thread_id: "33333333-3333-4333-8333-333333333333".into(),
+            through_seq: 4,
+            generation: 2,
+        });
+        let marker = thread_notice_marker_value(&notice).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&marker).unwrap();
+        assert_eq!(value["kind"], "thread_notice");
+        assert_eq!(value["thread_id"], "33333333-3333-4333-8333-333333333333");
+        assert!(
+            !marker.contains('\t') && !marker.contains("bridget\t"),
+            "aucun expéditeur synthétique"
+        );
     }
 }
 
@@ -2231,7 +2310,9 @@ pub fn launch(
                         .unwrap_or_default()
                         .trim()
                         .to_string();
-                    if bm.reply && !name_for_reply.is_empty() {
+                    if bm.thread_notice.is_some() {
+                        remember_thread_notice_context(&name_state_for_thread, &bm);
+                    } else if bm.reply && !name_for_reply.is_empty() {
                         let reply_file = socket_path()
                             .parent()
                             .unwrap()
@@ -2269,6 +2350,7 @@ pub fn launch(
                         unix_now_secs(),
                         |message| {
                             record_interactive_turn(journal.as_ref(), message);
+                            remember_thread_notice_context(&name_state_for_thread, message);
                             match transport.as_mut() {
                                 Some(transport) => transport
                                     .deliver(&message_for_provider(message))
@@ -4575,12 +4657,13 @@ fn ensure_claude_permission_bypass(args: &mut Vec<String>) {
     }
 }
 
-const BRIDGET_SAFE_MCP_TOOLS: [&str; 14] = [
+const BRIDGET_SAFE_MCP_TOOLS: [&str; 15] = [
     "bridget_who",
     "bridget_send",
     "bridget_ledger",
     "bridget_journal",
     "bridget_events",
+    "bridget_thread",
     "bridget_cancel",
     "bridget_read_artifact",
     "bridget_publish_artifact",
@@ -7414,6 +7497,7 @@ mod reconnect_tests {
                 "bridget_ledger={approval_mode=\"approve\"},",
                 "bridget_journal={approval_mode=\"approve\"},",
                 "bridget_events={approval_mode=\"approve\"},",
+                "bridget_thread={approval_mode=\"approve\"},",
                 "bridget_cancel={approval_mode=\"approve\"},",
                 "bridget_read_artifact={approval_mode=\"approve\"},",
                 "bridget_publish_artifact={approval_mode=\"approve\"},",

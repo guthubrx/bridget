@@ -1,6 +1,6 @@
 ---
 name: bridget
-description: Communiquer et demander une relecture entre agents avec Bridget, partager un extrait de journal, s'abonner aux fins de tour, permissions ou modifications concurrentes. Lancer un équipier uniquement sur demande explicite. MCP ou CLI attesté, sans orchestrateur métier.
+description: Communiquer et demander une relecture entre agents avec Bridget, tenir un fil de discussion partagé avec sollicitations ciblées, partager un extrait de journal, s'abonner aux fins de tour, permissions ou modifications concurrentes. Lancer un équipier uniquement sur demande explicite. MCP ou CLI attesté, sans orchestrateur métier.
 ---
 
 # Communication entre agents
@@ -33,8 +33,8 @@ panne du daemon Bridget ni celle du serveur MCP : ce sont des chemins d'exécuti
 distincts. Ne pas élargir le sandbox pour contourner ce refus.
 
 Pour toute demande hors annuaire, envoi ou réponse liée de base, lire
-[la référence des commandes et accès 094–101](references/commandes.md) avant d'agir.
-Elle contient l'inventaire CLI complet, les quatorze outils Bridget, les procédures
+[la référence des commandes et accès 094–102](references/commandes.md) avant d'agir.
+Elle contient l'inventaire CLI complet, les quinze outils Bridget, les procédures
 d'artefacts et les limites de rechargement.
 
 ## Les demandes du quotidien
@@ -50,6 +50,11 @@ l'annuaire ; demander une précision seulement si plusieurs cibles conviennent.
 | « Préviens-moi quand A finit, maximum 15 minutes » | Vérifier les sources dans `types`, puis `sub` sur A : `turn_ended`, `once:true`, `ttl_secs:900`. |
 | « Prolonge de 10 minutes » / « Arrête la surveillance » | Retrouver l'abonnement par `list`, puis suivre la procédure de remplacement ou `unsub` de la référence. Il n'existe pas d'action `renew`. |
 | « Signale les modifications concurrentes ici » | Vérifier la couverture des écritures puis s'abonner à `file_collision`, limité au chemin absolu demandé ; aucun verrou. |
+| « Ouvre une discussion avec B et C sur ce sujet » | `bridget_thread` `create` avec les UUID des membres et une clé `operation_id` préparée. La création ne réveille personne. |
+| « Dépose ce constat dans le fil, sans déranger » | `post` avec `notify:[]` : l'entrée est conservée, zéro sollicitation ; les autres la liront quand ils consulteront. |
+| « Demande l'avis de B dans le fil » | `post` avec `notify:[<UUID de B>]` ; `"all"` seulement si tous les autres membres sont réellement concernés. |
+| « Qu'y a-t-il de nouveau dans le fil ? » | `read`, prendre connaissance de la page, puis `ack` du reçu (ou `ack_receipt` joint au prochain `post`). Continuer tant que `has_more`. |
+| « Résume le fil X » | `history` par pages depuis 1 en gardant `snapshot_seq`, puis synthèse sourcée par numéros d'entrée dans la conversation humaine ; publier dans le fil seulement si demandé. |
 
 Pour ces observations, lire les **recettes pratiques** de la référence. Confirmer
 l'activation seulement sur un reçu `subscribed`, et annoncer l'échéance réelle.
@@ -103,7 +108,7 @@ espaces blancs. Ne pas comparer naïvement les octets de la saisie brute ; un no
 différent au-delà de cette normalisation, un refus, une erreur ou une réponse
 incohérente ne vaut pas renommage réussi.
 
-Le catalogue fournisseur est une liste fermée de quatorze outils Bridget, pas une
+Le catalogue fournisseur est une liste fermée de quinze outils Bridget, pas une
 approbation MCP globale ni une autorisation Maicie. Un serveur MCP déjà vivant
 garde son ancien binaire et son ancien catalogue : ne pas inventer de commande de
 reload, tuer la conversation ou relancer le fournisseur pour le mettre à jour.
@@ -121,6 +126,52 @@ l'application ; avec `reply=true`, la réponse finale revient comme réponse li�
 l'agent du fil dispose de Bridget. Le fil peut être occupé : la remise attend
 jusqu'à deux minutes, puis échoue nommément. L'installation, le statut et le
 retrait (`bridget t3 install|status|uninstall`) sont des actions humaines.
+
+## Fils partagés : publier, solliciter, lire
+
+Un fil Bridget est un historique commun à des membres fixés à la création (2 à
+16, créateur inclus). Ce n'est ni une conversation fournisseur, ni une file, ni
+un orchestrateur : chaque membre reste dans sa propre session. Trois choix à
+chaque dépôt, jamais devinés dans le texte : `notify:[]` (silence, personne n'est
+réveillé), `notify:[UUID…]` (sollicitation des seuls membres visés) ou
+`notify:"all"` (tous les autres membres, choix explicite). Une citation contenant
+« @all », du code ou un nom ne sollicite personne ; `reply_to_seq` référence une
+entrée sans solliciter son auteur.
+
+Trois faits distincts, à ne jamais confondre : la contribution est **publiée**
+(`posted`, durable), une alerte a été **injectée** chez un membre visé
+(`dispatched`, ou `outcome_unknown` si l'accusé manque), un membre a **confirmé**
+une page (`acknowledged`). Recevoir l'alerte n'est pas lire ; lire (`read`) n'est
+pas confirmer (`ack`) ; confirmer atteste un protocole exécuté, pas une
+compréhension. Le repère n'avance jamais par un envoi, un post sans reçu ni une
+fin de tour. Une page non confirmée peut être relue : pas de promesse
+« exactement une lecture », ni de cache fournisseur gratuit.
+
+Conduite à la réception d'une alerte de fil (message `bridget`, sans réponse
+attendue) : `read` → prendre connaissance → `ack` (ou `ack_receipt` sur le
+`post` suivant) → publier dans le fil seulement si utile ; poursuivre les pages
+tant que `has_more`. Ne pas répondre par message direct à l'alerte ; `bridget
+reply` la refuse (`thread_notice_not_replyable`). Aucun « bien reçu », aucune
+boucle de sondage après rattrapage. Un membre absent, en « ne pas déranger » ou
+avec un client ancien n'est ni lancé ni contourné : l'état visible dans `show`
+(`pending`, `in_flight`, `dispatched`, `refused`, `outcome_unknown`,
+`satisfied_by_read`, `cancelled`) dit ce qui est prouvé.
+
+`create`, `post` et `close` exigent une clé `operation_id` UUID préparée avant
+l'appel et rejouée à l'identique après une coupure : même clé, même enveloppe,
+même reçu, aucune duplication ; une même clé avec un autre contenu est refusée
+(`envelope_mismatch`). Un fil ou une identité non membre répond
+`thread_unavailable`, sans révéler titre ni membres. Bornes : titre 160
+caractères, corps 16 Kio, pages de 1 à 200 entrées et 60 Kio, reçu de lecture
+10 minutes, 256 fils conservés dont 32 ouverts par créateur. `history` relit une
+plage sans reçu ni déplacement du repère ; c'est la voie d'une reprise de contexte
+ou d'une synthèse, jamais un résumé automatique. Recettes et exemples JSON dans
+[la référence des commandes](references/commandes.md#fils-partagés-102).
+
+Compatibilité : l'outil `bridget_thread` fait partie des quinze outils du
+catalogue ; un serveur MCP ancien ne l'expose pas et une capacité d'alerte
+n'atteste pas l'accès à l'outil. Un wrapper ancien publie et lit, mais n'est pas
+sollicité (`capability_unavailable`) ; rien n'est dégradé en message direct.
 
 ## Lancer → mission → observer → arrêter
 
@@ -217,7 +268,7 @@ réponse à une demande `reply=true` ; ils ne filtrent pas son texte. Une répon
 très courte peut être légitime si elle répond réellement à la question.
 
 ```json
-{"name":"bridget_send","arguments":{"to":"<emetteur_uuid>","body":"Tests passés ; aucune régression constatée dans le périmètre vérifié.","in_reply_to":"<message_id_integral>"}}
+{"name":"bridget_send","arguments":{"to":"<emetteur_uuid>","body":"Tests passés ; aucune régression dans le périmètre vérifié.","in_reply_to":"<message_id_integral>"}}
 ```
 
 Au shell, depuis une session enregistrée :

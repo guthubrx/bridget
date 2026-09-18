@@ -111,6 +111,8 @@ tasks. Lecture ciblée principale du protocole, Store et CLI en complément.
 | Mention comme abonnement | créer thread_wakes | once consommé avant livraison, reprise interrupted | 2026-09-16 |
 | Queue nouvelle | réutiliser remise099 | seules intentions métier nouvelles, aucun broker | 2026-09-16 |
 | Résumé | réutiliser agent/history/post | pas de fonction de génération supplémentaire | 2026-09-16 |
+| Négociation de la capacité d'alerte | créer la variante `ThreadNoticeCapability` (fait post-enregistrement) au lieu de champs `Register`/`Registered` | même sémantique (connexion, renégociation), ~105 littéraux évités ; preuve : `wrapper.rs` connect_and_register_at, `daemon.rs` thread_notice_versions | 2026-09-17 |
+| Isolation des tests | réutiliser `tests/support/idempotent.rs` (racine, daemon, clients, preuves) ; ajouter seulement `stop_cooperatively` et `spec102_root` | arrêt coopératif sans SIGKILL exigé par T002 ; le reste existait | 2026-09-17 |
 
 ## Gate avant tasks
 
