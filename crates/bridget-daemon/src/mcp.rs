@@ -982,7 +982,22 @@ fn execute_ledger(
     arguments: &serde_json::Map<String, Value>,
     socket: &Path,
 ) -> Result<Value, ToolError> {
-    reject_unknown_arguments(arguments, &["view", "limit", "requests_scope"])?;
+    match arguments.get("action") {
+        None => {}
+        Some(Value::String(action)) if action == "recent" => {}
+        Some(Value::String(action)) if action == "search" => {
+            return execute_ledger_search(identity, instance_id, arguments, socket);
+        }
+        Some(Value::String(action)) if action == "read" => {
+            return execute_ledger_read(identity, instance_id, arguments, socket);
+        }
+        Some(_) => {
+            return Err(ToolError::InvalidParams(
+                "action doit valoir recent, search ou read".to_string(),
+            ));
+        }
+    }
+    reject_unknown_arguments(arguments, &["action", "view", "limit", "requests_scope"])?;
     let view = arguments
         .get("view")
         .and_then(Value::as_str)
@@ -1032,6 +1047,42 @@ fn execute_ledger(
             RequestsScope::All => "all",
         },
     }))
+}
+
+/// Session 104 : `bridget_ledger action=search`. Le schéma est fermé par
+/// action ; l'identité vient de la connexion enregistrée (099), jamais des
+/// paramètres. Un refus typé du daemon est rendu tel quel (`status=error`).
+fn execute_ledger_search(
+    identity: &str,
+    instance_id: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    let mut fields = arguments.clone();
+    fields.remove("action");
+    let request: bridget_transport::protocol::LedgerSearchRequest =
+        serde_json::from_value(Value::Object(fields))
+            .map_err(|error| ToolError::InvalidParams(format!("search : {error}")))?;
+    let outcome =
+        crate::communication::client::ledger_search(identity, instance_id, socket, request)?;
+    Ok(serde_json::to_value(outcome).expect("résultat de recherche sérialisable"))
+}
+
+/// Session 104 : `bridget_ledger action=read`, relecture exacte par (id, target).
+fn execute_ledger_read(
+    identity: &str,
+    instance_id: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    let mut fields = arguments.clone();
+    fields.remove("action");
+    let request: bridget_transport::protocol::LedgerReadRequest =
+        serde_json::from_value(Value::Object(fields))
+            .map_err(|error| ToolError::InvalidParams(format!("read : {error}")))?;
+    let outcome =
+        crate::communication::client::ledger_read(identity, instance_id, socket, request)?;
+    Ok(serde_json::to_value(outcome).expect("fragment sérialisable"))
 }
 
 fn execute_maicie_delegate(
@@ -1890,17 +1941,30 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_ledger",
-            "description": "Lire les messages et demandes Bridget récents.",
+            "description": "Lire les messages et demandes Bridget récents (action absente ou recent), chercher dans ses propres échanges ou dans un fil dont on est membre (action=search : page bornée, reprise par cursor), ou relire un message exact par id+target (action=read : fragments de 16 Kio, empreinte SHA-256). La recherche est partielle et reprenable : arrêter sur has_more=false ou annoncer une recherche partielle ; ne pas parcourir automatiquement toute l'archive.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "view": { "enum": ["messages", "requests", "both"] },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 20 },
+                    "action": { "enum": ["recent", "search", "read"], "default": "recent" },
+                    "view": { "enum": ["messages", "requests", "both"], "description": "recent seulement." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 20, "description": "recent : 1..200 ; search : 1..50." },
                     "requests_scope": {
                         "enum": ["mine", "all"],
                         "default": "mine",
-                        "description": "mine = demandes où l'appelant est participant (défaut) ; all = toutes les demandes ouvertes."
-                    }
+                        "description": "recent seulement. mine = demandes où l'appelant est participant (défaut) ; all = toutes les demandes ouvertes."
+                    },
+                    "source": { "enum": ["messages", "thread"], "default": "messages", "description": "search : messages de l'appelant ou fil 102 (thread_id requis)." },
+                    "query": { "type": "string", "minLength": 1, "maxLength": 256, "description": "search : 1 à 8 termes, tous requis (sous-chaînes, casse et accents précomposés repliés, guillemets littéraux)." },
+                    "author": { "type": "string", "description": "search : UUID de l'auteur." },
+                    "peer": { "type": "string", "description": "search, source=messages : UUID du correspondant." },
+                    "since": { "type": "integer", "minimum": 0, "description": "search : borne Unix inclusive (secondes)." },
+                    "until": { "type": "integer", "minimum": 0, "description": "search : borne Unix inclusive (secondes)." },
+                    "cursor": { "type": "string", "description": "search : next_cursor reçu, recopié tel quel avec la même query et les mêmes filtres." },
+                    "thread_id": { "type": "string", "description": "search, source=thread : UUID du fil." },
+                    "id": { "type": "string", "maxLength": 256, "description": "read : identifiant du message." },
+                    "target": { "type": "string", "maxLength": 256, "description": "read : destinataire exact (clé physique id+target)." },
+                    "offset": { "type": "integer", "minimum": 0, "default": 0, "description": "read : octet de départ (frontière UTF-8, par ex. match_offset)." },
+                    "digest": { "type": "string", "description": "read : body_digest attendu ; obligatoire dès que offset > 0 ; content_changed si le corps a changé." }
                 },
                 "additionalProperties": false
             }

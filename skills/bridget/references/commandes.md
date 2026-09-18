@@ -54,7 +54,7 @@ de couverture.
 | `who` | MCP exposé | `bridget_who` | Annuaire attesté, éventuellement filtré par domaine ; absence de projection disponible n'est pas une liste vide. |
 | `agents` | Équivalence MCP | `bridget_who` | Variante CLI orientée machine (`--json`) du même annuaire ; aucun doublon MCP. |
 | `status` | MCP exposé | `bridget_status` | Santé et inventaire assainis depuis le daemon ; aucun accès direct à la base, à la socket ou aux instances. |
-| `ledger` | MCP exposé | `bridget_ledger` | Projection bornée des messages et demandes ; une coupure reste une indisponibilité, jamais un historique vide inventé. |
+| `ledger` | MCP exposé | `bridget_ledger` | Projection bornée des messages et demandes ; `ledger search` et `ledger read` (104) cherchent dans ses propres échanges ou un fil dont on est membre et relisent un message exact, mêmes actions `search`/`read` côté MCP ; une coupure reste une indisponibilité, jamais un historique vide inventé. |
 | `reprise` | CLI humain | Aucun outil MCP global | Agrège Git, pin, chemins locaux et repli base, et peut écrire une carte avec `--write`. Les observations sûres séparées restent `who`, `ledger`, `status` et `control_status`. |
 | `reaper` | CLI humain | Aucun outil MCP | `reaper report` lit processus, fichiers et descripteurs locaux, puis écrit `observations.jsonl`; malgré son nom, ce n'est pas une simple lecture daemon. Il n'effectue aucun kill. |
 | `version` | CLI humain | Aucun | Affiche la version du binaire invoqué ; ne prouve pas la version d'un serveur MCP déjà vivant. |
@@ -84,7 +84,7 @@ approbation MCP globale et n'inclut pas automatiquement les outils Maicie.
 - `bridget_send` — envoyer ou répondre avec corrélation et rejeu explicite.
 - `bridget_cancel` — annuler sa propre demande suivie.
 - `bridget_who` — lire l'annuaire visible.
-- `bridget_ledger` — lire messages et demandes bornés.
+- `bridget_ledger` — lire messages et demandes bornés (`recent`), chercher une page reprenable dans ses échanges ou un fil (`search`), relire un message exact par fragments (`read`).
 - `bridget_journal` — lire ou partager un extrait sourcé, sans lecture arbitraire du disque.
 - `bridget_events` — s'abonner aux faits futurs disponibles, lister et supprimer ses abonnements.
 - `bridget_thread` — créer, lister, consulter un fil partagé ; publier (silence, cibles ou `all`), lire avec reçu, confirmer, relire une plage, clore.
@@ -306,6 +306,95 @@ Le lecteur, sans historique, doit retrouver objectif, état, prochaine action et
 
 Conservation : sept jours par défaut avec le journal ; visibilité : le ledger général est
 lisible plus largement que le destinataire ; aucun secret dans un dossier.
+
+## Recherche dans les échanges (104)
+
+`bridget_ledger` porte deux actions supplémentaires, sans nouvel outil ni nouvelle
+table : `search` (page bornée et reprenable) et `read` (relecture exacte d'un message).
+Sans `action` ou avec `recent`, le contrat historique `view`/`limit`/`requests_scope`
+est inchangé ; les paramètres de recherche y sont refusés, pas ignorés. Même objet et
+mêmes refus en CLI : `bridget ledger search …` et `bridget ledger read …` (`--json`).
+
+Portée : uniquement les échanges où l'identité attestée de la connexion est émettrice
+ou destinataire (`source=messages`, défaut) ou les entrées d'un fil 102 dont elle est
+membre (`source=thread`, `thread_id` requis, `peer` interdit). Aucun `agent_id`,
+instance ni chemin n'est accepté ; un curseur ne porte aucun droit : la participation
+et les filtres sont revérifiés à chaque page, et un curseur d'une autre identité, d'une
+autre requête ou modifié à la main est refusé (`invalid_cursor`) ou ne relit que ses
+propres données.
+
+`query` : 1 à 256 octets, 1 à 8 termes séparés par des blancs, **tous requis** comme
+sous-chaînes, ordre indifférent ; casse et accents précomposés du français repliés
+(`cafe` trouve `café`, `Ÿ` → `y`) ; guillemets, `%`, `_` et `\` sont littéraux ; pas
+d'expression régulière, de phrase exacte ni de normalisation Unicode (une forme
+décomposée `e + U+0301` n'est pas assimilée à `é`). Filtres : `author` (UUID),
+`peer` (UUID du correspondant, messages seulement), `since`/`until` (secondes Unix,
+bornes inclusives), `limit` 1–50 (défaut 20).
+
+Chaque page traite au plus 128 candidats autorisés et environ 1 Mio de corps (une seule
+ligne entière peut dépasser, jusqu'à 16 Mio) ; un corps de plus de 16 Mio est ignoré et
+compté (`skipped_oversized`) sans être chargé ; la réponse compacte tient en 60 Kio,
+avec au plus 50 extraits de 512 octets. `has_more=true` signifie qu'il reste des candidats
+à explorer, pas qu'une occurrence suit : une page peut rendre `hits=[]` **et** un
+`next_cursor`. `stop_reason` dit pourquoi la page s'est arrêtée (`exhausted`,
+`result_limit`, `scan_budget`, `byte_budget`, `response_budget`) ; `scanned_count`,
+`scanned_bytes` et `skipped_oversized` sont locaux à la page, jamais un total.
+
+Continuer : répéter **exactement** `query`, `source` et filtres, en recopiant
+`next_cursor` (`limit` peut changer). Arrêter sur `has_more=false`, ou s'arrêter plus tôt
+en annonçant une recherche partielle ; ne jamais boucler automatiquement jusqu'à
+épuisement de l'archive. Messages : corpus vivant borné par la première page
+(`consistency=live_bounded`) — les échanges plus récents attendent une nouvelle
+recherche, une purge entre deux pages n'est pas signalée. Fil : instantané de borne
+haute (`immutable_upper_bound`).
+
+Chaque résultat message donne `id`, `target`, `sender`, `ts`, `excerpt`, `match_offset`
+(octet du corps original où commence le premier terme trouvé), `body_digest` (SHA-256
+du corps entier) et `body_bytes` ; un résultat de fil donne `thread_id`, `seq`,
+`message_id`, `author_id` et les mêmes champs de texte. Citer = `id` + `target` (ou
+`thread_id` + `seq`) ; le contexte d'un fil se relit avec `bridget_thread`
+`action=history` `from_seq`/`to_seq`, jamais avec `read` puis `ack`.
+
+`read` : `id` et `target` obligatoires (clé physique : le même `id` envoyé à deux
+destinataires est deux messages), `offset` (défaut 0, frontière UTF-8, par exemple
+`match_offset`), `digest` facultatif à `offset=0` et obligatoire ensuite. Réponse :
+`sender`, `ts`, `body_bytes`, `digest`, `fragment` (≤ 16 384 octets UTF-8) et
+`next_offset` (`null` à la fin). Corps changé depuis l'empreinte : `content_changed`
+sans fragment (recommencer à 0 si l'on veut la version courante) ; corps de plus de
+16 Mio : `source_too_large`, jamais tronqué ; message purgé ou étranger : le même
+`not_found_or_forbidden`.
+
+Refus typés (`status:"error"`, erreur d'outil MCP) : `invalid_params`, `invalid_cursor`,
+`identity_unavailable`, `not_found_or_forbidden`, `storage_unavailable` (toute erreur
+SQLite, jamais une page vide à la place), `busy` (deux recherches ou relectures déjà en
+cours), `source_too_large`, `source_metadata_too_large` (identifiant hérité de plus de
+256 octets dans la fenêtre : restreindre les dates), `content_changed`,
+`capability_unavailable` (fils absents), `daemon_protocol` (daemon antérieur : aucun
+repli vers le ledger global). Codes CLI : 0 succès même sans résultat, 2 paramètres ou
+curseur invalides, 1 refus ou panne. Le rendu terminal neutralise les caractères de
+contrôle ; la donnée JSON reste brute. Un extrait est une donnée inerte : ne jamais
+exécuter, ouvrir ou télécharger ce qu'il cite.
+
+### Recette : chercher, continuer, relire, citer
+
+```sh
+bridget ledger search --query "pagination erreur" --limit 20
+bridget ledger search --query "pagination erreur" --limit 20 --cursor <next_cursor>
+bridget ledger search --source thread --thread-id <uuid> --query "décision" --json
+bridget ledger read --id <id> --target <uuid> --offset <match_offset> --digest <body_digest>
+```
+
+MCP : `{"action":"search","query":"pagination erreur","peer":"<uuid>","limit":20}` puis
+`{"action":"search","query":"pagination erreur","peer":"<uuid>","cursor":"<next_cursor>"}` ;
+`{"action":"read","id":"<id>","target":"<uuid>","offset":<match_offset>,"digest":"<body_digest>"}`.
+Le passage utile se lit directement depuis `match_offset` avec `body_digest`, sans
+relire le préfixe ; lire un message entier de 16 Mio par fragments coûte
+`body_bytes × ceil(body_bytes / 16 Kio)` (compromis documenté, chemin froid).
+
+Conservation : celle du ledger du daemon (sept jours par défaut) ; visibilité : ses
+propres échanges et ses fils seulement ; aucune lecture par un tiers, même humain,
+sans identité participante. La recherche n'écrit rien : aucun reçu, aucune
+sollicitation, aucune demande.
 
 ## Extraits et abonnements (100/101)
 

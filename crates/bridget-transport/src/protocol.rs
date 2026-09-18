@@ -2687,6 +2687,18 @@ pub enum WrapperToDaemon {
         scope: LedgerScope,
         limit: u16,
     },
+    /// Session 104 : recherche bornée et reprenable dans les échanges de
+    /// l'appelant (messages) ou d'un fil dont il est membre. L'identité vient
+    /// de la connexion attestée, jamais de la requête.
+    #[serde(rename = "ledger_search")]
+    LedgerSearch {
+        request: LedgerSearchRequest,
+    },
+    /// Session 104 : relecture exacte d'un message par sa clé (id, target).
+    #[serde(rename = "ledger_read")]
+    LedgerRead {
+        request: LedgerReadRequest,
+    },
     /// Signal de vie (périodique).
     Heartbeat,
     /// Demander la liste des agents connectés.
@@ -3561,6 +3573,16 @@ pub enum DaemonToWrapper {
         messages: Vec<LedgerMessage>,
         requests: Vec<RequestInfo>,
     },
+    /// Session 104 : page de recherche ou refus typé.
+    #[serde(rename = "ledger_search_result")]
+    LedgerSearchResult {
+        outcome: LedgerSearchOutcomeV1,
+    },
+    /// Session 104 : fragment relu ou refus typé.
+    #[serde(rename = "ledger_read_result")]
+    LedgerReadResult {
+        outcome: LedgerReadOutcomeV1,
+    },
     /// État de contrôle courant (SPEC-087), avec le nombre d'items ouverts de
     /// la boîte humaine : un compte, jamais leur contenu.
     #[serde(rename = "control_state")]
@@ -3681,6 +3703,150 @@ pub struct LedgerMessage {
     /// `en_vol` ⇔ phase SQL `dispatching` ⇔ dépôt CLI « en vol » / in_flight.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery_status: Option<LedgerDeliveryStatus>,
+}
+
+// ---------------------------------------------------------------------------
+// Session 104 — recherche et relecture des échanges
+// ---------------------------------------------------------------------------
+
+/// Source d'une recherche 104 : les messages de l'appelant ou un fil 102.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LedgerSearchSource {
+    #[default]
+    Messages,
+    Thread,
+}
+
+impl LedgerSearchSource {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Messages => "messages",
+            Self::Thread => "thread",
+        }
+    }
+}
+
+/// Requête de recherche 104. Aucun champ n'identifie l'appelant, son
+/// instance ni un chemin de base : la portée vient de la connexion.
+/// Les bornes (query ≤ 256 octets, 1..8 termes, limit 1..50, since ≤ until,
+/// UUID canoniques) sont contrôlées par le daemon, pas par serde.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LedgerSearchRequest {
+    #[serde(default)]
+    pub source: LedgerSearchSource,
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// Correspondant (source messages seulement).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer: Option<String>,
+    /// Bornes Unix inclusives, en secondes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u16>,
+    /// Curseur opaque rendu par la page précédente (hex minuscule).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    /// Exigé pour `source = thread`, interdit sinon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+}
+
+/// Résultat de recherche 104 : un message (clé physique `(id, target)`) ou
+/// une entrée de fil (clé `(thread_id, seq)`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LedgerSearchHit {
+    Message {
+        id: String,
+        target: String,
+        sender: String,
+        ts: i64,
+        excerpt: String,
+        /// Offset en octets du corps original où commence le premier terme
+        /// trouvé (frontière UTF-8) ; à réutiliser tel quel pour `read`.
+        match_offset: u64,
+        /// SHA-256 hexadécimal du corps entier.
+        body_digest: String,
+        body_bytes: u64,
+    },
+    ThreadEntry {
+        thread_id: String,
+        seq: u64,
+        message_id: String,
+        author_id: String,
+        ts: i64,
+        excerpt: String,
+        match_offset: u64,
+        body_digest: String,
+        body_bytes: u64,
+    },
+}
+
+/// Page de recherche : compteurs locaux à cette page, jamais un total.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LedgerSearchPage {
+    pub source: LedgerSearchSource,
+    pub hits: Vec<LedgerSearchHit>,
+    /// Des candidats restent à explorer ; pas forcément des occurrences.
+    pub has_more: bool,
+    pub next_cursor: Option<String>,
+    /// Candidats autorisés consommés dans cette page, filtres compris.
+    pub scanned_count: u32,
+    /// Octets de corps réellement examinés.
+    pub scanned_bytes: u64,
+    pub skipped_oversized: u32,
+    /// exhausted | result_limit | scan_budget | byte_budget | response_budget
+    pub stop_reason: String,
+    /// live_bounded (messages) | immutable_upper_bound (fil)
+    pub consistency: String,
+    pub notices: Vec<String>,
+}
+
+/// Réponse de recherche : succès typé ou refus `{code, reason}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum LedgerSearchOutcomeV1 {
+    Ok(LedgerSearchPage),
+    Error { code: String, reason: String },
+}
+
+/// Relecture d'un message exact : `id` et `target` désignent la clé
+/// physique ; `digest` est facultatif seulement à `offset = 0`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LedgerReadRequest {
+    pub id: String,
+    pub target: String,
+    #[serde(default)]
+    pub offset: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+}
+
+/// Fragment relu (≤ 16 384 octets UTF-8) et empreinte du corps entier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LedgerReadFragment {
+    pub id: String,
+    pub target: String,
+    pub sender: String,
+    pub ts: i64,
+    pub body_bytes: u64,
+    pub digest: String,
+    pub fragment: String,
+    pub next_offset: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum LedgerReadOutcomeV1 {
+    Ok(LedgerReadFragment),
+    Error { code: String, reason: String },
 }
 
 /// Réglages opaques : aucune substitution ni modification de permissions.
@@ -6833,5 +6999,144 @@ mod spec102_thread_contract_tests {
             .is_some(),
             "le rôle attach ne peut pas manipuler les fils"
         );
+    }
+}
+
+#[cfg(test)]
+mod spec104_search_contract_tests {
+    use super::*;
+
+    #[test]
+    fn spec104_requete_de_recherche_stricte_et_sans_identite() {
+        let request: LedgerSearchRequest = serde_json::from_value(serde_json::json!({
+            "query": "pagination erreur",
+            "peer": "11111111-1111-4111-8111-111111111111",
+            "limit": 20
+        }))
+        .unwrap();
+        assert_eq!(request.source, LedgerSearchSource::Messages);
+        assert_eq!(request.limit, Some(20));
+        assert!(request.cursor.is_none());
+        // Aucun champ d'identité, d'instance ou de chemin n'est accepté.
+        for forbidden in [
+            "agent_id",
+            "acting_agent",
+            "instance_id",
+            "db_path",
+            "scope",
+            "project_id",
+        ] {
+            let value = serde_json::json!({"query": "x", forbidden: "y"});
+            assert!(
+                serde_json::from_value::<LedgerSearchRequest>(value).is_err(),
+                "champ {forbidden} accepté"
+            );
+        }
+        // Types stricts : booléen ou flottant refusés pour since/limit.
+        assert!(
+            serde_json::from_value::<LedgerSearchRequest>(
+                serde_json::json!({"query":"x","since":true})
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<LedgerSearchRequest>(
+                serde_json::json!({"query":"x","limit":1.5})
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn spec104_trames_serialisees_par_nom_et_resultats_types() {
+        let frame = WrapperToDaemon::LedgerSearch {
+            request: LedgerSearchRequest {
+                source: LedgerSearchSource::Thread,
+                query: "décision".into(),
+                author: None,
+                peer: None,
+                since: None,
+                until: None,
+                limit: None,
+                cursor: None,
+                thread_id: Some("22222222-2222-4222-8222-222222222222".into()),
+            },
+        };
+        let json = serde_json::to_value(&frame).unwrap();
+        assert_eq!(json["type"], "ledger_search");
+        assert_eq!(json["request"]["source"], "thread");
+        assert!(json["request"].get("peer").is_none());
+        let back: WrapperToDaemon = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, WrapperToDaemon::LedgerSearch { .. }));
+
+        let outcome = LedgerSearchOutcomeV1::Ok(LedgerSearchPage {
+            source: LedgerSearchSource::Messages,
+            hits: vec![LedgerSearchHit::Message {
+                id: "m1".into(),
+                target: "t".into(),
+                sender: "s".into(),
+                ts: 7,
+                excerpt: "…".into(),
+                match_offset: 3,
+                body_digest: "ab".into(),
+                body_bytes: 12,
+            }],
+            has_more: true,
+            next_cursor: Some("00".into()),
+            scanned_count: 1,
+            scanned_bytes: 12,
+            skipped_oversized: 0,
+            stop_reason: "result_limit".into(),
+            consistency: "live_bounded".into(),
+            notices: vec![],
+        });
+        let json = serde_json::to_value(DaemonToWrapper::LedgerSearchResult { outcome }).unwrap();
+        assert_eq!(json["type"], "ledger_search_result");
+        assert_eq!(json["outcome"]["status"], "ok");
+        assert_eq!(json["outcome"]["hits"][0]["kind"], "message");
+        assert_eq!(json["outcome"]["hits"][0]["match_offset"], 3);
+
+        let refus = serde_json::to_value(LedgerReadOutcomeV1::Error {
+            code: "not_found_or_forbidden".into(),
+            reason: "source indisponible".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            refus,
+            serde_json::json!({"status":"error","code":"not_found_or_forbidden","reason":"source indisponible"})
+        );
+
+        let read: LedgerReadRequest =
+            serde_json::from_value(serde_json::json!({"id":"handoff-pagination-01","target":"t"}))
+                .unwrap();
+        assert_eq!(read.offset, 0);
+        assert!(read.digest.is_none());
+        assert!(
+            serde_json::from_value::<LedgerReadRequest>(
+                serde_json::json!({"id":"a","target":"b","offset":-1})
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn spec104_ancien_contrat_ledger_inchange() {
+        // Un client ou un daemon antérieur continue d'échanger la projection
+        // historique : trame et champs identiques à la version précédente.
+        let request = serde_json::to_value(WrapperToDaemon::LedgerProjection {
+            scope: LedgerScope::Messages,
+            limit: 20,
+        })
+        .unwrap();
+        assert_eq!(
+            request,
+            serde_json::json!({"type":"LedgerProjection","scope":"Messages","limit":20})
+        );
+        // Un ancien daemon ne connaît pas la trame 104 : le client doit obtenir
+        // une erreur explicite, jamais un repli. Ici : la trame reste
+        // syntaxiquement distincte de toute trame historique.
+        let unknown: Result<WrapperToDaemon, _> =
+            serde_json::from_str(r#"{"type":"ledger_search_v2","request":{"query":"x"}}"#);
+        assert!(unknown.is_err());
     }
 }

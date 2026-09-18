@@ -472,7 +472,7 @@ fn load_member(
 
 /// Fil et appartenance de l'acteur en une seule décision : un non-membre et
 /// un fil inexistant produisent le même refus, sans information.
-fn load_thread_for_member(
+pub(crate) fn load_thread_for_member(
     tx: &Transaction<'_>,
     thread_id: &str,
     actor: &str,

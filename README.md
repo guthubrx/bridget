@@ -40,6 +40,8 @@ bridget agents --json
 bridget send --to '<agent_id_uuid>' --reply --timeout 120 -- 'Vérifie ce point et réponds avec ton résultat.'
 bridget send --to '<emetteur_uuid>' --in-reply-to '<message_id_integral>' -- 'Résultat vérifié : …'
 bridget ledger --limit 20
+bridget ledger search --query "pagination erreur" --limit 20
+bridget ledger read --id '<id>' --target '<uuid>' --offset <match_offset> --digest <body_digest>
 bridget attach '<agent_id_uuid>'
 ```
 
@@ -319,6 +321,10 @@ ou la portée globale (`requests_scope=all`).
 une liste vide. Leur sonde est bornée ; `status` n'ouvre aucune base côté client.
 Le total des messages n'étant pas publié par le protocole, il reste explicitement
 indisponible ; le ledger expose une vue bornée, pas un total prétendument exhaustif.
+`ledger search` (ou `bridget_ledger` `action=search`) cherche une page bornée et
+reprenable dans ses propres échanges ou un fil dont on est membre ; `ledger read`
+relit un message exact par `id` + `target` avec son empreinte. Une recherche est
+partielle par construction : continuer avec le curseur, ou l'annoncer comme telle.
 
 `attach` rejoue le journal puis suit le flux. La jonction conserve les séquences ;
 un curseur devenu indisponible annonce une lacune (`Gap`). Source inaccessible,

@@ -51,6 +51,43 @@ pub(crate) fn thread_request(
     }
 }
 
+/// Session 104 : recherche bornée ; un daemon antérieur répond par une
+/// erreur de protocole explicite, jamais par un repli vers le ledger global.
+pub(crate) fn ledger_search(
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+    request: bridget_transport::protocol::LedgerSearchRequest,
+) -> Result<bridget_transport::protocol::LedgerSearchOutcomeV1, ClientError> {
+    let mut connection = registered_connection(identity, instance_id, socket)?;
+    match connection.send_then_wait(&WrapperToDaemon::LedgerSearch { request })? {
+        DaemonToWrapper::LedgerSearchResult { outcome } => Ok(outcome),
+        DaemonToWrapper::Nack { reason, .. } => Err(ClientError::Technical {
+            code: "daemon_protocol",
+            message: reason,
+        }),
+        other => unexpected_response(other),
+    }
+}
+
+/// Session 104 : relecture exacte d'un message par `(id, target)`.
+pub(crate) fn ledger_read(
+    identity: &str,
+    instance_id: &str,
+    socket: &Path,
+    request: bridget_transport::protocol::LedgerReadRequest,
+) -> Result<bridget_transport::protocol::LedgerReadOutcomeV1, ClientError> {
+    let mut connection = registered_connection(identity, instance_id, socket)?;
+    match connection.send_then_wait(&WrapperToDaemon::LedgerRead { request })? {
+        DaemonToWrapper::LedgerReadResult { outcome } => Ok(outcome),
+        DaemonToWrapper::Nack { reason, .. } => Err(ClientError::Technical {
+            code: "daemon_protocol",
+            message: reason,
+        }),
+        other => unexpected_response(other),
+    }
+}
+
 pub(crate) fn cancel_request(
     identity: &str,
     instance_id: &str,
@@ -1495,6 +1532,104 @@ mod security_tests {
             matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
         );
         drop(listener);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// Session 104 : un daemon antérieur ne connaît pas `ledger_search`. Le
+    /// client rend une erreur technique explicite (Nack → `daemon_protocol`,
+    /// coupure → `outcome_unknown`) et ne se replie jamais sur la projection
+    /// globale ni sur un fichier local.
+    #[test]
+    fn spec104_ancien_daemon_erreur_honnete_sans_repli() {
+        let root =
+            std::env::temp_dir().join(format!("b104-old-daemon-{}", uuid::Uuid::new_v4().simple()));
+        crate::environment::ensure_private_directory(&root).unwrap();
+        let path = root.join("daemon.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        crate::mcp_identity::mock_private_identity(
+            &path,
+            "10400000-0000-4000-8000-000000000104",
+            "instance-104",
+        );
+        let server = thread::spawn(move || {
+            for turn in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let WrapperToDaemon::RegisterAuxiliary { agent_id, .. } =
+                    decode(line.trim()).unwrap()
+                else {
+                    panic!("RegisterAuxiliary attendu");
+                };
+                writeln!(
+                    stream,
+                    "{}",
+                    encode(&DaemonToWrapper::Registered {
+                        credential: None,
+                        agent_id
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+                stream.flush().unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                assert!(line.contains("\"ledger_search\""), "{line}");
+                if turn == 0 {
+                    // Daemon ancien qui répond par un refus générique.
+                    writeln!(
+                        stream,
+                        "{}",
+                        encode(&DaemonToWrapper::Nack {
+                            id: "ledger".into(),
+                            reason: "commande inconnue".into()
+                        })
+                        .unwrap()
+                    )
+                    .unwrap();
+                    stream.flush().unwrap();
+                } // turn 1 : coupure sèche, aucune réponse.
+            }
+        });
+        let request = bridget_transport::protocol::LedgerSearchRequest {
+            source: bridget_transport::protocol::LedgerSearchSource::Messages,
+            query: "x".into(),
+            author: None,
+            peer: None,
+            since: None,
+            until: None,
+            limit: None,
+            cursor: None,
+            thread_id: None,
+        };
+        let nack = ledger_search(
+            "10400000-0000-4000-8000-000000000104",
+            "instance-104",
+            &path,
+            request.clone(),
+        );
+        assert!(
+            matches!(
+                &nack,
+                Err(ClientError::Technical {
+                    code: "daemon_protocol",
+                    ..
+                })
+            ),
+            "{nack:?}"
+        );
+        let cut = ledger_search(
+            "10400000-0000-4000-8000-000000000104",
+            "instance-104",
+            &path,
+            request,
+        );
+        assert!(
+            matches!(&cut, Err(ClientError::Technical { .. })),
+            "coupure = erreur technique, jamais une page : {cut:?}"
+        );
+        server.join().unwrap();
         std::fs::remove_file(path).unwrap();
     }
 }

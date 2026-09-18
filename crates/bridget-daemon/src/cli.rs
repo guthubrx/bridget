@@ -633,6 +633,8 @@ fn print_usage() {
            agents [--json]        Idem, format machine [--domain <D>]\n  \
            status                 Santé du daemon\n  \
            ledger [--limit N]     Historique des messages (défaut : maximum lisible)\n  \
+           ledger search --query Q  Cherche dans ses échanges ou un fil [--cursor HEX] [--json]\n  \
+           ledger read --id I --target T  Relit un message exact par fragments [--json]\n  \
            artifact read          Lit un contenu exact par références, sans exécution\n  \
            reprise [--write P]    Carte de reprise du référent\n  \
            reaper report          Observateur J2 (ne tue jamais)\n  \
@@ -5656,10 +5658,317 @@ fn render_ledger_borne(entries: &[LedgerMessage], limite: usize) -> String {
     rendu
 }
 
+const LEDGER_SEARCH_USAGE: &str = "usage: bridget ledger search --query \"termes\" [--source messages|thread] [--thread-id UUID]\n\
+       [--peer UUID] [--author UUID] [--since UNIX] [--until UNIX] [--limit N] [--cursor HEX] [--json]\n\
+       bridget ledger read --id ID --target UUID [--offset N --digest HEX] [--json]\n\
+Recherche partielle et reprenable : recopier next_cursor avec la même query et les mêmes filtres.\n\
+Codes : 0 succès (même sans résultat), 2 paramètres invalides, 1 refus ou erreur.";
+
+/// Session 104 : options fermées de `ledger search`, sans état implicite.
+fn parse_ledger_search_args(
+    args: &[String],
+) -> Result<(bridget_transport::protocol::LedgerSearchRequest, bool), String> {
+    use bridget_transport::protocol::{LedgerSearchRequest, LedgerSearchSource};
+    let mut request = LedgerSearchRequest {
+        source: LedgerSearchSource::Messages,
+        query: String::new(),
+        author: None,
+        peer: None,
+        since: None,
+        until: None,
+        limit: None,
+        cursor: None,
+        thread_id: None,
+    };
+    let mut json = false;
+    let mut query = None;
+    let mut index = 0;
+    let value = |index: &mut usize, name: &str| -> Result<String, String> {
+        *index += 1;
+        args.get(*index)
+            .cloned()
+            .ok_or_else(|| format!("{name} attend une valeur"))
+    };
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => json = true,
+            "--query" => query = Some(value(&mut index, "--query")?),
+            "--source" => {
+                request.source = match value(&mut index, "--source")?.as_str() {
+                    "messages" => LedgerSearchSource::Messages,
+                    "thread" => LedgerSearchSource::Thread,
+                    other => return Err(format!("--source inconnu : {other} (messages|thread)")),
+                }
+            }
+            "--thread-id" => request.thread_id = Some(value(&mut index, "--thread-id")?),
+            "--peer" => request.peer = Some(value(&mut index, "--peer")?),
+            "--author" => request.author = Some(value(&mut index, "--author")?),
+            "--cursor" => request.cursor = Some(value(&mut index, "--cursor")?),
+            "--since" | "--until" | "--limit" => {
+                let name = args[index].clone();
+                let raw = value(&mut index, &name)?;
+                let parsed: i64 = raw
+                    .parse()
+                    .map_err(|_| format!("{name} attend un entier ≥ 0, reçu {raw}"))?;
+                if parsed < 0 {
+                    return Err(format!("{name} attend un entier ≥ 0"));
+                }
+                match name.as_str() {
+                    "--since" => request.since = Some(parsed),
+                    "--until" => request.until = Some(parsed),
+                    _ => {
+                        request.limit = Some(
+                            u16::try_from(parsed).map_err(|_| "--limit trop grand".to_string())?,
+                        )
+                    }
+                }
+            }
+            other => return Err(format!("option ledger search inconnue : {other}")),
+        }
+        index += 1;
+    }
+    request.query = query.ok_or_else(|| "--query est obligatoire".to_string())?;
+    Ok((request, json))
+}
+
+fn parse_ledger_read_args(
+    args: &[String],
+) -> Result<(bridget_transport::protocol::LedgerReadRequest, bool), String> {
+    let (mut id, mut target, mut offset, mut digest, mut json) = (None, None, 0u64, None, false);
+    let mut index = 0;
+    while index < args.len() {
+        let name = args[index].as_str();
+        if name == "--json" {
+            json = true;
+            index += 1;
+            continue;
+        }
+        let raw = args
+            .get(index + 1)
+            .ok_or_else(|| format!("{name} attend une valeur"))?
+            .clone();
+        match name {
+            "--id" => id = Some(raw),
+            "--target" => target = Some(raw),
+            "--digest" => digest = Some(raw),
+            "--offset" => {
+                offset = raw
+                    .parse()
+                    .map_err(|_| format!("--offset attend un entier ≥ 0, reçu {raw}"))?
+            }
+            other => return Err(format!("option ledger read inconnue : {other}")),
+        }
+        index += 2;
+    }
+    Ok((
+        bridget_transport::protocol::LedgerReadRequest {
+            id: id.ok_or_else(|| "--id est obligatoire".to_string())?,
+            target: target.ok_or_else(|| "--target est obligatoire".to_string())?,
+            offset,
+            digest,
+        },
+        json,
+    ))
+}
+
+/// Neutralise les caractères de contrôle (ANSI, retours) dans un rendu
+/// terminal ; la donnée JSON n'est jamais modifiée par l'affichage.
+pub(crate) fn inert_text(text: &str) -> String {
+    text.chars()
+        .map(|ch| if ch.is_control() { '\u{FFFD}' } else { ch })
+        .collect()
+}
+
+pub(crate) fn render_ledger_search(page: &bridget_transport::protocol::LedgerSearchPage) -> String {
+    use bridget_transport::protocol::LedgerSearchHit;
+    let mut out = format!(
+        "{} résultat(s) — source {} — {} candidat(s) parcourus, {} octets examinés{}\n",
+        page.hits.len(),
+        page.source.name(),
+        page.scanned_count,
+        page.scanned_bytes,
+        if page.skipped_oversized > 0 {
+            format!(", {} ignoré(s) > 16 Mio", page.skipped_oversized)
+        } else {
+            String::new()
+        }
+    );
+    for hit in &page.hits {
+        match hit {
+            LedgerSearchHit::Message {
+                id,
+                target,
+                sender,
+                ts,
+                excerpt,
+                match_offset,
+                body_digest,
+                ..
+            } => out.push_str(&format!(
+                "  [{ts}] {} → {}  id={} offset={match_offset} digest={}\n      {}\n",
+                inert_text(sender),
+                inert_text(target),
+                inert_text(id),
+                &body_digest[..16],
+                inert_text(excerpt)
+            )),
+            LedgerSearchHit::ThreadEntry {
+                thread_id,
+                seq,
+                author_id,
+                ts,
+                excerpt,
+                match_offset,
+                ..
+            } => out.push_str(&format!(
+                "  [{ts}] fil {thread_id} seq={seq} auteur={} offset={match_offset}\n      {}\n",
+                inert_text(author_id),
+                inert_text(excerpt)
+            )),
+        }
+    }
+    match &page.next_cursor {
+        Some(cursor) => out.push_str(&format!(
+            "suite disponible ({}) : répéter la commande avec --cursor {cursor}\n",
+            page.stop_reason
+        )),
+        None => out.push_str("fin de la partie conservée.\n"),
+    }
+    out
+}
+
+fn ledger_error_exit(code: &str, reason: &str, json: bool) -> ! {
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({"status":"error","code":code,"reason":reason})
+        );
+    } else {
+        eprintln!("bridget ledger : {code} : {}", inert_text(reason));
+    }
+    std::process::exit(if matches!(code, "invalid_params" | "invalid_cursor") {
+        2
+    } else {
+        1
+    });
+}
+
+fn ledger_identity() -> crate::mcp_identity::ResolvedIdentity {
+    crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
+        eprintln!(
+            "bridget ledger : {} : {}",
+            error.code(),
+            error.remediation()
+        );
+        std::process::exit(1);
+    })
+}
+
+fn cmd_ledger_search(args: &[String]) {
+    let (request, json) = parse_ledger_search_args(args).unwrap_or_else(|error| {
+        eprintln!("{LEDGER_SEARCH_USAGE}");
+        eprintln!("erreur: {error}");
+        std::process::exit(2);
+    });
+    let identity = ledger_identity();
+    let outcome = crate::communication::client::ledger_search(
+        &identity.name,
+        &identity.instance_id,
+        &socket_path(),
+        request,
+    )
+    .unwrap_or_else(|error| match error {
+        crate::communication::client::ClientError::InvalidParams(message) => {
+            ledger_error_exit("invalid_params", &message, json)
+        }
+        crate::communication::client::ClientError::Technical { code, message } => {
+            ledger_error_exit(code, &message, json)
+        }
+    });
+    match outcome {
+        bridget_transport::protocol::LedgerSearchOutcomeV1::Ok(page) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&bridget_transport::protocol::LedgerSearchOutcomeV1::Ok(
+                        page
+                    ))
+                    .expect("page sérialisable")
+                );
+            } else {
+                print!("{}", render_ledger_search(&page));
+            }
+        }
+        bridget_transport::protocol::LedgerSearchOutcomeV1::Error { code, reason } => {
+            ledger_error_exit(&code, &reason, json)
+        }
+    }
+}
+
+fn cmd_ledger_read(args: &[String]) {
+    let (request, json) = parse_ledger_read_args(args).unwrap_or_else(|error| {
+        eprintln!("{LEDGER_SEARCH_USAGE}");
+        eprintln!("erreur: {error}");
+        std::process::exit(2);
+    });
+    let identity = ledger_identity();
+    let outcome = crate::communication::client::ledger_read(
+        &identity.name,
+        &identity.instance_id,
+        &socket_path(),
+        request,
+    )
+    .unwrap_or_else(|error| match error {
+        crate::communication::client::ClientError::InvalidParams(message) => {
+            ledger_error_exit("invalid_params", &message, json)
+        }
+        crate::communication::client::ClientError::Technical { code, message } => {
+            ledger_error_exit(code, &message, json)
+        }
+    });
+    match outcome {
+        bridget_transport::protocol::LedgerReadOutcomeV1::Ok(fragment) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&bridget_transport::protocol::LedgerReadOutcomeV1::Ok(
+                        fragment
+                    ))
+                    .expect("fragment sérialisable")
+                );
+            } else {
+                println!(
+                    "[{}] {} → {}  id={}  {} octets, digest={}\n{}\n{}",
+                    fragment.ts,
+                    inert_text(&fragment.sender),
+                    inert_text(&fragment.target),
+                    inert_text(&fragment.id),
+                    fragment.body_bytes,
+                    fragment.digest,
+                    inert_text(&fragment.fragment),
+                    match fragment.next_offset {
+                        Some(next) =>
+                            format!("suite : --offset {next} --digest {}", fragment.digest),
+                        None => "fin du message.".to_string(),
+                    }
+                );
+            }
+        }
+        bridget_transport::protocol::LedgerReadOutcomeV1::Error { code, reason } => {
+            ledger_error_exit(&code, &reason, json)
+        }
+    }
+}
+
 fn cmd_ledger(args: &[String]) {
+    match args.first().map(String::as_str) {
+        Some("search") => return cmd_ledger_search(&args[1..]),
+        Some("read") => return cmd_ledger_read(&args[1..]),
+        _ => {}
+    }
     let limite = parse_ledger_args(args).unwrap_or_else(|error| {
         eprintln!("bridget ledger: {error}");
-        eprintln!("usage: bridget ledger [--limit N]");
+        eprintln!("usage: bridget ledger [--limit N] | ledger search … | ledger read …");
         std::process::exit(2);
     });
     // Une de plus que la borne, pour savoir s'il y en a plus — jamais au-delà

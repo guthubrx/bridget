@@ -691,6 +691,8 @@ struct DaemonState {
     thread_notice_versions: HashMap<String, u16>,
     /// Session 102 : instants des derniers départs d'alertes de fil (débit 5/s).
     thread_wake_departures: VecDeque<Instant>,
+    /// Session 104 : permis de recherche/relecture (2 simultanés, sans file).
+    ledger_read_permits: crate::ledger::search::ReadPermits,
     observation_tx: mpsc::SyncSender<(Instant, DeferredControl)>,
     observation_lost: Arc<std::sync::atomic::AtomicU64>,
     #[cfg(test)]
@@ -2941,6 +2943,7 @@ impl DaemonState {
             observations,
             observation_sequences: HashMap::new(),
             thread_notice_versions: HashMap::new(),
+            ledger_read_permits: crate::ledger::search::ReadPermits::default(),
             thread_wake_departures: VecDeque::new(),
             observation_tx,
             observation_lost,
@@ -7737,6 +7740,32 @@ fn live_connection_identity(st: &DaemonState, conn_id: &str) -> Option<(String, 
     Some((agent.clone(), instance.clone()))
 }
 
+/// Session 104 : sous verrou bref, identité attestée, chemin de base
+/// configuré et permis de lecture. `Err((code, reason))` sinon.
+fn ledger_read_context(
+    state: &Arc<Mutex<DaemonState>>,
+    conn_id: &str,
+) -> Result<(String, PathBuf, crate::ledger::search::ReadPermit), (&'static str, &'static str)> {
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((actor, _)) = live_connection_identity(&st, conn_id) else {
+        return Err(("identity_unavailable", "identité active requise"));
+    };
+    let Some(permit) = st.ledger_read_permits.try_acquire() else {
+        return Err((
+            "busy",
+            "deux recherches ou relectures sont déjà en cours : réessayer dans un instant",
+        ));
+    };
+    Ok((actor, st.db_path.clone(), permit))
+}
+
+/// Session 104 : l'identité doit être la même connexion attestée qu'au
+/// départ ; sinon le contenu est abandonné.
+fn ledger_identity_still_live(state: &Arc<Mutex<DaemonState>>, conn_id: &str, actor: &str) -> bool {
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    live_connection_identity(&st, conn_id).is_some_and(|(live, _)| live == actor)
+}
+
 /// Réutilise l'autorité de connexion des mutations ; un scope de rejeu ou un
 /// champ from ne devient jamais une preuve d'identité.
 fn sender_is_authorized(st: &DaemonState, conn_id: &str, sender: &str) -> bool {
@@ -10295,6 +10324,8 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::ObservationRequest { .. }
                 | WrapperToDaemon::ThreadRequest { .. }
                 | WrapperToDaemon::ThreadNoticeCapability { .. }
+                | WrapperToDaemon::LedgerSearch { .. }
+                | WrapperToDaemon::LedgerRead { .. }
                 | WrapperToDaemon::ObservedActivity { .. }
                 | WrapperToDaemon::ObservationCapabilities { .. }
                 | WrapperToDaemon::ObservationGap { .. }
@@ -10512,6 +10543,8 @@ fn handle_wrapper_message(
                 | WrapperToDaemon::ObservationRequest { .. }
                 | WrapperToDaemon::ThreadRequest { .. }
                 | WrapperToDaemon::ThreadNoticeCapability { .. }
+                | WrapperToDaemon::LedgerSearch { .. }
+                | WrapperToDaemon::LedgerRead { .. }
                 | WrapperToDaemon::ObservedActivity { .. }
                 | WrapperToDaemon::ObservationCapabilities { .. }
                 | WrapperToDaemon::ObservationGap { .. }
@@ -10711,6 +10744,45 @@ fn handle_wrapper_message(
             };
             let _ = execute_controls(controls);
             Some(DaemonToWrapper::ThreadResult { result })
+        }
+        // Session 104 : lecture seule hors verrou. Identité et permis sous
+        // verrou bref ; SQL et repli sur le thread de connexion ; identité
+        // revérifiée avant publication ; permis relâché par RAII.
+        WrapperToDaemon::LedgerSearch { request } => {
+            let outcome = match ledger_read_context(state, conn_id) {
+                Err(outcome) => crate::ledger::search::search_error(outcome.0, outcome.1),
+                Ok((actor, db_path, permit)) => {
+                    let outcome = crate::ledger::search::search(&db_path, &actor, &request);
+                    drop(permit);
+                    if ledger_identity_still_live(state, conn_id, &actor) {
+                        outcome
+                    } else {
+                        crate::ledger::search::search_error(
+                            "identity_unavailable",
+                            "identité révoquée pendant la recherche : aucun résultat publié",
+                        )
+                    }
+                }
+            };
+            Some(DaemonToWrapper::LedgerSearchResult { outcome })
+        }
+        WrapperToDaemon::LedgerRead { request } => {
+            let outcome = match ledger_read_context(state, conn_id) {
+                Err(outcome) => crate::ledger::search::read_error(outcome.0, outcome.1),
+                Ok((actor, db_path, permit)) => {
+                    let outcome = crate::ledger::search::read(&db_path, &actor, &request);
+                    drop(permit);
+                    if ledger_identity_still_live(state, conn_id, &actor) {
+                        outcome
+                    } else {
+                        crate::ledger::search::read_error(
+                            "identity_unavailable",
+                            "identité révoquée pendant la relecture : aucun contenu publié",
+                        )
+                    }
+                }
+            };
+            Some(DaemonToWrapper::LedgerReadResult { outcome })
         }
         WrapperToDaemon::ObservationRequest { request } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());

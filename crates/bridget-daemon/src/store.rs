@@ -9,7 +9,8 @@ mod project_compat;
 mod service_events;
 pub(crate) mod threads;
 
-pub use ledger_requests::{LedgerEntry, LedgerSearchOutcome, TrackedRequest, UsageDashboardRow};
+pub(crate) use ledger_requests::search as ledger_search;
+pub use ledger_requests::{LedgerEntry, TrackedRequest, UsageDashboardRow};
 pub(crate) use ledger_requests::{
     fold_for_search, mark_answered_in_transaction, record_message_in_transaction,
 };
@@ -77,6 +78,20 @@ impl Store {
         &self.conn
     }
 
+    /// Session 104 : connexion de lecture seule sur une base existante, sans
+    /// création de schéma ni migration. Attente SQLite limitée à 100 ms : un
+    /// écrivain long rend `busy`, jamais une file d'attente.
+    pub fn open_read_only(path: &Path) -> Result<Connection, StoreError> {
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(StoreError::Sqlite)?;
+        conn.busy_timeout(std::time::Duration::from_millis(100))
+            .map_err(StoreError::Sqlite)?;
+        Ok(conn)
+    }
+
     fn init_schema(conn: &Connection) -> Result<(), StoreError> {
         crate::referent_control::ensure_schema(conn).map_err(StoreError::Sqlite)?;
         crate::human_inbox::ensure_schema(conn).map_err(StoreError::Sqlite)?;
@@ -100,6 +115,8 @@ impl Store {
             );
             CREATE INDEX IF NOT EXISTS idx_ledger_ts ON ledger(ts);
             CREATE INDEX IF NOT EXISTS idx_ledger_conv ON ledger(conversation_key, ts);
+            CREATE INDEX IF NOT EXISTS idx_ledger_sender_page ON ledger(sender, ts DESC, id DESC, target DESC);
+            CREATE INDEX IF NOT EXISTS idx_ledger_target_page ON ledger(target, ts DESC, id DESC);
             CREATE TABLE IF NOT EXISTS tracked_requests (
                 id TEXT PRIMARY KEY,
                 sender TEXT NOT NULL,

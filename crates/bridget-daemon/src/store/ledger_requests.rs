@@ -5,95 +5,38 @@ use super::{Store, StoreError, now_secs};
 use bridget_transport::protocol::GuichetLifecycleState;
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
-const MAX_LEDGER_SEARCH: usize = 100;
-
-/// Échappe les jokers LIKE pour une recherche littérale.
-pub(crate) fn escape_like_needle(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    for ch in raw.chars() {
-        match ch {
-            '\\' | '%' | '_' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            other => out.push(other),
-        }
+/// Règle de repli d'UN caractère, partagée par la normalisation des corps et
+/// la localisation des occurrences : accents précomposés du français → ASCII.
+/// La casse est repliée ensuite par `to_lowercase`. Aucune normalisation
+/// Unicode (NFC/NFD) : une forme décomposée n'est pas assimilée.
+fn fold_char(ch: char) -> char {
+    match ch {
+        'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' | 'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' => 'a',
+        'È' | 'É' | 'Ê' | 'Ë' | 'è' | 'é' | 'ê' | 'ë' => 'e',
+        'Ì' | 'Í' | 'Î' | 'Ï' | 'ì' | 'í' | 'î' | 'ï' => 'i',
+        'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' | 'ò' | 'ó' | 'ô' | 'õ' | 'ö' => 'o',
+        'Ù' | 'Ú' | 'Û' | 'Ü' | 'ù' | 'ú' | 'û' | 'ü' => 'u',
+        'Ý' | 'Ÿ' | 'ÿ' | 'ý' => 'y',
+        'Ç' | 'ç' => 'c',
+        'Ñ' | 'ñ' => 'n',
+        other => other,
     }
-    out
 }
 
 /// Repli des accents français → ASCII, pour que « cafe » trouve « café ».
 pub(crate) fn fold_for_search(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
-        let mapped = match ch {
-            'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' | 'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' => {
-                'a'
-            }
-            'È' | 'É' | 'Ê' | 'Ë' | 'è' | 'é' | 'ê' | 'ë' => 'e',
-            'Ì' | 'Í' | 'Î' | 'Ï' | 'ì' | 'í' | 'î' | 'ï' => 'i',
-            'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' | 'ò' | 'ó' | 'ô' | 'õ' | 'ö' => 'o',
-            'Ù' | 'Ú' | 'Û' | 'Ü' | 'ù' | 'ú' | 'û' | 'ü' => 'u',
-            'Ý' | 'ÿ' | 'ý' => 'y',
-            'Ç' | 'ç' => 'c',
-            'Ñ' | 'ñ' => 'n',
-            other => other,
-        };
-        for lower in mapped.to_lowercase() {
+        for lower in fold_char(ch).to_lowercase() {
             out.push(lower);
         }
     }
     out
 }
 
-/// Expression SQL qui replie le corps avant LIKE (miroir de `fold_for_search`).
-fn folded_body_sql() -> String {
-    let mut expr = "body".to_string();
-    for (from, to) in [
-        ("É", "e"),
-        ("È", "e"),
-        ("Ê", "e"),
-        ("Ë", "e"),
-        ("é", "e"),
-        ("è", "e"),
-        ("ê", "e"),
-        ("ë", "e"),
-        ("À", "a"),
-        ("Â", "a"),
-        ("Ä", "a"),
-        ("à", "a"),
-        ("â", "a"),
-        ("ä", "a"),
-        ("Î", "i"),
-        ("Ï", "i"),
-        ("î", "i"),
-        ("ï", "i"),
-        ("Ô", "o"),
-        ("Ö", "o"),
-        ("ô", "o"),
-        ("ö", "o"),
-        ("Ù", "u"),
-        ("Û", "u"),
-        ("Ü", "u"),
-        ("ù", "u"),
-        ("û", "u"),
-        ("ü", "u"),
-        ("Ç", "c"),
-        ("ç", "c"),
-        ("Ñ", "n"),
-        ("ñ", "n"),
-        ("Ÿ", "y"),
-        ("ÿ", "y"),
-    ] {
-        expr = format!("REPLACE({expr}, '{from}', '{to}')");
-    }
-    format!("LOWER({expr})")
-}
-
-#[derive(Debug)]
-pub struct LedgerSearchOutcome {
-    pub hits: Vec<LedgerEntry>,
-    pub truncated: bool,
+/// Longueur en octets du repli d'un caractère, sans allouer.
+fn folded_len(ch: char) -> usize {
+    fold_char(ch).to_lowercase().map(char::len_utf8).sum()
 }
 
 /// Agrégat d'usage affichable par le centre de contrôle. Les champs de
@@ -715,62 +658,6 @@ impl Store {
             .map_err(StoreError::Sqlite)?;
         Ok(entries)
     }
-
-    pub fn search_messages(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<LedgerSearchOutcome, StoreError> {
-        let limit = limit.clamp(1, MAX_LEDGER_SEARCH);
-        let needles: Vec<String> = query
-            .split_whitespace()
-            .filter(|token| !token.is_empty())
-            .map(|token| escape_like_needle(&fold_for_search(token)))
-            .collect();
-        if needles.is_empty() {
-            return Ok(LedgerSearchOutcome {
-                hits: Vec::new(),
-                truncated: false,
-            });
-        }
-
-        let folded = folded_body_sql();
-        let mut sql = String::from("SELECT id, ts, sender, target, body FROM ledger WHERE 1=1");
-        for _ in &needles {
-            sql.push_str(&format!(" AND {folded} LIKE ? ESCAPE '\\'"));
-        }
-        // limit+1 pour détecter la troncature sans mensonge par omission.
-        sql.push_str(" ORDER BY ts ASC, id ASC LIMIT ?");
-
-        let mut stmt = self.conn.prepare(&sql).map_err(StoreError::Sqlite)?;
-        let mut binds: Vec<rusqlite::types::Value> = needles
-            .iter()
-            .map(|needle| rusqlite::types::Value::Text(format!("%{needle}%")))
-            .collect();
-        binds.push(rusqlite::types::Value::Integer((limit as i64) + 1));
-        let mut entries: Vec<LedgerEntry> = stmt
-            .query_map(rusqlite::params_from_iter(binds), |row| {
-                Ok(LedgerEntry {
-                    id: row.get(0)?,
-                    ts: row.get(1)?,
-                    sender: row.get(2)?,
-                    target: row.get(3)?,
-                    body: row.get(4)?,
-                    delivery_phase: None,
-                })
-            })
-            .map_err(StoreError::Sqlite)?
-            .filter_map(|row| row.ok())
-            .collect();
-        let truncated = entries.len() > limit;
-        if truncated {
-            entries.truncate(limit);
-        }
-        Ok(LedgerSearchOutcome {
-            hits: entries,
-            truncated,
-        })
-    }
 }
 
 /// Transition commune de résolution d'une demande, réutilisable lorsqu'une
@@ -822,4 +709,656 @@ fn tracked_request_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Tracked
         cancel_reason: row.get(7)?,
         completed_at: row.get(8)?,
     })
+}
+
+/// Session 104 — accès de recherche et de relecture bornés, sur une
+/// connexion quelconque (lecture seule côté daemon, Store en test).
+///
+/// Complexité par page : deux plages indexées O(log N + 129) puis une fusion
+/// O(258), un chargement groupé des corps admissibles (< 17 Mio) et un repli
+/// linéaire O(K × B) sur les corps examinés (K ≤ 8 termes). Aucun OFFSET ni
+/// rowid : la reprise se fait par clé `(ts, id, target)` décroissante.
+pub(crate) mod search {
+    use super::fold_for_search;
+    use rusqlite::{Connection, OptionalExtension, Transaction, params};
+    use std::cmp::Ordering;
+    use std::collections::HashMap;
+
+    /// Candidats consommables par page ; la 129e clé n'est qu'un témoin.
+    pub(crate) const CANDIDATES_PER_PAGE: usize = 128;
+    /// Corps cumulés avant arrêt (une ligne entière peut dépasser).
+    pub(crate) const BYTE_BUDGET: u64 = 1 << 20;
+    /// Corps au-delà : ignoré sans chargement (`skipped_oversized`).
+    pub(crate) const MAX_BODY_BYTES: u64 = 16 << 20;
+    /// Identifiants hérités au-delà : refus `source_metadata_too_large`.
+    pub(crate) const MAX_METADATA_BYTES: usize = 256;
+    /// Extrait rendu depuis l'occurrence (frontière UTF-8).
+    pub(crate) const EXCERPT_BYTES: usize = 512;
+    const FETCH_LIMIT: usize = CANDIDATES_PER_PAGE + 1;
+
+    #[derive(Debug)]
+    pub(crate) enum SearchError {
+        /// Toute erreur SQLite (busy, corruption, décodage de ligne) ; le
+        /// détail n'est pas transmis au client.
+        Storage,
+        /// id/sender/target > 256 octets : aucune réponse partielle.
+        MetadataTooLarge,
+    }
+
+    impl From<rusqlite::Error> for SearchError {
+        fn from(error: rusqlite::Error) -> Self {
+            log::warn!("recherche 104 : SQLite indisponible : {error}");
+            Self::Storage
+        }
+    }
+
+    /// Clé physique d'un échange, ordonnée comme la pagination :
+    /// `(ts, id, target)` décroissants, texte comparé en binaire.
+    #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub(crate) struct MessageKey {
+        pub ts: i64,
+        pub id: String,
+        pub target: String,
+    }
+
+    impl MessageKey {
+        /// Ordre de parcours : `Less` = vient AVANT dans la page (plus récent).
+        pub(crate) fn page_cmp(&self, other: &Self) -> Ordering {
+            other
+                .ts
+                .cmp(&self.ts)
+                .then_with(|| other.id.as_bytes().cmp(self.id.as_bytes()))
+                .then_with(|| other.target.as_bytes().cmp(self.target.as_bytes()))
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub(crate) struct MessageCandidate {
+        pub key: MessageKey,
+        pub sender: String,
+        pub body_bytes: u64,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct DateWindow {
+        pub since: i64,
+        pub until: i64,
+    }
+
+    #[derive(Debug, Clone)]
+    pub(crate) struct LoadedMessage {
+        pub key: MessageKey,
+        pub sender: String,
+        pub body: String,
+    }
+
+    const META_TOO_LARGE: &str =
+        "(octet_length(id) > 256 OR octet_length(target) > 256 OR octet_length(sender) > 256)";
+
+    fn candidate_select(branch: &str, with_before: bool) -> String {
+        let before = if with_before {
+            " AND (ts, id, target) < (?7, ?8, ?9)"
+        } else {
+            ""
+        };
+        format!(
+            "SELECT ts,
+                    CASE WHEN {META_TOO_LARGE} THEN 1 ELSE 0 END,
+                    CASE WHEN {META_TOO_LARGE} THEN '' ELSE id END,
+                    CASE WHEN {META_TOO_LARGE} THEN '' ELSE target END,
+                    CASE WHEN {META_TOO_LARGE} THEN '' ELSE sender END,
+                    octet_length(body)
+             FROM ledger
+             WHERE {branch} AND ts >= ?2 AND ts <= ?3
+               AND (ts, id, target) <= (?4, ?5, ?6){before}
+             ORDER BY ts DESC, id DESC, target DESC
+             LIMIT {FETCH_LIMIT}"
+        )
+    }
+
+    pub(crate) const SENDER_BRANCH: &str = "sender = ?1";
+    pub(crate) const TARGET_BRANCH: &str = "target = ?1 AND sender <> ?1";
+
+    /// SQL des plages, exposé au test d'EXPLAIN (S23).
+    #[cfg(test)]
+    pub(crate) fn candidate_sql(branch: &str, with_before: bool) -> String {
+        candidate_select(branch, with_before)
+    }
+
+    fn one_branch(
+        conn: &Connection,
+        branch: &str,
+        actor: &str,
+        window: DateWindow,
+        upper: &MessageKey,
+        before: Option<&MessageKey>,
+    ) -> Result<Vec<MessageCandidate>, SearchError> {
+        let sql = candidate_select(branch, before.is_some());
+        let mut statement = conn.prepare(&sql)?;
+        let map = |row: &rusqlite::Row<'_>| -> rusqlite::Result<(bool, MessageCandidate)> {
+            Ok((
+                row.get::<_, i64>(1)? == 1,
+                MessageCandidate {
+                    key: MessageKey {
+                        ts: row.get(0)?,
+                        id: row.get(2)?,
+                        target: row.get(3)?,
+                    },
+                    sender: row.get(4)?,
+                    body_bytes: row.get::<_, i64>(5)?.max(0) as u64,
+                },
+            ))
+        };
+        let rows: Vec<(bool, MessageCandidate)> = match before {
+            Some(before) => statement
+                .query_map(
+                    params![
+                        actor,
+                        window.since,
+                        window.until,
+                        upper.ts,
+                        upper.id,
+                        upper.target,
+                        before.ts,
+                        before.id,
+                        before.target
+                    ],
+                    map,
+                )?
+                .collect::<Result<_, _>>()?,
+            None => statement
+                .query_map(
+                    params![
+                        actor,
+                        window.since,
+                        window.until,
+                        upper.ts,
+                        upper.id,
+                        upper.target
+                    ],
+                    map,
+                )?
+                .collect::<Result<_, _>>()?,
+        };
+        let mut out = Vec::with_capacity(rows.len());
+        for (too_large, candidate) in rows {
+            if too_large {
+                return Err(SearchError::MetadataTooLarge);
+            }
+            out.push(candidate);
+        }
+        Ok(out)
+    }
+
+    /// Plus grande clé autorisée dans la fenêtre : borne haute de la première
+    /// page. `None` = aucun échange visible.
+    pub(crate) fn message_upper_bound(
+        conn: &Connection,
+        actor: &str,
+        window: DateWindow,
+    ) -> Result<Option<MessageKey>, SearchError> {
+        let mut best: Option<MessageKey> = None;
+        for branch in [SENDER_BRANCH, TARGET_BRANCH] {
+            let sql = format!(
+                "SELECT ts,
+                        CASE WHEN {META_TOO_LARGE} THEN 1 ELSE 0 END,
+                        CASE WHEN {META_TOO_LARGE} THEN '' ELSE id END,
+                        CASE WHEN {META_TOO_LARGE} THEN '' ELSE target END
+                 FROM ledger WHERE {branch} AND ts >= ?2 AND ts <= ?3
+                 ORDER BY ts DESC, id DESC, target DESC LIMIT 1"
+            );
+            let found = conn
+                .query_row(&sql, params![actor, window.since, window.until], |row| {
+                    Ok((
+                        row.get::<_, i64>(1)? == 1,
+                        MessageKey {
+                            ts: row.get(0)?,
+                            id: row.get(2)?,
+                            target: row.get(3)?,
+                        },
+                    ))
+                })
+                .optional()?;
+            if let Some((too_large, key)) = found {
+                if too_large {
+                    return Err(SearchError::MetadataTooLarge);
+                }
+                if best
+                    .as_ref()
+                    .is_none_or(|current| key.page_cmp(current) == Ordering::Less)
+                {
+                    best = Some(key);
+                }
+            }
+        }
+        Ok(best)
+    }
+
+    /// Au plus 129 clés autorisées, fusion des deux plages (≤ 258), sans corps.
+    pub(crate) fn message_candidates(
+        conn: &Connection,
+        actor: &str,
+        window: DateWindow,
+        upper: &MessageKey,
+        before: Option<&MessageKey>,
+    ) -> Result<Vec<MessageCandidate>, SearchError> {
+        let sent = one_branch(conn, SENDER_BRANCH, actor, window, upper, before)?;
+        let received = one_branch(conn, TARGET_BRANCH, actor, window, upper, before)?;
+        let mut merged = Vec::with_capacity(sent.len() + received.len());
+        let (mut a, mut b) = (sent.into_iter().peekable(), received.into_iter().peekable());
+        while merged.len() < FETCH_LIMIT {
+            match (a.peek(), b.peek()) {
+                (None, None) => break,
+                (Some(_), None) => merged.push(a.next().expect("pic présent")),
+                (None, Some(_)) => merged.push(b.next().expect("pic présent")),
+                (Some(x), Some(y)) => {
+                    if x.key.page_cmp(&y.key) != Ordering::Greater {
+                        merged.push(a.next().expect("pic présent"));
+                    } else {
+                        merged.push(b.next().expect("pic présent"));
+                    }
+                }
+            }
+        }
+        Ok(merged)
+    }
+
+    /// Charge, en UNE requête, les corps des clés choisies (≤ 16 Mio chacune),
+    /// en revérifiant la participation de l'acteur. Une clé disparue entre
+    /// temps est simplement absente du résultat.
+    pub(crate) fn message_bodies(
+        conn: &Connection,
+        actor: &str,
+        keys: &[&MessageKey],
+    ) -> Result<HashMap<(String, String), LoadedMessage>, SearchError> {
+        let mut out = HashMap::with_capacity(keys.len());
+        if keys.is_empty() {
+            return Ok(out);
+        }
+        let values = std::iter::repeat_n("(?, ?)", keys.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        // Jointure pilotée par la liste de clés : chaque clé fait une
+        // recherche par clé primaire ; `IN (VALUES …)` laissait le planificateur
+        // préférer un parcours des index participant (borné, mais linéaire).
+        let sql = format!(
+            "WITH keys(k_id, k_target) AS (VALUES {values})
+             SELECT l.id, l.target, l.sender, l.ts, l.body
+             FROM keys JOIN ledger AS l ON l.id = keys.k_id AND l.target = keys.k_target
+             WHERE (l.sender = ?{actor_index} OR l.target = ?{actor_index})
+               AND octet_length(l.body) <= {MAX_BODY_BYTES}",
+            actor_index = keys.len() * 2 + 1
+        );
+        let mut binds: Vec<rusqlite::types::Value> = Vec::with_capacity(keys.len() * 2 + 1);
+        for key in keys {
+            binds.push(rusqlite::types::Value::Text(key.id.clone()));
+            binds.push(rusqlite::types::Value::Text(key.target.clone()));
+        }
+        binds.push(rusqlite::types::Value::Text(actor.to_string()));
+        let mut statement = conn.prepare(&sql)?;
+        let rows = statement.query_map(rusqlite::params_from_iter(binds), |row| {
+            Ok(LoadedMessage {
+                key: MessageKey {
+                    ts: row.get(3)?,
+                    id: row.get(0)?,
+                    target: row.get(1)?,
+                },
+                sender: row.get(2)?,
+                body: row.get(4)?,
+            })
+        })?;
+        for row in rows {
+            let loaded = row?;
+            out.insert((loaded.key.id.clone(), loaded.key.target.clone()), loaded);
+        }
+        Ok(out)
+    }
+
+    /// Métadonnées d'un message exact pour l'acteur participant :
+    /// `(sender, ts, body_bytes)`, sans charger le corps.
+    pub(crate) fn message_head(
+        conn: &Connection,
+        actor: &str,
+        id: &str,
+        target: &str,
+    ) -> Result<Option<(String, i64, u64)>, rusqlite::Error> {
+        conn.query_row(
+            "SELECT sender, ts, octet_length(body) FROM ledger
+             WHERE id = ?1 AND target = ?2 AND (sender = ?3 OR target = ?3)",
+            params![id, target, actor],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get::<_, i64>(2)?.max(0) as u64,
+                ))
+            },
+        )
+        .optional()
+    }
+
+    pub(crate) fn message_body(
+        conn: &Connection,
+        actor: &str,
+        id: &str,
+        target: &str,
+    ) -> Result<Option<String>, rusqlite::Error> {
+        conn.query_row(
+            "SELECT body FROM ledger
+             WHERE id = ?1 AND target = ?2 AND (sender = ?3 OR target = ?3)",
+            params![id, target, actor],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    // ---------------------------------------------------------------- fils
+
+    #[derive(Debug, Clone)]
+    pub(crate) struct ThreadCandidate {
+        pub seq: u64,
+        pub message_id: String,
+        pub author_id: String,
+        pub created_at: i64,
+        pub body_bytes: u64,
+    }
+
+    /// Au plus 129 entrées d'un fil, `seq` décroissant sous `upper`
+    /// (inclus) et `before` (exclu). L'appartenance est vérifiée par
+    /// l'appelant dans la MÊME transaction (`load_thread_for_member`).
+    pub(crate) fn thread_candidates(
+        tx: &Transaction<'_>,
+        thread_id: &str,
+        window: DateWindow,
+        upper_seq: u64,
+        before_seq: Option<u64>,
+    ) -> Result<Vec<ThreadCandidate>, SearchError> {
+        let before = before_seq.map(|seq| seq as i64).unwrap_or(i64::MAX);
+        let mut statement = tx.prepare(
+            "SELECT seq, message_id, author_id, created_at, octet_length(body)
+             FROM discussion_entries
+             WHERE thread_id = ?1 AND seq <= ?2 AND seq < ?3
+               AND created_at >= ?4 AND created_at <= ?5
+             ORDER BY seq DESC LIMIT ?6",
+        )?;
+        let rows = statement.query_map(
+            params![
+                thread_id,
+                upper_seq as i64,
+                before,
+                window.since,
+                window.until,
+                FETCH_LIMIT as i64
+            ],
+            |row| {
+                Ok(ThreadCandidate {
+                    seq: row.get::<_, i64>(0)?.max(0) as u64,
+                    message_id: row.get(1)?,
+                    author_id: row.get(2)?,
+                    created_at: row.get(3)?,
+                    body_bytes: row.get::<_, i64>(4)?.max(0) as u64,
+                })
+            },
+        )?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub(crate) fn thread_bodies(
+        tx: &Transaction<'_>,
+        thread_id: &str,
+        seqs: &[u64],
+    ) -> Result<HashMap<u64, String>, SearchError> {
+        let mut out = HashMap::with_capacity(seqs.len());
+        if seqs.is_empty() {
+            return Ok(out);
+        }
+        let marks = std::iter::repeat_n("?", seqs.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        // `?1` explicite puis marqueurs anonymes : les anonymes continuent la
+        // numérotation après le plus grand index déjà utilisé.
+        let sql = format!(
+            "SELECT seq, body FROM discussion_entries
+             WHERE thread_id = ?1 AND seq IN ({marks})"
+        );
+        let mut binds: Vec<rusqlite::types::Value> = Vec::with_capacity(seqs.len() + 1);
+        binds.push(rusqlite::types::Value::Text(thread_id.to_string()));
+        binds.extend(
+            seqs.iter()
+                .map(|seq| rusqlite::types::Value::Integer(*seq as i64)),
+        );
+        let mut statement = tx.prepare(&sql)?;
+        let rows = statement.query_map(rusqlite::params_from_iter(binds), |row| {
+            Ok((
+                row.get::<_, i64>(0)?.max(0) as u64,
+                row.get::<_, String>(1)?,
+            ))
+        })?;
+        for row in rows {
+            let (seq, body) = row?;
+            out.insert(seq, body);
+        }
+        Ok(out)
+    }
+
+    // ---------------------------------------------------------------- texte
+
+    /// Termes déjà repliés (`fold_for_search`), tous requis. Le corps est
+    /// replié UNE fois ; l'offset du premier terme trouvé est reconverti en
+    /// offset du corps ORIGINAL par un seul parcours des caractères, sans
+    /// tableau d'offsets. `None` si un terme manque.
+    pub(crate) fn locate_terms(body: &str, folded_terms: &[String]) -> Option<usize> {
+        let folded = fold_for_search(body);
+        let mut first: Option<usize> = None;
+        for term in folded_terms {
+            let at = folded.find(term.as_str())?;
+            first = Some(first.map_or(at, |current| current.min(at)));
+        }
+        let target = first?;
+        let mut folded_offset = 0usize;
+        for (original_offset, ch) in body.char_indices() {
+            if folded_offset >= target {
+                return Some(original_offset);
+            }
+            folded_offset += super::folded_len(ch);
+        }
+        // L'occurrence débute dans le repli du dernier caractère : son début
+        // original est ce dernier caractère.
+        body.char_indices().last().map(|(offset, _)| offset)
+    }
+
+    /// Extrait ≤ `max_bytes` depuis `offset` (frontières UTF-8 garanties).
+    pub(crate) fn excerpt(body: &str, offset: usize, max_bytes: usize) -> &str {
+        let start = offset.min(body.len());
+        let start = floor_char_boundary(body, start);
+        let end = floor_char_boundary(body, start.saturating_add(max_bytes).min(body.len()));
+        &body[start..end]
+    }
+
+    pub(crate) fn floor_char_boundary(text: &str, index: usize) -> usize {
+        let mut index = index.min(text.len());
+        while !text.is_char_boundary(index) {
+            index -= 1;
+        }
+        index
+    }
+
+    #[cfg(test)]
+    mod spec104_text_tests {
+        use super::*;
+
+        #[test]
+        fn spec104_repli_unique_et_offset_original_exact() {
+            // Ÿ (2 octets) se replie en y (1 octet) : l'offset replié diverge
+            // de l'offset original ; la reconversion doit rendre l'original.
+            let body = "ŸŸŸ décision café";
+            let terms = vec![fold_for_search("CAFE")];
+            let offset = locate_terms(body, &terms).unwrap();
+            assert_eq!(&body[offset..], "café");
+            assert_eq!(offset, body.find("café").unwrap());
+            // Plusieurs termes : le premier trouvé dans le corps localise.
+            let terms = vec![fold_for_search("café"), fold_for_search("décision")];
+            let offset = locate_terms(body, &terms).unwrap();
+            assert_eq!(&body[offset..offset + "décision".len()], "décision");
+            // Terme absent → None, même si les autres sont présents.
+            assert!(locate_terms(body, &[fold_for_search("cafe"), "zzz".into()]).is_none());
+            // Forme décomposée (e + U+0301) non assimilée au repli précomposé :
+            // un terme décomposé ne trouve pas « café » ; limite documentée.
+            assert!(locate_terms("café", &[fold_for_search("cafe\u{301}")]).is_none());
+            assert!(locate_terms("café", &[fold_for_search("CAFE")]).is_some());
+            // Jokers LIKE et guillemets littéraux, sans échappement.
+            assert!(
+                locate_terms(
+                    "100% sûr_",
+                    &[fold_for_search("%"), fold_for_search("sur_")]
+                )
+                .is_some()
+            );
+            assert!(locate_terms("dit \"bonjour\"", &[fold_for_search("\"bonjour\"")]).is_some());
+        }
+
+        #[test]
+        fn spec104_extrait_respecte_les_frontieres_utf8() {
+            let body = "ab😀cd";
+            assert_eq!(excerpt(body, 0, 3), "ab");
+            assert_eq!(excerpt(body, 2, 4), "😀");
+            // Offset au milieu d'un caractère : ramené à sa frontière.
+            assert_eq!(excerpt(body, 3, 10), "😀cd");
+            assert_eq!(excerpt(body, 100, 10), "");
+        }
+
+        #[test]
+        fn spec104_cle_de_page_ordonnee_en_binaire_decroissant() {
+            let a = MessageKey {
+                ts: 10,
+                id: "b".into(),
+                target: "x".into(),
+            };
+            let b = MessageKey {
+                ts: 10,
+                id: "a".into(),
+                target: "z".into(),
+            };
+            let c = MessageKey {
+                ts: 9,
+                id: "z".into(),
+                target: "z".into(),
+            };
+            assert_eq!(a.page_cmp(&b), Ordering::Less);
+            assert_eq!(b.page_cmp(&c), Ordering::Less);
+            assert_eq!(a.page_cmp(&a), Ordering::Equal);
+        }
+    }
+}
+
+#[cfg(test)]
+mod spec104_index_tests {
+    use super::search::{SENDER_BRANCH, TARGET_BRANCH};
+    use rusqlite::Connection;
+
+    fn fixture() -> (std::path::PathBuf, Connection) {
+        let path = std::env::temp_dir().join(format!(
+            "bridget-spec104-index-{}-{}.sqlite",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let store = crate::store::Store::open(&path).unwrap();
+        drop(store);
+        (path.clone(), Connection::open(&path).unwrap())
+    }
+
+    fn plan(conn: &Connection, sql: &str, params: &[&dyn rusqlite::ToSql]) -> String {
+        let mut statement = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        let rows = statement
+            .query_map(params, |row| row.get::<_, String>(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>();
+        rows.join(" / ")
+    }
+
+    /// T004 / S23 : les deux plages passent par les index participant, sans
+    /// balayage de table ni tri temporaire ; réouverture idempotente.
+    #[test]
+    fn spec104_plages_indexees_et_migration_idempotente() {
+        let (path, conn) = fixture();
+        conn.execute_batch(
+            "INSERT INTO ledger VALUES ('a', 10, 's', 't', 'x', 'k'), ('b', 9, 't', 's', 'y', 'k')",
+        )
+        .unwrap();
+        let names: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='ledger' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "idx_ledger_conv",
+                "idx_ledger_sender_page",
+                "idx_ledger_target_page",
+                "idx_ledger_ts",
+                "sqlite_autoindex_ledger_1"
+            ],
+            "index existants conservés, deux index 104 ajoutés"
+        );
+        for (branch, index) in [
+            (SENDER_BRANCH, "idx_ledger_sender_page"),
+            (TARGET_BRANCH, "idx_ledger_target_page"),
+        ] {
+            for with_before in [false, true] {
+                let sql = super::search::candidate_sql(branch, with_before);
+                let plan = if with_before {
+                    plan(
+                        &conn,
+                        &sql,
+                        &[
+                            &"s",
+                            &0i64,
+                            &i64::MAX,
+                            &10i64,
+                            &"a",
+                            &"t",
+                            &9i64,
+                            &"b",
+                            &"s",
+                        ],
+                    )
+                } else {
+                    plan(&conn, &sql, &[&"s", &0i64, &i64::MAX, &10i64, &"a", &"t"])
+                };
+                assert!(
+                    plan.contains(index),
+                    "{branch} before={with_before} : {plan}"
+                );
+                assert!(!plan.contains("SCAN ledger"), "{plan}");
+                assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+            }
+        }
+        // Chargement des corps par clé primaire.
+        let plan = plan(
+            &conn,
+            "WITH keys(k_id, k_target) AS (VALUES (?, ?)) SELECT l.id FROM keys JOIN ledger AS l ON l.id = keys.k_id AND l.target = keys.k_target WHERE (l.sender = ?3 OR l.target = ?3)",
+            &[&"a", &"t", &"s"],
+        );
+        assert!(plan.contains("sqlite_autoindex_ledger_1"), "{plan}");
+        assert!(
+            !plan.contains("SCAN ledger") && !plan.contains("SCAN l "),
+            "{plan}"
+        );
+        drop(conn);
+        // Réouverture deux fois : aucune perte, aucune erreur de migration.
+        for _ in 0..2 {
+            let store = crate::store::Store::open(&path).unwrap();
+            let count: i64 = store
+                .connection()
+                .query_row("SELECT count(*) FROM ledger", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, 2);
+        }
+        let _ = std::fs::remove_file(&path);
+    }
 }
