@@ -1,0 +1,25 @@
+{
+  "idempotency_key": "fixture-generated-provenance-v1",
+  "kind": "kpi",
+  "title": "Moyenne calculée",
+  "payload": {
+    "value": 17.5,
+    "unit": "ms",
+    "label": "Latence médiane"
+  },
+  "sources": [
+    {
+      "source_kind": "agent_computed",
+      "locator": "calculation:latence-mediane-v1",
+      "fetched_at": null,
+      "content_digest": "f6c9a81b91f3329113d5b0ab57c2ca9cbbc96cd6b6f4ea8434fb829432533a7a",
+      "citation": "Médiane calculée depuis les mesures jointes",
+      "units": "ms",
+      "transformations": ["tri ascendant", "médiane p50"],
+      "access_status": "available"
+    }
+  ],
+  "quality_notices": [],
+  "parent_artifact_ref": null,
+  "publication_reason": "initial"
+}

@@ -1,0 +1,2 @@
+{"v":1,"seq":8,"ts":"2026-08-25T00:00:00Z","session_id":"session-2","event":"permission","message_id":"m4","payload":{"tool":"écrire","options":[{"optionId":"reject-1","kind":"reject_once"}],"decision":{"outcome":"cancelled"}}}
+corrupt-jsonl-record

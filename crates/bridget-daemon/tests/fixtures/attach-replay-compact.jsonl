@@ -1,0 +1,7 @@
+{"v":1,"seq":1,"ts":"2026-08-23T11:00:00Z","session_id":"session-replay","message_id":"message-1","event":"turn_start","payload":{"from":"humain","reply":false,"body":"Premier tour"}}
+{"v":1,"seq":2,"ts":"2026-08-23T11:00:01Z","session_id":"session-replay","message_id":"message-1","event":"update","payload":{"kind":"text","content":"réponse "}}
+{"v":1,"seq":3,"ts":"2026-08-23T11:00:02Z","session_id":"session-replay","message_id":"message-1","event":"update","payload":{"kind":"text","content":"compacte"}}
+{"v":1,"seq":4,"ts":"2026-08-23T11:00:03Z","session_id":"session-replay","message_id":"message-1","event":"turn_end","payload":{"stop_reason":"end_turn"}}
+{"v":1,"seq":5,"ts":"2026-08-23T11:01:00Z","session_id":"session-replay","message_id":"message-2","event":"turn_start","payload":{"from":"humain","reply":false,"body":"Second tour"}}
+{"v":1,"seq":6,"ts":"2026-08-23T11:01:01Z","session_id":"session-replay","message_id":"message-2","event":"update","payload":{"kind":"text","content":"déjà clos"}}
+{"v":1,"seq":7,"ts":"2026-08-23T11:01:02Z","session_id":"session-replay","message_id":"message-2","event":"turn_end","payload":{"stop_reason":"end_turn"}}

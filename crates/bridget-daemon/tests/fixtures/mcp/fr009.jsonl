@@ -1,0 +1,15 @@
+{"name":"initialize numérique","stdin":[{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}],"responses":1,"id":1,"expect":"initialize"}
+{"name":"initialize chaîne","stdin":[{"jsonrpc":"2.0","id":"init-2","method":"initialize","params":{}}],"responses":1,"id":"init-2","expect":"initialize"}
+{"name":"notification initialized","stdin":[{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},{"jsonrpc":"2.0","method":"notifications/initialized"}],"responses":1,"id":1,"expect":"initialize"}
+{"name":"tools list","stdin":[{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":"outils","method":"tools/list"}],"responses":2,"expect":"tools"}
+{"name":"tools list idempotente","stdin":[{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":2,"method":"tools/list"},{"jsonrpc":"2.0","id":3,"method":"tools/list"}],"responses":3,"expect":"tools_twice"}
+{"name":"ping","stdin":[{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":"ping","method":"ping"}],"responses":2,"expect":"ping"}
+{"name":"tools call avant initialized","stdin":[{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"bridget_who"}}],"responses":1,"id":4,"expect":"error"}
+{"name":"tools call préparé","stdin":[{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"bridget_who","arguments":{}}}],"responses":2,"expect":"tool_unavailable"}
+{"name":"méthode inconnue","stdin":[{"jsonrpc":"2.0","id":6,"method":"inconnue"}],"responses":1,"id":6,"expect":"error"}
+{"name":"paramètres invalides","stdin":[{"jsonrpc":"2.0","id":1,"method":"initialize","params":[]},{"jsonrpc":"2.0","id":7,"method":"tools/list","params":[]}],"responses":2,"id":1,"expect":"error"}
+{"name":"json malformé","stdin":["{ JSON invalide"],"responses":1,"id":null,"expect":"error"}
+{"name":"ids mixtes","stdin":[{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":9,"method":"ping"},{"jsonrpc":"2.0","id":"neuf","method":"ping"}],"responses":3,"expect":"mixed_ids"}
+{"name":"notification intercalée","stdin":[{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","method":"notifications/cancelled","params":{}},{"jsonrpc":"2.0","id":10,"method":"ping"}],"responses":2,"expect":"ping"}
+{"name":"EOF propre","stdin":[],"responses":0,"expect":"none"}
+{"name":"notification inconnue sans id","stdin":[{"jsonrpc":"2.0","method":"inconnue"}],"responses":0,"expect":"none"}

@@ -1,0 +1,5 @@
+{"type":"RoleHandshake","role":"service"}
+{"type":"RoleAccepted","role":"service"}
+{"type":"ServiceHello","version":1,"service":"guichet","issuer_scope":"015_scope_0123456789abcdef0123456789abcdef","capabilities":["guichet_v1"]}
+{"type":"ServiceWelcome","version":1,"horizon_secs":604800,"issued_at_tolerance_secs":60,"capabilities":["guichet_v1"]}
+{"type":"ServiceRejected","reason":{"kind":"capability_required"}}

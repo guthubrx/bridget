@@ -1,0 +1,74 @@
+{
+  "draft": {
+    "objective": "Corriger la pagination / cas « slash » et \\ antislash",
+    "summary": "Résumé Unicode : é € 😀 — tabulation\tretour\nligne, contrôle \u0001 et guillemet \".",
+    "results": [
+      {
+        "text": "Le test de chevauchement échoue sur la page 2.",
+        "evidence": "Exécution déclarée par A sur la fixture synthétique."
+      },
+      {
+        "text": "Deux causes écartées : tri instable et cache."
+      }
+    ],
+    "decisions": [
+      "Garder la pagination par curseur."
+    ],
+    "questions": [
+      "La purge concurrente est-elle responsable ?"
+    ],
+    "next_step": "Relancer le test ciblé et observer les identifiants.",
+    "references": [
+      {
+        "kind": "file",
+        "label": "module",
+        "host": "poste-alpha",
+        "path": "/Users/user/projet/src/pagination.rs"
+      },
+      {
+        "kind": "file",
+        "label": "windows",
+        "host": "pc-bureau",
+        "path": "C:\\travail\\notes.txt"
+      },
+      {
+        "kind": "url",
+        "label": "ticket",
+        "url": "https://example.org/tickets/42?view=full#notes"
+      },
+      {
+        "kind": "message",
+        "label": "demande initiale",
+        "id": "msg-1",
+        "target": "10300000-0000-4000-8000-00000000000b",
+        "source_label": "Bridget principal sur poste-alpha"
+      },
+      {
+        "kind": "journal",
+        "label": "journal de A",
+        "agent": "10300000-0000-4000-8000-00000000000a",
+        "from_seq": 0,
+        "to_seq": 12,
+        "source_label": "Bridget principal"
+      },
+      {
+        "kind": "thread",
+        "label": "fil de relecture",
+        "thread_id": "33333333-3333-4333-8333-333333333333",
+        "from_seq": 1,
+        "to_seq": 7,
+        "source_label": "Bridget principal"
+      },
+      {
+        "kind": "artifact",
+        "label": "rapport",
+        "artifact_id": "art-9",
+        "version_id": "v3",
+        "source_label": "Bridget principal"
+      }
+    ],
+    "limitations": []
+  },
+  "expected_body": "[Bridget handoff v1]\n{\n  \"version\": 1,\n  \"objective\": \"Corriger la pagination / cas « slash » et \\\\ antislash\",\n  \"summary\": \"Résumé Unicode : é € 😀 — tabulation\\tretour\\nligne, contrôle \\u0001 et guillemet \\\".\",\n  \"results\": [\n    {\n      \"text\": \"Le test de chevauchement échoue sur la page 2.\",\n      \"evidence\": \"Exécution déclarée par A sur la fixture synthétique.\"\n    },\n    {\n      \"text\": \"Deux causes écartées : tri instable et cache.\",\n      \"evidence\": null\n    }\n  ],\n  \"decisions\": [\n    \"Garder la pagination par curseur.\"\n  ],\n  \"questions\": [\n    \"La purge concurrente est-elle responsable ?\"\n  ],\n  \"next_step\": \"Relancer le test ciblé et observer les identifiants.\",\n  \"references\": [\n    {\n      \"kind\": \"file\",\n      \"label\": \"module\",\n      \"host\": \"poste-alpha\",\n      \"path\": \"/Users/user/projet/src/pagination.rs\"\n    },\n    {\n      \"kind\": \"file\",\n      \"label\": \"windows\",\n      \"host\": \"pc-bureau\",\n      \"path\": \"C:\\\\travail\\\\notes.txt\"\n    },\n    {\n      \"kind\": \"url\",\n      \"label\": \"ticket\",\n      \"url\": \"https://example.org/tickets/42?view=full#notes\"\n    },\n    {\n      \"kind\": \"message\",\n      \"label\": \"demande initiale\",\n      \"id\": \"msg-1\",\n      \"target\": \"10300000-0000-4000-8000-00000000000b\",\n      \"source_label\": \"Bridget principal sur poste-alpha\"\n    },\n    {\n      \"kind\": \"journal\",\n      \"label\": \"journal de A\",\n      \"agent\": \"10300000-0000-4000-8000-00000000000a\",\n      \"from_seq\": 0,\n      \"to_seq\": 12,\n      \"source_label\": \"Bridget principal\"\n    },\n    {\n      \"kind\": \"thread\",\n      \"label\": \"fil de relecture\",\n      \"thread_id\": \"33333333-3333-4333-8333-333333333333\",\n      \"from_seq\": 1,\n      \"to_seq\": 7,\n      \"source_label\": \"Bridget principal\"\n    },\n    {\n      \"kind\": \"artifact\",\n      \"label\": \"rapport\",\n      \"artifact_id\": \"art-9\",\n      \"version_id\": \"v3\",\n      \"source_label\": \"Bridget principal\"\n    }\n  ],\n  \"limitations\": []\n}",
+  "expected_bytes": 1931
+}

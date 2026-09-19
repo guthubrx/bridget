@@ -1,0 +1,25 @@
+{
+  "idempotency_key": "fixture-image-v1",
+  "kind": "image",
+  "title": "Canard observé",
+  "payload": {
+    "blob_digest": "e65160712759df627bdacb009c3450f6a29fa07d5a7652916db39406873a8012",
+    "media_type": "image/jpeg",
+    "alt": "Un canard colvert nage sur une eau bleutée."
+  },
+  "sources": [
+    {
+      "source_kind": "remote",
+      "locator": "https://images.example.test/mallard.jpg",
+      "fetched_at": 1788163200,
+      "content_digest": "e65160712759df627bdacb009c3450f6a29fa07d5a7652916db39406873a8012",
+      "citation": "Photographie distante avec attribution",
+      "units": null,
+      "transformations": ["réduction côté Bridget"],
+      "access_status": "available"
+    }
+  ],
+  "quality_notices": [],
+  "parent_artifact_ref": null,
+  "publication_reason": "initial"
+}

@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","id":1,"method":"thread/start","params":{"cwd":"/workspace"}}
+{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-fixture"}}}
+{"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"threadId":"thread-fixture","input":[{"type":"text","text":"FIXTURE"}]}}
+{"jsonrpc":"2.0","method":"item/started","params":{"item":{"id":"item-internal","type":"userMessage","clientId":"delivery-fixture"}}}
+{"jsonrpc":"2.0","id":3,"method":"turn/interrupt","params":{"threadId":"thread-fixture","turnId":"turn-fixture"}}

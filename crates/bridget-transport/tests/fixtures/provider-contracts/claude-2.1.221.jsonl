@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":"FIXTURE"}}
+{"type":"control_request","request_id":"interrupt-fixture","request":{"subtype":"interrupt"}}
+{"type":"control_response","response":{"subtype":"success","request_id":"interrupt-fixture"}}
+{"type":"result","subtype":"aborted_tools","is_error":false}
