@@ -3,9 +3,9 @@
 ## Fiche synthèse
 
 Spec: 110-reprise-nom
-Statut: In Progress
+Statut: Implemented (livré 2026-09-19)
 Priorité: P1
-Tâches: 0/6
+Tâches: 6/6
 Date: 2026-09-19
 Branche: session-110-reprise-nom
 Dépendances : extension de nom 089, annuaire vivant, adaptateur T3 098.

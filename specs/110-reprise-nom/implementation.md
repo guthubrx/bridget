@@ -2,7 +2,7 @@
 
 ## Métadonnées
 - **Spec** : 110-reprise-nom — **Branche** : session-110-reprise-nom
-- **Base** : main `1f6acc42` — **Date** : 2026-09-19 — **Statut** : In Progress (livraison en cours)
+- **Base** : main `1f6acc42` — **Date** : 2026-09-19 — **Statut** : Implemented, livré en production le 2026-09-19 14:41
 
 ## Diagnostic à l'origine
 
@@ -31,3 +31,14 @@ Mesure : 268 profils pour 16 agents connectés, 253 dormants depuis plus de deux
 - Recette complète : **1516 réussis, 0 échec, 52 ignorés**, dont trois tests nouveaux :
   transfert depuis une identité éteinte, refus face à une identité vivante, reprise de son propre
   nom sans transfert.
+
+## T006 — Livraison en production (2026-09-19 14:41)
+
+- Binaire reconstruit par le script d'entretien, cible `target/release/bridget`, soit le fichier
+  pointé par le lien de la ligne de commande et par les deux services launchd.
+- `com.bridget.daemon` puis `com.bridget.t3` relancés par `launchctl kickstart -k`.
+- Le pont a republié les titres à la reconnexion. Journal : aucun `NameConflict` après la relance,
+  contre trois toutes les 330 secondes avant.
+- Annuaire vérifié : `claude-horizon`, `wiki`, `horizon-3D`, `opus-horizon`, `horizon-cursor` et
+  `cursor-listen` portent désormais le nom affiché dans T3. Quinze agents reconnectés.
+- SC-004 satisfait.
