@@ -1,6 +1,6 @@
 # Journal 113 — Une remise écartée par le pont n'est plus « en vol »
 
-- **Base** : main `4f53dc4d` — **Date** : 2026-09-19 — **Statut** : In Progress
+- **Base** : main `4f53dc4d` — **Date** : 2026-09-19 — **Statut** : Implemented, livré en production le 2026-09-19 21:06
 
 ## Diagnostic
 Le pont T3 jetait une remise dans quatre cas sans rien dire au daemon : file saturée (`QUEUE_BOUND`),
@@ -34,3 +34,12 @@ signale déjà une injection ratée par `DeliveryRejected` puis `DeliveryIndeter
 - `t3code::tests` : 49/49. fmt OK ; clippy `-D warnings` OK.
 - Recette complète (`cargo test --workspace --no-fail-fast`, umask 077, `BRIDGET_HOME` privé) :
   **1524 réussis, 0 échec, 52 ignorés** sur 80 binaires.
+
+## T005 — Livraison
+Commit `8ae71edb` fusionné dans main en fast-forward ; binaire reconstruit à 21:05 ; seul le service
+du pont (`com.bridget.t3`) a été relancé, le daemon n'a pas changé et les autres agents n'ont pas
+été coupés. À la reconnexion, le daemon a rejoué les remises `dispatching` des fils vivants et le
+pont a écarté avec motif celles dont la demande était close : sept sagas sont passées de
+`dispatching` à `indeterminate` en une seconde (40 → 33 ; 30 → 37). Les 33 restantes datent
+d'août et visent des instances disparues : elles ne sont plus rejouées et relèvent du balayage
+des sagas expirées, hors périmètre.

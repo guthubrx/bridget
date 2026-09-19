@@ -1,7 +1,7 @@
 # Spécification 113 — Une remise écartée par le pont n'est plus « en vol »
 
 ## Fiche synthèse
-Spec: 113-fiabilite-remises | Statut: In Progress | Priorité: P1 | Date: 2026-09-19
+Spec: 113-fiabilite-remises | Statut: Implemented (livré 2026-09-19) | Priorité: P1 | Date: 2026-09-19
 Branche: session-113-tete-de-file | Dépend de 111 et 112 (attente en file du pont T3).
 Origine : contre-revue adverse d'evols-t3 (Codex) du 2026-09-19, voir `adversarial-review-evols-t3.md`.
 
