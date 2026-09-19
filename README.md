@@ -139,8 +139,7 @@ d'architecture sont historisées dans [docs/decisions](docs/decisions) (45 ADR �
 - [Référence complète de la communication](docs/reference-communication.md) : reçus, observation, sessions natives, construction sans toucher à l'installation
 - [Installation et pont T3 Code](docs/communication-installation.md)
 - [Fédération SSH entre serveurs](docs/federation-services.md)
-- [Démarrage à froid pour un référent sans contexte](docs/demarrage-a-froid.md)
-- [Spécifications par session](specs) et [décisions d'architecture](docs/decisions)
+- [Décisions d'architecture](docs/decisions) : 45 ADR datées, contexte, décision, conséquences
 
 ## Licence
 
