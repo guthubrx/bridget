@@ -37,6 +37,11 @@ const PROTOCOL: &str = "t3code";
 const TOKEN_TTL: &str = "30d";
 const DEFAULT_POLL: Duration = Duration::from_secs(3);
 const DEFAULT_TURN_WAIT: Duration = Duration::from_secs(120);
+/// Session 111 : borne mémoire de la file d'un fil. Elle remplace l'ancien
+/// garde-fou temporel, qui jetait une remise valide au seul motif que le
+/// destinataire travaillait depuis plus de deux minutes. Une saturation est un
+/// fait distinct d'une péremption : elle a son propre avertissement.
+const QUEUE_BOUND: usize = 64;
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
 const AUTH_FAILED_PAUSE: Duration = Duration::from_secs(60);
 const DETAIL_PAGE: u32 = 20;
@@ -1395,6 +1400,15 @@ impl LinkWorker {
         match frame {
             delivery
             @ (DaemonToWrapper::Deliver(_) | DaemonToWrapper::DeliverIdempotent { .. }) => {
+                if self.queue.len() >= QUEUE_BOUND
+                    && let Some((oldest, _)) = self.queue.pop_front()
+                {
+                    warn!(
+                        "file du fil {} saturée à {QUEUE_BOUND} : remise {} écartée",
+                        self.thread_id,
+                        delivery_message(&oldest).id
+                    );
+                }
                 self.queue.push_back((delivery, Instant::now()));
                 self.request_status();
             }
@@ -1544,7 +1558,9 @@ impl LinkWorker {
             let message = delivery_message(frame);
             let expired = message.deadline_at.is_some_and(|deadline| deadline <= now)
                 || message.reply_timeout.is_some_and(|timeout| received.elapsed() >= Duration::from_secs(timeout))
-                || received.elapsed() >= self.turn_wait
+                // Session 111 : l'attente seule ne périme plus. Un message sans
+                // échéance attend la fin du tour ; c'est à l'expéditeur de
+                // déclarer une échéance s'il en veut une.
                 || matches!(frame, DaemonToWrapper::DeliverIdempotent { expires_at, .. } if *expires_at <= now as i64)
                 || self.requests.get(&message.id).is_some_and(|request| request.state != "open" || request.deadline_at <= now as i64);
             if expired { warn!("remise {} périmée avant démarrage", message.id); }
@@ -1587,7 +1603,6 @@ impl LinkWorker {
         if message
             .deadline_at
             .is_some_and(|deadline| deadline <= unix_now())
-            || received.elapsed() >= self.turn_wait
             || message
                 .reply_timeout
                 .is_some_and(|timeout| received.elapsed() >= Duration::from_secs(timeout))
@@ -3246,6 +3261,67 @@ mod tests {
         assert!(!worker.state.seen.iter().any(|id| id == "lost"));
         assert!(!worker.state.ended_turns.iter().any(|id| id == "t"));
         worker.relay.shutdown();
+    }
+
+    /// Session 111 : un message sans échéance attend la fin du tour, même
+    /// bien après l'ancien délai de deux minutes qui le jetait.
+    #[test]
+    fn spec111_remise_sans_echeance_survit_a_une_longue_attente() {
+        let (mut worker, _peer) = worker099();
+        let mut message = bridget_core::BridgetMessage::new("alice", "bob", "libération");
+        message.id = "attente-longue".into();
+        worker.handle_frame(DaemonToWrapper::Deliver(message));
+        // Antidater la réception bien au-delà de l'ancien seuil.
+        let ancien_seuil = worker.turn_wait * 10;
+        if let Some(entry) = worker.queue.front_mut() {
+            entry.1 = Instant::now() - ancien_seuil;
+        }
+        let (_tx, inbox) = mpsc::channel();
+        worker.drive_queue(&inbox);
+        assert_eq!(
+            worker.queue.len(),
+            1,
+            "une remise sans échéance ne périme pas sur la seule attente"
+        );
+        assert_eq!(delivery_message(&worker.queue[0].0).id, "attente-longue");
+    }
+
+    /// Une échéance réellement portée par le message reste respectée.
+    #[test]
+    fn spec111_remise_avec_echeance_depassee_est_toujours_ecartee() {
+        let (mut worker, _peer) = worker099();
+        let mut message = bridget_core::BridgetMessage::new("alice", "bob", "périmée");
+        message.id = "echeance-depassee".into();
+        message.deadline_at = Some(unix_now() - 1);
+        worker.handle_frame(DaemonToWrapper::Deliver(message));
+        let (_tx, inbox) = mpsc::channel();
+        worker.drive_queue(&inbox);
+        assert!(
+            worker.queue.is_empty(),
+            "une échéance dépassée écarte toujours la remise"
+        );
+    }
+
+    /// La borne de file remplace l'ancien garde-fou temporel : au-delà, la plus
+    /// ancienne est écartée, et la file cesse de grandir.
+    #[test]
+    fn spec111_file_saturee_ecarte_la_plus_ancienne() {
+        let (mut worker, _peer) = worker099();
+        for index in 0..(QUEUE_BOUND + 5) {
+            let mut message = bridget_core::BridgetMessage::new("alice", "bob", "lot");
+            message.id = format!("m-{index}");
+            worker.handle_frame(DaemonToWrapper::Deliver(message));
+        }
+        assert_eq!(worker.queue.len(), QUEUE_BOUND, "file bornée");
+        assert_eq!(
+            delivery_message(&worker.queue[0].0).id,
+            "m-5",
+            "les plus anciennes sont écartées, les récentes conservées"
+        );
+        assert_eq!(
+            delivery_message(&worker.queue[QUEUE_BOUND - 1].0).id,
+            format!("m-{}", QUEUE_BOUND + 4)
+        );
     }
 
     #[test]
