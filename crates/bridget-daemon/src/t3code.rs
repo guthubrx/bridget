@@ -1403,11 +1403,7 @@ impl LinkWorker {
                 if self.queue.len() >= QUEUE_BOUND
                     && let Some((oldest, _)) = self.queue.pop_front()
                 {
-                    warn!(
-                        "file du fil {} saturée à {QUEUE_BOUND} : remise {} écartée",
-                        self.thread_id,
-                        delivery_message(&oldest).id
-                    );
+                    self.report_discard(&oldest, Discard::Saturated);
                 }
                 self.queue.push_back((delivery, Instant::now()));
                 self.request_status();
@@ -1417,8 +1413,7 @@ impl LinkWorker {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .insert(id.clone(), Instant::now());
-                self.queue
-                    .retain(|(frame, _)| delivery_message(frame).id != id);
+                self.discard_by_id(&id, Discard::RequestClosed("annulée"));
                 info!("demande {id} retirée avant démarrage : {reason}");
             }
             DaemonToWrapper::Ack { id } => {
@@ -1471,8 +1466,10 @@ impl LinkWorker {
                         self.state
                             .pending
                             .retain(|p| p.request_id != request.id || p.from != request.sender);
-                        self.queue
-                            .retain(|(frame, _)| delivery_message(frame).id != request.id);
+                        self.discard_by_id(
+                            &request.id,
+                            Discard::RequestClosed(request_state_label(&request.state)),
+                        );
                     }
                     self.requests.insert(request.id.clone(), request);
                 }
@@ -1548,29 +1545,123 @@ impl LinkWorker {
         );
     }
 
+    /// Session 113 : pourquoi une remise en file ne partira pas, ou `None` si
+    /// elle attend légitimement la fin du tour.
+    fn discard_cause(
+        &self,
+        frame: &DaemonToWrapper,
+        received: Instant,
+        now: u64,
+    ) -> Option<Discard> {
+        let message = delivery_message(frame);
+        // Session 112 : `deadline_at` est le budget d'exécution du tour posé
+        // par le daemon au moment de la poussée, pas une date de fraîcheur.
+        // L'attente en file (destinataire occupé) ne le consomme pas : la
+        // remise n'est écartée que si elle était déjà périmée à sa réception.
+        // Le budget restant est reporté au dispatch.
+        if message
+            .deadline_at
+            .is_some_and(|deadline| deadline_after_wait(deadline, received) <= now)
+        {
+            return Some(Discard::Expired("de tour"));
+        }
+        // Session 111 : l'attente seule ne périme plus. Un message sans
+        // échéance attend la fin du tour ; c'est à l'expéditeur de déclarer
+        // une échéance s'il en veut une.
+        if message
+            .reply_timeout
+            .is_some_and(|timeout| received.elapsed() >= Duration::from_secs(timeout))
+        {
+            return Some(Discard::Expired("de réponse"));
+        }
+        if matches!(frame, DaemonToWrapper::DeliverIdempotent { expires_at, .. } if *expires_at <= now as i64)
+        {
+            return Some(Discard::Expired("de saga"));
+        }
+        match self.requests.get(&message.id) {
+            Some(request) if request.state != "open" => {
+                Some(Discard::RequestClosed(request_state_label(&request.state)))
+            }
+            Some(request) if request.deadline_at <= now as i64 => {
+                Some(Discard::Expired("de demande"))
+            }
+            _ => None,
+        }
+    }
+
+    /// Session 113 : une remise que le pont jette n'est jamais jetée en
+    /// silence. Le daemon la croirait « en vol » jusqu'à expiration de la saga,
+    /// et l'expéditeur d'une demande suivie attendrait pour rien.
+    fn report_discard(&self, frame: &DaemonToWrapper, why: Discard) {
+        let message = delivery_message(frame);
+        let reason = match why {
+            Discard::Saturated => {
+                format!("file du fil saturée à {QUEUE_BOUND}, remise écartée")
+            }
+            Discard::Expired(which) => format!("échéance {which} dépassée avant démarrage"),
+            Discard::RequestClosed(state) => format!("demande {state} avant démarrage"),
+        };
+        warn!(
+            "remise {} écartée du fil {} : {reason}",
+            message.id, self.thread_id
+        );
+        // Sort connu (jamais injectée) : rapporté comme le wrapper ACP le fait
+        // pour une injection ratée, afin que la saga devienne terminale.
+        if let DaemonToWrapper::DeliverIdempotent {
+            delivery_id,
+            delivery_generation,
+            ..
+        } = frame
+        {
+            send_wrapper_message(
+                &self.writer,
+                WrapperToDaemon::DeliveryIndeterminate {
+                    delivery_id: delivery_id.clone(),
+                    delivery_generation: *delivery_generation,
+                },
+            );
+        }
+        // Demande suivie encore ouverte : le daemon prévient l'expéditeur et,
+        // sur un motif d'échéance, clôt la demande. Une demande déjà close a
+        // déjà eu son issue : ne pas en fabriquer une seconde.
+        if message.reply && !matches!(why, Discard::RequestClosed(_)) {
+            send_wrapper_message(
+                &self.writer,
+                WrapperToDaemon::DeliveryRejected {
+                    id: message.id.clone(),
+                    reason,
+                },
+            );
+        }
+    }
+
+    /// Retire de la file toute remise du message `id` et le dit au daemon.
+    /// O(n), n ≤ QUEUE_BOUND.
+    fn discard_by_id(&mut self, id: &str, why: Discard) {
+        let queue = std::mem::take(&mut self.queue);
+        for (frame, received) in queue {
+            if delivery_message(&frame).id == id {
+                self.report_discard(&frame, why);
+            } else {
+                self.queue.push_back((frame, received));
+            }
+        }
+    }
+
     fn drive_queue(&mut self, inbox: &Receiver<LinkEvent>) {
         let now = unix_now();
         self.cancelled
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .retain(|_, received| received.elapsed() <= self.turn_wait);
-        self.queue.retain(|(frame, received)| {
-            let message = delivery_message(frame);
-            // Session 112 : `deadline_at` est le budget d'exécution du tour posé
-            // par le daemon au moment de la poussée, pas une date de fraîcheur.
-            // L'attente en file (destinataire occupé) ne le consomme pas : la
-            // remise n'est écartée ici que si elle était déjà périmée à sa
-            // réception. Le budget restant est reporté au dispatch.
-            let expired = message.deadline_at.is_some_and(|deadline| deadline_after_wait(deadline, *received) <= now)
-                || message.reply_timeout.is_some_and(|timeout| received.elapsed() >= Duration::from_secs(timeout))
-                // Session 111 : l'attente seule ne périme plus. Un message sans
-                // échéance attend la fin du tour ; c'est à l'expéditeur de
-                // déclarer une échéance s'il en veut une.
-                || matches!(frame, DaemonToWrapper::DeliverIdempotent { expires_at, .. } if *expires_at <= now as i64)
-                || self.requests.get(&message.id).is_some_and(|request| request.state != "open" || request.deadline_at <= now as i64);
-            if expired { warn!("remise {} périmée avant démarrage", message.id); }
-            !expired
-        });
+        // O(n), n ≤ QUEUE_BOUND : chaque remise écartée est rapportée au daemon.
+        let queue = std::mem::take(&mut self.queue);
+        for (frame, received) in queue {
+            match self.discard_cause(&frame, received, now) {
+                Some(why) => self.report_discard(&frame, why),
+                None => self.queue.push_back((frame, received)),
+            }
+        }
         if self.queue.is_empty() || !self.daemon_alive.load(Ordering::SeqCst) {
             return;
         }
@@ -1601,21 +1692,20 @@ impl LinkWorker {
         {
             return;
         }
-        let Some((frame, received)) = self.queue.front() else {
+        // Le temps de la requête HTTP a pu faire passer une échéance.
+        let stale = self
+            .queue
+            .front()
+            .and_then(|(frame, received)| self.discard_cause(frame, *received, unix_now()));
+        if let Some(why) = stale {
+            let (frame, _) = self.queue.pop_front().expect("remise présente");
+            self.report_discard(&frame, why);
+            return;
+        }
+        let Some((frame, _)) = self.queue.front() else {
             return;
         };
         let message = delivery_message(frame);
-        if message
-            .deadline_at
-            .is_some_and(|deadline| deadline_after_wait(deadline, *received) <= unix_now())
-            || message
-                .reply_timeout
-                .is_some_and(|timeout| received.elapsed() >= Duration::from_secs(timeout))
-            || matches!(frame, DaemonToWrapper::DeliverIdempotent { expires_at, .. } if *expires_at <= unix_now() as i64)
-        {
-            self.queue.pop_front();
-            return;
-        }
         // Pour une demande suivie, le daemon atteste l'échéance véritable (qui
         // peut être plus courte que celle du tour). Une absence dans une page
         // bornée n'est ni une autorisation de démarrage ni une clôture.
@@ -2408,6 +2498,28 @@ fn unix_now() -> u64 {
 /// réception reste passée : le report ne ressuscite rien.
 fn deadline_after_wait(deadline: u64, received: Instant) -> u64 {
     deadline.saturating_add(received.elapsed().as_secs())
+}
+
+/// Session 113 : motif pour lequel le pont renonce à une remise avant tout
+/// démarrage. Chaque motif est rapporté au daemon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Discard {
+    /// File bornée : un message plus récent a pris la place.
+    Saturated,
+    /// Échéance de tour, de réponse, de saga ou de demande déjà passée.
+    Expired(&'static str),
+    /// Demande suivie déjà close côté daemon : l'expéditeur le sait, seule
+    /// la saga d'envoi reste à clore.
+    RequestClosed(&'static str),
+}
+
+fn request_state_label(state: &str) -> &'static str {
+    match state {
+        "answered" => "répondue",
+        "cancelled" => "annulée",
+        "timed_out" => "expirée",
+        _ => "close",
+    }
 }
 
 fn delivery_message(frame: &DaemonToWrapper) -> &bridget_core::BridgetMessage {
@@ -3395,6 +3507,135 @@ mod tests {
             delivery_message(&worker.queue[QUEUE_BOUND - 1].0).id,
             format!("m-{}", QUEUE_BOUND + 4)
         );
+    }
+
+    /// Session 113 : toutes les trames émises vers le daemon, sans filtrage.
+    fn frames113(peer: UnixStream) -> Vec<WrapperToDaemon> {
+        peer.set_nonblocking(true).unwrap();
+        let mut reader = BufReader::new(peer);
+        let mut frames = Vec::new();
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => frames.push(serde_json::from_str(&line).unwrap()),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("lecture des trames : {e}"),
+            }
+        }
+        frames
+    }
+
+    fn idempotent113(id: &str) -> DaemonToWrapper {
+        let mut message = bridget_core::BridgetMessage::new("alice", "bob", "suivie");
+        message.id = id.into();
+        message.reply = true;
+        DaemonToWrapper::DeliverIdempotent {
+            delivery_id: format!("d-{id}"),
+            recipient_instance_id: stable_uuid("instance:test"),
+            delivery_generation: 1,
+            expires_at: unix_now() as i64 + 3600,
+            message,
+            execution: None,
+        }
+    }
+
+    fn saga_closed113(frames: &[WrapperToDaemon], delivery_id: &str) -> bool {
+        frames.iter().any(|frame| {
+            matches!(
+                frame,
+                WrapperToDaemon::DeliveryIndeterminate { delivery_id: id, delivery_generation: 1 }
+                    if id == delivery_id
+            )
+        })
+    }
+
+    fn rejection113<'a>(frames: &'a [WrapperToDaemon], message_id: &str) -> Option<&'a str> {
+        frames.iter().find_map(|frame| match frame {
+            WrapperToDaemon::DeliveryRejected { id, reason } if id == message_id => {
+                Some(reason.as_str())
+            }
+            _ => None,
+        })
+    }
+
+    /// Une remise poussée hors de la file par saturation n'est plus « en vol » :
+    /// la saga est close et l'expéditeur d'une demande suivie est prévenu.
+    #[test]
+    fn spec113_saturation_signale_la_remise_ecartee_au_daemon() {
+        let (mut worker, peer) = worker099();
+        worker.handle_frame(idempotent113("premiere"));
+        for index in 0..QUEUE_BOUND {
+            let mut message = bridget_core::BridgetMessage::new("alice", "bob", "lot");
+            message.id = format!("m-{index}");
+            worker.handle_frame(DaemonToWrapper::Deliver(message));
+        }
+        assert_eq!(worker.queue.len(), QUEUE_BOUND);
+        let frames = frames113(peer);
+        assert!(saga_closed113(&frames, "d-premiere"), "saga close");
+        assert!(
+            rejection113(&frames, "premiere").is_some_and(|reason| reason.contains("saturée")),
+            "expéditeur prévenu avec le motif"
+        );
+    }
+
+    /// Une échéance passée avant démarrage vaut refus explicite : le motif
+    /// porte « échéance », ce sur quoi le daemon clôt la demande suivie.
+    #[test]
+    fn spec113_echeance_passee_signale_refus_et_saga_close() {
+        let (mut worker, peer) = worker099();
+        let mut frame = idempotent113("perimee");
+        if let DaemonToWrapper::DeliverIdempotent { message, .. } = &mut frame {
+            message.deadline_at = Some(unix_now() - 1);
+        }
+        worker.handle_frame(frame);
+        let (_tx, inbox) = mpsc::channel();
+        worker.drive_queue(&inbox);
+        assert!(worker.queue.is_empty());
+        let frames = frames113(peer);
+        assert!(saga_closed113(&frames, "d-perimee"), "saga close");
+        assert!(
+            rejection113(&frames, "perimee").is_some_and(|reason| reason.contains("échéance")),
+            "refus porteur du motif d'échéance"
+        );
+    }
+
+    /// Une demande déjà close côté daemon (répondue, annulée, expirée) a déjà
+    /// son issue : la saga est close, aucun second échec n'est fabriqué.
+    #[test]
+    fn spec113_demande_close_clot_la_saga_sans_second_echec() {
+        let (mut worker, peer) = worker099();
+        worker.handle_frame(idempotent113("close"));
+        worker.handle_frame(idempotent113("annulee"));
+        worker.handle_frame(DaemonToWrapper::RequestList {
+            requests: vec![RequestInfo {
+                id: "close".into(),
+                sender: "alice".into(),
+                target: worker.agent_id.clone(),
+                state: "answered".into(),
+                created_at: 0,
+                deadline_at: i64::MAX,
+                cancel_reason: None,
+                deferred_reminder_level: None,
+                deferred_reminder_at: None,
+            }],
+        });
+        worker.handle_frame(DaemonToWrapper::CancelDelivery {
+            id: "annulee".into(),
+            reason: "test".into(),
+        });
+        assert!(worker.queue.is_empty());
+        let frames = frames113(peer);
+        assert!(
+            saga_closed113(&frames, "d-close"),
+            "saga de la demande répondue close"
+        );
+        assert!(
+            saga_closed113(&frames, "d-annulee"),
+            "saga de la demande annulée close"
+        );
+        assert!(rejection113(&frames, "close").is_none());
+        assert!(rejection113(&frames, "annulee").is_none());
     }
 
     #[test]

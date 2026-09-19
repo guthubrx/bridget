@@ -126,7 +126,7 @@ bridget t3 uninstall      # révoque la session, retire le service, efface l'ét
 
 Prérequis : t3code démarré (application ou `t3 --mode web --no-browser`) et le
 CLI `t3` installé (`npm i -g t3`). Un message remis attend que le fil soit libre
-(borne de deux minutes), démarre un tour avec le texte du message, et la réponse
+(sans limite de durée, file bornée à 64 remises par fil), démarre un tour avec le texte du message, et la réponse
 de ce tour revient à l'expéditeur comme réponse liée : l'appariement suit
 l'ordre FIFO des tours après le dernier tour clos au moment de la remise. La
 session détenue est administrative (t3code 0.0.40 n'en émet pas d'autre) et
@@ -135,6 +135,17 @@ un seul renouvellement, un second refus est un échec explicite dans `status`.
 Le journal du fil (`bridget attach`) ne rejoue pas l'historique antérieur à
 l'installation. Le fil archivé disparaît de l'annuaire, jamais de t3code.
 Voir [l'ADR 034](docs/decisions/034-adaptateur-t3code.md).
+
+Attente et écartement (sessions 111 à 113) : l'attente d'un fil occupé ne périme
+rien par elle-même et ne consomme pas le budget d'exécution du tour, qui court à
+partir du démarrage effectif. Une remise n'est écartée que pour un motif porté
+par le message ou par le daemon : échéance de tour ou de réponse déjà passée à la
+réception (`--timeout` côté expéditeur), demande suivie close, annulation, ou
+file saturée. Un message sans échéance peut donc partir des heures après son
+envoi, avec son contexte d'origine : c'est à l'expéditeur de poser une échéance
+s'il en veut une. Chaque écartement est rapporté au daemon : la saga d'envoi
+devient terminale (plus de « remise en vol » pour un message jeté) et
+l'expéditeur d'une demande suivie encore ouverte reçoit l'échec avec son motif.
 
 Le pont traite les annulations pendant l'attente d'un fil libre : une demande
 annulée avant démarrage ne devient pas un tour ultérieur. L'expiration et les
@@ -197,7 +208,11 @@ sans tmux. Sans terminal, le lancement est refusé avec l'alternative
 `bridget spawn claude`. Aucun bypass de permissions n'est ajouté ; un bypass
 explicitement passé par l'utilisateur est relayé tel quel. Le journal de
 session relaie les tours humain et assistant lus dans le transcript Claude ;
-`bridget attach <UUID>` fonctionne comme sur Codex interactif. Les autres
+`bridget attach <UUID>` fonctionne comme sur Codex interactif. Une session
+Claude hors T3 a donc deux routes vers une identité attestée : `bridget claude`
+(ou ses alias historiques `gclaude` et `claude-son`, même type) et
+`bridget spawn claude`. Une session Claude lancée autrement n'est pas joignable
+par Bridget. Les autres
 alias interactifs (`gemini`, agents personnalisés) restent sur tmux et sont
 refusés au lancement s'ils n'ont aucun pane.
 
