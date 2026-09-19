@@ -1556,7 +1556,12 @@ impl LinkWorker {
             .retain(|_, received| received.elapsed() <= self.turn_wait);
         self.queue.retain(|(frame, received)| {
             let message = delivery_message(frame);
-            let expired = message.deadline_at.is_some_and(|deadline| deadline <= now)
+            // Session 112 : `deadline_at` est le budget d'exécution du tour posé
+            // par le daemon au moment de la poussée, pas une date de fraîcheur.
+            // L'attente en file (destinataire occupé) ne le consomme pas : la
+            // remise n'est écartée ici que si elle était déjà périmée à sa
+            // réception. Le budget restant est reporté au dispatch.
+            let expired = message.deadline_at.is_some_and(|deadline| deadline_after_wait(deadline, *received) <= now)
                 || message.reply_timeout.is_some_and(|timeout| received.elapsed() >= Duration::from_secs(timeout))
                 // Session 111 : l'attente seule ne périme plus. Un message sans
                 // échéance attend la fin du tour ; c'est à l'expéditeur de
@@ -1602,7 +1607,7 @@ impl LinkWorker {
         let message = delivery_message(frame);
         if message
             .deadline_at
-            .is_some_and(|deadline| deadline <= unix_now())
+            .is_some_and(|deadline| deadline_after_wait(deadline, *received) <= unix_now())
             || message
                 .reply_timeout
                 .is_some_and(|timeout| received.elapsed() >= Duration::from_secs(timeout))
@@ -1622,7 +1627,25 @@ impl LinkWorker {
             self.request_status();
             return;
         }
-        let (frame, _) = self.queue.pop_front().expect("remise présente");
+        let (mut frame, received) = self.queue.pop_front().expect("remise présente");
+        // Session 112 : le budget d'exécution repart du dispatch réel.
+        match &mut frame {
+            DaemonToWrapper::Deliver(message)
+            | DaemonToWrapper::DeliverIdempotent { message, .. } => {
+                if let Some(deadline) = message.deadline_at {
+                    let shifted = deadline_after_wait(deadline, received);
+                    if shifted != deadline {
+                        info!(
+                            "remise {} : {} s d'attente en file reportés sur l'échéance de tour",
+                            message.id,
+                            received.elapsed().as_secs()
+                        );
+                    }
+                    message.deadline_at = Some(shifted);
+                }
+            }
+            _ => {}
+        }
         match frame {
             DaemonToWrapper::Deliver(message) => {
                 if let Err(e) = self.dispatch_with_id(&message, None, &summary) {
@@ -2377,6 +2400,14 @@ fn unix_now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+/// Session 112 : échéance de tour créditée du temps passé en file. Le daemon
+/// pose `deadline_at = poussée + budget` ; le budget doit courir à partir du
+/// dispatch effectif, pas de la poussée. Une échéance déjà passée à la
+/// réception reste passée : le report ne ressuscite rien.
+fn deadline_after_wait(deadline: u64, received: Instant) -> u64 {
+    deadline.saturating_add(received.elapsed().as_secs())
 }
 
 fn delivery_message(frame: &DaemonToWrapper) -> &bridget_core::BridgetMessage {
@@ -3261,6 +3292,48 @@ mod tests {
         assert!(!worker.state.seen.iter().any(|id| id == "lost"));
         assert!(!worker.state.ended_turns.iter().any(|id| id == "t"));
         worker.relay.shutdown();
+    }
+
+    /// Session 112 : une échéance de tour posée par le daemon est un budget
+    /// d'exécution ; une longue attente en file ne l'entame pas.
+    #[test]
+    fn spec112_attente_en_file_ne_consomme_pas_le_budget_de_tour() {
+        let (mut worker, _peer) = worker099();
+        let mut message = bridget_core::BridgetMessage::new("alice", "bob", "budget");
+        message.id = "budget-45min".into();
+        message.deadline_at = Some(unix_now() + 2_700);
+        worker.handle_frame(DaemonToWrapper::Deliver(message));
+        // Antidater la réception au-delà du budget : sans report, la remise
+        // serait périmée ; avec report, elle attend toujours.
+        if let Some(entry) = worker.queue.front_mut() {
+            entry.1 = Instant::now() - Duration::from_secs(3_600);
+        }
+        let (_tx, inbox) = mpsc::channel();
+        worker.drive_queue(&inbox);
+        assert_eq!(
+            worker.queue.len(),
+            1,
+            "le budget court à partir du dispatch"
+        );
+        let received = worker.queue[0].1;
+        let reporte = deadline_after_wait(unix_now() + 2_700 - 3_600, received);
+        assert!(
+            reporte >= unix_now() + 2_700 - 2,
+            "report de l'attente sur l'échéance : {reporte}"
+        );
+    }
+
+    /// Une remise déjà périmée à sa réception n'est pas ressuscitée par le report.
+    #[test]
+    fn spec112_echeance_deja_passee_a_la_reception_reste_ecartee() {
+        let (mut worker, _peer) = worker099();
+        let mut message = bridget_core::BridgetMessage::new("alice", "bob", "stale");
+        message.id = "stale".into();
+        message.deadline_at = Some(unix_now() - 10);
+        worker.handle_frame(DaemonToWrapper::Deliver(message));
+        let (_tx, inbox) = mpsc::channel();
+        worker.drive_queue(&inbox);
+        assert!(worker.queue.is_empty());
     }
 
     /// Session 111 : un message sans échéance attend la fin du tour, même
