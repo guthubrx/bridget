@@ -2,7 +2,7 @@
 # Spécification lisible liée à test-map.md : aucun runner Gherkin n'est installé.
 # Chaque tag désigne un critère, pas une preuve déjà acquise.
 @session_089
-Fonctionnalité: Communiquer entre agents sans dépendre de l'interface ni de Maicie
+Fonctionnalité: Communiquer entre agents sans dépendre de l'interface ni d'un service compagnon
   Bridget transporte des demandes et leurs faits attestés.
   Un accusé de livraison ne prouve pas la réussite intellectuelle d'une mission.
 
@@ -86,7 +86,7 @@ Fonctionnalité: Communiquer entre agents sans dépendre de l'interface ni de Ma
 
   @SC_08906 @T007 @T009 @T010 @T011 @T013
   Scénario: Le paquet de communication est indépendant du produit élargi
-    Étant donné une installation de test sans sources Maicie ni interface graphique
+    Étant donné une installation de test sans sources de service compagnon ni interface graphique
     Et sans serveur web, runtime Docker de projet ni binaire tmux
     Quand le paquet est construit puis deux agents communiquent
     Alors l'envoi, la réponse liée, le ledger et l'attache fonctionnent
@@ -141,14 +141,14 @@ Fonctionnalité: Communiquer entre agents sans dépendre de l'interface ni de Ma
       | GLM via Claude Code    |
 
   @SC_08910 @T023
-  Scénario: La skill suffit à envoyer puis répondre sans connaître Maicie
+  Scénario: La skill suffit à envoyer puis répondre sans connaître le service compagnon
     Étant donné un agent ne disposant que de la skill courte livrée avec le noyau
     Quand il exécute le scénario envoyer, répondre et consulter via CLI ou MCP
     Alors la réponse porte in_reply_to
     Et une seule réponse est rattachée à la demande
     Et les statuts expliqués correspondent aux issues réelles du contrat
     Et in_flight n'est pas présenté comme outcome_unknown
-    Et aucune connaissance du magasin ni du métier Maicie n'est nécessaire
+    Et aucune connaissance du magasin ni du métier du service compagnon n'est nécessaire
 
   @SC_08911 @T003 @T034 @T036
   Scénario: La simplification ne fait pas disparaître une preuve gênante
