@@ -1,6 +1,6 @@
 # Journal 112 — L'attente en file ne consomme pas le budget de tour
 
-- **Base** : main `dd195ccb` — **Date** : 2026-09-19 — **Statut** : In Progress (livraison)
+- **Base** : main `dd195ccb` — **Date** : 2026-09-19 — **Statut** : Implemented, livré en production le 2026-09-19 17:01
 
 ## Diagnostic
 Après la 111, le pont ne jetait plus une remise au bout de deux minutes, mais il appliquait avant
@@ -25,3 +25,6 @@ la réception écartée.
 Grâce à la 111 seule, à 16h51 le tour de `horizon-3D` s'est terminé et le pont a injecté les six
 remises en attente en 35 secondes, toutes accusées. La 112 couvre le cas où le tour aurait duré
 au-delà de 45 minutes.
+
+## T004 — Livraison
+Binaire reconstruit, daemon et pont relancés à 17:01, quinze agents reconnectés. Plus aucune remise en attente vers `horizon-3D`.

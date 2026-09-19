@@ -1,7 +1,7 @@
 # Spécification 112 — L'attente en file ne consomme pas le budget de tour
 
 ## Fiche synthèse
-Spec: 112-attente-hors-budget | Statut: In Progress | Priorité: P1 | Date: 2026-09-19
+Spec: 112-attente-hors-budget | Statut: Implemented (livré 2026-09-19) | Priorité: P1 | Date: 2026-09-19
 Branche: session-112-attente-hors-budget | Dépend de 111 (la file attend la fin du tour).
 
 ## Problème observé
