@@ -13619,7 +13619,14 @@ fn handle_wrapper_message(
                 let mut profiles = AgentProfileStore::open(&st.db_path)
                     .map_err(|_| Refusal::StorageUnavailable)?;
                 profiles
-                    .rename_display_name(&agent, &request.display_name)
+                    // Session 110 : un nom détenu par une identité absente de
+                    // l'annuaire vivant est transféré ; un détenteur vivant
+                    // conserve le sien.
+                    .rename_display_name(&agent, &request.display_name, |holder| {
+                        st.router
+                            .get_agent(holder)
+                            .is_some_and(|route| st.connections.contains_key(&route.connection_id))
+                    })
                     .map_err(|error| match error {
                         AgentProfileError::Invalid(_) => Refusal::InvalidRequest,
                         AgentProfileError::NotFound => Refusal::IdentityUnavailable,

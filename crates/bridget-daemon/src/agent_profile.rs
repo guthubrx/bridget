@@ -650,10 +650,16 @@ impl AgentProfileStore {
             .map_err(AgentProfileError::Sqlite)
     }
 
+    /// Session 110 : `holder_is_live` répond « ce détenteur est-il présent
+    /// dans l'annuaire vivant ? ». Un nom détenu par une identité éteinte est
+    /// transféré au demandeur, et l'ancien détenteur reçoit un nom dérivé ;
+    /// un nom détenu par une identité vivante reste refusé. Le magasin ne
+    /// consulte pas l'annuaire lui-même : c'est un état mémoire du daemon.
     pub fn rename_display_name(
         &mut self,
         agent_id: &str,
         name: &str,
+        holder_is_live: impl Fn(&str) -> bool,
     ) -> Result<AgentDisplayName, AgentProfileError> {
         if name.chars().any(char::is_control) {
             return Err(AgentProfileError::Invalid(
@@ -676,7 +682,14 @@ impl AgentProfileStore {
             .map_err(AgentProfileError::Sqlite)?
             .ok_or(AgentProfileError::NotFound)?;
         if current_name != display_name {
-            ensure_display_name_available(&tx, agent_id, &normalized)?;
+            // Le détenteur éteint cède son nom dans la MÊME transaction : soit
+            // les deux profils changent, soit aucun.
+            if let Some(holder) = display_name_holder(&tx, agent_id, &normalized)? {
+                if holder_is_live(&holder) {
+                    return Err(AgentProfileError::DisplayNameConflict);
+                }
+                release_display_name(&tx, &holder)?;
+            }
             let changed = tx.execute("UPDATE agent_profiles SET display_name=?2, display_name_normalized=?3, revision=revision+1, updated_at=?4 WHERE agent_id=?1 AND revision=?5",
                 params![agent_id, display_name, normalized, now_secs(), revision]).map_err(AgentProfileError::Sqlite)?;
             if changed != 1 {
@@ -1297,16 +1310,51 @@ fn ensure_display_name_available(
     agent_id: &str,
     normalized: &str,
 ) -> Result<(), AgentProfileError> {
-    let conflict = tx
-        .query_row(
-            "SELECT agent_id FROM agent_profiles WHERE display_name_normalized=?1 AND agent_id!=?2",
-            params![normalized, agent_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(AgentProfileError::Sqlite)?;
-    if conflict.is_some() {
+    if display_name_holder(tx, agent_id, normalized)?.is_some() {
         return Err(AgentProfileError::DisplayNameConflict);
+    }
+    Ok(())
+}
+
+/// Détenteur actuel d'un nom normalisé, hors le demandeur lui-même.
+fn display_name_holder(
+    tx: &rusqlite::Transaction<'_>,
+    agent_id: &str,
+    normalized: &str,
+) -> Result<Option<String>, AgentProfileError> {
+    tx.query_row(
+        "SELECT agent_id FROM agent_profiles WHERE display_name_normalized=?1 AND agent_id!=?2",
+        params![normalized, agent_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(AgentProfileError::Sqlite)
+}
+
+/// Session 110 : dépossède un détenteur éteint en lui attribuant un nom dérivé
+/// disponible. L'identité, l'avatar et les instructions ne bougent pas ; seule
+/// la révision avance, pour que les lecteurs voient le changement.
+fn release_display_name(
+    tx: &rusqlite::Transaction<'_>,
+    holder: &str,
+) -> Result<(), AgentProfileError> {
+    let current: String = tx
+        .query_row(
+            "SELECT display_name FROM agent_profiles WHERE agent_id=?1",
+            [holder],
+            |row| row.get(0),
+        )
+        .map_err(AgentProfileError::Sqlite)?;
+    let fallback = available_display_name(tx, &current)?;
+    let normalized = normalize_display_name(&fallback)?;
+    let changed = tx
+        .execute(
+            "UPDATE agent_profiles SET display_name=?2, display_name_normalized=?3, revision=revision+1, updated_at=?4 WHERE agent_id=?1",
+            params![holder, fallback, normalized, now_secs()],
+        )
+        .map_err(AgentProfileError::Sqlite)?;
+    if changed != 1 {
+        return Err(AgentProfileError::NotFound);
     }
     Ok(())
 }
@@ -1378,12 +1426,112 @@ mod tests {
         (AgentProfileStore::open(&path).unwrap(), path)
     }
 
+    /// Session 110 : un fil T3 réimporté reprend le nom que son ancienne
+    /// incarnation, éteinte, détenait encore.
+    #[test]
+    fn spec110_nom_detenu_par_une_identite_eteinte_est_transfere() {
+        let (mut store, path) = store();
+        let ancien = Uuid::new_v4().to_string();
+        let nouveau = Uuid::new_v4().to_string();
+        store
+            .ensure_agent_ids([ancien.as_str(), nouveau.as_str()])
+            .unwrap();
+        store
+            .rename_display_name(&ancien, "claude-horizon", |_| false)
+            .unwrap();
+        let revision_avant: u64 = store
+            .conn
+            .query_row(
+                "SELECT revision FROM agent_profiles WHERE agent_id=?1",
+                [ancien.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        // L'ancien détenteur est absent de l'annuaire : le nom est cédé.
+        let applied = store
+            .rename_display_name(&nouveau, "claude-horizon", |holder| {
+                assert_eq!(holder, ancien, "le détenteur consulté est bien l'ancien");
+                false
+            })
+            .unwrap();
+        assert_eq!(applied.display_name, "claude-horizon");
+        assert_eq!(
+            store.agent_id_for_display_name("claude-horizon").unwrap(),
+            Some(nouveau.clone()),
+            "la résolution rend le détenteur courant"
+        );
+
+        // L'ancien garde son identité, reçoit un nom dérivé distinct et voit sa
+        // révision avancer.
+        let (nom_ancien, revision_apres): (String, u64) = store
+            .conn
+            .query_row(
+                "SELECT display_name, revision FROM agent_profiles WHERE agent_id=?1",
+                [ancien.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_ne!(nom_ancien, "claude-horizon");
+        assert!(nom_ancien.starts_with("claude-horizon"), "{nom_ancien}");
+        assert!(revision_apres > revision_avant, "révision non avancée");
+        let profils: i64 = store
+            .conn
+            .query_row("SELECT count(*) FROM agent_profiles", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(profils, 2, "aucune identité créée ni supprimée");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Le nom d'un agent vivant n'est jamais volé : le refus reste le même.
+    #[test]
+    fn spec110_nom_detenu_par_une_identite_vivante_reste_refuse() {
+        let (mut store, path) = store();
+        let vivant = Uuid::new_v4().to_string();
+        let demandeur = Uuid::new_v4().to_string();
+        store
+            .ensure_agent_ids([vivant.as_str(), demandeur.as_str()])
+            .unwrap();
+        store
+            .rename_display_name(&vivant, "cursor-listen", |_| false)
+            .unwrap();
+
+        let refus =
+            store.rename_display_name(&demandeur, "cursor-listen", |holder| holder == vivant);
+        assert!(
+            matches!(refus, Err(AgentProfileError::DisplayNameConflict)),
+            "{refus:?}"
+        );
+        assert_eq!(
+            store.agent_id_for_display_name("cursor-listen").unwrap(),
+            Some(vivant.clone()),
+            "le vivant garde son nom"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Reprendre son propre nom ne déclenche aucun transfert.
+    #[test]
+    fn spec110_reprendre_son_propre_nom_ne_transfere_rien() {
+        let (mut store, path) = store();
+        let id = Uuid::new_v4().to_string();
+        store.ensure_agent_ids([id.as_str()]).unwrap();
+        store.rename_display_name(&id, "wiki", |_| false).unwrap();
+        let applied = store
+            .rename_display_name(&id, "wiki", |_| panic!("aucun détenteur à consulter"))
+            .unwrap();
+        assert_eq!(applied.display_name, "wiki");
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn resolution_du_nom_survit_a_la_reouverture_sans_creer_de_profil() {
         let (mut store, path) = store();
         let id = Uuid::new_v4().to_string();
         store.ensure_agent_ids([id.as_str()]).unwrap();
-        store.rename_display_name(&id, "Gui-Codér").unwrap();
+        store
+            .rename_display_name(&id, "Gui-Codér", |_| true)
+            .unwrap();
         drop(store);
         let store = AgentProfileStore::open(&path).unwrap();
         assert_eq!(
