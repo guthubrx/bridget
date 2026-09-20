@@ -1,7 +1,7 @@
 # Spécification 114 — Trois causes résiduelles de non-joignabilité
 
 ## Fiche synthèse
-Spec: 114-joignabilite | Statut: In Progress | Priorité: P1 | Date: 2026-09-20
+Spec: 114-joignabilite | Statut: Implemented (livré 2026-09-20) | Priorité: P1 | Date: 2026-09-20
 Branche: session-114-joignabilite | Suite du balayage demandé après la 113.
 
 ## Problèmes observés (2026-09-20)

@@ -84,3 +84,9 @@ Vérifications en production :
   aucun partage de dossier, l'application officielle ayant été quittée.
 - Le regroupement attend une rafale réelle pour être observé en production ; aucun message d'essai
   n'a été envoyé à un agent tiers pour le provoquer. Il est couvert par quatre tests.
+
+## T009 — Republication
+Copie filtrée régénérée (311 fichiers, 238 substitutions, aucun motif interdit, aucun lien cassé),
+formatée, puis recette complète sur la copie : **1532 réussis, 0 échec, 52 ignorés**, clippy propre.
+Dépôt public `guthubrx/bridget` remis à `63f2b51`, commit unique anonyme. Clone de contrôle : aucun
+motif interdit, une seule branche, aucun tag.
