@@ -1,6 +1,6 @@
 # Journal 114 — Trois causes résiduelles de non-joignabilité
 
-- **Base** : main `9661c127` — **Date** : 2026-09-20 — **Statut** : In Progress
+- **Base** : main `9661c127` — **Date** : 2026-09-20 — **Statut** : Implemented, livré en production le 2026-09-20 07:07
 
 ## A. Une seconde application T3 ne révoque plus les identités
 
@@ -71,3 +71,16 @@ dans `provider_session_runtime`. La preuve est donc de même nature que le rollo
 - `t3code` et `t3code_identity` : 77/77. fmt OK ; clippy `-D warnings` OK.
 - Recette complète (`cargo test --workspace --no-fail-fast`, umask 077, `BRIDGET_HOME` privé) :
   **1532 réussis, 0 échec, 52 ignorés** sur 80 binaires — les huit tests ajoutés, aucune régression.
+
+## T008 — Livraison
+Commit `c64b6cb3` fusionné dans main en fast-forward ; binaire reconstruit à 07:07 ; seul le service
+du pont (`com.bridget.t3`) a été relancé. Le daemon n'est pas touché : aucun changement de protocole
+ni de code daemon dans cette session, et les agents connectés n'ont pas été coupés.
+
+Vérifications en production :
+- Attestation Cursor : le processus `cursor-agent` du fil « Explorer le projet » porte désormais un
+  marqueur lié à son propre identité. Avant la 114, aucun fil Cursor n'était attestable.
+- Journal du pont : plus aucun avertissement depuis la relance ; `bridget t3 status` ne signale
+  aucun partage de dossier, l'application officielle ayant été quittée.
+- Le regroupement attend une rafale réelle pour être observé en production ; aucun message d'essai
+  n'a été envoyé à un agent tiers pour le provoquer. Il est couvert par quatre tests.
