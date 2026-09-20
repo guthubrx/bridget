@@ -147,6 +147,14 @@ s'il en veut une. Chaque écartement est rapporté au daemon : la saga d'envoi
 devient terminale (plus de « remise en vol » pour un message jeté) et
 l'expéditeur d'une demande suivie encore ouverte reçoit l'échec avec son motif.
 
+Regroupement (session 114) : plusieurs messages sans réponse attendue qui
+patientent pour le même fil partagent un seul tour, jusqu'à huit messages ou
+32 Kio. Un destinataire qui reçoit une rafale de comptes rendus n'ouvre donc plus
+un tour par message. Restent toujours seuls dans leur tour : une demande suivie
+(`--reply`, dont LA réponse du tour doit revenir à un expéditeur précis), une
+sollicitation de fil et une notification, qui portent chacune leur consigne
+propre. Un message seul garde mot pour mot son enveloppe habituelle.
+
 Le pont traite les annulations pendant l'attente d'un fil libre : une demande
 annulée avant démarrage ne devient pas un tour ultérieur. L'expiration et les
 rappels automatiques n'ouvrent pas de tour supplémentaire. Une annulation après
@@ -179,10 +187,22 @@ résultats déclarés, décisions, questions, prochain pas, références et limi
 déterministe borné à 16 Kio et le transmet par l'envoi idempotent existant. Rien
 n'est lu ni certifié ; le dossier suit la conservation du journal.
 
+**Une seule application t3code à la fois.** Deux applications lancées sur le même
+dossier utilisateur partagent `state.sqlite` et `server-runtime.json` : la
+dernière démarrée s'y déclare, et la première qui se ferme efface ce fichier.
+Le pont continue de servir le serveur auquel il est lié, mais il signale le
+partage dans son journal et dans `bridget t3 status`. Tant que le fichier
+désigne une autre application, un redémarrage du pont ne retrouvera pas le bon
+serveur. Un partage de base entre deux versions différentes peut en outre
+provoquer une migration de schéma que l'ancienne ne saura plus lire.
+
 La session 101 ajoute le rattachement automatique des appels MCP au fil T3
 réel, lorsque son identité fournisseur et sa filiation de processus sont
-attestées. Le pont lit uniquement les correspondances de sessions nécessaires
-dans la base T3, sans la modifier. Ni le titre, ni le projet, ni le fichier le
+attestées : Codex par le rollout qu'il tient ouvert, Claude par son option de
+session, Cursor par le dossier `acp-sessions` qu'il tient ouvert (session 114).
+Un fil dont le fournisseur n'expose aucune de ces preuves reste joignable, mais
+ses propres appels MCP ne sont pas rattachés. Le pont lit uniquement les
+correspondances de sessions nécessaires dans la base T3, sans la modifier. Ni le titre, ni le projet, ni le fichier le
 plus récent ne servent de preuve. Une ambiguïté entraîne un refus explicite,
 pas le choix arbitraire d'une conversation. Aucun redémarrage de T3 ou d'un
 fournisseur n'est nécessaire à ce mécanisme. Les événements proposés restent

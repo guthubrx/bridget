@@ -76,10 +76,18 @@ impl IdentityBindings {
             return Ok(0);
         }
         let rows = read_sessions(&base.join("userdata/state.sqlite"), live)?;
+        let Ok(birth_before) = process_birth(runtime.pid) else {
+            return Err("serveur T3 absent de l'inventaire OS".into());
+        };
         let processes = collect_processes(runtime.pid)?;
-        // Le serveur ne doit pas avoir changé pendant la collecte.
-        if crate::t3code_contract::read_runtime(base).ok().as_ref() != Some(runtime) {
-            return Err("serveur T3 changé pendant la collecte d'identité".into());
+        // Session 114 : le serveur attesté ne doit pas avoir été remplacé
+        // pendant la collecte. C'est sa NAISSANCE qui le prouve, pas le fichier
+        // d'état : une seconde application T3 sur le même dossier utilisateur
+        // réécrit ce fichier sans que NOTRE serveur change, et exiger l'égalité
+        // révoquait alors toutes les identités, pour tous les fils. La
+        // naissance couvre en plus le recyclage de PID, invisible au fichier.
+        if process_birth(runtime.pid).ok() != Some(birth_before) {
+            return Err("serveur T3 remplacé pendant la collecte d'identité".into());
         }
         let selected = select_bindings(&rows, &processes, live);
         let keep: HashSet<u32> = selected.iter().map(|(process, _)| process.pid).collect();
@@ -338,6 +346,9 @@ fn read_sessions(path: &Path, live: &[Binding]) -> Result<Vec<Session>, String> 
         let native = match provider.as_str() {
             "codex" => value.get("threadId"),
             "claude" => value.get("resume").or_else(|| value.get("sessionId")),
+            // Session 114 : Cursor publie son identifiant ACP, que le processus
+            // `cursor-agent` tient ouvert sous `acp-sessions/<id>/`.
+            "cursor" => value.get("sessionId"),
             _ => continue,
         };
         if let Some(id) = native
@@ -490,6 +501,10 @@ fn collect_processes(server: u32) -> Result<Vec<ProcessEvidence>, String> {
                 Some(id) => ("claude", vec![id]),
                 None => continue,
             },
+            // Session 114 : Cursor ne porte pas son identifiant de session en
+            // ligne de commande ; il le révèle par le dossier `acp-sessions`
+            // qu'il tient ouvert, exactement comme Codex par son rollout.
+            Some("cursor-agent") if args.iter().any(|arg| arg == "acp") => ("cursor", Vec::new()),
             _ => continue,
         };
         candidates.push(ProcessEvidence {
@@ -503,35 +518,90 @@ fn collect_processes(server: u32) -> Result<Vec<ProcessEvidence>, String> {
             return Err("trop de processus fournisseur T3".into());
         }
     }
-    let codex_pids: Vec<_> = candidates
+    // Les fournisseurs qui révèlent leur session par un fichier ouvert.
+    let file_backed: Vec<_> = candidates
         .iter()
-        .filter(|p| p.provider == "codex")
+        .filter(|p| session_file_backed(&p.provider))
         .map(|p| p.pid)
         .collect();
-    let files = crate::runtime::open_session_files(&codex_pids)
-        .map_err(|_| "inventaire des rollouts incomplet".to_string())?;
-    complete_rollout_inventory(candidates, &files)
+    let files = crate::runtime::open_session_files(&file_backed, is_session_file)
+        .map_err(|_| "inventaire des sessions ouvertes incomplet".to_string())?;
+    complete_session_inventory(candidates, &files)
+}
+
+/// Fournisseurs dont l'identifiant de session se lit dans un fichier ouvert.
+fn session_file_backed(provider: &str) -> bool {
+    matches!(provider, "codex" | "cursor")
+}
+
+/// Fichier de session reconnu, tous fournisseurs confondus. Le tri par
+/// fournisseur est fait ensuite : un `.jsonl` ouvert par Cursor ne doit pas
+/// devenir une session Cursor, ni l'inverse.
+fn is_session_file(path: &Path) -> bool {
+    crate::runtime::is_codex_rollout(path) || cursor_session(path).is_some()
+}
+
+/// Session Cursor portée par le chemin : `…/acp-sessions/<id>/store.db`.
+/// Le dossier est la seule preuve disponible — `cursor-agent` ne met pas son
+/// identifiant en ligne de commande et l'a déjà négocié par le protocole ACP.
+fn cursor_session(path: &Path) -> Option<String> {
+    let mut components = path.components();
+    while let Some(component) = components.next() {
+        if component.as_os_str() != "acp-sessions" {
+            continue;
+        }
+        let id = components.next()?.as_os_str().to_str()?;
+        return (!id.is_empty()
+            && id.len() <= 256
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'))
+        .then(|| id.to_owned());
+    }
+    None
+}
+
+/// Fichiers de session appartenant à CE fournisseur, parmi ceux qu'il tient
+/// ouverts. Un processus ouvre bien d'autres fichiers : sans ce tri, une
+/// lecture impossible sur un fichier étranger invaliderait tout le cycle.
+fn session_files_of<'a>(provider: &str, paths: &'a [PathBuf]) -> Vec<&'a PathBuf> {
+    paths
+        .iter()
+        .filter(|path| match provider {
+            "codex" => crate::runtime::is_codex_rollout(path),
+            "cursor" => cursor_session(path).is_some(),
+            _ => false,
+        })
+        .collect()
+}
+
+fn session_id_of(provider: &str, path: &Path) -> Option<String> {
+    match provider {
+        "codex" => rollout_session(path),
+        "cursor" => cursor_session(path),
+        _ => None,
+    }
 }
 
 /// Frontière unique de complétude : perdre un candidat peut créer une fausse
 /// unicité pour un autre. L'échec invalide tout le cycle, pas seulement ce PID.
-fn complete_rollout_inventory(
+fn complete_session_inventory(
     mut candidates: Vec<ProcessEvidence>,
     files: &HashMap<u32, Vec<PathBuf>>,
 ) -> Result<Vec<ProcessEvidence>, String> {
     for process in &mut candidates {
         if let Some(paths) = files.get(&process.pid) {
             if paths.len() > 256 {
-                return Err("trop de rollouts ouverts".into());
+                return Err("trop de fichiers de session ouverts".into());
             }
             // Une lecture manquante peut cacher un second fil : remonter
             // l'échec jusqu'à refresh, qui retire tous les marqueurs possédés.
-            process.sessions = paths
-                .iter()
-                .map(|path| rollout_session(path))
+            process.sessions = session_files_of(&process.provider, paths)
+                .into_iter()
+                .map(|path| session_id_of(&process.provider, path))
                 .collect::<Option<Vec<_>>>()
                 .ok_or_else(|| {
-                    "métadonnée de rollout illisible : inventaire incomplet".to_string()
+                    "métadonnée de session illisible : inventaire incomplet".to_string()
                 })?;
             process.sessions.sort();
             process.sessions.dedup();
@@ -804,11 +874,11 @@ mod spec101_identity {
         .unwrap();
         let candidates = vec![process(2, &[]), process(3, &[])];
         let files = HashMap::from([(2, vec![readable.clone()]), (3, vec![readable, missing])]);
-        let complete = complete_rollout_inventory(vec![process(2, &[])], &files).unwrap();
+        let complete = complete_session_inventory(vec![process(2, &[])], &files).unwrap();
         assert_eq!(complete[0].sessions, vec!["A"]);
         // P1=A, P2=A+inaccessible : aucun jeu de candidats partiel ne doit
         // atteindre select_bindings et rendre artificiellement P1 unique.
-        assert!(complete_rollout_inventory(candidates, &files).is_err());
+        assert!(complete_session_inventory(candidates, &files).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -905,6 +975,86 @@ mod spec101_identity {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// Session 114 : Cursor ne met pas son identifiant de session en ligne de
+    /// commande ; il le révèle par le dossier `acp-sessions` qu'il tient ouvert.
+    #[test]
+    fn spec114_session_cursor_lue_dans_le_dossier_acp() {
+        assert_eq!(
+            cursor_session(Path::new(
+                "/Users/u/.cursor/acp-sessions/df338dbf-96b3-4dbf-90f3-ee27fbf1af83/store.db"
+            )),
+            Some("df338dbf-96b3-4dbf-90f3-ee27fbf1af83".into())
+        );
+        // Les fichiers frères du même dossier désignent la même session.
+        assert_eq!(
+            cursor_session(Path::new("/x/acp-sessions/s-1/store.db-wal")),
+            Some("s-1".into())
+        );
+        for refuse in [
+            "/Users/u/.cursor/acp-sessions",
+            "/Users/u/.codex/sessions/rollout.jsonl",
+            "/x/acp-sessions/../evade/store.db",
+        ] {
+            assert_eq!(cursor_session(Path::new(refuse)), None, "{refuse}");
+        }
+    }
+
+    /// Chaque fournisseur ne lit que SES fichiers de session : un rollout
+    /// Codex ouvert par Cursor ne devient pas une session Cursor, et un
+    /// fichier étranger n'invalide pas l'inventaire.
+    #[test]
+    fn spec114_inventaire_trie_les_fichiers_par_fournisseur() {
+        let paths = vec![
+            PathBuf::from("/x/acp-sessions/s-1/store.db"),
+            PathBuf::from("/x/rollout.jsonl"),
+            PathBuf::from("/x/node_modules/tree-sitter.node"),
+        ];
+        assert_eq!(
+            session_files_of("cursor", &paths),
+            vec![&PathBuf::from("/x/acp-sessions/s-1/store.db")]
+        );
+        assert_eq!(
+            session_files_of("codex", &paths),
+            vec![&PathBuf::from("/x/rollout.jsonl")]
+        );
+        assert!(session_files_of("claude", &paths).is_empty());
+    }
+
+    /// Session 114 : une seconde application T3 sur le même dossier réécrit
+    /// `server-runtime.json`. Notre serveur, lui, n'a pas changé : exiger
+    /// l'égalité du fichier révoquait les identités de TOUS les fils.
+    #[test]
+    fn spec114_fichier_d_etat_etranger_ne_revoque_pas_les_identites() {
+        let root = std::env::temp_dir().join(format!("bi114-{}", uuid::Uuid::new_v4()));
+        crate::environment::ensure_private_directory(&root).unwrap();
+        let base = root.join("t3");
+        fs::create_dir_all(base.join("userdata")).unwrap();
+        let db = rusqlite::Connection::open(base.join("userdata/state.sqlite")).unwrap();
+        db.execute_batch(
+            "CREATE TABLE provider_session_runtime (thread_id TEXT, provider_name TEXT, resume_cursor_json TEXT);
+             INSERT INTO provider_session_runtime VALUES ('fil-a','cursor','{\"sessionId\":\"s-a\"}');",
+        )
+        .unwrap();
+        drop(db);
+        fs::write(
+            base.join("userdata/server-runtime.json"),
+            r#"{"version":1,"pid":4294967000,"host":"127.0.0.1","port":3774,"origin":"http://127.0.0.1:3774"}"#,
+        )
+        .unwrap();
+        let ours = ServerRuntime {
+            pid: std::process::id(),
+            port: 3773,
+        };
+        let mut bindings = IdentityBindings::new(&root);
+        let result = bindings.refresh(&base, &ours, &[binding("fil-a")]);
+        assert!(
+            result.is_ok(),
+            "un fichier d'état étranger ne révoque plus rien : {result:?}"
+        );
+        bindings.clear();
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn disparition_et_ambiguite_revoquent_uniquement_marqueurs_possedes() {
         let root = std::env::temp_dir().join(format!("bi101-{}", uuid::Uuid::new_v4()));
@@ -985,7 +1135,7 @@ mod spec101_identity {
         assert!(process_ids().unwrap().contains(&pid));
         assert!(!process_arguments(pid).unwrap().is_empty());
         let started = std::time::Instant::now();
-        let inventory = crate::runtime::open_session_files(&[pid]).unwrap();
+        let inventory = crate::runtime::open_session_files(&[pid], is_session_file).unwrap();
         let elapsed = started.elapsed();
         // /var est un alias de /private/var sur macOS ; lsof publie le canonique.
         assert!(inventory[&pid].contains(&first.canonicalize().unwrap()));

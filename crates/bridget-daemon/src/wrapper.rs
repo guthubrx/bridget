@@ -757,29 +757,92 @@ pub(crate) fn deliver_idempotent_to_interactive(
     now: i64,
     inject: impl FnOnce(&bridget_core::BridgetMessage) -> Result<(), String>,
 ) -> Vec<WrapperToDaemon> {
-    match tracker.receive(
-        delivery_id,
-        recipient_instance_id,
-        delivery_generation,
-        expires_at,
-        message,
-        now,
-    ) {
-        IdempotentDeliveryAction::Report(report) => vec![report],
-        IdempotentDeliveryAction::Inject {
-            message,
+    deliver_batch_to_interactive(
+        tracker,
+        vec![BatchedDelivery::Idempotent {
             delivery_id,
-        } => {
-            if inject(&message).is_ok() {
-                tracker
-                    .prompt_dispatched(&message.id, now)
-                    .into_iter()
-                    .collect()
-            } else {
-                tracker.injection_failed(&delivery_id).into_iter().collect()
-            }
+            recipient_instance_id,
+            delivery_generation,
+            expires_at,
+            message,
+        }],
+        now,
+        |messages| inject(&messages[0]),
+    )
+}
+
+/// Session 114 : une remise d'un lot partageant un même tour du destinataire.
+pub(crate) enum BatchedDelivery {
+    /// Remise historique : injectée, sans accusé durable attendu.
+    Historic(bridget_core::BridgetMessage),
+    Idempotent {
+        delivery_id: String,
+        recipient_instance_id: String,
+        delivery_generation: u64,
+        expires_at: i64,
+        message: bridget_core::BridgetMessage,
+    },
+}
+
+/// Session 114 : remet plusieurs messages en une seule injection.
+///
+/// Chaque remise reste jugée séparément par le tracker — un rejeu déjà accusé
+/// n'est pas réinjecté et n'entre pas dans le lot. Seuls les messages retenus
+/// sont passés à `inject`, qui ouvre UN tour ; chacun reçoit ensuite son propre
+/// accusé. Grouper est réservé aux messages sans réponse attendue : une réponse
+/// par tour ne saurait être répartie entre plusieurs demandes.
+///
+/// Complexité : O(n) sur la taille du lot, bornée par l'appelant.
+pub(crate) fn deliver_batch_to_interactive(
+    tracker: &mut IdempotentDeliveryTracker,
+    batch: Vec<BatchedDelivery>,
+    now: i64,
+    inject: impl FnOnce(&[bridget_core::BridgetMessage]) -> Result<(), String>,
+) -> Vec<WrapperToDaemon> {
+    let mut reports = Vec::new();
+    let mut retained: Vec<bridget_core::BridgetMessage> = Vec::new();
+    let mut awaiting: Vec<(String, String)> = Vec::new();
+    for item in batch {
+        match item {
+            BatchedDelivery::Historic(message) => retained.push(message),
+            BatchedDelivery::Idempotent {
+                delivery_id,
+                recipient_instance_id,
+                delivery_generation,
+                expires_at,
+                message,
+            } => match tracker.receive(
+                delivery_id,
+                recipient_instance_id,
+                delivery_generation,
+                expires_at,
+                message,
+                now,
+            ) {
+                IdempotentDeliveryAction::Report(report) => reports.push(report),
+                IdempotentDeliveryAction::Inject {
+                    message,
+                    delivery_id,
+                } => {
+                    awaiting.push((message.id.clone(), delivery_id));
+                    retained.push(message);
+                }
+            },
         }
     }
+    if retained.is_empty() {
+        return reports;
+    }
+    if inject(&retained).is_ok() {
+        for (message_id, _) in &awaiting {
+            reports.extend(tracker.prompt_dispatched(message_id, now));
+        }
+    } else {
+        for (_, delivery_id) in &awaiting {
+            reports.extend(tracker.injection_failed(delivery_id));
+        }
+    }
+    reports
 }
 
 fn socket_path() -> PathBuf {
@@ -6569,6 +6632,57 @@ mod delegated_runtime_tests {
                 .prompt_dispatched(&message.id, 1_700_000_002)
                 .is_none()
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Session 114 : un lot n'injecte qu'une fois, mais chaque remise garde son
+    /// accusé — sinon le daemon croirait la moitié du lot encore en vol. Un
+    /// rejeu déjà accusé n'entre pas dans le lot et n'est donc pas réinjecté.
+    #[test]
+    fn spec114_lot_injecte_une_fois_et_accuse_chaque_remise() {
+        let root = std::env::temp_dir().join(format!("bridget-spec-114-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, "equipier").unwrap();
+        let lot = |ids: [&str; 2]| {
+            ids.map(|id| {
+                let mut message =
+                    bridget_core::BridgetMessage::new("coordinateur", "equipier", "compte rendu");
+                message.id = id.to_string();
+                BatchedDelivery::Idempotent {
+                    delivery_id: format!("d-{id}"),
+                    recipient_instance_id: "equipier".to_string(),
+                    delivery_generation: 7,
+                    expires_at: 500,
+                    message,
+                }
+            })
+            .into_iter()
+            .collect::<Vec<_>>()
+        };
+
+        let mut injections = Vec::new();
+        let reports =
+            deliver_batch_to_interactive(&mut tracker, lot(["a", "b"]), 100, |messages| {
+                injections.push(messages.iter().map(|m| m.id.clone()).collect::<Vec<_>>());
+                Ok(())
+            });
+        assert_eq!(injections, vec![vec!["a".to_string(), "b".to_string()]]);
+        let accuses: Vec<&str> = reports
+            .iter()
+            .filter_map(|report| match report {
+                WrapperToDaemon::DeliverAcked { delivery_id, .. } => Some(delivery_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(accuses, vec!["d-a", "d-b"], "chaque remise a son accusé");
+
+        // Rejeu du lot : rien n'est réinjecté, les accusés repartent seuls.
+        let replay = deliver_batch_to_interactive(&mut tracker, lot(["a", "b"]), 101, |_| {
+            injections.push(vec!["rejeu".to_string()]);
+            Ok(())
+        });
+        assert_eq!(injections.len(), 1, "aucune seconde injection");
+        assert_eq!(replay.len(), 2, "les deux accusés sont rejoués");
         std::fs::remove_dir_all(root).unwrap();
     }
 

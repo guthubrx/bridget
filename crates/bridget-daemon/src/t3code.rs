@@ -29,8 +29,8 @@ use crate::t3code_contract::{
     self as contract, Client, ContractError, ServerRuntime, T3Cli, ThreadDetail, ThreadSummary,
 };
 use crate::wrapper::{
-    AttachRelayWorker, IdempotentDeliveryTracker, connect_and_register_at,
-    deliver_idempotent_to_interactive, send_wrapper_message,
+    AttachRelayWorker, BatchedDelivery, IdempotentDeliveryTracker, connect_and_register_at,
+    deliver_batch_to_interactive, send_wrapper_message,
 };
 
 const PROTOCOL: &str = "t3code";
@@ -42,6 +42,11 @@ const DEFAULT_TURN_WAIT: Duration = Duration::from_secs(120);
 /// destinataire travaillait depuis plus de deux minutes. Une saturation est un
 /// fait distinct d'une péremption : elle a son propre avertissement.
 const QUEUE_BOUND: usize = 64;
+/// Session 114 : bornes du regroupement des messages sans réponse attendue en
+/// un seul tour. Un lot doit rester lisible par son destinataire et tenir dans
+/// le budget d'un tour ; au-delà, les messages suivants attendent le tour d'après.
+const BATCH_BOUND: usize = 8;
+const BATCH_BODY_BOUND: usize = 32 * 1024;
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
 const AUTH_FAILED_PAUSE: Duration = Duration::from_secs(60);
 const DETAIL_PAGE: u32 = 20;
@@ -520,13 +525,36 @@ fn status(paths: &Paths) -> Result<i32, String> {
         ),
         Err(e) => println!("serveur t3code : {e}"),
     }
-    if let Some(bridge) = read_json::<StatusFile>(&paths.status())? {
+    let bridge = read_json::<StatusFile>(&paths.status())?;
+    if let Some(bridge) = &bridge {
         println!(
             "pont          : {} — {} ({} fil(s), {})",
             bridge.state, bridge.detail, bridge.threads, bridge.updated_at
         );
     } else {
         println!("pont          : jamais démarré");
+    }
+    // Session 114 : diagnostic explicite du partage de dossier T3. Sans lui, la
+    // divergence entre ces deux lignes se lit à l'œil — et c'est par là que
+    // toutes les identités MCP peuvent tomber.
+    if let Some(bridge) = bridge.filter(|bridge| bridge.state == "running") {
+        match &runtime {
+            Ok(runtime) if !bridge.detail.is_empty() && bridge.detail != runtime.base_url() => {
+                println!(
+                    "ATTENTION     : le pont sert {} mais le fichier d'état désigne {} ; \
+                     deux applications T3 partagent le même dossier. N'en garder qu'une.",
+                    bridge.detail,
+                    runtime.base_url()
+                );
+            }
+            Err(_) => println!(
+                "ATTENTION     : aucun serveur t3code déclaré alors que le pont sert {} ; \
+                 une autre application T3 a effacé le fichier d'état en se fermant. \
+                 Le pont continue, mais son prochain démarrage ne trouvera rien.",
+                bridge.detail
+            ),
+            _ => {}
+        }
     }
     if let (Ok(runtime), Some(token)) = (runtime, token) {
         match Client::new(&runtime, &token.token).snapshot() {
@@ -897,6 +925,44 @@ fn wait_runtime(paths: &Paths, poll: Duration) -> ServerRuntime {
     }
 }
 
+/// Session 114 : signale une seconde application T3 sur le même dossier
+/// utilisateur, une fois par changement.
+///
+/// Les deux applications partagent `server-runtime.json` et `state.sqlite` : la
+/// dernière démarrée s'y déclare. Nos attestations restent valides — elles ne
+/// dépendent que de NOTRE serveur — mais le partage de base doit être dit, et
+/// l'autre application efface ce fichier en se fermant, ce qui empêchera un
+/// prochain démarrage du pont de retrouver le serveur.
+fn report_foreign_runtime(base: &Path, ours: &ServerRuntime, last: &mut Option<u32>) {
+    let foreign = match contract::read_runtime(base) {
+        Ok(other) if other != *ours => Some(other),
+        _ => None,
+    };
+    match foreign {
+        Some(other) if *last != Some(other.pid) => {
+            warn!(
+                "une autre application T3 (pid {}, {}) s'est déclarée dans {} ; \
+                 la nôtre reste {} (pid {}). Les deux partagent state.sqlite : \
+                 n'en laisser tourner qu'une.",
+                other.pid,
+                other.base_url(),
+                contract::runtime_file(base).display(),
+                ours.base_url(),
+                ours.pid
+            );
+            *last = Some(other.pid);
+        }
+        None if last.is_some() => {
+            info!(
+                "plus qu'une application T3 déclarée ; la nôtre reste {}",
+                ours.base_url()
+            );
+            *last = None;
+        }
+        _ => {}
+    }
+}
+
 fn serve(paths: &Paths) -> Result<(), String> {
     paths.ensure()?;
     let Some(token) = read_json::<TokenFile>(&paths.token())? else {
@@ -915,6 +981,8 @@ fn serve(paths: &Paths) -> Result<(), String> {
     let mut retry_after: BTreeMap<String, Instant> = BTreeMap::new();
     let t3_base = contract::base_dir().map_err(|e| e.to_string())?;
     let mut identities = crate::t3code_identity::IdentityBindings::new(&paths.root);
+    let mut identity_error: Option<String> = None;
+    let mut foreign_runtime: Option<u32> = None;
     loop {
         let snapshot = match session.call(|client| client.snapshot()) {
             Ok(snapshot) => snapshot,
@@ -1040,9 +1108,23 @@ fn serve(paths: &Paths) -> Result<(), String> {
             })
             .collect();
         let runtime = session.lock().runtime.clone();
-        if let Err(error) = identities.refresh(&t3_base, &runtime, &bindings) {
-            warn!("rattachement MCP T3 indisponible : {error}");
+        // Session 114 : ces deux faits se répètent à chaque cycle de trois
+        // secondes. Ne les dire qu'au changement : sinon un seul incident noie
+        // le journal (456 lignes identiques en une journée) et cache le reste.
+        match identities.refresh(&t3_base, &runtime, &bindings) {
+            Ok(_) => {
+                if identity_error.take().is_some() {
+                    info!("rattachement MCP T3 rétabli");
+                }
+            }
+            Err(error) => {
+                if identity_error.as_deref() != Some(error.as_str()) {
+                    warn!("rattachement MCP T3 indisponible : {error}");
+                    identity_error = Some(error);
+                }
+            }
         }
+        report_foreign_runtime(&t3_base, &runtime, &mut foreign_runtime);
         publish_status(paths, "running", &session.base_url(), links.len());
         thread::sleep(poll);
     }
@@ -1717,85 +1799,140 @@ impl LinkWorker {
             self.request_status();
             return;
         }
-        let (mut frame, received) = self.queue.pop_front().expect("remise présente");
-        // Session 112 : le budget d'exécution repart du dispatch réel.
-        match &mut frame {
-            DaemonToWrapper::Deliver(message)
-            | DaemonToWrapper::DeliverIdempotent { message, .. } => {
-                if let Some(deadline) = message.deadline_at {
-                    let shifted = deadline_after_wait(deadline, received);
-                    if shifted != deadline {
-                        info!(
-                            "remise {} : {} s d'attente en file reportés sur l'échéance de tour",
-                            message.id,
-                            received.elapsed().as_secs()
-                        );
+        // Session 114 : les messages sans réponse attendue en tête de file
+        // partagent un seul tour. Sans cela, vingt-trois comptes rendus
+        // d'avancement ouvraient vingt-trois tours chez le coordinateur : budget
+        // consommé pour rien, et une corrélation faussée pour les demandes
+        // voisines dès qu'un de ces tours ne produisait pas de texte.
+        let mut batch = Vec::new();
+        for _ in 0..self.batchable_prefix() {
+            let (mut frame, received) = self.queue.pop_front().expect("remise présente");
+            // Session 112 : le budget d'exécution repart du dispatch réel.
+            match &mut frame {
+                DaemonToWrapper::Deliver(message)
+                | DaemonToWrapper::DeliverIdempotent { message, .. } => {
+                    if let Some(deadline) = message.deadline_at {
+                        let shifted = deadline_after_wait(deadline, received);
+                        if shifted != deadline {
+                            info!(
+                                "remise {} : {} s d'attente en file reportés sur l'échéance de tour",
+                                message.id,
+                                received.elapsed().as_secs()
+                            );
+                        }
+                        message.deadline_at = Some(shifted);
                     }
-                    message.deadline_at = Some(shifted);
                 }
+                _ => {}
             }
-            _ => {}
-        }
-        match frame {
-            DaemonToWrapper::Deliver(message) => {
-                if let Err(e) = self.dispatch_with_id(&message, None, &summary) {
-                    error!("remise {} au fil {} : {e}", message.id, self.thread_id);
-                }
-            }
-            DaemonToWrapper::DeliverIdempotent {
-                delivery_id,
-                recipient_instance_id,
-                delivery_generation,
-                expires_at,
-                message,
-                ..
-            } => {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or_default();
-                // Le tracker déduplique les rejeux ; l'ack ne part qu'après
-                // acceptation de la commande par t3code (dispatch 200).
-                let mut outcome = Ok(());
-                let mut tracker = self.tracker.take().expect("tracker présent");
-                let reports = deliver_idempotent_to_interactive(
-                    &mut tracker,
+            batch.push(match frame {
+                DaemonToWrapper::Deliver(message) => BatchedDelivery::Historic(message),
+                DaemonToWrapper::DeliverIdempotent {
                     delivery_id,
                     recipient_instance_id,
                     delivery_generation,
                     expires_at,
                     message,
-                    now,
-                    |message| {
-                        outcome = self.dispatch_with_id(message, Some(&message.id), &summary);
-                        outcome.clone()
-                    },
-                );
-                self.tracker = Some(tracker);
-                if let Err(e) = outcome {
-                    error!("remise idempotente au fil {} : {e}", self.thread_id);
-                }
-                for report in reports {
-                    send_wrapper_message(&self.writer, report);
-                }
-            }
-            _ => unreachable!("la file ne contient que des remises"),
+                    ..
+                } => BatchedDelivery::Idempotent {
+                    delivery_id,
+                    recipient_instance_id,
+                    delivery_generation,
+                    expires_at,
+                    message,
+                },
+                _ => unreachable!("la file ne contient que des remises"),
+            });
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or_default();
+        // Le tracker déduplique les rejeux ; l'accusé ne part qu'après
+        // acceptation de la commande par t3code (dispatch 200).
+        let mut outcome = Ok(());
+        let mut tracker = self.tracker.take().expect("tracker présent");
+        let reports = deliver_batch_to_interactive(&mut tracker, batch, now, |messages| {
+            outcome = self.dispatch_batch(messages, &summary);
+            outcome.clone()
+        });
+        self.tracker = Some(tracker);
+        if let Err(e) = outcome {
+            error!("remise au fil {} : {e}", self.thread_id);
+        }
+        for report in reports {
+            send_wrapper_message(&self.writer, report);
         }
     }
 
-    /// Démarre le fil attesté libre par drive_queue, après contrôle d'autorité.
-    /// `commandId` = identifiant du message Bridget (t3code déduplique dessus).
+    /// Session 114 : longueur du lot, en tête de file, qui peut partager un
+    /// tour. Toujours au moins un — la tête a déjà passé tous les contrôles.
+    ///
+    /// Au-delà du premier, seuls des messages groupables et encore valides
+    /// entrent dans le lot : un message écarté doit garder son propre sort,
+    /// rapporté au daemon par le cycle suivant (session 113).
+    /// Complexité : O(n) sur la file, bornée par `QUEUE_BOUND`.
+    fn batchable_prefix(&self) -> usize {
+        let now = unix_now();
+        let mut bytes = 0;
+        let mut length = 0;
+        for (frame, received) in &self.queue {
+            let message = delivery_message(frame);
+            if !groupable(message)
+                || length >= BATCH_BOUND
+                || bytes + message.body.len() > BATCH_BODY_BOUND
+            {
+                break;
+            }
+            if length > 0 && self.discard_cause(frame, *received, now).is_some() {
+                break;
+            }
+            bytes += message.body.len();
+            length += 1;
+        }
+        length.max(1)
+    }
+
+    /// Message que le pont ne doit plus injecter : sa propre échéance, ou celle
+    /// de sa demande suivie, est passée.
+    fn is_stale(&self, message: &bridget_core::BridgetMessage) -> bool {
+        message
+            .deadline_at
+            .is_some_and(|deadline| deadline <= unix_now())
+            || self
+                .requests
+                .get(&message.id)
+                .is_some_and(|request| request.deadline_at <= unix_now() as i64)
+    }
+
+    /// Remise d'un seul message. La production passe toujours par un lot ;
+    /// ce raccourci sert aux tests qui n'ont rien à grouper.
+    #[cfg(test)]
     fn dispatch_with_id(
         &mut self,
         message: &bridget_core::BridgetMessage,
-        command_id: Option<&str>,
         summary: &ThreadSummary,
     ) -> Result<(), String> {
+        self.dispatch_batch(std::slice::from_ref(message), summary)
+    }
+
+    /// Démarre le fil attesté libre par drive_queue, après contrôle d'autorité.
+    /// `commandId` = identifiant du premier message du lot (t3code déduplique
+    /// dessus). Session 114 : le lot ne dépasse un message que s'ils sont tous
+    /// ordinaires et sans réponse attendue, donc sans attente à corréler.
+    fn dispatch_batch(
+        &mut self,
+        messages: &[bridget_core::BridgetMessage],
+        summary: &ThreadSummary,
+    ) -> Result<(), String> {
+        let Some(first) = messages.first() else {
+            return Ok(());
+        };
         if !self.daemon_alive.load(Ordering::SeqCst) {
             return Err("daemon déconnecté".into());
         }
         let anchor = summary.latest_turn.as_ref().map(|t| t.turn_id.clone());
-        let command_id = command_id.unwrap_or(&message.id).to_string();
+        let command_id = first.id.clone();
         // Identifiant de message déterministe : un rejeu après panne reconstruit
         // exactement la même commande, que t3code déduplique par `commandId`.
         let message_id = stable_uuid(&format!("t3code-message:{command_id}"));
@@ -1803,7 +1940,7 @@ impl LinkWorker {
             &self.thread_id,
             &command_id,
             &message_id,
-            &envelope(message),
+            &batch_envelope(messages),
             &summary.runtime_mode,
             &summary.interaction_mode,
         );
@@ -1811,43 +1948,39 @@ impl LinkWorker {
         // t3code et cette ligne, la corrélation serait perdue et la réponse ne
         // reviendrait jamais. Écrite avant, elle est au pire inutile — et reste
         // conservée jusqu'à un refus certain ou une clôture attestée.
-        if message.id.starts_with("bridget-observation:") {
-            if !self.state.notification_messages.contains(&message_id) {
-                self.state.notification_messages.push(message_id.clone());
-                if self.state.notification_messages.len() > SEEN_BOUND {
-                    self.state.notification_messages.remove(0);
+        for message in messages {
+            if message.id.starts_with("bridget-observation:") {
+                if !self.state.notification_messages.contains(&message_id) {
+                    self.state.notification_messages.push(message_id.clone());
+                    if self.state.notification_messages.len() > SEEN_BOUND {
+                        self.state.notification_messages.remove(0);
+                    }
+                    self.state.save(&self.state_path)?;
                 }
+            } else if message.reply
+                && !self
+                    .state
+                    .pending
+                    .iter()
+                    .any(|p| p.request_id == message.id)
+            {
+                self.state.pending.push(Pending {
+                    request_id: message.id.clone(),
+                    from: message.from.clone(),
+                    message_id: message_id.clone(),
+                    anchor_turn_id: anchor.clone(),
+                    dispatched_at: contract::iso_now(),
+                    attempts: 0,
+                    response: None,
+                    reply_requested: Some(true),
+                });
                 self.state.save(&self.state_path)?;
             }
-        } else if message.reply
-            && !self
-                .state
-                .pending
-                .iter()
-                .any(|p| p.request_id == message.id)
-        {
-            self.state.pending.push(Pending {
-                request_id: message.id.clone(),
-                from: message.from.clone(),
-                message_id,
-                anchor_turn_id: anchor,
-                dispatched_at: contract::iso_now(),
-                attempts: 0,
-                response: None,
-                reply_requested: Some(true),
-            });
-            self.state.save(&self.state_path)?;
         }
         // La persistance peut elle-même prendre du temps. Le lecteur socket
         // publie la perte d'autorité sans attendre le traitement de sa file.
         if !self.daemon_alive.load(Ordering::SeqCst)
-            || message
-                .deadline_at
-                .is_some_and(|deadline| deadline <= unix_now())
-            || self
-                .requests
-                .get(&message.id)
-                .is_some_and(|request| request.deadline_at <= unix_now() as i64)
+            || messages.iter().any(|message| self.is_stale(message))
         {
             return Err("autorité absente ou demande périmée avant dispatch".into());
         }
@@ -1855,18 +1988,13 @@ impl LinkWorker {
         // Vérifier aussi dans sa closure, à la dernière frontière HTTP.
         match self.session.call(|client| {
             if !self.daemon_alive.load(Ordering::SeqCst)
-                || self
-                    .cancelled
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .contains_key(&message.id)
-                || message
-                    .deadline_at
-                    .is_some_and(|deadline| deadline <= unix_now())
-                || self
-                    .requests
-                    .get(&message.id)
-                    .is_some_and(|request| request.deadline_at <= unix_now() as i64)
+                || messages.iter().any(|message| {
+                    self.cancelled
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .contains_key(&message.id)
+                        || self.is_stale(message)
+                })
             {
                 return Err(ContractError::Transport(
                     "remise annulée, périmée ou autorité déconnectée avant dispatch".into(),
@@ -1875,10 +2003,12 @@ impl LinkWorker {
             client.dispatch(&command)
         }) {
             Ok(result) => {
-                info!(
-                    "message {} remis au fil {} (séquence {})",
-                    message.id, self.thread_id, result.sequence
-                );
+                for message in messages {
+                    info!(
+                        "message {} remis au fil {} (séquence {})",
+                        message.id, self.thread_id, result.sequence
+                    );
+                }
                 Ok(())
             }
             // Seuls ces refus explicites attestent une commande rejetée.
@@ -1890,7 +2020,9 @@ impl LinkWorker {
                     ..
                 },
             ) => {
-                self.state.pending.retain(|p| p.request_id != message.id);
+                self.state
+                    .pending
+                    .retain(|p| !messages.iter().any(|message| p.request_id == message.id));
                 let _ = self.state.save(&self.state_path);
                 Err(error.to_string())
             }
@@ -2567,6 +2699,42 @@ pub(crate) fn reply_id(request_id: &str) -> String {
 }
 
 /// Le pont ne relaie la réponse finale que si elle a été demandée.
+/// Session 114 : enveloppe d'un lot partageant un seul tour. Un message seul
+/// garde exactement son enveloppe historique ; le format de lot n'apparaît qu'à
+/// partir de deux, et ne concerne que des messages sans réponse attendue —
+/// c'est ce qui autorise une enveloppe commune, puisqu'aucune réponse du tour
+/// n'aura à être attribuée à l'un plutôt qu'à l'autre.
+pub(crate) fn batch_envelope(messages: &[bridget_core::BridgetMessage]) -> String {
+    let [message] = messages else {
+        let total = messages.len();
+        let mut rendered =
+            format!("📥 {total} messages Bridget groupés dans ce tour (reply=no) :\n");
+        for (index, message) in messages.iter().enumerate() {
+            rendered.push_str(&format!(
+                "\n── {}/{total} — de {} (id {}) ──\n{}\n",
+                index + 1,
+                message.from,
+                message.id,
+                message.body
+            ));
+        }
+        rendered.push_str(
+            "\nAucune réponse inter-agent attendue pour ces messages. N'envoie pas d'accusé de réception, même pour dire que tu ne répondras pas. Le pont ne relaie pas ta réponse finale pour ce tour.",
+        );
+        return rendered;
+    };
+    envelope(message)
+}
+
+/// Session 114 : message qui peut partager un tour avec ses voisins. Une
+/// sollicitation de fil et une notification portent chacune leur consigne
+/// propre ; une demande suivie attend LA réponse du tour, qui ne se partage pas.
+fn groupable(message: &bridget_core::BridgetMessage) -> bool {
+    !message.reply
+        && message.thread_notice.is_none()
+        && !message.id.starts_with("bridget-observation:")
+}
+
 pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
     if let Some(notice) = &message.thread_notice {
         // Session 102 : sollicitation de fil. Aucun relais de la réponse finale,
@@ -2790,6 +2958,111 @@ mod tests {
         replies
     }
 
+    /// Message ordinaire sans réponse attendue : le cas groupable.
+    fn plain114(id: &str) -> bridget_core::BridgetMessage {
+        let mut message = bridget_core::BridgetMessage::new("alice", "bob", format!("corps {id}"));
+        message.id = id.into();
+        message
+    }
+
+    /// Session 114 : plusieurs comptes rendus sans réponse attendue tiennent
+    /// dans un seul tour, au lieu d'en ouvrir un chacun.
+    #[test]
+    fn spec114_lot_sans_reponse_attendue_partage_un_seul_tour() {
+        let (mut worker, _peer) = worker099();
+        let messages: Vec<_> = (0..3)
+            .map(|index| plain114(&format!("r-{index}")))
+            .collect();
+        for message in &messages {
+            worker.handle_frame(DaemonToWrapper::Deliver(message.clone()));
+        }
+        assert_eq!(worker.batchable_prefix(), 3, "les trois partagent un tour");
+        let server = http_once099(&worker, 200, r#"{"sequence":1}"#.into());
+        let result = worker.dispatch_batch(&messages, &summary(None));
+        let request = server.join().unwrap();
+        worker.journal.stop();
+        worker.relay.shutdown();
+        assert!(result.is_ok(), "{result:?}");
+        for message in &messages {
+            assert!(
+                request.contains(&message.body),
+                "le tour unique porte {}",
+                message.id
+            );
+        }
+        assert!(
+            request.contains("3 messages Bridget"),
+            "le destinataire sait qu'il lit un lot"
+        );
+    }
+
+    /// Un message qui porte sa consigne propre, ou dont la réponse est
+    /// attendue, ne peut pas partager le tour d'un autre.
+    #[test]
+    fn spec114_message_a_consigne_propre_n_est_jamais_groupe() {
+        let mut question = plain114("question");
+        question.reply = true;
+        let mut notice = plain114("notice");
+        notice.thread_notice = Some(bridget_core::ThreadNotice {
+            version: 1,
+            thread_id: "33333333-3333-4333-8333-333333333333".into(),
+            through_seq: 3,
+            generation: 1,
+        });
+        let observation = plain114("bridget-observation:1");
+        for special in [question, notice, observation] {
+            let (mut worker, _peer) = worker099();
+            worker.handle_frame(DaemonToWrapper::Deliver(special.clone()));
+            worker.handle_frame(DaemonToWrapper::Deliver(plain114("suivant")));
+            assert_eq!(worker.batchable_prefix(), 1, "{} en tête", special.id);
+            worker.journal.stop();
+            worker.relay.shutdown();
+
+            let (mut worker, _peer) = worker099();
+            worker.handle_frame(DaemonToWrapper::Deliver(plain114("premier")));
+            worker.handle_frame(DaemonToWrapper::Deliver(special.clone()));
+            assert_eq!(worker.batchable_prefix(), 1, "{} en second", special.id);
+            worker.journal.stop();
+            worker.relay.shutdown();
+        }
+    }
+
+    /// Le lot reste lisible : borné en nombre et en taille.
+    #[test]
+    fn spec114_lot_borne_en_nombre_et_en_taille() {
+        let (mut worker, _peer) = worker099();
+        for index in 0..(BATCH_BOUND + 3) {
+            worker.handle_frame(DaemonToWrapper::Deliver(plain114(&format!("m-{index}"))));
+        }
+        assert_eq!(worker.batchable_prefix(), BATCH_BOUND, "borne de nombre");
+        worker.journal.stop();
+        worker.relay.shutdown();
+
+        let (mut worker, _peer) = worker099();
+        let mut enorme = plain114("enorme");
+        enorme.body = "x".repeat(BATCH_BODY_BOUND);
+        worker.handle_frame(DaemonToWrapper::Deliver(enorme));
+        worker.handle_frame(DaemonToWrapper::Deliver(plain114("suivant")));
+        assert_eq!(worker.batchable_prefix(), 1, "borne de taille");
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
+
+    /// Un message seul garde mot pour mot son enveloppe historique.
+    #[test]
+    fn spec114_enveloppe_d_un_message_seul_est_inchangee() {
+        for message in [plain114("seul"), {
+            let mut question = plain114("question");
+            question.reply = true;
+            question
+        }] {
+            assert_eq!(
+                batch_envelope(std::slice::from_ref(&message)),
+                envelope(&message)
+            );
+        }
+    }
+
     #[test]
     fn spec105_notification_et_reponse_ne_demandent_pas_de_relais() {
         for parent in [None, Some("question")] {
@@ -2834,7 +3107,7 @@ mod tests {
             "une sollicitation n'est pas une observation"
         );
         let server = http_once099(&worker, 200, r#"{"sequence":1}"#.into());
-        let result = worker.dispatch_with_id(&msg, Some(&msg.id), &summary(None));
+        let result = worker.dispatch_with_id(&msg, &summary(None));
         let request = server.join().unwrap();
         worker.journal.stop();
         worker.relay.shutdown();
@@ -2858,7 +3131,7 @@ mod tests {
             let mut msg = bridget_core::BridgetMessage::new("alice", &worker.agent_id, ".");
             msg.in_reply_to = parent.map(str::to_string);
             let server = http_once099(&worker, 200, r#"{"sequence":1}"#.into());
-            let result = worker.dispatch_with_id(&msg, None, &summary(None));
+            let result = worker.dispatch_with_id(&msg, &summary(None));
             let request = server.join().unwrap();
             worker.journal.stop();
             worker.relay.shutdown();
@@ -2962,9 +3235,7 @@ mod tests {
         question.reply = true;
         question.in_reply_to = Some("question-precedente".into());
         let server = http_once099(&worker, 200, r#"{"sequence":1}"#.into());
-        worker
-            .dispatch_with_id(&question, None, &summary(None))
-            .unwrap();
+        worker.dispatch_with_id(&question, &summary(None)).unwrap();
         server.join().unwrap();
         worker.state = ThreadState::load(&worker.state_path);
         let detail = ThreadDetail {
@@ -2992,7 +3263,7 @@ mod tests {
         let (mut recipient, _peer) = worker099();
         let server = http_once099(&recipient, 200, r#"{"sequence":1}"#.into());
         recipient
-            .dispatch_with_id(response, None, &summary(None))
+            .dispatch_with_id(response, &summary(None))
             .unwrap();
         server.join().unwrap();
         assert!(
@@ -3860,11 +4131,7 @@ mod tests {
             .lock()
             .unwrap()
             .insert(message.id.clone(), Instant::now());
-        assert!(
-            worker
-                .dispatch_with_id(&message, None, &summary(None))
-                .is_err()
-        );
+        assert!(worker.dispatch_with_id(&message, &summary(None)).is_err());
         assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
         worker.journal.stop();
         worker.relay.shutdown();
@@ -4014,11 +4281,7 @@ mod tests {
                 bridget_core::BridgetMessage::new("alice", &worker.agent_id, "travail accepté");
             request.reply = true;
             let server = http_once099(&worker, status, response.into());
-            assert!(
-                worker
-                    .dispatch_with_id(&request, None, &summary(None))
-                    .is_err()
-            );
+            assert!(worker.dispatch_with_id(&request, &summary(None)).is_err());
             let accepted = server.join().unwrap();
             assert!(accepted.starts_with("POST /api/orchestration/dispatch"));
             let saved = ThreadState::load(&worker.state_path);

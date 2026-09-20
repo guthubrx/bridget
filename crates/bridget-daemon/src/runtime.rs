@@ -177,15 +177,28 @@ pub fn parse_codex_rollout(path: &Path) -> Option<RuntimeObservation> {
 ///
 /// Complexité : O(nombre de descripteurs ouverts par le processus).
 pub fn open_session_file(pid: u32) -> Option<std::path::PathBuf> {
-    let candidates = open_session_files(&[pid]).ok()?;
+    let candidates = open_session_files(&[pid], is_codex_rollout).ok()?;
     most_recently_written(candidates.get(&pid)?)
+}
+
+/// Rollout Codex : le seul type de fichier que `open_session_file` classe.
+pub(crate) fn is_codex_rollout(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension == "jsonl")
 }
 
 /// Inventaire complet en une collecte. L'identité ne doit JAMAIS utiliser le
 /// classement mtime de `open_session_file` : un sous-agent peut écrire après son parent.
 /// Noms avec espaces conservés grâce au format machine lsof ; refus si tronqué.
+///
+/// `accept` borne la collecte aux fichiers de session reconnus. Il est fourni
+/// par l'appelant parce qu'il dépend du fournisseur : un rollout Codex est un
+/// `.jsonl`, une session Cursor est un dossier `acp-sessions/<id>`. Élargir ce
+/// filtre pour tout le monde ferait classer à `open_session_file` un fichier
+/// qui n'est pas un rollout.
 pub(crate) fn open_session_files(
     pids: &[u32],
+    accept: impl Fn(&Path) -> bool,
 ) -> std::io::Result<std::collections::HashMap<u32, Vec<std::path::PathBuf>>> {
     use std::os::fd::AsRawFd;
     use std::process::{Command, Stdio};
@@ -262,8 +275,8 @@ pub(crate) fn open_session_files(
                 current = pid.parse::<u32>().ok().filter(|pid| pids.contains(pid));
             } else if let Some(path) = line.strip_prefix('n')
                 && let Some(pid) = current
-                && path.ends_with(".jsonl")
                 && Path::new(path).is_absolute()
+                && accept(Path::new(path))
             {
                 let files = found.entry(pid).or_default();
                 let path = std::path::PathBuf::from(path);
