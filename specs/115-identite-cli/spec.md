@@ -1,7 +1,7 @@
 # Spécification 115 — Un fil T3 peut envoyer par la ligne de commande
 
 ## Fiche synthèse
-Spec: 115-identite-cli | Statut: In Progress | Priorité: P0 | Date: 2026-09-24
+Spec: 115-identite-cli | Statut: Implemented (livré 2026-09-24) | Priorité: P0 | Date: 2026-09-24
 Branche: session-115-identite-cli | Dépend de 101 (marqueurs d'identité par filiation) et 114.
 
 ## Problème observé

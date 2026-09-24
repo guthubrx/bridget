@@ -1,6 +1,6 @@
 # Journal 115 — Un fil T3 peut envoyer par la ligne de commande
 
-- **Base** : main `bedaa208` — **Date** : 2026-09-24 — **Statut** : In Progress
+- **Base** : main `bedaa208` — **Date** : 2026-09-24 — **Statut** : Implemented, livré le 2026-09-24 07:02
 
 ## Diagnostic (données réelles)
 - Transcript du coordinateur `opus_city_ai` : les 19 outils `mcp__bridget__*` ajoutés le 23/09 à
@@ -38,3 +38,10 @@ Rétabli hors dépôt par `claude mcp add --scope user bridget -- /Users/moi/.lo
 vérifié « Connected ». Il passe par le gestionnaire de configuration de Claude au lieu d'une édition
 manuelle, mais reste exposé aux réécritures concurrentes de ce fichier. Depuis cette session, son
 absence ne rend plus Bridget inutilisable : la ligne de commande prend le relais.
+
+## T007 — Livraison
+Commit `a59cef29` fusionné dans main en fast-forward ; binaire installé à 07:02. La ligne de
+commande étant lancée à neuf à chaque appel, la correction est active sans relance du daemon ni du
+pont : aucun agent n'a été coupé. Vérifié avec le binaire installé : `requests` liste les demandes
+de l'agent, `send` franchit le contrôle d'identité, la déclaration MCP de Claude est toujours en
+place, 24 agents connectés dont 20 fils T3.
