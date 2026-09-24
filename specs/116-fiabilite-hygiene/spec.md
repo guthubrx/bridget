@@ -1,7 +1,7 @@
 # Spécification 116 — Réponses fiables, identités stables, entretien automatique
 
 ## Fiche synthèse
-Spec: 116-fiabilite-hygiene | Statut: In Progress | Priorité: P0 | Date: 2026-09-24
+Spec: 116-fiabilite-hygiene | Statut: Implemented (livré 2026-09-24) | Priorité: P0 | Date: 2026-09-24
 Branche: session-116-fiabilite-hygiene | Suite de la revue « fais le tour » après la 115.
 Décision : [ADR 042](../../docs/decisions/042-appariement-par-origine-prouvee-et-entretien.md).
 

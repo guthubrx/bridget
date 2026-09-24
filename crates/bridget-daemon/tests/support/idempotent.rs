@@ -41,6 +41,29 @@ pub const ACP_AGENT: &str = "5da585af-5bc7-4808-985f-c73670633990";
 
 static CHILDREN: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 static WATCHDOG: Once = Once::new();
+/// Session 116 : racines de fixture créées par ce binaire de test. Elles
+/// n'étaient jamais supprimées : une recette complète en abandonnait une
+/// cinquantaine dans /tmp, plus d'un gigaoctet, jusqu'à remplir le disque.
+static ROOTS: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
+static ROOTS_CLEANUP: Once = Once::new();
+
+fn created_roots() -> &'static Mutex<Vec<PathBuf>> {
+    ROOTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Appelée par `exit` à la fin du binaire de test, quand tous ses tests ont
+/// rendu leurs processus. Les tests qui effacent déjà leur racine sont sans
+/// effet ici. Un fichier encore tenu par un enfant survivant peut rester.
+extern "C" fn remove_created_roots() {
+    let roots = std::mem::take(
+        &mut *created_roots()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()),
+    );
+    for root in roots {
+        let _ = fs::remove_dir_all(root);
+    }
+}
 pub fn children() -> &'static Mutex<Vec<i32>> {
     CHILDREN.get_or_init(|| Mutex::new(Vec::new()))
 }
@@ -484,6 +507,13 @@ pub fn test_root(_label: &str) -> PathBuf {
     for relative in ["", "provider", "state", "tmp"] {
         private_dir(&root.join(relative)).unwrap();
     }
+    ROOTS_CLEANUP.call_once(|| unsafe {
+        libc::atexit(remove_created_roots);
+    });
+    created_roots()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .push(root.clone());
     root
 }
 

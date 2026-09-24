@@ -1,6 +1,6 @@
 # Journal 116 — Réponses fiables, identités stables, entretien automatique
 
-- **Base** : main `9cbd770e` — **Date** : 2026-09-24 — **Statut** : In Progress
+- **Base** : main `9cbd770e` — **Date** : 2026-09-24 — **Statut** : Implemented, livré le 2026-09-24 07:57
 
 ## A. Appariement des réponses (`t3code.rs`)
 
@@ -61,6 +61,12 @@ Correction : lecture à l'exécution (`std::env::var_os`). Vérifié : le binair
 Limite connue : construire un worktree dans le répertoire de compilation principal fait surveiller
 les fichiers Git de ce worktree jusqu'à la construction suivante depuis le dépôt principal.
 
+## F. Fixtures de test abandonnées (`tests/support/idempotent.rs`)
+`test_root` créait `/tmp/bid-<id>` sans jamais l'effacer : 156 répertoires (1,3 Go) après une
+matinée de recettes, cause principale du disque plein. Chaque racine est désormais inscrite et
+effacée à la sortie du binaire de test (`atexit`), quand ses tests ont rendu leurs processus. Aucun
+test ne relance son propre binaire en utilisant ces racines : pas de suppression prématurée.
+
 ## Écarté
 Profils d'agents (313) : seul registre du nom d'un identifiant passé ; ne bloquent plus de nom (110).
 
@@ -79,3 +85,20 @@ production : une seule écriture ratée, le statut informatif du pont à 07:42.
   WouldBlock (os error 35) », délai de lecture de socket dépassé, avec une charge moyenne de la
   machine à 55 due à d'autres processus. Relancé seul trois fois : **23 réussis, 0 échec** à chaque
   fois. La recherche n'est pas touchée par cette session. Tests Python : 26 réussis.
+
+- Recette complète après le correctif des fixtures : **1545 réussis, 1 échec, 52 ignorés** ;
+  **0 fixture restante** dans /tmp, contre une cinquantaine par recette avant. L'échec,
+  `claude_gere_avec_bypass_ecrit_et_relit_un_fichier`, est préexistant et lié à la charge : il échoue
+  aussi sur main sans ce correctif (1 sur 6 à une charge moyenne de 67), jamais à charge 15 (10 sur 10
+  en parallèle, 8 sur 8 seul). Le pair reçoit la fin de connexion avant la réponse, en 1,3 s : piste
+  ouverte d'un wrapper Claude géré qui se termine avant de relayer sa réponse sous charge extrême.
+
+## Livraison
+- 07:52 : fusion, construction ; le script retire de lui-même les 21 worktrees fusionnés.
+- 07:52 puis 07:57 : relance du daemon et du pont (la seconde pour l'identifiant de build corrigé).
+  `bridget status` annonce `259b85793d50`, commit réel ; 26 agents, 22 fils T3.
+- 07:54:53 : premier passage d'entretien — 33 remises en vol passées en sort inconnu ; 55 marqueurs,
+  49 noms, 2 preuves retirés. `spawn_commands` intact (449).
+- Identités vivantes vérifiées après ce passage : les 10 marqueurs restants désignent tous un agent
+  vivant ; `requests` et la sonde d'envoi aboutissent depuis le fil `bdget`.
+- 52 fils ont déjà des origines de tour relevées par le nouvel appariement.
