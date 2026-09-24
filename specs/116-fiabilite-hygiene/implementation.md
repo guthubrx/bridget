@@ -50,6 +50,17 @@ morts (`kill(pid, 0)` → ESRCH) ; toute autre cause reste un échec.
 `unattested_hint` explique un refus d'identité (code et remède de la résolution) pour `send` et
 `reply`, sans maquiller un autre refus.
 
+## E. Identifiant de build figé (`build.rs`), trouvé à la livraison
+Le daemon relancé annonçait `853f29034c2d`, commit de la session 105 du 17/09, alors que le binaire
+venait d'être reconstruit au commit `81623fab`. La sortie Cargo du script de compilation listait des
+chemins du worktree 105 : `build.rs` lisait `CARGO_MANIFEST_DIR` par `env!`, donc à SA compilation.
+Compilé une fois depuis ce worktree dans le répertoire de compilation principal, puis réutilisé (Cargo
+n'inclut pas le chemin d'un membre de l'espace de travail dans son empreinte), il interrogeait depuis
+le Git figé de ce worktree. L'alerte de daemon périmé comparait donc deux valeurs toujours égales.
+Correction : lecture à l'exécution (`std::env::var_os`). Vérifié : le binaire porte le commit réel.
+Limite connue : construire un worktree dans le répertoire de compilation principal fait surveiller
+les fichiers Git de ce worktree jusqu'à la construction suivante depuis le dépôt principal.
+
 ## Écarté
 Profils d'agents (313) : seul registre du nom d'un identifiant passé ; ne bloquent plus de nom (110).
 
