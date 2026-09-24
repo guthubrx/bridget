@@ -1,7 +1,7 @@
 # Spécification 117 — Un fil non observable dit pourquoi
 
 ## Fiche synthèse
-Spec: 117-journal-bavard | Statut: In Progress | Priorité: P1 | Date: 2026-09-24
+Spec: 117-journal-bavard | Statut: Implemented (livré 2026-09-24) | Priorité: P1 | Date: 2026-09-24
 Branche: session-117-journal-bavard | Suite de la 116.
 
 ## Problème observé
