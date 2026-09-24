@@ -42,6 +42,8 @@ const DEFAULT_TURN_WAIT: Duration = Duration::from_secs(120);
 /// destinataire travaillait depuis plus de deux minutes. Une saturation est un
 /// fait distinct d'une péremption : elle a son propre avertissement.
 const QUEUE_BOUND: usize = 64;
+/// Session 117 : durée au-delà de laquelle un blocage du journal est signalé.
+const JOURNAL_BLOCK_GRACE: Duration = Duration::from_secs(30);
 /// Session 114 : bornes du regroupement des messages sans réponse attendue en
 /// un seul tour. Un lot doit rester lisible par son destinataire et tenir dans
 /// le budget d'un tour ; au-delà, les messages suivants attendent le tour d'après.
@@ -1313,6 +1315,9 @@ struct LinkWorker {
     /// et sans changement du snapshot fournisseur.
     journal_dirty: bool,
     response_sent: BTreeMap<String, Instant>,
+    /// Session 117 : blocage en cours de la projection du journal (motif,
+    /// depuis quand, déjà signalé).
+    journal_block: Option<(&'static str, Instant, bool)>,
     observation_events: Vec<bridget_transport::protocol::ObservationKind>,
     observation_schema: Vec<bridget_transport::protocol::ObservationKind>,
 }
@@ -1388,6 +1393,7 @@ impl LinkWorker {
             journal_caught_up: false,
             journal_dirty: false,
             response_sent: BTreeMap::new(),
+            journal_block: None,
             observation_events: Vec::new(),
             observation_schema: Vec::new(),
         })
@@ -2221,9 +2227,13 @@ impl LinkWorker {
             self.state.observations_seeded = true;
             self.state.seeded = true;
             self.journal_dirty = false;
+            self.clear_journal_block();
             return;
         }
         if self.journal_failed.load(Ordering::SeqCst) {
+            self.note_journal_block("journal en échec", || {
+                "l'écrivain s'est arrêté ; le lien sera rouvert".to_string()
+            });
             return;
         }
         let latest = detail.latest_turn.as_ref().or(summary.latest_turn.as_ref());
@@ -2344,11 +2354,10 @@ impl LinkWorker {
             } else {
                 serde_json::json!({"t3_turn_id":turn.turn_id,"gap":true,"reason":"origine du tour non attestée, notification de fin supprimée"})
             };
-            if self
-                .journal
-                .enqueue("turn_end", Some(&id), payload)
-                .is_err()
-            {
+            if let Err(error) = self.journal.enqueue("turn_end", Some(&id), payload) {
+                self.note_journal_block("fin de tour refusée par le journal", || {
+                    error.to_string()
+                });
                 return;
             }
             self.journal_inflight
@@ -2402,22 +2411,24 @@ impl LinkWorker {
                     payload = serde_json::json!({"t3_activity_id":activity.id,"gap":true,"reason":"origine activité non attestée"});
                     "error"
                 };
-                if self.journal.enqueue(event, Some(&id), payload).is_err() {
+                if let Err(error) = self.journal.enqueue(event, Some(&id), payload) {
+                    self.note_journal_block("activité refusée par le journal", || {
+                        error.to_string()
+                    });
                     return;
                 }
                 self.journal_inflight.insert(id);
             }
             // Repère séparé : ne pas confirmer une activité multi-fichiers sur le
             // premier fichier seulement ; le marqueur suit tous ses faits.
-            if self
-                .journal
-                .enqueue(
-                    "t3_activity_seen",
-                    Some(&key),
-                    serde_json::json!({"t3_activity_id":activity.id}),
-                )
-                .is_err()
-            {
+            if let Err(error) = self.journal.enqueue(
+                "t3_activity_seen",
+                Some(&key),
+                serde_json::json!({"t3_activity_id":activity.id}),
+            ) {
+                self.note_journal_block("repère d'activité refusé par le journal", || {
+                    error.to_string()
+                });
                 return;
             }
             self.journal_inflight.insert(key);
@@ -2430,6 +2441,42 @@ impl LinkWorker {
         }
         self.prune_turn_origins(detail, latest);
         self.journal_dirty = false;
+        self.clear_journal_block();
+    }
+
+    /// Session 117 : signale qu'un blocage de la projection du journal persiste.
+    ///
+    /// Ces sorties étaient muettes : le 24/09, un fil est resté non observable
+    /// des heures sans aucune trace. Un blocage bref est normal (écriture en
+    /// cours) ; seul un blocage qui dure JOURNAL_BLOCK_GRACE est signalé, une
+    /// fois par motif, et son rétablissement est annoncé.
+    fn note_journal_block(&mut self, kind: &'static str, detail: impl FnOnce() -> String) {
+        let now = Instant::now();
+        match &mut self.journal_block {
+            Some((current, since, reported)) if *current == kind => {
+                if !*reported && now.duration_since(*since) >= JOURNAL_BLOCK_GRACE {
+                    warn!(
+                        "observation du fil {} suspendue depuis {} s : {kind} ({})",
+                        self.thread_id,
+                        now.duration_since(*since).as_secs(),
+                        detail()
+                    );
+                    *reported = true;
+                }
+            }
+            _ => self.journal_block = Some((kind, now, false)),
+        }
+    }
+
+    /// Session 117 : fin d'un blocage ; annoncée seulement s'il avait été signalé.
+    fn clear_journal_block(&mut self) {
+        if let Some((kind, since, true)) = self.journal_block.take() {
+            info!(
+                "observation du fil {} rétablie après {} s ({kind})",
+                self.thread_id,
+                since.elapsed().as_secs()
+            );
+        }
     }
 
     /// Session 116 : relève l'origine du dernier tour à chaque lecture, que le
@@ -2548,8 +2595,17 @@ impl LinkWorker {
                     _ => {}
                 }
             }
-            if std::fs::metadata(&path).map_or(true, |m| reader.next_offset() < m.len()) {
+            let offset = reader.next_offset();
+            let size = std::fs::metadata(&path).map(|m| m.len()).ok();
+            if size.is_none_or(|size| offset < size) {
                 self.journal_caught_up = false;
+                self.note_journal_block("journal non rattrapé", || {
+                    format!(
+                        "{} lu jusqu'à {offset} octets sur {}",
+                        path.display(),
+                        size.map_or("taille inconnue".to_string(), |size| format!("{size}"))
+                    )
+                });
                 break;
             }
         }
@@ -3386,6 +3442,42 @@ mod tests {
             w.journal.stop();
             w.relay.shutdown();
         }
+    }
+
+    /// Session 117 : un blocage du journal n'est signalé qu'une fois, après le
+    /// délai de grâce, et un nouveau motif recommence le compte.
+    #[test]
+    fn spec117_blocage_du_journal_signale_une_fois_apres_le_delai() {
+        let (mut worker, _peer) = worker099();
+        worker.note_journal_block("journal non rattrapé", || "détail".into());
+        assert!(
+            matches!(
+                worker.journal_block,
+                Some(("journal non rattrapé", _, false))
+            ),
+            "un blocage bref n'est pas signalé"
+        );
+        if let Some((_, since, _)) = worker.journal_block.as_mut() {
+            *since = Instant::now() - JOURNAL_BLOCK_GRACE;
+        }
+        worker.note_journal_block("journal non rattrapé", || "détail".into());
+        assert!(
+            matches!(worker.journal_block, Some((_, _, true))),
+            "signalé"
+        );
+        worker.note_journal_block("journal non rattrapé", || panic!("signalé deux fois"));
+        worker.note_journal_block("activité refusée par le journal", || "x".into());
+        assert!(
+            matches!(
+                worker.journal_block,
+                Some(("activité refusée par le journal", _, false))
+            ),
+            "un nouveau motif repart de zéro"
+        );
+        worker.clear_journal_block();
+        assert!(worker.journal_block.is_none());
+        worker.journal.stop();
+        worker.relay.shutdown();
     }
 
     /// Session 116 : un tour prouvé silencieux n'est annoncé qu'après plusieurs
